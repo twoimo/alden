@@ -25,9 +25,9 @@ maps every staged file to its exact destination. `build.rs` copies only these
 files and the CLI from the checkout's `target/debug` or `target/release`, according
 to the desktop build profile. It never traverses/copies `.venv*`, the home
 directory, credentials, state, logs, caches, or arbitrary script directories.
-Missing bytecode or CLI inputs stop packaging. The three existing frozen
-CPython 3.11 artifacts must be supplied from a trusted build; they are currently
-ignored by Git and cannot be reconstructed by this packaging step.
+Missing bytecode or CLI inputs stop packaging. The three frozen CPython 3.11
+artifacts are pinned in this repository. The packaging step verifies their
+presence but does not regenerate them.
 
 Any `.app`, including an unsigned debug bundle, uses only its own Resources.
 An incomplete/unsafe bundle never falls back to `CARGO_MANIFEST_DIR` or PATH.
@@ -86,8 +86,15 @@ sh scripts/install-alden-desktop.sh
 
 For a debug bundle, use `cd desktop && npm run tauri -- build --debug --bundles
 app --no-sign` after preparing the debug CLI. Native macOS builds are supported
-here; cross/universal CLI staging and signed/notarized distribution need
-separate packaging work.
+here. The `Alden Desktop Release` workflow builds a macOS arm64 app for exact
+`alden-vX.Y.Z` tags and publishes it only after Developer ID signing, Apple
+notarization, stapling, checksum verification, and GitHub asset readback. It
+requires six `ALDEN_APPLE_*` signing and notarization secrets. Without them,
+the release stops before packaging. The published `.app` ZIP does not provision
+CPython, MLX models, or voice dependencies: a fresh Mac must satisfy the runtime
+paths and requirements above before the menu bridge or voice path can run. The
+wake-model release gate remains closed. A signed package by itself is not an
+end-to-end product check.
 
 Focused verification: `cargo test --manifest-path desktop/src-tauri/Cargo.toml`,
 and `npm test` / `npm run build` in `desktop`. Fixtures exercise moved installed

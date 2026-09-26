@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 대화 턴 처리와 응답 안정성, 운영 비용을 함께 개선하는 변경 묶음입니다.
 
+### Alden Desktop
+- macOS 메뉴바 앱을 Alden 0.1.5로 전환하고 Tauri v2·Three.js 렌더러, 로컬 MLX 27B 기본 경로, 준비 상태를 확인하는 음성·Browser-Use 소스, 긴급 중단 단축키와 Archify 구조도를 묶었습니다. 설치본과 빌드 번들의 일치, 합성 렌더 검사, 로컬 단일 생성은 확인했습니다.
+- 호출어 후보는 출시 기준을 통과하지 못해 실제 음성 시작이 꺼져 있습니다. Flash-Next 상주, 카카오톡 답변 지연·건너뜀 개선, 설치본의 GPU 절감, 서명·공증된 공개 앱 릴리스는 아직 검증되지 않았습니다.
+
 ### Added
-- **OpenCodex 인증 게이트웨이 연동 및 자동 폴백**: 기존 gjc 프로세스 호출 방식을 로컬 OpenCodex 게이트웨이(`http://127.0.0.1:10100/v1`) 직접 연동으로 교체했습니다. OpenCode Go 사용량 한도 초과 시 0.28초 만에 에러를 감지하고 `google-antigravity/gemini-3.8-flash`(high)로 즉시 자동 전환되어 서비스 중단 없이 답장을 이어갑니다.
+- **레거시 원격 명시 경로의 OpenCodex 게이트웨이 연동 및 자동 폴백**: 기존 gjc 프로세스 호출 방식을 로컬 OpenCodex 게이트웨이(`http://127.0.0.1:10100/v1`) 직접 연동으로 교체했습니다. OpenCode Go 사용량 한도 초과 시 0.28초 만에 에러를 감지하고 `google-antigravity/gemini-3.8-flash`(high)로 전환합니다. Alden의 로컬 MLX 운영 설정에는 이 원격 경로를 사용하지 않습니다.
 - **초보자 친화적 메뉴바 앱 리뉴얼**: 내부 코드 중심의 딱딱한 상태 문구를 직관적인 상태 표기(🟢 정상 작동, 🟡 처리 중, 🔴 확인 필요)와 쉬운 동작 라벨("즉시 답장 보내기", "긱뉴스 바로 전송", "답변 기록 보기", "AI 모델 설정")로 전면 개편했습니다.
 - 재랭커 후보 평가를 **자격(정책 통과)과 순위(랭크)** 두 단계로 분리했습니다. 자격 판정이 내는 거부를 기계 판독 가능한 안정 코드(`policy_rejections`의 `index`/`draft`/`reason`/`codes`/`decision`)로 모으고, 반환 dict에 `fallback`·`policy_rejections`를 **모든 경로에서** 싣습니다. 결정 기록(`rerank_policy_rejections`, `provenance.rerank`)과 영수증(최상위 `policy_rejections`, 최대 8건)에도 같은 목록이 실려 "어떤 초안이 왜 거부됐는지"가 순위 안에 묻히지 않습니다. 인가 발신자는 여전히 스킵하지 않으며(경량 폴백 `lenient_policy`: 빈 답·220자 초과·원문 복사만 금지) 사이드카의 `MAX_DRAFTS=8`/`MAX_DRAFT_CHARS=220` 정렬은 그대로입니다.
 - 응답시간 학습 스타일 tell에 구조 필드를 추가했습니다: `kind`(length/ending/question/caption/ai_detection), `target_phrase`, `scope`(room/recipient), `source`(operator/self-observed), `confidence`, `validity`·`expiry`. 원장 스키마는 v2가 되지만 v1 행은 기본값으로 하위호환 로드되고, 만료된 소프트 tell은 로드 시 건너뜁니다. phrase-only 정규화(단일 토큰 금지, 다어절·4자 이상)와 avoid-only 레지스터는 그대로입니다.

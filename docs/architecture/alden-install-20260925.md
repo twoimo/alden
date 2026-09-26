@@ -96,3 +96,7 @@ Browser-Use source now defaults to Qwen3.8 27B. An explicit Flash-Next choice is
 ### Archify receipt refresh
 
 Nine Alden diagrams were validated at showcase quality (**9/9 artifact checks each, zero composition errors and warnings**), delivered from their current specifications, and passed a fresh automated Chromium visual check. Their JSON receipts now identify the sibling HTML by relative path and bind its current SHA-256 and size. The system overview's ten source references were verified against commit `35eabebe28c1e2caa5e125c821ccce048e98f31d` before delivery. Browser checks remain separate from a perceptual review.
+
+### Current read-only queue window — 2026-09-27 06:15 KST
+
+The session monitor and read-only TUI reported **3/3 rooms ready**, zero active jobs, zero `delivery_unknown`, and zero journal errors. Three room queue databases contained **21 skipped** and **11 sent** jobs created in the preceding 24 hours; these are queue outcomes, not independently observed KakaoTalk delivery. All 32 jobs predate the worker cutover at 03:00:58 KST. No room queue contained a job created after that cutover. The latest 150 locally readable KakaoTalk rows in each room also had `sent_at` before the cutover. Thus this window supplies no post-cutover inbound-to-reply latency or skip-rate sample, and cannot establish an improvement in skipped conversations.

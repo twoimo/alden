@@ -81,8 +81,10 @@ pub enum BridgeError {
     DevelopmentDisabled,
     #[error("python_environment_missing_or_unsafe")]
     PythonEnv,
+    #[cfg_attr(not(test), allow(dead_code))]
     #[error("voice_environment_missing")]
     VoiceEnv,
+    #[cfg_attr(not(test), allow(dead_code))]
     #[error("voice_script_missing")]
     VoiceScript,
     #[error("voice_session_already_running")]
