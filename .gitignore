@@ -1,5 +1,9 @@
 __pycache__/
 *.pyc
+# The Alden menu bundle currently loads these exact CPython 3.11 artifacts.
+!scripts/_auto_reply_menubar_wrapper.cpython-311.pyc
+!scripts/_bujamentor_menubar_overlay.cpython-311.pyc
+!scripts/_bujamentor_menubar_impl.cpython-311.pyc
 *.egg-info/
 dist/
 build/
@@ -9,7 +13,7 @@ build/
 credentials.json
 /tmp/
 
-# Dedicated Jarvis voice interpreter; never Extra's runtime.
+# Dedicated Alden voice interpreter; never Extra's runtime.
 .venv-voice/
 browser/.venv/
 target/
