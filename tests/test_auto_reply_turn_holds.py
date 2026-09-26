@@ -672,8 +672,20 @@ class AutoReplyTurnHoldTests(unittest.TestCase):
                     state_path.write_text(json.dumps(current), encoding="utf-8")
                     return bundle
 
-                def refreshed_rows(refresh_event, _watermark):
-                    return [self._recent_row(refresh_event)]
+                def refreshed_rows(refresh_event, watermark):
+                    rows = [self._recent_row(refresh_event)]
+                    if watermark > refresh_event["log_id"]:
+                        rows.append(
+                            {
+                                **self._recent_row(refresh_event),
+                                "log_id": watermark,
+                                "author_id": 701,
+                                "author_nickname": "peer",
+                                "message": "newer context",
+                                "sent_at": refresh_event["sent_at"] + 1,
+                            }
+                        )
+                    return rows
 
                 now = [1_050.0]
                 with (
@@ -783,6 +795,17 @@ class AutoReplyTurnHoldTests(unittest.TestCase):
                 )
                 connection.commit()
                 bundle = self._context_bundle_payload(module)
+                refreshed_rows = [
+                    self._recent_row(event),
+                    {
+                        **self._recent_row(event),
+                        "log_id": 421,
+                        "author_id": 701,
+                        "author_nickname": "peer",
+                        "message": "newer context",
+                        "sent_at": event["sent_at"] + 1,
+                    },
+                ]
                 self.assertEqual(module.stable_room_watermark_log_id(event), 421)
                 self.assertIsNone(module._reply_turn_hold_reason(event, connection))
                 with (
@@ -796,7 +819,7 @@ class AutoReplyTurnHoldTests(unittest.TestCase):
                     mock.patch.object(
                         module,
                         "refresh_recent_messages_from_local_db",
-                        return_value=[self._recent_row(event)],
+                        return_value=refreshed_rows,
                     ) as refresh,
                     mock.patch.object(module, "_run_json_command", return_value=bundle),
                     mock.patch.object(module, "runner_is_trusted", return_value=True),
