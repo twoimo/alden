@@ -43,6 +43,14 @@ class ModelRetryPolicyTests(unittest.TestCase):
             patch.start()
             self.addCleanup(patch.stop)
 
+    def test_model_endpoint_reachability_probes_mlx_gateway_default_port(self):
+        with mock.patch("socket.create_connection") as create_connection:
+            self.assertTrue(self.module._model_endpoint_reachable())
+
+        create_connection.assert_called_once_with(
+            ("127.0.0.1", 11234), timeout=0.8,
+        )
+
     @contextlib.contextmanager
     def isolated_generation(self, runner_kind, runner):
         """Use the real generation and circuit paths with fake external adapters."""

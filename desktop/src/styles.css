@@ -328,10 +328,11 @@ body.settings-view { min-width: 0; min-height: 700px; overflow-y: auto; line-hei
     align-items: start;
     gap: 16px;
   }
-  #knowledge-graph-canvas { height: 230px; }
-  #knowledge-relations { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #settings-knowledge-card,
-  section[aria-labelledby="history-title"] { align-self: stretch; }
+  section[aria-labelledby="history-title"] { grid-column: 1 / -1; }
+  #knowledge-graph-canvas { height: 320px; }
+  #knowledge-relations { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #history-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 799px) {

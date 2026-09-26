@@ -13536,7 +13536,7 @@ def _inbound_reply_to_text(event: dict | None) -> str | None:
 
 
 
-def _model_endpoint_reachable(host: str = "127.0.0.1", port: int = 1337,
+def _model_endpoint_reachable(host: str = "127.0.0.1", port: int = 11234,
                               timeout: float = 0.8) -> bool:
     """Cheap TCP probe so failure rows record whether the local LLM server was up."""
     import socket

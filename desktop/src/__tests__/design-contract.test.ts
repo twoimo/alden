@@ -127,6 +127,8 @@ describe("design contract", () => {
     expect(STYLES).toMatch(/@media \(max-width: 799px\)[\s\S]*\.settings-shell \{ width: calc\(100% - 32px\)/);
     expect(STYLES).toContain("font-size: 16px; line-height: 1.3");
     expect(STYLES).toContain("font-size: 14px; line-height: 1.5");
-    expect(STYLES).toContain("#knowledge-graph-canvas { height: 230px; }");
+    expect(STYLES).toContain('section[aria-labelledby="history-title"] { grid-column: 1 / -1; }');
+    expect(STYLES).toContain("#knowledge-graph-canvas { height: 320px; }");
+    expect(STYLES).toContain("#history-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
   });
 });
