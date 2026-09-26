@@ -36,6 +36,16 @@ def read_repo_file(relative_path: str) -> str:
 
 
 class AldenDesktopLauncherTests(unittest.TestCase):
+    @staticmethod
+    def _fake_installer_runtime(tmp: Path) -> Path:
+        runtime_python = (
+            tmp.resolve() / "runtime" / "menubar" / "bin" / "python3.11"
+        )
+        runtime_python.parent.mkdir(parents=True, exist_ok=True)
+        runtime_python.write_text(FAKE_CPYTHON_311, encoding="utf-8")
+        runtime_python.chmod(0o755)
+        return runtime_python
+
     def _run_installer_fixture(
         self,
         *,
@@ -1020,6 +1030,7 @@ exit 99
         for stray in (False, True):
             with self.subTest(stray=stray), tempfile.TemporaryDirectory() as raw_tmp:
                 tmp = Path(raw_tmp)
+                runtime_python = self._fake_installer_runtime(tmp)
                 bin_dir = tmp / "bin"
                 applications_dir = tmp / "Applications"
                 launch_agents_dir = tmp / "LaunchAgents"
@@ -1141,6 +1152,8 @@ exit 1
                         "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
                         "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                         "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
+                        "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                        "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(runtime_python),
                         "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                         "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                         "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
@@ -1200,6 +1213,7 @@ exit 1
 
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
+            runtime_python = self._fake_installer_runtime(tmp)
             bin_dir = tmp / "bin"
             applications_dir = tmp / "Applications"
             launch_agents_dir = tmp / "LaunchAgents"
@@ -1296,6 +1310,8 @@ exit 1
                     "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
                     "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                     "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
+                    "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                    "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(runtime_python),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                     "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
@@ -1336,6 +1352,7 @@ exit 1
 
         with tempfile.TemporaryDirectory() as raw_tmp:
             tmp = Path(raw_tmp)
+            runtime_python = self._fake_installer_runtime(tmp)
             bin_dir = tmp / "bin"
             applications_dir = tmp / "Applications"
             launch_agents_dir = tmp / "LaunchAgents"
@@ -1420,6 +1437,8 @@ printf '4242\n'
                     "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
                     "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                     "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
+                    "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                    "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(runtime_python),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                     "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
