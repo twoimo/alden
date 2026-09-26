@@ -22,6 +22,15 @@ PS=${OPENKAKAO_PS:-/bin/ps}
 PGREP=${OPENKAKAO_PGREP:-/usr/bin/pgrep}
 LSOF=${OPENKAKAO_LSOF:-/usr/sbin/lsof}
 
+RUNTIME_PYTHON="$HOME/Library/Application Support/openkakao/runtimes/menubar/bin/python3.11"
+if [ -n "${OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY:-}" ]; then
+  if [ "${OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY:-0}" != "1" ]; then
+    echo "install-alden-desktop: test-only runtime override requires OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY=1" >&2
+    exit 2
+  fi
+  RUNTIME_PYTHON=$OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY
+fi
+
 LEGACY_LABEL="com.openkakao.auto-reply.menu"
 JARVIS_LABEL="com.openkakao.jarvis.desktop"
 ALDEN_LABEL="com.openkakao.alden.desktop"
@@ -73,6 +82,93 @@ if [ ! -d "$APPLICATIONS_DIR" ] || [ ! -w "$APPLICATIONS_DIR" ]; then
   echo "install-alden-desktop: cannot write to $APPLICATIONS_DIR" >&2
   exit 2
 fi
+
+runtime_preflight_fail() {
+  echo "install-alden-desktop: CPython 3.11 runtime preflight failed: $1" >&2
+  exit 2
+}
+
+runtime_path_component=$RUNTIME_PYTHON
+case "$runtime_path_component" in
+  /*)
+    ;;
+  *)
+    runtime_preflight_fail "runtime path is not absolute"
+    ;;
+esac
+case "$runtime_path_component" in
+  */./*|*/../*|*/.|*/..)
+    runtime_preflight_fail "runtime path contains dot components"
+    ;;
+esac
+
+runtime_path_is_leaf=1
+while :; do
+  if [ -L "$runtime_path_component" ]; then
+    runtime_preflight_fail "symlink path component: $runtime_path_component"
+  fi
+
+  if [ "$runtime_path_is_leaf" -eq 1 ]; then
+    if [ ! -f "$runtime_path_component" ] || [ ! -s "$runtime_path_component" ] || \
+      [ ! -r "$runtime_path_component" ] || [ ! -x "$runtime_path_component" ]; then
+      runtime_preflight_fail "interpreter is missing, empty, unreadable, or not executable: $runtime_path_component"
+    fi
+    runtime_path_is_leaf=0
+  elif [ ! -d "$runtime_path_component" ] || [ ! -x "$runtime_path_component" ]; then
+    runtime_preflight_fail "parent is missing, not a directory, or not searchable: $runtime_path_component"
+  fi
+
+  if [ "$runtime_path_component" = "/" ]; then
+    break
+  fi
+  runtime_path_parent=${runtime_path_component%/*}
+  if [ -z "$runtime_path_parent" ]; then
+    runtime_path_parent=/
+  fi
+  if [ "$runtime_path_parent" = "$runtime_path_component" ]; then
+    runtime_preflight_fail "could not walk runtime path"
+  fi
+  runtime_path_component=$runtime_path_parent
+done
+
+# Match the installed bridge contract without importing site/user code. Require
+# both exit 0 and exact Python-produced stdout; a no-op executable that merely
+# exits successfully must not satisfy the probe. Limit stdout at the OS level so
+# a damaged executable cannot grow the probe file without bound.
+RUNTIME_PROBE_SENTINEL=ALDEN_CPYTHON_3_11_OK
+runtime_probe_output=$(/usr/bin/mktemp "${TMPDIR:-/tmp}/openkakao-alden-python-probe.XXXXXX") || \
+  runtime_preflight_fail "could not create bounded probe output"
+(
+  ulimit -f 1
+  exec "$RUNTIME_PYTHON" -I -S -c \
+    'import sys; ok=sys.implementation.name=="cpython" and sys.version_info[:2]==(3,11); print("ALDEN_CPYTHON_3_11_OK") if ok else None; raise SystemExit(0 if ok else 3)' \
+    >"$runtime_probe_output" 2>/dev/null
+) &
+runtime_probe_pid=$!
+runtime_probe_attempt=0
+while /bin/kill -0 "$runtime_probe_pid" 2>/dev/null; do
+  runtime_probe_attempt=$((runtime_probe_attempt + 1))
+  if [ "$runtime_probe_attempt" -ge 10 ]; then
+    /bin/kill "$runtime_probe_pid" 2>/dev/null || true
+    /bin/sleep 0.1
+    /bin/kill -9 "$runtime_probe_pid" 2>/dev/null || true
+    wait "$runtime_probe_pid" 2>/dev/null || true
+    rm -f "$runtime_probe_output"
+    runtime_preflight_fail "version probe timed out"
+  fi
+  /bin/sleep 0.1
+done
+runtime_probe_status=0
+wait "$runtime_probe_pid" || runtime_probe_status=$?
+if [ "$runtime_probe_status" -ne 0 ]; then
+  rm -f "$runtime_probe_output"
+  runtime_preflight_fail "interpreter is not isolated CPython 3.11"
+fi
+if ! printf '%s\n' "$RUNTIME_PROBE_SENTINEL" | /usr/bin/cmp -s - "$runtime_probe_output"; then
+  rm -f "$runtime_probe_output"
+  runtime_preflight_fail "interpreter did not emit exact CPython 3.11 sentinel"
+fi
+rm -f "$runtime_probe_output"
 
 mkdir -p "$LAUNCH_AGENTS_DIR" "$BACKUP_BASE"
 STAMP=$(/bin/date +%Y%m%dT%H%M%S)

@@ -78,7 +78,10 @@ bundle unless `OPENKAKAO_SIGN_IDENTITY` is explicitly supplied:
 sh scripts/build-alden-desktop.sh
 ```
 
-Install the resulting app and its LaunchAgent only after reviewing the bundle:
+Install the resulting app and its LaunchAgent only after reviewing the bundle.
+The installer checks the fixed menubar CPython 3.11 runtime before it backs up
+or changes any app or launchd state; a missing, unsafe, or nonworking interpreter
+stops the cutover:
 
 ```sh
 sh scripts/install-alden-desktop.sh

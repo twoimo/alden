@@ -13,6 +13,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ALDEN_LABEL = "com.openkakao.alden.desktop"
 JARVIS_LABEL = "com.openkakao.jarvis.desktop"
+FAKE_CPYTHON_311 = """#!/bin/sh
+set -eu
+expected='import sys; ok=sys.implementation.name=="cpython" and sys.version_info[:2]==(3,11); print("ALDEN_CPYTHON_3_11_OK") if ok else None; raise SystemExit(0 if ok else 3)'
+[ "$#" -eq 4 ] || exit 97
+[ "$1" = "-I" ] || exit 97
+[ "$2" = "-S" ] || exit 97
+[ "$3" = "-c" ] || exit 97
+[ "$4" = "$expected" ] || exit 97
+printf 'ALDEN_CPYTHON_3_11_OK\n'
+"""
 
 
 def read_optional(path: Path) -> str | None:
@@ -102,6 +112,11 @@ class AldenDesktopLauncherTests(unittest.TestCase):
             source_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             source_bin.chmod(0o755)
             (source_app / "marker.txt").write_text("new\n", encoding="utf-8")
+            runtime_python = (
+                tmp.resolve() / "runtime" / "menubar" / "bin" / "python3.11"
+            )
+            runtime_python.parent.mkdir(parents=True)
+            write_executable(runtime_python, FAKE_CPYTHON_311)
 
             if has_previous_app:
                 target_bin.parent.mkdir(parents=True)
@@ -389,6 +404,10 @@ exit 1
                     "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
                     "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                     "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
+                    "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                    "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(
+                        runtime_python
+                    ),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                     "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
@@ -564,6 +583,188 @@ exit 1
                     / f"{JARVIS_LABEL}.process-after-bootout.txt"
                 ),
             }
+
+    def _run_runtime_preflight_fixture(
+        self,
+        mode: str,
+        *,
+        enable_test_gate: bool = True,
+    ) -> dict[str, object]:
+        installer = ROOT / "scripts/install-alden-desktop.sh"
+
+        def write_executable(path: Path, body: str) -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+            path.chmod(0o755)
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            tmp = Path(raw_tmp).resolve()
+            bin_dir = tmp / "bin"
+            applications_dir = tmp / "Applications"
+            launch_agents_dir = tmp / "LaunchAgents"
+            backup_dir = tmp / "backups"
+            source_app = tmp / "source" / "Alden.app"
+            source_bin = (
+                source_app / "Contents" / "MacOS" / "openkakao-alden-desktop"
+            )
+            launchctl_calls = tmp / "launchctl.calls"
+
+            applications_dir.mkdir()
+            launch_agents_dir.mkdir()
+            backup_dir.mkdir()
+            write_executable(source_bin, "#!/bin/sh\nexit 0\n")
+
+            launchctl = bin_dir / "launchctl"
+            write_executable(
+                launchctl,
+                """#!/bin/sh
+set -eu
+printf '%s\n' "$*" >>"$OPENKAKAO_PREFLIGHT_LAUNCHCTL_CALLS"
+exit 99
+""",
+            )
+            inert_tool = bin_dir / "inert-tool"
+            write_executable(inert_tool, "#!/bin/sh\nexit 0\n")
+
+            runtime_python = tmp / "runtime" / "menubar" / "bin" / "python3.11"
+            if mode == "missing":
+                pass
+            elif mode == "file-symlink":
+                real_python = tmp / "real-python3.11"
+                write_executable(real_python, "#!/bin/sh\nexit 0\n")
+                runtime_python.parent.mkdir(parents=True)
+                runtime_python.symlink_to(real_python)
+            elif mode == "parent-symlink":
+                real_runtime = tmp / "real-runtime"
+                real_python = real_runtime / "menubar" / "bin" / "python3.11"
+                write_executable(real_python, "#!/bin/sh\nexit 0\n")
+                (tmp / "runtime").symlink_to(real_runtime, target_is_directory=True)
+            elif mode == "non-executable":
+                write_executable(runtime_python, "#!/bin/sh\nexit 0\n")
+                runtime_python.chmod(0o644)
+            elif mode == "wrong-version":
+                write_executable(runtime_python, "#!/bin/sh\nexit 3\n")
+            elif mode == "exit-zero-no-output":
+                write_executable(runtime_python, "#!/bin/sh\nexit 0\n")
+            elif mode == "hang":
+                write_executable(runtime_python, "#!/bin/sh\nexec /bin/sleep 5\n")
+            elif mode == "dot-component":
+                real_python = runtime_python
+                write_executable(real_python, "#!/bin/sh\nexit 0\n")
+                runtime_python = (
+                    tmp
+                    / "runtime"
+                    / "menubar"
+                    / ".."
+                    / "menubar"
+                    / "bin"
+                    / "python3.11"
+                )
+            elif mode == "valid":
+                write_executable(runtime_python, FAKE_CPYTHON_311)
+            else:
+                raise AssertionError(f"unknown runtime fixture mode: {mode}")
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "OPENKAKAO_APPLICATIONS_DIR": str(applications_dir),
+                    "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
+                    "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
+                    "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
+                    "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(
+                        runtime_python
+                    ),
+                    "OPENKAKAO_LAUNCHCTL": str(launchctl),
+                    "OPENKAKAO_DITTO": str(inert_tool),
+                    "OPENKAKAO_PLISTBUDDY": str(inert_tool),
+                    "OPENKAKAO_PLUTIL": str(inert_tool),
+                    "OPENKAKAO_PS": str(inert_tool),
+                    "OPENKAKAO_PGREP": str(inert_tool),
+                    "OPENKAKAO_LSOF": str(inert_tool),
+                    "OPENKAKAO_PREFLIGHT_LAUNCHCTL_CALLS": str(launchctl_calls),
+                }
+            )
+            if enable_test_gate:
+                env["OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY"] = "1"
+            else:
+                env.pop("OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY", None)
+
+            started = time.monotonic()
+            result = subprocess.run(
+                ["/bin/sh", str(installer)],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=4,
+            )
+            elapsed = time.monotonic() - started
+
+            return {
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "elapsed": elapsed,
+                "backup_entries": sorted(path.name for path in backup_dir.iterdir()),
+                "launch_agent_entries": sorted(
+                    path.name for path in launch_agents_dir.iterdir()
+                ),
+                "application_entries": sorted(
+                    path.name for path in applications_dir.iterdir()
+                ),
+                "launchctl_called": launchctl_calls.exists(),
+            }
+
+    def test_installer_runtime_preflight_fails_closed_before_mutation(self) -> None:
+        cases = {
+            "missing": "interpreter is missing, empty, unreadable, or not executable",
+            "file-symlink": "symlink path component",
+            "parent-symlink": "symlink path component",
+            "non-executable": "interpreter is missing, empty, unreadable, or not executable",
+            "wrong-version": "interpreter is not isolated CPython 3.11",
+            "exit-zero-no-output": "interpreter did not emit exact CPython 3.11 sentinel",
+            "dot-component": "runtime path contains dot components",
+        }
+
+        for mode, error_fragment in cases.items():
+            with self.subTest(mode=mode):
+                result = self._run_runtime_preflight_fixture(mode)
+                self.assertEqual(result["returncode"], 2, msg=result["stderr"])
+                self.assertIn(error_fragment, result["stderr"])
+                self.assertEqual(result["backup_entries"], [])
+                self.assertEqual(result["launch_agent_entries"], [])
+                self.assertEqual(result["application_entries"], [])
+                self.assertFalse(result["launchctl_called"])
+
+    def test_installer_runtime_version_probe_is_bounded(self) -> None:
+        result = self._run_runtime_preflight_fixture("hang")
+
+        self.assertEqual(result["returncode"], 2, msg=result["stderr"])
+        self.assertIn("version probe timed out", result["stderr"])
+        self.assertLess(result["elapsed"], 2.5)
+        self.assertEqual(result["backup_entries"], [])
+        self.assertEqual(result["launch_agent_entries"], [])
+        self.assertEqual(result["application_entries"], [])
+        self.assertFalse(result["launchctl_called"])
+
+    def test_installer_runtime_override_is_test_gated_and_not_bridge_visible(
+        self,
+    ) -> None:
+        result = self._run_runtime_preflight_fixture(
+            "valid",
+            enable_test_gate=False,
+        )
+        bridge = read_repo_file("desktop/src-tauri/src/python_bridge.rs")
+
+        self.assertEqual(result["returncode"], 2, msg=result["stderr"])
+        self.assertIn("test-only runtime override requires", result["stderr"])
+        self.assertEqual(result["backup_entries"], [])
+        self.assertEqual(result["launch_agent_entries"], [])
+        self.assertEqual(result["application_entries"], [])
+        self.assertFalse(result["launchctl_called"])
+        self.assertNotIn("OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY", bridge)
 
     def test_staged_python_entrypoint_dependencies_are_complete_and_staging_lists_match(
         self,
