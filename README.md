@@ -23,26 +23,26 @@
 
 ---
 
-`openkakao-bot` helps you find context and prepare replies in KakaoTalk. Conversation data and AI requests stay on your Mac; replies go through the KakaoTalk app already installed there.
+`openkakao-bot` is the project and CLI name; **Alden** is its macOS menu-bar assistant. It helps you find context and prepare replies in KakaoTalk. Conversation data and AI requests stay on your Mac; replies go through the KakaoTalk app already installed there.
 
 <h2 id="architecture">Architecture</h2>
 
-Jarvis is a macOS menu-bar assistant. Its compact display is drawn with Tauri v2 and Three.js. KakaoTalk messages, local search, and model requests stay on this Mac; sending a reply uses the installed KakaoTalk app.
+Alden is a macOS menu-bar assistant. Its compact display is drawn with Tauri v2 and Three.js. KakaoTalk messages, local search, and model requests stay on this Mac; sending a reply uses the installed KakaoTalk app. Press **⌘⌥⇧Esc** from any app to latch the global emergency abort.
 
-See the [end-to-end local system map](docs/architecture/jarvis-system.html) and its [Archify source](docs/architecture/jarvis-system.architecture.json). The map shows the desktop shell, local tools, model boundary, and read-only conversation index in one view.
+See the [end-to-end local system map](docs/architecture/alden-system.html) and its [Archify source](docs/architecture/alden-system.architecture.json). The map shows the desktop shell, local tools, model boundary, and read-only conversation index in one view.
 
 ### The animated core
 
-1. Tauri reports when the small Jarvis panel is visible.
+1. Tauri reports when the small Alden panel is visible.
 2. Three.js draws the warm gold core and updates its rings while the panel is open. The center sphere uses a fixed-light `ShaderMaterial`; a paired local WebGL run measured 3.4% lower median CPU submission at 15 fps and 2.5% lower at 30 fps (about 3–5 μs per frame), with 8 draw calls in both variants. Pixel output matched in 11 of 12 theme, activity, and scale cases; the remaining case differed by one 8-bit channel level. These are CPU submission measurements, not GPU power or battery measurements.
 3. Reply, voice, and sync activity change the rings' rotation and the core's pulse.
 4. Hiding or closing the panel pauses drawing and status updates; reopening it resumes them.
 
-See the [render lifecycle](docs/architecture/jarvis-three-render-lifecycle.html) and [activity-to-motion map](docs/architecture/jarvis-core-load-mapping.html).
+See the [render lifecycle](docs/architecture/alden-three-render-lifecycle.html) and [activity-to-motion map](docs/architecture/alden-core-load-mapping.html).
 
 Source-rendered capture (latest dark-theme source render; not a live installed-app capture):
 
-![Jarvis champagne-gold spherical core](docs/architecture/jarvis-render-panel.dark.png)
+![Alden champagne-gold spherical core](docs/architecture/alden-render-panel.dark.png)
 
 ### Finding related conversations
 
@@ -51,7 +51,7 @@ Source-rendered capture (latest dark-theme source render; not a live installed-a
 3. It normalizes shortened names and searches by both words and meaning. When both searches are available, reciprocal-rank fusion (RRF) combines their results; otherwise it keeps the working word-search results.
 4. It stores people, topics, and their relationships as three-part facts (person — relationship — topic). Selecting a person or topic smoothly focuses nearby items, with at most 24 visible at once. This reads the existing index and does not start a new database copy or reindex.
 
-The graph follows the human-readable, source-backed design in the [Threads reference](https://www.threads.com/share/BBIeDkkHei/) and its linked [OSK System](https://github.com/lpaiu-cs/osk-system): preserve each message in the local conversation index, keep derived knowledge as canonical entities and unique subject–relation–object triples, and retain bounded message evidence IDs for traceability. Room, person, and topic nodes provide navigable neighborhoods. Drill-down starts at two relationship steps, limits each step to ten neighbors, and caps the view at 24 nodes (up to three steps when expanded). BM25 remains available when local embeddings are unavailable; RRF is used when both ranked candidate lists are ready.
+The [Threads reference](https://www.threads.com/share/BBIeDkkHei/) argues that a knowledge node should be a unit worth reusing on its own; links should carry the context that would otherwise be lost when notes are split. The linked [OSK System](https://github.com/lpaiu-cs/osk-system) is the related open-source project. This app applies that principle by retaining each message as source evidence, deriving canonical entities and unique subject–relation–object triples, and keeping bounded message evidence IDs for traceability. Room, person, and topic nodes provide navigable neighborhoods. Drill-down starts at two relationship steps, limits each step to ten neighbors, and caps the view at 24 nodes (up to three steps when expanded). BM25 remains available when local embeddings are unavailable; RRF is used when both ranked candidate lists are ready.
 
 See the [GraphRAG search sequence](docs/architecture/graphrag-search-sequence.html) and [conversation-map drill-down](docs/architecture/openkakao-graphrag.html).
 
@@ -61,11 +61,11 @@ Each incoming KakaoTalk row remains a durable queue item. Consecutive rows from 
 
 Empty Kakao emoticon rows (message types 12, 20, and 22) enter the same durable queue as `[이모티콘]` instead of being acknowledged as empty input.
 
-Punctuation-only follow-ups such as `???` are treated as pointers to the current thread. When recent messages give a topic, the model must answer from that context or ask one brief, topic-specific clarification; a generic “I don't understand” reply is rejected. Factual questions whose answer is absent keep the existing explicit unknown-answer path.
+Punctuation-only follow-ups such as `???` and short referential questions such as `뭐지 저건` are treated as pointers to the current thread. When recent messages give a topic, the worker answers from that context or asks one brief, topic-specific clarification tied to its recent-message evidence; a generic “I don't understand” reply is rejected. If local generation returns malformed output, referential follow-ups use this grounded clarification directly, while other malformed outputs are retried at most once per durable queue event. Factual questions whose answer is absent keep the existing explicit unknown-answer path.
 
 ### Voice conversation
 
-“Hey Jarvis” starts local speech recognition, a local model reply, and speech synthesis. Jarvis answers once and asks a follow-up only when essential information is missing. The voice pipeline keeps at most four recent question-and-answer turns in memory, up to 600 characters per message. It clears that context after ten idle minutes and resumes listening after each spoken reply.
+Voice is currently unavailable in the checked-out app: the wake-word model failed its release gate, the settings control is disabled, and the Rust bridge rejects voice-session startup. The source keeps the intended local pipeline bounded to four recent turns and 600 characters per message, with a ten-minute idle reset; those limits do not mean live microphone, STT, model, or TTS use has been validated.
 
 Before loading Whisper or Qwen3-TTS, a local-only admission check requires at least 8 GiB or 10 GiB of reclaimable RAM respectively and 2 GiB of free swap. If either probe is unavailable or the budget is low, the voice session reports the condition and does not load the model. A synthetic local voice run on 2026-09-24 reached the safety stop before a complete turn; end-to-end voice remains unverified on this host.
 
@@ -75,16 +75,30 @@ The settings UI marks voice status unavailable when its heartbeat is more than f
 
 ### Other architecture diagrams
 
-- [Tauri menu-bar architecture](docs/architecture/jarvis-openkakao-units1-4.html)
-- [Local MLX request drain and model swap](docs/architecture/jarvis-model-request-drain.html)
+- [Tauri menu-bar architecture](docs/architecture/alden-openkakao-units1-4.html)
+- [Local MLX request drain and model swap](docs/architecture/alden-model-request-drain.html)
 - [Offline DREAM-RSI review loop](docs/architecture/dream-rsi-provenance-loop.html)
-- [Browser-use lifecycle](docs/architecture/jarvis-browser-use-lifecycle.html)
+- [Browser-use lifecycle](docs/architecture/alden-browser-use-lifecycle.html)
 
-## Current runtime check
+## Source readiness
 
-At 21:17 KST on 2026-09-24, read-only checks returned HTTP 200 from local MLX `/health`. The same-day `/v1/models` readback showed Flash-Next loaded, Qwen3.8 27B and Qwen3-TTS unloaded, and no embedding capability; live GraphRAG therefore remains BM25-only and dense/RRF is unavailable. The latest synthetic Flash-Next generation probe disconnected after 45.060 s with zero output tokens and was not repeated, so generation remains unverified. A post-probe memory read showed 1,040.38 MiB free swap, 1,007.62 MiB below the 2,048 MiB voice admission threshold; Whisper/TTS loading and a complete wake→STT→LLM→TTS turn remain unverified.
+**Alden 0.1.5 was rebuilt and installed locally on 2026-09-27 KST.** The installed app matched the built bundle byte for byte, one Alden process was running, and the installed backend snapshot reported three reply-ready rooms. The newly baked room-worker runtime also matched all 20 packaged asset digests; its 18 script/data assets and configuration matched their current sources, while the packaged CLI matched the separately signed stable CLI. The active watchdog used that new runtime, and a later host readback reported **3/3 rooms ready**, with no pending database gaps or in-flight candidates. See the [dated installation evidence and remaining checks](docs/architecture/alden-install-20260925.md). This does not measure live conversational latency or KakaoTalk delivery.
 
-At that same 21:17 KST snapshot, `auto-reply-host --status --json` returned `healthy=true`: all three configured room supervisors were running and ready, each reported an available reply model, delivery was enabled, and no pending gaps were reported. The watchdog still showed eight restarts and five consecutive failures, while the LaunchAgent session-monitor job itself was not running. This status is not an end-to-end reply or latency measurement. The checks sent no messages, started no workers, loaded no models, and did not restart or take over a server. The current source changes are not installed in the immutable runtime. See [engineering status](docs/engineering-status.md) for measurements and limits.
+The synthetic Chromium rendering passed **32/32 checks**. At the settings window's 960 px width, its measured columns were 553.719 px and 342.266 px with no horizontal overflow; a simulated hidden-window signal produced zero frames over 1.503 seconds. These results cover the built frontend with a stubbed Tauri bridge. The review screenshots and JSON use fictional chat and graph data.
+
+The local MLX server could not restart its Flash-Next checkpoint when its memory preflight required about **77.1 GB** and found only **51.8–54.4 GB** available. The current local deployment uses Qwen3.8 27B instead. Its model catalog reported **18,196,477,654 resident bytes**, and one synthetic localhost request returned HTTP 200 with one completion token in **0.553 s**. The MLX management job subsequently completed another scheduled check with exit code 0. These observations verify this local fallback and one short inference; they do not establish normal reply latency, voice operation, or a public release. A clean checkout still lacks the maintained source for three bundled menubar bytecode files.
+
+Voice startup is deliberately blocked until a wake model passes its release gate. The current experimental wake model accepted 3/3 synthetic positive clips and falsely accepted 1/3 synthetic negative clips (33.333% at threshold 0.65); there are no human-speaker or microphone/room trials. The candidate is excluded from the app bundle. These source and evaluation facts do not establish a working microphone or a complete voice conversation.
+
+### Historical runtime observations (2026-09-24–25)
+
+At 23:43 KST on 2026-09-24, read-only checks returned HTTP 200 from local MLX `/health` and `/v1/models`. Flash-Next was loaded (75.3 GB resident); Qwen3.8 27B and Qwen3-TTS were unloaded. One bounded local Flash-Next generation returned `OK` in **56.849 s**. This verifies a single short local generation, not normal conversational latency; the earlier 45.060-second zero-token disconnect remains a separate failed attempt. The loaded model has no embedding capability, so live GraphRAG remains BM25-only and dense/RRF is unavailable.
+
+The post-probe session-monitor readback was healthy at that time: all three configured room workers were ready, their reply model was available, delivery was enabled, and there were no pending database gaps. Free swap was **1,322.19 MiB**, **725.81 MiB** below the 2,048 MiB voice-model admission threshold. The observed voice heartbeat was over 25 hours old, so this check did not verify Whisper/TTS loading or a complete wake→STT→LLM→TTS turn. The installed immutable worker matched the source snapshot at the time by SHA-256; that comparison does not cover subsequent edits. The diagnostic request was local-only and used no conversation data; no message was sent and no model was loaded or swapped. See [engineering status](docs/engineering-status.md) for queue counts, historical confusion-reply replay, and measurement limits.
+
+At 23:36 KST on 2026-09-24, Tauri app v0.1.5 was installed and its LaunchAgent process was running. All 27 installed bundle files matched that build. The configured global emergency shortcut is **⌘⌥⇧Esc**; the adjacent **⌘⌥Esc** chord belongs to macOS Force Quit. This bundle check did not exercise a physical global shortcut event.
+
+At 00:28 KST on 2026-09-25, a later read-only host check returned `healthy=false`: two of three room workers were ready and one was fenced during a transient context-sync failure. The primary reply room remained ready, with delivery enabled and no pending gaps. That observation predates the current source edits and does not verify their deployment.
 
 The detailed implementation notes and dated verification records are kept in [engineering status](docs/engineering-status.md). They describe source checks, automated tests, and live runtime observations separately.
 
@@ -98,7 +112,7 @@ The detailed implementation notes and dated verification records are kept in [en
 
 <h2 id="model-support">Model Support</h2>
 
-The menu app offers a fast local model for everyday replies and a larger local model when requested. It does not automatically send conversation data to a cloud AI service. Exact model names and setup details are in the [Korean setup guide](README.ko.md); current readiness and generation limits are in [Current runtime check](#current-runtime-check).
+The menu app offers a fast local model for everyday replies and a larger local model when requested. It does not automatically send conversation data to a cloud AI service. Exact model names and setup details are in the [Korean setup guide](README.ko.md); current source gates and dated runtime evidence are in [Source readiness](#source-readiness).
 
 <h2 id="quick-start">Quick Start</h2>
 
@@ -113,7 +127,7 @@ cargo build --release
 ### 2. Permissions
 
 In macOS **System Settings -> Privacy & Security**:
-- **Full Disk Access**: Grant to your Terminal (or `OpenKakao Jarvis.app`) to read local database files.
+- **Full Disk Access**: Grant to your Terminal (or `Alden.app`) to read local database files.
 - **Accessibility**: Grant to allow typing replies into KakaoTalk.
 
 <h3 id="configuration">3. Configuration</h3>
@@ -141,10 +155,10 @@ self_nickname = "Your Name"
 # Recommended on-device engine (MLX), not Gemma / llama.cpp / Ollama
 reply_runner = "/absolute/path/to/installed/opencodex"
 reply_runner_kind = "opencodex"
-reply_model = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
+reply_model = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
 ```
 
-`reply_runner` is a validated transport placeholder for this local MLX profile and must point to the installed `opencodex` executable. The exact Flash-Next and 27B IDs, with or without the `mlx/` prefix, are allowlisted and use the same bounded localhost readiness and generation probes. The recorded 27B model was unloaded and not ready, so actual 27B generation remains unverified.
+`reply_runner` is a validated transport placeholder for this local MLX profile and must point to the installed `opencodex` executable. The exact 27B and Flash-Next IDs, with or without the `mlx/` prefix, are allowlisted. The current 27B deployment passed one synthetic localhost completion; Flash-Next can be selected explicitly when it is resident and ready. This does not establish normal conversational latency.
 
 ### 4. Run
 
@@ -154,8 +168,8 @@ reply_model = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
 ./target/release/openkakao-cli local-chats
 
 # Build and install the primary Tauri menu-bar UI
-sh scripts/build-jarvis-desktop.sh
-sh scripts/install-jarvis-desktop.sh
+sh scripts/build-alden-desktop.sh
+sh scripts/install-alden-desktop.sh
 
 # Start the installed LaunchAgent without rebuilding or reinstalling
 sh scripts/start-auto-reply-menubar.command
