@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import * as THREE from "three";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { JarvisCore } from "../core/jarvis-core";
+import { AldenCore } from "../core/alden-core";
 import { RenderLifecycle } from "../core/lifecycle";
 
 // Exercise the real scene, geometry and animation loop, but make no GPU claim.
@@ -30,7 +30,7 @@ function harness() {
     return nextId;
   });
   vi.stubGlobal("cancelAnimationFrame", (id: number): void => { callbacks.delete(id); });
-  const core = new JarvisCore(document.createElement("canvas"));
+  const core = new AldenCore(document.createElement("canvas"));
   const lifecycle = new RenderLifecycle(core, () => undefined, () => undefined);
   const advance = (ms = 1000 / 30 + 1): void => {
     nowMs += ms;
@@ -65,7 +65,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("Jarvis core lattice integration", () => {
+describe("Alden core lattice integration", () => {
   it("changes only the draw range while retaining one lattice drawable and all buffers", () => {
     const { core, lifecycle, advance } = harness();
     try {

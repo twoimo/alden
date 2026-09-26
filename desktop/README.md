@@ -1,18 +1,24 @@
 # macOS Python/Rust resource contract
 
+**Alden** is the menu-bar product name. `openkakao-cli` and this repository
+retain the OpenKakao project identifiers.
+
 The running executable selects the layout, independently of the current directory:
 
 ```text
-OpenKakao Jarvis.app/Contents/
-  MacOS/openkakao-jarvis-desktop
+Alden.app/Contents/
+  MacOS/openkakao-alden-desktop
   Resources/
     scripts/auto-reply-menubar.py
-    scripts/jarvis_voice.py
+    scripts/alden_voice.py
     scripts/<fixed support modules and CPython 3.11 bytecode>
     scripts/auto-reply-operator-prompts.json
-    voice/models/hey_jarvis_ko_ridge.onnx
     bin/openkakao-cli
 ```
+
+Wake-word candidates live under `voice/models/experimental/` and are excluded
+from the app bundle until held-out human-speech evaluation clears the release
+false-accept gate. The desktop voice-start command remains disabled meanwhile.
 
 `src-tauri/src/resource_layout.rs::DATA_FILES` is the allowlist; `tauri.conf.json`
 maps every staged file to its exact destination. `build.rs` copies only these
@@ -49,10 +55,11 @@ packaging step. A conventional symlink-based venv is deliberately rejected.
 
 Outside a bundle, debug builds may use the checkout and these development/test
 overrides: `OPENKAKAO_RESOURCE_ROOT`, `OPENKAKAO_MENUBAR_SCRIPT`, `OPENKAKAO_BIN`,
-`OPENKAKAO_PYTHON`, `OPENKAKAO_VOICE_PYTHON`, `OPENKAKAO_STATE_ROOT`,
+`OPENKAKAO_PYTHON`, `OPENKAKAO_STATE_ROOT`,
 `OPENKAKAO_LOGS_DIR`. Script/CLI overrides stay within the chosen resource root;
-interpreter overrides must be absolute safe executable paths. Defaults are the
-existing uv CPython 3.11 path and `.venv-voice/bin/python`; use a copied-executable
+interpreter overrides must be absolute safe executable paths. The menubar uses
+the existing uv CPython 3.11 path. Voice runtime provisioning is dormant while
+the wake-model release gate is closed; use a copied-executable
 voice environment when developing. Release executables outside a bundle fail
 closed. Installed apps ignore these overrides.
 
@@ -68,13 +75,13 @@ script. The script stages the matching release CLI first and uses an unsigned
 bundle unless `OPENKAKAO_SIGN_IDENTITY` is explicitly supplied:
 
 ```sh
-sh scripts/build-jarvis-desktop.sh
+sh scripts/build-alden-desktop.sh
 ```
 
 Install the resulting app and its LaunchAgent only after reviewing the bundle:
 
 ```sh
-sh scripts/install-jarvis-desktop.sh
+sh scripts/install-alden-desktop.sh
 ```
 
 For a debug bundle, use `cd desktop && npm run tauri -- build --debug --bundles

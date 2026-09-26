@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, read-only checks for the two fixed Jarvis MLX models."""
+"""Bounded, read-only checks for the two fixed Alden MLX models."""
 
 from __future__ import annotations
 

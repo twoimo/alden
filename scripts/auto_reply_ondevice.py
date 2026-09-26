@@ -1012,6 +1012,13 @@ def _read_mlx_gateway_models(
                 model["state"] = str(item.get("state") or "")
             if "bytes_resident" in item:
                 model["bytes_resident"] = item["bytes_resident"]
+            capabilities = item.get("capabilities")
+            if isinstance(capabilities, list):
+                model["capabilities"] = [
+                    value.strip()
+                    for value in capabilities[:32]
+                    if isinstance(value, str) and value.strip()
+                ]
             models.append(model)
     return True, models
 

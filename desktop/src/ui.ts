@@ -9,6 +9,8 @@ export function voiceErrorMessage(errorCode: string | null): string | null {
       return "기기 메모리 여유가 부족해 음성 처리를 멈췄습니다.";
     case "voice_memory_budget_unavailable":
       return "기기 메모리 상태를 확인할 수 없어 음성 처리를 시작하지 않았습니다.";
+    case "alden_wake_model_unavailable":
+      return "‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력을 시작하지 않았습니다.";
     case "mic_disconnected":
       return "마이크를 사용할 수 없습니다. 연결을 확인해 주세요.";
     case "mic_unavailable":
@@ -45,8 +47,8 @@ export const SETTINGS_IDS = Object.freeze([
 ] as const);
 
 export function mainPanelMarkup(): string {
-  return `<main class="jarvis-panel" aria-label="자비스">
-    <canvas class="jarvis-core" width="${LAYOUT.coreSize}" height="${LAYOUT.coreSize}" aria-label="자비스 화면"></canvas>
+  return `<main class="alden-panel" aria-label="올든">
+    <canvas class="alden-core" width="${LAYOUT.coreSize}" height="${LAYOUT.coreSize}" aria-label="올든 화면"></canvas>
   </main>`;
 }
 
@@ -54,8 +56,8 @@ export function settingsMarkup(): string {
   return `<main class="settings-shell">
     <header class="settings-header">
       <p class="eyebrow">카카오톡 · 내 컴퓨터에서 실행</p>
-      <h1>자비스 설정</h1>
-      <p>대상 채팅방과 답변 상태를 확인합니다.</p>
+      <h1>올든 설정</h1>
+      <p>대상 채팅방과 답변 상태를 확인합니다. 긴급 중단은 ⌘⌥⇧Esc를 누르세요.</p>
     </header>
 
     <section class="settings-card" aria-labelledby="rooms-title">
@@ -67,7 +69,7 @@ export function settingsMarkup(): string {
         <select id="settings-add-room-select" aria-label="추가할 채팅방 선택"><option value="">추가할 채팅방 선택</option></select>
         <button id="settings-add-room-button" type="button">추가</button>
       </div>
-      <p id="room-summary" class="muted">등록된 채팅방을 불러오는 중입니다.</p>
+      <p id="room-summary" class="muted" role="status" aria-live="polite">등록된 채팅방을 불러오는 중입니다.</p>
     </section>
 
     <section class="settings-card" aria-labelledby="model-title">
@@ -83,9 +85,9 @@ export function settingsMarkup(): string {
 
     <section class="settings-card" aria-labelledby="voice-title">
       <div class="section-heading"><h2 id="voice-title">음성</h2><span class="tag muted-tag">이 기기에서 처리</span></div>
-      <p id="voice-status">음성 기능 상태를 확인하고 있습니다.</p>
-      <p class="muted">“헤이 자비스”라고 부른 뒤 말씀해 주세요.</p>
-      <button id="voice-start" type="button">마이크 켜기</button>
+      <p id="voice-status">‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력이 꺼져 있습니다.</p>
+      <p class="muted">호출어: 올든</p>
+      <button id="voice-start" type="button" disabled>마이크 켜기</button>
     </section>
 
     <section id="settings-sync-card" class="settings-card knowledge-accent" aria-labelledby="sync-title">
@@ -244,46 +246,66 @@ function safeDisplayString(value: unknown, fallback: string): string {
   }
 }
 
+function syncRoomOptions(
+  select: HTMLSelectElement,
+  items: ReadonlyArray<{ value: string; label: string }>,
+): void {
+  // Stable snapshots must not rebuild a native menu the user is interacting with.
+  if (select.options.length === items.length && items.every((item, index) => {
+    const option = select.options[index];
+    return option.value === item.value && option.textContent === item.label;
+  })) return;
+
+  const selected = select.value;
+  const options = items.map((item) => {
+    const option = select.ownerDocument.createElement("option");
+    option.value = item.value;
+    option.textContent = item.label;
+    return option;
+  });
+  select.replaceChildren(...options);
+  if (items.some((item) => item.value === selected)) select.value = selected;
+}
+
 export function renderRooms(snapshot: RuntimeSnapshot, root: Document = document): void {
+  const rooms = snapshot.available ? snapshot.rooms : [];
   const popup = root.querySelector<HTMLSelectElement>("#settings-room-popup");
   if (popup) {
-    popup.replaceChildren();
-    if (snapshot.rooms.length === 0) {
-      const option = document.createElement("option");
-      option.textContent = snapshot.available ? "등록된 채팅방이 없습니다." : "채팅방 목록을 불러오지 못했습니다.";
-      option.value = "";
-      popup.append(option);
-      const summary = root.getElementById("room-summary");
-      if (summary) summary.textContent = snapshot.available
-        ? "등록된 채팅방이 없습니다."
-        : "채팅방 목록을 불러오지 못했습니다. 다시 확인해 주세요.";
+    syncRoomOptions(popup, rooms.length > 0
+      ? rooms.map((room) => ({ value: String(room.chatId), label: room.title }))
+      : [{ value: "", label: snapshot.available
+        ? "등록된 채팅방이 없습니다." : "채팅방 목록을 불러오지 못했습니다." }]);
+  }
+
+  const summary = root.getElementById("room-summary");
+  if (summary) {
+    let message: string;
+    if (!snapshot.available) {
+      message = "채팅방 목록을 불러오지 못했습니다. 다시 확인해 주세요.";
+    } else if (rooms.length === 0) {
+      message = "등록된 채팅방이 없습니다.";
     } else {
-      snapshot.rooms.forEach((room) => {
-        const option = document.createElement("option");
-        option.value = String(room.chatId);
-        option.textContent = room.title;
-        popup.append(option);
-      });
-      const live = snapshot.rooms.filter((room) => room.live).length;
-      const summary = root.getElementById("room-summary");
-      if (summary) summary.textContent = `등록된 채팅방 ${snapshot.rooms.length}개 · 연결됨 ${live}개`;
+      const enabled = rooms.filter((room) => room.autoReply);
+      const ready = enabled.filter((room) => room.live && room.replyReadiness === "ready").length;
+      const attention = enabled.length - ready;
+      const off = rooms.length - enabled.length;
+      const parts = [`등록된 채팅방 ${rooms.length}개`, `답변 가능 ${ready}개`];
+      if (attention > 0) parts.push(`확인 필요 ${attention}개`);
+      if (off > 0) parts.push(`자동 답변 꺼짐 ${off}개`);
+      message = parts.join(" · ");
     }
+    if (summary.textContent !== message) summary.textContent = message;
   }
 
   const addSelect = root.querySelector<HTMLSelectElement>("#settings-add-room-select");
   if (addSelect) {
-    addSelect.replaceChildren();
-    const enrolledIds = new Set(snapshot.rooms.map((r) => r.chatId));
-    const candidates = (snapshot.availableChats || []).filter((c) => !enrolledIds.has(c.chatId));
-    const defaultOpt = document.createElement("option");
-    defaultOpt.value = "";
-    defaultOpt.textContent = candidates.length > 0 ? "추가할 채팅방 선택" : "추가 가능한 새 채팅방 없음";
-    addSelect.append(defaultOpt);
-    candidates.forEach((chat) => {
-      const opt = document.createElement("option");
-      opt.value = String(chat.chatId);
-      opt.textContent = chat.title;
-      addSelect.append(opt);
-    });
+    const enrolledIds = new Set(rooms.map((room) => room.chatId));
+    const candidates = snapshot.available
+      ? (snapshot.availableChats || []).filter((chat) => !enrolledIds.has(chat.chatId)) : [];
+    syncRoomOptions(addSelect, [
+      { value: "", label: !snapshot.available ? "채팅방 목록을 불러오지 못했습니다."
+        : candidates.length > 0 ? "추가할 채팅방 선택" : "추가 가능한 새 채팅방 없음" },
+      ...candidates.map((chat) => ({ value: String(chat.chatId), label: chat.title })),
+    ]);
   }
 }

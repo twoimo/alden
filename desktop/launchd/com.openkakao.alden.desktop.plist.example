@@ -3,10 +3,10 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.openkakao.jarvis.desktop</string>
+  <string>com.openkakao.alden.desktop</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Applications/OpenKakao Jarvis.app/Contents/MacOS/openkakao-jarvis-desktop</string>
+    <string>/Applications/Alden.app/Contents/MacOS/openkakao-alden-desktop</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

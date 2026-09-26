@@ -231,8 +231,8 @@ describe("render lifecycle wiring", () => {
 
   it("pins the event name the Rust shell announces", () => {
     const rust = RUST_MAIN;
-    expect(VISIBILITY_EVENT).toBe("jarvis://visibility");
-    expect(rust).toMatch(/const\s+VISIBILITY_EVENT\s*:\s*&str\s*=\s*"jarvis:\/\/visibility";/);
+    expect(VISIBILITY_EVENT).toBe("alden://visibility");
+    expect(rust).toMatch(/const\s+VISIBILITY_EVENT\s*:\s*&str\s*=\s*"alden:\/\/visibility";/);
     // Both hide paths must announce the hidden state only after the OS applied
     // the hide: announcing for a window that is still on screen freezes the
     // core in front of the user.

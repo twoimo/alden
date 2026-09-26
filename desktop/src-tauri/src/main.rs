@@ -9,7 +9,7 @@ use tauri::{Emitter, Manager, PhysicalPosition, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 const PANEL_WIDTH: f64 = 276.0;
-const VISIBILITY_EVENT: &str = "jarvis://visibility";
+const VISIBILITY_EVENT: &str = "alden://visibility";
 
 /// Payload for the window visibility event: one boolean, never content.
 fn visibility_payload(visible: bool) -> Value {
@@ -177,7 +177,7 @@ fn make_tray_icon() -> Image<'static> {
 }
 
 fn toggle_panel(app: &tauri::AppHandle, position: PhysicalPosition<f64>) {
-    let Some(window) = app.get_webview_window("jarvis") else {
+    let Some(window) = app.get_webview_window("alden") else {
         return;
     };
     if window.is_visible().unwrap_or(false) {
@@ -199,16 +199,24 @@ fn ignore_terminal_hangup() {
     }
 }
 
+fn global_abort_shortcut() -> Shortcut {
+    // Command-Option-Escape is reserved by macOS for Force Quit. Keep the
+    // system-wide emergency abort on the nearby unreserved three-modifier key.
+    Shortcut::new(
+        Some(Modifiers::SUPER | Modifiers::ALT | Modifiers::SHIFT),
+        Code::Escape,
+    )
+}
+
 fn main() {
     ignore_terminal_hangup();
-    let abort_shortcut = Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Escape);
+    let abort_shortcut = global_abort_shortcut();
     tauri::Builder::default()
         .manage(PythonBridge::new())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    let expected =
-                        Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Escape);
+                    let expected = global_abort_shortcut();
                     if shortcut == &expected && event.state() == ShortcutState::Pressed {
                         let bridge = app.state::<PythonBridge>();
                         let _ = bridge.global_abort();
@@ -235,7 +243,7 @@ fn main() {
             TrayIconBuilder::new()
                 .icon(make_tray_icon())
                 .icon_as_template(true)
-                .tooltip("OpenKakao Jarvis")
+                .tooltip("Alden")
                 .on_tray_icon_event(|tray, event| match event {
                     TrayIconEvent::Click {
                         button: MouseButton::Left,
@@ -259,11 +267,11 @@ fn main() {
             // Only a hide the OS actually applied may pause the renderer:
             // announcing hidden for a window that is still on screen would
             // freeze the core while the user is looking at it.
-            WindowEvent::Focused(false) if window.label() == "jarvis" && window.hide().is_ok() => {
+            WindowEvent::Focused(false) if window.label() == "alden" && window.hide().is_ok() => {
                 announce_visibility(window.app_handle(), window.label(), false);
             }
             WindowEvent::CloseRequested { api, .. }
-                if window.label() == "jarvis" || window.label() == "settings" =>
+                if window.label() == "alden" || window.label() == "settings" =>
             {
                 api.prevent_close();
                 if window.hide().is_ok() {
@@ -280,12 +288,28 @@ fn main() {
             _ => {}
         })
         .run(tauri::generate_context!())
-        .expect("error while running OpenKakao Jarvis");
+        .expect("error while running Alden");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_abort_shortcut_avoids_the_macos_force_quit_chord() {
+        let emergency = global_abort_shortcut();
+        assert_eq!(
+            emergency,
+            Shortcut::new(
+                Some(Modifiers::SUPER | Modifiers::ALT | Modifiers::SHIFT),
+                Code::Escape,
+            )
+        );
+        assert_ne!(
+            emergency,
+            Shortcut::new(Some(Modifiers::SUPER | Modifiers::ALT), Code::Escape)
+        );
+    }
 
     #[test]
     fn the_visibility_payload_carries_only_the_boolean() {

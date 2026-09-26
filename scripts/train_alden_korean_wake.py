@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
-"""Export a tiny Korean Jarvis wake classifier for openWakeWord.
+"""Export a tiny Korean Alden wake classifier for openWakeWord.
 
 This is intentionally a bounded calibration/distillation path. It reuses the
 local openWakeWord audio embedding frontend, fits a regularized linear head to
 one positive wake clip plus explicit non-wake and silence negatives, exports a
 real ONNX model, then scores all three clips through OpenWakeVadFrontend.
 
-Running this exporter is an explicit operator step; its output at
-voice/models/hey_jarvis_ko_ridge.onnx is then bundled and auto-selected by
-resolve_custom_wake_model whenever it validates, with the stock head as the
-fallback and no change to WAKE_THRESHOLD. That auto-selection only proves the
-custom-model loading path and the local scoring contract: a single synthesized
-positive clip is not enough evidence for human speaker generalization.
+Running this exporter is an explicit operator step. Output is written under
+voice/models/experimental and is never bundled or auto-selected. Synthetic
+results are calibration evidence only; release requires a separate
+false-accept gate on representative human speech.
 """
 
 from __future__ import annotations
@@ -22,7 +20,7 @@ import math
 import sys
 import wave
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -32,7 +30,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from jarvis_voice import CUSTOM_WAKE_MODEL_MAX_BYTES, OpenWakeVadFrontend, WAKE_THRESHOLD
+from alden_voice import CUSTOM_WAKE_MODEL_MAX_BYTES, OpenWakeVadFrontend, WAKE_THRESHOLD
 
 
 SAMPLE_RATE = 16_000
@@ -40,7 +38,7 @@ FEATURE_FRAMES = 16
 FEATURE_DIM = 96
 NATIVE_CHUNK_SAMPLES = 1_280
 FRONTEND_FRAME_SAMPLES = 320
-WARMUP_WINDOWS = 5
+WARMUP_WINDOWS = FEATURE_FRAMES
 RIDGE_LAMBDA = 1.0
 TARGET_POSITIVE_SCORE = 0.90
 
@@ -63,13 +61,16 @@ def _load_wav_mono_pcm16(path: Path) -> np.ndarray:
 
 
 def _feature_windows(samples: np.ndarray) -> np.ndarray:
-    from openwakeword.model import Model
+    from openwakeword.utils import AudioFeatures
 
-    model = Model(wakeword_models=["hey_jarvis"], inference_framework="onnx")
+    # Use only openWakeWord's pretrained acoustic embedding pipeline. Loading
+    # an unrelated stock phrase would make training depend on that detector
+    # and could accidentally keep its branded wake path enabled at runtime.
+    preprocessor = AudioFeatures(inference_framework="onnx", ncpu=1)
     windows: list[np.ndarray] = []
     for start in range(0, samples.size - NATIVE_CHUNK_SAMPLES + 1, NATIVE_CHUNK_SAMPLES):
-        model.predict(samples[start : start + NATIVE_CHUNK_SAMPLES])
-        features = np.asarray(model.preprocessor.get_features(FEATURE_FRAMES), dtype=np.float32)
+        preprocessor(samples[start : start + NATIVE_CHUNK_SAMPLES])
+        features = np.asarray(preprocessor.get_features(FEATURE_FRAMES), dtype=np.float32)
         if features.shape != (1, FEATURE_FRAMES, FEATURE_DIM):
             raise RuntimeError(f"wake_training_feature_shape_invalid:{features.shape}")
         windows.append(features.reshape(-1))
@@ -128,7 +129,7 @@ def _export_onnx(output: Path, weight: np.ndarray, bias: float) -> None:
             helper.make_node("Gemm", ["flat", "weight", "bias"], ["logit"]),
             helper.make_node("Sigmoid", ["logit"], ["score"]),
         ],
-        "jarvis_korean_wake_ridge",
+        "alden_korean_wake_ridge",
         [helper.make_tensor_value_info("features", TensorProto.FLOAT, [1, FEATURE_FRAMES, FEATURE_DIM])],
         [helper.make_tensor_value_info("score", TensorProto.FLOAT, [1, 1])],
         [
@@ -138,7 +139,7 @@ def _export_onnx(output: Path, weight: np.ndarray, bias: float) -> None:
     )
     model = helper.make_model(
         graph,
-        producer_name="openkakao-jarvis-local-wake",
+        producer_name="openkakao-alden-local-wake",
         opset_imports=[helper.make_opsetid("", 13)],
     )
     model.ir_version = min(model.ir_version, 10)
@@ -152,7 +153,7 @@ def _export_onnx(output: Path, weight: np.ndarray, bias: float) -> None:
 
 class _ZeroStockModel:
     def predict(self, _samples: np.ndarray) -> dict[str, float]:
-        return {"hey_jarvis_v0.1": 0.0}
+        return {"alden_v0.1": 0.0}
 
 
 class _NoopVad:
@@ -180,20 +181,37 @@ def _score_custom_model(model_path: Path, samples: np.ndarray) -> dict[str, Any]
     }
 
 
-def train_and_score(wake_path: Path, control_path: Path, output: Path) -> dict[str, Any]:
-    wake = _load_wav_mono_pcm16(wake_path)
-    control = _load_wav_mono_pcm16(control_path)
-    silence = np.zeros(SAMPLE_RATE, dtype=np.int16)
+def _as_paths(value: Path | Sequence[Path]) -> tuple[Path, ...]:
+    if isinstance(value, Path):
+        return (value,)
+    paths = tuple(Path(item) for item in value)
+    if not paths:
+        raise ValueError("wake_training_clips_missing")
+    return paths
 
-    wake_windows = _feature_windows(wake)
-    control_windows = _feature_windows(control)
+
+def train_and_score(
+    wake_path: Path | Sequence[Path],
+    control_path: Path | Sequence[Path],
+    output: Path,
+) -> dict[str, Any]:
+    wake_paths = _as_paths(wake_path)
+    control_paths = _as_paths(control_path)
+    wakes = [_load_wav_mono_pcm16(path) for path in wake_paths]
+    controls = [_load_wav_mono_pcm16(path) for path in control_paths]
+    silence = np.zeros(SAMPLE_RATE * 3, dtype=np.int16)
+
+    positive = np.concatenate([_feature_windows(wake) for wake in wakes], axis=0)
+    control_windows = [_feature_windows(control) for control in controls]
     silence_windows = _feature_windows(silence)
-    positive = wake_windows[WARMUP_WINDOWS:]
     negative = np.concatenate(
-        [control_windows[WARMUP_WINDOWS:], silence_windows[WARMUP_WINDOWS:]], axis=0
+        [*control_windows, silence_windows], axis=0
     )
     weight, bias, fit = _fit_ridge_head(positive, negative)
     _export_onnx(output, weight, bias)
+    wake_scores = [_score_custom_model(output, wake) for wake in wakes]
+    control_scores = [_score_custom_model(output, control) for control in controls]
+    silence_score = _score_custom_model(output, silence)
 
     return {
         "model_path": str(output),
@@ -203,26 +221,42 @@ def train_and_score(wake_path: Path, control_path: Path, output: Path) -> dict[s
             "method": "openwakeword_embedding_ridge_head",
             "positive_windows": int(positive.shape[0]),
             "negative_windows": int(negative.shape[0]),
-            "proof_scope": "single_synthesized_positive_clip",
+            "positive_clips": len(wakes),
+            "negative_clips": len(controls),
+            "proof_scope": "synthesized_clips_single_system_voice",
             **fit,
         },
         "scores": {
-            "wake": _score_custom_model(output, wake),
-            "control": _score_custom_model(output, control),
-            "silence": _score_custom_model(output, silence),
+            "wake": max(wake_scores, key=lambda score: score["custom_max"]),
+            "wake_clips": wake_scores,
+            "control": max(control_scores, key=lambda score: score["custom_max"]),
+            "control_clips": control_scores,
+            "silence": silence_score,
         },
     }
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Train/export a bounded Korean Jarvis wake ONNX head.")
-    parser.add_argument("--wake", type=Path, default=ROOT / ".venv-voice/smoke/hey-jarvis-ko.wav")
-    parser.add_argument("--control", type=Path, default=ROOT / ".venv-voice/smoke/qwen3-tts-1.7b-ko.wav")
-    parser.add_argument("--output", type=Path, default=ROOT / "voice/models/hey_jarvis_ko_ridge.onnx")
+    parser = argparse.ArgumentParser(description="Train/export a bounded Korean Alden wake ONNX head.")
+    parser.add_argument("--wake", type=Path, nargs="+", default=None)
+    parser.add_argument("--control", type=Path, nargs="+", default=None)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "voice/models/experimental/alden_ko_ridge_candidate.onnx",
+    )
     parser.add_argument("--report", type=Path, default=None)
     args = parser.parse_args(argv)
 
-    report = train_and_score(args.wake.expanduser(), args.control.expanduser(), args.output.expanduser())
+    args.output.expanduser().parent.mkdir(parents=True, exist_ok=True)
+
+    wake_paths = args.wake or [ROOT / ".venv-voice/smoke/alden-ko.wav"]
+    control_paths = args.control or [ROOT / ".venv-voice/smoke/alden-control-ko.wav"]
+    report = train_and_score(
+        tuple(path.expanduser() for path in wake_paths),
+        tuple(path.expanduser() for path in control_paths),
+        args.output.expanduser(),
+    )
     encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
     if args.report is not None:
         report_path = args.report.expanduser()

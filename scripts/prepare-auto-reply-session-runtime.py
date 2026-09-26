@@ -69,7 +69,7 @@ RUNTIME_SCRIPT_NAMES = (
     "auto_reply_reference_search.py",
     "auto_reply_reference_store.py",
     "auto_reply_transition_journal.py",
-    "jarvis_abort.py",
+    "alden_abort.py",
     "local_mlx_gateway.py",
     "auto-reply-apple-watch.py",
     "auto_reply_ax_ui.py",

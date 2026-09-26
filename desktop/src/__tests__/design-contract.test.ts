@@ -11,7 +11,7 @@ const read = (relative: string): string =>
 
 const STYLES = read("../styles.css");
 const DESIGN = read("../../DESIGN.md");
-const CORE = read("../core/jarvis-core.ts");
+const CORE = read("../core/alden-core.ts");
 const HOLOGRAM = read("../knowledge/hologram.ts");
 const TOKENS_SOURCE = read("../tokens.ts");
 
@@ -104,7 +104,7 @@ describe("design contract", () => {
   it("no neon, bloom, glow, or cyberpunk treatment is applied", () => {
     const surfaces: Array<[string, string]> = [
       ["styles.css", STYLES],
-      ["core/jarvis-core.ts", CORE],
+      ["core/alden-core.ts", CORE],
     ];
     for (const [name, source] of surfaces) {
       const match = source.match(/neon|bloom|glow|cyberpunk|drop-shadow/i);

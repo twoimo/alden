@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rendered cross-check of the Jarvis menubar UI inside a real browser engine.
+"""Rendered cross-check of the Alden menubar UI inside a real browser engine.
 
 The desktop contract test (desktop/src/__tests__/ui-removal-contract.test.ts)
 pins the panel and the settings window as *strings*. That is a different claim
@@ -32,6 +32,7 @@ import argparse
 import base64
 import hashlib
 import json
+import math
 import re
 import sys
 import threading
@@ -54,7 +55,15 @@ CONTRACT_INTERACTIVE_TAGS = "button,select,input,textarea,a,details,summary"
 # The Rust shell's window-visibility event. desktop/src/core/lifecycle-wiring.ts
 # exports this as VISIBILITY_EVENT, and the contract tests pin the two together
 # so a rename fails there instead of silently never firing here.
-VISIBILITY_EVENT = "jarvis://visibility"
+VISIBILITY_EVENT = "alden://visibility"
+
+
+def receipt_path(path: Path) -> str:
+    """Keep generated review artifacts independent of the local home path."""
+    try:
+        return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.name
 
 
 class ContractParseError(RuntimeError):
@@ -78,7 +87,7 @@ def parse_contract(path: Path) -> dict[str, Any]:
     banned = _array_literals(source, "REMOVED_TOKENS")
     sections = _array_literals(source, "SETTINGS_SECTIONS")
     return {
-        "path": str(path),
+        "path": receipt_path(path),
         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "banned_tokens": banned,
         "settings_sections": sections,
@@ -115,7 +124,7 @@ def inspect_tray_source(path: Path) -> dict[str, Any]:
     source = path.read_text(encoding="utf-8")
     routes = tray_click_routes(source)
     return {
-        "path": str(path),
+        "path": receipt_path(path),
         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         **routes,
         "browser_exercised": False,
@@ -150,13 +159,13 @@ def verdict(checks: Iterable[dict[str, Any]]) -> str:
 IDLE_SNAPSHOT: dict[str, Any] = {
     "available": True,
     "rooms": [
-        {"chat_id": 417780809780519, "title": "NIMDA \uc778\uc218\uc778\uacc4 \uc784\uc6d0\ubc29", "live": True, "auto_reply": True, "open_jobs": 0},
+        {"chat_id": 424242, "title": "\uc608\uc2dc \ucc44\ud305\ubc29", "live": True, "auto_reply": True, "open_jobs": 0, "reply_readiness": "ready"},
     ],
     "jobs": [],
     "recent_receipts": [
         {
-            "chatId": 417780809780519,
-            "title": "NIMDA \uc778\uc218\uc778\uacc4 \uc784\uc6d0\ubc29",
+            "chatId": 424242,
+            "title": "\uc608\uc2dc \ucc44\ud305\ubc29",
             "displayTime": "09:41",
             "clock": "09:41",
             "outcome": "sent",
@@ -177,15 +186,16 @@ IDLE_SNAPSHOT: dict[str, Any] = {
     "pipeline": {"active": False, "stage": "none", "stageIndex": 0, "stageTotal": 8, "outcome": "none"},
     "terminal_counts": {"sent": 12, "skipped": 1, "delivery_unknown": 0, "burst_superseded": 1},
     "context_sync": {"mode": "async", "waited": False},
-    "reply_model_id": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
+    "reply_model_id": "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
     "voice": {
-        "available": True,
-        "state": "idle",
+        "available": False,
+        "state": "error",
         "rms": 0.0,
-        "wake_phrase": "\ud5e4\uc774 \uc790\ube44\uc2a4",
+        "wake_phrase": "\uc62c\ub4e0",
+        "error_code": "alden_wake_model_unavailable",
         "threshold": 0.65,
-        "wake_source": "custom",
-        "custom_model_selected": True,
+        "wake_source": "none",
+        "custom_model_selected": False,
     },
 }
 
@@ -194,7 +204,7 @@ IDLE_SNAPSHOT: dict[str, Any] = {
 BUSY_SNAPSHOT: dict[str, Any] = json.loads(json.dumps(IDLE_SNAPSHOT))
 BUSY_SNAPSHOT["job_load"] = 0.9
 BUSY_SNAPSHOT["jobs"] = [
-    {"jobId": "reply-417780809780519", "kind": "reply", "stage": "model", "load": 0.9, "time": 1790000000, "errorCode": None},
+    {"jobId": "reply-424242", "kind": "reply", "stage": "model", "load": 0.9, "time": 1790000000, "errorCode": None},
 ]
 BUSY_SNAPSHOT["background"] = {
     "activity": 0.9,
@@ -210,17 +220,17 @@ BUSY_SNAPSHOT["voice"]["rms"] = 0.42
 KNOWLEDGE_GRAPH: dict[str, Any] = {
     "stale": False,
     "nodes": [
-        {"id": "person:\ucd5c\uc5f0\uc6b0", "label": "\ucd5c\uc5f0\uc6b0", "category": "person", "importance": 95, "updated_at": 1790000000},
-        {"id": "org:\uc54c\ub9ac\ubc14\ubc14\ud074\ub77c\uc6b0\ub4dc", "label": "\uc54c\ub9ac\ubc14\ubc14 \ud074\ub77c\uc6b0\ub4dc", "category": "org", "importance": 80, "updated_at": 1790000000},
-        {"id": "term:\uc54c\ucd00\ucfe0", "label": "\uc54c\ucd00\ucfe0", "category": "alias", "importance": 70, "updated_at": 1790000000},
-        {"id": "doc:\ucfe0\ud3f0\uc815\ucc45", "label": "\ucfe0\ud3f0 \uc815\ucc45", "category": "doc", "importance": 60, "updated_at": 1790000000},
-        {"id": "room:417780809780519", "label": "NIMDA \uc778\uc218\uc778\uacc4 \uc784\uc6d0\ubc29", "category": "room", "importance": 55, "updated_at": 1790000000},
+        {"id": "person:\uc608\uc2dc\uc778\ubb3c", "label": "\uc608\uc2dc\uc778\ubb3c", "category": "person", "importance": 95, "updated_at": 1790000000},
+        {"id": "org:\uc608\uc2dc\uc870\uc9c1", "label": "\uc608\uc2dc \uc870\uc9c1", "category": "org", "importance": 80, "updated_at": 1790000000},
+        {"id": "term:\uc608\uc2dc\uc57d\uc5b4", "label": "\uc608\uc2dc\uc57d\uc5b4", "category": "alias", "importance": 70, "updated_at": 1790000000},
+        {"id": "doc:\uc608\uc2dc\ubb38\uc11c", "label": "\uc608\uc2dc \ubb38\uc11c", "category": "doc", "importance": 60, "updated_at": 1790000000},
+        {"id": "room:424242", "label": "\uc608\uc2dc \ucc44\ud305\ubc29", "category": "room", "importance": 55, "updated_at": 1790000000},
     ],
     "edges": [
-        {"source": "person:\ucd5c\uc5f0\uc6b0", "relation": "MENTIONS", "target": "term:\uc54c\ucd00\ucfe0", "weight": 3.0, "room_id": "417780809780519", "valid_from": "2026-09-20", "evidence_message_id": "log:901"},
-        {"source": "term:\uc54c\ucd00\ucfe0", "relation": "ALIAS_OF", "target": "org:\uc54c\ub9ac\ubc14\ubc14\ud074\ub77c\uc6b0\ub4dc", "weight": 2.5, "room_id": "417780809780519", "valid_from": "2026-09-20", "evidence_message_id": "log:902"},
-        {"source": "org:\uc54c\ub9ac\ubc14\ubc14\ud074\ub77c\uc6b0\ub4dc", "relation": "HAS_POLICY", "target": "doc:\ucfe0\ud3f0\uc815\ucc45", "weight": 2.0, "room_id": "417780809780519", "valid_from": "2026-09-21", "evidence_message_id": "log:903"},
-        {"source": "room:417780809780519", "relation": "HAS_PARTICIPANT", "target": "person:\ucd5c\uc5f0\uc6b0", "weight": 1.0, "room_id": "417780809780519", "valid_from": "2026-09-19", "evidence_message_id": "log:900"},
+        {"source": "person:\uc608\uc2dc\uc778\ubb3c", "relation": "MENTIONS", "target": "term:\uc608\uc2dc\uc57d\uc5b4", "weight": 3.0, "room_id": "424242", "valid_from": "2026-09-20", "evidence_message_id": "log:901"},
+        {"source": "term:\uc608\uc2dc\uc57d\uc5b4", "relation": "ALIAS_OF", "target": "org:\uc608\uc2dc\uc870\uc9c1", "weight": 2.5, "room_id": "424242", "valid_from": "2026-09-20", "evidence_message_id": "log:902"},
+        {"source": "org:\uc608\uc2dc\uc870\uc9c1", "relation": "HAS_POLICY", "target": "doc:\uc608\uc2dc\ubb38\uc11c", "weight": 2.0, "room_id": "424242", "valid_from": "2026-09-21", "evidence_message_id": "log:903"},
+        {"source": "room:424242", "relation": "HAS_PARTICIPANT", "target": "person:\uc608\uc2dc\uc778\ubb3c", "weight": 1.0, "room_id": "424242", "valid_from": "2026-09-19", "evidence_message_id": "log:900"},
     ],
 }
 
@@ -243,13 +253,13 @@ SETTINGS_ACTIONS: dict[str, Any] = {
     "knowledge-graph-focus": {
         "ok": True,
         "search_mode": "rrf",
-        "facts": ["\uc54c\ucd00\ucfe0 = \uc54c\ub9ac\ubc14\ubc14 \ud074\ub77c\uc6b0\ub4dc \ucd95\uc57d", "\ucfe0\ud3f0 \ub9cc\ub8cc 2026-10-31"],
+        "facts": ["\uc608\uc2dc\uc57d\uc5b4 = \uc608\uc2dc \uc870\uc9c1 \ucd95\uc57d", "\ucfe0\ud3f0 \ub9cc\ub8cc 2026-10-31"],
     },
 }
 
 STUB_SOURCE = r"""
 (() => {
-  window.__jarvisStub = {
+  window.__aldenStub = {
     snapshot: null,
     actions: {},
     calls: [],
@@ -271,17 +281,17 @@ STUB_SOURCE = r"""
     unregisterCallback: function () {},
     convertFileSrc: function (path) { return path; },
     invoke: async function (command, args) {
-      window.__jarvisStub.calls.push({ command: command, args: args || {} });
+      window.__aldenStub.calls.push({ command: command, args: args || {} });
       if (command === "fetch_runtime_snapshot") {
-        if (window.__jarvisStub.failSnapshot) throw new Error("stub_snapshot_disabled");
-        return JSON.parse(JSON.stringify(window.__jarvisStub.snapshot));
+        if (window.__aldenStub.failSnapshot) throw new Error("stub_snapshot_disabled");
+        return JSON.parse(JSON.stringify(window.__aldenStub.snapshot));
       }
       if (command === "fetch_settings_action") {
         const action = args && args.action;
-        if (!Object.prototype.hasOwnProperty.call(window.__jarvisStub.actions, action)) {
+        if (!Object.prototype.hasOwnProperty.call(window.__aldenStub.actions, action)) {
           throw new Error("stub_action_unknown:" + String(action));
         }
-        return JSON.parse(JSON.stringify(window.__jarvisStub.actions[action]));
+        return JSON.parse(JSON.stringify(window.__aldenStub.actions[action]));
       }
       if (command === "cancel_python" || command === "cancel_model_swap") return true;
       if (command === "open_settings" || command === "start_voice_session") return null;
@@ -289,11 +299,11 @@ STUB_SOURCE = r"""
       // answers it instead of failing into the document-derived fallback. That
       // is what lets the check below drive a hide the way the Rust shell does.
       if (command === "plugin:event|listen") {
-        window.__jarvisStub.listeners[(args && args.event) || ""] = args && args.handler;
+        window.__aldenStub.listeners[(args && args.event) || ""] = args && args.handler;
         return 1;
       }
       if (command === "plugin:event|unlisten") return 1;
-      if (command === "window_is_visible") return window.__jarvisStub.visible !== false;
+      if (command === "window_is_visible") return window.__aldenStub.visible !== false;
       throw new Error("stub_command_unknown:" + String(command));
     }
   };
@@ -301,8 +311,8 @@ STUB_SOURCE = r"""
   // id plugin:event|listen registered. Returns false when nothing is subscribed,
   // so a caller can record "the bridge did not exist" instead of asserting on a
   // stray dispatch.
-  window.__jarvisStub.emitEvent = function (eventName, payload) {
-    const handlerId = window.__jarvisStub.listeners[eventName];
+  window.__aldenStub.emitEvent = function (eventName, payload) {
+    const handlerId = window.__aldenStub.listeners[eventName];
     const handler = handlerId === undefined ? undefined : window["_" + String(handlerId)];
     if (typeof handler !== "function") return false;
     handler({ event: eventName, id: 0, payload: payload });
@@ -317,7 +327,7 @@ PROBE_SOURCE = r"""
   const attribute = (element, name) => (element && element.getAttribute(name)) || "";
   const text = (element) => (element && element.textContent) || "";
   const contractTags = "button,select,input,textarea,a,details,summary";
-  const canvas = document.querySelector(".jarvis-core") || document.querySelector("#knowledge-graph-canvas");
+  const canvas = document.querySelector(".alden-core") || document.querySelector("#knowledge-graph-canvas");
   let glVersion = "";
   let glRenderer = "";
   let glUnmaskedRenderer = "";
@@ -351,6 +361,12 @@ PROBE_SOURCE = r"""
     headings: all("h2").map((element) => text(element).trim()),
     mains: all("main").length,
     mainClasses: all("main").map((element) => String(element.className || "")),
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    gridColumns: (() => {
+      const shell = document.querySelector(".settings-shell");
+      return shell ? getComputedStyle(shell).gridTemplateColumns : "";
+    })(),
     iframes: all("iframe").length,
     canvases: all("canvas").map((element) => ({
       id: element.id || "",
@@ -360,7 +376,7 @@ PROBE_SOURCE = r"""
       cssWidth: element.clientWidth,
       cssHeight: element.clientHeight
     })),
-    renderCount: typeof window.__jarvisRenderCount === "number" ? window.__jarvisRenderCount : null,
+    renderCount: typeof window.__aldenRenderCount === "number" ? window.__aldenRenderCount : null,
     knowledgeRenderCount: typeof window.__knowledgeRenderCount === "number" ? window.__knowledgeRenderCount : null,
     glVersion: glVersion,
     glRenderer: glRenderer,
@@ -428,7 +444,7 @@ def sha256_of(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def sample_frames(page: Any, seconds: float, counter: str = "__jarvisRenderCount") -> dict[str, Any]:
+def sample_frames(page: Any, seconds: float, counter: str = "__aldenRenderCount") -> dict[str, Any]:
     """Count the frames one render loop produced over a wall-clock window."""
     read = "() => window." + counter + " || 0"
     before = page.evaluate(read)
@@ -459,35 +475,70 @@ def scan_with_real_clicks(
     page: Any,
     box: dict[str, float],
     read_title: str,
-    step: float = 22.0,
+    step: float = 12.0,
 ) -> dict[str, Any]:
-    """Click a fixed grid with the real mouse until a node takes the focus.
+    """Click projected graph-node centers, then a dense grid, with the real mouse.
 
     Real clicks are the only input whose effect the focus heading can attribute,
-    and they are immune to the rotation that invalidates a coordinate recorded in
-    an earlier frame. A 22 px pitch against node spheres drawn about 19 px across
-    reaches every node an ordinary user could click.
+    and they use the same canvas-relative coordinates as an ordinary user. The
+    center probes use the graph's deterministic golden-sphere layout; the denser
+    fallback grid covers projection rounding and small viewport differences.
     """
     start_title = page.evaluate(read_title)
     probes = 0
-    y = box["top"] + 4.0
-    while y < box["top"] + box["height"]:
-        x = box["left"] + 4.0
-        while x < box["left"] + box["width"]:
-            page.mouse.click(x, y)
-            probes += 1
-            title = page.evaluate(read_title)
-            if title.strip() and title.strip() != start_title.strip():
-                return {
-                    "probes": probes,
-                    "title": title,
-                    "start_title": start_title,
-                    "hit": {"x": round(x, 1), "y": round(y, 1)},
-                    "pitch": step,
-                }
-            x += step
-        y += step
+    nodes = sorted(KNOWLEDGE_GRAPH["nodes"], key=lambda item: item["id"])
+    count = len(nodes)
+    fov = math.radians(38.0)
+    focal = 1.0 / math.tan(fov / 2.0)
+    aspect = box["width"] / max(box["height"], 1.0)
+    points: list[tuple[float, float]] = []
+    offset = 2.0 / max(count, 1)
+    golden = math.pi * (3.0 - math.sqrt(5.0))
+    for index, _node in enumerate(nodes):
+        y_world = (index * offset - 1.0) + offset / 2.0
+        ring = math.sqrt(max(0.0, 1.0 - y_world * y_world))
+        phi = index * golden
+        x_world = math.cos(phi) * ring * 1.42
+        y_world *= 1.42
+        z_world = math.sin(phi) * ring * 1.42
+        depth = 5.2 - z_world
+        ndc_x = x_world * focal / (aspect * depth)
+        ndc_y = y_world * focal / depth
+        points.append((
+            box["left"] + (ndc_x + 1.0) * box["width"] / 2.0,
+            box["top"] + (1.0 - ndc_y) * box["height"] / 2.0,
+        ))
+
+    center_offsets = ((0.0, 0.0), (-3.0, 0.0), (3.0, 0.0), (0.0, -3.0), (0.0, 3.0))
+    candidates = [
+        (x + dx, y + dy)
+        for x, y in points
+        for dx, dy in center_offsets
+    ]
+    candidates.extend(
+        (x, y)
+        for y in _frange(box["top"] + step / 2.0, box["top"] + box["height"], step)
+        for x in _frange(box["left"] + step / 2.0, box["left"] + box["width"], step)
+    )
+    for x, y in candidates:
+        page.mouse.click(x, y)
+        probes += 1
+        title = page.evaluate(read_title)
+        if title.strip() and title.strip() != start_title.strip():
+            return {
+                "probes": probes,
+                "title": title,
+                "start_title": start_title,
+                "hit": {"x": round(x, 1), "y": round(y, 1)},
+                "pitch": step,
+            }
     return {"probes": probes, "title": start_title, "start_title": start_title, "hit": None, "pitch": step}
+
+
+def _frange(start: float, stop: float, step: float) -> Iterable[float]:
+    while start < stop:
+        yield start
+        start += step
 
 
 def drive_drilldown(page: Any, log: Callable[[str], None]) -> dict[str, Any]:
@@ -600,6 +651,8 @@ def assertions(receipt: dict[str, Any], contract: dict[str, Any]) -> list[dict[s
     checks.append(check("settings.view_state_ready", settings["view_state"] == "ready", settings["view_state"]))
     checks.append(check("settings.sections_in_order", settings["headings"] == contract["settings_sections"], {"actual": settings["headings"], "expected": contract["settings_sections"]}))
     checks.append(check("settings.single_main_shell", settings["mains"] == 1, {"mains": settings["mains"], "classes": settings["main_classes"]}))
+    layout = settings["layout"]
+    checks.append(check("settings.uses_two_columns_without_overflow", layout["document_width"] <= layout["viewport_width"] and len(layout["grid_columns"].split()) == 2, layout))
     checks.append(check("settings.no_iframe", settings["iframes"] == 0, settings["iframes"]))
     checks.append(check("settings.knowledge_canvas_present", any(item["id"] == "knowledge-graph-canvas" for item in settings["canvases"]), settings["canvases"]))
     checks.append(check("settings.no_removed_control_tokens", scan_banned_tokens([settings["text"], settings["html"]], contract["banned_tokens"]) == [], scan_banned_tokens([settings["text"], settings["html"]], contract["banned_tokens"])))
@@ -632,14 +685,14 @@ def render_check(
     tray_source = inspect_tray_source(DEFAULT_TAURI_MAIN)
     out_dir.mkdir(parents=True, exist_ok=True)
     receipt: dict[str, Any] = {
-        "schema": "jarvis-desktop-render-check/1",
+        "schema": "alden-desktop-render-check/1",
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "dist": {
-            "path": str(dist),
+            "path": receipt_path(dist),
             "index_sha256": sha256_of(dist / "index.html") if (dist / "index.html").exists() else None,
             "assets": sorted(item.name for item in (dist / "assets").glob("*")) if (dist / "assets").is_dir() else [],
         },
-        "contract": {"path": str(contract_path), "sha256": contract["sha256"]},
+        "contract": {"path": receipt_path(contract_path), "sha256": contract["sha256"]},
         "tray_source": tray_source,
         "expected": {"banned_tokens": contract["banned_tokens"], "settings_sections": contract["settings_sections"]},
         "browser": {},
@@ -664,33 +717,33 @@ def render_check(
                 browser = playwright.chromium.launch(args=launch_args)
                 receipt["browser"]["channel"] = "chromium"
             receipt["browser"]["version"] = browser.version
-            receipt["browser"]["executable"] = playwright.chromium.executable_path
+            receipt["browser"]["executable"] = Path(playwright.chromium.executable_path).name
 
             panel = browser.new_page(viewport={"width": PANEL_SIZE[0], "height": PANEL_SIZE[1]}, device_scale_factor=2)
             panel.add_init_script(STUB_SOURCE)
-            panel.add_init_script("window.__jarvisStub.snapshot = " + json.dumps(IDLE_SNAPSHOT) + ";")
+            panel.add_init_script("window.__aldenStub.snapshot = " + json.dumps(IDLE_SNAPSHOT) + ";")
             panel.goto(origin + "/index.html", wait_until="load")
             panel.wait_for_timeout(1200)
 
             idle_probe = panel.evaluate(PROBE_SOURCE)
             idle_frames = sample_frames(panel, 2.0)
-            idle_capture = capture(panel, out_dir / "jarvis-render-panel.idle.png")
-            idle_luminance = mean_luminance(panel, out_dir / "jarvis-render-panel.idle.png")
+            idle_capture = capture(panel, out_dir / "alden-render-panel.idle.png")
+            idle_luminance = mean_luminance(panel, out_dir / "alden-render-panel.idle.png")
 
-            panel_light = capture(panel, out_dir / "jarvis-render-panel.light.png")
+            panel_light = capture(panel, out_dir / "alden-render-panel.light.png")
             panel.emulate_media(color_scheme="dark")
             panel.wait_for_timeout(250)
-            panel_dark = capture(panel, out_dir / "jarvis-render-panel.dark.png")
+            panel_dark = capture(panel, out_dir / "alden-render-panel.dark.png")
             panel.emulate_media(color_scheme="light")
 
-            panel.evaluate("() => { window.__jarvisStub.snapshot = " + json.dumps(BUSY_SNAPSHOT) + "; }")
+            panel.evaluate("() => { window.__aldenStub.snapshot = " + json.dumps(BUSY_SNAPSHOT) + "; }")
             panel.wait_for_timeout(3200)
             busy_probe = panel.evaluate(PROBE_SOURCE)
             busy_frames = sample_frames(panel, 2.0)
-            busy_capture = capture(panel, out_dir / "jarvis-render-panel.busy.png")
-            busy_luminance = mean_luminance(panel, out_dir / "jarvis-render-panel.busy.png")
+            busy_capture = capture(panel, out_dir / "alden-render-panel.busy.png")
+            busy_luminance = mean_luminance(panel, out_dir / "alden-render-panel.busy.png")
 
-            panel_calls = panel.evaluate("() => window.__jarvisStub.calls.map((entry) => entry.command)")
+            panel_calls = panel.evaluate("() => window.__aldenStub.calls.map((entry) => entry.command)")
 
             receipt["panel"] = {
                 "view_state": idle_probe["state"],
@@ -721,11 +774,11 @@ def render_check(
 
             # Hide/stop proof. The stub answers the real visibility bridge, so
             # the hide below travels the authoritative path the Rust shell uses
-            # (jarvis://visibility) before the blur/focus fallback is checked.
+            # (alden://visibility) before the blur/focus fallback is checked.
             def snapshot_calls() -> int:
                 return int(
                     panel.evaluate(
-                        "() => window.__jarvisStub.calls.filter("
+                        "() => window.__aldenStub.calls.filter("
                         "function (entry) { return entry.command === "
                         + json.dumps("fetch_runtime_snapshot")
                         + "; }).length"
@@ -733,7 +786,7 @@ def render_check(
                 )
 
             hidden_emitted = panel.evaluate(
-                "() => window.__jarvisStub.emitEvent("
+                "() => window.__aldenStub.emitEvent("
                 + json.dumps(VISIBILITY_EVENT)
                 + ", { visible: false })"
             )
@@ -743,7 +796,7 @@ def render_check(
             hidden_poll_delta = snapshot_calls() - hidden_polls_before
 
             visible_emitted = panel.evaluate(
-                "() => window.__jarvisStub.emitEvent("
+                "() => window.__aldenStub.emitEvent("
                 + json.dumps(VISIBILITY_EVENT)
                 + ", { visible: true })"
             )
@@ -758,7 +811,7 @@ def render_check(
             focus_frames = sample_frames(panel, 1.5)
 
             receipt["panel"]["pause"] = {
-                "listeners": panel.evaluate("() => Object.keys(window.__jarvisStub.listeners)"),
+                "listeners": panel.evaluate("() => Object.keys(window.__aldenStub.listeners)"),
                 "hidden_emitted": bool(hidden_emitted),
                 "visible_emitted": bool(visible_emitted),
                 "hidden": hidden_frames,
@@ -768,31 +821,38 @@ def render_check(
                 "hidden_poll_delta": hidden_poll_delta,
             }
             log("pause: " + json.dumps(receipt["panel"]["pause"], ensure_ascii=False))
+            panel.close()
+            receipt["notes"].append("panel page closed before settings render to avoid simultaneous WebGL contexts")
 
             settings = browser.new_page(viewport={"width": SETTINGS_SIZE[0], "height": SETTINGS_SIZE[1]}, device_scale_factor=2)
             settings.add_init_script(STUB_SOURCE)
-            settings.add_init_script("window.__jarvisStub.snapshot = " + json.dumps(IDLE_SNAPSHOT) + ";")
-            settings.add_init_script("window.__jarvisStub.actions = " + json.dumps(SETTINGS_ACTIONS) + ";")
+            settings.add_init_script("window.__aldenStub.snapshot = " + json.dumps(IDLE_SNAPSHOT) + ";")
+            settings.add_init_script("window.__aldenStub.actions = " + json.dumps(SETTINGS_ACTIONS) + ";")
             settings.goto(origin + "/index.html?view=settings", wait_until="load")
             settings.wait_for_timeout(1600)
 
             settings_probe = settings.evaluate(PROBE_SOURCE)
-            settings_light = capture(settings, out_dir / "jarvis-render-settings.light.png")
+            settings_light = capture(settings, out_dir / "alden-render-settings.light.png")
             settings.emulate_media(color_scheme="dark")
             settings.wait_for_timeout(300)
-            settings_dark = capture(settings, out_dir / "jarvis-render-settings.dark.png")
+            settings_dark = capture(settings, out_dir / "alden-render-settings.dark.png")
             settings.emulate_media(color_scheme="light")
             settings.wait_for_timeout(250)
 
             knowledge = drive_drilldown(settings, log)
             knowledge["render_count_after_focus"] = settings.evaluate("() => window.__knowledgeRenderCount || null")
-            knowledge["settings_focus_capture"] = capture(settings, out_dir / "jarvis-render-settings.focus.png")
+            knowledge["settings_focus_capture"] = capture(settings, out_dir / "alden-render-settings.focus.png")
 
             receipt["settings"] = {
                 "view_state": settings_probe["state"],
                 "headings": settings_probe["headings"],
                 "mains": settings_probe["mains"],
                 "main_classes": settings_probe["mainClasses"],
+                "layout": {
+                    "viewport_width": settings_probe["viewportWidth"],
+                    "document_width": settings_probe["documentWidth"],
+                    "grid_columns": settings_probe["gridColumns"],
+                },
                 "iframes": settings_probe["iframes"],
                 "canvases": settings_probe["canvases"],
                 "webgl": {
@@ -816,7 +876,7 @@ def render_check(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Render the Jarvis menubar UI in Chromium and record what it draws.")
+    parser = argparse.ArgumentParser(description="Render the Alden menubar UI in Chromium and record what it draws.")
     parser.add_argument("--dist", type=Path, default=DEFAULT_DIST)
     parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT)
@@ -843,7 +903,7 @@ def main(argv: list[str] | None = None) -> int:
             print("browser unavailable: " + str(error)[:400], file=sys.stderr)
             return 3
         raise
-    receipt_path = arguments.out_dir / "jarvis-desktop-render-check.json"
+    receipt_path = arguments.out_dir / "alden-desktop-render-check.json"
     receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
     if arguments.json:
         print(json.dumps({"status": receipt["status"], "checks": receipt["checks"], "receipt": str(receipt_path)}, ensure_ascii=False))

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Measure Korean wake generalization on held-out synthesized voices.
 
-The bundled head at `voice/models/hey_jarvis_ko_ridge.onnx` was fitted to a single
-synthesized positive clip, so the honest question it can answer about
-generalization is whether it survives voices it never saw. This script renders a
-held-out corpus with a local synthesizer, scores every clip through the
-production `OpenWakeVadFrontend` at the pinned `WAKE_THRESHOLD`, and reports per-clip
-scores plus accept and false-accept rates.
+Experimental heads are fitted to small synthetic corpora, so this script only
+measures their behavior on held-out synthesized speech. It renders a corpus with
+a local synthesizer, scores each clip through `OpenWakeVadFrontend` at the pinned
+`WAKE_THRESHOLD`, and reports per-clip scores plus accept and false-accept rates.
+No result from synthetic speech alone enables a model in the product.
 
 Two backends are available. `qwen3tts` drives the same cached
 `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` model the product uses and can select any of
@@ -46,13 +45,13 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-from jarvis_voice import OpenWakeVadFrontend, WAKE_THRESHOLD, resolve_custom_wake_model
+from alden_voice import OpenWakeVadFrontend, WAKE_THRESHOLD, resolve_custom_wake_model
 
 
 SAMPLE_RATE = 16_000
 FRAME_SAMPLES = 320  # 20 ms at 16 kHz is the production analyze() contract.
-WAKE_PHRASE = "헤이 자비스"
-NEGATIVE_PHRASES: tuple[str, ...] = ("안녕하세요", "자비스 봇이야", "오늘 날씨 어때")
+WAKE_PHRASE = "올든"
+NEGATIVE_PHRASES: tuple[str, ...] = ("안녕하세요", "올든 봇이야", "오늘 날씨 어때")
 
 # Speakers the cached Qwen3-TTS CustomVoice build reports through
 # get_supported_speakers(). The product adapter always speaks with the first
@@ -180,7 +179,7 @@ def make_qwen3tts_synthesizer(model_id: str | None = None) -> Callable[..., Path
 
     import os
 
-    from jarvis_voice import QWEN3_TTS_MODEL_ID, QWEN3_TTS_PRECISION, _resolve_qwen3_tts_model_path
+    from alden_voice import QWEN3_TTS_MODEL_ID, QWEN3_TTS_PRECISION, _resolve_qwen3_tts_model_path
 
     state: dict[str, Any] = {}
 
@@ -441,7 +440,7 @@ def main(argv: list[str] | None = None) -> int:
 
     voices = tuple(part.strip() for part in args.voices.split(",") if part.strip())
     references = tuple(Path(part.strip()) for part in args.references.split(",") if part.strip())
-    with tempfile.TemporaryDirectory(prefix="jarvis-wake-eval-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="alden-wake-eval-") as scratch:
         corpus_dir = args.corpus_dir.expanduser() if args.corpus_dir is not None else Path(scratch)
         if args.probe_only:
             report = {
@@ -468,4 +467,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

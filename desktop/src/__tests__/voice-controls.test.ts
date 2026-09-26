@@ -9,6 +9,9 @@ function voiceElements(): { button: HTMLButtonElement; status: HTMLElement } {
   const button = document.querySelector<HTMLButtonElement>("#voice-start");
   const status = document.querySelector<HTMLElement>("#voice-status");
   if (!button || !status) throw new Error("voice_test_dom_missing");
+  // Exercise the event handler independently; product markup keeps this
+  // control disabled until a wake model passes the release gate.
+  button.disabled = false;
   return { button, status };
 }
 

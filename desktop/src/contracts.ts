@@ -12,12 +12,15 @@ export interface CancellationToken {
   cancelled: boolean;
 }
 
+export type RoomReplyReadiness = "ready" | "blocked" | "unknown";
+
 export interface RoomSummary {
   chatId: number;
   title: string;
   live: boolean;
   autoReply: boolean;
   openJobs: number;
+  replyReadiness: RoomReplyReadiness;
 }
 
 export interface AvailableChatSummary {
@@ -435,12 +438,21 @@ export function parseRuntimeSnapshot(value: unknown): RuntimeSnapshot {
     if (!room) return [];
     const chatId = finiteNumber(room.chat_id ?? room.chatId, -1);
     if (!Number.isInteger(chatId) || chatId <= 0) return [];
+    const snakeReadiness = room.reply_readiness;
+    const camelReadiness = room.replyReadiness;
+    const conflictingReadiness = snakeReadiness !== undefined
+      && camelReadiness !== undefined && snakeReadiness !== camelReadiness;
+    const rawReadiness = snakeReadiness ?? camelReadiness;
+    const replyReadiness: RoomReplyReadiness = !conflictingReadiness
+      && (rawReadiness === "ready" || rawReadiness === "blocked")
+      ? rawReadiness : "unknown";
     return [{
       chatId,
       title: text(room.title, `id:${chatId}`),
       live: room.live === true,
       autoReply: room.auto_reply === true || room.autoReply === true,
       openJobs: nonNegativeInt(room.open_jobs ?? room.openJobs),
+      replyReadiness,
     }];
   });
 

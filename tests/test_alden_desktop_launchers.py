@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+ALDEN_LABEL = "com.openkakao.alden.desktop"
 JARVIS_LABEL = "com.openkakao.jarvis.desktop"
 
 
@@ -24,7 +25,7 @@ def read_repo_file(relative_path: str) -> str:
     return (ROOT / relative_path).read_text(encoding="utf-8")
 
 
-class JarvisDesktopLauncherTests(unittest.TestCase):
+class AldenDesktopLauncherTests(unittest.TestCase):
     def _run_installer_fixture(
         self,
         *,
@@ -39,15 +40,21 @@ class JarvisDesktopLauncherTests(unittest.TestCase):
         pid_never: bool = False,
         launchd_pid_absent: bool = False,
         launchd_pid_delay: int = 0,
-        initial_jarvis_loaded: bool = False,
+        initial_alden_loaded: bool = False,
         initial_legacy_loaded: bool = False,
         has_legacy_plist: bool = False,
+        initial_jarvis_loaded: bool = False,
+        has_jarvis_plist: bool = False,
+        jarvis_stray: bool = False,
+        jarvis_pgrep_status: int | None = None,
+        jarvis_reported_path: str | None = None,
+        jarvis_service_pid: str = "3120",
         marker_change: bool = False,
         block_pid_print: bool = False,
         block_bootout: bool = False,
         send_signal: int | None = None,
     ) -> dict[str, object]:
-        installer = ROOT / "scripts/install-jarvis-desktop.sh"
+        installer = ROOT / "scripts/install-alden-desktop.sh"
 
         def write_executable(path: Path, body: str) -> None:
             path.write_text(body, encoding="utf-8")
@@ -59,19 +66,28 @@ class JarvisDesktopLauncherTests(unittest.TestCase):
             applications_dir = tmp / "Applications"
             launch_agents_dir = tmp / "LaunchAgents"
             backup_dir = tmp / "backups"
-            source_app = tmp / "source" / "OpenKakao Jarvis.app"
+            source_app = tmp / "source" / "Alden.app"
             source_bin = (
-                source_app / "Contents" / "MacOS" / "openkakao-jarvis-desktop"
+                source_app / "Contents" / "MacOS" / "openkakao-alden-desktop"
             )
-            target_app = applications_dir / "OpenKakao Jarvis.app"
+            target_app = applications_dir / "Alden.app"
             target_bin = (
-                target_app / "Contents" / "MacOS" / "openkakao-jarvis-desktop"
+                target_app / "Contents" / "MacOS" / "openkakao-alden-desktop"
             )
             target_marker = target_app / "marker.txt"
-            jarvis_plist = launch_agents_dir / "com.openkakao.jarvis.desktop.plist"
+            jarvis_app = applications_dir / "OpenKakao Jarvis.app"
+            jarvis_bin = (
+                jarvis_app
+                / "Contents"
+                / "MacOS"
+                / "openkakao-jarvis-desktop"
+            )
+            alden_plist = launch_agents_dir / "com.openkakao.alden.desktop.plist"
             legacy_plist = launch_agents_dir / "com.openkakao.auto-reply.menu.plist"
-            jarvis_state_file = tmp / "launchctl.jarvis.loaded"
+            jarvis_plist = launch_agents_dir / "com.openkakao.jarvis.desktop.plist"
+            alden_state_file = tmp / "launchctl.alden.loaded"
             legacy_state_file = tmp / "launchctl.legacy.loaded"
+            jarvis_state_file = tmp / "launchctl.jarvis.loaded"
             calls_file = tmp / "launchctl.calls"
             print_count_file = tmp / "launchctl.post-bootstrap-print-count"
             pgrep_count_file = tmp / "pgrep.count"
@@ -93,13 +109,26 @@ class JarvisDesktopLauncherTests(unittest.TestCase):
                 target_bin.chmod(0o755)
                 target_marker.write_text("old\n", encoding="utf-8")
             if has_previous_plist:
-                jarvis_plist.write_text("previous-plist\n", encoding="utf-8")
+                alden_plist.write_text("previous-plist\n", encoding="utf-8")
             if has_legacy_plist:
                 legacy_plist.write_text("legacy-plist\n", encoding="utf-8")
-            if initial_jarvis_loaded:
-                jarvis_state_file.touch()
+            if has_jarvis_plist:
+                jarvis_plist.write_text("jarvis-plist\n", encoding="utf-8")
+                jarvis_bin.parent.mkdir(parents=True, exist_ok=True)
+                jarvis_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                jarvis_bin.chmod(0o755)
+            if initial_alden_loaded:
+                alden_state_file.touch()
             if initial_legacy_loaded:
                 legacy_state_file.touch()
+            if initial_jarvis_loaded:
+                jarvis_state_file.touch()
+                jarvis_bin.parent.mkdir(parents=True, exist_ok=True)
+                jarvis_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                jarvis_bin.chmod(0o755)
+
+            if jarvis_pgrep_status is None:
+                jarvis_pgrep_status = 0 if initial_jarvis_loaded or jarvis_stray else 1
 
             write_executable(
                 bin_dir / "launchctl",
@@ -111,17 +140,20 @@ case "$1" in
     target=${2:-}
     if [ "$target" = "$OPENKAKAO_FAKE_DOMAIN" ]; then
       printf '{\n    services = {\n'
-      if [ -f "$OPENKAKAO_FAKE_JARVIS_STATE" ]; then
-        printf '        com.openkakao.jarvis.desktop = { active count = 1 }\n'
+      if [ -f "$OPENKAKAO_FAKE_ALDEN_STATE" ]; then
+        printf '        com.openkakao.alden.desktop = { active count = 1 }\n'
       fi
       if [ -f "$OPENKAKAO_FAKE_LEGACY_STATE" ]; then
         printf '        com.openkakao.auto-reply.menu = { active count = 1 }\n'
       fi
+      if [ -f "$OPENKAKAO_FAKE_JARVIS_STATE" ]; then
+        printf '        com.openkakao.jarvis.desktop = { active count = 1 }\n'
+      fi
       printf '    }\n}\n'
       exit 0
     fi
-    if [ "$target" = "$OPENKAKAO_FAKE_JARVIS_SERVICE" ]; then
-      if [ ! -f "$OPENKAKAO_FAKE_JARVIS_STATE" ]; then
+    if [ "$target" = "$OPENKAKAO_FAKE_ALDEN_SERVICE" ]; then
+      if [ ! -f "$OPENKAKAO_FAKE_ALDEN_STATE" ]; then
         exit 1
       fi
       count=0
@@ -147,15 +179,27 @@ case "$1" in
       printf '{\n    pid = 3131\n}\n'
       exit 0
     fi
+    if [ "$target" = "$OPENKAKAO_FAKE_JARVIS_SERVICE" ] && \
+      [ -f "$OPENKAKAO_FAKE_JARVIS_STATE" ]; then
+      if [ "$OPENKAKAO_FAKE_JARVIS_SERVICE_PID" = missing ]; then
+        printf '{\n    state = running\n}\n'
+      else
+        printf '{\n    pid = %s\n}\n' "$OPENKAKAO_FAKE_JARVIS_SERVICE_PID"
+      fi
+      exit 0
+    fi
     exit 1
     ;;
   bootstrap)
     case "$3" in
-      *com.openkakao.jarvis.desktop.plist)
-        : >"$OPENKAKAO_FAKE_JARVIS_STATE"
+      *com.openkakao.alden.desktop.plist)
+        : >"$OPENKAKAO_FAKE_ALDEN_STATE"
         ;;
       *com.openkakao.auto-reply.menu.plist)
         : >"$OPENKAKAO_FAKE_LEGACY_STATE"
+        ;;
+      *com.openkakao.jarvis.desktop.plist)
+        : >"$OPENKAKAO_FAKE_JARVIS_STATE"
         ;;
       *)
         exit 2
@@ -178,8 +222,8 @@ case "$1" in
     ;;
   bootout)
     case "$2" in
-      *com.openkakao.jarvis.desktop)
-        /bin/rm -f "$OPENKAKAO_FAKE_JARVIS_STATE"
+      *com.openkakao.alden.desktop)
+        /bin/rm -f "$OPENKAKAO_FAKE_ALDEN_STATE"
         if [ "$OPENKAKAO_FAKE_BLOCK_BOOTOUT" = 1 ] && \
           [ ! -f "$OPENKAKAO_FAKE_BLOCK_MARKER" ]; then
           : >"$OPENKAKAO_FAKE_BLOCK_MARKER"
@@ -188,6 +232,9 @@ case "$1" in
         ;;
       *com.openkakao.auto-reply.menu)
         /bin/rm -f "$OPENKAKAO_FAKE_LEGACY_STATE"
+        ;;
+      *com.openkakao.jarvis.desktop)
+        /bin/rm -f "$OPENKAKAO_FAKE_JARVIS_STATE"
         ;;
     esac
     ;;
@@ -201,12 +248,50 @@ esac
                 bin_dir / "ditto",
                 "#!/bin/sh\nset -eu\n/bin/cp -R \"$1\" \"$2\"\n",
             )
-            write_executable(bin_dir / "PlistBuddy", "#!/bin/sh\nexit 0\n")
+            write_executable(
+                bin_dir / "PlistBuddy",
+                """#!/bin/sh
+set -eu
+if [ "${1:-}" = "-c" ]; then
+  case "${2:-}" in
+    "Print :Label")
+      printf '%s\n' "$OPENKAKAO_FAKE_JARVIS_PLIST_LABEL"
+      ;;
+    "Print :ProgramArguments:0")
+      printf '%s\n' "$OPENKAKAO_FAKE_JARVIS_PLIST_PROGRAM"
+      ;;
+  esac
+fi
+exit 0
+""",
+            )
             write_executable(bin_dir / "plutil", "#!/bin/sh\nexit 0\n")
             write_executable(
                 bin_dir / "pgrep",
                 """#!/bin/sh
 set -eu
+pattern=${2:-}
+case "$pattern" in
+  *openkakao-jarvis-desktop*)
+    status=$OPENKAKAO_FAKE_JARVIS_PGREP_STATUS
+    if [ "$status" -ne 0 ]; then
+      exit "$status"
+    fi
+    found=0
+    if [ -f "$OPENKAKAO_FAKE_JARVIS_STATE" ]; then
+      printf '3120\n'
+      found=1
+    fi
+    if [ "$OPENKAKAO_FAKE_JARVIS_STRAY" = 1 ]; then
+      printf '9191\n'
+      found=1
+    fi
+    if [ "$found" -eq 0 ]; then
+      exit 1
+    fi
+    exit 0
+    ;;
+esac
 status=$OPENKAKAO_FAKE_PGREP_STATUS
 if [ "$OPENKAKAO_FAKE_LAUNCHD_PID_ABSENT" = 1 ]; then
   # Model the real failure: the app process is gone, so pgrep reports no match
@@ -252,6 +337,12 @@ if [ "$1" = "-axo" ]; then
       if [ "$OPENKAKAO_FAKE_PS_MODE" = stray ]; then
         printf ' 7777 %s\n' "$OPENKAKAO_FAKE_INSTALLED_BIN"
       fi
+      if [ -f "$OPENKAKAO_FAKE_JARVIS_STATE" ]; then
+        printf ' 3120 %s\n' "$OPENKAKAO_FAKE_JARVIS_REPORTED_PATH"
+      fi
+      if [ "$OPENKAKAO_FAKE_JARVIS_STRAY" = 1 ]; then
+        printf ' 9191 %s\n' "$OPENKAKAO_FAKE_JARVIS_REPORTED_PATH"
+      fi
       exit 0
       ;;
   esac
@@ -272,6 +363,10 @@ if [ "$1" = "-p" ]; then
     exit 0
   fi
   case "$2" in
+    3120|9191)
+      printf '%s\n' "$OPENKAKAO_FAKE_JARVIS_REPORTED_PATH"
+      exit 0
+      ;;
     4242)
       printf '%s\n' "$OPENKAKAO_FAKE_INSTALLED_BIN"
       exit 0
@@ -292,8 +387,8 @@ exit 1
                 {
                     "OPENKAKAO_APPLICATIONS_DIR": str(applications_dir),
                     "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
-                    "OPENKAKAO_JARVIS_BACKUP_DIR": str(backup_dir),
-                    "OPENKAKAO_JARVIS_APP_SOURCE": str(source_app),
+                    "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
+                    "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                     "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
@@ -302,14 +397,19 @@ exit 1
                     "OPENKAKAO_PGREP": str(bin_dir / "pgrep"),
                     "OPENKAKAO_LSOF": str(bin_dir / "lsof"),
                     "OPENKAKAO_FAKE_DOMAIN": f"gui/{os.getuid()}",
-                    "OPENKAKAO_FAKE_JARVIS_SERVICE": (
-                        f"gui/{os.getuid()}/com.openkakao.jarvis.desktop"
+                    "OPENKAKAO_FAKE_ALDEN_SERVICE": (
+                        f"gui/{os.getuid()}/com.openkakao.alden.desktop"
                     ),
                     "OPENKAKAO_FAKE_LEGACY_SERVICE": (
                         f"gui/{os.getuid()}/com.openkakao.auto-reply.menu"
                     ),
-                    "OPENKAKAO_FAKE_JARVIS_STATE": str(jarvis_state_file),
+                    "OPENKAKAO_FAKE_JARVIS_SERVICE": (
+                        f"gui/{os.getuid()}/com.openkakao.jarvis.desktop"
+                    ),
+                    "OPENKAKAO_FAKE_ALDEN_STATE": str(alden_state_file),
                     "OPENKAKAO_FAKE_LEGACY_STATE": str(legacy_state_file),
+                    "OPENKAKAO_FAKE_JARVIS_STATE": str(jarvis_state_file),
+                    "OPENKAKAO_FAKE_JARVIS_SERVICE_PID": jarvis_service_pid,
                     "OPENKAKAO_FAKE_LAUNCHCTL_CALLS": str(calls_file),
                     "OPENKAKAO_FAKE_PRINT_COUNT": str(print_count_file),
                     "OPENKAKAO_FAKE_PGREP_COUNT": str(pgrep_count_file),
@@ -328,6 +428,9 @@ exit 1
                     "OPENKAKAO_FAKE_LAUNCHD_PID_DELAY": str(launchd_pid_delay),
                     "OPENKAKAO_FAKE_KICKSTART_OUTPUT": kickstart_output,
                     "OPENKAKAO_FAKE_PGREP_STATUS": str(pgrep_status),
+                    "OPENKAKAO_FAKE_JARVIS_PGREP_STATUS": str(
+                        jarvis_pgrep_status
+                    ),
                     "OPENKAKAO_FAKE_PS_MODE": "stray" if stray else ps_mode,
                     "OPENKAKAO_FAKE_STRAY": "1" if stray else "0",
                     "OPENKAKAO_FAKE_STRAY_AFTER_FIRST_GUARD": (
@@ -336,6 +439,12 @@ exit 1
                     "OPENKAKAO_FAKE_STRAY_REPORTED_PATH": (
                         stray_reported_path or str(target_bin)
                     ),
+                    "OPENKAKAO_FAKE_JARVIS_STRAY": "1" if jarvis_stray else "0",
+                    "OPENKAKAO_FAKE_JARVIS_REPORTED_PATH": (
+                        jarvis_reported_path or str(jarvis_bin)
+                    ),
+                    "OPENKAKAO_FAKE_JARVIS_PLIST_LABEL": JARVIS_LABEL,
+                    "OPENKAKAO_FAKE_JARVIS_PLIST_PROGRAM": str(jarvis_bin),
                     "OPENKAKAO_FAKE_MARKER_CHANGE": "1" if marker_change else "0",
                     "OPENKAKAO_FAKE_INSTALLED_BIN": str(target_bin),
                 }
@@ -391,19 +500,19 @@ exit 1
                     if target_marker.exists()
                     else None
                 ),
-                "plist_exists": jarvis_plist.exists(),
+                "plist_exists": alden_plist.exists(),
                 "plist_content": (
-                    jarvis_plist.read_text(encoding="utf-8")
-                    if jarvis_plist.exists()
+                    alden_plist.read_text(encoding="utf-8")
+                    if alden_plist.exists()
                     else None
                 ),
                 "previous_apps": [
                     path.name
                     for path in applications_dir.glob(
-                        ".openkakao-jarvis.previous.*.app"
+                        ".openkakao-alden.previous.*.app"
                     )
                 ],
-                "service_loaded": jarvis_state_file.exists(),
+                "service_loaded": alden_state_file.exists(),
                 "legacy_loaded": legacy_state_file.exists(),
                 "legacy_plist_exists": legacy_plist.exists(),
                 "legacy_plist_content": (
@@ -411,6 +520,14 @@ exit 1
                     if legacy_plist.exists()
                     else None
                 ),
+                "jarvis_loaded": jarvis_state_file.exists(),
+                "jarvis_plist_exists": jarvis_plist.exists(),
+                "jarvis_plist_content": (
+                    jarvis_plist.read_text(encoding="utf-8")
+                    if jarvis_plist.exists()
+                    else None
+                ),
+                "jarvis_app_exists": jarvis_app.exists(),
                 "launchctl_calls": calls_file.read_text(encoding="utf-8"),
                 "post_bootstrap_print_count": (
                     int(print_count_file.read_text(encoding="utf-8").strip())
@@ -421,13 +538,30 @@ exit 1
                 "backup_exists": backup_entries[0].is_dir(),
                 "source_exists": source_app.exists(),
                 "installed_readback": read_optional(
-                    backup_entries[0] / f"{JARVIS_LABEL}.installed.txt"
+                    backup_entries[0] / f"{ALDEN_LABEL}.installed.txt"
                 ),
                 "wait_readback": read_optional(
-                    backup_entries[0] / f"{JARVIS_LABEL}.wait.txt"
+                    backup_entries[0] / f"{ALDEN_LABEL}.wait.txt"
                 ),
                 "rollback_readback": read_optional(
-                    backup_entries[0] / f"{JARVIS_LABEL}.rollback.txt"
+                    backup_entries[0] / f"{ALDEN_LABEL}.rollback.txt"
+                ),
+                "jarvis_launchctl_readback": read_optional(
+                    backup_entries[0] / f"{JARVIS_LABEL}.launchctl.txt"
+                ),
+                "jarvis_pre_cutover_readback": read_optional(
+                    backup_entries[0]
+                    / f"{JARVIS_LABEL}.pre-cutover.launchctl.txt"
+                ),
+                "jarvis_backup_plist": read_optional(
+                    backup_entries[0] / f"{JARVIS_LABEL}.plist"
+                ),
+                "jarvis_disabled_plist": read_optional(
+                    backup_entries[0] / f"{JARVIS_LABEL}.disabled.plist"
+                ),
+                "jarvis_process_wait": read_optional(
+                    backup_entries[0]
+                    / f"{JARVIS_LABEL}.process-after-bootout.txt"
                 ),
             }
 
@@ -481,10 +615,10 @@ exit 1
         seeds = (
             "scripts/auto-reply-menubar.py",
             "scripts/local_mlx_model_readiness.py",
-            "scripts/jarvis_voice.py",
-            "scripts/jarvis_tool_runtime.py",
+            "scripts/alden_voice.py",
+            "scripts/alden_tool_runtime.py",
             "scripts/auto_reply_ax_ui.py",
-            "scripts/jarvis_browser_use.py",
+            "scripts/alden_browser_use.py",
             "scripts/auto_reply_metrics.py",
         )
         pending = [seed for seed in seeds if (ROOT / seed).is_file()]
@@ -525,8 +659,8 @@ exit 1
 
     def test_primary_and_compat_shell_scripts_pass_sh_syntax_check(self) -> None:
         scripts = (
-            "scripts/build-jarvis-desktop.sh",
-            "scripts/install-jarvis-desktop.sh",
+            "scripts/build-alden-desktop.sh",
+            "scripts/install-alden-desktop.sh",
             "scripts/build-auto-reply-menubar.sh",
             "scripts/install-auto-reply-menubar.sh",
             "scripts/start-auto-reply-menubar.command",
@@ -550,11 +684,11 @@ exit 1
     def test_compat_wrappers_default_to_tauri_and_swift_is_opt_in(self) -> None:
         wrappers = {
             "scripts/build-auto-reply-menubar.sh": (
-                "build-jarvis-desktop.sh",
+                "build-alden-desktop.sh",
                 "build-swift-auto-reply-menubar.sh",
             ),
             "scripts/install-auto-reply-menubar.sh": (
-                "install-jarvis-desktop.sh",
+                "install-alden-desktop.sh",
                 "install-swift-auto-reply-menubar.sh",
             ),
             "scripts/start-auto-reply-menubar.command": (
@@ -583,24 +717,24 @@ exit 1
     def test_launch_agent_plist_targets_installed_tauri_app(self) -> None:
         plist_path = (
             ROOT
-            / "desktop/launchd/com.openkakao.jarvis.desktop.plist.example"
+            / "desktop/launchd/com.openkakao.alden.desktop.plist.example"
         )
         with plist_path.open("rb") as stream:
             launch_agent = plistlib.load(stream)
 
-        self.assertEqual(launch_agent["Label"], "com.openkakao.jarvis.desktop")
+        self.assertEqual(launch_agent["Label"], "com.openkakao.alden.desktop")
         self.assertEqual(
             launch_agent["ProgramArguments"],
             [
-                "/Applications/OpenKakao Jarvis.app/Contents/MacOS/"
-                "openkakao-jarvis-desktop"
+                "/Applications/Alden.app/Contents/MacOS/"
+                "openkakao-alden-desktop"
             ],
         )
         self.assertIs(launch_agent["RunAtLoad"], True)
         self.assertEqual(launch_agent["LimitLoadToSessionType"], "Aqua")
 
     def test_installer_has_bounded_launch_agent_disappearance_wait(self) -> None:
-        source = read_repo_file("scripts/install-jarvis-desktop.sh")
+        source = read_repo_file("scripts/install-alden-desktop.sh")
 
         self.assertIn("wait_for_absent() {", source)
         self.assertIn('while [ "$wait_attempt" -le 10 ]; do', source)
@@ -611,25 +745,34 @@ exit 1
         )
         self.assertIn('wait_for_absent "$LEGACY_SERVICE"', source)
         self.assertIn('wait_for_absent "$JARVIS_SERVICE"', source)
+        self.assertIn('wait_for_absent "$ALDEN_SERVICE"', source)
+        self.assertIn("wait_for_jarvis_absent() {", source)
         self.assertIn('"$BACKUP_DIR/$LEGACY_LABEL.disabled.plist"', source)
+        self.assertIn('"$BACKUP_DIR/$JARVIS_LABEL.disabled.plist"', source)
         self.assertIn("return 1", source)
 
     def test_installer_guards_previous_bundle_cleanup_against_stray_pids(
         self,
     ) -> None:
-        source = read_repo_file("scripts/install-jarvis-desktop.sh")
+        source = read_repo_file("scripts/install-alden-desktop.sh")
 
         self.assertIn("PS=${OPENKAKAO_PS:-/bin/ps}", source)
         self.assertIn("PGREP=${OPENKAKAO_PGREP:-/usr/bin/pgrep}", source)
         self.assertIn("LSOF=${OPENKAKAO_LSOF:-/usr/sbin/lsof}", source)
+        self.assertIn('JARVIS_LABEL="com.openkakao.jarvis.desktop"', source)
+        self.assertIn('JARVIS_EXECUTABLE="openkakao-jarvis-desktop"', source)
         self.assertIn("list_live_app_pids() {", source)
+        self.assertIn("list_jarvis_pids() {", source)
+        self.assertIn("list_matching_pids() {", source)
         self.assertIn('if [ -x "$PGREP" ]; then', source)
-        self.assertIn('"$PGREP" -f "$APP_EXECUTABLE"', source)
+        self.assertIn('"$PGREP" -f "$match_executable"', source)
         self.assertIn('case "$pgrep_status" in', source)
         self.assertIn("2|3)", source)
         self.assertIn('"$PS" -axo pid=,command=', source)
+        self.assertIn("process_executable_path() {", source)
         self.assertIn("reported_app_path() {", source)
-        self.assertIn('"$LSOF" -p "$reported_pid" -a -d txt -Fn', source)
+        self.assertIn('"$LSOF" -p "$process_pid" -a -d txt -Fn', source)
+        self.assertIn('process_executable_path "$reported_pid"', source)
         self.assertIn('printf \'%s\\n\' "$candidate_pids"', source)
         self.assertNotIn('case "$candidate_path" in', source)
         self.assertIn("wait_for_pid() {", source)
@@ -639,8 +782,8 @@ exit 1
         )
         self.assertIn("/bin/sleep 0.5", source)
         self.assertIn('wait_attempt=$((wait_attempt + 1))', source)
-        self.assertIn('kickstart -kp "$JARVIS_SERVICE"', source)
-        self.assertIn('LAUNCHD_PID=$(wait_for_pid "$JARVIS_SERVICE"', source)
+        self.assertIn('kickstart -kp "$ALDEN_SERVICE"', source)
+        self.assertIn('LAUNCHD_PID=$(wait_for_pid "$ALDEN_SERVICE"', source)
         self.assertIn("LaunchAgent pid was never reported", source)
         self.assertIn('-v launchd_pid="$guard_launchd_pid" -v installer_pid="$$"', source)
         self.assertIn('$0 != launchd_pid && $0 != installer_pid', source)
@@ -656,6 +799,10 @@ exit 1
         self.assertIn("RUNTIME_TOUCHED=1", source)
         self.assertIn('[ "$RUNTIME_TOUCHED" -eq 1 ]', source)
         self.assertIn("rollback legacy runtime:", source)
+        self.assertIn("rollback Jarvis runtime:", source)
+        self.assertIn("verify_jarvis_preflight() {", source)
+        self.assertIn("Jarvis plist ownership could not be verified", source)
+        self.assertIn("check_no_jarvis_processes() {", source)
         self.assertIn('-o lstart=', source)
         self.assertIn("launchd pid identity changed before deletion", source)
         self.assertIn('trap cleanup EXIT', source)
@@ -663,7 +810,7 @@ exit 1
         self.assertGreaterEqual(source.count('check_duplicate_guard "$LAUNCHD_PID"'), 2)
 
     def test_installer_duplicate_process_guard_with_fake_adapters(self) -> None:
-        installer = ROOT / "scripts/install-jarvis-desktop.sh"
+        installer = ROOT / "scripts/install-alden-desktop.sh"
 
         def write_executable(path: Path, body: str) -> None:
             path.write_text(body, encoding="utf-8")
@@ -676,19 +823,19 @@ exit 1
                 applications_dir = tmp / "Applications"
                 launch_agents_dir = tmp / "LaunchAgents"
                 backup_dir = tmp / "backups"
-                source_app = tmp / "source" / "OpenKakao Jarvis.app"
+                source_app = tmp / "source" / "Alden.app"
                 source_bin = (
                     source_app
                     / "Contents"
                     / "MacOS"
-                    / "openkakao-jarvis-desktop"
+                    / "openkakao-alden-desktop"
                 )
-                target_app = applications_dir / "OpenKakao Jarvis.app"
+                target_app = applications_dir / "Alden.app"
                 target_bin = (
                     target_app
                     / "Contents"
                     / "MacOS"
-                    / "openkakao-jarvis-desktop"
+                    / "openkakao-alden-desktop"
                 )
                 state_file = tmp / "launchctl.loaded"
 
@@ -747,6 +894,11 @@ set -eu
                     bin_dir / "pgrep",
                     """#!/bin/sh
 set -eu
+case "${2:-}" in
+  *openkakao-jarvis-desktop*)
+    exit 1
+    ;;
+esac
 printf '4242\n'
 if [ "${OPENKAKAO_FAKE_STRAY:-0}" = 1 ]; then
   printf '7777\n'
@@ -786,8 +938,8 @@ exit 1
                     {
                         "OPENKAKAO_APPLICATIONS_DIR": str(applications_dir),
                         "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
-                        "OPENKAKAO_JARVIS_BACKUP_DIR": str(backup_dir),
-                        "OPENKAKAO_JARVIS_APP_SOURCE": str(source_app),
+                        "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
+                        "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                         "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                         "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                         "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
@@ -810,7 +962,7 @@ exit 1
                     check=False,
                 )
                 previous_apps = list(
-                    applications_dir.glob(".openkakao-jarvis.previous.*.app")
+                    applications_dir.glob(".openkakao-alden.previous.*.app")
                 )
 
                 if stray:
@@ -833,13 +985,13 @@ exit 1
                         result.stdout.splitlines(),
                         [
                             f"installed: {target_app}",
-                            f"LaunchAgent: gui/{os.getuid()}/com.openkakao.jarvis.desktop",
+                            f"LaunchAgent: gui/{os.getuid()}/com.openkakao.alden.desktop",
                             f"backup: {created_backups[0]}",
                         ],
                     )
 
     def test_installer_waits_for_launchd_pid_before_duplicate_guard(self) -> None:
-        installer = ROOT / "scripts/install-jarvis-desktop.sh"
+        installer = ROOT / "scripts/install-alden-desktop.sh"
 
         def write_executable(path: Path, body: str) -> None:
             path.write_text(body, encoding="utf-8")
@@ -851,13 +1003,13 @@ exit 1
             applications_dir = tmp / "Applications"
             launch_agents_dir = tmp / "LaunchAgents"
             backup_dir = tmp / "backups"
-            source_app = tmp / "source" / "OpenKakao Jarvis.app"
+            source_app = tmp / "source" / "Alden.app"
             source_bin = (
-                source_app / "Contents" / "MacOS" / "openkakao-jarvis-desktop"
+                source_app / "Contents" / "MacOS" / "openkakao-alden-desktop"
             )
-            target_app = applications_dir / "OpenKakao Jarvis.app"
+            target_app = applications_dir / "Alden.app"
             target_bin = (
-                target_app / "Contents" / "MacOS" / "openkakao-jarvis-desktop"
+                target_app / "Contents" / "MacOS" / "openkakao-alden-desktop"
             )
             state_file = tmp / "launchctl.loaded"
             count_file = tmp / "launchctl.print-count"
@@ -915,7 +1067,12 @@ esac
             write_executable(bin_dir / "plutil", "#!/bin/sh\nexit 0\n")
             write_executable(
                 bin_dir / "pgrep",
-                "#!/bin/sh\nprintf '4242\\n'\n",
+                """#!/bin/sh
+case "${2:-}" in
+  *openkakao-jarvis-desktop*) exit 1 ;;
+esac
+printf '4242\n'
+""",
             )
             write_executable(
                 bin_dir / "ps",
@@ -936,8 +1093,8 @@ exit 1
                 {
                     "OPENKAKAO_APPLICATIONS_DIR": str(applications_dir),
                     "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
-                    "OPENKAKAO_JARVIS_BACKUP_DIR": str(backup_dir),
-                    "OPENKAKAO_JARVIS_APP_SOURCE": str(source_app),
+                    "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
+                    "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                     "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
@@ -962,7 +1119,7 @@ exit 1
 
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             self.assertEqual(
-                list(applications_dir.glob(".openkakao-jarvis.previous.*.app")),
+                list(applications_dir.glob(".openkakao-alden.previous.*.app")),
                 [],
             )
             self.assertEqual(count_file.read_text(encoding="utf-8").strip(), "3")
@@ -970,7 +1127,7 @@ exit 1
     def test_installer_keeps_previous_bundle_when_launchd_pid_never_appears(
         self,
     ) -> None:
-        installer = ROOT / "scripts/install-jarvis-desktop.sh"
+        installer = ROOT / "scripts/install-alden-desktop.sh"
 
         def write_executable(path: Path, body: str) -> None:
             path.write_text(body, encoding="utf-8")
@@ -982,16 +1139,16 @@ exit 1
             applications_dir = tmp / "Applications"
             launch_agents_dir = tmp / "LaunchAgents"
             backup_dir = tmp / "backups"
-            source_app = tmp / "source" / "OpenKakao Jarvis.app"
+            source_app = tmp / "source" / "Alden.app"
             source_bin = (
-                source_app / "Contents" / "MacOS" / "openkakao-jarvis-desktop"
+                source_app / "Contents" / "MacOS" / "openkakao-alden-desktop"
             )
             target_bin = (
                 applications_dir
-                / "OpenKakao Jarvis.app"
+                / "Alden.app"
                 / "Contents"
                 / "MacOS"
-                / "openkakao-jarvis-desktop"
+                / "openkakao-alden-desktop"
             )
             state_file = tmp / "launchctl.loaded"
             count_file = tmp / "launchctl.print-count"
@@ -1045,7 +1202,12 @@ esac
             write_executable(bin_dir / "plutil", "#!/bin/sh\nexit 0\n")
             write_executable(
                 bin_dir / "pgrep",
-                "#!/bin/sh\nprintf '4242\\n'\n",
+                """#!/bin/sh
+case "${2:-}" in
+  *openkakao-jarvis-desktop*) exit 1 ;;
+esac
+printf '4242\n'
+""",
             )
             write_executable(bin_dir / "ps", "#!/bin/sh\nexit 1\n")
             write_executable(bin_dir / "lsof", "#!/bin/sh\nexit 1\n")
@@ -1055,8 +1217,8 @@ esac
                 {
                     "OPENKAKAO_APPLICATIONS_DIR": str(applications_dir),
                     "OPENKAKAO_LAUNCH_AGENTS_DIR": str(launch_agents_dir),
-                    "OPENKAKAO_JARVIS_BACKUP_DIR": str(backup_dir),
-                    "OPENKAKAO_JARVIS_APP_SOURCE": str(source_app),
+                    "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
+                    "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
                     "OPENKAKAO_PLISTBUDDY": str(bin_dir / "PlistBuddy"),
@@ -1078,7 +1240,7 @@ esac
                 check=False,
             )
             previous_apps = list(
-                applications_dir.glob(".openkakao-jarvis.previous.*.app")
+                applications_dir.glob(".openkakao-alden.previous.*.app")
             )
 
             self.assertEqual(result.returncode, 3, msg=result.stderr)
@@ -1089,6 +1251,132 @@ esac
             self.assertTrue(target_bin.is_file())
             self.assertFalse(state_file.exists())
             self.assertEqual(count_file.read_text(encoding="utf-8").strip(), "10")
+
+    def test_installer_cuts_over_verified_loaded_jarvis_service(self) -> None:
+        case = self._run_installer_fixture(
+            initial_jarvis_loaded=True,
+            has_jarvis_plist=True,
+        )
+
+        self.assertEqual(case["returncode"], 0, msg=case["stderr"])
+        self.assertFalse(case["jarvis_loaded"])
+        self.assertFalse(case["jarvis_plist_exists"])
+        self.assertTrue(case["jarvis_app_exists"])
+        self.assertEqual(case["jarvis_backup_plist"], "jarvis-plist\n")
+        self.assertEqual(case["jarvis_disabled_plist"], "jarvis-plist\n")
+        self.assertIn("pid = 3120", case["jarvis_launchctl_readback"])
+        self.assertIn("pid = 3120", case["jarvis_pre_cutover_readback"])
+        self.assertIn("attempt 1/10", case["jarvis_process_wait"])
+        self.assertIn(
+            f"bootout gui/{os.getuid()}/{JARVIS_LABEL}",
+            case["launchctl_calls"],
+        )
+        self.assertNotIn("rollback was attempted", case["stderr"])
+
+    def test_installer_cuts_over_unloaded_jarvis_plist_without_bootout(
+        self,
+    ) -> None:
+        case = self._run_installer_fixture(has_jarvis_plist=True)
+
+        self.assertEqual(case["returncode"], 0, msg=case["stderr"])
+        self.assertFalse(case["jarvis_loaded"])
+        self.assertFalse(case["jarvis_plist_exists"])
+        self.assertEqual(case["jarvis_backup_plist"], "jarvis-plist\n")
+        self.assertEqual(case["jarvis_disabled_plist"], "jarvis-plist\n")
+        self.assertNotIn(
+            f"bootout gui/{os.getuid()}/{JARVIS_LABEL}",
+            case["launchctl_calls"],
+        )
+
+    def test_installer_blocks_unowned_jarvis_process_before_mutation(self) -> None:
+        case = self._run_installer_fixture(jarvis_stray=True)
+
+        self.assertEqual(case["returncode"], 3)
+        self.assertIn("stray Jarvis process detected before cutover", case["stderr"])
+        self.assertIn("Jarvis pid 9191", case["stderr"])
+        self.assertEqual(case["target_marker"], "old")
+        self.assertFalse(case["service_loaded"])
+        self.assertFalse(case["jarvis_loaded"])
+        self.assertNotIn("bootout ", case["launchctl_calls"])
+        self.assertNotIn("rollback was attempted", case["stderr"])
+
+    def test_installer_blocks_unverified_jarvis_service_ownership(self) -> None:
+        scenarios = (
+            ({"jarvis_service_pid": "missing"}, "service pid could not be verified"),
+            ({"jarvis_service_pid": "9999"}, "is not a live Jarvis process"),
+            (
+                {"jarvis_reported_path": "/tmp/unowned-openkakao-jarvis-desktop"},
+                "service path mismatch",
+            ),
+        )
+        for overrides, expected_error in scenarios:
+            with self.subTest(expected_error=expected_error):
+                case = self._run_installer_fixture(
+                    initial_jarvis_loaded=True,
+                    has_jarvis_plist=True,
+                    **overrides,
+                )
+
+                self.assertEqual(case["returncode"], 3)
+                self.assertIn(expected_error, case["stderr"])
+                self.assertTrue(case["jarvis_loaded"])
+                self.assertTrue(case["jarvis_plist_exists"])
+                self.assertEqual(case["jarvis_plist_content"], "jarvis-plist\n")
+                self.assertNotIn(
+                    f"bootout gui/{os.getuid()}/{JARVIS_LABEL}",
+                    case["launchctl_calls"],
+                )
+
+    def test_failed_cutover_restores_loaded_jarvis_state(self) -> None:
+        case = self._run_installer_fixture(
+            stray=True,
+            initial_jarvis_loaded=True,
+            has_jarvis_plist=True,
+        )
+
+        self.assertEqual(case["returncode"], 3)
+        self.assertIn("rollback was attempted", case["stderr"])
+        self.assertIn("rollback Jarvis runtime: bootstrap restored", case["stderr"])
+        self.assertTrue(case["jarvis_loaded"])
+        self.assertTrue(case["jarvis_plist_exists"])
+        self.assertEqual(case["jarvis_plist_content"], "jarvis-plist\n")
+        self.assertIn(
+            f"bootstrap gui/{os.getuid()} ",
+            case["launchctl_calls"],
+        )
+
+    def test_failed_cutover_restores_unloaded_jarvis_state(self) -> None:
+        case = self._run_installer_fixture(
+            stray=True,
+            has_jarvis_plist=True,
+        )
+
+        self.assertEqual(case["returncode"], 3)
+        self.assertIn("rollback was attempted", case["stderr"])
+        self.assertFalse(case["jarvis_loaded"])
+        self.assertTrue(case["jarvis_plist_exists"])
+        self.assertEqual(case["jarvis_plist_content"], "jarvis-plist\n")
+        jarvis_bootstrap_lines = [
+            line
+            for line in case["launchctl_calls"].splitlines()
+            if line.startswith(f"bootstrap gui/{os.getuid()} ")
+            and JARVIS_LABEL in line
+        ]
+        self.assertEqual(jarvis_bootstrap_lines, [])
+
+    def test_installer_blocks_when_jarvis_process_enumeration_is_unknown(
+        self,
+    ) -> None:
+        case = self._run_installer_fixture(
+            jarvis_pgrep_status=2,
+            ps_mode="fail",
+        )
+
+        self.assertEqual(case["returncode"], 3)
+        self.assertIn("process enumeration is unknown", case["stderr"])
+        self.assertEqual(case["target_marker"], "old")
+        self.assertNotIn("bootout ", case["launchctl_calls"])
+        self.assertNotIn("rollback was attempted", case["stderr"])
 
     def test_installer_pgrep_errors_use_ps_fallback(self) -> None:
         for pgrep_status in (2, 3):
@@ -1151,7 +1439,7 @@ esac
         self.assertEqual(case["previous_apps"], [])
         self.assertFalse(case["service_loaded"])
         self.assertIn(
-            f"bootout gui/{os.getuid()}/com.openkakao.jarvis.desktop",
+            f"bootout gui/{os.getuid()}/com.openkakao.alden.desktop",
             case["launchctl_calls"],
         )
 
@@ -1175,21 +1463,27 @@ esac
     ) -> None:
         case = self._run_installer_fixture(
             block_bootout=True,
-            initial_jarvis_loaded=True,
+            initial_alden_loaded=True,
             initial_legacy_loaded=True,
             has_legacy_plist=True,
+            initial_jarvis_loaded=True,
+            has_jarvis_plist=True,
             send_signal=signal.SIGTERM,
         )
 
         self.assertEqual(case["returncode"], 128 + signal.SIGTERM)
         self.assertIn("signal exit 143", case["stderr"])
         self.assertIn("rollback was attempted", case["stderr"])
-        self.assertIn("rollback Jarvis runtime: bootstrap restored", case["stderr"])
+        self.assertIn("rollback Alden runtime: bootstrap restored", case["stderr"])
         self.assertIn("rollback legacy runtime: bootstrap restored", case["stderr"])
+        self.assertIn("rollback Jarvis runtime: bootstrap restored", case["stderr"])
         self.assertTrue(case["service_loaded"])
         self.assertTrue(case["legacy_loaded"])
+        self.assertTrue(case["jarvis_loaded"])
         self.assertTrue(case["legacy_plist_exists"])
         self.assertEqual(case["legacy_plist_content"], "legacy-plist\n")
+        self.assertTrue(case["jarvis_plist_exists"])
+        self.assertEqual(case["jarvis_plist_content"], "jarvis-plist\n")
         self.assertEqual(case["target_marker"], "old")
         self.assertIsNone(case["installed_readback"])
         self.assertIsNotNone(case["rollback_readback"])
@@ -1197,33 +1491,44 @@ esac
     def test_installer_rollback_restores_previous_launch_agents(self) -> None:
         case = self._run_installer_fixture(
             stray=True,
-            initial_jarvis_loaded=True,
+            initial_alden_loaded=True,
             initial_legacy_loaded=True,
             has_legacy_plist=True,
+            initial_jarvis_loaded=True,
+            has_jarvis_plist=True,
         )
 
         self.assertEqual(case["returncode"], 3)
         self.assertTrue(case["service_loaded"])
         self.assertTrue(case["legacy_loaded"])
+        self.assertTrue(case["jarvis_loaded"])
         self.assertTrue(case["legacy_plist_exists"])
         self.assertEqual(case["legacy_plist_content"], "legacy-plist\n")
+        self.assertTrue(case["jarvis_plist_exists"])
+        self.assertEqual(case["jarvis_plist_content"], "jarvis-plist\n")
         bootstrap_lines = [
             line
             for line in case["launchctl_calls"].splitlines()
             if line.startswith(f"bootstrap gui/{os.getuid()} ")
         ]
         self.assertEqual(
-            sum("com.openkakao.jarvis.desktop.plist" in line for line in bootstrap_lines),
+            sum("com.openkakao.alden.desktop.plist" in line for line in bootstrap_lines),
             2,
         )
         self.assertEqual(
             sum("com.openkakao.auto-reply.menu.plist" in line for line in bootstrap_lines),
             1,
         )
-        self.assertIn("rollback Jarvis runtime: bootstrap restored", case["stderr"])
+        self.assertEqual(
+            sum("com.openkakao.jarvis.desktop.plist" in line for line in bootstrap_lines),
+            1,
+        )
+        self.assertIn("rollback Alden runtime: bootstrap restored", case["stderr"])
         self.assertIn("rollback legacy runtime: bootstrap restored", case["stderr"])
-        self.assertIn("rollback Jarvis LaunchAgent loaded: yes", case["stderr"])
+        self.assertIn("rollback Jarvis runtime: bootstrap restored", case["stderr"])
+        self.assertIn("rollback Alden LaunchAgent loaded: yes", case["stderr"])
         self.assertIn("rollback legacy LaunchAgent loaded: yes", case["stderr"])
+        self.assertIn("rollback Jarvis LaunchAgent loaded: yes", case["stderr"])
 
     def test_installer_second_guard_stray_removes_installed_artifact(self) -> None:
         case = self._run_installer_fixture(stray_after_first_guard=True)
@@ -1236,7 +1541,7 @@ esac
         self.assertIsNotNone(case["rollback_readback"])
 
     def test_installer_outside_applications_candidate_is_stray(self) -> None:
-        outside_path = "/tmp/openkakao-jarvis-desktop"
+        outside_path = "/tmp/openkakao-alden-desktop"
         case = self._run_installer_fixture(
             stray=True,
             stray_reported_path=outside_path,
@@ -1274,7 +1579,7 @@ esac
         self.assertFalse(case["service_loaded"])
         self.assertEqual(case["post_bootstrap_print_count"], 10)
         self.assertIn(
-            f"bootout gui/{os.getuid()}/com.openkakao.jarvis.desktop",
+            f"bootout gui/{os.getuid()}/com.openkakao.alden.desktop",
             case["launchctl_calls"],
         )
 
@@ -1283,7 +1588,7 @@ esac
 
         self.assertEqual(case["returncode"], 3)
         self.assertIn("is not a live app process", case["stderr"])
-        self.assertNotIn("stray Jarvis process", case["stderr"])
+        self.assertNotIn("stray Alden process", case["stderr"])
         self.assertIn("rollback was attempted", case["stderr"])
         self.assertIn("previous bundle restored", case["stderr"])
         self.assertEqual(case["target_marker"], "old")
@@ -1296,7 +1601,7 @@ esac
 
         self.assertEqual(case["returncode"], 0)
         self.assertNotIn("rollback was attempted", case["stderr"])
-        self.assertNotIn("stray Jarvis process", case["stderr"])
+        self.assertNotIn("stray Alden process", case["stderr"])
         self.assertTrue(case["service_loaded"])
         self.assertIsNotNone(case["installed_readback"])
         self.assertEqual(case["previous_apps"], [])
@@ -1318,7 +1623,7 @@ esac
             case["stdout"].splitlines(),
             [
                 f"installed: {case['target_app']}",
-                f"LaunchAgent: gui/{os.getuid()}/com.openkakao.jarvis.desktop",
+                f"LaunchAgent: gui/{os.getuid()}/com.openkakao.alden.desktop",
                 f"backup: {case['backup_path']}",
             ],
         )
@@ -1343,7 +1648,7 @@ esac
         self.assertIsNone(case["installed_readback"])
         self.assertIsNotNone(case["rollback_readback"])
         self.assertIn(
-            f"bootout gui/{os.getuid()}/com.openkakao.jarvis.desktop",
+            f"bootout gui/{os.getuid()}/com.openkakao.alden.desktop",
             case["launchctl_calls"],
         )
 
@@ -1352,7 +1657,7 @@ esac
 
         self.assertEqual(case["returncode"], 0, msg=case["stderr"])
         self.assertIn(
-            f"kickstart -kp gui/{os.getuid()}/com.openkakao.jarvis.desktop",
+            f"kickstart -kp gui/{os.getuid()}/com.openkakao.alden.desktop",
             case["launchctl_calls"],
         )
         self.assertEqual(case["post_bootstrap_print_count"], 0)

@@ -1967,7 +1967,10 @@ fn probe_auto_reply_llm_with_local_transport(
                 .send()
             {
                 if resp.status().is_success() {
-                    eprintln!("advisory: OpenCodex authentication gateway verified OK ({})", ocx_model);
+                    eprintln!(
+                        "advisory: OpenCodex authentication gateway verified OK ({})",
+                        ocx_model
+                    );
                     return Ok(());
                 }
             }
@@ -2225,7 +2228,9 @@ fn validate_auto_reply_runner(config: &config::OpenKakaoConfig) -> Result<AutoRe
             let codex_prefix = Path::new("/opt/homebrew/lib/node_modules/@openai/codex/");
             let ocx_prefix = Path::new("/opt/homebrew/lib/node_modules/@bitkyc08/opencodex/");
             if kind == "opencodex" {
-                if !resolved_path.starts_with(ocx_prefix) && !resolved_path.starts_with("/opt/homebrew/") {
+                if !resolved_path.starts_with(ocx_prefix)
+                    && !resolved_path.starts_with("/opt/homebrew/")
+                {
                     anyhow::bail!(
                         "AutoReply reply_runner for opencodex must be in Homebrew prefix"
                     );
@@ -4064,9 +4069,8 @@ fn enrollment_cursor_authority_for_target(
         });
     } else if let Err(error) = fs::symlink_metadata(&state_path) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(error).with_context(|| {
-                format!("inspect AutoReply room state {}", state_path.display())
-            });
+            return Err(error)
+                .with_context(|| format!("inspect AutoReply room state {}", state_path.display()));
         }
     }
 
@@ -4610,8 +4614,7 @@ fn resolve_auto_reply_author_bindings(
 /// flapping). Each attempt re-reads both sides and re-runs the same read-only
 /// match, so the safety property is unchanged.
 const AUTO_REPLY_ATTEST_ATTEMPTS: usize = 3;
-const AUTO_REPLY_ATTEST_RETRY_PAUSE: std::time::Duration =
-    std::time::Duration::from_millis(500);
+const AUTO_REPLY_ATTEST_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Run one bounded operation until it succeeds or the attempt budget is spent.
 ///
@@ -4643,9 +4646,11 @@ fn auto_reply_attest_explicit_bindings(
     selectors: &[local_db::ChatSelector],
     targets: &[local_db::LocalChat],
 ) -> Result<Vec<AutoReplyBindingEvidence>> {
-    retry_bounded(AUTO_REPLY_ATTEST_ATTEMPTS, AUTO_REPLY_ATTEST_RETRY_PAUSE, || {
-        auto_reply_attest_explicit_bindings_once(reader, selectors, targets)
-    })
+    retry_bounded(
+        AUTO_REPLY_ATTEST_ATTEMPTS,
+        AUTO_REPLY_ATTEST_RETRY_PAUSE,
+        || auto_reply_attest_explicit_bindings_once(reader, selectors, targets),
+    )
 }
 
 fn auto_reply_attest_explicit_bindings_once(
@@ -7409,14 +7414,15 @@ fn main() -> Result<()> {
                 let _generation_lock = if is_auto_reply_worker && !preflight {
                     let home = dirs::home_dir().context("cannot resolve home directory")?;
                     let lock_path = std::env::var_os("OPENKAKAO_AUTO_REPLY_GENERATION_LOCK")
-                    .or_else(|| std::env::var_os("OPENKAKAO_AUTO_REPLY_LOCK"))
-                    .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_GENERATION_LOCK"))
-                    .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_LOCK"))
-                    .filter(|value| !value.is_empty())
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| {
-                        auto_reply_service::default_state_root(&home).join(".owner-generation.lock")
-                    });
+                        .or_else(|| std::env::var_os("OPENKAKAO_AUTO_REPLY_LOCK"))
+                        .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_GENERATION_LOCK"))
+                        .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_LOCK"))
+                        .filter(|value| !value.is_empty())
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| {
+                            auto_reply_service::default_state_root(&home)
+                                .join(".owner-generation.lock")
+                        });
                     let lock = fs::OpenOptions::new()
                         .create(true)
                         .truncate(false)
@@ -9262,10 +9268,7 @@ mod tests {
             None,
             "the local model allowlist must remain exact"
         );
-        for exact in [
-            config::MLX_27B_MODEL_ID,
-            config::MLX_27B_PREFIXED_MODEL_ID,
-        ] {
+        for exact in [config::MLX_27B_MODEL_ID, config::MLX_27B_PREFIXED_MODEL_ID] {
             assert_eq!(
                 AutoReplyLlmChoice::from_model(exact),
                 Some(AutoReplyLlmChoice::MlxQwen38TwentySevenB)
@@ -9441,9 +9444,10 @@ mod tests {
         .is_err());
         assert_eq!(malformed.requests.borrow().len(), 1);
 
-        let redirected = FakeLocalMlxProbeTransport::new(vec![
-            FakeLocalMlxProbeTransport::json(302, serde_json::json!({"redirect": true})),
-        ]);
+        let redirected = FakeLocalMlxProbeTransport::new(vec![FakeLocalMlxProbeTransport::json(
+            302,
+            serde_json::json!({"redirect": true}),
+        )]);
         let redirect_error = probe_auto_reply_llm_with_local_transport(
             &config,
             AutoReplyLlmChoice::MlxQwen38FlashNext,
@@ -9471,12 +9475,12 @@ mod tests {
             "https://models.example.invalid/v1/models",
         ] {
             let error = match ReqwestLocalMlxProbeTransport.send(LocalMlxProbeRequest {
-                    method: LocalMlxProbeMethod::Get,
-                    url,
-                    body: None,
-                    timeout: LOCAL_MLX_PROBE_TIMEOUT,
-                    max_response_bytes: LOCAL_MLX_MAX_RESPONSE_BYTES,
-                }) {
+                method: LocalMlxProbeMethod::Get,
+                url,
+                body: None,
+                timeout: LOCAL_MLX_PROBE_TIMEOUT,
+                max_response_bytes: LOCAL_MLX_MAX_RESPONSE_BYTES,
+            }) {
                 Ok(_) => panic!("non-fixed endpoint must be rejected before transport"),
                 Err(error) => error,
             };
@@ -11887,7 +11891,11 @@ connection.close()
         config.safety.allow_loco_write = true;
         assert!(require_loco_write(&config).is_ok());
     }
-    fn bound_source_message(log_id: i64, author_id: i64, sender_name: &str) -> local_db::LocalMessage {
+    fn bound_source_message(
+        log_id: i64,
+        author_id: i64,
+        sender_name: &str,
+    ) -> local_db::LocalMessage {
         local_db::LocalMessage {
             log_id,
             chat_id: 417_780_809_780_519,
@@ -11939,15 +11947,18 @@ connection.close()
             .contains("scheduled reply source row is unavailable"));
     }
 
-        #[test]
-        fn bound_source_message_reports_a_lookup_failure() {
-            let windowed: Vec<local_db::LocalMessage> = Vec::new();
-            let error = resolve_bound_source_message(&windowed, 7, |_| anyhow::bail!("database gone"))
-                .expect_err("a read failure must surface instead of a silent miss");
-            // The context wraps the read error, so the cause is on the chain
-            // rather than in the outermost message.
-            let chain = format!("{error:#}");
-            assert!(chain.contains("database gone"), "{chain}");
-            assert!(chain.contains("read the scheduled reply source row"), "{chain}");
-        }
+    #[test]
+    fn bound_source_message_reports_a_lookup_failure() {
+        let windowed: Vec<local_db::LocalMessage> = Vec::new();
+        let error = resolve_bound_source_message(&windowed, 7, |_| anyhow::bail!("database gone"))
+            .expect_err("a read failure must surface instead of a silent miss");
+        // The context wraps the read error, so the cause is on the chain
+        // rather than in the outermost message.
+        let chain = format!("{error:#}");
+        assert!(chain.contains("database gone"), "{chain}");
+        assert!(
+            chain.contains("read the scheduled reply source row"),
+            "{chain}"
+        );
+    }
 }

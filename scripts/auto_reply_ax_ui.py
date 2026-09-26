@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Callable
 from typing import Any
 import auto_reply_metrics as perf
-from jarvis_abort import AbortToken
+from alden_abort import AbortToken
 
 CHAT = os.environ.get("OPENKAKAO_TARGET_CHAT_NAME", "부자멘토멘티").strip() or "부자멘토멘티"
 _FIELD = chr(31)

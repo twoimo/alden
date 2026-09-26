@@ -29,6 +29,8 @@ export function wireVoiceStart(
         const code = error instanceof Error ? error.message : error;
         if (code === "voice_session_already_running") {
           if (status) status.textContent = "기존 음성 실행이 남아 있어 새로 시작하지 않았습니다.";
+        } else if (code === "alden_wake_model_unavailable") {
+          if (status) status.textContent = "‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력을 시작하지 않았습니다.";
         } else {
           if (status) status.textContent = "음성 듣기를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.";
         }

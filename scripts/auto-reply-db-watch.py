@@ -78,7 +78,7 @@ def _find_cli_bin() -> Path:
     if bundle_bin.is_file():
         return bundle_bin
     tauri_app_bin = Path(
-        "/Applications/OpenKakao Jarvis.app/Contents/Resources/bin/openkakao-cli"
+        "/Applications/Alden.app/Contents/Resources/bin/openkakao-cli"
     )
     if tauri_app_bin.is_file():
         return tauri_app_bin
@@ -175,11 +175,10 @@ CONTEXT_SYNC_DEFERRED_RETRY_MAX_SECONDS = 5
 # slow capped schedule instead of making the supervisor restart every child.
 CONTEXT_SYNC_TRANSIENT_RETRY_DELAYS_SECONDS = (5.0, 10.0, 30.0, 60.0)
 CONTEXT_SYNC_RETRY_HEARTBEAT_SECONDS = 5.0
-# Every room's watcher syncs the same context database, and that database runs
-# in rollback-journal (DELETE) mode, where a second writer starves on RESERVED
-# and reports SQLITE_BUSY. Three rooms retrying on their own clocks therefore
-# never converged and stayed fenced in context_sync_transient. One bounded
-# advisory lock keeps a single writer on the database at a time.
+# Every room's watcher syncs the same context database. WAL allows concurrent
+# readers, but SQLite still admits only one writer; independent room syncs can
+# report SQLITE_BUSY and repeatedly fence their own pollers. One advisory lock
+# serializes those shared-index writes.
 CONTEXT_SYNC_WRITER_LOCK_FILE_NAME = "context-sync.writer.lock"
 CONTEXT_SYNC_WRITER_LOCK_WAIT_SECONDS = 300.0
 CONTEXT_SYNC_WRITER_LOCK_POLL_SECONDS = 0.25
@@ -652,16 +651,27 @@ class _PeriodicContextSync:
 
     def in_flight(self) -> bool:
         with self._guard:
-            return self._thread is not None
+            return self._thread is not None or self._result is not None
 
-    def start(self, chat_id: int, *, on_wait=None, on_tick=None) -> bool:
-        """Start one sync unless one is already running."""
+    def start(
+        self,
+        chat_id: int,
+        *,
+        initial: bool = False,
+        on_wait=None,
+        on_tick=None,
+    ) -> bool:
+        """Start one sync unless one is running or awaiting collection."""
         with self._guard:
-            if self._thread is not None or self._stop.is_set():
+            if (
+                self._thread is not None
+                or self._result is not None
+                or self._stop.is_set()
+            ):
                 return False
             thread = threading.Thread(
                 target=self._run,
-                args=(chat_id, on_wait, on_tick),
+                args=(chat_id, initial, on_wait, on_tick),
                 name="context-sync",
                 daemon=True,
             )
@@ -669,7 +679,7 @@ class _PeriodicContextSync:
         thread.start()
         return True
 
-    def _run(self, chat_id: int, on_wait, on_tick) -> None:
+    def _run(self, chat_id: int, initial: bool, on_wait, on_tick) -> None:
         # The worker owns its in-flight marker: every exit path, cancellation
         # included, has to clear it, or in_flight() would stay true and no
         # later periodic sync could ever start.
@@ -677,6 +687,7 @@ class _PeriodicContextSync:
         try:
             value = sync_context_index(
                 chat_id,
+                initial=initial,
                 on_wait=on_wait,
                 on_tick=on_tick,
             )
@@ -1789,6 +1800,7 @@ def _clean_poll_retry_snapshot(
     state: dict,
     *,
     retry_fence: bool,
+    capture_only: bool = False,
 ) -> tuple[object, ...] | None:
     """Return immutable clean-cursor proof for the typed poll retry loop.
 
@@ -1814,6 +1826,10 @@ def _clean_poll_retry_snapshot(
             ("ready", True, "ready", ""),
         }
     )
+    capture_only_capability = (
+        capability[:3] == ("starting", False, "starting")
+        and capability[3] in {"context_sync_transient", "context_sync_deferred"}
+    )
     target_chat_id = state.get("target_chat_id")
     source_epoch = state.get("source_epoch")
     cursor_floor = state.get("cursor_floor")
@@ -1825,7 +1841,10 @@ def _clean_poll_retry_snapshot(
     recent_tail = _validated_recent_tail(state.get("recent_message_tail"))
     if (
         state.get("schema_version") != state_schema_version()
-        or capability not in allowed_capabilities
+        or (
+            capability not in allowed_capabilities
+            and not (capture_only and not retry_fence and capture_only_capability)
+        )
         or retry_kind
         != (TRANSIENT_POLL_RETRY_KIND if retry_fence else None)
         or isinstance(target_chat_id, bool)
@@ -1900,6 +1919,9 @@ def _wait_clean_poll_retry(state: dict, retry_delay: float) -> None:
 def _poll_with_bounded_clean_retry(
     state: dict,
     interval: float,
+    *,
+    delivery_ready: bool = True,
+    not_ready_reason: str = "",
 ) -> tuple[dict, int]:
     """Poll until success or a non-transient/changed poll fence.
 
@@ -1913,7 +1935,11 @@ def _poll_with_bounded_clean_retry(
     # the immutable retry proof. Invalid state becomes a reconciliation fence
     # here and therefore cannot enter the retry path.
     state = _state(state)
-    clean_snapshot = _clean_poll_retry_snapshot(state, retry_fence=False)
+    clean_snapshot = _clean_poll_retry_snapshot(
+        state,
+        retry_fence=False,
+        capture_only=not delivery_ready,
+    )
     if clean_snapshot is None:
         # A child may restart inside the same supervisor generation after
         # persisting the typed gap. Resume from that immutable non-delivery
@@ -1922,7 +1948,15 @@ def _poll_with_bounded_clean_retry(
     emitted_total = 0
     attempt = 0
     while True:
-        state, emitted = poll_once(state, interval)
+        if delivery_ready:
+            state, emitted = poll_once(state, interval)
+        else:
+            state, emitted = poll_once(
+                state,
+                interval,
+                delivery_ready=False,
+                not_ready_reason=not_ready_reason,
+            )
         emitted_total += emitted
         if not _save_polled_state(state):
             raise DbFence("state_persist_failed")
@@ -4089,10 +4123,24 @@ def poll_once(
     interval: float = 1.0,
     *,
     _generation_lock_held: bool = False,
+    delivery_ready: bool = True,
+    not_ready_reason: str = "",
 ) -> tuple[dict, int]:
     # `_generation_lock_held` is retained for callers from older harnesses,
     # but hook and media work must never run while that lock is held.
     state = _state(state)
+    if not delivery_ready and (
+        not_ready_reason
+        not in {"", "context_sync_transient", "context_sync_deferred"}
+        or state.get("delivery_enabled") is not False
+    ):
+        state.update(
+            capability_state="fenced",
+            delivery_enabled=False,
+            fence_reason="context_sync_unavailable",
+            fence="context_sync_unavailable",
+        )
+        return state, 0
     _reconcile_ingress_journal(state)
     # A retry marker proves only the immediately preceding typed gap. Never
     # let it authorize an unrelated failure or survive a successful poll.
@@ -4189,12 +4237,20 @@ def poll_once(
             if not state.get("pending_log_ids"):
                 return state, 0
         else:
-            state.update(
-                capability_state="ready",
-                delivery_enabled=True,
-                fence_reason="",
-                fence="ready",
-            )
+            if delivery_ready:
+                state.update(
+                    capability_state="ready",
+                    delivery_enabled=True,
+                    fence_reason="",
+                    fence="ready",
+                )
+            else:
+                state.update(
+                    capability_state="starting",
+                    delivery_enabled=False,
+                    fence_reason=not_ready_reason,
+                    fence="starting",
+                )
         if _safe_no_change_hint(state, chat):
             return state, 0
         try:
@@ -4584,75 +4640,52 @@ def main() -> int:
         _PERIODIC_CONTEXT_SYNC.note_proof()
 
     try:
-        target_chat_id = 0
+        target_chat_id = int(os.environ.get(TARGET_CHAT_ID_ENV, "0"))
+        if not 0 < target_chat_id < MAX_INT64:
+            raise DbFence("context_sync_identity")
         context_sync_transient_failures = 0
-        try:
-            target_chat_id = int(os.environ.get(TARGET_CHAT_ID_ENV, "0"))
-            while True:
-                try:
-                    sync = sync_context_index(
-                        target_chat_id,
-                        initial=context_sync_transient_failures == 0,
-                        on_wait=publish_sync_heartbeat,
-                        on_tick=publish_sync_heartbeat,
-                    )
-                    break
-                except (ContextSyncTransient, SqliteBusyTransient, subprocess.TimeoutExpired):
-                    context_sync_transient_failures += 1
-                    context_sync_now = time.time()
-                    state, retry_delay = _context_sync_transient_state(
-                        state,
-                        target_chat_id=target_chat_id,
-                        consecutive_failures=context_sync_transient_failures,
-                        now=context_sync_now,
-                    )
-                    if not save_state(state, _require_ready=False):
-                        # A cold start can reach here before the supervisor has
-                        # published its own status, which `save_state` requires
-                        # to match. That is a race, not a reason to exit the
-                        # watcher: keep the room fenced and retry on the capped
-                        # schedule. The fenced state is published on the next
-                        # heartbeat once the supervisor status lands.
-                        print(
-                            "[db-watch] context_sync_transient_unpersisted",
-                            flush=True,
-                        )
-                    _wait_context_sync_startup_retry(
-                        state,
-                        retry_delay=retry_delay,
-                    )
-            context_sync_now = time.time()
-            _record_context_sync(state, sync, context_sync_now)
-            context_sync_next_at = time.monotonic() + _context_sync_retry_delay(sync)
-            context_authoritative = sync["authoritative"] is True
-            context_sync_fence_reason = (
-                "" if context_authoritative else "context_sync_deferred"
-            )
-            context_sync_transient_failures = 0
-            if context_authoritative:
-                state = _clear_context_sync_transient_fence(
-                    state,
-                    context_sync_now,
-                )
-        except (DbFence, OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
-            state = _state(state)
-            state.update(
-                capability_state="fenced",
-                delivery_enabled=False,
-                fence_reason="context_sync_unavailable",
-                heartbeat_at=time.time(),
-                fence="context_sync_unavailable",
-            )
-            save_state(state, _require_ready=False)
-            # Keep the underlying message: the coarse reason class alone
-            # ("db_fence") hid whether the sync failed on contention, a schema
-            # problem, or a timeout.
-            print(
-                f"[db-watch] context_sync_unavailable:"
-                f"{_fixed_fence_reason(exc)}:{str(exc).strip()[:200]}",
-                flush=True,
-            )
-            return 1
+        context_sync_next_at = time.monotonic()
+        context_sync_attempted = False
+        context_authoritative = False
+        context_sync_fence_reason = ""
+        # Do not advertise a previous run's readiness while this generation
+        # establishes its own context watermark. The main loop starts the
+        # initial sync in a worker and keeps capturing inbound rows locally;
+        # every candidate remains non-deliverable until an authoritative sync
+        # result has been applied here.
+        state = _state(state)
+        state.update(
+            target_chat_id=target_chat_id,
+            target_chat_name=CHAT,
+            capability_state="starting",
+            delivery_enabled=False,
+            fence_reason="",
+            heartbeat_at=time.time(),
+            fence="starting",
+        )
+        if not save_state(state, _require_ready=False):
+            raise DbFence("state_persist_failed")
+    except (DbFence, OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+        state = _state(state)
+        state.update(
+            capability_state="fenced",
+            delivery_enabled=False,
+            fence_reason="context_sync_unavailable",
+            heartbeat_at=time.time(),
+            fence="context_sync_unavailable",
+        )
+        save_state(state, _require_ready=False)
+        # Keep the underlying message: the coarse reason class alone
+        # ("db_fence") hid whether startup failed on contention, identity,
+        # schema, or timeout.
+        print(
+            f"[db-watch] context_sync_unavailable:"
+            f"{_fixed_fence_reason(exc)}:{str(exc).strip()[:200]}",
+            flush=True,
+        )
+        return 1
+
+    try:
         while True:
             try:
                 sync_proof_at = _PERIODIC_CONTEXT_SYNC.take_proof()
@@ -4719,37 +4752,61 @@ def main() -> int:
                     not _PERIODIC_CONTEXT_SYNC.in_flight()
                     and time.monotonic() >= context_sync_next_at
                 ):
-                    _PERIODIC_CONTEXT_SYNC.start(
+                    initial_sync = not context_sync_attempted
+                    started = _PERIODIC_CONTEXT_SYNC.start(
                         target_chat_id,
+                        initial=initial_sync,
                         on_wait=note_sync_liveness,
                         on_tick=note_sync_liveness,
                     )
+                    if started:
+                        context_sync_attempted = True
+                    elif not _PERIODIC_CONTEXT_SYNC.in_flight():
+                        raise DbFence("context_sync_start_failed")
                 if not context_authoritative:
                     state = _state(state)
-                    state.update(
-                        target_chat_id=target_chat_id,
-                        target_chat_name=CHAT,
-                        capability_state="starting",
-                        delivery_enabled=False,
-                        fence_reason=context_sync_fence_reason,
-                        heartbeat_at=time.time(),
-                        fence="starting",
-                    )
-                    if not save_state(state, _require_ready=False):
-                        raise DbFence("state_persist_failed")
-                    time.sleep(
-                        min(
-                            interval,
-                            max(0.0, context_sync_next_at - time.monotonic()),
+                    current_fence_reason = str(state.get("fence_reason") or "")
+                    if state.get("capability_state") == "fenced":
+                        if current_fence_reason not in {"poll_fence", "database_timeout"}:
+                            return 1
+                        if _clean_poll_retry_snapshot(state, retry_fence=True) is None:
+                            return 1
+                    else:
+                        state.update(
+                            target_chat_id=target_chat_id,
+                            target_chat_name=CHAT,
+                            capability_state="starting",
+                            delivery_enabled=False,
+                            fence_reason=context_sync_fence_reason,
+                            heartbeat_at=time.time(),
+                            fence="starting",
                         )
+                        if not save_state(state, _require_ready=False):
+                            raise DbFence("state_persist_failed")
+                    # Continue observing and durably queueing local inbound
+                    # rows while the shared retrieval index is catching up.
+                    # The starting/fenced state remains non-deliverable, so
+                    # workers hold each candidate until context sync recovers.
+                    state, _ = _poll_with_bounded_clean_retry(
+                        state,
+                        interval,
+                        delivery_ready=False,
+                        not_ready_reason=context_sync_fence_reason,
                     )
-                    continue
-                state, _ = _poll_with_bounded_clean_retry(state, interval)
-                if (
-                    state.get("capability_state") == "fenced"
-                    and state.get("fence_reason") not in {"poll_fence", "database_timeout"}
-                ):
-                    return 1
+                    if (
+                        state.get("capability_state") == "fenced"
+                        and state.get("fence_reason")
+                        not in {"poll_fence", "database_timeout"}
+                    ):
+                        return 1
+                else:
+                    state, _ = _poll_with_bounded_clean_retry(state, interval)
+                    if (
+                        state.get("capability_state") == "fenced"
+                        and state.get("fence_reason")
+                        not in {"poll_fence", "database_timeout"}
+                    ):
+                        return 1
             except (
                 OSError,
                 RuntimeError,

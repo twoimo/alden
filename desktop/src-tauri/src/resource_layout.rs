@@ -5,13 +5,12 @@ use std::path::{Component, Path, PathBuf};
 
 pub const MENUBAR_SCRIPT: &str = "scripts/auto-reply-menubar.py";
 pub const LOCAL_MLX_READINESS_SCRIPT: &str = "scripts/local_mlx_model_readiness.py";
-pub const VOICE_SCRIPT: &str = "scripts/jarvis_voice.py";
-pub const TOOL_RUNTIME_SCRIPT: &str = "scripts/jarvis_tool_runtime.py";
+pub const VOICE_SCRIPT: &str = "scripts/alden_voice.py";
+pub const TOOL_RUNTIME_SCRIPT: &str = "scripts/alden_tool_runtime.py";
 pub const AX_UI_SCRIPT: &str = "scripts/auto_reply_ax_ui.py";
-pub const BROWSER_USE_SCRIPT: &str = "scripts/jarvis_browser_use.py";
+pub const BROWSER_USE_SCRIPT: &str = "scripts/alden_browser_use.py";
 pub const METRICS_SCRIPT: &str = "scripts/auto_reply_metrics.py";
 pub const CLI: &str = "bin/openkakao-cli";
-pub const WAKE_MODEL: &str = "voice/models/hey_jarvis_ko_ridge.onnx";
 pub const DATA_FILES: &[&str] = &[
     MENUBAR_SCRIPT,
     LOCAL_MLX_READINESS_SCRIPT,
@@ -35,8 +34,7 @@ pub const DATA_FILES: &[&str] = &[
     BROWSER_USE_SCRIPT,
     TOOL_RUNTIME_SCRIPT,
     VOICE_SCRIPT,
-    "scripts/jarvis_abort.py",
-    WAKE_MODEL,
+    "scripts/alden_abort.py",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,10 +158,6 @@ impl ResourceLayout {
         }
         validate_path(&self.script, Kind::Data)?;
         validate_path(&self.bin, Kind::Executable)?;
-        let model = fs::metadata(self.root.join(WAKE_MODEL)).map_err(|_| ResourceError::Missing)?;
-        if model.len() > 64 * 1024 * 1024 {
-            return Err(ResourceError::Unsafe);
-        }
         Ok(())
     }
 }
@@ -179,7 +173,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
-                "jarvis-resources-{}-{}",
+                "alden-resources-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
@@ -209,8 +203,8 @@ mod tests {
             );
         }
         fn app(&self) -> (PathBuf, PathBuf) {
-            let app = self.0.join("Moved Jarvis.app");
-            let executable = app.join("Contents/MacOS/openkakao-jarvis-desktop");
+            let app = self.0.join("Moved Alden.app");
+            let executable = app.join("Contents/MacOS/openkakao-alden-desktop");
             self.file(&executable, true);
             let root = app.join("Contents/Resources");
             self.payload(&root, true);
@@ -270,7 +264,7 @@ mod tests {
     #[test]
     fn symlinked_files_parents_roots_and_dangling_links_fail_closed() {
         let f = Fixture::new();
-        for target in [MENUBAR_SCRIPT, VOICE_SCRIPT, WAKE_MODEL, CLI, "scripts", ""] {
+        for target in [MENUBAR_SCRIPT, VOICE_SCRIPT, CLI, "scripts", ""] {
             let (exe, root) = f.app();
             let path = if target.is_empty() {
                 root.clone()
@@ -325,7 +319,7 @@ mod tests {
         let f = Fixture::new();
         let checkout = f.0.join("checkout");
         f.payload(&checkout, false);
-        let exe = checkout.join("desktop/target/debug/jarvis");
+        let exe = checkout.join("desktop/target/debug/alden");
         let layout =
             ResourceLayout::discover(&exe, &checkout, true, DevOverrides::default()).unwrap();
         assert!(!layout.installed);

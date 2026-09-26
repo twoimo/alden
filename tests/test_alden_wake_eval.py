@@ -23,8 +23,8 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import evaluate_jarvis_korean_wake as evaluations  # noqa: E402
-from jarvis_voice import WAKE_THRESHOLD  # noqa: E402
+import evaluate_alden_korean_wake as evaluations  # noqa: E402
+from alden_voice import WAKE_THRESHOLD  # noqa: E402
 
 
 try:  # The focused CI interpreter ships without numpy.
@@ -161,10 +161,10 @@ class EvaluationReportTests(unittest.TestCase):
     def test_summary_rates_separate_positives_and_negatives(self) -> None:
         entries = self._entries(
             [
-                ("positive", "aiden", "헤이 자비스"),
-                ("positive", "dylan", "헤이 자비스"),
+                ("positive", "aiden", "올든"),
+                ("positive", "dylan", "올든"),
                 ("negative", "aiden", "안녕하세요"),
-                ("negative", "dylan", "자비스 봇이야"),
+                ("negative", "dylan", "올든 봇이야"),
             ]
         )
         frontend = ScriptedFrontend([0.9, 0.4, 0.1, 0.67, 0.2])
@@ -181,16 +181,16 @@ class EvaluationReportTests(unittest.TestCase):
         self.assertFalse(report["scope"]["human_speakers"])
 
     def test_borderline_negatives_are_reported_below_threshold(self) -> None:
-        entries = self._entries([("negative", "aiden", "자비스 봇이야")])
+        entries = self._entries([("negative", "aiden", "올든 봇이야")])
         frontend = ScriptedFrontend([WAKE_THRESHOLD - 0.046])
         report = evaluations.evaluate(entries, frontend, loader=lambda path: FakeFrames.of(1))
         borderline = report["summary"]["borderline_negatives"]
         self.assertEqual(len(borderline), 1)
-        self.assertEqual(borderline[0]["text"], "자비스 봇이야")
+        self.assertEqual(borderline[0]["text"], "올든 봇이야")
         self.assertEqual(report["summary"]["negative_false_accepts"], 0)
 
     def test_loader_failure_is_not_swallowed(self) -> None:
-        entries = self._entries([("positive", "aiden", "헤이 자비스")])
+        entries = self._entries([("positive", "aiden", "올든")])
 
         def broken(path: Path) -> FakeFrames:
             raise evaluations.WakeEvaluationError("wake_eval_wav_format_invalid")

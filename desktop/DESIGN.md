@@ -1,8 +1,8 @@
-# Jarvis desktop design contract
+# Alden desktop design contract
 
 ## Experience
 
-Jarvis should feel like a quiet instrument panel: warm, legible, and composed. A new user should understand each setting without knowing model, retrieval, or runtime terminology. Status copy gives one useful next step; diagnostic detail stays in developer documentation. The trade-off is deliberate: expert users see fewer live counters in the settings window.
+Alden should feel like a quiet instrument panel: warm, legible, and composed. A new user should understand each setting without knowing model, retrieval, or runtime terminology. Status copy gives one useful next step; diagnostic detail stays in developer documentation. The trade-off is deliberate: expert users see fewer live counters in the settings window.
 
 ## Decision table
 
@@ -12,7 +12,7 @@ Jarvis should feel like a quiet instrument panel: warm, legible, and composed. A
 | Visual character | Ivory and warm black surfaces; champagne marks selection; amber marks caution | No neon, bloom, glow, or decorative shadow. |
 | Reading width | 960px window, 912px content area, golden-ratio 61.8:38.2 columns with a 16px gap; one column below 800px | The 38.2% side retains its 300px minimum at the two-column breakpoint; long labels wrap without forcing horizontal scrolling. |
 | Live panel geometry | 276×260 panel, 12 inset, 236 core | Main panel constants are tested. |
-| Main-panel hierarchy | Spherical Jarvis core only; settings open from a right-click on the menu-bar tray icon | No health/jobs/bulk/permission chrome. |
+| Main-panel hierarchy | Spherical Alden core only; settings open from a right-click on the menu-bar tray icon | No health/jobs/bulk/permission chrome. |
 | Settings | One unified 960×880 window; two-column desktop grid and a single narrow-screen column | Rooms and AI answers, then voice and conversation status, then conversation search beside recent replies. |
 | Motion | Per-source angular velocity, voice-aware global load, phase-integrated pulse, bounded spring substeps | Idle ≤15fps, active ≤30fps, frame dt ≤250ms, hidden/close/lock cancels RAF. |
 | Color | Warm neutral canvas/surface with restrained gold | Champagne/gold is reserved for core and selection; amber is warning. |
@@ -34,8 +34,8 @@ The desktop settings split uses the golden ratio `φ = (1 + √5) / 2 ≈ 1.618`
 
 ## Component contract
 
-- `JarvisPanel`: opaque 276×260 root. The Three.js canvas is transparent and exactly 236×236. The panel has no interactive controls; settings open from a right-click on the menu-bar tray icon.
-- `JarvisCore`: three independently damped gimbal rings, 96 neuron points, three synapses per neuron, 30 particles, a spring nucleus, and an acoustic wire lattice. GPU buffers are allocated once and updated in place.
+- `AldenPanel`: opaque 276×260 root. The Three.js canvas is transparent and exactly 236×236. The panel has no interactive controls; settings open from a right-click on the menu-bar tray icon.
+- `AldenCore`: three independently damped gimbal rings, 96 neuron points, three synapses per neuron, 30 particles, a spring nucleus, and an acoustic wire lattice. GPU buffers are allocated once and updated in place.
 - `UnifiedSettings`: target rooms, two plain-language AI choices, voice start, one conversation status, holographic conversation search, and recent replies. There are no bulk-verification, feature-checklist, permission, model-owner, hardware, index, or training-status controls in this window.
 - AI models: Flash-Next is the default resident choice; the 27B model is shown as an on-demand swap target and is never prepared or loaded by this unit.
 
@@ -60,8 +60,8 @@ draw range when the tier changes; they do not construct geometry.
 
 ## Bundle contract
 
-The primary bundle is `OpenKakao Jarvis.app` with identifier
-`com.openkakao.jarvis.desktop`; `LSUIElement=true` keeps it menu-bar-only.
+The primary bundle is `Alden.app` with identifier
+`com.openkakao.alden.desktop`; `LSUIElement=true` keeps it menu-bar-only.
 Signing identity is intentionally not hardcoded in source. The packaging
 script accepts an explicitly supplied `OPENKAKAO_SIGN_IDENTITY`; local builds
 remain unsigned when it is absent. The former `com.openkakao.auto-reply.menu`

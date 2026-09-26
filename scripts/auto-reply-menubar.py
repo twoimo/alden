@@ -30,8 +30,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from local_mlx_model_readiness import (
-    RESIDENT_MODEL_ID as JARVIS_RESIDENT_MODEL_ID,
-    SWAP_MODEL_ID as JARVIS_SWAP_MODEL_ID,
+    RESIDENT_MODEL_ID as ALDEN_RESIDENT_MODEL_ID,
+    SWAP_MODEL_ID as ALDEN_SWAP_MODEL_ID,
     canonical_fixed_local_mlx_model_id,
     read_fixed_local_mlx_readiness,
     resolve_fixed_local_mlx_catalog_model,
@@ -328,7 +328,7 @@ def _local_reply_model_allowed(model: Any) -> bool:
 
 
 def _qwen38_27b_image_model(model: Any) -> bool:
-    return canonical_fixed_local_mlx_model_id(model) == JARVIS_SWAP_MODEL_ID
+    return canonical_fixed_local_mlx_model_id(model) == ALDEN_SWAP_MODEL_ID
 
 
 def _read_image_reply_model(state_root: Path) -> tuple[str, str]:
@@ -1746,7 +1746,7 @@ def set_reply_model(
             "needs_prepare": wanted.startswith("omlx/"),
             "warnings": [prepare_warning] if prepare_warning else [],
         }
-    # Fixed local IDs must remain on the prefixless Jarvis contract. Do not
+    # Fixed local IDs must remain on the prefixless Alden contract. Do not
     # fall through to a broader legacy resolver that could persist an mlx/
     # alias or reinterpret a fixed local request as a remote model.
     if canonical_fixed_local_mlx_model_id(requested) is not None:
@@ -1927,28 +1927,28 @@ if callable(_orig_reply_model_payload):
 
 
 def prepare_reply_model(state_root: Path, model: str):
-    """Prepare legacy models or read fixed Jarvis readiness without saving.
+    """Prepare legacy models or read fixed Alden readiness without saving.
 
     The recheck path used to call ``model-set`` to prepare, which first saves
     the model. A stale recheck could then overwrite a newer selection. This
-    action never writes the selection. The fixed Jarvis 27B path is GET-only
+    action never writes the selection. The fixed Alden 27B path is GET-only
     readiness verification and never initiates a model load (2026-09-21).
     """
 
     requested = str(model or "").strip()
     local_wanted = canonical_fixed_local_mlx_model_id(requested)
-    if local_wanted == JARVIS_RESIDENT_MODEL_ID:
+    if local_wanted == ALDEN_RESIDENT_MODEL_ID:
         return {
             "ok": False,
             "action": "model-prepare",
             "privacy": "content_redacted",
-            "model": JARVIS_RESIDENT_MODEL_ID,
+            "model": ALDEN_RESIDENT_MODEL_ID,
             "needs_prepare": False,
             "prepared": False,
             "reason": "model_prepare_not_allowed",
             "warnings": ["Flash-Next는 27B 준비 확인 대상으로 사용할 수 없습니다."],
         }
-    if local_wanted == JARVIS_SWAP_MODEL_ID:
+    if local_wanted == ALDEN_SWAP_MODEL_ID:
         readiness = read_fixed_local_mlx_readiness(
             local_wanted,
             state_root=state_root,
@@ -1957,7 +1957,7 @@ def prepare_reply_model(state_root: Path, model: str):
             "ok": readiness.prepared,
             "action": "model-prepare",
             "privacy": "content_redacted",
-            "model": JARVIS_SWAP_MODEL_ID,
+            "model": ALDEN_SWAP_MODEL_ID,
             "needs_prepare": not readiness.prepared,
             "prepared": readiness.prepared,
             "reason": readiness.reason,
@@ -1994,7 +1994,7 @@ def _model_swap_result(
     return {
         "ok": bool(ok),
         "action": "model-swap",
-        "model": JARVIS_SWAP_MODEL_ID,
+        "model": ALDEN_SWAP_MODEL_ID,
         "stage": str(stage or "failed")[:32],
         "reason": str(reason or "model_swap_failed")[:96],
         "stages": [str(item)[:32] for item in list(stages)[:12]],
@@ -2031,7 +2031,7 @@ def swap_reply_model(
 
     root = Path(state_root)
     requested = canonical_fixed_local_mlx_model_id(model)
-    if requested != JARVIS_SWAP_MODEL_ID:
+    if requested != ALDEN_SWAP_MODEL_ID:
         return _model_swap_result(
             ok=False, stage="aborted", reason="model_not_allowed"
         )
@@ -2171,7 +2171,7 @@ def _swap_reply_model_locked(
                 _reply_model_override_path(root),
                 {
                     "schema_version": 1,
-                    "model": JARVIS_SWAP_MODEL_ID,
+                    "model": ALDEN_SWAP_MODEL_ID,
                     "updated_at": int(time.time() if now is None else float(now)),
                 },
             )
@@ -2398,16 +2398,16 @@ async def _tool_browser_payload(
             "result": "",
         }
     try:
-        from jarvis_tool_runtime import (
+        from alden_tool_runtime import (
             MAX_TOOL_RESULT_BYTES,
             BrowserToolJob,
-            JarvisToolRuntime,
+            AldenToolRuntime,
         )
     except (ImportError, ModuleNotFoundError):
         return dict(_TOOL_BROWSER_FALLBACK)
 
     try:
-        outcome = await JarvisToolRuntime(state_root).run_browser(
+        outcome = await AldenToolRuntime(state_root).run_browser(
             BrowserToolJob(job_id=job_id, task=task)
         )
     except (ImportError, ModuleNotFoundError):
@@ -2494,7 +2494,7 @@ def _mlx_app_owned_spec(state_root: Path, model_id: str | None) -> MlxLaunchSpec
         return None
     required_bytes = (
         QWEN38_27B_REQUIRED_BYTES
-        if resident.name == JARVIS_SWAP_MODEL_ID.rsplit("/", 1)[-1]
+        if resident.name == ALDEN_SWAP_MODEL_ID.rsplit("/", 1)[-1]
         else FLASH_NEXT_REQUIRED_BYTES
     )
     return MlxLaunchSpec(
@@ -3099,7 +3099,7 @@ _install_receipt_snapshot_hook()
 # ---------------------------------------------------------------------------
 # 백그라운드 작업 표시
 #
-# 메인 화면의 자비스 코어는 답변 생성만 보고 있었다. 사용자가 실제로 기다리는
+# 메인 화면의 올든 코어는 답변 생성만 보고 있었다. 사용자가 실제로 기다리는
 # 일은 긱뉴스 전송과 카카오톡 DB 동기화라서 그 둘도 같은 코어가 반응해야 한다.
 # 어떤 상태를 몇 세기로 볼지는 여기서 정하고, 화면은 받은 숫자를 그리기만
 # 한다(2026-09-19).
@@ -3107,6 +3107,33 @@ BACKGROUND_STATE_LIMIT_BYTES = 262_144
 BACKGROUND_SYNC_FRESH_SECONDS = 12.0
 BACKGROUND_HEARTBEAT_FRESH_SECONDS = 90.0
 GEEKNEWS_CONFIRMED_FRESH_SECONDS = 20.0
+REPLY_READINESS_HEARTBEAT_FRESH_SECONDS = 15.0
+REPLY_READINESS_FUTURE_TOLERANCE_SECONDS = 5.0
+REPLY_READINESS_CONTEXT_INTERVAL_SECONDS = 60.0
+REPLY_READINESS_CONTEXT_INTERVAL_TOLERANCE_SECONDS = 1.0
+# A periodic context sync may wait 300 seconds for the shared writer slot and
+# then run for 90 seconds. Older proof is not current readiness evidence.
+REPLY_READINESS_CONTEXT_LATE_GRACE_SECONDS = 390.0
+REPLY_READINESS_STARTING_REASONS = frozenset(
+    {"", "context_sync_transient", "context_sync_deferred"}
+)
+REPLY_READINESS_BLOCKED_FENCE_PAIRS = frozenset(
+    {
+        ("context_sync_unavailable", "context_sync_unavailable"),
+        ("owner_epoch_fence", "owner_epoch_fence"),
+        ("reconcile_required", "reconcile_required"),
+        ("sentinel", "sentinel_watermark_requires_reconcile"),
+        ("watermark_regressed", "watermark_regressed"),
+        ("db_unavailable", "poll_fence"),
+        ("db_unavailable", "database_timeout"),
+        ("db_unavailable", "reconcile_required"),
+        ("db_unavailable", "target_fence"),
+        ("db_unavailable", "owner_fence"),
+        ("db_unavailable", "source_epoch_fence"),
+        ("db_unavailable", "db_fence"),
+        ("db_unavailable", "database_unavailable"),
+    }
+)
 BACKGROUND_ROOM_ACTIVE_STATUSES = (
     "pending",
     "processing",
@@ -3140,6 +3167,113 @@ def _bounded_epoch(value: Any) -> float | None:
     if not math.isfinite(number) or number <= 0:
         return None
     return number
+
+
+def _bounded_state_text(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if len(value) > limit or value != value.strip():
+        return None
+    return value
+
+
+def _fresh_epoch(value: Any, now: float, max_age: float) -> float | None:
+    if not math.isfinite(now):
+        return None
+    stamp = _bounded_epoch(value)
+    if stamp is None:
+        return None
+    age = now - stamp
+    if age < -REPLY_READINESS_FUTURE_TOLERANCE_SECONDS or age > max_age:
+        return None
+    return stamp
+
+
+def _context_sync_window(
+    state: dict, now: float, heartbeat: float
+) -> tuple[float, float] | None:
+    synced_at = _bounded_epoch(state.get("context_sync_at"))
+    retry_at = _bounded_epoch(state.get("context_sync_retry_at"))
+    if synced_at is None or retry_at is None:
+        return None
+    if now - synced_at < -REPLY_READINESS_FUTURE_TOLERANCE_SECONDS:
+        return None
+    interval = retry_at - synced_at
+    if not math.isclose(
+        interval,
+        REPLY_READINESS_CONTEXT_INTERVAL_SECONDS,
+        rel_tol=0.0,
+        abs_tol=REPLY_READINESS_CONTEXT_INTERVAL_TOLERANCE_SECONDS,
+    ):
+        return None
+    if synced_at - heartbeat > REPLY_READINESS_FUTURE_TOLERANCE_SECONDS:
+        return None
+    return synced_at, retry_at
+
+
+def _context_sync_is_current(context: tuple[float, float], now: float) -> bool:
+    _synced_at, retry_at = context
+    return now - retry_at <= REPLY_READINESS_CONTEXT_LATE_GRACE_SECONDS
+
+
+def _room_delivery_shape(state: dict) -> str:
+    """Validate the producer's exact delivery tuple without using it as a gate."""
+
+    if not state:
+        return "unknown"
+    capability = _bounded_state_text(state.get("capability_state"), 32)
+    fence = _bounded_state_text(state.get("fence"), 32)
+    fence_reason = _bounded_state_text(state.get("fence_reason"), 64)
+    delivery_enabled = state.get("delivery_enabled")
+    if (
+        capability is None
+        or fence is None
+        or fence_reason is None
+        or (delivery_enabled is not True and delivery_enabled is not False)
+    ):
+        return "unknown"
+    if (capability, delivery_enabled, fence, fence_reason) == (
+        "ready",
+        True,
+        "ready",
+        "",
+    ):
+        return "ready"
+    if (
+        capability == "starting"
+        and delivery_enabled is False
+        and fence == "starting"
+        and fence_reason in REPLY_READINESS_STARTING_REASONS
+    ):
+        return "blocked"
+    if (
+        capability == "fenced"
+        and delivery_enabled is False
+        and (fence, fence_reason) in REPLY_READINESS_BLOCKED_FENCE_PAIRS
+    ):
+        return "blocked"
+    return "unknown"
+
+
+def _room_reply_readiness(state: dict, now: float) -> str:
+    """Derive a display-only enum from the current authoritative watcher."""
+
+    shape = _room_delivery_shape(state)
+    if shape == "unknown":
+        return "unknown"
+    heartbeat = _fresh_epoch(
+        state.get("heartbeat_at"), now, REPLY_READINESS_HEARTBEAT_FRESH_SECONDS
+    )
+    if heartbeat is None:
+        return "unknown"
+    if shape == "ready":
+        context = _context_sync_window(state, now, heartbeat)
+        if context is None or not _context_sync_is_current(context, now):
+            return "unknown"
+        return "ready"
+    if shape == "blocked":
+        return "blocked"
+    return "unknown"
 
 
 def _read_background_state(path: Path) -> dict:
@@ -3246,27 +3380,37 @@ def _room_geeknews_background(room_dir: Path, now: float) -> dict[str, Any]:
     }
 
 
-def _room_db_sync_background(room_dir: Path, now: float) -> dict[str, Any]:
+def _room_db_sync_background(state: dict, now: float) -> dict[str, Any]:
     """카카오톡 DB 동기화가 도는지, 뒤처졌는지, 멈췄는지."""
 
-    state = _read_background_state(room_dir / "db-watch-state.json")
-    capability = str(state.get("capability_state") or "").strip()[:32]
-    fence_reason = str(state.get("fence_reason") or "").strip()[:64]
-    synced_at = _bounded_epoch(state.get("context_sync_at"))
-    due_at = _bounded_epoch(state.get("context_sync_retry_at"))
-    heartbeat = _bounded_epoch(state.get("heartbeat_at"))
-    age = None if synced_at is None else max(0.0, now - synced_at)
-    live = (
-        heartbeat is not None
-        and now - heartbeat <= BACKGROUND_HEARTBEAT_FRESH_SECONDS
+    capability = _bounded_state_text(state.get("capability_state"), 32) or ""
+    fence_reason = _bounded_state_text(state.get("fence_reason"), 64) or ""
+    heartbeat_stamp = _bounded_epoch(state.get("heartbeat_at"))
+    heartbeat = _fresh_epoch(
+        state.get("heartbeat_at"), now, BACKGROUND_HEARTBEAT_FRESH_SECONDS
     )
-    if capability and capability != "ready" and live:
+    shape = _room_delivery_shape(state)
+    context = (
+        _context_sync_window(state, now, heartbeat)
+        if heartbeat is not None
+        else None
+    )
+    synced_at, due_at = context if context is not None else (None, None)
+    age = None if synced_at is None else max(0.0, now - synced_at)
+    if not state or shape == "unknown":
+        code, activity = "unknown", 0.0
+    elif heartbeat_stamp is None:
+        code, activity = "unknown", 0.0
+    elif now - heartbeat_stamp < -REPLY_READINESS_FUTURE_TOLERANCE_SECONDS:
+        code, activity = "unknown", 0.0
+    elif heartbeat is None:
+        # 심장이 멈춘 방은 "도는 중"도 "준비됨"도 아니다.
+        code, activity = "stalled", 0.0
+    elif shape == "blocked":
         # 다시 붙는 중이다. 아직 살아 있는 감시자가 도는 중이라는 뜻이다.
         code, activity = "retrying", 0.3
-    elif capability and capability != "ready":
-        # 심장이 멈춘 방은 "도는 중"이 아니다. 코어를 계속 빠르게 두면
-        # 화면이 거짓말을 한다.
-        code, activity = "stalled", 0.0
+    elif context is None or not _context_sync_is_current(context, now):
+        code, activity = "unknown", 0.0
     elif age is not None and age <= BACKGROUND_SYNC_FRESH_SECONDS:
         code, activity = "syncing", 0.6
     elif due_at is not None and now - due_at > BACKGROUND_SYNC_FRESH_SECONDS:
@@ -3283,21 +3427,29 @@ def _room_db_sync_background(room_dir: Path, now: float) -> dict[str, Any]:
     }
 
 
-def _background_sources(room_dir: Path | None, now: float) -> dict[str, Any]:
+def _background_sources(
+    room_dir: Path | None, now: float
+) -> tuple[dict[str, Any], str]:
     """한 방의 두 백그라운드 작업을 한 덩어리로 접는다."""
 
     if room_dir is None or not room_dir.is_dir():
         geeknews = _empty_background_source("geeknews")
         db_sync = _empty_background_source("db_sync")
+        reply_readiness = "unknown"
     else:
+        db_state = _read_background_state(room_dir / "db-watch-state.json")
         geeknews = _room_geeknews_background(room_dir, now)
-        db_sync = _room_db_sync_background(room_dir, now)
-    return {
-        "activity": max(geeknews["activity"], db_sync["activity"]),
-        "caption": geeknews["caption"] or db_sync["caption"],
-        "geeknews": geeknews,
-        "db_sync": db_sync,
-    }
+        db_sync = _room_db_sync_background(db_state, now)
+        reply_readiness = _room_reply_readiness(db_state, now)
+    return (
+        {
+            "activity": max(geeknews["activity"], db_sync["activity"]),
+            "caption": geeknews["caption"] or db_sync["caption"],
+            "geeknews": geeknews,
+            "db_sync": db_sync,
+        },
+        reply_readiness,
+    )
 
 
 def _attach_background_state(
@@ -3310,29 +3462,36 @@ def _attach_background_state(
     (2026-09-19).
     """
 
-    if not isinstance(snap, dict) or "background" in snap:
+    if not isinstance(snap, dict):
         return snap
     root = _resolve_background_state_root(state_root)
-    if root is None:
-        return snap
     try:
         stamp = time.time() if now is None else float(now)
     except (TypeError, ValueError):
         stamp = time.time()
     if not math.isfinite(stamp):
         stamp = time.time()
-    rooms_root = root / "rooms"
+    rooms_root = root / "rooms" if root is not None else None
     entries: list[dict[str, Any]] = []
+    rooms: list[Any] = []
     for room in snap.get("rooms") or []:
         if not isinstance(room, dict):
+            rooms.append(room)
             continue
+        safe_room = dict(room)
         chat_id = room.get("chat_id")
         if isinstance(chat_id, bool) or not isinstance(chat_id, int):
+            safe_room["reply_readiness"] = "unknown"
+            rooms.append(safe_room)
             continue
+        room_dir = rooms_root / str(chat_id) if rooms_root is not None else None
+        sources, reply_readiness = _background_sources(room_dir, stamp)
+        safe_room["reply_readiness"] = reply_readiness
+        rooms.append(safe_room)
         entries.append(
             {
                 "chat_id": chat_id,
-                **_background_sources(rooms_root / str(chat_id), stamp),
+                **sources,
             }
         )
     geeknews = _empty_background_source("geeknews")
@@ -3349,6 +3508,7 @@ def _attach_background_state(
             activity = entry["activity"]
             caption = entry["caption"]
     snap = dict(snap)
+    snap["rooms"] = rooms
     snap["background"] = {
         "schema_version": 1,
         "activity": activity,
@@ -3358,6 +3518,22 @@ def _attach_background_state(
         "rooms": entries,
     }
     return snap
+
+
+def _attach_background_state_once(
+    snap: Any, state_root: Any, *, now: float | None = None
+) -> Any:
+    """Avoid rereading room evidence when nested snapshot wrappers already attached it."""
+
+    if isinstance(snap, dict) and isinstance(snap.get("background"), dict):
+        rooms = snap.get("rooms")
+        if isinstance(rooms, list) and all(
+            not isinstance(room, dict)
+            or room.get("reply_readiness") in {"ready", "blocked", "unknown"}
+            for room in rooms
+        ):
+            return snap
+    return _attach_background_state(snap, state_root, now=now)
 
 
 def _patch_overlay_background(namespace: Any) -> bool:
@@ -3372,7 +3548,7 @@ def _patch_overlay_background(namespace: Any) -> bool:
                 namespace,
                 attr,
                 flag="_openkakao_background",
-                attach=_attach_background_state,
+                attach=_attach_background_state_once,
             )
             or installed
         )
@@ -3698,7 +3874,7 @@ def _scope_menubar_rooms_to_enrollment() -> None:
             # 코어 애니메이션이 반응할 긱뉴스·DB 동기화 상태. 오버레이 훅이
             # 이미 붙였으면 그대로 두고, 이 경로만 도는 배치에서도 빠지지
             # 않게 여기서도 붙인다(2026-09-19).
-            snap = _attach_background_state(snap, state_root)
+            snap = _attach_background_state_once(snap, state_root)
             try:
                 models = collect_reply_models(Path(state_root))
             except Exception:

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Readiness probe for the provisioned Browser-Use runtime.
 
-`scripts/jarvis_browser_use.py` binds a web job to whatever `browser_use` release
+`scripts/alden_browser_use.py` binds a web job to whatever `browser_use` release
 is installed, and that dependency is deliberately kept out of both the app bundle
 and the voice environment. `browser/pyproject.toml` pins the pair that was
 actually measured, and this probe answers whether the environment it runs in
@@ -51,9 +51,9 @@ def _default_distribution_version(name: str) -> str:
 
 
 def _default_adapter_loader() -> Any:
-    import jarvis_browser_use
+    import alden_browser_use
 
-    return jarvis_browser_use
+    return alden_browser_use
 
 
 def _default_agent_loader() -> Any:
@@ -80,7 +80,7 @@ def _default_chromium_probe() -> bool | None:
 
 def _probe_context(adapter: Any) -> Any:
     """Build the smallest context the adapter's binding check can read."""
-    attribute = str(getattr(adapter, "CDP_URL_ATTR", "jarvis_cdp_url"))
+    attribute = str(getattr(adapter, "CDP_URL_ATTR", "alden_cdp_url"))
     return type("ProbeContext", (), {attribute: PROBE_CDP_URL})()
 
 

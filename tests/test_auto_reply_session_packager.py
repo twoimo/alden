@@ -199,7 +199,7 @@ class SessionRuntimePackagerTests(unittest.TestCase):
             "auto_reply_ondevice.py",
             "auto_reply_reference_search.py",
             "auto_reply_reference_store.py",
-            "jarvis_abort.py",
+            "alden_abort.py",
             "local_mlx_gateway.py",
         }
         self.assertTrue(required <= set(module.RUNTIME_SCRIPT_NAMES))
@@ -211,7 +211,7 @@ class SessionRuntimePackagerTests(unittest.TestCase):
             "auto_reply_ondevice.py",
             "auto_reply_reference_search.py",
             "auto_reply_reference_store.py",
-            "jarvis_abort.py",
+            "alden_abort.py",
             "local_mlx_gateway.py",
         }
         reduced = tuple(

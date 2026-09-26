@@ -88,12 +88,9 @@ jobs:
           OPENKAKAO_MENUBAR_BACKEND: swift
         run: sh scripts/build-auto-reply-menubar.sh
 
-      # tests.test_auto_reply_menubar cannot run here: the menu extra's Python
-      # implementation ships as a frozen .pyc that is not in the repository, so
-      # the module raises frozen_menubar_missing on a fresh checkout. Run those
-      # tests on a machine that has the baked runtime instead:
-      #   python3 -m unittest tests.test_auto_reply_menubar
-      # (2026-09-16)
+      # The pinned CPython 3.11 menu bytecode is now tracked. The legacy Swift
+      # audit below still uses the runner's Python; the separate desktop job
+      # sets up Python 3.11 for the Alden runtime checks.
       # The windows cannot be seen from CI, so the app dumps every view frame
       # and a PNG of each window off-screen, and the audit reads them back.
       - name: Audit menu layout
@@ -122,12 +119,12 @@ jobs:
 
       - name: Validate Tauri launcher contracts
         run: |
-          sh -n scripts/build-jarvis-desktop.sh
-          sh -n scripts/install-jarvis-desktop.sh
+          sh -n scripts/build-alden-desktop.sh
+          sh -n scripts/install-alden-desktop.sh
           sh -n scripts/build-auto-reply-menubar.sh
           sh -n scripts/install-auto-reply-menubar.sh
           sh -n scripts/start-auto-reply-menubar.command
-          /usr/bin/plutil -lint desktop/launchd/com.openkakao.jarvis.desktop.plist.example
+          /usr/bin/plutil -lint desktop/launchd/com.openkakao.alden.desktop.plist.example
 
   desktop:
     name: Tauri desktop and focused Python tests
@@ -156,8 +153,8 @@ jobs:
           tests.test_auto_reply_reference_search
           tests.test_auto_reply_knowledge_graph
           tests.test_auto_reply_finetune
-          tests.test_jarvis_unit4
-          tests.test_jarvis_desktop_launchers
+          tests.test_alden_unit4
+          tests.test_alden_desktop_launchers
           tests.test_local_mlx_model_readiness
           tests.test_verify_local_models
           tests.test_mlx_serve_lifecycle
@@ -178,11 +175,14 @@ jobs:
           tests.test_auto_reply_service_entry
           tests.test_auto_reply_dw_starting_takeover
           tests.test_auto_reply_db_watch_retry
-          tests.test_jarvis_browser_use
-          tests.test_jarvis_wake_eval
-          tests.test_jarvis_wake_evidence
-          tests.test_jarvis_browser_runtime
-          tests.test_jarvis_desktop_render_check
+          tests.test_alden_browser_use
+          tests.test_alden_tool_runtime
+          tests.test_alden_voice_runtime
+          tests.test_alden_unit3.LocalMlxLlmRequestTests
+          tests.test_alden_wake_eval
+          tests.test_alden_wake_evidence
+          tests.test_alden_browser_runtime
+          tests.test_alden_desktop_render_check
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

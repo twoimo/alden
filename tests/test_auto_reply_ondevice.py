@@ -164,6 +164,26 @@ class TestHardwareDetection(unittest.TestCase):
             models = detect_mlx_gateway_models()
         self.assertEqual(models, [{"id": FLASH_NEXT_MODEL_ID, "owned_by": "mlx-serve"}])
 
+    def test_gateway_detection_preserves_string_capabilities(self):
+        payload = {
+            "data": [
+                {
+                    "id": FLASH_NEXT_MODEL_ID,
+                    "owned_by": "mlx-serve",
+                    "capabilities": ["json_schema", 7, {"unknown": True}, " vision "],
+                }
+            ]
+        }
+        with patch(
+            "scripts.auto_reply_ondevice._local_only_urlopen",
+            return_value=_HTTPResponse(payload),
+        ):
+            models = detect_mlx_gateway_models()
+        self.assertEqual(
+            models[0]["capabilities"],
+            ["json_schema", "vision"],
+        )
+
     def test_gateway_detection_accepts_prefixless_mlx_serve_id(self):
         payload = {"data": _prefixless_gateway_models()}
         with patch(

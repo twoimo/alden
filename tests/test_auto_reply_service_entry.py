@@ -183,12 +183,15 @@ class CatalogSelectorTests(unittest.TestCase):
             module, "_preflight_cli", return_value=(True, {"valid": True}, "")
         ) as preflight:
             accepted = module._preflight_catalog_selectors(
-                Path("/tmp/openkakao-cli"), Path("/tmp/config.toml"), candidates
+                Path("/tmp/openkakao-cli"),
+                Path("/tmp/config.toml"),
+                Path("/tmp/runtime/scripts/auto-reply-service.py"),
+                candidates,
             )
 
         self.assertEqual(accepted, candidates)
         preflight.assert_called_once()
-        self.assertEqual(preflight.call_args.args[2], candidates)
+        self.assertEqual(preflight.call_args.args[3], candidates)
         self.assertEqual(
             preflight.call_args.kwargs["timeout_seconds"],
             module.PREFLIGHT_TIMEOUT_SECONDS,
@@ -199,7 +202,7 @@ class CatalogSelectorTests(unittest.TestCase):
         candidates = ["id:1", "id:2", "id:3"]
         calls = []
 
-        def fake_preflight(_binary, _config, selectors, **kwargs):
+        def fake_preflight(_binary, _config, _entry, selectors, **kwargs):
             calls.append((tuple(selectors), kwargs.get("timeout_seconds")))
             return False, {}, f"whole set rejected attempt {len(calls)}"
 
@@ -237,7 +240,7 @@ class CatalogSelectorTests(unittest.TestCase):
         module = load_entry("auto_reply_catalog_full_set_only_test")
         candidates = ["id:1", "id:2", "id:3"]
 
-        def full_set_only(_binary, _config, selectors, **_kwargs):
+        def full_set_only(_binary, _config, _entry, selectors, **_kwargs):
             if selectors == candidates:
                 return True, {"valid": True}, ""
             return False, {}, "single-room calls are invalid for this config"
@@ -246,7 +249,10 @@ class CatalogSelectorTests(unittest.TestCase):
             module, "_preflight_cli", side_effect=full_set_only
         ) as preflight:
             accepted = module._preflight_catalog_selectors(
-                Path("/tmp/openkakao-cli"), Path("/tmp/config.toml"), candidates
+                Path("/tmp/openkakao-cli"),
+                Path("/tmp/config.toml"),
+                Path("/tmp/runtime/scripts/auto-reply-service.py"),
+                candidates,
             )
 
         self.assertEqual(accepted, candidates)
@@ -257,7 +263,7 @@ class CatalogSelectorTests(unittest.TestCase):
         candidates = ["id:1", "id:2", "id:3"]
         calls = []
 
-        def transient_then_ok(_binary, _config, selectors, **_kwargs):
+        def transient_then_ok(_binary, _config, _entry, selectors, **_kwargs):
             calls.append(tuple(selectors))
             if len(calls) == 1:
                 return False, {}, "transient aggregate failure"
@@ -267,7 +273,10 @@ class CatalogSelectorTests(unittest.TestCase):
             module, "_preflight_cli", side_effect=transient_then_ok
         ):
             accepted = module._preflight_catalog_selectors(
-                Path("/tmp/openkakao-cli"), Path("/tmp/config.toml"), candidates
+                Path("/tmp/openkakao-cli"),
+                Path("/tmp/config.toml"),
+                Path("/tmp/runtime/scripts/auto-reply-service.py"),
+                candidates,
             )
 
         self.assertEqual(accepted, candidates)
@@ -310,11 +319,15 @@ class AutoReplyServiceEntryTests(unittest.TestCase):
             )
         runtime = root / "runtime"
         runtime.mkdir(mode=0o700)
+        runtime.chmod(0o700)
+        scripts_runtime = runtime / "scripts"
+        scripts_runtime.mkdir(mode=0o700)
+        scripts_runtime.chmod(0o700)
         module = load_entry(f"auto_reply_fixture_{id(root)}")
         names = ("auto-reply-service.py", *module.RUNTIME_ASSET_NAMES)
         for name in names:
             source = ROOT / "scripts" / name
-            target = runtime / name
+            target = scripts_runtime / name
             shutil.copy2(source, target)
             target.chmod(0o700 if name.endswith(".py") else 0o600)
 
@@ -373,8 +386,9 @@ print(json.dumps({{
         return {
             "module": module,
             "python": _test_python(),
-            "entry": (runtime / "auto-reply-service.py").resolve(),
+            "entry": (scripts_runtime / "auto-reply-service.py").resolve(),
             "runtime": runtime,
+            "scripts_runtime": scripts_runtime,
             "binary": binary.resolve(),
             "config": config.resolve(),
             "control": control,
@@ -599,8 +613,15 @@ exit 64
             fixture = self._fixture(Path(temporary))
             module = fixture["module"]
             state = module._private_state_root(fixture["state"])
-            os.environ["OPENKAKAO_MUST_NOT_LEAK"] = "secret"
-            try:
+            hostile_runtime = str(Path(temporary) / "caller-controlled-runtime")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "OPENKAKAO_MUST_NOT_LEAK": "secret",
+                    "OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT": hostile_runtime,
+                },
+                clear=False,
+            ):
                 result = module.run_preflight(
                     fixture["python"],
                     fixture["entry"],
@@ -609,8 +630,6 @@ exit 64
                     "name:room",
                     state,
                 )
-            finally:
-                os.environ.pop("OPENKAKAO_MUST_NOT_LEAK", None)
             self.assertEqual(result, 0)
             receipt_path = state / "launchd-preflight.json"
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -624,6 +643,7 @@ exit 64
                 self.assertEqual(receipt[f"{key}_sha256"], module._sha256(path))
             self.assertEqual(receipt["chat_selectors"], ["name:room"])
             self.assertEqual(receipt["state_root"], str(state))
+            self.assertEqual(receipt["runtime_root"], str(fixture["runtime"]))
             self.assertEqual(
                 set(receipt["runtime_assets"]), set(module.RUNTIME_ASSET_NAMES)
             )
@@ -635,6 +655,13 @@ exit 64
             observed_env = json.loads(fixture["env_log"].read_text(encoding="utf-8"))
             self.assertNotIn("OPENKAKAO_MUST_NOT_LEAK", observed_env)
             self.assertEqual(observed_env["OPENKAKAO_CONFIG"], str(fixture["config"]))
+            self.assertEqual(
+                observed_env["OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT"],
+                str(fixture["runtime"]),
+            )
+            self.assertNotEqual(
+                observed_env["OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT"], hostile_runtime
+            )
 
     def test_multi_room_preflight_binds_full_ordered_target_set_without_writes(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -889,12 +916,18 @@ exit 64
 
             original = module.os.execve
             module.os.execve = fake_execve
+            hostile_runtime = str(Path(temporary) / "caller-controlled-runtime")
             try:
-                with self.assertRaisesRegex(RuntimeError, "exec captured"):
-                    module.run_production(
-                        fixture["python"], fixture["entry"], fixture["binary"],
-                        fixture["config"], "name:room", state,
-                    )
+                with mock.patch.dict(
+                    os.environ,
+                    {"OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT": hostile_runtime},
+                    clear=False,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "exec captured"):
+                        module.run_production(
+                            fixture["python"], fixture["entry"], fixture["binary"],
+                            fixture["config"], "name:room", state,
+                        )
             finally:
                 module.os.execve = original
             receipt = json.loads(
@@ -912,7 +945,18 @@ exit 64
                     "auto-reply", "--chat", "name:room",
                 ],
             )
-            self.assertEqual(captured["env"], module._runtime_env(fixture["config"]))
+            self.assertEqual(
+                captured["env"],
+                module._runtime_env(fixture["config"], fixture["entry"]),
+            )
+            self.assertEqual(
+                captured["env"]["OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT"],
+                str(fixture["runtime"]),
+            )
+            self.assertNotEqual(
+                captured["env"]["OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT"],
+                hostile_runtime,
+            )
 
     def test_production_fence_created_during_preflight_blocks_exec(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1019,22 +1063,28 @@ exit 64
                 statuses.append(dict(value))
                 module._write_session_status(path, value)
 
-            result = module.run_session(
-                fixture["python"],
-                fixture["entry"],
-                fixture["binary"],
-                fixture["config"],
-                "bind:42:room",
-                state,
-                popen_factory=fake_popen,
-                preflight=fake_preflight,
-                stop_event=event,
-                wait=fake_wait,
-                monotonic=lambda: 0.0,
-                time_ns=lambda: 123_000_000_000,
-                status_writer=capture_status,
-                install_signal_handlers=False,
-            )
+            hostile_runtime = str(Path(temporary) / "caller-controlled-runtime")
+            with mock.patch.dict(
+                os.environ,
+                {"OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT": hostile_runtime},
+                clear=False,
+            ):
+                result = module.run_session(
+                    fixture["python"],
+                    fixture["entry"],
+                    fixture["binary"],
+                    fixture["config"],
+                    "bind:42:room",
+                    state,
+                    popen_factory=fake_popen,
+                    preflight=fake_preflight,
+                    stop_event=event,
+                    wait=fake_wait,
+                    monotonic=lambda: 0.0,
+                    time_ns=lambda: 123_000_000_000,
+                    status_writer=capture_status,
+                    install_signal_handlers=False,
+                )
 
             self.assertEqual(result, 0)
             self.assertEqual(len(preflights), 2)
@@ -1062,10 +1112,31 @@ exit 64
                 self.assertTrue(kwargs["start_new_session"])
                 self.assertTrue(kwargs["close_fds"])
                 self.assertEqual(
-                    kwargs["env"], module._runtime_env(fixture["config"])
+                    kwargs["env"],
+                    module._runtime_env(fixture["config"], fixture["entry"]),
+                )
+                self.assertEqual(
+                    kwargs["env"]["OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT"],
+                    str(fixture["runtime"]),
+                )
+                self.assertNotEqual(
+                    kwargs["env"]["OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT"],
+                    hostile_runtime,
                 )
             for spec in guardian_specs:
-                self.assertEqual(spec["schema_version"], 2)
+                self.assertEqual(spec["schema_version"], 3)
+                self.assertEqual(spec["runtime_root"], str(fixture["runtime"]))
+                self.assertEqual(spec["runtime_entry"], str(fixture["entry"]))
+                self.assertEqual(
+                    spec["runtime_entry_sha256"],
+                    module._sha256(fixture["entry"]),
+                )
+                _assets, runtime_manifest_sha256 = module._runtime_manifest(
+                    fixture["entry"]
+                )
+                self.assertEqual(
+                    spec["runtime_manifest_sha256"], runtime_manifest_sha256
+                )
                 self.assertEqual(spec["binary"], str(fixture["binary"]))
                 self.assertEqual(spec["config"], str(fixture["config"]))
                 self.assertEqual(spec["chat_selectors"], ["bind:42:room"])
@@ -1400,7 +1471,10 @@ exit 64
             fixture = self._fixture(Path(temporary))
             module = fixture["module"]
             read_fd, write_fd = module._create_session_guardian_control(
-                fixture["binary"], fixture["config"], "bind:42:room"
+                fixture["entry"],
+                fixture["binary"],
+                fixture["config"],
+                "bind:42:room",
             )
             spawns = []
             terminated = []
@@ -1459,18 +1533,124 @@ exit 64
                 kwargs["env"][module.SESSION_GUARDIAN_LIVENESS_ENV],
                 str(liveness_fd),
             )
+            self.assertEqual(
+                kwargs["env"]["OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT"],
+                str(fixture["runtime"]),
+            )
             self.assertNotIn("bind:42:room", kwargs["env"].values())
             with self.assertRaises(OSError):
                 os.fstat(liveness_fd)
             with self.assertRaises(OSError):
                 os.fstat(read_fd)
 
+    def test_session_guardian_rejects_runtime_manifest_drift_before_spawn(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            read_fd, write_fd = module._create_session_guardian_control(
+                fixture["entry"],
+                fixture["binary"],
+                fixture["config"],
+                "bind:42:room",
+            )
+            asset = fixture["scripts_runtime"] / "auto_reply_metrics.py"
+            with asset.open("a", encoding="utf-8") as stream:
+                stream.write("# guardian identity drift\n")
+            spawn = mock.Mock()
+            try:
+                with mock.patch.object(
+                    module.os, "getpid", return_value=6100
+                ), mock.patch.object(
+                    module.os, "getpgrp", return_value=6100
+                ), mock.patch.object(module.os, "getsid", return_value=6100):
+                    with self.assertRaisesRegex(
+                        SystemExit, "launch identity no longer matches"
+                    ):
+                        module.run_session_guardian(
+                            read_fd,
+                            popen_factory=spawn,
+                            install_signal_handlers=False,
+                        )
+            finally:
+                os.close(write_fd)
+            spawn.assert_not_called()
+
+    def test_session_guardian_rejects_tampered_runtime_identity_before_spawn(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            original = module._session_guardian_spec(
+                fixture["entry"],
+                fixture["binary"],
+                fixture["config"],
+                "bind:42:room",
+            )
+            cases = (
+                (
+                    "runtime root",
+                    {"runtime_root": str(Path(temporary) / "caller-controlled-runtime")},
+                    "launch identity no longer matches",
+                ),
+                (
+                    "runtime entry",
+                    {
+                        "runtime_entry": str(
+                            fixture["scripts_runtime"] / "auto-reply-supervisor.py"
+                        )
+                    },
+                    "outside the pinned runtime scripts directory",
+                ),
+                (
+                    "runtime entry digest",
+                    {"runtime_entry_sha256": "0" * 64},
+                    "launch identity no longer matches",
+                ),
+            )
+
+            for label, mutation, expected_error in cases:
+                with self.subTest(label=label):
+                    spec = {**original, **mutation}
+                    payload = (
+                        json.dumps(
+                            spec,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                        + b"\n"
+                    )
+                    read_fd, write_fd = os.pipe()
+                    offset = 0
+                    while offset < len(payload):
+                        offset += os.write(write_fd, payload[offset:])
+                    spawn = mock.Mock()
+                    try:
+                        with mock.patch.object(
+                            module.os, "getpid", return_value=6100
+                        ), mock.patch.object(
+                            module.os, "getpgrp", return_value=6100
+                        ), mock.patch.object(
+                            module.os, "getsid", return_value=6100
+                        ):
+                            with self.assertRaisesRegex(SystemExit, expected_error):
+                                module.run_session_guardian(
+                                    read_fd,
+                                    popen_factory=spawn,
+                                    install_signal_handlers=False,
+                                )
+                    finally:
+                        os.close(write_fd)
+                    spawn.assert_not_called()
+
     def test_session_guardian_main_fails_closed_if_parent_died_before_spawn(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self._fixture(Path(temporary))
             module = fixture["module"]
             read_fd, write_fd = module._create_session_guardian_control(
-                fixture["binary"], fixture["config"], "bind:42:room"
+                fixture["entry"],
+                fixture["binary"],
+                fixture["config"],
+                "bind:42:room",
             )
             os.close(write_fd)
             try:
@@ -1482,7 +1662,7 @@ exit 64
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    env=module._runtime_env(fixture["config"]),
+                    env=module._runtime_env(fixture["config"], fixture["entry"]),
                     start_new_session=True,
                     close_fds=True,
                     pass_fds=(read_fd,),
@@ -1498,9 +1678,11 @@ exit 64
 
     @unittest.skipUnless(sys.platform == "darwin", "caffeinate is macOS-specific")
     def test_caffeinate_preserves_guardian_liveness_read_pipe(self):
-        module = load_entry("auto_reply_caffeinate_liveness_test")
-        read_fd, write_fd = module._create_session_guardian_liveness()
-        helper = """\
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            read_fd, write_fd = module._create_session_guardian_liveness()
+            helper = """\
 import fcntl
 import json
 import os
@@ -1515,36 +1697,38 @@ print(json.dumps({
     "eof": os.read(fd, 1) == b"",
 }), flush=True)
 """
-        child = None
-        try:
-            child = subprocess.Popen(
-                [
-                    "/usr/bin/caffeinate",
-                    "-i",
-                    str(_test_python()),
-                    "-E",
-                    "-B",
-                    "-S",
-                    "-c",
-                    helper,
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                env=module._guardian_child_env(Path("/tmp/config.toml"), read_fd),
-                close_fds=True,
-                pass_fds=(read_fd,),
+            child = None
+            try:
+                child = subprocess.Popen(
+                    [
+                        "/usr/bin/caffeinate",
+                        "-i",
+                        str(_test_python()),
+                        "-E",
+                        "-B",
+                        "-S",
+                        "-c",
+                        helper,
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    env=module._guardian_child_env(
+                        fixture["config"], fixture["entry"], read_fd
+                    ),
+                    close_fds=True,
+                    pass_fds=(read_fd,),
+                )
+            finally:
+                os.close(read_fd)
+                os.close(write_fd)
+            stdout, stderr = child.communicate(timeout=5)
+            self.assertEqual(child.returncode, 0, stderr)
+            self.assertEqual(
+                json.loads(stdout),
+                {"fifo": True, "read_only": True, "eof": True},
             )
-        finally:
-            os.close(read_fd)
-            os.close(write_fd)
-        stdout, stderr = child.communicate(timeout=5)
-        self.assertEqual(child.returncode, 0, stderr)
-        self.assertEqual(
-            json.loads(stdout),
-            {"fifo": True, "read_only": True, "eof": True},
-        )
 
     @unittest.skipUnless(sys.platform == "darwin", "caffeinate is macOS-specific")
     def test_guardian_sigkill_reaps_ready_fake_auto_reply_tree_before_retry(self):
@@ -1603,7 +1787,10 @@ raise SystemExit(73)
             )
             fake_binary.chmod(0o700)
             control_read_fd, control_write_fd = module._create_session_guardian_control(
-                fake_binary.resolve(), fixture["config"], "bind:42:room"
+                fixture["entry"],
+                fake_binary.resolve(),
+                fixture["config"],
+                "bind:42:room",
             )
             guardian = None
             process_ids = {}
@@ -1623,7 +1810,7 @@ raise SystemExit(73)
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    env=module._runtime_env(fixture["config"]),
+                    env=module._runtime_env(fixture["config"], fixture["entry"]),
                     start_new_session=True,
                     close_fds=True,
                     pass_fds=(control_read_fd,),
@@ -1790,7 +1977,7 @@ raise SystemExit(73)
             fixture = self._fixture(Path(temporary))
             module = fixture["module"]
             state = module._private_state_root(fixture["state"])
-            asset = fixture["runtime"] / "auto_reply_metrics.py"
+            asset = fixture["scripts_runtime"] / "auto_reply_metrics.py"
             fixture["control"].write_text(
                 json.dumps({"mutate": str(asset)}) + "\n", encoding="utf-8"
             )

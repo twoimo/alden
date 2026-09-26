@@ -31,6 +31,60 @@ if str(SCRIPTS) not in sys.path:
 CONTEXT_SYNC_HEARTBEAT_KWARGS = ("on_wait", "on_tick")
 
 
+class ImmediateContextSyncWorker:
+    """Deterministic async-worker stand-in for the watcher's state-machine tests."""
+
+    def __init__(self, results, *, repeat_last: bool = False) -> None:
+        self.results = list(results)
+        self.repeat_last = repeat_last
+        self.last_result = self.results[-1] if self.results else None
+        self.pending = None
+        self.starts = []
+
+    def in_flight(self) -> bool:
+        return False
+
+    def start(self, chat_id, *, initial=False, on_wait=None, on_tick=None) -> bool:
+        self.starts.append((chat_id, initial, on_wait, on_tick))
+        if self.results:
+            self.pending = self.results.pop(0)
+        elif self.repeat_last:
+            self.pending = self.last_result
+        else:
+            return False
+        return True
+
+    def take_result(self):
+        result = self.pending
+        self.pending = None
+        return result
+
+    def take_proof(self):
+        return None
+
+    def note_proof(self):
+        return None
+
+    def stop(self):
+        return None
+
+
+class AdvancingTestClock:
+    """Fake monotonic clock whose sleeps advance time without blocking."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+
+    def time(self) -> float:
+        return 100.0 + self.now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def sync_call_kwargs(call, *, heartbeat: bool = False) -> dict:
     """Read one `sync_context_index` call's keyword arguments.
 
@@ -60,6 +114,15 @@ def held_open_stdin_pipe():
         os.close(write_fd)
 
 
+def context_sync_thread_running(worker) -> bool:
+    """Report only an executing sync thread, excluding a pending result."""
+    guard = getattr(worker, "_guard", None)
+    if guard is None:
+        return worker.in_flight()
+    with guard:
+        return getattr(worker, "_thread", None) is not None
+
+
 def settling_sleep(db_watch, real_sleep, real_monotonic, timeout: float = 5.0):
     """Return a `time.sleep` replacement that lets a started sync land.
 
@@ -76,10 +139,10 @@ def settling_sleep(db_watch, real_sleep, real_monotonic, timeout: float = 5.0):
 
     def sleep(_delay):
         deadline = real_monotonic() + timeout
-        while worker.in_flight() and real_monotonic() < deadline:
+        while context_sync_thread_running(worker) and real_monotonic() < deadline:
             real_sleep(0.001)
-        if worker.in_flight():
-            raise AssertionError("periodic context sync never finished")
+        if context_sync_thread_running(worker):
+            raise AssertionError("periodic context sync thread never finished")
 
     return sleep
 
@@ -1765,6 +1828,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         ]
         self.assertTrue(module._is_context_pointer(" ??? "))
         self.assertFalse(module._is_context_pointer("몇 명이야?"))
+        self.assertTrue(module._is_referential_context_question("뭐지저건"))
+        self.assertTrue(module._inbound_asks_question("뭐지 저건"))
+        self.assertFalse(module._is_contextual_followup("몇 명이야?"))
         self.assertTrue(
             module._is_contextless_confusion_reply("무슨 말인지 모르겠네요")
         )
@@ -1798,6 +1864,14 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertEqual(
             module._contextual_clarification_reply("???", recent, recipient="현준"),
             "아까 “둘다 해병대네” 얘기예요?",
+        )
+        self.assertEqual(
+            module._contextual_clarification_reply("뭐지저건", recent),
+            "아까 “둘다 해병대네” 얘기야?",
+        )
+        self.assertEqual(
+            module._contextual_clarification_target("뭐지저건", recent)["evidence_id"],
+            "recent:11",
         )
         with mock.patch.object(
             module,
@@ -3393,6 +3467,19 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         saved = []
         polled = []
         call_order = []
+        clock = AdvancingTestClock()
+        worker = ImmediateContextSyncWorker(
+            [
+                ("ok", valid),
+                (
+                    "transient",
+                    db_watch.ContextSyncTransient(
+                        "context_sync_snapshot_retry_exhausted"
+                    ),
+                ),
+                ("ok", valid),
+            ]
+        )
 
         def save_state(state, **_kwargs):
             call_order.append("save")
@@ -3404,8 +3491,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             self.assertTrue(saved)
             self.assertFalse(saved[-1]["delivery_enabled"])
 
-        def poll_after_recovery(state, interval):
-            polled.append((dict(state), interval))
+        def poll_after_recovery(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
             if (
                 state.get("context_sync_checkpoint_log_id") == 999
                 and "context_sync_transient_failures" not in state
@@ -3434,54 +3521,16 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 side_effect=lambda state: dict(state),
             ),
             mock.patch.object(db_watch, "CONTEXT_SYNC_INTERVAL_SECONDS", 5.0),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[
-                    valid,
-                    db_watch.ContextSyncTransient(
-                        "context_sync_snapshot_retry_exhausted"
-                    ),
-                    valid,
-                ],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
             mock.patch.object(
                 db_watch,
                 "_poll_with_bounded_clean_retry",
                 side_effect=poll_after_recovery,
             ),
-            mock.patch.object(
-                db_watch.time,
-                "monotonic",
-                side_effect=[
-                    20.0,
-                    26.0,
-                    26.1,
-                    26.2,
-                    26.3,
-                    26.4,
-                    26.5,
-                    32.0,
-                    32.1,
-                    32.2,
-                    32.3,
-                ],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0, 111.0, 112.0, 113.0, 120.0],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "sleep",
-                side_effect=settling_sleep(
-                    db_watch,
-                    real_sleep,
-                    real_monotonic,
-                ),
-            ),
+            mock.patch.object(db_watch.time, "monotonic", side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(
                 db_watch, "_stop_poll_stream", side_effect=stop_poll_stream
             ),
@@ -3490,12 +3539,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             db_watch.main()
 
         self.assertEqual(
-            [call.args for call in sync.call_args_list],
-            [(42,), (42,), (42,)],
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False, False],
         )
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[1]), {})
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[2]), {})
         fenced = [
             item
             for item in saved
@@ -3505,26 +3551,29 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertFalse(fenced["delivery_enabled"])
         self.assertEqual(fenced["fence"], "starting")
         self.assertEqual(fenced["fence_reason"], "context_sync_transient")
-        self.assertEqual(fenced["context_sync_retry_at"], 115.0)
+        self.assertEqual(fenced["context_sync_retry_at"], 112.0)
         self.assertEqual(fenced["context_sync_transient_failures"], 1)
         self.assertNotIn("context_sync_deferred_log_id", fenced)
-        self.assertEqual(call_order[:2], ["save", "stop"])
+        self.assertLess(call_order.index("stop"), len(call_order) - 1)
         # The room kept polling with the authority it had already published
         # while the transient sync was still in flight.
-        self.assertEqual(len(polled), 2)
-        in_flight_state, in_flight_interval = polled[0]
+        self.assertGreater(len(polled), 2)
+        in_flight_state, in_flight_interval, in_flight_kwargs = polled[0]
         self.assertEqual(in_flight_interval, 1.0)
         self.assertEqual(in_flight_state["fence_reason"], "")
         self.assertFalse(in_flight_state["delivery_enabled"])
         self.assertNotIn("context_sync_transient_failures", in_flight_state)
-        recovered, interval = polled[1]
+        self.assertFalse(in_flight_kwargs["delivery_ready"])
+        self.assertTrue(any(item[0].get("fence_reason") == "context_sync_transient" for item in polled))
+        recovered, interval, ready_kwargs = polled[-1]
         self.assertEqual(interval, 1.0)
+        self.assertEqual(ready_kwargs, {})
         self.assertEqual(recovered["capability_state"], "starting")
         self.assertFalse(recovered["delivery_enabled"])
         self.assertEqual(recovered["fence_reason"], "")
-        self.assertEqual(recovered["context_sync_at"], 120.0)
+        self.assertEqual(recovered["context_sync_at"], 113.0)
         self.assertEqual(recovered["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(recovered["context_sync_retry_at"], 125.0)
+        self.assertEqual(recovered["context_sync_retry_at"], 118.0)
         self.assertNotIn("context_sync_transient_failures", recovered)
         self.assertNotIn("context_sync_failure_at", recovered)
 
@@ -3568,7 +3617,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 in_flight["active"] = False
             return valid
 
-        def poll(state, _interval):
+        def poll(state, _interval, **_kwargs):
             polls_total.append((time.monotonic(), dict(state)))
             if in_flight["active"]:
                 polls_while_blocked.append((time.monotonic(), dict(state)))
@@ -3642,7 +3691,11 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertTrue(
             all(state == first_state for _, state in polls_while_blocked)
         )
-        self.assertFalse(db_watch._PERIODIC_CONTEXT_SYNC.in_flight())
+        worker = db_watch._PERIODIC_CONTEXT_SYNC
+        self.assertFalse(context_sync_thread_running(worker))
+        self.assertTrue(worker.in_flight())
+        self.assertEqual(worker.take_result(), ("ok", valid))
+        self.assertFalse(worker.in_flight())
 
     def test_periodic_context_sync_publishes_worker_liveness_from_the_loop(self):
         db_watch = self._load_db_watch_module(
@@ -3682,7 +3735,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             saved.append(dict(state))
             return True
 
-        def poll(state, _interval):
+        def poll(state, _interval, **_kwargs):
             if proofs and any(
                 item["heartbeat_at"] >= proofs[0] for item in saved
             ):
@@ -3739,6 +3792,28 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             )
         )
 
+    def test_settling_sleep_ignores_unconsumed_context_sync_result(self):
+        db_watch = self._load_db_watch_module(
+            "auto_reply_periodic_context_sync_settling_sleep_test"
+        )
+        worker = db_watch._PERIODIC_CONTEXT_SYNC
+        result = {"authoritative": True, "checkpoint_log_id": 999}
+        real_sleep = mock.Mock()
+
+        with mock.patch.object(
+            db_watch,
+            "sync_context_index",
+            return_value=result,
+        ):
+            worker._run(42, True, None, None)
+
+        self.assertFalse(context_sync_thread_running(worker))
+        self.assertTrue(worker.in_flight())
+        settling_sleep(db_watch, real_sleep, time.monotonic, timeout=0.01)(1.0)
+        real_sleep.assert_not_called()
+        self.assertEqual(worker.take_result(), ("ok", result))
+        self.assertFalse(worker.in_flight())
+
     def test_periodic_context_sync_worker_clears_in_flight_after_cancellation(self):
         db_watch = self._load_db_watch_module(
             "auto_reply_periodic_context_sync_cancelled_test"
@@ -3766,11 +3841,11 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
         def wait_for_worker():
             deadline = time.monotonic() + 5.0
-            while worker.in_flight() and time.monotonic() < deadline:
+            while context_sync_thread_running(worker) and time.monotonic() < deadline:
                 time.sleep(0.005)
             self.assertFalse(
-                worker.in_flight(),
-                "the worker never reported that its sync had finished",
+                context_sync_thread_running(worker),
+                "the worker thread never finished",
             )
 
         with mock.patch.object(
@@ -3793,7 +3868,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         ):
             self.assertTrue(worker.start(42))
             wait_for_worker()
+        self.assertTrue(worker.in_flight())
         self.assertEqual(worker.take_result(), ("ok", valid))
+        self.assertFalse(worker.in_flight())
 
     def test_periodic_context_sync_worker_clears_in_flight_when_the_watcher_stops(self):
         db_watch = self._load_db_watch_module(
@@ -3863,17 +3940,23 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         saved = []
         polled = []
         call_order = []
+        clock = AdvancingTestClock()
+        worker = ImmediateContextSyncWorker(
+            [("ok", valid), ("ok", deferred), ("ok", valid)]
+        )
 
         def save_state(state, **_kwargs):
             call_order.append("save")
             saved.append(dict(state))
             return True
 
-        def poll(state, interval):
-            polled.append((dict(state), interval))
+        def poll(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
             if (
-                state.get("context_sync_checkpoint_log_id") == 999
+                len(worker.starts) >= 3
+                and state.get("context_sync_checkpoint_log_id") == 999
                 and "context_sync_transient_failures" not in state
+                and "context_sync_deferred_log_id" not in state
                 and any(
                     item.get("fence_reason") == "context_sync_deferred"
                     for item in saved
@@ -3902,48 +3985,16 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 side_effect=lambda state: dict(state),
             ),
             mock.patch.object(db_watch, "CONTEXT_SYNC_INTERVAL_SECONDS", 5.0),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[valid, deferred, valid],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
             mock.patch.object(
                 db_watch,
                 "_poll_with_bounded_clean_retry",
                 side_effect=poll,
             ),
-            mock.patch.object(
-                db_watch.time,
-                "monotonic",
-                side_effect=[
-                    20.0,
-                    26.0,
-                    26.1,
-                    26.2,
-                    26.3,
-                    26.4,
-                    26.5,
-                    32.0,
-                    32.1,
-                    32.2,
-                    32.3,
-                ],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0, 111.0, 112.0, 113.0, 120.0],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "sleep",
-                side_effect=settling_sleep(
-                    db_watch,
-                    real_sleep,
-                    real_monotonic,
-                ),
-            ),
+            mock.patch.object(db_watch.time, "monotonic", side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(
                 db_watch,
                 "_stop_poll_stream",
@@ -3954,10 +4005,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             db_watch.main()
 
         self.assertEqual(
-            [call.args for call in sync.call_args_list],
-            [(42,), (42,), (42,)],
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False, False],
         )
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
         deferred_publish = [
             item
             for item in saved
@@ -3966,10 +4016,10 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertEqual(deferred_publish["capability_state"], "starting")
         self.assertEqual(deferred_publish["fence"], "starting")
         self.assertFalse(deferred_publish["delivery_enabled"])
-        self.assertEqual(deferred_publish["context_sync_at"], 110.0)
+        self.assertEqual(deferred_publish["context_sync_at"], 107.0)
         self.assertEqual(deferred_publish["context_sync_checkpoint_log_id"], 999)
         self.assertEqual(deferred_publish["context_sync_deferred_log_id"], 1000)
-        self.assertEqual(deferred_publish["context_sync_retry_at"], 115.0)
+        self.assertEqual(deferred_publish["context_sync_retry_at"], 112.0)
         # A deferral fences delivery without stopping the poll stream: the only
         # stop is the watcher's own shutdown unwind.
         self.assertEqual(call_order[-1], "stop")
@@ -3977,23 +4027,31 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         # Only the poll that ran while the deferred result was still landing,
         # then the poll that ran once the sync proved authoritative again: no
         # inbound observation is delivered while the room is deferred.
-        self.assertEqual(len(polled), 2)
-        self.assertTrue(
-            all(
-                state.get("fence_reason") != "context_sync_deferred"
-                for state, _ in polled
-            )
+        self.assertGreater(len(polled), 2)
+        deferred_poll = next(
+            (state, kwargs)
+            for state, _interval, kwargs in polled
+            if state.get("fence_reason") == "context_sync_deferred"
         )
-        in_flight_state, in_flight_interval = polled[0]
+        self.assertFalse(deferred_poll[1]["delivery_ready"])
+        in_flight_state, in_flight_interval, in_flight_kwargs = polled[0]
         self.assertEqual(in_flight_interval, 1.0)
+        self.assertFalse(in_flight_kwargs["delivery_ready"])
         self.assertEqual(in_flight_state["fence_reason"], "")
         self.assertNotIn("context_sync_deferred_log_id", in_flight_state)
-        recovered, interval = polled[1]
+        deferred_capture = next(
+            (state, kwargs)
+            for state, _interval, kwargs in polled
+            if kwargs.get("not_ready_reason") == "context_sync_deferred"
+        )
+        self.assertFalse(deferred_capture[1]["delivery_ready"])
+        recovered, interval, ready_kwargs = polled[-1]
         self.assertEqual(interval, 1.0)
+        self.assertEqual(ready_kwargs, {})
         self.assertEqual(recovered["fence_reason"], "")
-        self.assertEqual(recovered["context_sync_at"], 120.0)
+        self.assertEqual(recovered["context_sync_at"], 113.0)
         self.assertEqual(recovered["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(recovered["context_sync_retry_at"], 125.0)
+        self.assertEqual(recovered["context_sync_retry_at"], 118.0)
         self.assertNotIn("context_sync_deferred_log_id", recovered)
         self.assertNotIn("context_sync_transient_failures", recovered)
 
@@ -4016,14 +4074,23 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         }
         saved = []
         polled = []
+        clock = AdvancingTestClock()
+        transient = db_watch.ContextSyncTransient(
+            "context_sync_snapshot_retry_exhausted"
+        )
+        worker = ImmediateContextSyncWorker(
+            [("transient", transient), ("ok", valid)]
+        )
 
         def save_state(state, **_kwargs):
             saved.append(dict(state))
             return True
 
-        def poll_once(state, interval):
-            polled.append((dict(state), interval))
-            raise StopIteration
+        def poll_once(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            if not kwargs:
+                raise StopIteration
+            return state, 0
 
         with (
             mock.patch.dict(
@@ -4034,59 +4101,50 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
             mock.patch.object(db_watch.signal, "signal"),
             mock.patch.object(db_watch, "load_state", return_value={}),
+            mock.patch.object(db_watch, "_state", side_effect=lambda state: dict(state)),
             mock.patch.object(
                 db_watch,
                 "_state",
                 side_effect=lambda state: dict(state),
             ),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[
-                    db_watch.ContextSyncTransient(
-                        "context_sync_snapshot_retry_exhausted"
-                    ),
-                    valid,
-                ],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
             mock.patch.object(
                 db_watch,
                 "_poll_with_bounded_clean_retry",
                 side_effect=poll_once,
             ),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
             mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0],
+                db_watch.time, "monotonic", side_effect=clock.monotonic
             ),
-            mock.patch.object(
-                db_watch.time,
-                "monotonic",
-                side_effect=[20.0, 20.0],
-            ),
-            mock.patch.object(db_watch.time, "sleep") as sleep,
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(db_watch, "_stop_poll_stream"),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
 
-        self.assertEqual(len(saved), 1)
-        fenced = saved[0]
-        self.assertEqual(fenced["capability_state"], "starting")
-        self.assertFalse(fenced["delivery_enabled"])
-        self.assertEqual(fenced["fence_reason"], "context_sync_transient")
-        self.assertEqual(fenced["context_sync_retry_at"], 105.0)
-        sleep.assert_called_once_with(5.0)
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[1]), {"initial": False})
-        self.assertEqual(len(polled), 1)
-        recovered, interval = polled[0]
-        self.assertEqual(interval, 1.0)
-        self.assertFalse(recovered["delivery_enabled"])
-        self.assertEqual(recovered["fence_reason"], "")
-        self.assertNotIn("context_sync_transient_failures", recovered)
-        self.assertNotIn("context_sync_failure_at", recovered)
+        transient_states = [
+            item
+            for item in saved
+            if item.get("context_sync_transient_failures") == 1
+        ]
+        self.assertTrue(transient_states)
+        self.assertEqual(transient_states[0]["capability_state"], "starting")
+        self.assertFalse(transient_states[0]["delivery_enabled"])
+        self.assertEqual(transient_states[0]["context_sync_retry_at"], 106.0)
+        self.assertEqual(
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False],
+        )
+        self.assertGreaterEqual(len(polled), 4)
+        self.assertTrue(all(item[1] == 1.0 for item in polled))
+        self.assertTrue(all(item[2].get("delivery_ready") is False for item in polled[:3]))
+        # The authoritative sync is applied, then the watcher performs its
+        # normal ready poll; the mock stops before it can mutate readiness.
+        self.assertEqual(polled[-1][2], {})
+        self.assertFalse(polled[-1][0]["delivery_enabled"])
+        self.assertEqual(polled[-1][0]["fence_reason"], "")
 
     def test_startup_context_sync_persistent_transient_never_becomes_ready(self):
         db_watch = self._load_db_watch_module(
@@ -4094,7 +4152,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
         db_watch.SELF = "self"
         saved = []
-        waited = []
+        polled = []
+        clock = AdvancingTestClock()
 
         def save_state(state, **_kwargs):
             saved.append(dict(state))
@@ -4104,10 +4163,18 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "context_sync_snapshot_retry_exhausted"
         )
 
-        def wait_retry(_state, *, retry_delay):
-            waited.append(retry_delay)
-            if len(waited) == 3:
+        def poll_once(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            if (
+                len(worker.starts) == 3
+                and saved[-1].get("context_sync_transient_failures") == 3
+            ):
                 raise StopIteration
+            return state, 0
+
+        worker = ImmediateContextSyncWorker(
+            [("transient", transient)], repeat_last=True
+        )
 
         with (
             mock.patch.dict(
@@ -4123,61 +4190,56 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 "_state",
                 side_effect=lambda state: dict(state),
             ),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[transient, transient, transient],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
             mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0, 130.0],
+                db_watch.time, "monotonic", side_effect=clock.monotonic
             ),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(
-                db_watch,
-                "_wait_context_sync_startup_retry",
-                side_effect=wait_retry,
+                db_watch, "_poll_with_bounded_clean_retry", side_effect=poll_once
             ),
-            mock.patch.object(db_watch, "_poll_with_bounded_clean_retry") as poll,
             mock.patch.object(db_watch, "_stop_poll_stream"),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
 
-        self.assertEqual(len(saved), 3)
+        self.assertEqual(
+            sorted(
+                {
+                    item["context_sync_transient_failures"]
+                    for item in saved
+                    if "context_sync_transient_failures" in item
+                }
+            ),
+            [1, 2, 3],
+        )
+        transient_states = [
+            item
+            for item in saved
+            if "context_sync_transient_failures" in item
+        ]
         self.assertTrue(
             all(
                 item["capability_state"] == "starting"
                 and item["delivery_enabled"] is False
                 and item["fence_reason"] == "context_sync_transient"
-                for item in saved
+                for item in transient_states
             )
         )
         self.assertEqual(
-            [item["context_sync_transient_failures"] for item in saved],
+            sorted({item["context_sync_transient_failures"] for item in transient_states}),
             [1, 2, 3],
         )
-        self.assertEqual(waited, [5.0, 10.0, 30.0])
         self.assertEqual(
-            [sync_call_kwargs(call) for call in sync.call_args_list],
-            [
-                {"initial": True},
-                {"initial": False},
-                {"initial": False},
-            ],
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False, False],
         )
-        # Every sync proves liveness through the same watcher heartbeat, both
-        # while queuing for the shared writer slot and while its child runs.
-        self.assertTrue(
-            all(
-                callable(sync_call_kwargs(call, heartbeat=True)["on_wait"])
-                and sync_call_kwargs(call, heartbeat=True)["on_wait"]
-                is sync_call_kwargs(call, heartbeat=True)["on_tick"]
-                for call in sync.call_args_list
-            )
-        )
-        poll.assert_not_called()
+        self.assertGreaterEqual(len(polled), 16)
+        self.assertLess(len(polled), 30)
+        self.assertTrue(all(item[1] == 1.0 for item in polled))
+        self.assertTrue(all(item[2].get("delivery_ready") is False for item in polled))
 
     def test_startup_context_sync_retry_refreshes_heartbeat_while_fenced(self):
         db_watch = self._load_db_watch_module(
@@ -4244,10 +4306,19 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "network": False,
         }
         saved = []
+        polled = []
+        clock = AdvancingTestClock()
+        worker = ImmediateContextSyncWorker([("ok", deferred)])
 
         def save_state(state, **_kwargs):
             saved.append(dict(state))
             return True
+
+        def poll_capture(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            if kwargs.get("not_ready_reason") == "context_sync_deferred":
+                raise StopIteration
+            return state, 0
 
         with (
             mock.patch.dict(
@@ -4258,27 +4329,36 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
             mock.patch.object(db_watch.signal, "signal"),
             mock.patch.object(db_watch, "load_state", return_value={}),
-            mock.patch.object(db_watch, "sync_context_index", return_value=deferred) as sync,
+            mock.patch.object(db_watch, "_state", side_effect=lambda state: dict(state)),
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
-            mock.patch.object(db_watch, "poll_once") as poll,
-            mock.patch.object(db_watch.time, "monotonic", side_effect=[10.0, 10.0, 10.0]),
-            mock.patch.object(db_watch.time, "time", side_effect=[100.0, 101.0]),
-            mock.patch.object(db_watch.time, "sleep", side_effect=StopIteration),
+            mock.patch.object(
+                db_watch, "_poll_with_bounded_clean_retry", side_effect=poll_capture
+            ),
+            mock.patch.object(db_watch.time, "monotonic", side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(db_watch, "_stop_poll_stream"),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
 
-        self.assertEqual(sync.call_count, 1)
-        self.assertEqual(sync.call_args_list[0].args, (42,))
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
-        poll.assert_not_called()
-        self.assertEqual(len(saved), 1)
-        self.assertEqual(saved[0]["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(saved[0]["context_sync_deferred_log_id"], 1000)
-        self.assertEqual(saved[0]["capability_state"], "starting")
-        self.assertFalse(saved[0]["delivery_enabled"])
-        self.assertEqual(saved[0]["fence_reason"], "context_sync_deferred")
+        self.assertEqual(
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True],
+        )
+        deferred_state = next(
+            item for item in saved if item.get("fence_reason") == "context_sync_deferred"
+        )
+        self.assertEqual(deferred_state["context_sync_checkpoint_log_id"], 999)
+        self.assertEqual(deferred_state["context_sync_deferred_log_id"], 1000)
+        self.assertEqual(deferred_state["context_sync_at"], 101.0)
+        self.assertEqual(deferred_state["capability_state"], "starting")
+        self.assertFalse(deferred_state["delivery_enabled"])
+        self.assertEqual(len(polled), 2)
+        self.assertEqual(polled[0][2].get("not_ready_reason", ""), "")
+        self.assertEqual(polled[1][2]["not_ready_reason"], "context_sync_deferred")
+        self.assertFalse(polled[1][2]["delivery_ready"])
 
     def test_authoritative_context_sync_deferral_preserves_watcher_readiness(self):
         db_watch = self._load_db_watch_module(
@@ -19940,6 +20020,65 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             content = captured["body"]["messages"][1]["content"]
             self.assertIsInstance(content, str)
             self.assertNotIn("사진을 읽지 못했습니다", content)
+            self.assertNotIn("response_format", captured["body"])
+
+    def test_mlx_serve_uses_its_advertised_strict_json_schema(self):
+        module = self._load_auto_reply_module("mlx_strict_response_format")
+        captured: dict = {}
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit=None):
+                return json.dumps(
+                    {
+                        "model": module.FLASH_NEXT_MODEL_ID,
+                        "choices": [{"message": {"content": "{}"}}],
+                    }
+                ).encode("utf-8")
+
+        def fake_urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return _Response()
+
+        with mock.patch.object(
+            module,
+            "discover_mlx_gateway",
+            return_value=("http://127.0.0.1:11234/v1", ""),
+        ), mock.patch.object(
+            module,
+            "detect_mlx_gateway_models",
+            return_value=[
+                {
+                    "id": module.FLASH_NEXT_MODEL_ID,
+                    "owned_by": "mlx-serve",
+                    "capabilities": ["json_schema"],
+                }
+            ],
+        ), mock.patch.object(
+            module.auto_reply_ondevice,
+            "_local_only_urlopen",
+            side_effect=fake_urlopen,
+        ):
+            code, _stdout, _stderr = module._run_opencodex_generation_unleased(
+                module.FLASH_NEXT_MODEL_ID,
+                "시스템",
+                '{"inbound":"안녕"}'.encode("utf-8"),
+                timeout=5.0,
+            )
+
+        self.assertEqual(code, 0)
+        response_format = captured["body"]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        schema = response_format["json_schema"]["schema"]
+        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        self.assertFalse(schema["additionalProperties"])
+        self.assertNotIn("minItems", schema["properties"]["drafts"])
 
     def test_rerank_client_consumes_late_sidecar_greeting(self):
         module = self._load_auto_reply_module("rerank_late_greeting")

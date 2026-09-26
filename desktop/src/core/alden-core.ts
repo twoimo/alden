@@ -17,7 +17,7 @@ function spherePoint(index: number, count: number, radius: number): THREE.Vector
   return new THREE.Vector3(Math.cos(phi) * r * radius, y * radius, Math.sin(phi) * r * radius);
 }
 
-export class JarvisCore {
+export class AldenCore {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(34, 1, 0.1, 20);

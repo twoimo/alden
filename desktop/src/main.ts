@@ -52,7 +52,7 @@ if (!app) throw new Error("app_root_missing");
 const isSettings = new URLSearchParams(window.location.search).get("view") === "settings";
 document.body.classList.add(isSettings ? "settings-view" : "panel-view");
 
-interface JarvisCoreControl {
+interface AldenCoreControl {
   readonly renderCount: number;
   start(): void;
   stop(): void;
@@ -67,7 +67,7 @@ function setText(id: string, value: string): void {
 
 function showPanelUnavailable(message: string): void {
   app.dataset.state = "unavailable";
-  const panel = document.querySelector<HTMLElement>(".jarvis-panel");
+  const panel = document.querySelector<HTMLElement>(".alden-panel");
   if (!panel) return;
   let status = document.getElementById("panel-status");
   if (!status) {
@@ -83,9 +83,9 @@ function showPanelUnavailable(message: string): void {
 
 function renderPanelUnavailable(): void {
   app.innerHTML = mainPanelMarkup();
-  document.querySelector<HTMLCanvasElement>(".jarvis-core")
-    ?.setAttribute("aria-label", "Jarvis core 확인 불가");
-  showPanelUnavailable("Jarvis 상태를 확인할 수 없습니다.");
+  document.querySelector<HTMLCanvasElement>(".alden-core")
+    ?.setAttribute("aria-label", "Alden core 확인 불가");
+  showPanelUnavailable("Alden 상태를 확인할 수 없습니다.");
 }
 
 function wireRoomAdd(loadSnapshot: SnapshotLoader, loadAction: typeof fetchSettingsAction): void {
@@ -237,6 +237,12 @@ function wireModelSelection(): void {
 
 function renderVoice(snapshot: RuntimeSnapshot): void {
   const voice = snapshot.voice;
+  const startButton = document.getElementById("voice-start") as HTMLButtonElement | null;
+  if (startButton) startButton.disabled = true;
+  if (!voice.customModelSelected) {
+    setText("voice-status", "‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력이 꺼져 있습니다.");
+    return;
+  }
   if (!voice.available) {
     setText("voice-status", "음성 상태를 확인할 수 없습니다.");
     return;
@@ -494,7 +500,7 @@ export async function bootSettings(
 type CommandInvoker = (command: string) => Promise<unknown>;
 
 interface PanelBootDependencies {
-  createCore: (canvas: HTMLCanvasElement) => JarvisCoreControl | Promise<JarvisCoreControl>;
+  createCore: (canvas: HTMLCanvasElement) => AldenCoreControl | Promise<AldenCoreControl>;
   loadSnapshot: SnapshotLoader;
   cancelSnapshot: SnapshotCanceller;
   makeToken: () => CancellationToken;
@@ -510,8 +516,8 @@ export async function bootPanel(
 ): Promise<void> {
   const dependencies: PanelBootDependencies = {
     createCore: async (canvas) => {
-      const { JarvisCore } = await import("./core/jarvis-core");
-      return new JarvisCore(canvas);
+      const { AldenCore } = await import("./core/alden-core");
+      return new AldenCore(canvas);
     },
     loadSnapshot: fetchRuntimeSnapshot,
     cancelSnapshot: cancelRuntimeRequest,
@@ -524,18 +530,18 @@ export async function bootPanel(
   };
   app.innerHTML = mainPanelMarkup();
   app.dataset.state = "loading";
-  const canvas = document.querySelector<HTMLCanvasElement>(".jarvis-core");
+  const canvas = document.querySelector<HTMLCanvasElement>(".alden-core");
   if (!canvas) {
     renderPanelUnavailable();
     return;
   }
 
-  let core: JarvisCoreControl | null = null;
+  let core: AldenCoreControl | null = null;
   let closePanel: (() => void) | null = null;
   try {
     core = await dependencies.createCore(canvas);
     const activeCore = core;
-    Object.defineProperty(window, "__jarvisRenderCount", { configurable: true, get: () => activeCore.renderCount });
+    Object.defineProperty(window, "__aldenRenderCount", { configurable: true, get: () => activeCore.renderCount });
     const polling = new RuntimeSnapshotPoller(
       activeCore,
       dependencies.loadSnapshot,

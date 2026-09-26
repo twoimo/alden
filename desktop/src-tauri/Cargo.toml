@@ -1,7 +1,7 @@
 [package]
-name = "openkakao-jarvis-desktop"
-version = "0.1.4"
-description = "OpenKakao Tauri menubar shell with a local Jarvis core"
+name = "openkakao-alden-desktop"
+version = "0.1.5"
+description = "OpenKakao Tauri menubar shell with a local Alden core"
 edition = "2021"
 
 [build-dependencies]

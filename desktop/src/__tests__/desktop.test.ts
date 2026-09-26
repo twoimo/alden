@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from "vitest";
 import { AnimationLoop, type FrameScheduler } from "../core/animation-loop";
-import { JarvisCore } from "../core/jarvis-core";
+import { AldenCore } from "../core/alden-core";
 import { RenderLifecycle } from "../core/lifecycle";
 import { parseBackground, parseJobEvent, parseOnDevice, parsePipeline, parseRuntimeSnapshot, parseRuntimeSnapshotJson, serializeJobEvent, unavailableSnapshot } from "../contracts";
 import {
@@ -112,10 +112,10 @@ describe("render lifecycle", () => {
     expect(dts[2]).toBeCloseTo(0.06667, 4);
   });
 
-  it("JarvisCore reports zero renders while stopped", () => {
+  it("AldenCore reports zero renders while stopped", () => {
     const scheduler = new FakeScheduler();
     const loop = new AnimationLoop(() => undefined, scheduler);
-    const core = Object.create(JarvisCore.prototype) as JarvisCore;
+    const core = Object.create(AldenCore.prototype) as AldenCore;
     Object.defineProperty(core, "loop", { value: loop });
     core.stop();
     scheduler.step(1000);
@@ -638,8 +638,11 @@ describe("layout and settings contract", () => {
       "settings-sync-card", "settings-knowledge-card",
     ]) expect(markup).toContain(`id="${id}"`);
     expect(markup).toContain('id="voice-status"');
-    expect(markup).toContain('“헤이 자비스”라고 부른 뒤 말씀해 주세요.');
+    expect(markup).toContain('호출어: 올든');
+    expect(markup).toContain('‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력이 꺼져 있습니다.');
+    expect(markup).toContain("긴급 중단은 ⌘⌥⇧Esc를 누르세요.");
     expect(markup).toContain('id="voice-start"');
+    expect(markup).toContain('id="voice-start" type="button" disabled');
     expect(mainPanelMarkup()).not.toContain('id="voice-start"');
     expect(markup).toContain('id="knowledge-graph-canvas"');
     expect(markup).toContain('id="knowledge-expand-hop"');
@@ -668,18 +671,18 @@ describe("layout and settings contract", () => {
     const snapshot = unavailableSnapshot();
     snapshot.available = true;
     snapshot.rooms = [
-      { chatId: 417780809780519, title: "부자멘토멘티", live: true, autoReply: true, openJobs: 0 },
+      { chatId: 424242, title: "예시 채팅방", live: true, autoReply: true, openJobs: 0, replyReadiness: "unknown" },
     ];
     snapshot.availableChats = [
-      { chatId: 417780809780519, title: "부자멘토멘티", catalog: true, live: true },
+      { chatId: 424242, title: "예시 채팅방", catalog: true, live: true },
       { chatId: 1234567890, title: "새로운 카카오방", catalog: false, live: false },
     ];
     renderRooms(snapshot);
 
     const enrolledSelect = document.getElementById("settings-room-popup") as HTMLSelectElement;
     expect(enrolledSelect.options.length).toBe(1);
-    expect(enrolledSelect.options[0].value).toBe("417780809780519");
-    expect(enrolledSelect.options[0].textContent).toBe("부자멘토멘티");
+    expect(enrolledSelect.options[0].value).toBe("424242");
+    expect(enrolledSelect.options[0].textContent).toBe("예시 채팅방");
 
     const addSelect = document.getElementById("settings-add-room-select") as HTMLSelectElement;
     expect(addSelect.options.length).toBe(2);

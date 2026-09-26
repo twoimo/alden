@@ -31,14 +31,12 @@ const BROWSER_TOOL_TASK_LIMIT_BYTES: usize = 16 * 1024;
 const BROWSER_TOOL_JOB_ID_LIMIT: usize = 64;
 const JOB_EVENT_CAP: usize = 8;
 const JOB_EVENT_MAX_AGE_SECS: f64 = 300.0;
-const ABORT_STATE_NAME: &str = "jarvis-abort.json";
-const VOICE_STATUS_NAME: &str = "jarvis-voice-status.json";
+const ABORT_STATE_NAME: &str = "alden-abort.json";
+const VOICE_STATUS_NAME: &str = "alden-voice-status.json";
 const VOICE_STATUS_MAX_AGE_SECS: u64 = 5 * 60;
 const STATE_FILE_LIMIT_BYTES: u64 = 4096;
-const WAKE_PHRASE: &str = "헤이 자비스";
+const WAKE_PHRASE: &str = "올든";
 const WAKE_THRESHOLD: f64 = 0.65;
-const CUSTOM_WAKE_MODEL_MAX_BYTES: u64 = 64 * 1024 * 1024;
-const BUNDLED_CUSTOM_WAKE_MODEL: &str = resource_layout::WAKE_MODEL;
 const RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
 const SWAP_MODEL_ID: &str = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit";
 // The on-disk directory names the app-owned server publishes in /v1/models.
@@ -49,7 +47,8 @@ const MLX_SERVER_LAUNCH_ACTION: &str = "mlx-server-launch";
 const MLX_SERVER_STOP_ACTION: &str = "mlx-server-stop";
 const MODEL_SWAP_OPT_IN: &str = "qwen38-27b-explicit-v1";
 const MODEL_SWAP_CANCEL_DIR: &str = "model-swap-cancel";
-const VOICE_TTS_OUT_NAME: &str = "jarvis-voice-out.wav";
+#[cfg(test)]
+const VOICE_TTS_OUT_NAME: &str = "alden-voice-out.wav";
 static VOICE_SESSION_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Error)]
@@ -90,6 +89,8 @@ pub enum BridgeError {
     VoiceSessionAlreadyRunning,
     #[error("voice_session_process_check_failed")]
     VoiceProcessCheck,
+    #[error("alden_wake_model_unavailable")]
+    WakeModelUnavailable,
 }
 
 #[derive(Clone)]
@@ -144,12 +145,12 @@ impl Default for PythonRun<'_> {
 #[derive(Debug)]
 struct BridgeConfig {
     python: PathBuf,
-    voice_python: PathBuf,
     resources: Result<ResourceLayout, ResourceError>,
     state_root: PathBuf,
     logs_dir: PathBuf,
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 struct VoiceSessionPlan {
     python: PathBuf,
@@ -164,6 +165,8 @@ pub struct SafeRoom {
     live: bool,
     auto_reply: bool,
     open_jobs: u64,
+    #[serde(rename = "replyReadiness")]
+    reply_readiness: String,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, Clone)]
@@ -666,17 +669,7 @@ impl PythonBridge {
 
     pub fn start_voice_session(&self) -> Result<(), BridgeError> {
         start_voice_session_if_absent(&self.config.state_root, voice_session_is_running, || {
-            let resources = self.config.resources()?;
-            resources.validate().map_err(BridgeError::from)?;
-            let plan = plan_voice_session(
-                &resources.root,
-                &self.config.state_root,
-                &self.config.voice_python,
-            )?;
-            voice_session_command(&plan, &self.config.state_root)?
-                .spawn()
-                .map(|_| ())
-                .map_err(|_| BridgeError::Spawn)
+            Err(BridgeError::WakeModelUnavailable)
         })
     }
 
@@ -870,41 +863,26 @@ impl BridgeConfig {
         });
         let logs_dir = get_override("OPENKAKAO_LOGS_DIR")
             .unwrap_or_else(|| home.join("Library/Logs/AutoReplyMenu"));
-        let (python, voice_python) = if dev
-            && resources.as_ref().is_ok_and(|layout| !layout.installed)
-        {
-            let root = resources
-                .as_ref()
-                .map(|r| r.root.as_path())
-                .unwrap_or(checkout);
-            (
-                get_override("OPENKAKAO_PYTHON").unwrap_or_else(|| {
-                    let uv = home.join(
-                        ".local/share/uv/python/cpython-3.11-macos-aarch64-none/bin/python3.11",
-                    );
-                    if uv.is_file() {
-                        return uv;
-                    }
-                    let homebrew = PathBuf::from("/opt/homebrew/opt/python@3.11/bin/python3.11");
-                    if homebrew.is_file() {
-                        homebrew
-                    } else {
-                        PathBuf::from("python3")
-                    }
-                }),
-                get_override("OPENKAKAO_VOICE_PYTHON")
-                    .unwrap_or_else(|| root.join(".venv-voice/bin/python")),
-            )
+        let python = if dev && resources.as_ref().is_ok_and(|layout| !layout.installed) {
+            get_override("OPENKAKAO_PYTHON").unwrap_or_else(|| {
+                let uv = home
+                    .join(".local/share/uv/python/cpython-3.11-macos-aarch64-none/bin/python3.11");
+                if uv.is_file() {
+                    return uv;
+                }
+                let homebrew = PathBuf::from("/opt/homebrew/opt/python@3.11/bin/python3.11");
+                if homebrew.is_file() {
+                    homebrew
+                } else {
+                    PathBuf::from("python3")
+                }
+            })
         } else {
             // Provisioned separately; never copy or inspect a checkout .venv.
-            (
-                support.join("runtimes/menubar/bin/python3.11"),
-                support.join("runtimes/voice/bin/python3.11"),
-            )
+            support.join("runtimes/menubar/bin/python3.11")
         };
         Self {
             python,
-            voice_python,
             resources,
             state_root,
             logs_dir,
@@ -1649,6 +1627,7 @@ fn parse_voice_process_args(bytes: &[u8]) -> Result<VoiceProcessArgs, BridgeErro
     Ok((executable, argv))
 }
 
+#[cfg(test)]
 fn plan_voice_session(
     resource_root: &Path,
     state_root: &Path,
@@ -1664,6 +1643,7 @@ fn plan_voice_session(
     })
 }
 
+#[cfg(test)]
 fn voice_session_command(
     plan: &VoiceSessionPlan,
     state_root: &Path,
@@ -1766,29 +1746,9 @@ fn global_abort_is_latched(state_root: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn bundled_custom_wake_model_selected(repo_root: &Path) -> bool {
-    let path = repo_root.join(BUNDLED_CUSTOM_WAKE_MODEL);
-    if validate_path(&path, Kind::Data).is_err() {
-        return false;
-    }
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
-        return false;
-    };
-    let extension_valid = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("onnx") || value.eq_ignore_ascii_case("tflite"))
-        .unwrap_or(false);
-    metadata.is_file()
-        && !metadata.file_type().is_symlink()
-        && extension_valid
-        && metadata.len() > 0
-        && metadata.len() <= CUSTOM_WAKE_MODEL_MAX_BYTES
-}
-
-fn default_voice_status(repo_root: &Path) -> SafeVoiceStatus {
+fn default_voice_status(_repo_root: &Path) -> SafeVoiceStatus {
     SafeVoiceStatus {
-        custom_model_selected: bundled_custom_wake_model_selected(repo_root),
+        custom_model_selected: false,
         ..SafeVoiceStatus::default()
     }
 }
@@ -1803,7 +1763,6 @@ fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
     if root.get("schema_version").and_then(Value::as_u64) != Some(1) {
         return default_voice_status(repo_root);
     }
-    let bundled_model_selected = bundled_custom_wake_model_selected(repo_root);
     let state = root
         .get("state")
         .and_then(Value::as_str)
@@ -1848,10 +1807,9 @@ fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
             .and_then(Value::as_f64)
             .unwrap_or(WAKE_THRESHOLD)
             .clamp(WAKE_THRESHOLD, 0.95),
-        custom_model_selected: root
-            .get("custom_model_selected")
-            .and_then(Value::as_bool)
-            .unwrap_or(bundled_model_selected),
+        // Persisted status from older builds must not re-enable an unverified
+        // wake model in the current desktop UI.
+        custom_model_selected: false,
     }
 }
 
@@ -2044,6 +2002,33 @@ fn sanitize_recent_receipts(
         .collect()
 }
 
+fn exact_room_reply_readiness(value: &Value) -> Option<&'static str> {
+    match value.as_str()? {
+        "ready" => Some("ready"),
+        "blocked" => Some("blocked"),
+        "unknown" => Some("unknown"),
+        _ => None,
+    }
+}
+
+fn sanitize_room_reply_readiness(room: &serde_json::Map<String, Value>) -> &'static str {
+    let snake = room.get("reply_readiness");
+    let camel = room.get("replyReadiness");
+    match (snake, camel) {
+        (Some(left), Some(right)) => match (
+            exact_room_reply_readiness(left),
+            exact_room_reply_readiness(right),
+        ) {
+            (Some(left), Some(right)) if left == right => left,
+            _ => "unknown",
+        },
+        (Some(value), None) | (None, Some(value)) => {
+            exact_room_reply_readiness(value).unwrap_or("unknown")
+        }
+        (None, None) => "unknown",
+    }
+}
+
 fn sanitize_snapshot(value: &Value) -> SafeRuntimeSnapshot {
     let Some(root) = value.as_object() else {
         return SafeRuntimeSnapshot {
@@ -2125,6 +2110,7 @@ fn sanitize_snapshot(value: &Value) -> SafeRuntimeSnapshot {
                             .and_then(Value::as_bool)
                             .unwrap_or(false),
                         open_jobs: as_u64(obj.get("open_jobs")),
+                        reply_readiness: sanitize_room_reply_readiness(obj).to_string(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -3649,6 +3635,95 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_room_reply_readiness_accepts_aliases_and_fails_closed() {
+        fn sanitized_readiness(room: Value) -> String {
+            let safe = sanitize_snapshot(&json!({"rooms": [room]}));
+            assert_eq!(safe.rooms.len(), 1);
+            safe.rooms[0].reply_readiness.clone()
+        }
+
+        let cases = [
+            (json!({"chat_id": 1, "reply_readiness": "ready"}), "ready"),
+            (json!({"chat_id": 1, "replyReadiness": "blocked"}), "blocked"),
+            (
+                json!({
+                    "chat_id": 1,
+                    "reply_readiness": "unknown",
+                    "replyReadiness": "unknown"
+                }),
+                "unknown",
+            ),
+            (
+                json!({
+                    "chat_id": 1,
+                    "reply_readiness": "ready",
+                    "replyReadiness": "blocked"
+                }),
+                "unknown",
+            ),
+            (
+                json!({
+                    "chat_id": 1,
+                    "reply_readiness": "ready",
+                    "replyReadiness": 7
+                }),
+                "unknown",
+            ),
+            (json!({"chat_id": 1}), "unknown"),
+            (json!({"chat_id": 1, "reply_readiness": "READY"}), "unknown"),
+            (json!({"chat_id": 1, "replyReadiness": true}), "unknown"),
+            (json!({"chat_id": 1, "replyReadiness": "paused"}), "unknown"),
+        ];
+
+        for (room, expected) in cases {
+            assert_eq!(sanitized_readiness(room), expected);
+        }
+    }
+
+    #[test]
+    fn snapshot_room_serializes_only_the_safe_readiness_enum() {
+        let safe = sanitize_snapshot(&json!({
+            "rooms": [{
+                "chat_id": 42,
+                "selector": "id:42",
+                "live": true,
+                "auto_reply": true,
+                "open_jobs": 3,
+                "reply_readiness": "ready",
+                "replyReadiness": "ready",
+                "raw_state": {"delivery_enabled": true},
+                "private_message": "must-not-escape",
+                "error": "private-error"
+            }]
+        }));
+        let serialized = serde_json::to_value(&safe.rooms[0]).unwrap();
+        let room = serialized.as_object().unwrap();
+        assert_eq!(
+            room.keys().map(String::as_str).collect::<HashSet<_>>(),
+            HashSet::from([
+                "chat_id",
+                "title",
+                "live",
+                "auto_reply",
+                "open_jobs",
+                "replyReadiness",
+            ])
+        );
+        assert_eq!(room["replyReadiness"], "ready");
+        let text = serde_json::to_string(room).unwrap();
+        for forbidden in [
+            "reply_readiness",
+            "raw_state",
+            "delivery_enabled",
+            "private_message",
+            "must-not-escape",
+            "private-error",
+        ] {
+            assert!(!text.contains(forbidden));
+        }
+    }
+
+    #[test]
     fn room_upsert_action_args_and_sanitization() {
         let args = settings_action_args(
             "room-upsert",
@@ -4266,7 +4341,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_voice_status_selects_valid_bundled_wake_model() {
+    fn missing_voice_status_never_selects_an_unverified_wake_model() {
         let temp = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "openkakao-voice-status-valid-bundle-{}",
             std::process::id()
@@ -4274,7 +4349,7 @@ mod tests {
         let _ = fs::remove_dir_all(&temp);
         let state_root = temp.join("state");
         let repo_root = temp.join("repo");
-        let bundled_model = repo_root.join(BUNDLED_CUSTOM_WAKE_MODEL);
+        let bundled_model = repo_root.join("voice/models/alden_ko_ridge.onnx");
         fs::create_dir_all(bundled_model.parent().unwrap()).unwrap();
         fs::write(&bundled_model, b"onnx").unwrap();
 
@@ -4282,13 +4357,13 @@ mod tests {
         assert!(!status.available);
         assert_eq!(status.wake_phrase, WAKE_PHRASE);
         assert_eq!(status.threshold, WAKE_THRESHOLD);
-        assert!(status.custom_model_selected);
+        assert!(!status.custom_model_selected);
 
         let _ = fs::remove_dir_all(&temp);
     }
 
     #[test]
-    fn missing_voice_status_rejects_missing_or_invalid_bundled_wake_model() {
+    fn missing_or_invalid_legacy_wake_model_stays_disabled() {
         let temp = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "openkakao-voice-status-invalid-bundle-{}",
             std::process::id()
@@ -4300,7 +4375,7 @@ mod tests {
         let missing = read_voice_status(&state_root, &repo_root);
         assert!(!missing.custom_model_selected);
 
-        let bundled_model = repo_root.join(BUNDLED_CUSTOM_WAKE_MODEL);
+        let bundled_model = repo_root.join("voice/models/alden_ko_ridge.onnx");
         fs::create_dir_all(bundled_model.parent().unwrap()).unwrap();
         fs::write(&bundled_model, b"").unwrap();
         let invalid = read_voice_status(&state_root, &repo_root);
@@ -4325,6 +4400,7 @@ mod tests {
                 "rms": 2.0,
                 "error_code": "",
                 "wake_source": "stock",
+                "custom_model_selected": true,
                 "updated_at": epoch_seconds() as u64
             })
             .to_string(),
@@ -4455,8 +4531,7 @@ mod tests {
     #[test]
     fn voice_process_matching_preserves_script_and_state_root_argument_boundaries() {
         let root = "/Users/listener/Library/Application Support/openkakao/auto-reply";
-        let script =
-            "/Applications/OpenKakao Jarvis.app/Contents/Resources/scripts/jarvis_voice.py";
+        let script = "/Applications/Alden.app/Contents/Resources/scripts/alden_voice.py";
         for argv in [
             vec!["python3", script, "--state-root", root],
             vec!["python3", "-E", "-B", "-s", script, "--state-root", root],
@@ -4464,7 +4539,7 @@ mod tests {
                 "python3",
                 "-Iu",
                 "--",
-                "scripts/jarvis_voice.py",
+                "scripts/alden_voice.py",
                 "--state-root",
                 root,
             ],
@@ -4499,7 +4574,7 @@ mod tests {
             vec!["python3", &script_suffix, "--state-root", root],
             vec![
                 "python3",
-                "/repo/not-scripts/jarvis_voice.py",
+                "/repo/not-scripts/alden_voice.py",
                 "--state-root",
                 root,
             ],
@@ -4583,7 +4658,7 @@ mod tests {
                 "-E",
                 "-B",
                 "-s",
-                "/Applications/OpenKakao Jarvis.app/Contents/Resources/scripts/jarvis_voice.py",
+                "/Applications/Alden.app/Contents/Resources/scripts/alden_voice.py",
                 "--state-root",
                 root,
             ]
@@ -4663,7 +4738,7 @@ mod tests {
         );
         let valid = voice_process_fixture(&[
             "python3",
-            "scripts/jarvis_voice.py",
+            "scripts/alden_voice.py",
             "--state-root",
             "/state",
         ]);
@@ -4695,7 +4770,7 @@ mod tests {
         let spawned = std::cell::Cell::new(0);
         let args = voice_process_fixture(&[
             "python3",
-            "/another checkout/scripts/jarvis_voice.py",
+            "/another checkout/scripts/alden_voice.py",
             "--state-root",
             root.to_str().unwrap(),
         ]);
@@ -4802,7 +4877,7 @@ mod tests {
     fn voice_process_native_arguments_preserve_spaces_empty_args_and_omit_environment() {
         let argv = [
             "python3",
-            "/bundle with spaces/scripts/jarvis_voice.py",
+            "/bundle with spaces/scripts/alden_voice.py",
             "--state-root",
             "/state with spaces",
             "",
@@ -4837,7 +4912,7 @@ mod tests {
         use std::io::BufRead;
         let root =
             std::env::temp_dir().join(format!("openkakao native voice {}", std::process::id()));
-        let script = root.join("scripts/jarvis_voice.py");
+        let script = root.join("scripts/alden_voice.py");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(
             &script,
@@ -4912,7 +4987,7 @@ mod tests {
             Err(BridgeError::VoiceScript)
         ));
 
-        let script = temp.join("scripts/jarvis_voice.py");
+        let script = temp.join("scripts/alden_voice.py");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(&script, b"# fake voice script").unwrap();
         let plan = plan_voice_session(&temp, &state_root, &python).unwrap();

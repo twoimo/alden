@@ -33,7 +33,7 @@ SESSION_CIRCUIT_OPEN_SECONDS = 300.0
 SESSION_STABLE_RUN_SECONDS = 300.0
 SESSION_HEARTBEAT_SECONDS = 5.0
 SESSION_TERMINATE_GRACE_SECONDS = 10.0
-SESSION_GUARDIAN_SPEC_SCHEMA = 2
+SESSION_GUARDIAN_SPEC_SCHEMA = 3
 SESSION_GUARDIAN_SPEC_MAX_BYTES = 16 * 1024
 MAX_SERVICE_CHAT_SELECTORS = 32
 MAX_SERVICE_CHAT_SELECTOR_BYTES = 512
@@ -342,6 +342,41 @@ def _read_receipt(path: Path) -> dict[str, Any]:
     return value
 
 
+def _validated_runtime_root(entry: Path) -> Path:
+    """Bind one service entry to the private immutable runtime that owns it."""
+    entry = _owned_file(entry)
+    scripts_root = entry.parent
+    runtime_root = scripts_root.parent
+    if entry.name != "auto-reply-service.py" or scripts_root.name != "scripts":
+        raise SystemExit("service entry is outside the pinned runtime scripts directory")
+
+    for label, path in (
+        ("runtime root", runtime_root),
+        ("runtime scripts directory", scripts_root),
+    ):
+        if not path.is_absolute() or path.is_symlink():
+            raise SystemExit(f"{label} must be an absolute non-symlink path")
+        try:
+            metadata = path.lstat()
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise SystemExit(f"{label} is unavailable") from exc
+        if (
+            resolved != path
+            or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise SystemExit(f"{label} must be canonical, private, and user-owned")
+
+    try:
+        if not os.path.samefile(entry, scripts_root / "auto-reply-service.py"):
+            raise SystemExit("service entry does not identify the pinned runtime entry")
+    except OSError as exc:
+        raise SystemExit("unable to attest the pinned runtime entry") from exc
+    return runtime_root
+
+
 def _runtime_manifest(entry: Path) -> tuple[dict[str, dict[str, str]], str]:
     assets: dict[str, dict[str, str]] = {}
     for name in RUNTIME_ASSET_NAMES:
@@ -361,9 +396,11 @@ def _identity(
     chat_selectors: tuple[str, ...],
     state_root: Path,
 ) -> dict[str, Any]:
+    runtime_root = _validated_runtime_root(entry)
     assets, manifest_sha256 = _runtime_manifest(entry)
     return {
         "schema_version": RECEIPT_SCHEMA,
+        "runtime_root": str(runtime_root),
         "python": str(python),
         "python_sha256": _sha256(python),
         "entry": str(entry),
@@ -379,13 +416,15 @@ def _identity(
     }
 
 
-def _runtime_env(config: Path) -> dict[str, str]:
+def _runtime_env(config: Path, entry: Path) -> dict[str, str]:
     """Return the complete environment shared by check and production."""
+    runtime_root = _validated_runtime_root(entry)
     env = {
         "HOME": str(Path.home()),
         "PATH": "/opt/homebrew/bin:/usr/bin:/bin",
         "TMPDIR": "/tmp",
         "OPENKAKAO_CONFIG": str(config),
+        "OPENKAKAO_AUTO_REPLY_RUNTIME_ROOT": str(runtime_root),
     }
     # The operator's explicit attestation exception reaches the CLI only if the
     # host passes it through; it is absent by default.
@@ -547,6 +586,7 @@ def _catalog_selectors(state_root: Path) -> list[str]:
 def _preflight_cli(
     binary: Path,
     config: Path,
+    entry: Path,
     chat_selectors: list[str],
     *,
     timeout_seconds: int = PREFLIGHT_TIMEOUT_SECONDS,
@@ -563,7 +603,7 @@ def _preflight_cli(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=_runtime_env(config),
+        env=_runtime_env(config, entry),
         timeout=timeout_seconds,
         check=False,
     )
@@ -599,6 +639,7 @@ class _CatalogPreflightError(RuntimeError):
 def _preflight_catalog_selectors(
     binary: Path,
     config: Path,
+    entry: Path,
     candidates: list[str],
 ) -> list[str]:
     """카탈로그 전체 집합을 검사하고 일시 실패면 같은 집합을 한 번 재시도한다.
@@ -618,6 +659,7 @@ def _preflight_catalog_selectors(
         ok, _payload, detail = _preflight_cli(
             binary,
             config,
+            entry,
             candidates,
             timeout_seconds=PREFLIGHT_TIMEOUT_SECONDS,
         )
@@ -643,7 +685,9 @@ def _perform_preflight(
         candidates = _catalog_selectors(state_root)
         if candidates:
             try:
-                chat_selectors = _preflight_catalog_selectors(binary, config, candidates)
+                chat_selectors = _preflight_catalog_selectors(
+                    binary, config, entry, candidates
+                )
             except _CatalogPreflightError as exc:
                 # 방별 fallback은 config 계약상 성립하지 않는다. 전체 집합 실패라는
                 # 사실과 두 시도의 진단을 그대로 남겨 다음 진단이 잘못된 방을 찍지 않게 한다.
@@ -676,7 +720,7 @@ def _perform_preflight(
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=_runtime_env(config),
+        env=_runtime_env(config, entry),
         timeout=240,
         check=False,
     )
@@ -781,7 +825,7 @@ def run_production(
         "auto-reply",
         *_chat_argv(chat_selectors),
     ]
-    os.execve(argv[0], argv, _runtime_env(config))
+    os.execve(argv[0], argv, _runtime_env(config, entry))
     return 127
 
 
@@ -863,13 +907,20 @@ def _terminate_owned_child(
 
 
 def _session_guardian_spec(
+    entry: Path,
     binary: Path,
     config: Path,
     chat: str | list[str] | tuple[str, ...] | None,
 ) -> dict[str, Any]:
     """Describe one attested child launch without placing it in guardian argv."""
+    runtime_root = _validated_runtime_root(entry)
+    _assets, runtime_manifest_sha256 = _runtime_manifest(entry)
     return {
         "schema_version": SESSION_GUARDIAN_SPEC_SCHEMA,
+        "runtime_root": str(runtime_root),
+        "runtime_entry": str(entry),
+        "runtime_entry_sha256": _sha256(entry),
+        "runtime_manifest_sha256": runtime_manifest_sha256,
         "binary": str(binary),
         "binary_sha256": _sha256(binary),
         "config": str(config),
@@ -879,13 +930,14 @@ def _session_guardian_spec(
 
 
 def _create_session_guardian_control(
+    entry: Path,
     binary: Path,
     config: Path,
     chat: str | list[str] | tuple[str, ...] | None,
 ) -> tuple[int, int]:
     payload = (
         json.dumps(
-            _session_guardian_spec(binary, config, chat),
+            _session_guardian_spec(entry, binary, config, chat),
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -930,21 +982,23 @@ def _create_session_guardian_liveness() -> tuple[int, int]:
         raise
 
 
-def _guardian_child_env(config: Path, liveness_read_fd: int) -> dict[str, str]:
+def _guardian_child_env(
+    config: Path, entry: Path, liveness_read_fd: int
+) -> dict[str, str]:
     if (
         isinstance(liveness_read_fd, bool)
         or not isinstance(liveness_read_fd, int)
         or liveness_read_fd <= 2
     ):
         raise SystemExit("session guardian liveness descriptor is invalid")
-    env = _runtime_env(config)
+    env = _runtime_env(config, entry)
     env[SESSION_GUARDIAN_LIVENESS_ENV] = str(liveness_read_fd)
     return env
 
 
 def _read_session_guardian_spec(
     control_fd: int,
-) -> tuple[Path, Path, tuple[str, ...]]:
+) -> tuple[Path, Path, Path, tuple[str, ...]]:
     if (
         isinstance(control_fd, bool)
         or not isinstance(control_fd, int)
@@ -982,6 +1036,10 @@ def _read_session_guardian_spec(
         raise SystemExit("session guardian launch specification is malformed") from exc
     expected_keys = {
         "schema_version",
+        "runtime_root",
+        "runtime_entry",
+        "runtime_entry_sha256",
+        "runtime_manifest_sha256",
         "binary",
         "binary_sha256",
         "config",
@@ -1001,20 +1059,33 @@ def _read_session_guardian_spec(
     if list(chat_selectors) != raw_chat_selectors:
         raise SystemExit("session guardian chat selector identity is not canonical")
     try:
+        runtime_root_value = value.get("runtime_root")
+        runtime_entry_value = value.get("runtime_entry")
         binary_value = value.get("binary")
         config_value = value.get("config")
-        if not isinstance(binary_value, str) or not isinstance(config_value, str):
+        if (
+            not isinstance(runtime_root_value, str)
+            or not isinstance(runtime_entry_value, str)
+            or not isinstance(binary_value, str)
+            or not isinstance(config_value, str)
+        ):
             raise TypeError
+        runtime_entry = _owned_file(Path(runtime_entry_value))
+        runtime_root = _validated_runtime_root(runtime_entry)
         binary = _owned_file(Path(binary_value), executable=True)
         config = _owned_file(Path(config_value))
     except (OSError, TypeError) as exc:
         raise SystemExit("session guardian launch paths are invalid") from exc
+    _assets, runtime_manifest_sha256 = _runtime_manifest(runtime_entry)
     if (
-        value.get("binary_sha256") != _sha256(binary)
+        Path(runtime_root_value) != runtime_root
+        or value.get("runtime_entry_sha256") != _sha256(runtime_entry)
+        or value.get("runtime_manifest_sha256") != runtime_manifest_sha256
+        or value.get("binary_sha256") != _sha256(binary)
         or value.get("config_sha256") != _sha256(config)
     ):
         raise SystemExit("session guardian launch identity no longer matches")
-    return binary, config, chat_selectors
+    return runtime_entry, binary, config, chat_selectors
 
 
 def _session_guardian_argv(python: Path, entry: Path, control_fd: int) -> list[str]:
@@ -1084,7 +1155,9 @@ def run_session_guardian(
             ) from exc
 
     try:
-        binary, config, chat_selectors = _read_session_guardian_spec(control_fd)
+        runtime_entry, binary, config, chat_selectors = _read_session_guardian_spec(
+            control_fd
+        )
         os.set_inheritable(control_fd, False)
 
         # The parent may have died after writing the bounded launch spec but
@@ -1108,7 +1181,7 @@ def run_session_guardian(
             stdin=subprocess.DEVNULL,
             stdout=None,
             stderr=None,
-            env=_guardian_child_env(config, liveness_read_fd),
+            env=_guardian_child_env(config, runtime_entry, liveness_read_fd),
             start_new_session=True,
             close_fds=True,
             pass_fds=(liveness_read_fd,),
@@ -1343,7 +1416,7 @@ def run_session(
             spawned_child: subprocess.Popen[Any] | None = None
             try:
                 control_read_fd, control_write_fd = _create_session_guardian_control(
-                    binary, config, chat_selectors
+                    entry, binary, config, chat_selectors
                 )
                 argv = _session_guardian_argv(python, entry, control_read_fd)
                 spawned_child = popen_factory(
@@ -1351,7 +1424,7 @@ def run_session(
                     stdin=subprocess.DEVNULL,
                     stdout=None,
                     stderr=None,
-                    env=_runtime_env(config),
+                    env=_runtime_env(config, entry),
                     start_new_session=True,
                     close_fds=True,
                     pass_fds=(control_read_fd,),

@@ -1,7 +1,7 @@
 """Contract tests for the provisioned Browser-Use runtime probe.
 
 ``browser/pyproject.toml`` pins the Browser-Use pair the product was measured
-against, and ``scripts/jarvis_browser_runtime.py`` is what a launcher asks before
+against, and ``scripts/alden_browser_runtime.py`` is what a launcher asks before
 a web job starts. Both have to fail closed, so these tests pin the pins against
 the project file, cover every reason code the probe can emit, and keep the
 Chromium answer a tri-state. No browser, network, or installed Browser-Use is
@@ -25,8 +25,8 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import jarvis_browser_runtime as runtime  # noqa: E402
-import jarvis_browser_use as adapter  # noqa: E402
+import alden_browser_runtime as runtime  # noqa: E402
+import alden_browser_use as adapter  # noqa: E402
 
 
 class LegacyAgent:

@@ -122,7 +122,7 @@ def _find_cli_bin() -> Path:
     if bundle_bin.is_file():
         return bundle_bin
     tauri_app_bin = Path(
-        "/Applications/OpenKakao Jarvis.app/Contents/Resources/bin/openkakao-cli"
+        "/Applications/Alden.app/Contents/Resources/bin/openkakao-cli"
     )
     if tauri_app_bin.is_file():
         return tauri_app_bin
@@ -357,6 +357,7 @@ MODEL_DEFERRABLE_NON_CIRCUIT_FAILURE_CLASSES = frozenset({
     "runner_untrusted",
     "unparsed_output",
 })
+UNPARSED_OUTPUT_MAX_RETRIES = 1
 DUE_SCHEDULED_BURST_LIMIT = 4
 PARTNER_STREAK_MAX_GAP_SECONDS = 15
 LEGACY_BURST_MAX_GAP_SECONDS = 2
@@ -6423,7 +6424,7 @@ def _policy_valid_draft(
     if len(text) > 220:
         return reject("too_long")
     if (
-        _is_context_pointer(inbound)
+        _is_contextual_followup(inbound)
         and _contextual_clarification_reply(inbound, recent_conversation)
         and _is_contextless_confusion_reply(text)
     ):
@@ -6749,10 +6750,25 @@ def _contextual_clarification_reply(
     register: str | None = None,
 ) -> str:
     """Ask about the nearest grounded topic instead of reporting confusion."""
-    if not _is_context_pointer(inbound):
+    target = _contextual_clarification_target(inbound, recent_conversation)
+    if target is None:
         return ""
-    topic = ""
-    topic_is_self = False
+    topic = target["topic"]
+    topic_is_self = target["is_self"]
+    if topic_is_self:
+        if _recipient_requires_honorific(recipient, register):
+            return f"제가 말한 “{topic}” 부분 말씀하시는 거예요?"
+        return f"내가 말한 “{topic}” 부분이야?"
+    ending = "얘기예요?" if _recipient_requires_honorific(recipient, register) else "얘기야?"
+    return f"아까 “{topic}” {ending}"
+
+
+def _contextual_clarification_target(
+    inbound: str,
+    recent_conversation: list[dict] | None,
+) -> dict | None:
+    if not _is_contextual_followup(inbound):
+        return None
     for row in reversed(list(recent_conversation or [])):
         if not isinstance(row, dict):
             continue
@@ -6768,17 +6784,26 @@ def _contextual_clarification_reply(
             continue
         if len(message) > 42:
             message = message[:41].rstrip() + "…"
-        topic = message
-        topic_is_self = is_self
-        break
-    if not topic:
-        return ""
-    if topic_is_self:
-        if _recipient_requires_honorific(recipient, register):
-            return f"제가 말한 “{topic}” 부분 말씀하시는 거예요?"
-        return f"내가 말한 “{topic}” 부분이야?"
-    ending = "얘기예요?" if _recipient_requires_honorific(recipient, register) else "얘기야?"
-    return f"아까 “{topic}” {ending}"
+        return {
+            "topic": message,
+            "is_self": is_self,
+            "evidence_id": str(row.get("evidence_id") or ""),
+        }
+    return None
+
+
+def _is_referential_context_question(inbound: str) -> bool:
+    compact = re.sub(r"[\s?？.!~…]+", "", str(inbound or ""))
+    deictic = r"(?:이거|이게|이건|그거|그게|그건|저거|저게|저건|이것|그것|저것)"
+    question = r"(?:뭐|뭔|무엇)(?:야|지|죠|예요|인가요)?"
+    return bool(
+        re.fullmatch(rf"{deictic}(?:은|는|이|가)?{question}", compact)
+        or re.fullmatch(rf"{question}{deictic}", compact)
+    )
+
+
+def _is_contextual_followup(inbound: str) -> bool:
+    return _is_context_pointer(inbound) or _is_referential_context_question(inbound)
 
 def _photo_fallback_reply(
     inbound: str, recent_conversation: list[dict] | None = None
@@ -10627,6 +10652,8 @@ def _outbound_restatement_allows(reply: str, inbound: str = "") -> bool:
 def _inbound_asks_question(text: str) -> bool:
     raw = str(text or "").strip()
     body = _analyzed_tail(raw)
+    if _is_referential_context_question(raw):
+        return True
     if "?" in raw or "？" in raw:
         # A bare reaction such as "흠?" is not a request for an answer; a real
         # question keeps its reply rights.
@@ -11723,6 +11750,7 @@ def _run_opencodex_generation_unleased(
     local_mlx = _is_mlx_serve_text_model(model)
     target_base_url = base_url
     target_model = model
+    model_capabilities: list[str] = []
     if local_mlx:
         gateway_base_url, _ = discover_mlx_gateway(
             candidates=("http://127.0.0.1:11234/v1",)
@@ -11739,6 +11767,14 @@ def _run_opencodex_generation_unleased(
                 else b"mlx_serve_text_model_not_advertised"
             )
             return 1, b"", reason
+        for advertised_entry in advertised:
+            if advertised_entry.get("id") == advertised_model:
+                capabilities = advertised_entry.get("capabilities")
+                if isinstance(capabilities, list):
+                    model_capabilities = [
+                        value for value in capabilities if isinstance(value, str)
+                    ]
+                break
         target_base_url = gateway_base_url
         target_model = advertised_model
     elif target_model in (
@@ -11762,6 +11798,11 @@ def _run_opencodex_generation_unleased(
             {"role": "user", "content": user_content},
         ],
     }
+    if local_mlx and "json_schema" in model_capabilities:
+        try:
+            payload["response_format"] = _mlx_json_schema_response_format()
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return 1, b"", b"mlx_json_schema_unavailable"
     if image_paths:
         import base64, mimetypes
         user_parts = [{"type": "text", "text": user_content}]
@@ -11846,6 +11887,30 @@ def _run_opencodex_generation_unleased(
         return exc.code, b"", err_bytes
     except Exception as exc:
         return 1, b"", str(exc).encode("utf-8")
+
+
+def _mlx_json_schema_response_format() -> dict:
+    """Build the strict, local-only response contract advertised by MLX Serve."""
+    schema = json.loads(REPLY_OUTPUT_SCHEMA.read_text(encoding="utf-8"))
+    if not isinstance(schema, dict) or not isinstance(schema.get("properties"), dict):
+        raise ValueError("reply_schema_invalid")
+    schema = json.loads(json.dumps(schema))
+    schema.pop("$schema", None)
+    properties = schema["properties"]
+    schema["required"] = list(properties)
+    drafts = properties.get("drafts")
+    if isinstance(drafts, dict):
+        # `drafts` is optional in the worker's decision contract; strict
+        # structured outputs require every property, so permit an empty list.
+        drafts.pop("minItems", None)
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "openkakao_reply_decision",
+            "strict": True,
+            "schema": schema,
+        },
+    }
 
 
 def _run_opencodex_generation(
@@ -14587,6 +14652,47 @@ def analyze_event(event: dict) -> dict:
             "prompt_evidence_ids": model.get("prompt_evidence_ids"),
             "generation_seconds": model.get("generation_seconds"),
         }
+        if not model.get("should_reply") and str(
+            model.get("model_failure_class") or ""
+        ) == "unparsed_output":
+            clarification_target = _contextual_clarification_target(
+                message,
+                recent_conversation,
+            )
+            clarification = _contextual_clarification_reply(
+                message,
+                recent_conversation,
+                recipient=_event_author_nickname(event),
+                register=str((recipient_style_profile or {}).get("register") or "") or None,
+            )
+            if clarification and clarification_target is not None and _inbound_asks_question(message):
+                evidence_id = str(clarification_target.get("evidence_id") or "")
+                model = {
+                    **model,
+                    "should_reply": True,
+                    "reason": "contextual_clarification",
+                    "category": "question",
+                    "reply": clarification,
+                    "drafts": [],
+                    "evidence_ids": [evidence_id] if evidence_id else [],
+                }
+            else:
+                retry_value = event.get("unparsed_output_retry_count")
+                retry_count = (
+                    retry_value
+                    if type(retry_value) is int and 0 <= retry_value <= UNPARSED_OUTPUT_MAX_RETRIES
+                    else (0 if retry_value is None else UNPARSED_OUTPUT_MAX_RETRIES)
+                )
+                if retry_count >= UNPARSED_OUTPUT_MAX_RETRIES:
+                    result["reason"] = "unparsed_output_retry_exhausted"
+                    result["category"] = "uncertain"
+                    provenance["model_failure_class"] = "unparsed_output"
+                    provenance["model_invoked"] = bool(model.get("model_invoked"))
+                    return result
+                model = {
+                    **model,
+                    "unparsed_output_retry_count": retry_count + 1,
+                }
         if not model.get("should_reply"):
             failure_class = str(model.get("model_failure_class") or "")
             retry_at = model.get("model_defer_until")
@@ -14609,6 +14715,11 @@ def analyze_event(event: dict) -> dict:
                         provenance["model_invoked"] = bool(
                             model.get("model_invoked")
                         )
+                        if failure_class == "unparsed_output":
+                            result["unparsed_output_retry_count"] = int(
+                                model.get("unparsed_output_retry_count")
+                                or UNPARSED_OUTPUT_MAX_RETRIES
+                            )
                         return result
             model_reply = str(model.get("reply") or "").strip()
             if not model_reply or not (
@@ -15759,6 +15870,11 @@ def process_job(
                 if _media_unavailable_clarification_event(event)
                 else analyze_event(analysis_event)
             )
+            retry_count = analysis.get("unparsed_output_retry_count")
+            if type(retry_count) is int and 0 <= retry_count <= UNPARSED_OUTPUT_MAX_RETRIES:
+                # Persist the single allowed retry on the source queue event
+                # before the watermark check can requeue for refreshed context.
+                event["unparsed_output_retry_count"] = retry_count
             if bool((analysis.get("provenance") or {}).get("model_invoked")):
                 _active_journal_checkpoint(
                     component="model",

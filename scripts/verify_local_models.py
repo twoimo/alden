@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded generation checks for Jarvis's two fixed localhost MLX models."""
+"""Bounded generation checks for Alden's two fixed localhost MLX models."""
 
 from __future__ import annotations
 
@@ -448,7 +448,7 @@ def _timeout_argument(value: str) -> float:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify the two fixed Jarvis models through localhost only."
+        description="Verify the two fixed Alden models through localhost only."
     )
     parser.add_argument(
         "--model",

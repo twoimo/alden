@@ -6,4 +6,4 @@ exec uv run \
   --project "$repo_root/browser" \
   --python 3.11 \
   --frozen \
-  python "$repo_root/scripts/jarvis_browser_runtime.py" "$@"
+  python "$repo_root/scripts/alden_browser_runtime.py" "$@"

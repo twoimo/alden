@@ -1,6 +1,6 @@
-"""Contract tests for the rendered Jarvis desktop cross-check.
+"""Contract tests for the rendered Alden desktop cross-check.
 
-scripts/jarvis_desktop_render_check.py loads the built frontend in Chromium and
+scripts/alden_desktop_render_check.py loads the built frontend in Chromium and
 reports what the live DOM and the WebGL context actually are. It reads its
 expectations from the TypeScript contract test so the banned tokens and the
 settings section list have one source, which means this module has to keep those
@@ -26,7 +26,7 @@ SCRIPTS = ROOT / "scripts"
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
-import jarvis_desktop_render_check as check  # noqa: E402
+import alden_desktop_render_check as check  # noqa: E402
 
 
 UI_SOURCE = ROOT / "desktop" / "src" / "ui.ts"
@@ -133,7 +133,7 @@ class Helpers(unittest.TestCase):
         self.assertEqual(check.count_contract_interactive("<a href='#'></a><details></details><summary></summary>"), 3)
 
     def test_headings_from_markup_ignores_attributes_and_non_h2(self) -> None:
-        markup = "<h1>Jarvis</h1><h2 id='a'>\uc54c\ud30c</h2><h2>\ubca0\ud0c0</h2><h3>\uac10\ub9c8</h3>"
+        markup = "<h1>Alden</h1><h2 id='a'>\uc54c\ud30c</h2><h2>\ubca0\ud0c0</h2><h3>\uac10\ub9c8</h3>"
         self.assertEqual(check.headings_from_markup(markup), ["\uc54c\ud30c", "\ubca0\ud0c0"])
 
     def test_verdict_requires_every_check(self) -> None:
@@ -197,9 +197,9 @@ class BridgeStub(unittest.TestCase):
 
     def test_generated_capture_names_are_the_documented_ones(self) -> None:
         source = Path(check.__file__).read_text(encoding="utf-8")
-        generated = set(re.findall(r"jarvis-render-[a-z.-]+\.png", source))
-        self.assertIn("jarvis-render-panel.light.png", generated)
-        self.assertIn("jarvis-render-settings.focus.png", generated)
+        generated = set(re.findall(r"alden-render-[a-z.-]+\.png", source))
+        self.assertIn("alden-render-panel.light.png", generated)
+        self.assertIn("alden-render-settings.focus.png", generated)
 
 
 class PauseOnHideContract(unittest.TestCase):

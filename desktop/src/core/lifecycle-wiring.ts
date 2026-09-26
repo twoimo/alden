@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import type { LifecycleState } from "./animation-loop";
 
 /** Event the Rust shell emits when it shows or hides a panel window. */
-export const VISIBILITY_EVENT = "jarvis://visibility";
+export const VISIBILITY_EVENT = "alden://visibility";
 
 export type VisibilityHandler = (visible: boolean) => void;
 export type VisibilitySubscriber = (handler: VisibilityHandler) => Promise<() => void>;

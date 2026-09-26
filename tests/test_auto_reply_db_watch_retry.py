@@ -216,10 +216,36 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, module.SqliteBusyTransient)
         self.assertEqual(module._fixed_fence_reason(caught.exception), "reconcile_required")
 
-    def test_database_timeout_fence_keeps_main_loop_running(self):
-        module = load_db_watch("auto_reply_db_watch_main_busy_test")
+    def test_periodic_context_sync_preserves_unconsumed_result(self):
+        module = load_db_watch("auto_reply_db_watch_sync_result_test")
+        worker = module._PeriodicContextSync()
+        result = {"authoritative": True, "checkpoint_log_id": 123}
+
+        with mock.patch.object(
+            module,
+            "sync_context_index",
+            return_value=result,
+        ) as sync_context:
+            worker._run(42, True, None, None)
+
+        self.assertTrue(worker.in_flight())
+        with mock.patch.object(module.threading, "Thread") as thread:
+            self.assertFalse(worker.start(42, initial=False))
+        thread.assert_not_called()
+        self.assertEqual(worker.take_result(), ("ok", result))
+        self.assertFalse(worker.in_flight())
+        sync_context.assert_called_once_with(
+            42,
+            initial=True,
+            on_wait=None,
+            on_tick=None,
+        )
+
+    def test_main_keeps_delivery_fenced_until_transient_sync_recovers(self):
+        module = load_db_watch("auto_reply_db_watch_main_recovery_test")
         module.SELF = "self"
-        valid_sync = {
+        clean = self._clean_state(module)
+        authoritative_sync = {
             "schema_version": 1,
             "action": "context_sync_local",
             "chat_id": 42,
@@ -231,10 +257,119 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
             "totals": {key: 0 for key in module.CONTEXT_SYNC_TOTAL_KEYS},
             "network": False,
         }
+        sync_results = iter(
+            [
+                None,
+                (
+                    "transient",
+                    module.ContextSyncTransient("context_sync_snapshot_gap"),
+                ),
+                None,
+                ("ok", authoritative_sync),
+            ]
+        )
+        starts = []
+
+        class FakePeriodicSync:
+            def take_proof(self):
+                return None
+
+            def take_result(self):
+                return next(sync_results)
+
+            def in_flight(self):
+                return False
+
+            def start(self, chat_id, *, initial, on_wait, on_tick):
+                starts.append((chat_id, initial, on_wait, on_tick))
+                return True
+
+            def stop(self):
+                return None
+
+        poll_calls = []
+        promoted_states = []
+
+        def poll(state, interval, **kwargs):
+            snapshot = dict(state)
+            poll_calls.append((snapshot, interval, dict(kwargs)))
+            if len(poll_calls) < 4:
+                return snapshot, 0
+            promoted = {
+                **snapshot,
+                "capability_state": "ready",
+                "delivery_enabled": True,
+                "fence_reason": "",
+                "fence": "ready",
+            }
+            promoted_states.append(promoted)
+            return promoted, 0
+
+        saved_states = []
+
+        def save(state, **_kwargs):
+            saved_states.append(dict(state))
+            return True
+
+        def sleep(_seconds):
+            if len(poll_calls) >= 4:
+                raise StopIteration
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
+            mock.patch.object(module.signal, "signal"),
+            mock.patch.object(module, "load_state", return_value=clean),
+            mock.patch.object(module, "_state", side_effect=lambda value: dict(value)),
+            mock.patch.object(module, "save_state", side_effect=save),
+            mock.patch.object(
+                module, "_poll_with_bounded_clean_retry", side_effect=poll
+            ),
+            mock.patch.object(module, "_PERIODIC_CONTEXT_SYNC", FakePeriodicSync()),
+            mock.patch.object(
+                module.time,
+                "monotonic",
+                side_effect=[0.0, 0.0, 1.0, 1.0, 6.0, 7.0, 7.0],
+            ),
+            mock.patch.object(module.time, "sleep", side_effect=sleep),
+            mock.patch.object(module, "_stop_poll_stream"),
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(StopIteration),
+        ):
+            module.main()
+
+        self.assertEqual([initial for _, initial, _, _ in starts], [True, False])
+        self.assertEqual(
+            [kwargs for _, _, kwargs in poll_calls],
+            [
+                {"delivery_ready": False, "not_ready_reason": ""},
+                {
+                    "delivery_ready": False,
+                    "not_ready_reason": "context_sync_transient",
+                },
+                {
+                    "delivery_ready": False,
+                    "not_ready_reason": "context_sync_transient",
+                },
+                {},
+            ],
+        )
+        self.assertTrue(all(not state["delivery_enabled"] for state in saved_states))
+        self.assertFalse(poll_calls[-1][0]["delivery_enabled"])
+        self.assertTrue(promoted_states[-1]["delivery_enabled"])
+
+    def test_database_timeout_fence_keeps_main_loop_running(self):
+        module = load_db_watch("auto_reply_db_watch_main_busy_test")
+        module.SELF = "self"
+        clean = self._clean_state(module)
         calls = []
 
-        def poll(state, interval):
-            calls.append((dict(state), interval))
+        def poll(state, interval, **kwargs):
+            calls.append((dict(state), interval, dict(kwargs)))
             if len(calls) == 1:
                 return {
                     **state,
@@ -254,13 +389,19 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
             ),
             mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
             mock.patch.object(module.signal, "signal"),
-            mock.patch.object(module, "load_state", return_value={}),
+            mock.patch.object(module, "load_state", return_value=clean),
             mock.patch.object(module, "_state", side_effect=lambda value: dict(value)),
-            mock.patch.object(module, "sync_context_index", return_value=valid_sync),
             mock.patch.object(module, "save_state", return_value=True),
             mock.patch.object(
                 module, "_poll_with_bounded_clean_retry", side_effect=poll
             ),
+            mock.patch.object(
+                module._PERIODIC_CONTEXT_SYNC,
+                "in_flight",
+                side_effect=[False, True],
+            ),
+            mock.patch.object(module._PERIODIC_CONTEXT_SYNC, "start", return_value=True) as start_sync,
+            mock.patch.object(module._PERIODIC_CONTEXT_SYNC, "stop"),
             mock.patch.object(module.time, "sleep"),
             mock.patch.object(module, "_stop_poll_stream"),
             self.assertRaises(StopIteration),
@@ -269,6 +410,227 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertFalse(calls[1][0]["delivery_enabled"])
         self.assertEqual(calls[1][0]["fence_reason"], "database_timeout")
+        self.assertEqual(
+            calls[0][2],
+            {"delivery_ready": False, "not_ready_reason": ""},
+        )
+        self.assertEqual(
+            calls[1][2],
+            {"delivery_ready": False, "not_ready_reason": ""},
+        )
+        self.assertTrue(start_sync.call_args.kwargs["initial"])
+
+    def test_main_keeps_polling_when_initial_context_sync_is_deferred(self):
+        module = load_db_watch("auto_reply_db_watch_main_deferred_test")
+        module.SELF = "self"
+        deferred_sync = {
+            "schema_version": 1,
+            "action": "context_sync_local",
+            "chat_id": 42,
+            "chat": module.CHAT,
+            "checkpoint_log_id": 123,
+            "pages": 1,
+            "authoritative": False,
+            "deferred": {
+                "reason": "fresh_unmatched_self",
+                "log_id": 124,
+                "retry_after_seconds": 1,
+            },
+            "totals": {key: 0 for key in module.CONTEXT_SYNC_TOTAL_KEYS},
+            "network": False,
+        }
+        calls = []
+
+        def poll(state, interval, **kwargs):
+            calls.append((dict(state), interval, dict(kwargs)))
+            if len(calls) == 1:
+                return dict(state), 0
+            raise StopIteration
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
+            mock.patch.object(module.signal, "signal"),
+            mock.patch.object(module, "load_state", return_value={}),
+            mock.patch.object(module, "_state", side_effect=lambda value: dict(value)),
+            mock.patch.object(module, "save_state", return_value=True),
+            mock.patch.object(
+                module, "_poll_with_bounded_clean_retry", side_effect=poll
+            ),
+            mock.patch.object(module._PERIODIC_CONTEXT_SYNC, "in_flight", side_effect=[False, False]),
+            mock.patch.object(module._PERIODIC_CONTEXT_SYNC, "start", return_value=True) as start_sync,
+            mock.patch.object(
+                module._PERIODIC_CONTEXT_SYNC,
+                "take_result",
+                side_effect=[None, ("ok", deferred_sync)],
+            ),
+            mock.patch.object(module._PERIODIC_CONTEXT_SYNC, "take_proof", return_value=None),
+            mock.patch.object(module._PERIODIC_CONTEXT_SYNC, "stop"),
+            mock.patch.object(module.time, "monotonic", side_effect=[10.0, 10.0, 10.1, 10.2]),
+            mock.patch.object(module.time, "sleep"),
+            mock.patch.object(module, "_stop_poll_stream"),
+            self.assertRaises(StopIteration),
+        ):
+            module.main()
+        self.assertEqual(len(calls), 2)
+        self.assertFalse(calls[0][0]["delivery_enabled"])
+        self.assertEqual(
+            calls[0][2],
+            {"delivery_ready": False, "not_ready_reason": ""},
+        )
+        self.assertFalse(calls[1][0]["delivery_enabled"])
+        self.assertEqual(calls[1][0]["fence_reason"], "context_sync_deferred")
+        self.assertEqual(
+            calls[1][2],
+            {"delivery_ready": False, "not_ready_reason": "context_sync_deferred"},
+        )
+        self.assertTrue(start_sync.call_args.kwargs["initial"])
+
+    def test_capture_only_poll_queues_candidate_but_keeps_delivery_fenced(self):
+        module = load_db_watch("auto_reply_db_watch_capture_only_test")
+        state = self._clean_state(module)
+        state.update(
+            capability_state="starting",
+            delivery_enabled=False,
+            fence_reason="context_sync_transient",
+            fence="starting",
+        )
+        enrollment = {
+            "chat_id": 42,
+            "chat_name": module.CHAT,
+            "identity": {
+                "kind": "local_name",
+                "local_name": module.CHAT,
+                "ax_name": module.CHAT,
+            },
+            "reply_author_bindings": [
+                {"nickname": "member", "author_id": 700}
+            ],
+        }
+        environment = {
+            "OPENKAKAO_AUTO_REPLY_CLI": "1",
+            "OPENKAKAO_DB_MODE": "database_authoritative",
+            "OPENKAKAO_AUTO_REPLY_ENABLED": "1",
+            "OPENKAKAO_SUPERVISOR_OWNER": "owner",
+            "OPENKAKAO_DB_SOURCE_EPOCH": "7",
+        }
+        persisted = {}
+
+        def save(value, **_kwargs):
+            persisted.update(value)
+            return True
+
+        with (
+            mock.patch.dict(os.environ, environment, clear=False),
+            mock.patch.object(module, "_state", side_effect=lambda value: dict(value)),
+            mock.patch.object(module, "_reconcile_ingress_journal"),
+            mock.patch.object(module, "_owner_epoch_current", return_value=True),
+            mock.patch.object(module, "cleanup_orphan_media"),
+            mock.patch.object(module, "_start_poll_stream"),
+            mock.patch.object(module, "_stop_poll_stream"),
+            mock.patch.object(
+                module, "_read_poll_envelope", return_value=self._envelope(module)
+            ),
+            mock.patch.object(module, "_cli_enrollment_target", return_value=enrollment),
+            mock.patch.object(
+                module, "_generation_lock", side_effect=contextlib.nullcontext
+            ),
+            mock.patch.object(module, "load_state", side_effect=lambda: dict(persisted)),
+            mock.patch.object(module, "save_state", side_effect=save),
+            mock.patch.object(module, "_journal_candidate"),
+            mock.patch.object(module, "emit", return_value="accepted") as emit,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            result, emitted = module.poll_once(
+                state,
+                1.0,
+                delivery_ready=False,
+                not_ready_reason="context_sync_transient",
+            )
+        self.assertEqual(emitted, 1)
+        self.assertEqual(result["acked_watermark"], 124)
+        self.assertEqual(result["pending_log_ids"], [])
+        self.assertEqual(result["candidate_phase"], "idle")
+        self.assertEqual(result["capability_state"], "starting")
+        self.assertFalse(result["delivery_enabled"])
+        self.assertEqual(result["fence"], "starting")
+        self.assertEqual(result["fence_reason"], "context_sync_transient")
+        emit.assert_called_once()
+
+    def test_capture_only_poll_rejects_unrecognized_not_ready_reason(self):
+        module = load_db_watch("auto_reply_db_watch_capture_only_reason_test")
+        state, emitted = module.poll_once(
+            self._clean_state(module),
+            1.0,
+            delivery_ready=False,
+            not_ready_reason="aggregate_readiness_missing",
+        )
+        self.assertEqual(emitted, 0)
+        self.assertEqual(state["capability_state"], "fenced")
+        self.assertFalse(state["delivery_enabled"])
+        self.assertEqual(state["fence_reason"], "context_sync_unavailable")
+
+    def test_clean_cursor_snapshot_allows_only_context_sync_capture_fences(self):
+        module = load_db_watch("auto_reply_db_watch_capture_snapshot_test")
+        state = self._clean_state(module)
+        state.update(
+            capability_state="starting",
+            delivery_enabled=False,
+            fence="starting",
+        )
+        for reason in ("context_sync_transient", "context_sync_deferred"):
+            state["fence_reason"] = reason
+            self.assertIsNotNone(
+                module._clean_poll_retry_snapshot(
+                    state,
+                    retry_fence=False,
+                    capture_only=True,
+                )
+            )
+        state["fence_reason"] = "aggregate_readiness_missing"
+        self.assertIsNone(
+            module._clean_poll_retry_snapshot(
+                state,
+                retry_fence=False,
+                capture_only=True,
+            )
+        )
+        state["fence_reason"] = "context_sync_transient"
+        self.assertIsNone(
+            module._clean_poll_retry_snapshot(state, retry_fence=False)
+        )
+
+    def test_capture_only_retry_wrapper_never_promotes_delivery_readiness(self):
+        module = load_db_watch("auto_reply_db_watch_capture_wrapper_test")
+        state = self._clean_state(module)
+        state.update(
+            capability_state="starting",
+            delivery_enabled=False,
+            fence_reason="context_sync_deferred",
+            fence="starting",
+        )
+        with (
+            mock.patch.object(module, "poll_once", return_value=(state, 0)) as poll,
+            mock.patch.object(module, "_save_polled_state", return_value=True),
+        ):
+            result, emitted = module._poll_with_bounded_clean_retry(
+                state,
+                1.0,
+                delivery_ready=False,
+                not_ready_reason="context_sync_deferred",
+            )
+        self.assertEqual(emitted, 0)
+        self.assertFalse(result["delivery_enabled"])
+        poll.assert_called_once_with(
+            state,
+            1.0,
+            delivery_ready=False,
+            not_ready_reason="context_sync_deferred",
+        )
 
     @staticmethod
     def _page_envelope(module, log_ids):

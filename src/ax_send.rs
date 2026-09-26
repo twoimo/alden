@@ -833,8 +833,10 @@ fn is_permitted_leftover(value: &str, message: &str) -> bool {
 
 fn is_kakao_send_button_label(value: &str) -> bool {
     let trimmed = value.trim();
-    matches!(trimmed, "전송" | "보내기" | "Send" | "보내기 버튼" | "전송 버튼")
-        || trimmed.eq_ignore_ascii_case("send")
+    matches!(
+        trimmed,
+        "전송" | "보내기" | "Send" | "보내기 버튼" | "전송 버튼"
+    ) || trimmed.eq_ignore_ascii_case("send")
         || trimmed.contains("전송")
         || trimmed.contains("보내기")
 }
@@ -1034,8 +1036,7 @@ where
     attest("before composer write")?;
     match read().as_deref() {
         Some("") | None => {}
-        Some(value)
-            if is_permitted_leftover(value, message) => {}
+        Some(value) if is_permitted_leftover(value, message) => {}
         Some(value) if value == message => {
             anyhow::bail!("message composer changed before write; refusing to overwrite it")
         }
@@ -2177,10 +2178,7 @@ mod match_tests {
         first.log_id = 2;
         second.log_id = 3;
         let pairs = normalize_local_binding_suffix(&[link, first, second]);
-        let discarded: Vec<String> = pairs
-            .iter()
-            .map(|(_, token)| token.text.clone())
-            .collect();
+        let discarded: Vec<String> = pairs.iter().map(|(_, token)| token.text.clone()).collect();
         let ax = [
             "https://huggingface.co/spaces/immich-app/immich".to_string(),
             "raid로 작은서버 만들어서 굿ㅓㅇ하는건가".to_string(),
@@ -2353,11 +2351,10 @@ mod match_tests {
 
     #[test]
     fn composer_guard_treats_unreadable_value_as_empty_after_focus() {
-        let (result, probe) =
-            run_composer_probe(
-                [None, Some(""), None, Some("reply"), Some("reply"), Some("")],
-                true,
-            );
+        let (result, probe) = run_composer_probe(
+            [None, Some(""), None, Some("reply"), Some("reply"), Some("")],
+            true,
+        );
         assert!(result.is_ok());
         assert_eq!(probe.focuses, 2);
         assert_eq!(probe.set_attempts, 1);
@@ -2527,11 +2524,10 @@ mod match_tests {
 
     #[test]
     fn composer_guard_allows_one_verified_direct_or_keyboard_send() {
-        let (direct_result, direct_probe) =
-            run_composer_probe(
-                [Some(""), Some(""), Some("reply"), Some("reply"), Some("")],
-                true,
-            );
+        let (direct_result, direct_probe) = run_composer_probe(
+            [Some(""), Some(""), Some("reply"), Some("reply"), Some("")],
+            true,
+        );
         assert!(direct_result.is_ok());
         assert_eq!(direct_probe.set_attempts, 1);
         assert_eq!(direct_probe.typed, 0);
@@ -2614,12 +2610,12 @@ mod imp {
     use accessibility::{
         AXAttribute, AXUIElement, AXUIElementAttributes, Error as AccessibilityError,
     };
-    use accessibility_sys::{kAXPressAction, kAXRaiseAction};
     use accessibility_sys::AXIsProcessTrusted;
     use accessibility_sys::{
         kAXErrorAttributeUnsupported, kAXErrorNoValue, kAXValueTypeCGPoint, kAXValueTypeCGSize,
         AXUIElementCopyMultipleAttributeValues, AXUIElementRef, AXValueGetValue, AXValueRef,
     };
+    use accessibility_sys::{kAXPressAction, kAXRaiseAction};
     use anyhow::{anyhow, Context, Result};
     use core_foundation::array::{CFArray, CFArrayRef};
     use core_foundation::base::{CFRange, CFType, TCFType};
@@ -3239,10 +3235,7 @@ mod imp {
     /// that as proof the scroll area holds no `AXTable`, which is exactly how a
     /// truncated transcript probe let a bubble text area be recorded as the
     /// message composer. Only a walk that finished may claim an empty result.
-    fn strict_walk_result(
-        matches: Vec<AXUIElement>,
-        exhausted: bool,
-    ) -> Option<Vec<AXUIElement>> {
+    fn strict_walk_result(matches: Vec<AXUIElement>, exhausted: bool) -> Option<Vec<AXUIElement>> {
         if exhausted {
             None
         } else {
@@ -3744,9 +3737,7 @@ mod imp {
     /// attempts as "matched 0 rows, 0 distinct values, 0 UTF-8 bytes" on a loaded
     /// machine (2026-09-22). Only a truncated walk is retried; a completed read
     /// that proves the window has no message list returns immediately.
-    fn visible_message_rows_bounded(
-        window: &AXUIElement,
-    ) -> Option<Vec<(String, AXUIElement)>> {
+    fn visible_message_rows_bounded(window: &AXUIElement) -> Option<Vec<(String, AXUIElement)>> {
         let deadline = Instant::now() + TRANSCRIPT_READ_TIMEOUT;
         loop {
             match visible_message_rows(window) {
@@ -4348,7 +4339,12 @@ mod imp {
         let window = match find_chat_window(&app, chat_display_name)? {
             Some(window) => window,
             None => {
-                if std::env::var("OPENKAKAO_AUTO_REPLY_WORKER").ok().or_else(|| std::env::var("OPENKAKAO_BUJAMENTOR_WORKER").ok()).as_deref() == Some("1") {
+                if std::env::var("OPENKAKAO_AUTO_REPLY_WORKER")
+                    .ok()
+                    .or_else(|| std::env::var("OPENKAKAO_BUJAMENTOR_WORKER").ok())
+                    .as_deref()
+                    == Some("1")
+                {
                     anyhow::bail!(
                         "AutoReply requires exactly one already-open KakaoTalk window titled {chat_display_name:?}"
                     );
@@ -4618,7 +4614,9 @@ mod imp {
             assert!(!transcript_read_is_retryable(&anyhow!(
                 "could not find the message list in the chat window"
             )));
-            assert!(!transcript_read_is_retryable(&anyhow!("AX permission denied")));
+            assert!(!transcript_read_is_retryable(&anyhow!(
+                "AX permission denied"
+            )));
         }
 
         #[test]

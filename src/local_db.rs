@@ -500,6 +500,86 @@ const LOCAL_POLL_ROWS_SQL: &str = "SELECT m.logId, m.chatId, m.authorId,
      WHERE m.chatId = ? AND m.logId > ? AND m.type >= ?
      ORDER BY m.logId ASC, m.sentAt ASC
      LIMIT ?";
+const LOCAL_POLL_TAIL_EVIDENCE_SQL: &str = "SELECT
+            COUNT(CASE WHEN m.logId = ?2 THEN 1 END),
+            COUNT(CASE WHEN m.logId = ?2 AND m.type >= ?4 THEN 1 END),
+            COUNT(CASE WHEN m.logId = ?2 AND m.type < ?4 THEN 1 END),
+            MIN(CASE WHEN m.logId = ?2 THEN m.prevId END),
+            MAX(CASE WHEN m.logId = ?2 THEN m.prevId END),
+            COUNT(CASE WHEN m.logId = ?3 THEN 1 END),
+            COUNT(CASE WHEN m.logId = ?3 AND m.type >= ?4 THEN 1 END)
+     FROM NTChatMessage m
+     WHERE m.chatId = ?1 AND m.logId IN (?2, ?3)";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalPollRoomTailMetadata {
+    advertised_last_log_id: i64,
+    last_user_log_id: i64,
+    last_seen_log_id: i64,
+    last_sync_log_id: i64,
+    last_mchat_log_id: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalPollTailEvidence {
+    advertised_rows: i64,
+    advertised_conversation_rows: i64,
+    advertised_control_rows: i64,
+    advertised_prev_min: Option<i64>,
+    advertised_prev_max: Option<i64>,
+    last_user_rows: i64,
+    last_user_conversation_rows: i64,
+}
+
+/// Resolve the reply-visible tail only when the raw room tail is itself a
+/// visible control row whose direct predecessor is the room's independently
+/// advertised, present conversational tail. Any missing row, mixed type,
+/// conflicting watermark or rowset disagreement keeps the raw tail so the
+/// existing gap proof remains fail-closed.
+fn resolve_local_poll_conversation_tail(
+    metadata: LocalPollRoomTailMetadata,
+    evidence: Option<LocalPollTailEvidence>,
+    after_log_id: i64,
+    total_rows: i64,
+    available_max: Option<i64>,
+) -> i64 {
+    let advertised = metadata.advertised_last_log_id;
+    let conversation = metadata.last_user_log_id;
+    let bounded_ids = advertised > 0
+        && advertised < LOCAL_POLL_MAX_INT64
+        && conversation > 0
+        && conversation < LOCAL_POLL_MAX_INT64
+        && advertised > conversation
+        && conversation >= after_log_id;
+    let matching_room_watermarks = metadata.last_seen_log_id == advertised
+        && metadata.last_sync_log_id == advertised
+        && metadata.last_mchat_log_id == advertised;
+    let matching_rowset_tail = match available_max {
+        Some(tail) => total_rows > 0 && tail == conversation,
+        None => total_rows == 0 && after_log_id == conversation,
+    };
+    let Some(evidence) = evidence else {
+        return advertised;
+    };
+    let exact_visible_control = evidence.advertised_rows == 1
+        && evidence.advertised_conversation_rows == 0
+        && evidence.advertised_control_rows == 1
+        && evidence.advertised_prev_min == Some(conversation)
+        && evidence.advertised_prev_max == Some(conversation);
+    let exact_visible_conversation =
+        evidence.last_user_rows == 1 && evidence.last_user_conversation_rows == 1;
+
+    if bounded_ids
+        && matching_room_watermarks
+        && matching_rowset_tail
+        && exact_visible_control
+        && exact_visible_conversation
+    {
+        conversation
+    } else {
+        advertised
+    }
+}
 
 // Kakao log IDs are global sparse identifiers, so numeric holes are not gaps.
 // Completeness proves the bounded rowset from one SQLite snapshot instead.
@@ -2106,32 +2186,43 @@ impl LocalDbReader {
         let mut stmt = tx.prepare_cached(
             "SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
                     r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
-                    COALESCE(u.displayName, u.friendNickName, u.nickName, '') as displayName
+                    COALESCE(u.displayName, u.friendNickName, u.nickName, '') as displayName,
+                    r.lastUserLogId, r.lastSeenLogId, r.lastSyncLogId, r.lastMChatLogId
              FROM NTChatRoom r
              LEFT JOIN NTUser u ON r.directChatMemberUserId = u.userId AND u.linkId = 0
              WHERE r.chatId = ?
              LIMIT 1",
         )?;
-        let chat = stmt
+        let (mut chat, tail_metadata) = stmt
             .query_row([chat_id], |row| {
                 let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
                 let display_name: String = row.get::<_, String>(7).unwrap_or_default();
+                let advertised_last_log_id = row.get(4).unwrap_or(0);
                 let title = if chat_name.is_empty() {
                     display_name.clone()
                 } else {
                     chat_name
                 };
-                Ok(LocalChat {
-                    chat_id: row.get(0)?,
-                    chat_type: row.get(1)?,
-                    chat_name: title,
-                    database_chat_name: None,
-                    active_members_count: row.get(3).unwrap_or(0),
-                    last_log_id: row.get(4).unwrap_or(0),
-                    last_updated_at: row.get(5).unwrap_or(0),
-                    unread_count: row.get(6).unwrap_or(0),
-                    display_name,
-                })
+                Ok((
+                    LocalChat {
+                        chat_id: row.get(0)?,
+                        chat_type: row.get(1)?,
+                        chat_name: title,
+                        database_chat_name: None,
+                        active_members_count: row.get(3).unwrap_or(0),
+                        last_log_id: advertised_last_log_id,
+                        last_updated_at: row.get(5).unwrap_or(0),
+                        unread_count: row.get(6).unwrap_or(0),
+                        display_name,
+                    },
+                    LocalPollRoomTailMetadata {
+                        advertised_last_log_id,
+                        last_user_log_id: row.get(8).unwrap_or(0),
+                        last_seen_log_id: row.get(9).unwrap_or(0),
+                        last_sync_log_id: row.get(10).unwrap_or(0),
+                        last_mchat_log_id: row.get(11).unwrap_or(0),
+                    },
+                ))
             })
             .optional()?
             .with_context(|| "Target chat is no longer available")?;
@@ -2149,6 +2240,38 @@ impl LocalDbReader {
         if available_max == Some(LOCAL_POLL_MAX_INT64) {
             anyhow::bail!("reconcile_required");
         }
+        let tail_evidence = if tail_metadata.advertised_last_log_id > tail_metadata.last_user_log_id
+            && tail_metadata.last_user_log_id > 0
+        {
+            Some(tx.prepare_cached(LOCAL_POLL_TAIL_EVIDENCE_SQL)?.query_row(
+                rusqlite::params![
+                    chat_id,
+                    tail_metadata.advertised_last_log_id,
+                    tail_metadata.last_user_log_id,
+                    LOCAL_CONVERSATION_MESSAGE_TYPE_MIN
+                ],
+                |row| {
+                    Ok(LocalPollTailEvidence {
+                        advertised_rows: row.get(0)?,
+                        advertised_conversation_rows: row.get(1)?,
+                        advertised_control_rows: row.get(2)?,
+                        advertised_prev_min: row.get(3)?,
+                        advertised_prev_max: row.get(4)?,
+                        last_user_rows: row.get(5)?,
+                        last_user_conversation_rows: row.get(6)?,
+                    })
+                },
+            )?)
+        } else {
+            None
+        };
+        chat.last_log_id = resolve_local_poll_conversation_tail(
+            tail_metadata,
+            tail_evidence,
+            after_log_id,
+            total_rows,
+            available_max,
+        );
 
         let mut stmt = tx.prepare_cached(LOCAL_POLL_ROWS_SQL)?;
         let account_user_id = self.account_user_id;
@@ -2465,6 +2588,146 @@ mod tests {
             )
             .expect("create local-poll control-row fixture");
         connection
+    }
+
+    fn local_poll_reader_test_fixture() -> (tempfile::TempDir, LocalDbReader) {
+        let tempdir = tempfile::tempdir().expect("create local-poll fixture directory");
+        let db_path = tempdir.path().join("local-poll.sqlite3");
+        let connection = Connection::open(&db_path).expect("open local-poll fixture database");
+        connection
+            .execute_batch(
+                "CREATE TABLE NTUser(
+                    userId INTEGER NOT NULL,
+                    linkId INTEGER NOT NULL,
+                    displayName TEXT,
+                    friendNickName TEXT,
+                    nickName TEXT
+                );
+                CREATE TABLE NTChatRoom(
+                    chatId INTEGER PRIMARY KEY,
+                    type INTEGER NOT NULL,
+                    chatName TEXT,
+                    activeMembersCount INTEGER NOT NULL,
+                    lastLogId INTEGER NOT NULL,
+                    lastUpdatedAt INTEGER NOT NULL,
+                    countOfNewMessage INTEGER NOT NULL,
+                    directChatMemberUserId INTEGER NOT NULL,
+                    lastUserLogId INTEGER NOT NULL,
+                    lastSeenLogId INTEGER NOT NULL,
+                    lastSyncLogId INTEGER NOT NULL,
+                    lastMChatLogId INTEGER NOT NULL
+                );
+                CREATE TABLE NTChatMessage(
+                    chatId INTEGER NOT NULL,
+                    logId INTEGER NOT NULL,
+                    prevId INTEGER NOT NULL,
+                    msgId INTEGER NOT NULL,
+                    authorId INTEGER NOT NULL,
+                    message TEXT,
+                    attachment TEXT,
+                    type INTEGER NOT NULL,
+                    sentAt INTEGER NOT NULL,
+                    PRIMARY KEY(chatId, logId, msgId)
+                );
+
+                INSERT INTO NTChatRoom VALUES
+                    (42, 0, '', 2, 101, 1001, 0, 0, 100, 101, 101, 101),
+                    (43, 0, '', 2, 202, 2002, 0, 0, 202, 202, 202, 202),
+                    (44, 0, '', 2, 301, 3001, 0, 0, 301, 301, 301, 301),
+                    (45, 0, '', 2, 401, 4001, 0, 0, 400, 400, 401, 401),
+                    (46, 0, '', 2, 501, 5001, 0, 0, 500, 501, 501, 501);
+
+                INSERT INTO NTChatMessage
+                    (chatId, logId, prevId, msgId, authorId, message, attachment, type, sentAt)
+                VALUES
+                    (42, 100, 0, 1, 700, 'conversation', '', 1, 1000),
+                    (42, 101, 100, 2, 700, 'control', '', 0, 1001),
+                    (43, 200, 0, 1, 700, 'conversation', '', 1, 2000),
+                    (43, 201, 200, 2, 700, 'control', '', 0, 2001),
+                    (43, 202, 201, 3, 701, 'later-conversation', '', 71, 2002),
+                    (44, 300, 0, 1, 700, 'conversation', '', 1, 3000),
+                    (45, 400, 0, 1, 700, 'conversation', '', 1, 4000),
+                    (45, 401, 400, 2, 700, 'control', '', 0, 4001),
+                    (46, 500, 499, 1, 700, 'malformed-user-tail', '', 0, 5000),
+                    (46, 501, 500, 2, 700, 'control', '', 0, 5001);",
+            )
+            .expect("create local-poll reader fixture");
+        let db_identity = database_identity(&db_path).expect("read fixture identity");
+        let reader = LocalDbReader {
+            conn: connection,
+            db_path,
+            db_identity,
+            account_fingerprint: "fixture".to_string(),
+            account_user_id: 900,
+        };
+        (tempdir, reader)
+    }
+
+    #[test]
+    fn local_poll_resolves_visible_control_tail_to_conversation_predecessor() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let envelope = reader
+            .poll_after(42, LOCAL_POLL_MAX_ROWS, Some(100))
+            .expect("visible control tail should resolve");
+
+        assert!(envelope.messages.is_empty());
+        assert_eq!(envelope.chat.last_log_id, 100);
+        assert_eq!(envelope.completeness.chat_last_log_id, 100);
+        assert_eq!(envelope.completeness.status, "empty");
+        assert!(!envelope.completeness.has_gap);
+        assert_eq!(envelope.completeness.proof, "sqlite_snapshot_rowset");
+    }
+
+    #[test]
+    fn local_poll_missing_advertised_conversation_tail_stays_fail_closed() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let envelope = reader
+            .poll_after(44, LOCAL_POLL_MAX_ROWS, Some(300))
+            .expect("missing tail is represented as a gap page");
+
+        assert!(envelope.messages.is_empty());
+        assert_eq!(envelope.chat.last_log_id, 301);
+        assert_eq!(envelope.completeness.status, "gap");
+        assert!(envelope.completeness.has_gap);
+        assert_eq!(envelope.completeness.proof, "reconcile_required");
+    }
+
+    #[test]
+    fn local_poll_mixed_control_and_later_conversation_tail_is_complete() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let envelope = reader
+            .poll_after(43, LOCAL_POLL_MAX_ROWS, Some(200))
+            .expect("later conversation tail should remain authoritative");
+
+        assert_eq!(
+            envelope
+                .messages
+                .iter()
+                .map(|message| message.log_id)
+                .collect::<Vec<_>>(),
+            vec![202]
+        );
+        assert_eq!(envelope.chat.last_log_id, 202);
+        assert_eq!(envelope.completeness.status, "complete");
+        assert!(!envelope.completeness.has_gap);
+    }
+
+    #[test]
+    fn local_poll_control_tail_resolution_rejects_conflicting_or_malformed_evidence() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let conflicting = reader
+            .poll_after(45, LOCAL_POLL_MAX_ROWS, Some(400))
+            .expect("conflicting room watermarks remain a gap page");
+        assert_eq!(conflicting.chat.last_log_id, 401);
+        assert_eq!(conflicting.completeness.status, "gap");
+        assert!(conflicting.completeness.has_gap);
+
+        let malformed = reader
+            .poll_after(46, LOCAL_POLL_MAX_ROWS, Some(499))
+            .expect("non-conversation lastUserLogId remains a gap page");
+        assert_eq!(malformed.chat.last_log_id, 501);
+        assert_eq!(malformed.completeness.status, "gap");
+        assert!(malformed.completeness.has_gap);
     }
 
     #[test]
