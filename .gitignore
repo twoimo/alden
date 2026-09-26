@@ -76,3 +76,12 @@ context.sqlite3
 reply-queue.sqlite3
 model-circuit.sqlite3
 macos/AutoReplyMenu/build/
+
+# Private local review captures and unreleased voice candidates.
+docs/architecture/alden-core-panel.png
+docs/architecture/alden-knowledge-hologram.png
+docs/architecture/alden-live-panel.png
+docs/architecture/alden-live-settings.png
+docs/architecture/alden-settings-panel.png
+docs/architecture/alden-system.architecture.pre-main-*.json
+voice/models/experimental/
