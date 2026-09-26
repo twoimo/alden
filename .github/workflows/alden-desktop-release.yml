@@ -279,6 +279,25 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           spctl --assess --type execute --verbose=4 "$app"
 
+      - name: Package pinned CPython 3.11 menubar runtime sidecars
+        run: |
+          set -euo pipefail
+          test "$(/usr/bin/uname -s)" = "Darwin"
+          test "$(/usr/bin/uname -m)" = "arm64"
+          source_url="$(/bin/sh scripts/alden-menubar-runtime.sh source-url)"
+          source_archive="$RUNNER_TEMP/alden-menubar-cpython-source.tar.gz"
+          mkdir -p dist
+          /usr/bin/curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --proto '=https' \
+            --tlsv1.2 \
+            --output "$source_archive" \
+            "$source_url"
+          /bin/sh scripts/alden-menubar-runtime.sh package "$source_archive" dist
+
       - name: Package immutable release evidence
         env:
           VERSION: ${{ steps.identity.outputs.version }}
@@ -308,6 +327,10 @@ jobs:
 
           app = pathlib.Path(os.environ["APP_PATH"])
           asset = pathlib.Path("dist") / os.environ["ASSET_NAME"]
+          runtime_asset = pathlib.Path("dist/Alden-menubar-cpython-3.11.16-macos-arm64.tar.gz")
+          runtime_manifest_path = pathlib.Path("dist/alden-menubar-runtime-v1.json")
+          runtime_installer = pathlib.Path("dist/install-alden-menubar-runtime.sh")
+          runtime_manifest = json.loads(runtime_manifest_path.read_text())
           config = json.loads(pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text())
           resources = []
           for source, destination in sorted(config["bundle"]["resources"].items()):
@@ -333,18 +356,25 @@ jobs:
               "embedded_cli_version": os.environ["CLI_VERSION"],
               "bundle_identifier": config["identifier"],
               "signing": {
+                  "scope": "Alden.app",
                   "developer_id_application": True,
                   "hardened_runtime": True,
                   "notarized": True,
                   "stapled": True,
                   "notary_submission_id": os.environ["NOTARY_SUBMISSION_ID"],
               },
+              "menubar_runtime": {
+                  "manifest": runtime_manifest,
+                  "apple_notarization": "not asserted; integrity is pinned by provenance and SHA-256",
+                  "offline_installer": runtime_installer.name,
+              },
               "assets": [
                   {
-                      "name": asset.name,
-                      "sha256": sha256(asset),
-                      "bytes": asset.stat().st_size,
+                      "name": path.name,
+                      "sha256": sha256(path),
+                      "bytes": path.stat().st_size,
                   }
+                  for path in (asset, runtime_asset, runtime_manifest_path, runtime_installer)
               ],
               "bundle_resources": resources,
           }
@@ -354,9 +384,15 @@ jobs:
           PY
           (
             cd dist
-            shasum -a 256 "$asset" alden-desktop-release-evidence-v1.json > SHA256SUMS.txt
+            shasum -a 256 \
+              "$asset" \
+              Alden-menubar-cpython-3.11.16-macos-arm64.tar.gz \
+              alden-menubar-runtime-v1.json \
+              install-alden-menubar-runtime.sh \
+              alden-desktop-release-evidence-v1.json \
+              > SHA256SUMS.txt
           )
-          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "3"
+          test "$(find dist -maxdepth 1 -type f | wc -l | tr -d ' ')" = "6"
 
       - name: Upload bounded production release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -419,6 +455,7 @@ jobs:
           import json
           import os
           import pathlib
+          import subprocess
           import tomllib
 
           version = os.environ["VERSION"]
@@ -437,8 +474,14 @@ jobs:
           evidence_path = pathlib.Path("dist/alden-desktop-release-evidence-v1.json")
           evidence = json.loads(evidence_path.read_text())
           expected_asset = f"Alden-{version}-macos-arm64.zip"
+          runtime_asset = "Alden-menubar-cpython-3.11.16-macos-arm64.tar.gz"
+          runtime_manifest_name = "alden-menubar-runtime-v1.json"
+          runtime_installer = "install-alden-menubar-runtime.sh"
           expected_files = {
               expected_asset,
+              runtime_asset,
+              runtime_manifest_name,
+              runtime_installer,
               "SHA256SUMS.txt",
               "alden-desktop-release-evidence-v1.json",
           }
@@ -459,18 +502,43 @@ jobs:
               if evidence.get(key) != expected:
                   raise SystemExit(f"evidence {key}={evidence.get(key)!r}, expected {expected!r}")
           signing = evidence.get("signing", {})
+          if signing.get("scope") != "Alden.app":
+              raise SystemExit("production evidence signing scope must be Alden.app")
           for key in ("developer_id_application", "hardened_runtime", "notarized", "stapled"):
               if signing.get(key) is not True:
                   raise SystemExit(f"production evidence is missing signing assertion {key}")
           if not signing.get("notary_submission_id"):
               raise SystemExit("production evidence is missing notarization submission id")
+          expected_evidence_assets = {
+              expected_asset,
+              runtime_asset,
+              runtime_manifest_name,
+              runtime_installer,
+          }
           assets = evidence.get("assets", [])
-          if len(assets) != 1 or assets[0].get("name") != expected_asset:
+          if {item.get("name") for item in assets} != expected_evidence_assets:
               raise SystemExit(f"unexpected evidence assets: {assets!r}")
-          asset_path = pathlib.Path("dist") / expected_asset
-          digest = hashlib.sha256(asset_path.read_bytes()).hexdigest()
-          if assets[0].get("sha256") != digest:
-              raise SystemExit("asset SHA-256 does not match release evidence")
+          if len(assets) != len(expected_evidence_assets):
+              raise SystemExit(f"duplicate or missing release evidence assets: {assets!r}")
+          for item in assets:
+              asset_path = pathlib.Path("dist") / item["name"]
+              digest = hashlib.sha256(asset_path.read_bytes()).hexdigest()
+              if item.get("sha256") != digest or item.get("bytes") != asset_path.stat().st_size:
+                  raise SystemExit(f"asset metadata does not match release evidence: {item['name']}")
+          expected_runtime_manifest = subprocess.check_output(
+              ["/bin/sh", "scripts/alden-menubar-runtime.sh", "manifest"], text=True
+          )
+          runtime_manifest_path = pathlib.Path("dist") / runtime_manifest_name
+          if runtime_manifest_path.read_text() != expected_runtime_manifest:
+              raise SystemExit("runtime manifest does not match the tagged source provenance contract")
+          runtime_manifest = json.loads(expected_runtime_manifest)
+          if runtime_manifest.get("release_asset", {}).get("name") != runtime_asset:
+              raise SystemExit("runtime manifest release asset name is inconsistent")
+          runtime_digest = hashlib.sha256((pathlib.Path("dist") / runtime_asset).read_bytes()).hexdigest()
+          if runtime_manifest.get("release_asset", {}).get("sha256") != runtime_digest:
+              raise SystemExit("runtime archive SHA-256 does not match the pinned manifest")
+          if evidence.get("menubar_runtime", {}).get("manifest") != runtime_manifest:
+              raise SystemExit("release evidence does not embed the exact runtime manifest")
           if not evidence.get("bundle_resources"):
               raise SystemExit("release evidence is missing bundle resource hashes")
           PY
@@ -519,10 +587,14 @@ jobs:
           body: |
             macOS arm64 Alden app, signed with Developer ID and notarized by Apple.
 
-            Before installation, provision the separate CPython 3.11 menubar
-            runtime described in desktop/README.md. The app ZIP does not contain
-            Python, MLX model weights, or voice dependencies. Voice activation
-            remains disabled until the wake-model release gate passes.
+            This release also carries a pinned CPython 3.11.16 arm64 menubar
+            runtime archive, its provenance manifest, and an offline installer.
+            The runtime archive is a byte-identical copy of the SHA-256-pinned
+            upstream python-build-standalone asset; Apple notarization applies
+            to Alden.app only. Follow desktop/README.md before installing Alden.
+            The app ZIP does not contain Python, MLX model weights, or voice
+            dependencies. Voice activation remains disabled until the wake-model
+            release gate passes.
           fail_on_unmatched_files: true
           files: dist/*
 
@@ -555,6 +627,9 @@ jobs:
               raise SystemExit("published Alden release identity/state is incorrect")
           expected = {
               f"Alden-{os.environ['VERSION']}-macos-arm64.zip",
+              "Alden-menubar-cpython-3.11.16-macos-arm64.tar.gz",
+              "alden-menubar-runtime-v1.json",
+              "install-alden-menubar-runtime.sh",
               "SHA256SUMS.txt",
               "alden-desktop-release-evidence-v1.json",
           }

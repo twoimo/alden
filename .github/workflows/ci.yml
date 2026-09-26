@@ -155,6 +155,7 @@ jobs:
           tests.test_auto_reply_finetune
           tests.test_alden_unit4
           tests.test_alden_desktop_launchers
+          tests.test_alden_menubar_runtime_payload
           tests.test_local_mlx_model_readiness
           tests.test_verify_local_models
           tests.test_mlx_serve_lifecycle
