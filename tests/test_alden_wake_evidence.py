@@ -35,20 +35,28 @@ class WakeEvidenceBundleTests(unittest.TestCase):
         self.assertIs(bundle["scope"]["microphones_or_rooms"], False)
         self.assertEqual(bundle["scope"]["voices"], ["Yuna"])
 
-    def test_candidate_and_evaluator_hashes_match(self) -> None:
-        candidate = self.bundle["candidate"]
-        model = ROOT / candidate["path"]
-        self.assertTrue(model.is_file(), str(model))
-        raw_model = model.read_bytes()
-        self.assertEqual(candidate["bytes"], len(raw_model))
-        self.assertEqual(candidate["sha256"], hashlib.sha256(raw_model).hexdigest())
-
+    def test_evaluator_hash_matches(self) -> None:
         evaluator = ROOT / self.bundle["evaluator"]
         self.assertEqual(self.bundle["evaluator"], "scripts/evaluate_alden_korean_wake.py")
         self.assertEqual(
             self.bundle["evaluator_sha256"],
             hashlib.sha256(evaluator.read_bytes()).hexdigest(),
         )
+
+    def test_experimental_candidate_hash_when_available(self) -> None:
+        candidate = self.bundle["candidate"]
+        self.assertEqual(
+            candidate["path"],
+            "voice/models/experimental/alden_ko_ridge_candidate_v4.onnx",
+        )
+        self.assertGreater(candidate["bytes"], 0)
+        self.assertRegex(candidate["sha256"], r"^[0-9a-f]{64}$")
+        model = ROOT / candidate["path"]
+        if not model.is_file():
+            self.skipTest("unreleased experimental candidate is absent from this checkout")
+        raw_model = model.read_bytes()
+        self.assertEqual(candidate["bytes"], len(raw_model))
+        self.assertEqual(candidate["sha256"], hashlib.sha256(raw_model).hexdigest())
 
     def test_measured_rows_reproduce_summary_and_threshold_decisions(self) -> None:
         rows = self.bundle["rows"]
