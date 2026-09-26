@@ -243,3 +243,147 @@ jobs:
       # These Rust steps are source-level Tauri checks, not packaged app proof.
       # A packaged build still requires the fail-closed frozen CPython and CLI
       # resources and is validated separately after trusted provisioning.
+
+  alden-pr-release-smoke:
+    name: Alden unsigned arm64 release + runtime smoke
+    if: github.event_name == 'pull_request'
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Bind checkout and require Apple Silicon runner
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(/usr/bin/uname -s)" = "Darwin"
+          test "$(/usr/bin/uname -m)" = "arm64"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Cache release build inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            desktop/src-tauri/target
+          key: alden-pr-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: alden-pr-release-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build unsigned Alden release bundle
+        run: |
+          set -euo pipefail
+          unset OPENKAKAO_SIGN_IDENTITY APPLE_SIGNING_IDENTITY
+          /bin/sh scripts/build-alden-desktop.sh
+
+      - name: Verify arm64 bundle identity and exact resource allowlist
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Alden.app"
+          main="$app/Contents/MacOS/openkakao-alden-desktop"
+          embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
+          release_cli="target/release/openkakao-cli"
+
+          test -x "$main"
+          test -x "$embedded_cli"
+          test -x "$release_cli"
+          test ! -e "$app/Contents/_CodeSignature"
+          test "$(/usr/bin/lipo -archs "$main")" = "arm64"
+          test "$(/usr/bin/lipo -archs "$embedded_cli")" = "arm64"
+          test "$(/usr/bin/lipo -archs "$release_cli")" = "arm64"
+          /usr/bin/cmp -s "$embedded_cli" "$release_cli"
+
+          APP_PATH="$app" python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import plistlib
+
+          app = pathlib.Path(os.environ["APP_PATH"])
+          config = json.loads(pathlib.Path("desktop/src-tauri/tauri.conf.json").read_text())
+          info = plistlib.loads((app / "Contents/Info.plist").read_bytes())
+          if info.get("CFBundleIdentifier") != config["identifier"]:
+              raise SystemExit("Alden bundle identifier does not match tauri.conf.json")
+          if info.get("CFBundleShortVersionString") != config["version"]:
+              raise SystemExit("Alden bundle version does not match tauri.conf.json")
+          if info.get("CFBundleExecutable") != "openkakao-alden-desktop":
+              raise SystemExit("unexpected Alden bundle executable")
+
+          resources = config["bundle"]["resources"]
+          if not resources:
+              raise SystemExit("Tauri bundle resource allowlist is empty")
+          root = app / "Contents/Resources"
+          for source, destination in sorted(resources.items()):
+              path = root / destination
+              if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f"missing/empty bundled resource {destination} from {source}")
+          PY
+
+      - name: Package and offline-install pinned menubar CPython sidecar
+        env:
+          EXPECTED_RUNTIME_SHA256: e1d745b07b6acc0641dbb3237d3c5953deeeed182141bab2242684076fd86547
+        run: |
+          set -euo pipefail
+          source_url="$(/bin/sh scripts/alden-menubar-runtime.sh source-url)"
+          source_archive="$RUNNER_TEMP/alden-menubar-cpython-source.tar.gz"
+          sidecar_dir="$RUNNER_TEMP/alden-menubar-sidecar"
+          runtime_home="$RUNNER_TEMP/alden-menubar-home"
+          expected_manifest="$RUNNER_TEMP/alden-menubar-runtime-expected.json"
+          packaged_archive="$sidecar_dir/Alden-menubar-cpython-3.11.16-macos-arm64.tar.gz"
+          packaged_manifest="$sidecar_dir/alden-menubar-runtime-v1.json"
+          packaged_installer="$sidecar_dir/install-alden-menubar-runtime.sh"
+
+          /bin/mkdir -p "$sidecar_dir" "$runtime_home"
+          /usr/bin/curl \
+            --fail \
+            --location \
+            --silent \
+            --show-error \
+            --proto '=https' \
+            --tlsv1.2 \
+            --connect-timeout 20 \
+            --max-time 180 \
+            --max-filesize 30000000 \
+            --output "$source_archive" \
+            "$source_url"
+
+          actual_sha256="$(/usr/bin/shasum -a 256 "$source_archive" | /usr/bin/awk '{print $1}')"
+          test "$actual_sha256" = "$EXPECTED_RUNTIME_SHA256"
+          /bin/sh scripts/alden-menubar-runtime.sh package "$source_archive" "$sidecar_dir"
+          /bin/sh scripts/alden-menubar-runtime.sh manifest > "$expected_manifest"
+          /usr/bin/cmp -s "$source_archive" "$packaged_archive"
+          /usr/bin/cmp -s "$expected_manifest" "$packaged_manifest"
+
+          HOME="$runtime_home" TMPDIR="$RUNNER_TEMP" \
+            /bin/sh "$packaged_installer" install "$packaged_archive" "$packaged_manifest"
+
+          python_bin="$runtime_home/Library/Application Support/openkakao/runtimes/menubar/bin/python3.11"
+          test -x "$python_bin"
+          test "$(/usr/bin/lipo -archs "$python_bin")" = "arm64"
+          probe_output=$(
+            /usr/bin/env -i HOME="$runtime_home" PATH='/usr/bin:/bin' \
+              "$python_bin" -I -S -c \
+              'import platform,sys; ok=sys.implementation.name=="cpython" and sys.version_info[:3]==(3,11,16) and platform.machine()=="arm64"; print("ALDEN_CI_CPYTHON_3_11_16_ARM64_OK") if ok else None; raise SystemExit(0 if ok else 3)'
+          )
+          test "$probe_output" = "ALDEN_CI_CPYTHON_3_11_16_ARM64_OK"
