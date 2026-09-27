@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CancellationToken, RuntimeSnapshot } from "./contracts";
 import { parseRuntimeSnapshot, unavailableSnapshot } from "./contracts";
-import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
+import { LEGACY_RESIDENT_MODEL_ID, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 
 type SettingsAction =
   | "knowledge-graph-status"
@@ -58,6 +58,15 @@ export async function fetchSettingsAction(
 
 export type LocalModelId = typeof RESIDENT_MODEL_ID | typeof SWAP_MODEL_ID;
 export type SettingsInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+
+export function normalizeLocalModelId(modelId: string | null): LocalModelId | null {
+  if (modelId === null) return null;
+  const normalized = modelId.replace(/^mlx\//, "");
+  if (normalized === RESIDENT_MODEL_ID || normalized === LEGACY_RESIDENT_MODEL_ID) {
+    return RESIDENT_MODEL_ID;
+  }
+  return normalized === SWAP_MODEL_ID ? SWAP_MODEL_ID : null;
+}
 
 export type BrowserToolStatus = "completed" | "aborted" | "rejected" | "failed";
 

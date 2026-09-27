@@ -16,6 +16,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from local_mlx_model_readiness import (  # noqa: E402
+    IQ_MODEL_ID,
     MLX_MODELS_URL,
     RESIDENT_MODEL_ID,
     SWAP_MODEL_ID,
@@ -88,6 +89,16 @@ class LocalMlxModelReadinessTests(unittest.TestCase):
             ),
             RESIDENT_MODEL_ID,
         )
+        self.assertEqual(
+            canonical_fixed_local_mlx_model_id(f"mlx/{IQ_MODEL_ID}"),
+            IQ_MODEL_ID,
+        )
+        self.assertEqual(
+            resolve_fixed_local_mlx_catalog_model(
+                IQ_MODEL_ID, [f"mlx/{IQ_MODEL_ID}"]
+            ),
+            IQ_MODEL_ID,
+        )
         self.assertIsNone(
             resolve_fixed_local_mlx_catalog_model(
                 "remote/arbitrary", ["mlx/remote/arbitrary"]
@@ -108,6 +119,19 @@ class LocalMlxModelReadinessTests(unittest.TestCase):
             f"mlx/{SWAP_MODEL_ID}",
             opener=self._opener(
                 {"data": [{"id": SWAP_MODEL_ID, "loaded": True, "state": "ready"}]},
+                calls,
+            ),
+        )
+        self.assertTrue(result.prepared)
+        self.assertEqual(result.reason, "ready")
+        self.assertEqual(calls, [(MLX_MODELS_URL, "GET", 2.0)])
+
+    def test_ready_iq_requires_exact_loaded_ready_from_local_get(self):
+        calls = []
+        result = read_fixed_local_mlx_readiness(
+            f"mlx/{IQ_MODEL_ID}",
+            opener=self._opener(
+                {"data": [{"id": IQ_MODEL_ID, "loaded": True, "state": "ready"}]},
                 calls,
             ),
         )

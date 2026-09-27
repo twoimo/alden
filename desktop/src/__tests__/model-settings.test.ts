@@ -2,7 +2,7 @@
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { parseRuntimeSnapshot } from "../contracts";
-import { RESIDENT_MODEL_ID } from "../tokens";
+import { LEGACY_RESIDENT_MODEL_ID, RESIDENT_MODEL_ID } from "../tokens";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -28,6 +28,14 @@ const snapshot = parseRuntimeSnapshot({
   reply_model_id: `mlx/${RESIDENT_MODEL_ID}`,
 });
 
+const legacySnapshot = parseRuntimeSnapshot({
+  available: true,
+  rooms: [],
+  jobs: [],
+  context_sync: { mode: "async", waited: false },
+  reply_model_id: `mlx/${LEGACY_RESIDENT_MODEL_ID}`,
+});
+
 describe("simple model settings", () => {
   it("loads only the conversation data needed for the settings screen", async () => {
     const loadAction = vi.fn(async (): Promise<Record<string, unknown> | null> => null);
@@ -49,6 +57,20 @@ describe("simple model settings", () => {
     expect(document.querySelector("#model-status")?.textContent).toBe("빠른 대화가 선택되어 있습니다.");
     expect(document.querySelector("#model-owner-state")).toBeNull();
     expect(document.querySelector("#mlx-server-state")).toBeNull();
+  });
+
+  it("keeps a legacy Flash-Next saved state on the fast conversation choice", async () => {
+    await bootSettings({
+      loadSnapshot: async () => legacySnapshot,
+      loadAction: async (): Promise<Record<string, unknown> | null> => null,
+      wireVoice: () => undefined,
+      invokeCommand: async <T>() => undefined as T,
+      subscribeVisibility: null,
+      readVisibility: null,
+    });
+
+    expect(document.querySelector('[data-model-choice="fast"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector("#model-status")?.textContent).toBe("빠른 대화가 선택되어 있습니다.");
   });
 
   it.each([

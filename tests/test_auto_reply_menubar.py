@@ -5,6 +5,7 @@ import io
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1051,10 +1052,20 @@ class AutoReplyMenubarTests(unittest.TestCase):
             )
             # 없는 동작을 부르면 조용히 성공한 척하지 않는다. argparse가
             # 알 수 없는 선택지를 거절하고, 출력에 ok=true가 남지 않는다.
-            output = os.popen(
-                f"{sys.executable} {MENUBAR} "
-                f"--state-root '{state.resolve()}' --action improve-prep 2>&1"
-            ).read()
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(MENUBAR),
+                    "--state-root",
+                    str(state.resolve()),
+                    "--action",
+                    "improve-prep",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            output = completed.stdout + completed.stderr
             self.assertNotIn('"ok": true', output)
             self.assertIn("improve-prep", output)
             del helper
@@ -2215,6 +2226,123 @@ class AutoReplyMenubarTests(unittest.TestCase):
             )
             self.assertFalse(denied["ok"])
             del helper
+
+    def test_iq_model_set_requires_exact_ready_gateway_before_write(self):
+        module = load("auto_reply_menubar_iq_model_set_readiness")
+        original_readiness = module.read_fixed_local_mlx_readiness
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.raw = json.dumps(payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, limit):
+                return self.raw[:limit]
+
+        def reader_for(payload):
+            def fake_readiness(model, *, state_root=None):
+                def opener(_request, *, timeout):
+                    self.assertEqual(timeout, 2.0)
+                    return FakeResponse(payload)
+
+                return original_readiness(
+                    model,
+                    state_root=state_root,
+                    opener=opener,
+                )
+
+            return fake_readiness
+
+        catalog = [
+            {
+                "id": "mlx",
+                "label": "mlx",
+                "models": [{"id": module.ALDEN_IQ_MODEL_ID, "label": "iQ"}],
+            }
+        ]
+        cases = (
+            ("absent", {"data": []}, False, "mlx_gateway_wrong_model"),
+            (
+                "unloaded",
+                {
+                    "data": [
+                        {
+                            "id": module.ALDEN_IQ_MODEL_ID,
+                            "loaded": False,
+                            "state": "unloaded",
+                        }
+                    ]
+                },
+                False,
+                "mlx_gateway_not_ready",
+            ),
+            (
+                "wrong-id",
+                {
+                    "data": [
+                        {
+                            "id": module.ALDEN_SWAP_MODEL_ID,
+                            "loaded": True,
+                            "state": "ready",
+                        }
+                    ]
+                },
+                False,
+                "mlx_gateway_wrong_model",
+            ),
+            (
+                "ready",
+                {
+                    "data": [
+                        {
+                            "id": module.ALDEN_IQ_MODEL_ID,
+                            "loaded": True,
+                            "state": "ready",
+                        }
+                    ]
+                },
+                True,
+                None,
+            ),
+        )
+
+        for name, payload, should_store, expected_reason in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw:
+                state = Path(raw)
+                override_path = module._reply_model_override_path(state)
+                with mock.patch.object(
+                    module,
+                    "_global_catalog_providers",
+                    return_value=catalog,
+                ), mock.patch.object(
+                    module,
+                    "_displayed_reply_providers",
+                    return_value=[],
+                ), mock.patch.object(
+                    module,
+                    "read_fixed_local_mlx_readiness",
+                    new=reader_for(payload),
+                ):
+                    result = module.set_reply_model(
+                        state,
+                        module.ALDEN_IQ_MODEL_ID,
+                        now=1000.0,
+                    )
+
+                self.assertEqual(result["ok"], should_store)
+                self.assertEqual(result.get("stored"), should_store)
+                self.assertEqual(result.get("prepared"), should_store)
+                self.assertEqual(override_path.exists(), should_store)
+                if should_store:
+                    saved = json.loads(override_path.read_text(encoding="utf-8"))
+                    self.assertEqual(saved["model"], module.ALDEN_IQ_MODEL_ID)
+                else:
+                    self.assertEqual(result["reason"], expected_reason)
 
     def test_model_swap_requires_opt_in_and_verified_owner_before_gateway(self):
         module = load("auto_reply_menubar_model_swap_gates")
@@ -5458,6 +5586,17 @@ class AldenMlxServerActionTests(unittest.TestCase):
             "Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit",
         )
         self.assertEqual(prefixed.minimum_free_bytes, module.FLASH_NEXT_REQUIRED_BYTES)
+        iq = module._mlx_app_owned_spec(
+            Path("/tmp/alden-mlx-state"), module.ALDEN_IQ_MODEL_ID
+        )
+        self.assertIsNotNone(iq)
+        self.assertEqual(
+            iq.resident_model_dir,
+            module._MLX_APP_OWNED_MODELS_DIR / module.ALDEN_IQ_MODEL_ID,
+        )
+        self.assertEqual(iq.minimum_free_bytes, module.FLASH_NEXT_IQ_REQUIRED_BYTES)
+        self.assertEqual(iq.ctx_size, module.FLASH_NEXT_IQ_CONTEXT_SIZE)
+        self.assertEqual(iq.validate(), "")
         for candidate in (None, "", "remote/arbitrary", "ddalcu/../../etc/passwd"):
             self.assertIsNone(
                 module._mlx_app_owned_spec(Path("/tmp/alden-mlx-state"), candidate),
@@ -5487,7 +5626,11 @@ class AldenMlxServerActionTests(unittest.TestCase):
         current = f"mlx/{module.FLASH_NEXT_MODEL_ID.removeprefix('mlx/')}"
         residency = module.ManagedModelResidency(
             current,
-            (module.FLASH_NEXT_MODEL_ID, module.QWEN38_27B_MODEL_ID),
+            (
+                module.FLASH_NEXT_MODEL_ID,
+                module.FLASH_NEXT_IQ_MODEL_ID,
+                module.QWEN38_27B_MODEL_ID,
+            ),
             pid,
             True,
             False,

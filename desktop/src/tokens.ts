@@ -26,5 +26,6 @@ export const DARK_TOKENS = Object.freeze({
   warning: "#E5A04B",
 });
 
-export const RESIDENT_MODEL_ID = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
+export const RESIDENT_MODEL_ID = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw";
+export const LEGACY_RESIDENT_MODEL_ID = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
 export const SWAP_MODEL_ID = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit";

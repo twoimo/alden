@@ -32,6 +32,10 @@ class _Response:
 
 
 class AutoReplyWorkerMlxTests(unittest.TestCase):
+    MIXED_FLASH = "mlx/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
+    IQ_FLASH = "mlx/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw"
+    QWEN_27B = "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
+
     @classmethod
     def setUpClass(cls):
         spec = importlib.util.spec_from_file_location("auto_reply_worker_mlx", WORKER)
@@ -69,6 +73,116 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
                 },
             ]
         }
+
+    @classmethod
+    def _ready_catalog(cls, order=("mixed", "iq"), *, iq_loaded=True, include_iq=True):
+        rows = {
+            "mixed": {
+                "id": cls.MIXED_FLASH.removeprefix("mlx/"),
+                "owned_by": "mlx-serve",
+                "loaded": True,
+                "state": "ready",
+            },
+            "iq": {
+                "id": cls.IQ_FLASH,
+                "owned_by": "mlx-serve",
+                "loaded": iq_loaded,
+                "state": "ready" if iq_loaded else "unloaded",
+            },
+        }
+        return {"data": [rows[name] for name in order if name != "iq" or include_iq]}
+
+    def _run_with_catalog(self, selected_model, catalog):
+        module = self.module
+        calls = []
+        payloads = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append((request.full_url, request.data, timeout))
+            if request.full_url == "http://127.0.0.1:11234/v1/models":
+                return _Response(catalog)
+            if request.full_url == "http://127.0.0.1:11234/v1/chat/completions":
+                payloads.append(json.loads(request.data.decode("utf-8")))
+                return _Response({"choices": [{"message": {"content": "ok"}}]})
+            raise AssertionError(f"unexpected URL: {request.full_url}")
+
+        with (
+            mock.patch("auto_reply_ondevice._local_only_urlopen", side_effect=fake_urlopen),
+            mock.patch("urllib.request.urlopen") as direct_urlopen,
+        ):
+            result = module._run_opencodex_generation(
+                selected_model,
+                "system",
+                b'{"inbound":"hello"}',
+                timeout=90.0,
+            )
+        direct_urlopen.assert_not_called()
+        return result, calls, payloads
+
+    def test_flash_pack_selection_is_exact_in_either_catalog_order(self):
+        for order in (("mixed", "iq"), ("iq", "mixed")):
+            catalog = self._ready_catalog(order)
+            for selected_model, expected_advertised in (
+                (self.MIXED_FLASH, self.MIXED_FLASH.removeprefix("mlx/")),
+                (self.IQ_FLASH.removeprefix("mlx/"), self.IQ_FLASH),
+            ):
+                with self.subTest(order=order, selected_model=selected_model):
+                    result, calls, payloads = self._run_with_catalog(selected_model, catalog)
+                    self.assertEqual(result, (0, b"ok", b""))
+                    self.assertEqual(payloads[0]["model"], expected_advertised)
+                    self.assertEqual(
+                        calls[-1][0], "http://127.0.0.1:11234/v1/chat/completions"
+                    )
+
+    def test_iq_request_fails_closed_when_exact_pack_absent_or_unloaded(self):
+        for label, catalog in (
+            ("absent", self._ready_catalog(include_iq=False)),
+            ("unloaded", self._ready_catalog(iq_loaded=False)),
+        ):
+            with self.subTest(label=label):
+                result, calls, payloads = self._run_with_catalog(self.IQ_FLASH, catalog)
+                self.assertEqual(result, (1, b"", b"mlx_serve_text_model_not_advertised"))
+                self.assertEqual(payloads, [])
+                self.assertFalse(
+                    any(url.endswith("/chat/completions") for url, _data, _timeout in calls)
+                )
+
+    def test_unknown_or_cloudish_flash_ids_do_not_match_local_pack(self):
+        catalog = self._ready_catalog()
+        for selected_model in (
+            "mlx/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-unknown-pack",
+            "cloud/ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw",
+        ):
+            with self.subTest(selected_model=selected_model):
+                result, calls, payloads = self._run_with_catalog(selected_model, catalog)
+                self.assertEqual(result, (1, b"", b"mlx_serve_text_model_not_advertised"))
+                self.assertEqual(payloads, [])
+                self.assertFalse(
+                    any(url.endswith("/chat/completions") for url, _data, _timeout in calls)
+                )
+
+    def test_27b_selection_requires_exact_ready_catalog_id(self):
+        catalog = self._ready_catalog()
+        catalog["data"].insert(
+            1,
+            {
+                "id": self.QWEN_27B.removeprefix("mlx/"),
+                "owned_by": "mlx-serve",
+                "loaded": True,
+                "state": "ready",
+            },
+        )
+        result, calls, payloads = self._run_with_catalog(self.QWEN_27B, catalog)
+        self.assertEqual(result, (0, b"ok", b""))
+        self.assertEqual(payloads[0]["model"], self.QWEN_27B.removeprefix("mlx/"))
+        self.assertEqual(calls[-1][0], "http://127.0.0.1:11234/v1/chat/completions")
+
+        result, calls, payloads = self._run_with_catalog(
+            self.QWEN_27B.replace("-4bit", "-8bit"), catalog
+        )
+        self.assertEqual(result, (1, b"", b"mlx_serve_text_model_not_advertised"))
+        self.assertEqual(payloads, [])
+        self.assertFalse(any(url.endswith("/chat/completions") for url, _data, _ in calls))
 
     def test_mlx_generation_uses_discovered_gateway_and_advertised_id(self):
         module = self.module

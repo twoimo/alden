@@ -30,6 +30,7 @@ import {
   cancelModelSwap,
   fetchRuntimeSnapshot,
   fetchSettingsAction,
+  normalizeLocalModelId,
   setResidentModel,
   swapToLargeModel,
 } from "./runtime";
@@ -147,10 +148,8 @@ function clearModelFailures(): void {
 
 function renderModels(snapshot: RuntimeSnapshot): void {
   const current = snapshot.replyModelId;
-  const normalized = current?.replace(/^mlx\//, "") ?? null;
-  const selected = normalized === RESIDENT_MODEL_ID || normalized === SWAP_MODEL_ID
-    ? normalized
-    : normalized === null ? RESIDENT_MODEL_ID : null;
+  const normalized = normalizeLocalModelId(current);
+  const selected = current === null ? RESIDENT_MODEL_ID : normalized;
   setModelSelection(selected);
   setText("model-status", selected === RESIDENT_MODEL_ID
     ? "빠른 대화가 선택되어 있습니다."

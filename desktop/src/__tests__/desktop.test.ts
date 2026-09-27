@@ -11,6 +11,7 @@ import {
 } from "../knowledge/graph-model";
 import {
   cancelModelSwap,
+  normalizeLocalModelId,
   prepareSwapModel,
   runBrowserTool,
   setResidentModel,
@@ -18,7 +19,7 @@ import {
   type SettingsInvoke,
 } from "../runtime";
 import { RuntimeSnapshotPoller } from "../runtime-poller";
-import { LAYOUT, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "../tokens";
+import { LEGACY_RESIDENT_MODEL_ID, LAYOUT, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "../tokens";
 import { MAIN_PANEL_CONTROLS, mainPanelMarkup, renderBackground, renderHistory, renderRooms, settingsMarkup } from "../ui";
 
 class FakeScheduler implements FrameScheduler {
@@ -692,6 +693,18 @@ describe("layout and settings contract", () => {
 });
 
 describe("local model settings bridge", () => {
+  it("uses the iQ resident identity and recognizes only the fixed legacy alias", () => {
+    expect(RESIDENT_MODEL_ID).toBe("ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw");
+    expect(LEGACY_RESIDENT_MODEL_ID).toBe("ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit");
+    expect(normalizeLocalModelId(RESIDENT_MODEL_ID)).toBe(RESIDENT_MODEL_ID);
+    expect(normalizeLocalModelId(`mlx/${RESIDENT_MODEL_ID}`)).toBe(RESIDENT_MODEL_ID);
+    expect(normalizeLocalModelId(LEGACY_RESIDENT_MODEL_ID)).toBe(RESIDENT_MODEL_ID);
+    expect(normalizeLocalModelId(`mlx/${LEGACY_RESIDENT_MODEL_ID}`)).toBe(RESIDENT_MODEL_ID);
+    expect(normalizeLocalModelId(SWAP_MODEL_ID)).toBe(SWAP_MODEL_ID);
+    expect(normalizeLocalModelId("remote/arbitrary")).toBeNull();
+    expect(normalizeLocalModelId(`${LEGACY_RESIDENT_MODEL_ID}/extra`)).toBeNull();
+  });
+
   it("invokes only the fixed resident save and swap prepare contracts", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const fakeInvoke: SettingsInvoke = async <T>(command: string, args?: Record<string, unknown>) => {

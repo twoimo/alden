@@ -20056,6 +20056,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                 {
                     "id": module.FLASH_NEXT_MODEL_ID,
                     "owned_by": "mlx-serve",
+                    "loaded": True,
+                    "state": "ready",
                     "capabilities": ["json_schema"],
                 }
             ],

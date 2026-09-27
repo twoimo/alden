@@ -71,7 +71,6 @@ import auto_reply_transition_journal as transition_journal
 from auto_reply_ondevice import (
     FLASH_NEXT_MODEL_ID,
     QWEN38_27B_MODEL_ID,
-    _model_id as _ondevice_model_id,
     detect_mlx_gateway_models,
     discover_mlx_gateway,
 )
@@ -11540,6 +11539,29 @@ def _is_mlx_serve_text_model(model: str) -> bool:
     return _is_mlx_serve_flash_next_model(model) or _is_mlx_serve_27b_model(model)
 
 
+def _exact_advertised_mlx_model_id(advertised: list[dict], requested_model: str) -> str:
+    """Return the one ready catalog id matching the request after ``mlx/`` normalization."""
+
+    requested = str(requested_model or "").strip().removeprefix("mlx/")
+    if not requested:
+        return ""
+    matched = ""
+    for entry in advertised:
+        if not isinstance(entry, dict):
+            continue
+        model_id = str(entry.get("id") or "").strip()
+        if not model_id or model_id.removeprefix("mlx/") != requested:
+            continue
+        if entry.get("loaded") is not True:
+            return ""
+        if str(entry.get("state") or "").strip().casefold() != "ready":
+            return ""
+        if matched:
+            return ""
+        matched = model_id
+    return matched
+
+
 def _is_local_reply_model(model: str) -> bool:
     folded = str(model or "").casefold()
     return folded.startswith(("omlx/", "mlx/")) or _is_mlx_serve_text_model(model)
@@ -11758,8 +11780,7 @@ def _run_opencodex_generation_unleased(
         if not gateway_base_url:
             return 1, b"", b"mlx_serve_gateway_unavailable"
         advertised = detect_mlx_gateway_models(base_url=gateway_base_url)
-        marker = "Qwen3.8-27B" if _is_mlx_serve_27b_model(target_model) else "Qwen3.8-Flash-Next"
-        advertised_model = _ondevice_model_id(advertised, marker)
+        advertised_model = _exact_advertised_mlx_model_id(advertised, target_model)
         if not advertised_model:
             reason = (
                 b"mlx_serve_vision_model_not_resident"

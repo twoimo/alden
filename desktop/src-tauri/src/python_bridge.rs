@@ -37,16 +37,39 @@ const VOICE_STATUS_MAX_AGE_SECS: u64 = 5 * 60;
 const STATE_FILE_LIMIT_BYTES: u64 = 4096;
 const WAKE_PHRASE: &str = "올든";
 const WAKE_THRESHOLD: f64 = 0.65;
-const RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
+const RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw";
+const LEGACY_RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
 const SWAP_MODEL_ID: &str = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit";
 // The on-disk directory names the app-owned server publishes in /v1/models.
-const RESIDENT_MODEL_NAME: &str = "Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
+const RESIDENT_MODEL_NAME: &str = "Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw";
+const LEGACY_RESIDENT_MODEL_NAME: &str = "Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
 const SWAP_MODEL_NAME: &str = "Qwen3.8-27B-MLX-Serve-4bit";
 const MLX_SERVER_STATUS_ACTION: &str = "mlx-server-status";
 const MLX_SERVER_LAUNCH_ACTION: &str = "mlx-server-launch";
 const MLX_SERVER_STOP_ACTION: &str = "mlx-server-stop";
 const MODEL_SWAP_OPT_IN: &str = "qwen38-27b-explicit-v1";
 const MODEL_SWAP_CANCEL_DIR: &str = "model-swap-cancel";
+
+fn is_resident_model_id(candidate: &str) -> bool {
+    candidate == RESIDENT_MODEL_ID || candidate == LEGACY_RESIDENT_MODEL_ID
+}
+
+fn is_local_model_id(candidate: &str) -> bool {
+    is_resident_model_id(candidate) || candidate == SWAP_MODEL_ID
+}
+
+fn is_resident_model_name(candidate: &str) -> bool {
+    candidate == RESIDENT_MODEL_NAME || candidate == LEGACY_RESIDENT_MODEL_NAME
+}
+
+fn is_local_model_name(candidate: &str) -> bool {
+    is_resident_model_name(candidate) || candidate == SWAP_MODEL_NAME
+}
+
+fn is_snapshot_model_id(candidate: &str) -> bool {
+    is_local_model_id(candidate.strip_prefix("mlx/").unwrap_or(candidate))
+}
+
 #[cfg(test)]
 const VOICE_TTS_OUT_NAME: &str = "alden-voice-out.wav";
 static VOICE_SESSION_START_LOCK: Mutex<()> = Mutex::new(());
@@ -1296,7 +1319,7 @@ fn settings_action_args(
         | MLX_SERVER_STATUS_ACTION => {}
         MLX_SERVER_LAUNCH_ACTION => {
             // Starting a resident model needs a deliberate opt-in and one of
-            // the two fixed local models; the app supplies the binary, models
+            // the fixed local models; the app supplies the binary, models
             // directory, and log path itself so no path crosses this boundary.
             if token_id.is_some() {
                 return Err(BridgeError::ActionNotAllowed);
@@ -1305,7 +1328,7 @@ fn settings_action_args(
                 return Err(BridgeError::ActionNotAllowed);
             }
             let candidate = model
-                .filter(|value| *value == RESIDENT_MODEL_ID || *value == SWAP_MODEL_ID)
+                .filter(|value| is_local_model_id(value))
                 .ok_or(BridgeError::ActionNotAllowed)?;
             args.push("--model".to_string());
             args.push(candidate.to_string());
@@ -2166,7 +2189,8 @@ fn sanitize_snapshot(value: &Value) -> SafeRuntimeSnapshot {
         .and_then(Value::as_object)
         .and_then(|obj| obj.get("id"))
         .and_then(Value::as_str)
-        .map(|id| id.chars().take(256).collect::<String>());
+        .filter(|id| is_snapshot_model_id(id))
+        .map(str::to_string);
 
     SafeRuntimeSnapshot {
         available: true,
@@ -2267,7 +2291,7 @@ fn sanitize_model_owner_status(value: &Value) -> Value {
     let current = value
         .get("current_model")
         .and_then(Value::as_str)
-        .filter(|candidate| *candidate == RESIDENT_MODEL_ID || *candidate == SWAP_MODEL_ID);
+        .filter(|candidate| is_local_model_id(candidate));
     json!({
         "ok": value.get("ok").and_then(Value::as_bool).unwrap_or(false),
         "action": "model-owner-status",
@@ -2303,7 +2327,7 @@ fn sanitize_mlx_server_status(value: &Value) -> Value {
     let model = value
         .get("model")
         .and_then(Value::as_str)
-        .filter(|candidate| *candidate == RESIDENT_MODEL_NAME || *candidate == SWAP_MODEL_NAME);
+        .filter(|candidate| is_local_model_name(candidate));
     json!({
         "ok": value.get("ok").and_then(Value::as_bool).unwrap_or(false),
         "action": MLX_SERVER_STATUS_ACTION,
@@ -2378,7 +2402,7 @@ fn sanitize_mlx_lifecycle(value: &Value, launch: bool) -> Value {
     let model = value
         .get("model")
         .and_then(Value::as_str)
-        .filter(|candidate| *candidate == RESIDENT_MODEL_NAME || *candidate == SWAP_MODEL_NAME);
+        .filter(|candidate| is_local_model_name(candidate));
     let stage = value
         .get("stage")
         .and_then(Value::as_str)
@@ -2914,6 +2938,14 @@ mod tests {
 
     #[test]
     fn local_model_actions_are_exactly_allowlisted() {
+        assert_eq!(
+            RESIDENT_MODEL_ID,
+            "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw"
+        );
+        assert_eq!(
+            LEGACY_RESIDENT_MODEL_ID,
+            "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
+        );
         let set_args = settings_action_args(
             "model-set",
             None,
@@ -2952,6 +2984,7 @@ mod tests {
 
         for (action, model) in [
             ("model-set", SWAP_MODEL_ID),
+            ("model-set", LEGACY_RESIDENT_MODEL_ID),
             ("model-prepare", RESIDENT_MODEL_ID),
             ("model-set", "../../tmp/model"),
             ("model-prepare", "remote/arbitrary --flag"),
@@ -3067,6 +3100,17 @@ mod tests {
         assert!(safe.get("argv").is_none());
         assert!(safe.get("path").is_none());
 
+        let legacy = sanitize_model_owner_status(&json!({
+            "ok": true,
+            "action": "model-owner-status",
+            "owner_state": "app_owned",
+            "owner_verified": true,
+            "drain_verified": true,
+            "current_model": LEGACY_RESIDENT_MODEL_ID,
+        }));
+        assert_eq!(legacy["owner_verified"], true);
+        assert_eq!(legacy["current_model"], LEGACY_RESIDENT_MODEL_ID);
+
         // A claim of verified ownership is only honoured for the app-owned code.
         let coerced = sanitize_model_owner_status(&json!({
             "ok": true,
@@ -3089,6 +3133,7 @@ mod tests {
     #[test]
     fn fixed_model_names_match_served_ids() {
         assert!(RESIDENT_MODEL_ID.ends_with(RESIDENT_MODEL_NAME));
+        assert!(LEGACY_RESIDENT_MODEL_ID.ends_with(LEGACY_RESIDENT_MODEL_NAME));
         assert!(SWAP_MODEL_ID.ends_with(SWAP_MODEL_NAME));
     }
 
@@ -3128,6 +3173,21 @@ mod tests {
         assert!(safe.get("executable").is_none());
         assert!(safe.get("pid").is_none());
 
+        for known in [
+            RESIDENT_MODEL_NAME,
+            LEGACY_RESIDENT_MODEL_NAME,
+            SWAP_MODEL_NAME,
+        ] {
+            let known_status = sanitize_mlx_server_status(&json!({
+                "ok": true,
+                "action": "mlx-server-status",
+                "owner_state": "app_owned",
+                "app_owned": true,
+                "model": known,
+            }));
+            assert_eq!(known_status["model"], known);
+        }
+
         // A verified claim is only honoured when the code says app_owned.
         let coerced = sanitize_mlx_server_status(&json!({
             "ok": true,
@@ -3148,25 +3208,27 @@ mod tests {
 
     #[test]
     fn mlx_server_launch_requires_opt_in_and_a_fixed_model() {
-        assert_eq!(
-            settings_action_args(
-                MLX_SERVER_LAUNCH_ACTION,
-                None,
-                None,
-                None,
-                Some(SWAP_MODEL_ID),
-                Some(true),
-                None,
-            )
-            .unwrap(),
-            vec![
-                "--action",
-                "mlx-server-launch",
-                "--model",
-                SWAP_MODEL_ID,
-                "--explicit-opt-in"
-            ]
-        );
+        for model in [RESIDENT_MODEL_ID, LEGACY_RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            assert_eq!(
+                settings_action_args(
+                    MLX_SERVER_LAUNCH_ACTION,
+                    None,
+                    None,
+                    None,
+                    Some(model),
+                    Some(true),
+                    None,
+                )
+                .unwrap(),
+                vec![
+                    "--action",
+                    "mlx-server-launch",
+                    "--model",
+                    model,
+                    "--explicit-opt-in"
+                ]
+            );
+        }
         for (model, opt_in, token) in [
             (Some(SWAP_MODEL_ID), None, None),
             (Some(SWAP_MODEL_ID), Some(false), None),
@@ -3275,6 +3337,12 @@ mod tests {
             true,
         );
         assert_eq!(named["model"], SWAP_MODEL_NAME);
+
+        let legacy_named = sanitize_mlx_lifecycle(
+            &json!({"ok": true, "reason": "launch_ready", "model": LEGACY_RESIDENT_MODEL_NAME}),
+            true,
+        );
+        assert_eq!(legacy_named["model"], LEGACY_RESIDENT_MODEL_NAME);
 
         let stop = sanitize_mlx_lifecycle(
             &json!({"ok": true, "reason": "stop_stopped", "pid": 4242}),
@@ -3618,6 +3686,29 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_preserves_only_known_local_model_ids_including_legacy_resident() {
+        for model in [RESIDENT_MODEL_ID, LEGACY_RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            let bare = sanitize_snapshot(&json!({"reply_model": {"id": model}}));
+            assert_eq!(bare.reply_model_id.as_deref(), Some(model));
+
+            let prefixed = format!("mlx/{model}");
+            let with_prefix = sanitize_snapshot(&json!({"reply_model": {"id": prefixed}}));
+            assert_eq!(
+                with_prefix.reply_model_id.as_deref(),
+                Some(prefixed.as_str())
+            );
+        }
+
+        for model in [
+            "remote/arbitrary",
+            "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit/extra",
+        ] {
+            let safe = sanitize_snapshot(&json!({"reply_model": {"id": model}}));
+            assert!(safe.reply_model_id.is_none());
+        }
+    }
+
+    #[test]
     fn snapshot_parses_and_bounds_available_chats() {
         let safe = sanitize_snapshot(&json!({
             "available_chats": [
@@ -3646,7 +3737,10 @@ mod tests {
 
         let cases = [
             (json!({"chat_id": 1, "reply_readiness": "ready"}), "ready"),
-            (json!({"chat_id": 1, "replyReadiness": "blocked"}), "blocked"),
+            (
+                json!({"chat_id": 1, "replyReadiness": "blocked"}),
+                "blocked",
+            ),
             (
                 json!({
                     "chat_id": 1,

@@ -30,6 +30,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from local_mlx_model_readiness import (
+    IQ_MODEL_ID as ALDEN_IQ_MODEL_ID,
     RESIDENT_MODEL_ID as ALDEN_RESIDENT_MODEL_ID,
     SWAP_MODEL_ID as ALDEN_SWAP_MODEL_ID,
     canonical_fixed_local_mlx_model_id,
@@ -37,6 +38,9 @@ from local_mlx_model_readiness import (
     resolve_fixed_local_mlx_catalog_model,
 )
 from auto_reply_ondevice import (
+    FLASH_NEXT_IQ_CONTEXT_SIZE,
+    FLASH_NEXT_IQ_MODEL_ID,
+    FLASH_NEXT_IQ_REQUIRED_BYTES,
     FLASH_NEXT_MODEL_ID,
     FLASH_NEXT_REQUIRED_BYTES,
     MLX_GATEWAY_BASE_URL,
@@ -1702,6 +1706,25 @@ def set_reply_model(
     wanted = local_wanted or requested
     allowed = local_wanted is not None or requested in allowed_model_ids
     if allowed:
+        if wanted == ALDEN_IQ_MODEL_ID:
+            readiness = read_fixed_local_mlx_readiness(
+                ALDEN_IQ_MODEL_ID,
+                state_root=state_root,
+            )
+            if not readiness.prepared:
+                return {
+                    "ok": False,
+                    "action": "model-set",
+                    "privacy": "content_redacted",
+                    "model": ALDEN_IQ_MODEL_ID,
+                    "reason": readiness.reason,
+                    "stored": False,
+                    "prepared": False,
+                    "needs_prepare": True,
+                    "warnings": [
+                        "iQ 3.3bpw는 localhost MLX gateway에서 loaded/ready로 확인된 뒤 선택할 수 있습니다."
+                    ],
+                }
         import time as _time
         stamp = _time.time() if now is None else float(now)
         override_path = _reply_model_override_path(state_root)
@@ -1931,8 +1954,8 @@ def prepare_reply_model(state_root: Path, model: str):
 
     The recheck path used to call ``model-set`` to prepare, which first saves
     the model. A stale recheck could then overwrite a newer selection. This
-    action never writes the selection. The fixed Alden 27B path is GET-only
-    readiness verification and never initiates a model load (2026-09-21).
+    action never writes the selection. The fixed Alden iQ and 27B paths are
+    GET-only readiness verification and never initiate a model load.
     """
 
     requested = str(model or "").strip()
@@ -1948,22 +1971,27 @@ def prepare_reply_model(state_root: Path, model: str):
             "reason": "model_prepare_not_allowed",
             "warnings": ["Flash-Next는 27B 준비 확인 대상으로 사용할 수 없습니다."],
         }
-    if local_wanted == ALDEN_SWAP_MODEL_ID:
+    if local_wanted in {ALDEN_IQ_MODEL_ID, ALDEN_SWAP_MODEL_ID}:
         readiness = read_fixed_local_mlx_readiness(
             local_wanted,
             state_root=state_root,
+        )
+        warning = (
+            "iQ 3.3bpw는 localhost MLX gateway에서 loaded/ready로 확인되지 않았습니다."
+            if local_wanted == ALDEN_IQ_MODEL_ID
+            else "27B는 localhost MLX gateway에서 loaded/ready로 확인되지 않았습니다."
         )
         return {
             "ok": readiness.prepared,
             "action": "model-prepare",
             "privacy": "content_redacted",
-            "model": ALDEN_SWAP_MODEL_ID,
+            "model": local_wanted,
             "needs_prepare": not readiness.prepared,
             "prepared": readiness.prepared,
             "reason": readiness.reason,
             "warnings": []
             if readiness.prepared
-            else ["27B는 localhost MLX gateway에서 loaded/ready로 확인되지 않았습니다."],
+            else [warning],
         }
 
     wanted = requested
@@ -2461,7 +2489,7 @@ async def _tool_browser_payload(
 
 _MLX_LIFECYCLE_ACTIONS = frozenset({"mlx-server-launch", "mlx-server-stop"})
 # The app-owned server may only be started from the signed MLX Core bundle that
-# already ships on this machine, serving one of the two fixed local models.
+# already ships on this machine, serving one of the fixed local models.
 _MLX_APP_OWNED_BINARY = Path("/Applications/MLX Core.app/Contents/MacOS/mlx-serve")
 _MLX_APP_OWNED_MODELS_DIR = Path.home() / ".mlx-serve" / "models"
 
@@ -2472,16 +2500,10 @@ def _menubar_state_root() -> Path:
 
 
 def _mlx_app_owned_model_dir(model_id: str | None) -> Path | None:
-    """Resolve one of the two fixed local models to its on-disk directory."""
+    """Resolve one fixed local model to its app-owned on-disk directory."""
 
-    name = str(model_id or "").strip()
-    if name.startswith("mlx/"):
-        name = name[4:]
-    allowed = {
-        FLASH_NEXT_MODEL_ID.removeprefix("mlx/"),
-        QWEN38_27B_MODEL_ID.removeprefix("mlx/"),
-    }
-    if name not in allowed:
+    name = canonical_fixed_local_mlx_model_id(model_id)
+    if name is None:
         return None
     return _MLX_APP_OWNED_MODELS_DIR / name
 
@@ -2492,17 +2514,24 @@ def _mlx_app_owned_spec(state_root: Path, model_id: str | None) -> MlxLaunchSpec
     resident = _mlx_app_owned_model_dir(model_id)
     if resident is None:
         return None
-    required_bytes = (
-        QWEN38_27B_REQUIRED_BYTES
-        if resident.name == ALDEN_SWAP_MODEL_ID.rsplit("/", 1)[-1]
-        else FLASH_NEXT_REQUIRED_BYTES
-    )
+    wanted = canonical_fixed_local_mlx_model_id(model_id)
+    required_bytes = {
+        ALDEN_RESIDENT_MODEL_ID: FLASH_NEXT_REQUIRED_BYTES,
+        ALDEN_IQ_MODEL_ID: FLASH_NEXT_IQ_REQUIRED_BYTES,
+        ALDEN_SWAP_MODEL_ID: QWEN38_27B_REQUIRED_BYTES,
+    }.get(wanted)
+    if required_bytes is None:
+        return None
+    kwargs: dict[str, Any] = {}
+    if wanted == ALDEN_IQ_MODEL_ID:
+        kwargs["ctx_size"] = FLASH_NEXT_IQ_CONTEXT_SIZE
     return MlxLaunchSpec(
         executable=_MLX_APP_OWNED_BINARY,
         resident_model_dir=resident,
         models_dir=_MLX_APP_OWNED_MODELS_DIR,
         log_path=state_root / "mlx-app-owned-server.log",
         minimum_free_bytes=required_bytes,
+        **kwargs,
     )
 
 
@@ -2543,7 +2572,11 @@ def _seed_launched_model_residency(state_root: Path, spec: MlxLaunchSpec, pid: i
             state_root,
             ManagedModelResidency(
                 f"mlx/{current}",
-                (FLASH_NEXT_MODEL_ID, QWEN38_27B_MODEL_ID),
+                (
+                    FLASH_NEXT_MODEL_ID,
+                    FLASH_NEXT_IQ_MODEL_ID,
+                    QWEN38_27B_MODEL_ID,
+                ),
                 pid,
                 True,
                 False,
@@ -2585,7 +2618,7 @@ def _mlx_lifecycle_payload(action: str, state_root: Path) -> dict:
 
     Both actions are gated behind an explicit --explicit-opt-in flag because
     they start or stop a resident model process.  The launch path can only
-    name the signed MLX Core bundle and the two fixed local models, so the
+    name the signed MLX Core bundle and the fixed local models, so the
     request surface stays bounded and auditable.
     """
 
