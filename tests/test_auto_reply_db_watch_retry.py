@@ -633,7 +633,8 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _page_envelope(module, log_ids):
+    def _page_envelope(module, log_ids, *, sent_at_by_log_id=None):
+        sent_at_by_log_id = sent_at_by_log_id or {}
         messages = [
             {
                 "log_id": log_id,
@@ -644,7 +645,7 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
                 "message": f"question {log_id}",
                 "attachment": "",
                 "message_type": 1,
-                "sent_at": 1000 + log_id,
+                "sent_at": sent_at_by_log_id.get(log_id, 1000 + log_id),
                 "reply_authorized": True,
             }
             for log_id in log_ids
@@ -673,7 +674,15 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
             },
         }
 
-    def _drive_one_page(self, module, log_ids, *, hook_seconds):
+    def _drive_one_page(
+        self,
+        module,
+        log_ids,
+        *,
+        hook_seconds,
+        clock_start=1000.0,
+        sent_at_by_log_id=None,
+    ):
         """Drive one bounded page with a fake clock and record every save.
 
         ``hook_seconds`` is how long each hook round trip is made to take.
@@ -699,7 +708,7 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
             "OPENKAKAO_SUPERVISOR_OWNER": "owner",
             "OPENKAKAO_DB_SOURCE_EPOCH": "7",
         }
-        clock = {"now": 1000.0}
+        clock = {"now": float(clock_start)}
         saves = []
 
         def hook(*_args, **_kwargs):
@@ -725,7 +734,11 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
             mock.patch.object(
                 module,
                 "_read_poll_envelope",
-                return_value=self._page_envelope(module, list(log_ids)),
+                return_value=self._page_envelope(
+                    module,
+                    list(log_ids),
+                    sent_at_by_log_id=sent_at_by_log_id,
+                ),
             ),
             mock.patch.object(module, "_cli_enrollment_target", return_value=enrollment),
             mock.patch.object(
@@ -739,6 +752,107 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
         ):
             state, emitted = module.poll_once(self._clean_state(module), 1.0)
         return state, emitted, saves
+
+    def test_timing_diagnostics_track_recent_max_without_widening_clean_fence(self):
+        module = load_db_watch("auto_reply_db_watch_timing_math_test")
+        state = self._clean_state(module)
+        clean_before = module._clean_poll_retry_snapshot(state, retry_fence=False)
+
+        module._record_successful_poll_envelope(state, 1000.0)
+        module._record_successful_poll_envelope(state, 1002.25)
+        module._record_successful_poll_envelope(state, 1008.75)
+        module._record_successful_poll_envelope(state, 1010.0)
+
+        module._record_candidate_ingress_delay(
+            state,
+            {
+                "sent_at": 840,
+                "message": "private body",
+                "log_id": 987654321,
+                "chat_name": "private room",
+            },
+            1000.0,
+        )
+        module._record_candidate_ingress_delay(
+            state,
+            {"sent_at": 900},
+            1010.0,
+        )
+
+        diagnostics = state[module.TIMING_DIAGNOSTICS_KEY]
+        self.assertEqual(diagnostics["poll_envelope_interval_recent_seconds"], 1.25)
+        self.assertEqual(diagnostics["poll_envelope_interval_recent_observed_at"], 1010.0)
+        self.assertEqual(diagnostics["poll_envelope_interval_max_seconds"], 6.5)
+        self.assertEqual(diagnostics["poll_envelope_interval_max_observed_at"], 1008.75)
+        self.assertEqual(diagnostics["candidate_ingress_delay_recent_seconds"], 110.0)
+        self.assertEqual(diagnostics["candidate_ingress_delay_recent_observed_at"], 1010.0)
+        self.assertEqual(diagnostics["candidate_ingress_delay_max_seconds"], 160.0)
+        self.assertEqual(diagnostics["candidate_ingress_delay_max_observed_at"], 1000.0)
+        self.assertLessEqual(
+            set(diagnostics),
+            set(module._TIMING_DIAGNOSTIC_KEYS),
+        )
+        self.assertNotIn("private body", repr(diagnostics))
+        self.assertNotIn("private room", repr(diagnostics))
+        self.assertNotIn("987654321", repr(diagnostics))
+        self.assertEqual(module.STATE_VERSION, 3)
+        self.assertEqual(module.LEGACY_STATE_VERSION, 2)
+        self.assertEqual(
+            module._clean_poll_retry_snapshot(state, retry_fence=False),
+            clean_before,
+        )
+
+    def test_fake_candidate_records_160_second_ingress_delay_on_existing_save(self):
+        module = load_db_watch("auto_reply_db_watch_ingress_delay_test")
+        recorded_at = 2_000_000.0
+        state, emitted, saves = self._drive_one_page(
+            module,
+            (124,),
+            hook_seconds=0.0,
+            clock_start=recorded_at,
+            sent_at_by_log_id={124: int(recorded_at - 160)},
+        )
+
+        self.assertEqual(emitted, 1)
+        self.assertEqual(len(saves), 3, "diagnostics must not add a state write")
+        first_candidate_save = saves[0][1]
+        diagnostics = first_candidate_save[module.TIMING_DIAGNOSTICS_KEY]
+        self.assertEqual(diagnostics["candidate_ingress_delay_recent_seconds"], 160.0)
+        self.assertEqual(diagnostics["candidate_ingress_delay_recent_observed_at"], recorded_at)
+        self.assertEqual(diagnostics["candidate_ingress_delay_max_seconds"], 160.0)
+        self.assertEqual(diagnostics["candidate_ingress_delay_max_observed_at"], recorded_at)
+        self.assertEqual(diagnostics["poll_envelope_last_success_at"], recorded_at)
+        self.assertNotIn("question 124", repr(diagnostics))
+        self.assertNotIn(module.CHAT, repr(diagnostics))
+        self.assertNotIn("log_id", diagnostics)
+        self.assertEqual(state["candidate_phase"], "idle")
+        self.assertEqual(state["pending_log_ids"], [])
+        self.assertIsNone(state["in_flight_candidate"])
+
+    def test_candidate_ingress_delay_ignores_missing_invalid_or_future_sent_at(self):
+        module = load_db_watch("auto_reply_db_watch_ingress_delay_invalid_test")
+        recorded_at = 1000.0
+        invalid_messages = (
+            {},
+            {"sent_at": None},
+            {"sent_at": True},
+            {"sent_at": -1},
+            {"sent_at": 1.5},
+            {"sent_at": 1001},
+        )
+        for message in invalid_messages:
+            state = self._clean_state(module)
+            module._record_candidate_ingress_delay(state, message, recorded_at)
+            self.assertNotIn(module.TIMING_DIAGNOSTICS_KEY, state)
+
+        # sent_at is the message timestamp, not Kakao's SQLite insertion time;
+        # the actual first insert instant remains unavailable to this watcher.
+        state = self._clean_state(module)
+        module._record_candidate_ingress_delay(state, {"sent_at": 900}, recorded_at)
+        self.assertEqual(
+            state[module.TIMING_DIAGNOSTICS_KEY]["candidate_ingress_delay_recent_seconds"],
+            100.0,
+        )
 
     def test_long_candidate_page_keeps_db_heartbeat_inside_the_liveness_window(self):
         """A catch-up page must not look dead while it is answering.

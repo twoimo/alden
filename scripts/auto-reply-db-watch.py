@@ -751,6 +751,87 @@ def state_schema_version() -> int:
     return STATE_VERSION if os.environ.get("OPENKAKAO_AUTO_REPLY_CLI") == "1" else LEGACY_STATE_VERSION
 
 
+TIMING_DIAGNOSTICS_KEY = "timing_diagnostics"
+_TIMING_DIAGNOSTIC_KEYS = (
+    "poll_envelope_last_success_at",
+    "poll_envelope_interval_recent_seconds",
+    "poll_envelope_interval_recent_observed_at",
+    "poll_envelope_interval_max_seconds",
+    "poll_envelope_interval_max_observed_at",
+    "candidate_ingress_delay_recent_seconds",
+    "candidate_ingress_delay_recent_observed_at",
+    "candidate_ingress_delay_max_seconds",
+    "candidate_ingress_delay_max_observed_at",
+)
+
+
+def _timing_diagnostics(state: dict) -> dict[str, float]:
+    """Return only bounded numeric watcher timing diagnostics from state."""
+    raw = state.get(TIMING_DIAGNOSTICS_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    diagnostics: dict[str, float] = {}
+    for key in _TIMING_DIAGNOSTIC_KEYS:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            continue
+        number = float(value)
+        if math.isfinite(number) and number >= 0.0:
+            diagnostics[key] = number
+    return diagnostics
+
+
+def _record_successful_poll_envelope(state: dict, observed_at: float) -> None:
+    """Track successful poll-envelope spacing without changing fence state."""
+    if not math.isfinite(observed_at) or observed_at < 0.0:
+        return
+    diagnostics = _timing_diagnostics(state)
+    previous = diagnostics.get("poll_envelope_last_success_at")
+    diagnostics["poll_envelope_last_success_at"] = observed_at
+    if previous is not None and observed_at >= previous:
+        interval = round(observed_at - previous, 3)
+        diagnostics["poll_envelope_interval_recent_seconds"] = interval
+        diagnostics["poll_envelope_interval_recent_observed_at"] = observed_at
+        previous_max = diagnostics.get("poll_envelope_interval_max_seconds")
+        if previous_max is None or interval > previous_max:
+            diagnostics["poll_envelope_interval_max_seconds"] = interval
+            diagnostics["poll_envelope_interval_max_observed_at"] = observed_at
+    state[TIMING_DIAGNOSTICS_KEY] = diagnostics
+
+
+def _record_candidate_ingress_delay(
+    state: dict,
+    message: dict,
+    recorded_at: float,
+) -> None:
+    """Track sent_at -> first candidate persistence timing only.
+
+    Kakao's sent_at is a message timestamp, not a SQLite insertion timestamp.
+    This diagnostic therefore cannot establish when Kakao first inserted the
+    row into its local database. ``recorded_at`` is sampled immediately before
+    the existing durable candidate state write, so it only bounds what this
+    watcher observed.
+    """
+    sent_at = message.get("sent_at")
+    if (
+        isinstance(sent_at, bool)
+        or not isinstance(sent_at, int)
+        or not 0 < sent_at < MAX_INT64
+        or not math.isfinite(recorded_at)
+        or recorded_at < float(sent_at)
+    ):
+        return
+    delay = round(recorded_at - float(sent_at), 3)
+    diagnostics = _timing_diagnostics(state)
+    diagnostics["candidate_ingress_delay_recent_seconds"] = delay
+    diagnostics["candidate_ingress_delay_recent_observed_at"] = recorded_at
+    previous_max = diagnostics.get("candidate_ingress_delay_max_seconds")
+    if previous_max is None or delay > previous_max:
+        diagnostics["candidate_ingress_delay_max_seconds"] = delay
+        diagnostics["candidate_ingress_delay_max_observed_at"] = recorded_at
+    state[TIMING_DIAGNOSTICS_KEY] = diagnostics
+
+
 def _candidate_fingerprint(
     *,
     event_id: str,
@@ -4222,7 +4303,9 @@ def poll_once(
             target_chat_id=int(chat["chat_id"]),
             target_chat_name=CHAT,
         )
-        state["heartbeat_at"] = time.time()
+        poll_observed_at = time.time()
+        _record_successful_poll_envelope(state, poll_observed_at)
+        state["heartbeat_at"] = poll_observed_at
         sentinel_fenced = (
             state.get("fence") == "sentinel"
             or state.get("fence_reason") == "sentinel_watermark_requires_reconcile"
@@ -4351,12 +4434,23 @@ def poll_once(
             owner_id=owner_id,
             source_epoch=source_epoch,
         )
+        first_candidate_record = (
+            log_id not in pending
+            and state.get("in_flight_candidate") is None
+        )
         # Phase A: publish the exact pending candidate while only the
         # owner-generation lock is held.  The hook and media work below run
         # unlocked so a final sender can observe and safely defer.
         with _generation_lock():
             if not _owner_epoch_current(state):
                 raise DbFence("owner_epoch_fence")
+            candidate_recorded_at = time.time()
+            if first_candidate_record:
+                _record_candidate_ingress_delay(
+                    state,
+                    message,
+                    candidate_recorded_at,
+                )
             pending.add(log_id)
             state["pending_log_ids"] = sorted(pending)
             state["in_flight_candidate"] = candidate
@@ -4371,7 +4465,7 @@ def poll_once(
             # it on every candidate transition this page durably persists; a
             # hook that wedges still leaves the gap it deserves, because no
             # transition is written while it runs.
-            state["heartbeat_at"] = time.time()
+            state["heartbeat_at"] = candidate_recorded_at
             if not save_state(
                 state,
                 _generation_lock_held=True,
