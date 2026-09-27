@@ -1,0 +1,36 @@
+# Alden local tools: evidence and remaining work
+
+Date: 2026-09-27 KST. This record separates source checks from actual browser and macOS permission observations. No KakaoTalk message was sent for these checks.
+
+## Actual Browser-Use runs
+
+The pinned browser runtime used CPython 3.11.9, browser-use 0.13.10 and Playwright 1.63.0. Its dependency probe reported ready. `BrowserUseRunner` used the local Qwen3.8 27B endpoint on `127.0.0.1:11234` and a dedicated ephemeral Chromium context.
+
+| Read-only task | Agent result | Independent DOM readback | Outcome |
+| --- | --- | --- | --- |
+| Open example.com and return its page title | `example.com`, runner `ok=true`, about 48 s | HTTP 200; `document.title` and h1 both `Example Domain` | Navigation succeeded; requested title was wrong |
+| Search Wikipedia for Tauri software and return the first result title | `Tauri (software framework)`, runner `ok=true`, about 43 s | HTTP 200; first `.mw-search-result-heading` was `Tauri (software framework)` | Requested field matched |
+
+Navigation succeeded in **2/2** cases; exact requested-field accuracy was **1/2**. `ok=true` indicates that the agent finished; it does not prove factual correctness. The direct DOM probes used the same dedicated Playwright context implementation without an LLM. These approximate times are individual observations, not latency percentiles or a performance improvement. BrowserSession reset/cleanup appeared in both agent logs.
+
+The title mismatch is assigned to the native Web GPT-5.6 Sol child as a separate implementation task. It requires actual bounded DOM evidence; a prompt-only instruction to avoid guessing is insufficient. These observations predate that correction.
+
+## Exact background AX source
+
+The production CLI in `scripts/alden_tool_runtime.py` now resolves a target by exact PID, bundle identifier, window title, AX role, and at least one element identity selector. Zero matches or multiple matches are rejected. It requires `--allow-background-ax`, supports only a fixed `AXPress` action on the allowlisted button/check box/radio button/disclosure roles, and has a total timeout of at most five seconds. This opt-in does not establish authorization for the particular target's effect.
+
+`SystemEventsBackgroundAxAdapter` resolves the target again immediately before pressing it. It contains no app activation, real pointer movement, click synthesis or keystroke synthesis. The virtual cursor is only the element rectangle's center: **(x + w/2, y + h/2)**. A frontmost target is refused. An action can still cause its own app to activate; if that happens after pressing, the effect is reported as uncertain.
+
+The exact runtime reads the same enrollment-selected state root as Tauri: `auto-reply` when enrolled, otherwise the enrolled legacy `bujamentor` root. The global abort latch is checked before resolving and before/after action. A timeout, unexpected post-press result, or abort after pressing yields **`ax_action_effect_unknown`**, not a claim that nothing happened. The caller must read back the target before retrying. No automatic retry or durable AX idempotency ledger is implemented.
+
+Parent verification on the installed CPython 3.11 voice runtime: **59/59** focused tool-runtime and unit3 tests passed, with no skips. Generated resolve and press AppleScripts compiled successfully in a prior parent check; compilation did not execute them. Tests use fake AX adapters. **No real AXPress action was performed.** The standalone CLI is implemented, but a desktop bridge/UI invocation and installed-bundle deployment of these changes remain unverified.
+
+## Current permission UI observations
+
+Computer Use opened macOS System Settings and inspected the actual permission switches:
+
+- Accessibility: Terminal, openkakao-cli and osascript were already enabled. No Alden row or pending approval button was present.
+- Microphone: the older display label `OpenKakao Jarvis.app` was enabled. The installed `/Applications/Alden.app` has bundle identifier `com.openkakao.alden.desktop`; the older label alone does not prove permission for this bundle.
+- Automation: osascript → System Events and python3.11 → System Events were enabled.
+
+No permission was newly granted. App inventory calls timed out, so these observations do not prove that no other app has a permission popup. Alden microphone operation remains unverified, and the wake-model release gate still blocks voice startup independently of permission state.
