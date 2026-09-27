@@ -39,6 +39,16 @@ The built app and `/Applications/Alden.app` compared with **zero differences**. 
 
 The Kakao host reported `healthy=true`, with **3/3** rooms ready, model available and workers idle. Its watchdog was on attempt **3**, with **2** cumulative restarts and last child exit code **1**. The cause of the earlier exits was not established by this readback; this is not evidence of zero-restart stability. No test message was sent. The installed app's Computer Use screen-read attempt still timed out, so this receipt does not verify its rendered UI, microphone or physical shortcut.
 
+## Main-process resource observation at 22:52 KST
+
+The installed Alden main process, PID 73818, was sampled five times over **20.01494325 s**. Its cumulative CPU counters did not advance during that interval, yielding **0.0 s** observed CPU time and **0.0% of one logical core**. Its physical footprint stayed at **27.689 MiB**; resident size stayed at **99.625 MiB**. These describe the main process only: WebKit, Chromium, MLX and other processes are excluded, and window visibility was not observed. This is neither a before/after memory saving nor a GPU/battery measurement.
+
+The sampler used `proc_pid_rusage(RUSAGE_INFO_V0)` with the installed Xcode SDK structure layout. On this Apple Silicon host, treating native CPU counters as nanoseconds directly failed a POSIX `getrusage` crosscheck. Multiplication by `mach_timebase_info` **125/3** made the native/POSIX CPU-duration ratio **1.0002536** (about **0.0254%** difference). The reported CPU percentage is **100 × ΔCPU_ticks × (125/3) / Δwall_nanoseconds**. The [raw resource receipt](alden-main-resource-sample-20260927.json) preserves the counters and measurement boundaries.
+
+## Emergency-stop coverage still required
+
+Current source registers **⌘⌥⇧Esc** and `PythonBridge.global_abort()` writes `alden-abort.json` while cancelling app-owned bridge jobs. Voice and the standalone browser/AX tool runtime read this latch. A source scan of the Kakao worker, supervisor and DB watcher found no corresponding latch reader; the existing background Kakao reply host is outside that app-owned cancellation registry. Thus the source does not yet establish that this shortcut stops every Kakao/GeekNews write path. A further scan found the Python `resume_after_human_action()` helper but no desktop bridge command or UI control that exposes it; render-loop lifecycle resumes are unrelated to this emergency latch. That broader stop integration, explicit operator resume path and physical shortcut verification remain required; no live abort or test send was performed during this audit.
+
 ## Current permission UI observations
 
 Computer Use opened macOS System Settings and inspected the actual permission switches:
