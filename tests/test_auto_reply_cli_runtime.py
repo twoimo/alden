@@ -11499,6 +11499,169 @@ print(json.dumps({
         )
         self.assertTrue(analysis["provenance"]["context_sync"]["degraded"])
 
+    def test_recent_only_timeout_compensates_verified_ingress_and_settle(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_recent_only_ingress_budget_test"
+        )
+        module.BIN = Path(__file__)
+        sent_at = 1_700_000_000
+        queue_created_at = sent_at + 160.0
+        analysis_now = (
+            queue_created_at
+            + 15.926
+            + module.CONTEXT_BUNDLE_TIMEOUT_SECONDS
+        )
+        prior = self._burst_event(
+            module,
+            700,
+            "앞에서 나눈 얘기",
+            sent_at - 10,
+            author="MOM",
+        )
+        event = self._burst_event(
+            module,
+            701,
+            "오늘 일정 그대로 진행해",
+            sent_at,
+            author="MOM",
+            recent=[self._recent_row(prior)],
+        )
+        event["recent_messages"].append(self._recent_row(event))
+        module._attach_verified_queue_created_at(
+            event,
+            queue_created_at,
+            now=analysis_now,
+        )
+        timeout = subprocess.TimeoutExpired(
+            [str(module.BIN), "context-reply-bundle"],
+            module.CONTEXT_BUNDLE_TIMEOUT_SECONDS,
+        )
+        with (
+            mock.patch.object(module, "_reply_turn_hold_reason", return_value=None),
+            mock.patch.object(
+                module, "conversation_advanced_past_event", return_value=False
+            ),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch.object(module, "runner_is_trusted", return_value=True),
+            mock.patch.object(module, "record_learned_style_tells"),
+            mock.patch.object(module, "fetch_link_previews", return_value=[]),
+            mock.patch.object(module, "_partner_streak_hold_reason", return_value=None),
+            mock.patch.object(module, "_active_journal_checkpoint"),
+            mock.patch.object(module, "_run_bounded_process", side_effect=timeout),
+            mock.patch.object(module.time, "time", return_value=analysis_now),
+            mock.patch.object(
+                module,
+                "generate_reply",
+                return_value={
+                    "should_reply": False,
+                    "reply": "",
+                    "reason": "model_no_reply",
+                    "category": "uncertain",
+                },
+            ) as generate,
+        ):
+            analysis = module.analyze_event(event)
+
+        expected_upper = (
+            160.0
+            + module.BURST_SETTLE_SECONDS
+            + module.CONTEXT_BUNDLE_TIMEOUT_SECONDS
+            + module.RECENT_ONLY_TIMEOUT_BASE_WINDOW_SECONDS
+        )
+        self.assertEqual(expected_upper, 185.0)
+        self.assertLess(analysis_now - sent_at, expected_upper)
+        self.assertEqual(
+            module.response_delay_distribution(analysis["response_time"])[
+                "global_upper_seconds"
+            ],
+            expected_upper,
+        )
+        self.assertEqual(analysis["reason"], "model_no_reply")
+        generate.assert_called_once()
+
+    def test_recent_only_timeout_missing_or_stale_ingress_proof_stays_closed(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_recent_only_ingress_closed_test"
+        )
+        module.BIN = Path(__file__)
+        sent_at = 1_700_000_000
+        timeout = subprocess.TimeoutExpired(
+            [str(module.BIN), "context-reply-bundle"],
+            module.CONTEXT_BUNDLE_TIMEOUT_SECONDS,
+        )
+
+        for label, queue_created_at, analysis_now in (
+            ("missing", None, sent_at + 177.926),
+            (
+                "stale",
+                sent_at + module.RECENT_ONLY_TIMEOUT_MAX_INGRESS_LAG_SECONDS + 1.0,
+                sent_at
+                + module.RECENT_ONLY_TIMEOUT_MAX_INGRESS_LAG_SECONDS
+                + 1.0
+                + module.BURST_SETTLE_SECONDS
+                + module.CONTEXT_BUNDLE_TIMEOUT_SECONDS,
+            ),
+        ):
+            with self.subTest(label=label):
+                prior = self._burst_event(
+                    module,
+                    710,
+                    "앞에서 나눈 얘기",
+                    sent_at - 10,
+                    author="MOM",
+                )
+                event = self._burst_event(
+                    module,
+                    711,
+                    "오늘 일정 그대로 진행해",
+                    sent_at,
+                    author="MOM",
+                    recent=[self._recent_row(prior)],
+                )
+                event["recent_messages"].append(self._recent_row(event))
+                if queue_created_at is not None:
+                    module._attach_verified_queue_created_at(
+                        event,
+                        queue_created_at,
+                        now=analysis_now,
+                    )
+                self.assertNotIn(module._QUEUE_CREATED_AT_PROOF_KEY, event)
+                with (
+                    mock.patch.object(
+                        module, "_reply_turn_hold_reason", return_value=None
+                    ),
+                    mock.patch.object(
+                        module,
+                        "conversation_advanced_past_event",
+                        return_value=False,
+                    ),
+                    mock.patch.object(
+                        module, "privacy_attestation_current", return_value=True
+                    ),
+                    mock.patch.object(module, "runner_is_trusted", return_value=True),
+                    mock.patch.object(module, "record_learned_style_tells"),
+                    mock.patch.object(module, "fetch_link_previews", return_value=[]),
+                    mock.patch.object(
+                        module, "_partner_streak_hold_reason", return_value=None
+                    ),
+                    mock.patch.object(module, "_active_journal_checkpoint"),
+                    mock.patch.object(
+                        module, "_run_bounded_process", side_effect=timeout
+                    ),
+                    mock.patch.object(module.time, "time", return_value=analysis_now),
+                    mock.patch.object(module, "generate_reply") as generate,
+                ):
+                    analysis = module.analyze_event(event)
+
+                self.assertEqual(analysis["reason"], "stale_backlog")
+                self.assertEqual(
+                    module.response_delay_distribution(analysis["response_time"])[
+                        "global_upper_seconds"
+                    ],
+                    module.RECENT_ONLY_TIMEOUT_BASE_WINDOW_SECONDS,
+                )
+                generate.assert_not_called()
+
     def test_analyze_event_fails_closed_when_retrieval_fails(self):
         module = self._load_auto_reply_module("auto_reply_retrieval_fallback_test")
         now = int(time.time())

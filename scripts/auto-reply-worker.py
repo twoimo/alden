@@ -491,6 +491,9 @@ STYLE_TELL_TARGET_MAX = 80
 _LEARNED_TELLS_CACHE: tuple[float, tuple[str, ...]] = (0.0, ())
 CONTEXT_SYNC_TIMEOUT_SECONDS = 90.0
 CONTEXT_BUNDLE_TIMEOUT_SECONDS = 2.0
+RECENT_ONLY_TIMEOUT_BASE_WINDOW_SECONDS = 8.0
+RECENT_ONLY_TIMEOUT_MAX_INGRESS_LAG_SECONDS = 180.0
+_QUEUE_CREATED_AT_PROOF_KEY = "_verified_queue_created_at"
 RERANK_HELPER = Path(__file__).with_name("auto-reply-rerank.py")
 RERANK_TIMEOUT_SECONDS = 0.4
 RERANK_SPAWN_GREETING_SECONDS = 90.0
@@ -8018,6 +8021,73 @@ def record_delivery_ledger(
     return EVIDENCE_LEDGER
 
 
+def _attach_verified_queue_created_at(
+    event: dict,
+    created_at: object,
+    *,
+    now: float | None = None,
+) -> None:
+    """Attach bounded queue-ingress timing proof for this processing attempt."""
+    event.pop(_QUEUE_CREATED_AT_PROOF_KEY, None)
+    if event.get("proactive") is True:
+        return
+    sent_at = _fence_int(event.get("sent_at"))
+    if sent_at is None or isinstance(created_at, bool):
+        return
+    current = time.time() if now is None else now
+    if isinstance(current, bool):
+        return
+    try:
+        created = float(created_at)
+        current_value = float(current)
+    except (TypeError, ValueError, OverflowError):
+        return
+    if (
+        not math.isfinite(created)
+        or not math.isfinite(current_value)
+        or created <= 0.0
+        or current_value <= 0.0
+        or created < float(sent_at)
+        or created > current_value + 5.0
+    ):
+        return
+    ingress_lag = created - float(sent_at)
+    if ingress_lag > RECENT_ONLY_TIMEOUT_MAX_INGRESS_LAG_SECONDS:
+        return
+    event[_QUEUE_CREATED_AT_PROOF_KEY] = created
+
+
+def _recent_only_timeout_response_window(event: dict) -> float:
+    """Return the timeout window only when queue ingress timing is proven."""
+    base = RECENT_ONLY_TIMEOUT_BASE_WINDOW_SECONDS
+    if event.get("proactive") is True:
+        return base
+    sent_at = _fence_int(event.get("sent_at"))
+    proof = event.get(_QUEUE_CREATED_AT_PROOF_KEY)
+    if sent_at is None or isinstance(proof, bool):
+        return base
+    try:
+        created = float(proof)
+    except (TypeError, ValueError, OverflowError):
+        return base
+    ingress_lag = created - float(sent_at)
+    if (
+        not math.isfinite(created)
+        or not math.isfinite(ingress_lag)
+        or not 0.0 <= ingress_lag <= RECENT_ONLY_TIMEOUT_MAX_INGRESS_LAG_SECONDS
+    ):
+        return base
+    upper = (
+        ingress_lag
+        + BURST_SETTLE_SECONDS
+        + CONTEXT_BUNDLE_TIMEOUT_SECONDS
+        + base
+    )
+    if not math.isfinite(upper) or upper > MAX_RESPONSE_TIMING_SECONDS:
+        return base
+    return max(base, upper)
+
+
 @perf.timed("auto_reply.context_bundle")
 def run_context_reply_bundle(message: str, event: dict) -> dict:
     if not BIN.exists():
@@ -8082,6 +8152,7 @@ def run_context_reply_bundle(message: str, event: dict) -> dict:
     except RetrievalError as exc:
         if not isinstance(exc.__cause__, subprocess.TimeoutExpired):
             raise
+        response_window = _recent_only_timeout_response_window(event)
         if isinstance(event.get("provenance"), dict):
             event["provenance"]["context_sync"] = {
                 "mode": "recent_only",
@@ -8103,10 +8174,10 @@ def run_context_reply_bundle(message: str, event: dict) -> dict:
                 "sample_count": 0,
                 "average_seconds": 4.0,
                 "median_seconds": 4.0,
-                "p90_seconds": 8.0,
+                "p90_seconds": response_window,
                 "min_seconds": MIN_REPLY_DELAY_SECONDS,
-                "max_seconds": 8.0,
-                "max_window_seconds": 8,
+                "max_seconds": response_window,
+                "max_window_seconds": response_window,
                 "stddev_seconds": 1.0,
                 "distribution": None,
             },
@@ -15427,6 +15498,7 @@ def process_job(
 ) -> None:
     event_id = str(job["event_id"])
     event = json.loads(str(job["event_json"]))
+    event.pop(_QUEUE_CREATED_AT_PROOF_KEY, None)
     # A supersession is a local, no-send audit projection.  Complete it even
     # when a later owner/epoch or privacy gate no longer authorizes delivery;
     # otherwise a restart could overwrite the durable burst reason with
@@ -15931,6 +16003,10 @@ def process_job(
     analysis_event = event if event.get("proactive") is True else _coalesced_burst_event(event)
     if event.get("proactive") is not True:
         analysis_event = dict(analysis_event)
+        _attach_verified_queue_created_at(
+            analysis_event,
+            job.get("created_at"),
+        )
         analysis_event["recent_sent_self"] = _recent_sent_self_turns_for_author(
             connection,
             analysis_event,
