@@ -12,6 +12,13 @@ export interface CancellationToken {
   cancelled: boolean;
 }
 
+export interface EmergencyState {
+  schemaVersion: 1;
+  epoch: number;
+  latched: boolean;
+  reason: string;
+}
+
 export type RoomReplyReadiness = "ready" | "blocked" | "unknown";
 
 export interface RoomSummary {
@@ -376,6 +383,27 @@ export function serializeJobEvent(event: JobEvent): string {
     time: event.time,
     errorCode: event.errorCode,
   });
+}
+
+export function parseEmergencyState(value: unknown): EmergencyState | null {
+  const input = record(value);
+  if (!input) return null;
+  const keys = Object.keys(input);
+  if (keys.length !== 4 || keys.some((key) => !["schemaVersion", "epoch", "latched", "reason"].includes(key))) {
+    return null;
+  }
+  if (input.schemaVersion !== 1) return null;
+  if (typeof input.epoch !== "number" || !Number.isSafeInteger(input.epoch) || input.epoch < 0) return null;
+  if (typeof input.latched !== "boolean" || typeof input.reason !== "string") return null;
+  if (Array.from(input.reason).length > 96 || /[\u0000-\u001f\u007f-\u009f]/u.test(input.reason)) return null;
+  if (input.latched && input.reason.length === 0) return null;
+  if (!input.latched && input.reason !== "human_resume" && !(input.epoch === 0 && input.reason === "")) return null;
+  return {
+    schemaVersion: 1,
+    epoch: input.epoch,
+    latched: input.latched,
+    reason: input.reason,
+  };
 }
 
 export function unavailableSnapshot(errorCode: string | null = "snapshot_unavailable"): RuntimeSnapshot {

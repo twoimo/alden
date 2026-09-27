@@ -1,5 +1,5 @@
 import { LAYOUT } from "./tokens";
-import type { RuntimeSnapshot } from "./contracts";
+import type { EmergencyState, RuntimeSnapshot } from "./contracts";
 
 export const MAIN_PANEL_CONTROLS = Object.freeze([] as const);
 
@@ -58,6 +58,10 @@ export function settingsMarkup(): string {
       <p class="eyebrow">카카오톡 · 내 컴퓨터에서 실행</p>
       <h1>올든 설정</h1>
       <p>대상 채팅방과 답변 상태를 확인합니다. 긴급 중단은 ⌘⌥⇧Esc를 누르세요.</p>
+      <div id="emergency-controls" class="emergency-controls" hidden>
+        <span id="emergency-status" role="status" aria-live="polite"></span>
+        <button id="emergency-resume" type="button" disabled></button>
+      </div>
     </header>
 
     <section class="settings-card" aria-labelledby="rooms-title">
@@ -120,6 +124,24 @@ export function settingsMarkup(): string {
       <div id="history-list" class="knowledge-relations" role="list" aria-label="최근 답변 기록"></div>
     </section>
   </main>`;
+}
+
+export function renderEmergencyState(state: EmergencyState, root: Document = document): void {
+  const controls = root.querySelector<HTMLElement>("#emergency-controls");
+  const status = root.querySelector<HTMLElement>("#emergency-status");
+  const button = root.querySelector<HTMLButtonElement>("#emergency-resume");
+  if (!controls || !status || !button) return;
+  if (!state.latched) {
+    controls.hidden = true;
+    status.textContent = "";
+    button.textContent = "";
+    button.disabled = true;
+    return;
+  }
+  status.textContent = "일시 중지됨";
+  button.textContent = "다시 시작";
+  button.disabled = false;
+  controls.hidden = false;
 }
 
 export function renderHistory(snapshot: RuntimeSnapshot, root: Document = document): void {

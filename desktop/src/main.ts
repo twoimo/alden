@@ -4,6 +4,7 @@ import {
   createCancellationToken,
   unavailableSnapshot,
   type CancellationToken,
+  type EmergencyState,
   type RuntimeSnapshot,
 } from "./contracts";
 import type { SourceLoads } from "./core/load-mapping";
@@ -28,12 +29,16 @@ import {
 import {
   cancelRuntimeRequest,
   cancelModelSwap,
+  fetchEmergencyState,
   fetchRuntimeSnapshot,
   fetchSettingsAction,
   normalizeLocalModelId,
+  operatorResume,
   selectResidentModel,
   setSwapModel,
+  subscribeEmergencyState,
   swapToLargeModel,
+  type EmergencyStateSubscriber,
   type SettingsInvoke,
 } from "./runtime";
 import {
@@ -43,7 +48,7 @@ import {
   type SnapshotCanceller,
   type SnapshotLoader,
 } from "./runtime-poller";
-import { mainPanelMarkup, renderBackground, renderHistory, renderRooms, settingsMarkup, voiceErrorMessage } from "./ui";
+import { mainPanelMarkup, renderBackground, renderEmergencyState, renderHistory, renderRooms, settingsMarkup, voiceErrorMessage } from "./ui";
 import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 import { wireVoiceStart } from "./voice-controls";
 
@@ -305,6 +310,56 @@ function renderSettingsUnavailable(): void {
   });
 }
 
+type EmergencyResumeAction = (explicitOptIn: boolean) => Promise<EmergencyState | null>;
+
+export function wireEmergencyResume(
+  resumeAction: EmergencyResumeAction,
+  root: Document = document,
+): { update: (state: EmergencyState) => void } {
+  const button = root.querySelector<HTMLButtonElement>("#emergency-resume");
+  let current: EmergencyState | null = null;
+  let busy = false;
+
+  const renderCurrent = (): void => {
+    if (current) renderEmergencyState(current, root);
+    if (button) button.disabled = busy || current?.latched !== true;
+  };
+  const update = (state: EmergencyState): void => {
+    if (current && state.epoch <= current.epoch) {
+      renderCurrent();
+      return;
+    }
+    current = state;
+    renderCurrent();
+  };
+
+  button?.addEventListener("click", async () => {
+    const before = current;
+    if (!before?.latched || busy) return;
+    busy = true;
+    renderCurrent();
+    let resumed: EmergencyState | null = null;
+    try {
+      resumed = await resumeAction(true);
+    } catch {
+      resumed = null;
+    }
+    busy = false;
+    if (
+      resumed
+      && resumed.epoch > before.epoch
+      && !resumed.latched
+      && resumed.reason === "human_resume"
+    ) {
+      update(resumed);
+      return;
+    }
+    renderCurrent();
+  });
+
+  return { update };
+}
+
 function relationLabel(relation: string): string {
   switch (relation.trim().toUpperCase().replace(/[\s-]+/g, "_")) {
     case "MENTIONS": return "언급";
@@ -441,6 +496,9 @@ async function setupKnowledgeGraph(
 interface SettingsBootDependencies {
   loadSnapshot: SnapshotLoader;
   loadAction: typeof fetchSettingsAction;
+  loadEmergency: typeof fetchEmergencyState;
+  resumeEmergency: EmergencyResumeAction;
+  subscribeEmergency: EmergencyStateSubscriber | null;
   wireVoice: typeof wireVoiceStart;
   invokeCommand: typeof invoke;
   subscribeVisibility: VisibilitySubscriber | null;
@@ -454,6 +512,9 @@ export async function bootSettings(
   const dependencies: SettingsBootDependencies = {
     loadSnapshot: fetchRuntimeSnapshot,
     loadAction: fetchSettingsAction,
+    loadEmergency: fetchEmergencyState,
+    resumeEmergency: operatorResume,
+    subscribeEmergency: subscribeEmergencyState,
     wireVoice: wireVoiceStart,
     invokeCommand: invoke,
     subscribeVisibility: tauriVisibilitySubscriber,
@@ -464,19 +525,34 @@ export async function bootSettings(
   app.dataset.state = "loading";
   let hologram: KnowledgeHologram | null = null;
   try {
+    const emergency = wireEmergencyResume(dependencies.resumeEmergency);
+    if (dependencies.subscribeEmergency) {
+      try {
+        const unsubscribe = await dependencies.subscribeEmergency(emergency.update);
+        window.addEventListener("pagehide", unsubscribe, { once: true });
+      } catch {
+        // Initial readback below remains authoritative when event subscription is unavailable.
+      }
+    }
     const token = createCancellationToken();
     const results = await Promise.allSettled([
       dependencies.loadSnapshot(token),
       dependencies.loadAction("knowledge-graph-status"),
       dependencies.loadAction("knowledge-graph"),
+      dependencies.loadEmergency(),
     ] as const);
-    const [snapshotResult, knowledgeResult, graphResult] = results;
+    const [snapshotResult, knowledgeResult, graphResult, emergencyResult] = results;
     const snapshot = snapshotResult.status === "fulfilled"
       ? snapshotResult.value
       : unavailableSnapshot("settings_snapshot_unavailable");
     const knowledge = knowledgeResult.status === "fulfilled" ? knowledgeResult.value : null;
     const graphPayload = graphResult.status === "fulfilled" ? graphResult.value : null;
-    const degraded = results.some((result) => result.status === "rejected") || !snapshot.available;
+    const degraded = [snapshotResult, knowledgeResult, graphResult]
+      .some((result) => result.status === "rejected") || !snapshot.available;
+
+    if (emergencyResult.status === "fulfilled" && emergencyResult.value) {
+      emergency.update(emergencyResult.value);
+    }
 
     renderRooms(snapshot);
     wireRoomAdd(dependencies.loadSnapshot, dependencies.loadAction);

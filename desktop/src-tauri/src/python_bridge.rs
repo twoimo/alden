@@ -5,10 +5,11 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +36,9 @@ const ABORT_STATE_NAME: &str = "alden-abort.json";
 const VOICE_STATUS_NAME: &str = "alden-voice-status.json";
 const VOICE_STATUS_MAX_AGE_SECS: u64 = 5 * 60;
 const STATE_FILE_LIMIT_BYTES: u64 = 4096;
+const ABORT_EPOCH_MAX: u64 = 9_007_199_254_740_991;
+const ABORT_LOCK_NAME: &str = "alden-abort.lock";
+const ABORT_LOCK_TIMEOUT: Duration = Duration::from_millis(250);
 const WAKE_PHRASE: &str = "올든";
 const WAKE_THRESHOLD: f64 = 0.65;
 const RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw";
@@ -222,6 +226,35 @@ pub struct SafeJobEvent {
     time: f64,
     #[serde(rename = "errorCode")]
     error_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SafeEmergencyState {
+    schema_version: u64,
+    epoch: u64,
+    latched: bool,
+    reason: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiskEmergencyState {
+    schema_version: u64,
+    epoch: u64,
+    latched: bool,
+    reason: String,
+}
+
+impl Default for SafeEmergencyState {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            epoch: 0,
+            latched: false,
+            reason: String::new(),
+        }
+    }
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -686,6 +719,7 @@ impl PythonBridge {
             if let Some(marker) = handle.cooperative_marker.as_deref() {
                 if write_model_swap_cancel_marker(marker).is_err() {
                     marker_failed = true;
+                    handle.flag.store(true, Ordering::SeqCst);
                 }
             } else if latch_result.is_ok() {
                 if let Some(global_abort_flag) = handle.global_abort_flag.as_ref() {
@@ -705,6 +739,43 @@ impl PythonBridge {
             return Err(BridgeError::StateIo);
         }
         Ok(())
+    }
+
+    pub fn emergency_state(&self) -> Result<SafeEmergencyState, BridgeError> {
+        read_global_abort_state(&self.config.state_root)
+    }
+
+    pub fn operator_resume(
+        &self,
+        explicit_opt_in: bool,
+    ) -> Result<SafeEmergencyState, BridgeError> {
+        if !explicit_opt_in {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        let _map = self
+            .cancellations
+            .lock()
+            .map_err(|_| BridgeError::StateIo)?;
+        let _state_lock = lock_global_abort(&self.config.state_root)?;
+        let current = read_global_abort_state(&self.config.state_root)?;
+        if !current.latched {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        let next = SafeEmergencyState {
+            schema_version: 1,
+            epoch: current
+                .epoch
+                .checked_add(1)
+                .filter(|epoch| *epoch <= ABORT_EPOCH_MAX)
+                .ok_or(BridgeError::StateIo)?,
+            latched: false,
+            reason: "human_resume".to_string(),
+        };
+        write_global_abort_state(&self.config.state_root, &next)?;
+        if read_global_abort_state(&self.config.state_root)? != next {
+            return Err(BridgeError::StateIo);
+        }
+        Ok(next)
     }
 
     pub fn start_voice_session(&self) -> Result<(), BridgeError> {
@@ -781,7 +852,7 @@ impl PythonBridge {
                     return Err(BridgeError::ActionNotAllowed);
                 }
                 if let Some(flag) = global_abort_flag.as_ref() {
-                    if global_abort_is_latched(&self.config.state_root) {
+                    if global_abort_is_latched(&self.config.state_root)? {
                         // The child still starts so Python can return its fixed
                         // aborted envelope; Rust enforces the hard deadline.
                         flag.store(true, Ordering::SeqCst);
@@ -1010,6 +1081,7 @@ fn run_process(
     )
 }
 
+#[cfg(test)]
 fn run_process_with_recovery(
     executable: &str,
     args: &[String],
@@ -1852,10 +1924,72 @@ fn safe_small_json(path: &Path) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn global_abort_is_latched(state_root: &Path) -> bool {
-    safe_small_json(&state_root.join(ABORT_STATE_NAME))
-        .and_then(|value| value.get("latched").and_then(Value::as_bool))
-        .unwrap_or(false)
+fn read_global_abort_state(state_root: &Path) -> Result<SafeEmergencyState, BridgeError> {
+    match fs::symlink_metadata(state_root) {
+        Ok(metadata) if !private_abort_root(&metadata) => return Err(BridgeError::StateIo),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SafeEmergencyState::default())
+        }
+        Err(_) => return Err(BridgeError::StateIo),
+    }
+    let path = state_root.join(ABORT_STATE_NAME);
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SafeEmergencyState::default())
+        }
+        Err(_) => return Err(BridgeError::StateIo),
+    };
+    let metadata = file.metadata().map_err(|_| BridgeError::StateIo)?;
+    if !metadata.is_file()
+        || metadata.len() > STATE_FILE_LIMIT_BYTES
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
+    {
+        return Err(BridgeError::StateIo);
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(STATE_FILE_LIMIT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| BridgeError::StateIo)?;
+    if bytes.len() as u64 > STATE_FILE_LIMIT_BYTES {
+        return Err(BridgeError::StateIo);
+    }
+    // Struct deserialization rejects duplicate, missing and extra fields.
+    let value: DiskEmergencyState =
+        serde_json::from_slice(&bytes).map_err(|_| BridgeError::StateIo)?;
+    if value.schema_version != 1 {
+        return Err(BridgeError::StateIo);
+    }
+    let epoch = value.epoch;
+    if epoch > ABORT_EPOCH_MAX {
+        return Err(BridgeError::StateIo);
+    }
+    let latched = value.latched;
+    let reason = value.reason;
+    if reason.chars().count() > 96
+        || reason.chars().any(char::is_control)
+        || (latched && reason.is_empty())
+        || (!latched && reason != "human_resume" && !(epoch == 0 && reason.is_empty()))
+    {
+        return Err(BridgeError::StateIo);
+    }
+    Ok(SafeEmergencyState {
+        schema_version: 1,
+        epoch,
+        latched,
+        reason,
+    })
+}
+
+fn global_abort_is_latched(state_root: &Path) -> Result<bool, BridgeError> {
+    read_global_abort_state(state_root).map(|state| state.latched)
 }
 
 fn default_voice_status(_repo_root: &Path) -> SafeVoiceStatus {
@@ -1926,37 +2060,130 @@ fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
 }
 
 fn write_global_abort(state_root: &Path) -> Result<(), BridgeError> {
-    fs::create_dir_all(state_root).map_err(|_| BridgeError::StateIo)?;
-    let path = state_root.join(ABORT_STATE_NAME);
-    if fs::symlink_metadata(&path)
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
+    let _state_lock = lock_global_abort(state_root)?;
+    let current = read_global_abort_state(state_root)?;
+    let next = SafeEmergencyState {
+        schema_version: 1,
+        epoch: current
+            .epoch
+            .checked_add(1)
+            .filter(|epoch| *epoch <= ABORT_EPOCH_MAX)
+            .ok_or(BridgeError::StateIo)?,
+        latched: true,
+        reason: "global_abort".to_string(),
+    };
+    write_global_abort_state(state_root, &next)?;
+    if read_global_abort_state(state_root)? != next {
+        return Err(BridgeError::StateIo);
+    }
+    Ok(())
+}
+
+fn private_abort_root(metadata: &fs::Metadata) -> bool {
+    metadata.is_dir()
+        && !metadata.file_type().is_symlink()
+        && metadata.uid() == unsafe { libc::geteuid() }
+        && metadata.mode() & 0o777 == 0o700
+}
+
+fn lock_global_abort(state_root: &Path) -> Result<File, BridgeError> {
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(state_root)
+        .map_err(|_| BridgeError::StateIo)?;
+    if !private_abort_root(&fs::symlink_metadata(state_root).map_err(|_| BridgeError::StateIo)?) {
+        return Err(BridgeError::StateIo);
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(state_root.join(ABORT_LOCK_NAME))
+        .map_err(|_| BridgeError::StateIo)?;
+    let metadata = file.metadata().map_err(|_| BridgeError::StateIo)?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
     {
         return Err(BridgeError::StateIo);
     }
-    let epoch = safe_small_json(&path)
-        .and_then(|value| value.get("epoch").and_then(Value::as_u64))
-        .unwrap_or(0)
-        .saturating_add(1);
-    let payload = json!({
-        "schema_version": 1,
-        "epoch": epoch,
-        "latched": true,
-        "reason": "global_abort"
-    });
-    let temp = state_root.join(format!(".{ABORT_STATE_NAME}.{}.tmp", std::process::id()));
+    let deadline = Instant::now() + ABORT_LOCK_TIMEOUT;
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(file); // Closing this descriptor releases the flock.
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ) || Instant::now() >= deadline
+        {
+            return Err(BridgeError::StateIo);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn write_global_abort_state(
+    state_root: &Path,
+    state: &SafeEmergencyState,
+) -> Result<(), BridgeError> {
+    fs::create_dir_all(state_root).map_err(|_| BridgeError::StateIo)?;
+    let root_metadata = fs::symlink_metadata(state_root).map_err(|_| BridgeError::StateIo)?;
+    if !private_abort_root(&root_metadata) {
+        return Err(BridgeError::StateIo);
+    }
+    let path = state_root.join(ABORT_STATE_NAME);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            read_global_abort_state(state_root)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(BridgeError::StateIo),
+    }
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| BridgeError::StateIo)?
+        .as_nanos();
+    let temp = state_root.join(format!(
+        ".{ABORT_STATE_NAME}.{}.{}.tmp",
+        std::process::id(),
+        unique
+    ));
     let mut file = OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&temp)
         .map_err(|_| BridgeError::StateIo)?;
-    serde_json::to_writer(&mut file, &payload).map_err(|_| BridgeError::StateIo)?;
-    file.flush().map_err(|_| BridgeError::StateIo)?;
-    file.sync_all().map_err(|_| BridgeError::StateIo)?;
-    fs::rename(&temp, &path).map_err(|_| BridgeError::StateIo)?;
-    Ok(())
+    let result = (|| {
+        let payload = json!({
+            "schema_version": 1,
+            "epoch": state.epoch,
+            "latched": state.latched,
+            "reason": state.reason,
+        });
+        serde_json::to_writer(&mut file, &payload).map_err(|_| BridgeError::StateIo)?;
+        file.flush().map_err(|_| BridgeError::StateIo)?;
+        file.sync_all().map_err(|_| BridgeError::StateIo)?;
+        let metadata = file.metadata().map_err(|_| BridgeError::StateIo)?;
+        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o777 != 0o600 {
+            return Err(BridgeError::StateIo);
+        }
+        drop(file);
+        fs::rename(&temp, &path).map_err(|_| BridgeError::StateIo)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 fn write_model_swap_cancel_marker(path: &Path) -> Result<(), BridgeError> {
@@ -2896,25 +3123,14 @@ mod tests {
             fs::set_permissions(python, fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        let normal = select_python_runtime(
-            &menubar_python,
-            &browser_python,
-            &browsers,
-            true,
-            false,
-        )
-        .unwrap();
+        let normal =
+            select_python_runtime(&menubar_python, &browser_python, &browsers, true, false)
+                .unwrap();
         assert_eq!(normal.executable, menubar_python.to_string_lossy());
         assert!(normal.env.is_empty());
 
-        let browser = select_python_runtime(
-            &menubar_python,
-            &browser_python,
-            &browsers,
-            true,
-            true,
-        )
-        .unwrap();
+        let browser =
+            select_python_runtime(&menubar_python, &browser_python, &browsers, true, true).unwrap();
         assert_eq!(browser.executable, browser_python.to_string_lossy());
         let env = browser.env.into_iter().collect::<HashMap<_, _>>();
         assert_eq!(
@@ -4757,6 +4973,174 @@ mod tests {
             value.get("reason").and_then(Value::as_str),
             Some("global_abort")
         );
+        let metadata = fs::metadata(temp.join(ABORT_STATE_NAME)).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    fn bridge_with_state_root(state_root: PathBuf) -> PythonBridge {
+        let mut config = BridgeConfig::discover();
+        config.state_root = state_root;
+        PythonBridge {
+            config: Arc::new(config),
+            cancellations: Arc::new(Mutex::new(HashMap::new())),
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[test]
+    fn operator_resume_requires_opt_in_increments_epoch_and_keeps_old_token_cancelled() {
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-resume-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        let bridge = bridge_with_state_root(temp.clone());
+        let old_cancel = Arc::new(AtomicBool::new(false));
+        bridge.cancellations.lock().unwrap().insert(
+            "old-job".to_string(),
+            CancellationHandle {
+                flag: old_cancel.clone(),
+                cooperative_marker: None,
+                global_abort_flag: None,
+            },
+        );
+
+        bridge.global_abort().unwrap();
+        assert!(old_cancel.load(Ordering::SeqCst));
+        let latched = bridge.emergency_state().unwrap();
+        assert_eq!(latched.epoch, 1);
+        assert!(latched.latched);
+        assert!(matches!(
+            bridge.operator_resume(false),
+            Err(BridgeError::ActionNotAllowed)
+        ));
+
+        let resumed = bridge.operator_resume(true).unwrap();
+        assert_eq!(resumed.epoch, 2);
+        assert!(!resumed.latched);
+        assert_eq!(resumed.reason, "human_resume");
+        assert!(old_cancel.load(Ordering::SeqCst));
+        assert!(!global_abort_is_latched(&temp).unwrap());
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn corrupt_abort_state_is_rejected_and_not_overwritten_by_resume() {
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-corrupt-resume-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = temp.join(ABORT_STATE_NAME);
+        fs::write(&path, b"{bad").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let bridge = bridge_with_state_root(temp.clone());
+
+        assert!(matches!(
+            bridge.emergency_state(),
+            Err(BridgeError::StateIo)
+        ));
+        assert!(matches!(
+            bridge.operator_resume(true),
+            Err(BridgeError::StateIo)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"{bad");
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn abort_reader_checks_duplicate_fields_custom_reason_hardlinks_and_fifo() {
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-strict-abort-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        write_global_abort(&temp).unwrap();
+        let path = temp.join(ABORT_STATE_NAME);
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"epoch":1,"latched":true,"reason":"operator stop"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_global_abort_state(&temp).unwrap().reason,
+            "operator stop"
+        );
+        let bridge = bridge_with_state_root(temp.clone());
+        assert_eq!(bridge.operator_resume(true).unwrap().epoch, 2);
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"epoch":1,"epoch":2,"latched":true,"reason":"stop"}"#,
+        )
+        .unwrap();
+        assert!(read_global_abort_state(&temp).is_err());
+        write_private_test_json(
+            &path,
+            &json!({"schema_version":1,"epoch":2,"latched":true,"reason":"stop"}),
+        );
+        fs::hard_link(&path, temp.join("linked")).unwrap();
+        assert!(read_global_abort_state(&temp).is_err());
+        fs::remove_file(&path).unwrap();
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        let started = Instant::now();
+        assert!(read_global_abort_state(&temp).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    fn write_private_test_json(path: &Path, value: &Value) {
+        fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn abort_writers_share_python_flock_and_refuse_busy_or_unsafe_lock() {
+        let temp = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "openkakao-python-abort-lock-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp);
+        write_global_abort(&temp).unwrap();
+        let state_before = fs::read(temp.join(ABORT_STATE_NAME)).unwrap();
+        let held = lock_global_abort(&temp).unwrap();
+        assert!(write_global_abort(&temp).is_err());
+        let scripts = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("scripts");
+        let output = Command::new("python3").args(["-E", "-B", "-s", "-c"])
+            .arg("import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from alden_abort import AbortController,AbortStateError\ntry: AbortController(Path(sys.argv[2])).abort('python stop')\nexcept AbortStateError as e: assert 'lock_timeout' in str(e); print('locked')\nelse: raise SystemExit('lock ignored')")
+            .arg(&scripts).arg(&temp).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "locked");
+        assert_eq!(fs::read(temp.join(ABORT_STATE_NAME)).unwrap(), state_before);
+        drop(held);
+        let output = Command::new("python3").args(["-E", "-B", "-s", "-c"])
+            .arg("import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from alden_abort import AbortController; print(AbortController(Path(sys.argv[2])).abort('python stop').epoch)")
+            .arg(&scripts).arg(&temp).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(read_global_abort_state(&temp).unwrap().epoch, 2);
+        let bridge = bridge_with_state_root(temp.clone());
+        assert_eq!(bridge.operator_resume(true).unwrap().epoch, 3);
+        let lock_path = temp.join(ABORT_LOCK_NAME);
+        fs::remove_file(&lock_path).unwrap();
+        let cpath = std::ffi::CString::new(lock_path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        assert!(write_global_abort(&temp).is_err());
         let _ = fs::remove_dir_all(&temp);
     }
 

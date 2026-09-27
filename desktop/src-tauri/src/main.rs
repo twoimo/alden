@@ -1,7 +1,7 @@
 mod python_bridge;
 mod resource_layout;
 
-use python_bridge::{PythonBridge, SafeBrowserToolResult, SafeRuntimeSnapshot};
+use python_bridge::{PythonBridge, SafeBrowserToolResult, SafeEmergencyState, SafeRuntimeSnapshot};
 use serde_json::Value;
 use tauri::image::Image;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -10,6 +10,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 const PANEL_WIDTH: f64 = 276.0;
 const VISIBILITY_EVENT: &str = "alden://visibility";
+const EMERGENCY_EVENT: &str = "alden://emergency-state";
 
 /// Payload for the window visibility event: one boolean, never content.
 fn visibility_payload(visible: bool) -> Value {
@@ -67,6 +68,29 @@ async fn fetch_runtime_snapshot(
     tauri::async_runtime::spawn_blocking(move || bridge.fetch_snapshot(token_id.as_deref()))
         .await
         .map_err(|_| "snapshot_worker_failed".to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn fetch_emergency_state(
+    bridge: tauri::State<'_, PythonBridge>,
+) -> Result<SafeEmergencyState, String> {
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || bridge.emergency_state())
+        .await
+        .map_err(|_| "emergency_state_worker_failed".to_string())?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn operator_resume(
+    bridge: tauri::State<'_, PythonBridge>,
+    explicit_opt_in: bool,
+) -> Result<SafeEmergencyState, String> {
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || bridge.operator_resume(explicit_opt_in))
+        .await
+        .map_err(|_| "operator_resume_worker_failed".to_string())?
         .map_err(|error| error.to_string())
 }
 
@@ -219,13 +243,19 @@ fn main() {
                     let expected = global_abort_shortcut();
                     if shortcut == &expected && event.state() == ShortcutState::Pressed {
                         let bridge = app.state::<PythonBridge>();
-                        let _ = bridge.global_abort();
+                        if bridge.global_abort().is_ok() {
+                            if let Ok(state) = bridge.emergency_state() {
+                                let _ = app.emit(EMERGENCY_EVENT, state);
+                            }
+                        }
                     }
                 })
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
             fetch_runtime_snapshot,
+            fetch_emergency_state,
+            operator_resume,
             fetch_settings_action,
             run_browser_tool,
             cancel_python,

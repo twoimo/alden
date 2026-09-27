@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CancellationToken, RuntimeSnapshot } from "./contracts";
-import { parseRuntimeSnapshot, unavailableSnapshot } from "./contracts";
+import { listen } from "@tauri-apps/api/event";
+import type { CancellationToken, EmergencyState, RuntimeSnapshot } from "./contracts";
+import { parseEmergencyState, parseRuntimeSnapshot, unavailableSnapshot } from "./contracts";
 import { LEGACY_RESIDENT_MODEL_ID, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 
 type SettingsAction =
@@ -27,6 +28,35 @@ export async function fetchRuntimeSnapshot(token: CancellationToken): Promise<Ru
     return unavailableSnapshot("snapshot_unavailable");
   }
 }
+
+export async function fetchEmergencyState(): Promise<EmergencyState | null> {
+  try {
+    return parseEmergencyState(await invoke<unknown>("fetch_emergency_state"));
+  } catch {
+    return null;
+  }
+}
+
+export async function operatorResume(explicitOptIn: boolean): Promise<EmergencyState | null> {
+  try {
+    return parseEmergencyState(await invoke<unknown>("operator_resume", { explicitOptIn }));
+  } catch {
+    return null;
+  }
+}
+
+export const EMERGENCY_STATE_EVENT = "alden://emergency-state";
+export type EmergencyStateSubscriber = (
+  handler: (state: EmergencyState) => void,
+) => Promise<() => void>;
+
+export const subscribeEmergencyState: EmergencyStateSubscriber = async (handler) => {
+  const unlisten = await listen<unknown>(EMERGENCY_STATE_EVENT, (event) => {
+    const state = parseEmergencyState(event.payload);
+    if (state) handler(state);
+  });
+  return () => unlisten();
+};
 
 export async function cancelRuntimeRequest(token: CancellationToken): Promise<void> {
   if (token.cancelled) return;
