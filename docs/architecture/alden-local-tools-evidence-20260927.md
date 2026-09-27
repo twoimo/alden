@@ -19,7 +19,7 @@ The final source passed **85/85** focused browser, tool-runtime and unit3 checks
 
 Parent actual rechecks on the final source returned **2/2 exact-field matches** against independent Playwright DOM reads: `Example Domain` and `Tauri (software framework)`. In the final example.com run the LLM itself still returned the wrong `example.com`; the DOM-derived value corrected the product result. Both outputs included the actual URL and extraction source in their Python evidence sidecars. Total times including separate DOM probes were **33.872 s** and **47.307 s**. These two cases do not establish general web factual accuracy or a latency improvement. The [live receipt](alden-browser-grounding-live-20260927.json) binds both cases to source SHA-256 `2f272249857cf3f393a158a411e3435346a619d0cb04e0a9007f3d488015fd7e`.
 
-The installed menu-app CPython 3.11.9 runtime currently lacks both `browser_use` and `playwright`. The Rust desktop browser command uses that menubar interpreter. Therefore direct `BrowserUseRunner` success in `browser/.venv` does **not** establish an operational installed desktop browser command. A dedicated installed browser runtime and desktop routing remain required. The Python evidence sidecar is not yet propagated through the desktop bridge's plain-string tool result.
+The installed menu-app CPython 3.11.9 runtime currently lacks both `browser_use` and `playwright`. The Rust desktop browser command uses that menubar interpreter. An actual invocation of the installed `auto-reply-menubar.py --action tool-browser` returned valid JSON with `ok=false`, `status=failed`, and `errorCode=browser_job_failed`. Therefore direct `BrowserUseRunner` success in `browser/.venv` does **not** establish an operational installed desktop browser command. A dedicated installed browser runtime and desktop routing remain required. The Python evidence sidecar is not yet propagated through the desktop bridge's plain-string tool result.
 
 ## Exact background AX source
 
@@ -30,6 +30,14 @@ The production CLI in `scripts/alden_tool_runtime.py` now resolves a target by e
 The exact runtime reads the same enrollment-selected state root as Tauri: `auto-reply` when enrolled, otherwise the enrolled legacy `bujamentor` root. The global abort latch is checked before resolving and before/after action. A timeout, unexpected post-press result, or abort after pressing yields **`ax_action_effect_unknown`**, not a claim that nothing happened. The caller must read back the target before retrying. No automatic retry or durable AX idempotency ledger is implemented.
 
 Parent verification on the installed CPython 3.11 voice runtime: **59/59** focused tool-runtime and unit3 tests passed, with no skips. Generated resolve and press AppleScripts compiled successfully in a prior parent check; compilation did not execute them. Tests use fake AX adapters. **No real AXPress action was performed.** The standalone CLI is implemented, but a desktop bridge/UI invocation and installed-bundle deployment of these changes remain unverified.
+
+## Local deployment readback at approximately 22:33 KST
+
+The app was rebuilt from committed source `62b2749` and installed with the existing reviewed installer. The local bundle has an ad-hoc signature, not Developer ID signing or Apple notarization. `codesign --verify --deep --strict` passed before installation. The installer retained the recovery directory `~/Library/Application Support/openkakao/install-backups/alden-desktop/20260927T223221-73679`.
+
+The built app and `/Applications/Alden.app` compared with **zero differences**. The installed Browser-Use, exact AX runtime, AX adapter and voice files each matched their source SHA-256. LaunchAgent readback reported one Alden process, PID **73818**, running from the installed app. This ships the corrected source and standalone AX CLI; it does not fill the missing browser dependency/runtime connection or add a desktop AX caller.
+
+The Kakao host reported `healthy=true`, with **3/3** rooms ready, model available and workers idle. Its watchdog was on attempt **3**, with **2** cumulative restarts and last child exit code **1**. The cause of the earlier exits was not established by this readback; this is not evidence of zero-restart stability. No test message was sent. The installed app's Computer Use screen-read attempt still timed out, so this receipt does not verify its rendered UI, microphone or physical shortcut.
 
 ## Current permission UI observations
 
