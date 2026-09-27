@@ -46,3 +46,11 @@ The downloaded wheelhouse contains **110 wheels**, **98,209,110 bytes**. All dow
 ## Local provisioning readback
 
 The parent provisioned the previously absent fixed runtime without overwriting the menubar or voice directories. The new runtime readiness probe returned `ready=true`, both exact package versions, `chromium_installed=true`, and adapter binding `browser`. This verifies installed dependency/binding readiness. An actual installed-app browser job and the Rust routing deployment remain separate checks.
+
+## Installed backend check at approximately 23:24 KST
+
+The app was rebuilt from committed source `51ebd9c` and installed after strict ad-hoc signature verification. All **24** bundled Python resources matched that commit; the built and installed app had **zero byte differences**. LaunchAgent readback showed one installed Alden main process, PID **65142**. The installer retained backup `20260927T232241-64947`. Developer ID signing and notarization are still absent.
+
+The parent invoked the installed `auto-reply-menubar.py --action tool-browser` using the fixed dedicated browser interpreter, an isolated private job state directory, task input on stdin, and a minimal environment without cloud credentials. The example.com title task returned `ok=true`, `status=completed`, `result=Example Domain` in **28.769829 s**. Stdout parsed as exactly one JSON object; browser progress appeared on stderr (**1,432 bytes**). Dedicated Chromium process counts were **0 before / 0 after** the job. An independent Playwright DOM read with the provisioned Chromium returned HTTP **200** and the same `Example Domain` title in **0.943118 s**.
+
+This checks the installed Python entrypoint and browser runtime. It does **not** exercise a Tauri invoke event, graphical caller, physical emergency shortcut, or general web accuracy. The single task does not establish a latency improvement. The [raw live receipt](alden-installed-browser-live-20260927.json) records the source and these boundaries. After the job, the Kakao host remained healthy with **3/3** rooms ready and idle; its existing watchdog was still on attempt **3**, restart count **2**, child PID **68702**. The new worker-exit metadata is source-only until an immutable worker runtime is separately rolled out.
