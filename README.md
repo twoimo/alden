@@ -86,6 +86,7 @@ The settings UI marks voice status unavailable when its heartbeat is more than f
 - [Tauri menu-bar architecture](docs/architecture/alden-openkakao-units1-4.html)
 - [Local MLX request drain and model swap](docs/architecture/alden-model-request-drain.html)
 - [Offline DREAM-RSI review loop](docs/architecture/dream-rsi-provenance-loop.html)
+- [Current local DPO scoring evidence and remaining integration](docs/architecture/alden-dpo-scoring-20260927.md)
 - [Browser-use lifecycle](docs/architecture/alden-browser-use-lifecycle.html)
 
 The [dated local-tool evidence](docs/architecture/alden-local-tools-evidence-20260927.md) records two real Browser-use navigations through the local 27B model: navigation succeeded in **2/2** cases, but the requested field was correct in **1/2**. The source now includes an opt-in exact-target background AX CLI with a five-second maximum and explicit uncertain-effect reporting; **59/59** focused fake-adapter tests passed. No real AX press or installed desktop invocation is established by those tests.
