@@ -30,11 +30,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from local_mlx_gateway import (
-    MLX_GATEWAY_EMBEDDINGS_URL,
-    MlxRequestAdmissionClosed,
-    mlx_model_request_lease,
-)
+from local_mlx_gateway import MlxRequestAdmissionClosed, mlx_model_request_lease
 
 KNOWLEDGE_GRAPH_DB_NAME = "knowledge-graph.sqlite3"
 GRAPH_SOURCE_KIND = "knowledge_graph"
@@ -50,7 +46,7 @@ DENSE_INDEX_VERSION = "local-embedding-lsh-v2"
 # An index must name the encoder the loopback server actually advertises.
 # Never label vectors as BGE-M3 merely because that name was sent in a request.
 DENSE_EMBEDDING_MODEL = os.environ.get("OPENKAKAO_DENSE_EMBEDDING_MODEL", "").strip()
-DEFAULT_DENSE_EMBEDDING_URL = MLX_GATEWAY_EMBEDDINGS_URL
+DEFAULT_DENSE_EMBEDDING_URL = "http://127.0.0.1:11236/v1/embeddings"
 DENSE_EMBEDDING_URL = os.environ.get(
     "OPENKAKAO_LOCAL_EMBEDDING_URL", DEFAULT_DENSE_EMBEDDING_URL
 )
@@ -66,6 +62,9 @@ DENSE_EMBEDDING_MODELS_MAX_BYTES = 64 * 1024
 DENSE_EMBEDDING_CYCLE_TIMEOUT_SECONDS = 900.0
 DENSE_EMBEDDING_CYCLE_REQUEST_CAP = 64
 DENSE_STATUS_MAX_LENGTH = 400
+DENSE_INPUT_TYPE_QUERY = "query"
+DENSE_INPUT_TYPE_PASSAGE = "passage"
+DENSE_INPUT_TYPES = frozenset({DENSE_INPUT_TYPE_QUERY, DENSE_INPUT_TYPE_PASSAGE})
 RRF_K = 60
 ANN_BANDS = 8
 ANN_BITS_PER_BAND = 8
@@ -2930,6 +2929,7 @@ def _dense_endpoint_identity() -> str:
 def _local_dense_embeddings_unleased(
     texts: list[str],
     *,
+    input_type: str = DENSE_INPUT_TYPE_QUERY,
     model_id: str | None = None,
     timeout_seconds: float | None = None,
     _budget: _DenseCycleBudget | None = None,
@@ -2946,6 +2946,9 @@ def _local_dense_embeddings_unleased(
     normalized_texts = [str(text).strip() for text in texts]
     if any(not text for text in normalized_texts):
         raise ValueError("dense embedding input must be non-empty")
+    normalized_input_type = str(input_type).strip().casefold()
+    if normalized_input_type not in DENSE_INPUT_TYPES:
+        raise ValueError("dense embedding input_type must be query or passage")
     active_model = model_id or _active_dense_embedding_model()
     parsed = urllib.parse.urlparse(DENSE_EMBEDDING_URL)
     host = (parsed.hostname or "").casefold()
@@ -2959,7 +2962,11 @@ def _local_dense_embeddings_unleased(
     ):
         raise ValueError("dense embedding endpoint must be loopback-local")
     payload = json.dumps(
-        {"model": active_model, "input": normalized_texts},
+        {
+            "model": active_model,
+            "input": normalized_texts,
+            "input_type": normalized_input_type,
+        },
         ensure_ascii=False,
     ).encode("utf-8")
     request = urllib.request.Request(
@@ -3028,6 +3035,7 @@ def _local_dense_embeddings_unleased(
 def _local_dense_embeddings(
     texts: list[str],
     *,
+    input_type: str = DENSE_INPUT_TYPE_QUERY,
     model_id: str | None = None,
     timeout_seconds: float | None = None,
     _budget: _DenseCycleBudget | None = None,
@@ -3050,6 +3058,7 @@ def _local_dense_embeddings(
     if not managed_gateway:
         return _local_dense_embeddings_unleased(
             texts,
+            input_type=input_type,
             model_id=model_id,
             timeout_seconds=timeout_seconds,
             _budget=_budget,
@@ -3059,6 +3068,7 @@ def _local_dense_embeddings(
         with mlx_model_request_lease(state_root):
             return _local_dense_embeddings_unleased(
                 texts,
+                input_type=input_type,
                 model_id=model_id,
                 timeout_seconds=timeout_seconds,
                 _budget=_budget,
@@ -3072,6 +3082,7 @@ def _local_dense_embeddings_adaptive(
     texts: list[str],
     *,
     model_id: str,
+    input_type: str = DENSE_INPUT_TYPE_QUERY,
     first_attempt_timeout_seconds: float | None = None,
     budget: _DenseCycleBudget | None = None,
     state_root: Path | None = None,
@@ -3093,6 +3104,7 @@ def _local_dense_embeddings_adaptive(
     if first_attempt_timeout_seconds is None:
         batch_vectors = _local_dense_embeddings(
             texts,
+            input_type=input_type,
             model_id=model_id,
             _budget=budget,
             state_root=state_root,
@@ -3100,6 +3112,7 @@ def _local_dense_embeddings_adaptive(
     else:
         batch_vectors = _local_dense_embeddings(
             texts,
+            input_type=input_type,
             model_id=model_id,
             timeout_seconds=first_attempt_timeout_seconds,
             _budget=budget,
@@ -3132,6 +3145,7 @@ def _dense_embedding_probe(
     try:
         _local_dense_embeddings(
             ["knowledge graph dense probe"],
+            input_type=DENSE_INPUT_TYPE_QUERY,
             model_id=model_id,
             timeout_seconds=DENSE_EMBEDDING_PROBE_TIMEOUT_SECONDS,
             _budget=budget,
@@ -3311,6 +3325,7 @@ def refresh_dense_index(
             vectors = _local_dense_embeddings_adaptive(
                 texts[start : start + bounded_batch_size],
                 model_id=model_id,
+                input_type=DENSE_INPUT_TYPE_PASSAGE,
                 first_attempt_timeout_seconds=first_attempt_timeout_seconds,
                 budget=budget,
                 state_root=state_root,
@@ -3468,6 +3483,7 @@ def _dense_ann_query(
             raise RuntimeError("dense vector metadata mismatch")
         query_vector = _local_dense_embeddings(
             [query_text],
+            input_type=DENSE_INPUT_TYPE_QUERY,
             model_id=active_model,
             state_root=state_root,
         )[0]

@@ -1098,18 +1098,18 @@ class DenseRefreshBatchingTests(unittest.TestCase):
         self._model_patch.stop()
         self._lease_state_patch.stop()
 
-    def test_default_dense_endpoint_uses_shared_local_mlx_gateway_and_passes_loopback_guard(self):
+    def test_default_dense_endpoint_uses_dedicated_local_adapter_and_passes_loopback_guard(self):
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("OPENKAKAO_LOCAL_EMBEDDING_URL", None)
             default_kg = load_graph("kg_default_dense_endpoint_test")
         try:
-            self.assertIs(
+            self.assertEqual(
                 default_kg.DEFAULT_DENSE_EMBEDDING_URL,
-                LOCAL_MLX.MLX_GATEWAY_EMBEDDINGS_URL,
+                "http://127.0.0.1:11236/v1/embeddings",
             )
             self.assertEqual(
                 default_kg.DENSE_EMBEDDING_URL,
-                "http://127.0.0.1:11234/v1/embeddings",
+                "http://127.0.0.1:11236/v1/embeddings",
             )
 
             class Response:
@@ -1139,8 +1139,13 @@ class DenseRefreshBatchingTests(unittest.TestCase):
                 vectors = default_kg._local_dense_embeddings(["로컬 임베딩"])
 
             request = open_request.call_args.args[0]
-            self.assertEqual(request.full_url, LOCAL_MLX.MLX_GATEWAY_EMBEDDINGS_URL)
-            self.assertEqual(json.loads(request.data)["model"], "mlx/test-model")
+            self.assertEqual(
+                request.full_url,
+                "http://127.0.0.1:11236/v1/embeddings",
+            )
+            request_payload = json.loads(request.data)
+            self.assertEqual(request_payload["model"], "mlx/test-model")
+            self.assertEqual(request_payload["input_type"], KG.DENSE_INPUT_TYPE_QUERY)
             self.assertEqual(
                 open_request.call_args.kwargs["timeout"],
                 default_kg.DENSE_EMBEDDING_TIMEOUT_SECONDS,
@@ -1161,17 +1166,18 @@ class DenseRefreshBatchingTests(unittest.TestCase):
             self.assertEqual(override_kg.DENSE_EMBEDDING_URL, override)
             self.assertEqual(
                 override_kg.DEFAULT_DENSE_EMBEDDING_URL,
-                LOCAL_MLX.MLX_GATEWAY_EMBEDDINGS_URL,
+                "http://127.0.0.1:11236/v1/embeddings",
             )
         finally:
             sys.modules.pop("kg_dense_endpoint_override_test", None)
 
-    def test_mlx_gateway_endpoint_constants_have_one_shared_source(self):
+    def test_generation_gateway_and_dense_adapter_use_distinct_default_ports(self):
         self.assertIs(ONDEVICE.MLX_GATEWAY_BASE_URL, LOCAL_MLX.MLX_GATEWAY_BASE_URL)
-        self.assertIs(
+        self.assertEqual(
             KG.DEFAULT_DENSE_EMBEDDING_URL,
-            LOCAL_MLX.MLX_GATEWAY_EMBEDDINGS_URL,
+            "http://127.0.0.1:11236/v1/embeddings",
         )
+        self.assertEqual(LOCAL_MLX.MLX_GATEWAY_EMBEDDINGS_URL, "http://127.0.0.1:11234/v1/embeddings")
 
     def _make_graph(self, root: Path, count: int) -> sqlite3.Connection:
         conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
@@ -1341,11 +1347,13 @@ class DenseRefreshBatchingTests(unittest.TestCase):
             def fake_embeddings(
                 texts,
                 *,
+                input_type=KG.DENSE_INPUT_TYPE_QUERY,
                 model_id=None,
                 timeout_seconds=KG.DENSE_EMBEDDING_TIMEOUT_SECONDS,
                 _budget=None,
                 state_root=None,
             ):
+                self.assertEqual(input_type, KG.DENSE_INPUT_TYPE_PASSAGE)
                 calls.append((len(texts), timeout_seconds))
                 raise KG._DenseEmbeddingTimeoutError("local dense embedding unavailable")
 
@@ -1391,11 +1399,13 @@ class DenseRefreshBatchingTests(unittest.TestCase):
             def fake_embeddings(
                 _texts,
                 *,
+                input_type=KG.DENSE_INPUT_TYPE_QUERY,
                 model_id=None,
                 timeout_seconds=KG.DENSE_EMBEDDING_TIMEOUT_SECONDS,
                 _budget=None,
                 state_root=None,
             ):
+                self.assertEqual(input_type, KG.DENSE_INPUT_TYPE_PASSAGE)
                 nonlocal calls
                 calls += 1
                 self.assertEqual(
@@ -1518,11 +1528,13 @@ class DenseRefreshBatchingTests(unittest.TestCase):
             def fake_embeddings(
                 texts,
                 *,
+                input_type=KG.DENSE_INPUT_TYPE_QUERY,
                 model_id=None,
                 timeout_seconds=KG.DENSE_EMBEDDING_TIMEOUT_SECONDS,
                 _budget=None,
                 state_root=None,
             ):
+                self.assertEqual(input_type, KG.DENSE_INPUT_TYPE_PASSAGE)
                 return [(1.0, 0.0)] * len(texts)
 
             try:

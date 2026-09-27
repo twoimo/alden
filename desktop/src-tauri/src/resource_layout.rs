@@ -10,6 +10,7 @@ pub const TOOL_RUNTIME_SCRIPT: &str = "scripts/alden_tool_runtime.py";
 pub const AX_UI_SCRIPT: &str = "scripts/auto_reply_ax_ui.py";
 pub const BROWSER_USE_SCRIPT: &str = "scripts/alden_browser_use.py";
 pub const METRICS_SCRIPT: &str = "scripts/auto_reply_metrics.py";
+pub const LOCAL_EMBEDDING_SCRIPT: &str = "scripts/alden_local_embedding_server.py";
 pub const CLI: &str = "bin/openkakao-cli";
 pub const DATA_FILES: &[&str] = &[
     MENUBAR_SCRIPT,
@@ -26,6 +27,7 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/auto_reply_reference_store.py",
     "scripts/auto_reply_reference_search.py",
     "scripts/auto_reply_knowledge_graph.py",
+    LOCAL_EMBEDDING_SCRIPT,
     "scripts/auto_reply_ondevice.py",
     "scripts/local_mlx_gateway.py",
     "scripts/mlx_serve_lifecycle.py",

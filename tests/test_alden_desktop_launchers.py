@@ -812,6 +812,7 @@ exit 99
         for source_path, destination_path in tauri_pairs:
             self.assertEqual(source_path, destination_path)
         tauri_staged = {destination_path for _, destination_path in tauri_pairs}
+        embedding_adapter = "scripts/alden_local_embedding_server.py"
 
         self.assertEqual(
             rust_staged,
@@ -822,6 +823,8 @@ exit 99
                 f"tauri_only={sorted(tauri_staged - rust_staged)}"
             ),
         )
+        self.assertIn(embedding_adapter, rust_staged)
+        self.assertIn(embedding_adapter, tauri_staged)
 
         seeds = (
             "scripts/auto-reply-menubar.py",
