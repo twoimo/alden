@@ -1851,6 +1851,13 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             )
         )
         self.assertEqual(reasons, ["contextless_confusion"])
+        self.assertIsNone(
+            module._lenient_policy_draft(
+                ["무슨 말인지 모르겠네요"],
+                "???",
+                recent,
+            )
+        )
 
         result = module.select_ranked_reply(
             "???",
@@ -1884,9 +1891,142 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                     for item in module._reply_decision_instructions()
                 )
             )
-        unknown = module.select_ranked_reply("사람은 몇 명이야?", "", [], {}, [])
+        unknown = module.select_ranked_reply("사람은 몇 명이야?", "", [], {}, recent)
         self.assertEqual(unknown["fallback"], "question_unknown")
         self.assertEqual(unknown["reply"], "몇 명인진 안 나와서 모르겠네")
+
+    def test_discourse_followup_uses_recent_topic_instead_of_generic_confusion(self):
+        module = self._load_auto_reply_module("auto_reply_discourse_followup_test")
+        recent = [
+            {
+                "evidence_id": "recent:31",
+                "author_nickname": "다른 참여자",
+                "message": "배포 전에 설정 파일부터 다시 확인하자",
+                "is_self": False,
+            }
+        ]
+
+        self.assertTrue(module._is_discourse_context_followup("그래서?"))
+        self.assertTrue(module._is_contextual_followup("그래서?"))
+        reasons = []
+        self.assertFalse(
+            module._policy_valid_draft(
+                "무슨 말인지 모르겠네요",
+                "그래서?",
+                recent,
+                reasons_out=reasons,
+            )
+        )
+        self.assertEqual(reasons, ["contextless_confusion"])
+        self.assertIsNone(
+            module._lenient_policy_draft(
+                ["무슨 말인지 모르겠네요"],
+                "그래서?",
+                recent,
+            )
+        )
+
+        result = module.select_ranked_reply(
+            "그래서?",
+            "무슨 말인지 모르겠네요",
+            ["무슨 말인지 모르겠어요"],
+            {"author_nickname": "MOM"},
+            recent,
+        )
+        self.assertEqual(result["fallback"], "contextual_clarification")
+        self.assertEqual(
+            result["reply"],
+            "아까 “배포 전에 설정 파일부터 다시 확인하자” 얘기야?",
+        )
+        # Exercise the old strict -> lenient escape directly: the first draft
+        # is a non-generic overlong refusal, while a later draft is generic.
+        # Grounded clarification must win before lenient fallback can revive it.
+        overlong = "설명" * 120
+        escaped = module.select_ranked_reply(
+            "그래서",
+            overlong,
+            ["무슨 말인지 모르겠네요"],
+            {"author_nickname": "MOM"},
+            recent,
+        )
+        self.assertEqual(escaped["fallback"], "contextual_clarification")
+        self.assertEqual(
+            escaped["reply"],
+            "아까 “배포 전에 설정 파일부터 다시 확인하자” 얘기야?",
+        )
+        recent.append(
+            {
+                "evidence_id": "recent:32",
+                "author_nickname": "나",
+                "message": "무슨 말인지 모르겠네요",
+                "is_self": True,
+            }
+        )
+        target = module._contextual_clarification_target("그래서?", recent)
+        self.assertIsNotNone(target)
+        self.assertEqual(target["evidence_id"], "recent:31")
+
+    def test_missing_context_never_sends_generic_confusion(self):
+        module = self._load_auto_reply_module("auto_reply_discourse_no_context_test")
+        generic = "무슨 말인지 모르겠네요"
+
+        self.assertIsNone(module._contextual_clarification_target("그래서?", []))
+        for inbound in ("그래서?", "???", "ㅁㄴㅇㄹ"):
+            reasons = []
+            self.assertFalse(
+                module._policy_valid_draft(
+                    generic, inbound, [], reasons_out=reasons
+                )
+            )
+            self.assertEqual(reasons, ["contextless_confusion"])
+            self.assertIsNone(module._lenient_policy_draft([generic], inbound, []))
+            result = module.select_ranked_reply(
+                inbound, generic, [generic], {"author_nickname": "MOM"}, []
+            )
+            self.assertEqual(result["fallback"], "missing_context_clarification")
+            self.assertEqual(result["reply"], "어느 얘기 말하는 거야?")
+            self.assertTrue(
+                module._valid_missing_context_clarification(
+                    result["reply"], inbound, [], recipient="MOM"
+                )
+            )
+            self.assertFalse(
+                module._valid_missing_context_clarification(
+                    generic, inbound, [], recipient="MOM"
+                )
+            )
+
+        honorific = module.select_ranked_reply(
+            "???", generic, [generic], {"author_nickname": "현준"}, []
+        )
+        self.assertEqual(honorific["reply"], "어느 부분 말씀하시는 거예요?")
+        self.assertTrue(
+            module._valid_missing_context_clarification(
+                honorific["reply"], "???", [], recipient="현준"
+            )
+        )
+        self.assertFalse(
+            module._valid_missing_context_clarification(
+                "어느 얘기 말하는 거야?", "???", [], recipient="현준"
+            )
+        )
+
+        recent = [{"message": "배포 일정은 금요일이야", "is_self": False}]
+        self.assertFalse(
+            module._valid_missing_context_clarification(
+                "어느 얘기 말하는 거야?", "???", recent, recipient="MOM"
+            )
+        )
+        factual = module.select_ranked_reply(
+            "사람은 몇 명이야?", generic, [generic], {}, []
+        )
+        self.assertEqual(factual["fallback"], "question_unknown")
+        self.assertEqual(factual["reply"], "몇 명인진 안 나와서 모르겠네")
+
+        normal = module.select_ranked_reply(
+            "그래서?", "확인했어", [generic], {"author_nickname": "MOM"}, []
+        )
+        self.assertEqual(normal["reply"], "확인했어")
 
     def test_punctuation_followup_can_clarify_the_last_self_reply(self):
         module = self._load_auto_reply_module("auto_reply_self_context_pointer_test")
@@ -19407,6 +19547,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         event["canonical_event_id"] = "db:42:1787182399"
         event["rerank_fallback"] = "lenient_policy"
         event["response_window_upper_seconds"] = 600.0
+        event["analysis_watermark_log_id"] = 120
         reply_text = "잘 쉬어"
         try:
             with tempfile.TemporaryDirectory() as temporary:
@@ -19458,6 +19599,11 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                         ),
                         mock.patch.object(
                             module,
+                            "stable_room_watermark_log_id",
+                            return_value=120,
+                        ),
+                        mock.patch.object(
+                            module,
                             "pre_ax_delivery_probe",
                             return_value={"result": "ready"},
                         ),
@@ -19485,6 +19631,70 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     ).fetchone()
                     self.assertEqual(row["status"], "sent")
                     self.assertEqual(row["reply"], reply_text)
+                finally:
+                    connection.close()
+        finally:
+            if previous is None:
+                os.environ.pop("OPENKAKAO_TARGET_CHAT_ID", None)
+            else:
+                os.environ["OPENKAKAO_TARGET_CHAT_ID"] = previous
+
+    def test_scheduled_missing_context_clarification_survives_pre_send(self):
+        module = self._load_auto_reply_module("auto_reply_missing_context_scheduled")
+        previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
+        os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
+        now = int(time.time())
+        event = self._burst_event(module, 121, "???", now, author="MOM")
+        event["rerank_fallback"] = "missing_context_clarification"
+        event["response_window_upper_seconds"] = 600.0
+        event["analysis_watermark_log_id"] = 121
+        reply_text = "어느 얘기 말하는 거야?"
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                module.QUEUE = root / "42" / "reply-queue.sqlite3"
+                module.EVIDENCE_LEDGER = root / "evidence.jsonl"
+                connection = self._worker_queue_connection(module)
+                try:
+                    connection.execute(
+                        """
+                        INSERT INTO reply_jobs(
+                            event_id,event_json,status,due_at,decision,reason,category,
+                            reply,scheduled_delay_seconds,error_class,created_at,updated_at
+                        ) VALUES(
+                            ?, ?, 'scheduled', ?, 'reply', 'direct_question', 'question',
+                            ?, 0.4, NULL, 1.0, 1.0
+                        )
+                        """,
+                        (
+                            event["event_id"],
+                            json.dumps(event, ensure_ascii=False),
+                            time.time() - 1.0,
+                            reply_text,
+                        ),
+                    )
+                    connection.commit()
+                    job, previous_status = module.claim_job(time.time(), connection)
+                    self.assertEqual(previous_status, "scheduled")
+                    with (
+                        mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
+                        mock.patch.object(module, "privacy_attestation_current", return_value=True),
+                        mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                        mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
+                        mock.patch.object(module, "stable_room_watermark_log_id", return_value=121),
+                        mock.patch.object(module, "pre_ax_delivery_probe", return_value={"result": "ready"}),
+                        mock.patch.object(module, "send_reply", return_value=True) as sender,
+                        mock.patch.object(module, "update_context_decision", return_value=True),
+                        mock.patch.object(module, "complete_event"),
+                    ):
+                        module.process_job(job, previous_status, connection)
+                    sender.assert_called_once()
+                    self.assertEqual(sender.call_args.args[0], reply_text)
+                    row = connection.execute(
+                        "SELECT status, reply FROM reply_jobs WHERE event_id = ?",
+                        (event["event_id"],),
+                    ).fetchone()
+                    self.assertEqual(tuple(row), ("sent", reply_text))
                 finally:
                     connection.close()
         finally:

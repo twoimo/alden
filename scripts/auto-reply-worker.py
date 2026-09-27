@@ -6426,11 +6426,7 @@ def _policy_valid_draft(
         return reject("empty")
     if len(text) > 220:
         return reject("too_long")
-    if (
-        _is_contextual_followup(inbound)
-        and _contextual_clarification_reply(inbound, recent_conversation)
-        and _is_contextless_confusion_reply(text)
-    ):
+    if _is_contextless_confusion_reply(text):
         return reject("contextless_confusion")
     if not _outbound_reaction_allows(
         text, inbound, laughter_allowed=laughter_allowed, awe_allowed=awe_allowed
@@ -6766,6 +6762,35 @@ def _contextual_clarification_reply(
     return f"아까 “{topic}” {ending}"
 
 
+def _missing_context_clarification_reply(
+    *,
+    recipient: str | None = None,
+    register: str | None = None,
+) -> str:
+    """Preserve liveness without pretending to understand an ungrounded turn."""
+    if _recipient_requires_honorific(recipient, register):
+        return "어느 부분 말씀하시는 거예요?"
+    return "어느 얘기 말하는 거야?"
+
+
+def _valid_missing_context_clarification(
+    reply: str,
+    inbound: str,
+    recent_conversation: list[dict] | None,
+    *,
+    recipient: str | None = None,
+) -> bool:
+    """Recheck an exact no-context fallback before a scheduled AX send."""
+    if _contextual_clarification_target(inbound, recent_conversation) is not None:
+        return False
+    honorific = _missing_context_clarification_reply(
+        recipient=recipient, register="honorific"
+    )
+    if _recipient_requires_honorific(recipient):
+        return reply == honorific
+    return reply in {honorific, _missing_context_clarification_reply(recipient=recipient)}
+
+
 def _contextual_clarification_target(
     inbound: str,
     recent_conversation: list[dict] | None,
@@ -6805,8 +6830,26 @@ def _is_referential_context_question(inbound: str) -> bool:
     )
 
 
+def _is_discourse_context_followup(inbound: str) -> bool:
+    """Recognize terse discourse turns that require the preceding topic."""
+    compact = re.sub(r"[\s?？.!~…]+", "", str(inbound or ""))
+    return compact in {
+        "그래서",
+        "그래서뭐",
+        "그럼",
+        "그럼뭐",
+        "그러면",
+        "그러면뭐",
+    }
+
+
 def _is_contextual_followup(inbound: str) -> bool:
-    return _is_context_pointer(inbound) or _is_referential_context_question(inbound)
+    return (
+        _is_context_pointer(inbound)
+        or _is_referential_context_question(inbound)
+        or _is_discourse_context_followup(inbound)
+    )
+
 
 def _photo_fallback_reply(
     inbound: str, recent_conversation: list[dict] | None = None
@@ -6869,13 +6912,18 @@ def _last_self_reply_ending(recent_conversation: list[dict] | None) -> str:
     return _reply_ending(texts[-1]) if texts else ""
 
 
-def _lenient_policy_draft(drafts: list[str], inbound: str) -> str | None:
+def _lenient_policy_draft(
+    drafts: list[str],
+    inbound: str,
+    recent_conversation: list[dict] | None = None,
+) -> str | None:
     """Light safety rules for the never-skip fallback.
 
     Operator rule: an authorized sender is never skipped, so a draft that the
     full policy refused may still go out when it clears the light rules — not
     empty, not longer than 220 characters, not a verbatim copy of the inbound
-    message. Every relaxation stays visible through the policy_rejections list.
+    message. Generic-confusion drafts are never eligible for outbound. Every
+    relaxation stays visible through the policy_rejections list.
     """
     normalized_inbound = " ".join(str(inbound or "").split())
     for item in drafts:
@@ -6883,6 +6931,8 @@ def _lenient_policy_draft(drafts: list[str], inbound: str) -> str | None:
         if not text or len(text) > 220:
             continue
         if normalized_inbound and text == normalized_inbound:
+            continue
+        if _is_contextless_confusion_reply(text):
             continue
         return text
     return None
@@ -6962,6 +7012,8 @@ def select_ranked_reply(
             text = " ".join(str(item or "").split())
             if _outbound_youtube_title_label(text, inbound):
                 text = _rewrite_youtube_title_label(text)
+            if _is_contextless_confusion_reply(text):
+                continue
             if text:
                 fallback_text = text
                 break
@@ -6971,8 +7023,11 @@ def select_ranked_reply(
             recipient=recipient,
             register=register,
         )
+        has_contextless_confusion = any(
+            _is_contextless_confusion_reply(item) for item in [preferred, *drafts]
+        )
         if contextual_clarification and (
-            not fallback_text or _is_contextless_confusion_reply(fallback_text)
+            not fallback_text or has_contextless_confusion
         ):
             return {
                 "reply": contextual_clarification,
@@ -6980,6 +7035,18 @@ def select_ranked_reply(
                 "scores": [],
                 "winner_index": 0,
                 "fallback": "contextual_clarification",
+                "policy_rejections": policy_rejections,
+            }
+        if has_contextless_confusion and _is_contextual_followup(inbound) and not fallback_text:
+            clarification = _missing_context_clarification_reply(
+                recipient=recipient, register=register
+            )
+            return {
+                "reply": clarification,
+                "drafts": [clarification],
+                "scores": [],
+                "winner_index": 0,
+                "fallback": "missing_context_clarification",
                 "policy_rejections": policy_rejections,
             }
         if inbound_is_question and str(event.get("attachment") or "") != "image":
@@ -7007,9 +7074,11 @@ def select_ranked_reply(
                 "policy_rejections": policy_rejections,
             }
         # 최후 폴백(사용자 요구: 인가 발신자 메시지는 스킵 금지). 경량 안전 규칙만
-        # 적용한다 — 빈 답·220자 초과·원문 그대로 복사만 금지하고, 나머지 품질
-        # 정책은 완화한다. 무엇을 왜 완화했는지 policy_rejections에 남긴다.
-        lenient = _lenient_policy_draft([preferred, *drafts], inbound)
+        # 적용한다 — 빈 답·220자 초과·원문 그대로 복사와 일반적인 혼란 답변을
+        # 금지하고 나머지 품질 정책은 완화한다.
+        lenient = _lenient_policy_draft(
+            [preferred, *drafts], inbound, recent_conversation
+        )
         if lenient is not None:
             return {
                 "reply": lenient,
@@ -7017,6 +7086,18 @@ def select_ranked_reply(
                 "scores": [],
                 "winner_index": 0,
                 "fallback": "lenient_policy",
+                "policy_rejections": policy_rejections,
+            }
+        if has_contextless_confusion:
+            clarification = _missing_context_clarification_reply(
+                recipient=recipient, register=register
+            )
+            return {
+                "reply": clarification,
+                "drafts": [clarification],
+                "scores": [],
+                "winner_index": 0,
+                "fallback": "missing_context_clarification",
                 "policy_rejections": policy_rejections,
             }
         return {
@@ -11334,7 +11415,7 @@ DEFAULT_REPLY_INSTRUCTIONS = tuple([
             "When should_reply is true, also include 3 or 4 distinct draft replies in drafts (2 to 8 max). reply remains required and must be one of those drafts.",
             "Write one Korean KakaoTalk reply in the observed 최연우 register: a short take to the other person, not a chain of self-commentary. One bubble is the default.",
             "Read the entire recent_conversation from every speaker before answering. The latest line is not the whole topic.",
-            "If incoming_message is only punctuation (for example ???), treat it as a pointer to the ongoing thread. Infer its likely referent from the latest substantive recent_conversation lines and link previews. Answer that topic when the evidence supports it; if two referents remain plausible, ask one focused clarification that names the topic. Never reply with a generic confusion line such as 무슨 말인지 모르겠네요 when prior context is available, and never invent missing facts.",
+            "If incoming_message is only punctuation (for example ???), treat it as a pointer to the ongoing thread. Infer its likely referent from the latest substantive recent_conversation lines and link previews. Answer that topic when the evidence supports it; if two referents remain plausible, ask one focused clarification that names the topic. Never reply with a generic confusion line such as 무슨 말인지 모르겠네요. If context is missing, ask which part they mean without inventing facts.",
             "Use the full recent thread to decide what people are actually talking about. An image is one turn, not the only topic unless later messages stay on that image.",
             "Use context_evidence for facts and style_register only for register.",
             "Treat style_register and style_register_profile as non-factual register evidence. Never use them as facts, biography, authorship proof, or identity claims.",
@@ -15675,8 +15756,21 @@ def process_job(
         skip_reason = REPLY_LAUGHTER_POLICY_REASON
         if _constructed_geeknews_outbound(event, job):
             valid = True
+        elif event.get("rerank_fallback") == "missing_context_clarification":
+            valid = _valid_missing_context_clarification(
+                reply,
+                inbound_text,
+                _event_recent_conversation(event),
+                recipient=_event_author_nickname(event),
+            )
+            if not valid:
+                skip_reason = "policy_missing_context_clarification"
         elif event.get("rerank_fallback") == "lenient_policy":
-            valid = bool(_lenient_policy_draft([reply], inbound_text))
+            valid = bool(
+                _lenient_policy_draft(
+                    [reply], inbound_text, _event_recent_conversation(event)
+                )
+            )
             if not valid:
                 skip_reason = "policy_lenient_violation"
         else:
