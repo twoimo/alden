@@ -37,11 +37,15 @@ from alden_browser_use import (  # noqa: E402
     LOCAL_MLX_MODELS_URL,
     TELEMETRY_ENV_VAR,
     TEXT_ONLY_AGENT_KWARGS,
+    DOCUMENT_TITLE_EVIDENCE_KIND,
+    FIRST_SEARCH_RESULT_EVIDENCE_KIND,
+    WIKIPEDIA_FIRST_RESULT_SELECTOR,
     BrowserUseApiUnsupported,
     BrowserUseRunner,
     DedicatedPlaywrightContext,
     LocalModelCatalogRejected,
     _RejectRedirects,
+    _collect_dom_evidence,
     _local_only_urlopen,
     browser_agent_kwargs,
     declared_agent_kwargs,
@@ -85,6 +89,7 @@ class _AgentDeclaringVisionSwitches:
         generate_gif=None,
         use_judge=None,
         browser=None,
+        register_new_step_callback=None,
         **kwargs,
     ):
         self.task = task
@@ -93,10 +98,13 @@ class _AgentDeclaringVisionSwitches:
         self.generate_gif = generate_gif
         self.use_judge = use_judge
         self.browser = browser
+        self.register_new_step_callback = register_new_step_callback
         self.extra = kwargs
         _AgentDeclaringVisionSwitches.instances.append(self)
 
     async def run(self, *args, **kwargs):
+        if self.register_new_step_callback is not None:
+            await self.register_new_step_callback(None, None, 1)
         return types.SimpleNamespace(final_result="done")
 
 
@@ -107,10 +115,40 @@ class _FakeProfile:
 
 class _FakeSession:
     instances: list = []
+    page = None
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         _FakeSession.instances.append(self)
+
+    async def get_current_page(self):
+        return self.page
+
+
+class _FakeActorPage:
+    def __init__(self, *, url: str, title: str = "", first_result: str = "") -> None:
+        self.url = url
+        self.title = title
+        self.first_result = first_result
+        self.evaluations: list[str] = []
+
+    async def evaluate(self, expression: str) -> str:
+        self.evaluations.append(expression)
+        if expression == "() => window.location.href":
+            return self.url
+        if expression == "() => document.title":
+            return self.title
+        if WIKIPEDIA_FIRST_RESULT_SELECTOR in expression:
+            return self.first_result
+        raise AssertionError(f"unexpected DOM expression: {expression}")
+
+
+class _SlowActorPage(_FakeActorPage):
+    async def evaluate(self, expression: str) -> str:
+        import asyncio
+
+        await asyncio.sleep(0.02)
+        return await super().evaluate(expression)
 
 
 def _fake_browser_use_module() -> types.ModuleType:
@@ -447,6 +485,9 @@ def _fake_modules_with_agent(agent_class, recorder: dict) -> dict:
 
 
 class DedicatedContextTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _FakeSession.page = None
+
     async def test_start_exposes_a_loopback_devtools_endpoint(self):
         recorder = {}
         context_holder = DedicatedPlaywrightContext()
@@ -524,6 +565,107 @@ class DedicatedContextTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(agent.browser, _FakeSession.instances[0])
         cdp_url = _FakeSession.instances[0].kwargs["cdp_url"]
         self.assertTrue(cdp_url.startswith("http://127.0.0.1:"), cdp_url)
+
+    async def test_document_title_is_grounded_from_live_cdp_dom(self):
+        _AgentDeclaringVisionSwitches.instances = []
+        _FakeSession.instances = []
+        _FakeSession.page = _FakeActorPage(
+            url="https://example.com/",
+            title="Example Domain",
+        )
+        recorder = {}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token = AbortToken(Path(temp_dir) / "alden-abort.json")
+            owned = DedicatedPlaywrightContext()
+            modules = _fake_modules_with_agent(_AgentDeclaringVisionSwitches, recorder)
+            runner = BrowserUseRunner(
+                token,
+                context_factory=lambda: owned,
+                catalog_reader=_ready_catalog,
+                state_root=Path(temp_dir),
+            )
+            with mock.patch.dict(sys.modules, modules):
+                result = await runner.run(
+                    "Navigate to https://example.com and return only the document title"
+                )
+
+        self.assertTrue(result.ok, result.error_code)
+        self.assertEqual(result.result, "Example Domain")
+        self.assertEqual(len(result.evidence), 1)
+        self.assertEqual(result.evidence[0].kind, DOCUMENT_TITLE_EVIDENCE_KIND)
+        self.assertEqual(result.evidence[0].value, "Example Domain")
+        self.assertEqual(result.evidence[0].url, "https://example.com/")
+        self.assertEqual(result.evidence[0].source, "document.title")
+        self.assertIn("() => document.title", _FakeSession.page.evaluations)
+
+    async def test_wikipedia_first_result_is_grounded_from_fixed_dom_selector(self):
+        _AgentDeclaringVisionSwitches.instances = []
+        _FakeSession.instances = []
+        _FakeSession.page = _FakeActorPage(
+            url="https://en.wikipedia.org/wiki/Special:Search?search=Tauri+software",
+            title="Search results - Wikipedia",
+            first_result="Tauri (software framework)",
+        )
+        recorder = {}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token = AbortToken(Path(temp_dir) / "alden-abort.json")
+            owned = DedicatedPlaywrightContext()
+            modules = _fake_modules_with_agent(_AgentDeclaringVisionSwitches, recorder)
+            runner = BrowserUseRunner(
+                token,
+                context_factory=lambda: owned,
+                catalog_reader=_ready_catalog,
+                state_root=Path(temp_dir),
+            )
+            with mock.patch.dict(sys.modules, modules):
+                result = await runner.run(
+                    "Open Wikipedia Special:Search for Tauri software and return only the first search result"
+                )
+
+        self.assertTrue(result.ok, result.error_code)
+        self.assertEqual(result.result, "Tauri (software framework)")
+        self.assertEqual(len(result.evidence), 1)
+        self.assertEqual(result.evidence[0].kind, FIRST_SEARCH_RESULT_EVIDENCE_KIND)
+        self.assertEqual(result.evidence[0].value, "Tauri (software framework)")
+        self.assertEqual(result.evidence[0].source, WIKIPEDIA_FIRST_RESULT_SELECTOR)
+        self.assertTrue(
+            any(
+                WIKIPEDIA_FIRST_RESULT_SELECTOR in expression
+                for expression in _FakeSession.page.evaluations
+            )
+        )
+
+    async def test_dom_evidence_collection_has_a_hard_timeout(self):
+        session = _FakeSession()
+        session.page = _SlowActorPage(
+            url="https://example.com/",
+            title="Example Domain",
+        )
+        with mock.patch("alden_browser_use.DOM_EVIDENCE_TIMEOUT_SECS", 0.001):
+            evidence = await _collect_dom_evidence(
+                session,
+                frozenset({DOCUMENT_TITLE_EVIDENCE_KIND}),
+            )
+        self.assertEqual(evidence, ())
+
+    async def test_document_title_without_dom_evidence_is_not_reported_as_success(self):
+        _FakeSession.page = None
+        recorder = {}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            token = AbortToken(Path(temp_dir) / "alden-abort.json")
+            owned = DedicatedPlaywrightContext()
+            modules = _fake_modules_with_agent(_AgentDeclaringVisionSwitches, recorder)
+            runner = BrowserUseRunner(
+                token,
+                context_factory=lambda: owned,
+                catalog_reader=_ready_catalog,
+                state_root=Path(temp_dir),
+            )
+            with mock.patch.dict(sys.modules, modules):
+                result = await runner.run("Return only the document title")
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error_code, "browser_job_failed")
+        self.assertEqual(result.result, "")
 
 
 class RunnerCatalogGateTests(unittest.IsolatedAsyncioTestCase):

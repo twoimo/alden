@@ -19,6 +19,7 @@ import inspect
 import json
 import os
 import socket
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,16 @@ TEXT_ONLY_AGENT_KWARGS: dict[str, Any] = {
     "generate_gif": False,
     "use_judge": False,
 }
+
+# Exact single-field facts are read from the live DOM through Browser-Use's
+# bound CDP page. Keep this collector deliberately small: it exists to ground
+# fields that are otherwise easy for a text-only model to guess from a URL or
+# page summary, and every collection attempt has one short wall-clock budget.
+DOM_EVIDENCE_TIMEOUT_SECS = 2.0
+DOM_EVIDENCE_MAX_CHARS = 4096
+DOCUMENT_TITLE_EVIDENCE_KIND = "document_title"
+FIRST_SEARCH_RESULT_EVIDENCE_KIND = "first_search_result"
+WIKIPEDIA_FIRST_RESULT_SELECTOR = ".mw-search-result-heading a"
 
 
 class BrowserUseApiUnsupported(RuntimeError):
@@ -240,10 +251,155 @@ def browser_agent_kwargs(agent_class: Any, context: Any) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
+class DomEvidence:
+    kind: str
+    value: str
+    url: str
+    source: str
+
+
+@dataclass(frozen=True)
+class _BrowserAgentOutcome:
+    result: str
+    evidence: tuple[DomEvidence, ...] = ()
+
+
+@dataclass(frozen=True)
 class BrowserJobResult:
     ok: bool
     error_code: str = ""
     result: str = ""
+    evidence: tuple[DomEvidence, ...] = ()
+
+
+def _requested_dom_evidence_kinds(task: str) -> frozenset[str]:
+    """Recognize the two bounded exact-field intents this adapter can ground."""
+
+    normalized = " ".join(str(task).casefold().split())
+    kinds: set[str] = set()
+    if any(
+        phrase in normalized
+        for phrase in (
+            "document title",
+            "page title",
+            "title of the page",
+            "html title",
+            "문서 제목",
+            "페이지 제목",
+        )
+    ):
+        kinds.add(DOCUMENT_TITLE_EVIDENCE_KIND)
+
+    asks_for_first = "first" in normalized or "1st" in normalized or "첫" in normalized
+    asks_for_search_result = (
+        "search result" in normalized
+        or ("search" in normalized and "result" in normalized)
+        or "검색 결과" in normalized
+    )
+    if asks_for_first and asks_for_search_result:
+        kinds.add(FIRST_SEARCH_RESULT_EVIDENCE_KIND)
+    return frozenset(kinds)
+
+
+def _bounded_dom_value(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip()
+    if not normalized or len(normalized) > DOM_EVIDENCE_MAX_CHARS:
+        return ""
+    return normalized
+
+
+def _is_wikipedia_search_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False
+    hostname = (parsed.hostname or "").casefold()
+    path = urllib.parse.unquote(parsed.path).casefold()
+    query = urllib.parse.parse_qs(parsed.query)
+    query_title = " ".join(query.get("title", ())).casefold()
+    return (
+        parsed.scheme in {"http", "https"}
+        and (hostname == "wikipedia.org" or hostname.endswith(".wikipedia.org"))
+        and ("special:search" in path or query_title == "special:search")
+    )
+
+
+async def _collect_dom_evidence(
+    browser_session: Any,
+    requested_kinds: frozenset[str],
+) -> tuple[DomEvidence, ...]:
+    """Read supported facts from the actual focused CDP page within one timeout."""
+
+    if not requested_kinds:
+        return ()
+
+    async def collect() -> tuple[DomEvidence, ...]:
+        page = await browser_session.get_current_page()
+        if page is None:
+            return ()
+
+        url = _bounded_dom_value(await page.evaluate("() => window.location.href"))
+        if not url.startswith(("http://", "https://")):
+            return ()
+
+        evidence: list[DomEvidence] = []
+        if DOCUMENT_TITLE_EVIDENCE_KIND in requested_kinds:
+            title = _bounded_dom_value(await page.evaluate("() => document.title"))
+            if title:
+                evidence.append(
+                    DomEvidence(
+                        kind=DOCUMENT_TITLE_EVIDENCE_KIND,
+                        value=title,
+                        url=url,
+                        source="document.title",
+                    )
+                )
+
+        if (
+            FIRST_SEARCH_RESULT_EVIDENCE_KIND in requested_kinds
+            and _is_wikipedia_search_url(url)
+        ):
+            first_result = _bounded_dom_value(
+                await page.evaluate(
+                    "() => { const node = document.querySelector("
+                    f"{WIKIPEDIA_FIRST_RESULT_SELECTOR!r}); "
+                    "return node ? (node.textContent || '').trim() : ''; }"
+                )
+            )
+            if first_result:
+                evidence.append(
+                    DomEvidence(
+                        kind=FIRST_SEARCH_RESULT_EVIDENCE_KIND,
+                        value=first_result,
+                        url=url,
+                        source=WIKIPEDIA_FIRST_RESULT_SELECTOR,
+                    )
+                )
+        return tuple(evidence)
+
+    try:
+        return await asyncio.wait_for(collect(), timeout=DOM_EVIDENCE_TIMEOUT_SECS)
+    except Exception:
+        return ()
+
+
+def _ground_exact_requested_field(
+    task: str,
+    fallback: str,
+    evidence: tuple[DomEvidence, ...],
+) -> str:
+    """Use live DOM evidence only when the task asks for one supported field."""
+
+    requested = _requested_dom_evidence_kinds(task)
+    if len(requested) != 1:
+        return fallback
+    wanted = next(iter(requested))
+    for item in reversed(evidence):
+        if item.kind == wanted and item.value:
+            return item.value
+    return fallback
 
 
 class DedicatedPlaywrightContext:
@@ -310,7 +466,10 @@ class BrowserUseRunner:
         token: AbortToken,
         *,
         context_factory: Callable[[], DedicatedPlaywrightContext] = DedicatedPlaywrightContext,
-        agent_factory: Callable[[str, Any, str, str], Awaitable[str]] | None = None,
+        agent_factory: Callable[
+            [str, Any, str, str], Awaitable[str | _BrowserAgentOutcome]
+        ]
+        | None = None,
         catalog_reader: Callable[[], bytes] = read_local_model_catalog,
         model: str = DEFAULT_BROWSER_MODEL_ID,
         state_root: Path | None = None,
@@ -329,7 +488,7 @@ class BrowserUseRunner:
         context: Any,
         model: str,
         base_url: str,
-    ) -> str:
+    ) -> _BrowserAgentOutcome:
         """Bind Browser-Use to the dedicated Chromium and the local MLX endpoint."""
 
         disable_browser_use_telemetry()
@@ -340,14 +499,34 @@ class BrowserUseRunner:
         # Both the text-only switches and the browser argument are chosen from
         # the installed signature, so a release that ignores them cannot
         # silently send screenshots or drop the dedicated browser.
+        browser_kwargs = browser_agent_kwargs(Agent, context)
+        evidence_by_kind: dict[str, DomEvidence] = {}
+        requested_kinds = _requested_dom_evidence_kinds(task)
+        browser_session = browser_kwargs.get(AGENT_BROWSER_KWARG)
+
+        async def capture_dom_evidence(*_args: Any) -> None:
+            if browser_session is None or not requested_kinds:
+                return
+            for item in await _collect_dom_evidence(browser_session, requested_kinds):
+                evidence_by_kind[item.kind] = item
+
+        callback_kwargs = declared_agent_kwargs(
+            Agent,
+            {"register_new_step_callback": capture_dom_evidence},
+        )
         kwargs = {
             **declared_agent_kwargs(Agent, TEXT_ONLY_AGENT_KWARGS),
-            **browser_agent_kwargs(Agent, context),
+            **browser_kwargs,
+            **callback_kwargs,
         }
         agent = Agent(task=task, llm=llm, **kwargs)
         history = await agent.run()
+        await capture_dom_evidence()
         final = getattr(history, "final_result", None)
-        return str(final() if callable(final) else final or "")
+        return _BrowserAgentOutcome(
+            result=str(final() if callable(final) else final or ""),
+            evidence=tuple(evidence_by_kind.values()),
+        )
 
     async def run(self, task: str) -> BrowserJobResult:
         if self.token.is_cancelled():
@@ -366,12 +545,23 @@ class BrowserUseRunner:
                 self._owned_context = owned
                 context = await _cancelable(owned.start(), self.token)
                 self.token.raise_if_cancelled()
-                result = await _cancelable(
+                agent_outcome = await _cancelable(
                     self.agent_factory(task, context, self.model, LOCAL_MLX_BASE_URL),
                     self.token,
                 )
             self.token.raise_if_cancelled()
-            return BrowserJobResult(True, result=result)
+            if isinstance(agent_outcome, _BrowserAgentOutcome):
+                evidence = agent_outcome.evidence
+                requested = _requested_dom_evidence_kinds(task)
+                if len(requested) == 1 and not any(
+                    item.kind in requested and item.value for item in evidence
+                ):
+                    return BrowserJobResult(False, "browser_job_failed")
+                result = _ground_exact_requested_field(task, agent_outcome.result, evidence)
+            else:
+                evidence = ()
+                result = agent_outcome
+            return BrowserJobResult(True, result=result, evidence=evidence)
         except AldenCancelled:
             return BrowserJobResult(False, "global_abort")
         except MlxRequestAdmissionClosed as exc:
