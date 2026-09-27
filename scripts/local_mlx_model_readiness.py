@@ -20,6 +20,7 @@ SWAP_MODEL_ID = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
 FIXED_LOCAL_MLX_MODEL_IDS = frozenset({RESIDENT_MODEL_ID, IQ_MODEL_ID, SWAP_MODEL_ID})
 READINESS_MODEL_IDS = frozenset({IQ_MODEL_ID, SWAP_MODEL_ID})
 MLX_MODELS_URL = "http://127.0.0.1:11234/v1/models"
+IQ_MLX_MODELS_URL = "http://127.0.0.1:11235/v1/models"
 MLX_MODELS_TIMEOUT_SECS = 2.0
 MLX_MODELS_MAX_BYTES = 256 * 1024
 MLX_MODELS_MAX_ROWS = 256
@@ -95,8 +96,9 @@ def read_fixed_local_mlx_readiness(
     if wanted not in READINESS_MODEL_IDS:
         return MlxReadiness(False, "model_prepare_not_allowed")
 
+    models_url = IQ_MLX_MODELS_URL if wanted == IQ_MODEL_ID else MLX_MODELS_URL
     request = urllib.request.Request(
-        MLX_MODELS_URL,
+        models_url,
         method="GET",
         headers={"Accept": "application/json"},
     )

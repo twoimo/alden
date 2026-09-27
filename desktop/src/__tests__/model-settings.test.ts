@@ -2,7 +2,7 @@
 
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { parseRuntimeSnapshot } from "../contracts";
-import { LEGACY_RESIDENT_MODEL_ID, RESIDENT_MODEL_ID } from "../tokens";
+import { LEGACY_RESIDENT_MODEL_ID, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "../tokens";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(async () => null),
@@ -36,15 +36,25 @@ const legacySnapshot = parseRuntimeSnapshot({
   reply_model_id: `mlx/${LEGACY_RESIDENT_MODEL_ID}`,
 });
 
+const deepSnapshot = parseRuntimeSnapshot({
+  available: true,
+  rooms: [],
+  jobs: [],
+  context_sync: { mode: "async", waited: false },
+  reply_model_id: `mlx/${SWAP_MODEL_ID}`,
+});
+
 describe("simple model settings", () => {
   it("loads only the conversation data needed for the settings screen", async () => {
     const loadAction = vi.fn(async (): Promise<Record<string, unknown> | null> => null);
+    const invokeMock = vi.fn(async () => undefined);
+    const invokeCommand = invokeMock as unknown as typeof import("@tauri-apps/api/core").invoke;
 
     await bootSettings({
       loadSnapshot: async () => snapshot,
       loadAction,
       wireVoice: () => undefined,
-      invokeCommand: async <T>() => undefined as T,
+      invokeCommand,
       subscribeVisibility: null,
       readVisibility: null,
     });
@@ -53,6 +63,7 @@ describe("simple model settings", () => {
       ["knowledge-graph-status"],
       ["knowledge-graph"],
     ]);
+    expect(invokeMock).not.toHaveBeenCalled();
     expect(document.querySelector('[data-model-choice="fast"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(document.querySelector("#model-status")?.textContent).toBe("빠른 대화가 선택되어 있습니다.");
     expect(document.querySelector("#model-owner-state")).toBeNull();
@@ -71,6 +82,57 @@ describe("simple model settings", () => {
 
     expect(document.querySelector('[data-model-choice="fast"]')?.getAttribute("aria-pressed")).toBe("true");
     expect(document.querySelector("#model-status")?.textContent).toBe("빠른 대화가 선택되어 있습니다.");
+  });
+
+  it("keeps the current selection busy and unchanged when resident launch fails", async () => {
+    let resolveLaunch!: (value: unknown) => void;
+    const launchPending = new Promise<unknown>((resolve) => { resolveLaunch = resolve; });
+    const invokeMock = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+      if (args?.action === "model-set") {
+        return {
+          ok: false,
+          action: "model-set",
+          model: RESIDENT_MODEL_ID,
+          stored: false,
+          prepared: false,
+          needs_prepare: true,
+        };
+      }
+      if (args?.action === "mlx-server-launch") return await launchPending;
+      return undefined;
+    });
+    const invokeCommand = invokeMock as unknown as typeof import("@tauri-apps/api/core").invoke;
+
+    await bootSettings({
+      loadSnapshot: async () => deepSnapshot,
+      loadAction: async (): Promise<Record<string, unknown> | null> => null,
+      wireVoice: () => undefined,
+      invokeCommand,
+      subscribeVisibility: null,
+      readVisibility: null,
+    });
+
+    const fast = document.querySelector<HTMLButtonElement>('[data-model-choice="fast"]')!;
+    const deep = document.querySelector<HTMLButtonElement>('[data-model-choice="deep"]')!;
+    fast.click();
+    await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+    expect(fast.disabled).toBe(true);
+    expect(deep.disabled).toBe(true);
+    expect(fast.getAttribute("aria-busy")).toBe("true");
+    expect(document.querySelector("#model-status")?.textContent).toBe("빠른 대화를 준비하고 있습니다…");
+
+    resolveLaunch({
+      ok: false,
+      action: "mlx-server-launch",
+      model: null,
+      reason: "launch_memory_insufficient",
+    });
+    await vi.waitFor(() => expect(fast.disabled).toBe(false));
+    expect(fast.getAttribute("aria-pressed")).toBe("false");
+    expect(deep.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector("#model-status")?.textContent).toBe(
+      "빠른 대화를 준비하지 못했습니다. 기존 설정을 유지했습니다.",
+    );
   });
 
   it.each([

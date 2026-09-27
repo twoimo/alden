@@ -59,6 +59,7 @@ from auto_reply_ondevice import (
     write_managed_model_residency,
 )
 from mlx_serve_lifecycle import (
+    MLX_SERVE_FLASH_NEXT_IQ_PORT,
     MlxLaunchSpec,
     launch_app_owned_server,
     ownership_status,
@@ -1702,7 +1703,16 @@ def set_reply_model(
         for item in provider.get("models") or []:
             if isinstance(item, dict) and item.get("id"):
                 allowed_model_ids.add(str(item["id"]))
-    local_wanted = resolve_fixed_local_mlx_catalog_model(requested, allowed_model_ids)
+    fixed_requested = canonical_fixed_local_mlx_model_id(requested)
+    # The iQ fast model is served by the independent app-owned 11235 runtime,
+    # so its save gate cannot depend on the 11234 display catalog. The fixed
+    # allowlist still bounds the accepted ID, and readiness must pass below
+    # before the override file is written.
+    local_wanted = (
+        ALDEN_IQ_MODEL_ID
+        if fixed_requested == ALDEN_IQ_MODEL_ID
+        else resolve_fixed_local_mlx_catalog_model(requested, allowed_model_ids)
+    )
     wanted = local_wanted or requested
     allowed = local_wanted is not None or requested in allowed_model_ids
     if allowed:
@@ -2523,13 +2533,16 @@ def _mlx_app_owned_spec(state_root: Path, model_id: str | None) -> MlxLaunchSpec
     if required_bytes is None:
         return None
     kwargs: dict[str, Any] = {}
+    log_path = state_root / "mlx-app-owned-server.log"
     if wanted == ALDEN_IQ_MODEL_ID:
         kwargs["ctx_size"] = FLASH_NEXT_IQ_CONTEXT_SIZE
+        kwargs["port"] = MLX_SERVE_FLASH_NEXT_IQ_PORT
+        log_path = state_root / "mlx-app-owned-server-11235.log"
     return MlxLaunchSpec(
         executable=_MLX_APP_OWNED_BINARY,
         resident_model_dir=resident,
         models_dir=_MLX_APP_OWNED_MODELS_DIR,
-        log_path=state_root / "mlx-app-owned-server.log",
+        log_path=log_path,
         minimum_free_bytes=required_bytes,
         **kwargs,
     )
@@ -2631,7 +2644,12 @@ def _mlx_lifecycle_payload(action: str, state_root: Path) -> dict:
         return {"ok": False, "action": action, "reason": "mlx_model_not_supported"}
     result = launch_app_owned_server(spec, state_root)
     report = result.report()
-    if result.ok and type(result.pid) is int and result.pid > 1:
+    if (
+        result.ok
+        and type(result.pid) is int
+        and result.pid > 1
+        and spec.port != MLX_SERVE_FLASH_NEXT_IQ_PORT
+    ):
         report["residency_seeded"] = _seed_launched_model_residency(
             state_root, spec, result.pid
         )

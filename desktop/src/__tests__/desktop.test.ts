@@ -14,6 +14,7 @@ import {
   normalizeLocalModelId,
   prepareSwapModel,
   runBrowserTool,
+  selectResidentModel,
   setResidentModel,
   swapToLargeModel,
   type SettingsInvoke,
@@ -734,6 +735,180 @@ describe("local model settings bridge", () => {
     } as T);
     expect((await setResidentModel(throwing)).ok).toBe(false);
     expect((await prepareSwapModel(mismatched)).ok).toBe(false);
+  });
+
+  it("keeps a ready resident selection to one model-set call", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const fakeInvoke: SettingsInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      return {
+        ok: true,
+        action: "model-set",
+        model: RESIDENT_MODEL_ID,
+        stored: true,
+        prepared: true,
+        needs_prepare: false,
+      } as T;
+    };
+
+    expect(await selectResidentModel(fakeInvoke)).toEqual({ ok: true, outcome: "selected" });
+    expect(calls).toEqual([
+      { command: "fetch_settings_action", args: { action: "model-set", model: RESIDENT_MODEL_ID } },
+    ]);
+  });
+
+  it("launches the exact resident sidecar once and retries model-set after launch_ready", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const phases: string[] = [];
+    let modelSetCalls = 0;
+    const fakeInvoke: SettingsInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      if (args?.action === "mlx-server-launch") {
+        return {
+          ok: true,
+          action: "mlx-server-launch",
+          model: RESIDENT_MODEL_ID.split("/", 2)[1],
+          reason: "launch_ready",
+        } as T;
+      }
+      modelSetCalls += 1;
+      return modelSetCalls === 1
+        ? {
+          ok: false,
+          action: "model-set",
+          model: RESIDENT_MODEL_ID,
+          stored: false,
+          prepared: false,
+          needs_prepare: true,
+        } as T
+        : {
+          ok: true,
+          action: "model-set",
+          model: RESIDENT_MODEL_ID,
+          stored: true,
+          prepared: true,
+          needs_prepare: false,
+        } as T;
+    };
+
+    expect(await selectResidentModel(fakeInvoke, (phase) => phases.push(phase))).toEqual({
+      ok: true,
+      outcome: "selected",
+    });
+    expect(phases).toEqual(["launching", "retrying"]);
+    expect(calls).toEqual([
+      { command: "fetch_settings_action", args: { action: "model-set", model: RESIDENT_MODEL_ID } },
+      {
+        command: "fetch_settings_action",
+        args: { action: "mlx-server-launch", model: RESIDENT_MODEL_ID, explicitOptIn: true },
+      },
+      { command: "fetch_settings_action", args: { action: "model-set", model: RESIDENT_MODEL_ID } },
+    ]);
+  });
+
+  it("does not launch for a malformed failed resident model-set payload", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const fakeInvoke: SettingsInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      return {
+        ok: false,
+        action: "model-set",
+        model: RESIDENT_MODEL_ID,
+        stored: "false",
+        prepared: false,
+        needs_prepare: true,
+      } as T;
+    };
+
+    expect(await selectResidentModel(fakeInvoke)).toEqual({ ok: false, outcome: "set_failed" });
+    expect(calls).toEqual([
+      { command: "fetch_settings_action", args: { action: "model-set", model: RESIDENT_MODEL_ID } },
+    ]);
+  });
+
+  it("stops after a sanitized resident launch failure", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const fakeInvoke: SettingsInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      if (args?.action === "mlx-server-launch") {
+        return {
+          ok: false,
+          action: "mlx-server-launch",
+          model: null,
+          reason: "launch_memory_insufficient",
+        } as T;
+      }
+      return {
+        ok: false,
+        action: "model-set",
+        model: RESIDENT_MODEL_ID,
+        stored: false,
+        prepared: false,
+        needs_prepare: true,
+      } as T;
+    };
+
+    expect(await selectResidentModel(fakeInvoke)).toEqual({ ok: false, outcome: "launch_failed" });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual({
+      command: "fetch_settings_action",
+      args: { action: "mlx-server-launch", model: RESIDENT_MODEL_ID, explicitOptIn: true },
+    });
+  });
+
+  it("does not launch again when the post-launch model-set still needs prepare", async () => {
+    const actions: unknown[] = [];
+    const fakeInvoke: SettingsInvoke = async <T>(_command: string, args?: Record<string, unknown>) => {
+      actions.push(args?.action);
+      if (args?.action === "mlx-server-launch") {
+        return {
+          ok: true,
+          action: "mlx-server-launch",
+          model: RESIDENT_MODEL_ID.split("/", 2)[1],
+          reason: "launch_already_running",
+        } as T;
+      }
+      return {
+        ok: false,
+        action: "model-set",
+        model: RESIDENT_MODEL_ID,
+        stored: false,
+        prepared: false,
+        needs_prepare: true,
+      } as T;
+    };
+
+    expect(await selectResidentModel(fakeInvoke)).toEqual({ ok: false, outcome: "retry_failed" });
+    expect(actions).toEqual(["model-set", "mlx-server-launch", "model-set"]);
+  });
+
+  it("fails closed when the model-set retry throws after a ready launch", async () => {
+    let modelSetCalls = 0;
+    const actions: unknown[] = [];
+    const fakeInvoke: SettingsInvoke = async <T>(_command: string, args?: Record<string, unknown>) => {
+      actions.push(args?.action);
+      if (args?.action === "mlx-server-launch") {
+        return {
+          ok: true,
+          action: "mlx-server-launch",
+          model: RESIDENT_MODEL_ID.split("/", 2)[1],
+          reason: "launch_ready",
+        } as T;
+      }
+      modelSetCalls += 1;
+      if (modelSetCalls === 2) throw new Error("python_timed_out");
+      return {
+        ok: false,
+        action: "model-set",
+        model: RESIDENT_MODEL_ID,
+        stored: false,
+        prepared: false,
+        needs_prepare: true,
+      } as T;
+    };
+
+    expect(await selectResidentModel(fakeInvoke)).toEqual({ ok: false, outcome: "retry_failed" });
+    expect(actions).toEqual(["model-set", "mlx-server-launch", "model-set"]);
   });
 
   it("keeps a failed 27B readiness check prepare-only without model promotion", async () => {

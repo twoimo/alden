@@ -2248,6 +2248,10 @@ class AutoReplyMenubarTests(unittest.TestCase):
             def fake_readiness(model, *, state_root=None):
                 def opener(_request, *, timeout):
                     self.assertEqual(timeout, 2.0)
+                    self.assertEqual(
+                        _request.full_url,
+                        "http://127.0.0.1:11235/v1/models",
+                    )
                     return FakeResponse(payload)
 
                 return original_readiness(
@@ -2258,13 +2262,7 @@ class AutoReplyMenubarTests(unittest.TestCase):
 
             return fake_readiness
 
-        catalog = [
-            {
-                "id": "mlx",
-                "label": "mlx",
-                "models": [{"id": module.ALDEN_IQ_MODEL_ID, "label": "iQ"}],
-            }
-        ]
+        catalog = []
         cases = (
             ("absent", {"data": []}, False, "mlx_gateway_wrong_model"),
             (
@@ -2343,6 +2341,28 @@ class AutoReplyMenubarTests(unittest.TestCase):
                     self.assertEqual(saved["model"], module.ALDEN_IQ_MODEL_ID)
                 else:
                     self.assertEqual(result["reason"], expected_reason)
+
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            readiness = mock.Mock(
+                side_effect=AssertionError(
+                    "non-allowlisted IDs must not probe fixed-model readiness"
+                )
+            )
+            with mock.patch.object(
+                module, "_global_catalog_providers", return_value=[]
+            ), mock.patch.object(
+                module, "_displayed_reply_providers", return_value=[]
+            ), mock.patch.object(
+                module, "read_fixed_local_mlx_readiness", new=readiness
+            ):
+                denied = module.set_reply_model(
+                    state,
+                    "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw-lookalike",
+                    now=1000.0,
+                )
+            self.assertFalse(denied["ok"])
+            self.assertFalse(module._reply_model_override_path(state).exists())
 
     def test_model_swap_requires_opt_in_and_verified_owner_before_gateway(self):
         module = load("auto_reply_menubar_model_swap_gates")
@@ -5596,6 +5616,13 @@ class AldenMlxServerActionTests(unittest.TestCase):
         )
         self.assertEqual(iq.minimum_free_bytes, module.FLASH_NEXT_IQ_REQUIRED_BYTES)
         self.assertEqual(iq.ctx_size, module.FLASH_NEXT_IQ_CONTEXT_SIZE)
+        self.assertEqual(iq.minimum_free_bytes, 60 * 1024**3)
+        self.assertEqual(iq.ctx_size, 8192)
+        self.assertEqual(iq.port, 11235)
+        self.assertEqual(
+            iq.log_path,
+            Path("/tmp/alden-mlx-state") / "mlx-app-owned-server-11235.log",
+        )
         self.assertEqual(iq.validate(), "")
         for candidate in (None, "", "remote/arbitrary", "ddalcu/../../etc/passwd"):
             self.assertIsNone(
@@ -5619,6 +5646,62 @@ class AldenMlxServerActionTests(unittest.TestCase):
         )
         self.assertEqual(payload["reason"], "mlx_model_not_supported")
         launched.assert_not_called()
+
+    def test_iq_launch_skips_11234_gateway_residency_seed(self):
+        module = load(f"auto_reply_menubar_mlx_iq_independent_{id(self)}")
+        captured = {}
+
+        class Result:
+            ok = True
+            pid = 4242
+
+            @staticmethod
+            def report():
+                return {
+                    "ok": True,
+                    "action": "mlx-server-launch",
+                    "reason": "launch_ready",
+                }
+
+        def fake_launch(spec, state_root):
+            captured["spec"] = spec
+            captured["state_root"] = state_root
+            return Result()
+
+        probe_11234 = mock.Mock(
+            side_effect=AssertionError("iQ launch must not probe the 11234 gateway")
+        )
+        write_residency = mock.Mock(
+            side_effect=AssertionError("iQ launch must not write 11234 residency")
+        )
+        payload = self._run(
+            module,
+            [
+                "--action",
+                "mlx-server-launch",
+                "--model",
+                module.ALDEN_IQ_MODEL_ID,
+                "--state-root",
+                "/tmp/alden-mlx-state",
+                "--explicit-opt-in",
+            ],
+            launch_app_owned_server=fake_launch,
+            _read_mlx_gateway_models=probe_11234,
+            write_managed_model_residency=write_residency,
+        )
+
+        self.assertTrue(payload["ok"])
+        self.assertNotIn("residency_seeded", payload)
+        self.assertEqual(captured["state_root"], Path("/tmp/alden-mlx-state"))
+        self.assertEqual(captured["spec"].port, 11235)
+        self.assertEqual(captured["spec"].ctx_size, 8192)
+        self.assertEqual(captured["spec"].minimum_free_bytes, 60 * 1024**3)
+        self.assertEqual(
+            captured["spec"].log_path,
+            Path("/tmp/alden-mlx-state") / "mlx-app-owned-server-11235.log",
+        )
+        probe_11234.assert_not_called()
+        write_residency.assert_not_called()
 
     def test_launch_residency_seed_requires_exact_ready_catalog_and_owner_readback(self):
         module = load(f"auto_reply_menubar_mlx_residency_seed_{id(self)}")

@@ -31,8 +31,9 @@ import {
   fetchRuntimeSnapshot,
   fetchSettingsAction,
   normalizeLocalModelId,
-  setResidentModel,
+  selectResidentModel,
   swapToLargeModel,
+  type SettingsInvoke,
 } from "./runtime";
 import {
   RuntimeSnapshotPoller,
@@ -180,7 +181,7 @@ export function modelSwapFailureText(reason: string): string {
   return "깊은 분석을 준비하지 못했습니다. 기존 설정을 유지했습니다.";
 }
 
-function wireModelSelection(): void {
+function wireModelSelection(invokeFn: SettingsInvoke): void {
   const resident = modelButton(RESIDENT_MODEL_ID);
   const swap = modelButton(SWAP_MODEL_ID);
   if (!resident || !swap) return;
@@ -198,12 +199,20 @@ function wireModelSelection(): void {
       setModelBusy(true);
       resident.setAttribute("aria-busy", "true");
       setText("model-status", "빠른 대화를 선택하고 있습니다…");
-      const result = await setResidentModel();
+      const result = await selectResidentModel(invokeFn, (phase) => {
+        setText("model-status", phase === "launching"
+          ? "빠른 대화를 준비하고 있습니다…"
+          : "빠른 대화를 적용하고 있습니다…");
+      });
       resident.removeAttribute("aria-busy");
       setModelBusy(false);
       if (!result.ok) {
         resident.classList.add("model-failed");
-        setText("model-status", "빠른 대화를 선택하지 못했습니다. 기존 설정을 유지했습니다.");
+        setText("model-status", result.outcome === "launch_failed"
+          ? "빠른 대화를 준비하지 못했습니다. 기존 설정을 유지했습니다."
+          : result.outcome === "retry_failed"
+            ? "빠른 대화를 준비했지만 선택을 완료하지 못했습니다. 기존 설정을 유지했습니다."
+            : "빠른 대화를 선택하지 못했습니다. 기존 설정을 유지했습니다.");
         return;
       }
       setModelSelection(RESIDENT_MODEL_ID);
@@ -454,7 +463,7 @@ export async function bootSettings(
     renderRooms(snapshot);
     wireRoomAdd(dependencies.loadSnapshot, dependencies.loadAction);
     renderModels(snapshot);
-    wireModelSelection();
+    wireModelSelection(dependencies.invokeCommand);
     renderVoice(snapshot);
     renderHistory(snapshot);
     renderBackground(snapshot);

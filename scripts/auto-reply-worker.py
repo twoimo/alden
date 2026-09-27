@@ -69,6 +69,7 @@ import auto_reply_ondevice
 import auto_reply_metrics as perf
 import auto_reply_transition_journal as transition_journal
 from auto_reply_ondevice import (
+    FLASH_NEXT_IQ_MODEL_ID,
     FLASH_NEXT_MODEL_ID,
     QWEN38_27B_MODEL_ID,
     detect_mlx_gateway_models,
@@ -11539,6 +11540,61 @@ def _is_mlx_serve_text_model(model: str) -> bool:
     return _is_mlx_serve_flash_next_model(model) or _is_mlx_serve_27b_model(model)
 
 
+def _mlx_serve_gateway_base_url(model: str) -> str:
+    """Return the fixed loopback gateway assigned to one exact local model id."""
+
+    requested = str(model or "").strip().removeprefix("mlx/")
+    iq_model = FLASH_NEXT_IQ_MODEL_ID.removeprefix("mlx/")
+    if requested == iq_model:
+        return "http://127.0.0.1:11235/v1"
+    return "http://127.0.0.1:11234/v1"
+
+
+def _detect_fixed_iq_mlx_gateway_models(*, timeout: float = 1.5) -> list[dict] | None:
+    """Read the dedicated iQ catalog from its one fixed loopback endpoint."""
+
+    base_url = "http://127.0.0.1:11235/v1"
+    try:
+        request = urllib.request.Request(
+            f"{base_url}/models",
+            headers={"Accept": "application/json"},
+        )
+        with auto_reply_ondevice._local_only_urlopen(
+            request,
+            timeout=max(0.1, min(timeout, 3.0)),
+        ) as response:
+            raw = response.read(auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES + 1)
+        if len(raw) > auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES:
+            return None
+        payload = json.loads(raw.decode("utf-8", "replace"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return None
+    except Exception:
+        return None
+
+    models: list[dict] = []
+    for entry in payload["data"]:
+        if not isinstance(entry, dict):
+            return None
+        model_id = str(entry.get("id") or "").strip()
+        owner = str(entry.get("owned_by") or "").strip()
+        if model_id and (model_id.startswith("mlx/") or owner.casefold() == "mlx-serve"):
+            model = {"id": model_id, "owned_by": owner}
+            if "loaded" in entry:
+                model["loaded"] = entry.get("loaded")
+            if "state" in entry:
+                model["state"] = str(entry.get("state") or "")
+            capabilities = entry.get("capabilities")
+            if isinstance(capabilities, list):
+                model["capabilities"] = [
+                    value.strip()
+                    for value in capabilities[:32]
+                    if isinstance(value, str) and value.strip()
+                ]
+            models.append(model)
+    return models
+
+
 def _exact_advertised_mlx_model_id(advertised: list[dict], requested_model: str) -> str:
     """Return the one ready catalog id matching the request after ``mlx/`` normalization."""
 
@@ -11774,12 +11830,19 @@ def _run_opencodex_generation_unleased(
     target_model = model
     model_capabilities: list[str] = []
     if local_mlx:
-        gateway_base_url, _ = discover_mlx_gateway(
-            candidates=("http://127.0.0.1:11234/v1",)
-        )
-        if not gateway_base_url:
-            return 1, b"", b"mlx_serve_gateway_unavailable"
-        advertised = detect_mlx_gateway_models(base_url=gateway_base_url)
+        mlx_gateway_base_url = _mlx_serve_gateway_base_url(target_model)
+        if mlx_gateway_base_url == "http://127.0.0.1:11235/v1":
+            advertised = _detect_fixed_iq_mlx_gateway_models()
+            if advertised is None:
+                return 1, b"", b"mlx_serve_gateway_unavailable"
+            gateway_base_url = mlx_gateway_base_url
+        else:
+            gateway_base_url, _ = discover_mlx_gateway(
+                candidates=(mlx_gateway_base_url,)
+            )
+            if not gateway_base_url:
+                return 1, b"", b"mlx_serve_gateway_unavailable"
+            advertised = detect_mlx_gateway_models(base_url=gateway_base_url)
         advertised_model = _exact_advertised_mlx_model_id(advertised, target_model)
         if not advertised_model:
             reason = (

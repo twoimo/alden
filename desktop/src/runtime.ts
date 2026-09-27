@@ -185,12 +185,26 @@ function parseModelAction(
 ): ModelActionResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) return failedModelAction(action, model);
   const record = value as Record<string, unknown>;
-  const contractMatches = record.ok === true && record.action === action && record.model === model;
+  const responseMatches = record.action === action && record.model === model;
+  const contractMatches = record.ok === true && responseMatches;
   const stored = record.stored === true;
   const prepared = record.prepared === true;
   const needsPrepare = record.needs_prepare === true;
   const completed = action === "model-set" ? stored : prepared;
-  if (!contractMatches || !completed) return failedModelAction(action, model);
+  if (!contractMatches || !completed) {
+    const failed = failedModelAction(action, model);
+    if (
+      action === "model-set"
+      && responseMatches
+      && record.ok === false
+      && record.stored === false
+      && record.prepared === false
+      && record.needs_prepare === true
+    ) {
+      failed.needsPrepare = true;
+    }
+    return failed;
+  }
   return { ok: true, action, model, stored, prepared, needsPrepare };
 }
 
@@ -209,6 +223,74 @@ async function invokeLocalModelAction(
 
 export async function setResidentModel(invokeFn: SettingsInvoke = invoke): Promise<ModelActionResult> {
   return invokeLocalModelAction("model-set", RESIDENT_MODEL_ID, invokeFn);
+}
+
+type ResidentLaunchReadyReason = "launch_ready" | "launch_already_running";
+
+export interface ResidentLaunchResult {
+  ok: boolean;
+  reason: ResidentLaunchReadyReason | "launch_failed";
+}
+
+export type ResidentModelSelectionPhase = "launching" | "retrying";
+export type ResidentModelSelectionOutcome = "selected" | "set_failed" | "launch_failed" | "retry_failed";
+
+export interface ResidentModelSelectionResult {
+  ok: boolean;
+  outcome: ResidentModelSelectionOutcome;
+}
+
+const RESIDENT_MODEL_NAME = RESIDENT_MODEL_ID.split("/", 2)[1];
+
+function parseResidentLaunch(value: unknown): ResidentLaunchResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, reason: "launch_failed" };
+  }
+  const record = value as Record<string, unknown>;
+  const reason = record.reason === "launch_ready" || record.reason === "launch_already_running"
+    ? record.reason
+    : null;
+  if (
+    record.ok !== true
+    || record.action !== "mlx-server-launch"
+    || record.model !== RESIDENT_MODEL_NAME
+    || reason === null
+  ) {
+    return { ok: false, reason: "launch_failed" };
+  }
+  return { ok: true, reason };
+}
+
+export async function launchResidentModel(invokeFn: SettingsInvoke = invoke): Promise<ResidentLaunchResult> {
+  try {
+    const value = await invokeFn<unknown>("fetch_settings_action", {
+      action: "mlx-server-launch",
+      model: RESIDENT_MODEL_ID,
+      explicitOptIn: true,
+    });
+    return parseResidentLaunch(value);
+  } catch {
+    return { ok: false, reason: "launch_failed" };
+  }
+}
+
+export async function selectResidentModel(
+  invokeFn: SettingsInvoke = invoke,
+  onPhase?: (phase: ResidentModelSelectionPhase) => void,
+): Promise<ResidentModelSelectionResult> {
+  const initial = await setResidentModel(invokeFn);
+  if (initial.ok) return { ok: true, outcome: "selected" };
+  if (!initial.needsPrepare) return { ok: false, outcome: "set_failed" };
+
+  onPhase?.("launching");
+  const launch = await launchResidentModel(invokeFn);
+  if (!launch.ok) return { ok: false, outcome: "launch_failed" };
+
+  onPhase?.("retrying");
+  const retry = await setResidentModel(invokeFn);
+  return retry.ok
+    ? { ok: true, outcome: "selected" }
+    : { ok: false, outcome: "retry_failed" };
 }
 
 export async function prepareSwapModel(invokeFn: SettingsInvoke = invoke): Promise<ModelActionResult> {
