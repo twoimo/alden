@@ -27,12 +27,14 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::io::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::TimeZone;
@@ -2827,6 +2829,7 @@ fn write_auto_reply_aggregate(
     targets: &[local_db::LocalChat],
     children: &[Child],
     state: &str,
+    last_unexpected_exit: Option<&serde_json::Value>,
 ) -> Result<()> {
     let now = chrono::Utc::now();
     let now_unix = now.timestamp_millis() as f64 / 1_000.0;
@@ -2889,6 +2892,7 @@ fn write_auto_reply_aggregate(
         "room_count": summaries.len(),
         "ready_room_count": ready_count,
         "targets": summaries,
+        "last_unexpected_exit": last_unexpected_exit,
     });
     let path = root.join("aggregate-status.json");
     let tmp = root.join(format!(".aggregate-status.{}.tmp", std::process::id()));
@@ -2911,6 +2915,51 @@ fn write_auto_reply_aggregate(
     fs::rename(tmp, path)?;
     fs::File::open(root)?.sync_all()?;
     Ok(())
+}
+
+fn auto_reply_unexpected_exit_evidence(
+    target: &local_db::LocalChat,
+    pid: u32,
+    status: &ExitStatus,
+    elapsed: Duration,
+) -> serde_json::Value {
+    #[cfg(unix)]
+    let signal = status.signal();
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let failure_class = if status.success() {
+        "unexpected_clean_exit"
+    } else if status.code().is_some() {
+        "process_exit_nonzero"
+    } else {
+        "process_signaled"
+    };
+    serde_json::json!({
+        "observed_at_unix_ms": chrono::Utc::now().timestamp_millis(),
+        "monotonic_elapsed_seconds": elapsed.as_secs_f64(),
+        "worker_kind": "room_supervisor",
+        "room_selector": format!("id:{}", target.chat_id),
+        "pid": pid,
+        "exit_code": status.code(),
+        "signal": signal,
+        "failure_class": failure_class,
+    })
+}
+
+fn capture_first_auto_reply_unexpected_exit(
+    slot: &mut Option<serde_json::Value>,
+    target: &local_db::LocalChat,
+    pid: u32,
+    status: &ExitStatus,
+    elapsed: Duration,
+) -> bool {
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(auto_reply_unexpected_exit_evidence(
+        target, pid, status, elapsed,
+    ));
+    true
 }
 
 fn is_empty_json_array(value: Option<&serde_json::Value>) -> bool {
@@ -5168,6 +5217,7 @@ fn run_auto_reply(
 
     install_auto_reply_signal_handlers();
     let mut children = AutoReplyChildrenGuard::new(targets.len());
+    let mut child_started_at = Vec::with_capacity(targets.len());
     for (target, enrollment_floor) in targets.iter().zip(enrollment_floors.iter()) {
         if AUTO_REPLY_STOP.load(Ordering::Relaxed) {
             anyhow::bail!("auto-reply activation interrupted before worker startup");
@@ -5270,7 +5320,10 @@ fn run_auto_reply(
         }
         configure_auto_reply_process_group(&mut command);
         match command.spawn() {
-            Ok(child) => children.children.push(child),
+            Ok(child) => {
+                child_started_at.push(Instant::now());
+                children.children.push(child);
+            }
             Err(error) => {
                 anyhow::bail!("start AutoReply worker for {}: {error}", target.chat_name);
             }
@@ -5280,10 +5333,13 @@ fn run_auto_reply(
     if AUTO_REPLY_STOP.load(Ordering::Relaxed) {
         anyhow::bail!("auto-reply activation interrupted during worker startup");
     }
-    write_auto_reply_aggregate(&root, &targets, &children.children, "running")?;
+    // Aggregate status is diagnostic only. A write failure must not tear down
+    // otherwise healthy room supervisors.
+    let _ = write_auto_reply_aggregate(&root, &targets, &children.children, "running", None);
     emit_auto_reply_preflight(json_output, false, &targets, &root, true, None, true);
 
     let mut failed = false;
+    let mut first_unexpected_exit: Option<serde_json::Value> = None;
     let mut next_aggregate_update = std::time::Instant::now();
     loop {
         if AUTO_REPLY_STOP.load(Ordering::Relaxed) {
@@ -5293,18 +5349,44 @@ fn run_auto_reply(
         if std::time::Instant::now() >= next_aggregate_update {
             // Aggregate status is observational only; a transient dashboard
             // write must not stop otherwise healthy per-room safety workers.
-            let _ = write_auto_reply_aggregate(&root, &targets, &children.children, "running");
+            let _ = write_auto_reply_aggregate(
+                &root,
+                &targets,
+                &children.children,
+                "running",
+                first_unexpected_exit.as_ref(),
+            );
             next_aggregate_update = std::time::Instant::now() + Duration::from_secs(1);
         }
         let mut child_exited = false;
-        for child in &mut children.children {
-            if child.try_wait()?.is_some() {
+        let mut captured_unexpected_exit = false;
+        for (index, child) in children.children.iter_mut().enumerate() {
+            let pid = child.id();
+            if let Some(status) = child.try_wait()? {
                 // A room supervisor is persistent. Any exit before the parent
                 // receives its own stop signal means that room lost coverage,
                 // even when the child happened to return status 0.
                 failed = true;
                 child_exited = true;
+                captured_unexpected_exit |= capture_first_auto_reply_unexpected_exit(
+                    &mut first_unexpected_exit,
+                    &targets[index],
+                    pid,
+                    &status,
+                    child_started_at[index].elapsed(),
+                );
             }
+        }
+        if captured_unexpected_exit {
+            // Persist the first observed cause before terminating sibling
+            // process groups. Diagnostic I/O remains observational only.
+            let _ = write_auto_reply_aggregate(
+                &root,
+                &targets,
+                &children.children,
+                "stopping",
+                first_unexpected_exit.as_ref(),
+            );
         }
         if child_exited {
             children.stop();
@@ -5319,7 +5401,13 @@ fn run_auto_reply(
             failed = true;
         }
     }
-    write_auto_reply_aggregate(&root, &targets, &children.children, "stopped")?;
+    let _ = write_auto_reply_aggregate(
+        &root,
+        &targets,
+        &children.children,
+        "stopped",
+        first_unexpected_exit.as_ref(),
+    );
     children.disarm();
     if AUTO_REPLY_GUARDIAN_LOST.load(Ordering::Acquire) {
         anyhow::bail!("session guardian liveness was lost; all AutoReply workers were stopped");
@@ -11273,6 +11361,7 @@ connection.close()
             std::slice::from_ref(&target),
             std::slice::from_ref(&child),
             "running",
+            None,
         )
         .expect("write live aggregate");
         let aggregate: serde_json::Value =
@@ -11284,6 +11373,7 @@ connection.close()
         assert_eq!(aggregate["room_count"], 1);
         assert_eq!(aggregate["ready_room_count"], 1);
         assert_eq!(aggregate["targets"][0]["ready"], true);
+        assert!(aggregate["last_unexpected_exit"].is_null());
         assert_eq!(
             fs::metadata(root.path().join("aggregate-status.json"))
                 .unwrap()
@@ -11292,8 +11382,88 @@ connection.close()
                 & 0o777,
             0o600
         );
+        let exit_evidence = serde_json::json!({
+            "worker_kind": "room_supervisor",
+            "room_selector": "id:42",
+            "pid": child.id(),
+            "exit_code": 7,
+            "failure_class": "process_exit_nonzero",
+        });
+        write_auto_reply_aggregate(
+            root.path(),
+            std::slice::from_ref(&target),
+            std::slice::from_ref(&child),
+            "stopping",
+            Some(&exit_evidence),
+        )
+        .expect("persist exit evidence");
+        let stopping: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.path().join("aggregate-status.json")).unwrap())
+                .unwrap();
+        assert_eq!(stopping["last_unexpected_exit"], exit_evidence);
         child.kill().ok();
         child.wait().ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auto_reply_exit_evidence_preserves_first_room_and_clean_exit_failure() {
+        fn target(chat_id: i64, name: &str) -> local_db::LocalChat {
+            local_db::LocalChat {
+                chat_id,
+                chat_type: 0,
+                chat_name: name.to_string(),
+                database_chat_name: Some(name.to_string()),
+                active_members_count: 4,
+                last_log_id: 100,
+                last_updated_at: 0,
+                unread_count: 0,
+                display_name: name.to_string(),
+            }
+        }
+
+        let first_target = target(42, "first room");
+        let second_target = target(43, "second room");
+        let mut first_child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn clean-exit fake supervisor");
+        let first_pid = first_child.id();
+        let first_status = first_child.wait().expect("wait clean-exit fake supervisor");
+        let mut second_child = Command::new("/bin/sh")
+            .args(["-c", "exit 9"])
+            .spawn()
+            .expect("spawn failing fake supervisor");
+        let second_pid = second_child.id();
+        let second_status = second_child.wait().expect("wait failing fake supervisor");
+
+        let mut evidence = None;
+        assert!(capture_first_auto_reply_unexpected_exit(
+            &mut evidence,
+            &first_target,
+            first_pid,
+            &first_status,
+            Duration::from_millis(125),
+        ));
+        assert!(!capture_first_auto_reply_unexpected_exit(
+            &mut evidence,
+            &second_target,
+            second_pid,
+            &second_status,
+            Duration::from_millis(250),
+        ));
+
+        let evidence = evidence.expect("first exit evidence");
+        assert_eq!(evidence["worker_kind"], "room_supervisor");
+        assert_eq!(evidence["room_selector"], "id:42");
+        assert_eq!(evidence["pid"], first_pid);
+        assert_eq!(evidence["exit_code"], 0);
+        assert_eq!(evidence["failure_class"], "unexpected_clean_exit");
+        assert_eq!(evidence["signal"], serde_json::Value::Null);
+        assert_eq!(evidence["monotonic_elapsed_seconds"], 0.125);
+        assert!(evidence["observed_at_unix_ms"]
+            .as_i64()
+            .is_some_and(|value| value > 0));
     }
 
     #[cfg(unix)]

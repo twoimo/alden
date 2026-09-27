@@ -321,6 +321,140 @@ def _write_session_status(path: Path, value: dict[str, Any]) -> None:
             os.unlink(temporary)
 
 
+def _read_last_worker_exit_evidence(
+    state_root: Path,
+    *,
+    not_before_unix_ms: int | None = None,
+) -> dict[str, Any] | None:
+    """Read only the fixed, bounded worker-exit fields from aggregate status."""
+    path = state_root / "aggregate-status.json"
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        return None
+    try:
+        fd = os.open(
+            path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | no_follow,
+        )
+    except OSError:
+        return None
+    try:
+        metadata = os.fstat(fd)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size > MAX_OUTPUT_BYTES
+        ):
+            return None
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            encoded = stream.read(MAX_OUTPUT_BYTES + 1)
+        if len(encoded) > MAX_OUTPUT_BYTES:
+            return None
+        try:
+            value = json.loads(encoded.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if not isinstance(value, dict) or value.get("schema_version") != 2:
+        return None
+    evidence = value.get("last_unexpected_exit")
+    if not isinstance(evidence, dict):
+        return None
+
+    required_fields = {
+        "observed_at_unix_ms",
+        "monotonic_elapsed_seconds",
+        "worker_kind",
+        "room_selector",
+        "pid",
+        "exit_code",
+        "signal",
+        "failure_class",
+    }
+    if not required_fields.issubset(evidence):
+        return None
+
+    observed_at_unix_ms = evidence.get("observed_at_unix_ms")
+    elapsed = evidence.get("monotonic_elapsed_seconds")
+    worker_kind = evidence.get("worker_kind")
+    room_selector = evidence.get("room_selector")
+    pid = evidence.get("pid")
+    exit_code = evidence.get("exit_code")
+    exit_signal = evidence.get("signal")
+    failure_class = evidence.get("failure_class")
+    if (
+        isinstance(observed_at_unix_ms, bool)
+        or not isinstance(observed_at_unix_ms, int)
+        or observed_at_unix_ms <= 0
+        or observed_at_unix_ms > 2**63 - 1
+        or (
+            not_before_unix_ms is not None
+            and observed_at_unix_ms < not_before_unix_ms
+        )
+        or isinstance(elapsed, bool)
+        or not isinstance(elapsed, (int, float))
+        or not 0.0 <= float(elapsed) <= 365.0 * 24.0 * 60.0 * 60.0
+        or worker_kind != "room_supervisor"
+        or not isinstance(room_selector, str)
+        or not room_selector.startswith("id:")
+        or not room_selector.isascii()
+        or not room_selector[3:].isdigit()
+        or not 0 < len(room_selector) <= 64
+        or not 0 < int(room_selector[3:]) <= 2**63 - 1
+        or isinstance(pid, bool)
+        or not isinstance(pid, int)
+        or not 0 < pid < 2**31
+        or (
+            exit_code is not None
+            and (
+                isinstance(exit_code, bool)
+                or not isinstance(exit_code, int)
+                or not 0 <= exit_code <= 255
+            )
+        )
+        or (
+            exit_signal is not None
+            and (
+                isinstance(exit_signal, bool)
+                or not isinstance(exit_signal, int)
+                or not 0 < exit_signal <= 255
+            )
+        )
+        or not isinstance(failure_class, str)
+        or failure_class
+        not in {
+            "unexpected_clean_exit",
+            "process_exit_nonzero",
+            "process_signaled",
+        }
+    ):
+        return None
+    if failure_class == "unexpected_clean_exit":
+        if exit_code != 0 or exit_signal is not None:
+            return None
+    elif failure_class == "process_exit_nonzero":
+        if exit_code is None or exit_code == 0 or exit_signal is not None:
+            return None
+    elif failure_class == "process_signaled":
+        if exit_code is not None or exit_signal is None:
+            return None
+    return {
+        "observed_at_unix_ms": observed_at_unix_ms,
+        "monotonic_elapsed_seconds": float(elapsed),
+        "worker_kind": worker_kind,
+        "room_selector": room_selector,
+        "pid": pid,
+        "exit_code": exit_code,
+        "signal": exit_signal,
+        "failure_class": failure_class,
+    }
+
+
 def _read_receipt(path: Path) -> dict[str, Any]:
     try:
         metadata = path.lstat()
@@ -1266,6 +1400,13 @@ def run_session(
     status_writer = status_writer or _write_session_status
     status_path = _session_status_path(state_root)
     started_at_ns = time_ns()
+    selector_set_sha256 = hashlib.sha256(
+        json.dumps(
+            list(chat_selectors),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     attempt = 0
     restart_count = 0
     consecutive_failures = 0
@@ -1273,6 +1414,8 @@ def run_session(
     active_child: subprocess.Popen[Any] | None = None
     active_control_write_fd: int | None = None
     shutdown_reason = "stop_requested"
+    last_session_exit: dict[str, Any] | None = None
+    last_worker_exit: dict[str, Any] | None = None
 
     def close_active_control() -> None:
         nonlocal active_control_write_fd
@@ -1305,19 +1448,15 @@ def run_session(
                 "restart_count": restart_count,
                 "consecutive_failures": consecutive_failures,
                 "last_exit_code": last_exit_code,
+                "last_session_exit": last_session_exit,
+                "last_worker_exit": last_worker_exit,
                 "backoff_seconds": backoff_seconds,
                 "next_attempt_at_unix_ns": (
                     updated_at_ns + int(backoff_seconds * 1_000_000_000)
                     if backoff_seconds > 0
                     else None
                 ),
-                "chat_selectors_sha256": hashlib.sha256(
-                    json.dumps(
-                        list(chat_selectors),
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    ).encode("utf-8")
-                ).hexdigest(),
+                "chat_selectors_sha256": selector_set_sha256,
                 "chat_selector_count": len(chat_selectors),
                 "started_at_unix_ns": started_at_ns,
                 "updated_at_unix_ns": updated_at_ns,
@@ -1411,6 +1550,8 @@ def run_session(
                 publish("stopping", reason=shutdown_reason)
                 break
 
+            prior_worker_exit = _read_last_worker_exit_evidence(state_root)
+            attempt_started_unix_ms = time_ns() // 1_000_000
             control_read_fd: int | None = None
             control_write_fd: int | None = None
             spawned_child: subprocess.Popen[Any] | None = None
@@ -1490,11 +1631,29 @@ def run_session(
 
             if child_exit_code is None:
                 raise RuntimeError("session watchdog lost the owned child state")
+            guardian_pid = active_child.pid
+            child_elapsed = max(0.0, monotonic() - child_started)
             last_exit_code = child_exit_code
+            last_session_exit = {
+                "observed_at_unix_ns": time_ns(),
+                "monotonic_elapsed_seconds": child_elapsed,
+                "worker_kind": "session_guardian",
+                "selector_set_sha256": selector_set_sha256,
+                "pid": guardian_pid,
+                "exit_code": child_exit_code,
+                "failure_class": "unexpected_guardian_exit",
+                "attempt": attempt,
+            }
+            worker_exit = _read_last_worker_exit_evidence(
+                state_root,
+                not_before_unix_ms=attempt_started_unix_ms,
+            )
+            if worker_exit is not None and worker_exit != prior_worker_exit:
+                last_worker_exit = {**worker_exit, "session_attempt": attempt}
             active_child = None
             close_active_control()
             restart_count += 1
-            if monotonic() - child_started >= SESSION_STABLE_RUN_SECONDS:
+            if child_elapsed >= SESSION_STABLE_RUN_SECONDS:
                 consecutive_failures = 0
             consecutive_failures += 1
             _invalidate_receipt(state_root)

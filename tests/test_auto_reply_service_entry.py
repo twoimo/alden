@@ -1161,6 +1161,268 @@ exit 64
                 0o600,
             )
 
+    def test_worker_exit_evidence_requires_complete_consistent_private_shape(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            state = module._private_state_root(fixture["state"])
+            path = state / "aggregate-status.json"
+            valid = {
+                "observed_at_unix_ms": 2_000,
+                "monotonic_elapsed_seconds": 0.125,
+                "worker_kind": "room_supervisor",
+                "room_selector": "id:42",
+                "pid": 8123,
+                "exit_code": 7,
+                "signal": None,
+                "failure_class": "process_exit_nonzero",
+            }
+
+            def write(evidence):
+                path.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": 2,
+                            "last_unexpected_exit": evidence,
+                        }
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                path.chmod(0o600)
+
+            write({**valid, "ignored_detail": "bounded-reader-must-strip-this"})
+            self.assertEqual(module._read_last_worker_exit_evidence(state), valid)
+
+            for missing in valid:
+                incomplete = dict(valid)
+                incomplete.pop(missing)
+                write(incomplete)
+                with self.subTest(missing=missing):
+                    self.assertIsNone(module._read_last_worker_exit_evidence(state))
+
+            for invalid in (
+                {**valid, "failure_class": "unexpected_clean_exit"},
+                {**valid, "exit_code": None},
+                {
+                    **valid,
+                    "exit_code": None,
+                    "signal": 9,
+                    "failure_class": "process_exit_nonzero",
+                },
+                {
+                    **valid,
+                    "exit_code": 7,
+                    "signal": 9,
+                    "failure_class": "process_signaled",
+                },
+                {**valid, "exit_code": -9},
+                {**valid, "room_selector": "id:0"},
+                {**valid, "room_selector": "id:\u00b2"},
+                {**valid, "failure_class": []},
+            ):
+                write(invalid)
+                with self.subTest(invalid=invalid):
+                    self.assertIsNone(module._read_last_worker_exit_evidence(state))
+
+            write(valid)
+            path.chmod(0o644)
+            self.assertIsNone(module._read_last_worker_exit_evidence(state))
+
+            write(valid)
+            with mock.patch.object(
+                module.os, "fstat", side_effect=OSError("diagnostic read failure")
+            ):
+                self.assertIsNone(module._read_last_worker_exit_evidence(state))
+
+            path.unlink()
+            target = state / "aggregate-status-target.json"
+            target.write_text(
+                json.dumps(
+                    {"schema_version": 2, "last_unexpected_exit": valid}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            target.chmod(0o600)
+            path.symlink_to(target)
+            self.assertIsNone(module._read_last_worker_exit_evidence(state))
+
+    def test_worker_exit_evidence_rejects_fifo_without_blocking(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            os.mkfifo(state / "aggregate-status.json", 0o600)
+            probe = (
+                "import importlib.util,sys; from pathlib import Path; "
+                "s=importlib.util.spec_from_file_location('exit_probe',sys.argv[1]); "
+                "m=importlib.util.module_from_spec(s); s.loader.exec_module(m); "
+                "assert m._read_last_worker_exit_evidence(Path(sys.argv[2])) is None"
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-c", probe, str(ENTRY), str(state)],
+                capture_output=True, text=True, timeout=3,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_session_watchdog_does_not_attribute_prior_attempt_worker_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            state = module._private_state_root(fixture["state"])
+            aggregate = state / "aggregate-status.json"
+            stale = {
+                "observed_at_unix_ms": 1_000,
+                "monotonic_elapsed_seconds": 0.5,
+                "worker_kind": "room_supervisor",
+                "room_selector": "id:42",
+                "pid": 7001,
+                "exit_code": 9,
+                "signal": None,
+                "failure_class": "process_exit_nonzero",
+            }
+            aggregate.write_text(
+                json.dumps(
+                    {"schema_version": 2, "last_unexpected_exit": stale}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            aggregate.chmod(0o600)
+            statuses = []
+
+            class ImmediateChild:
+                pid = 9001
+
+                def poll(self):
+                    return 23
+
+            class StopEvent:
+                stopped = False
+
+                def is_set(self):
+                    return self.stopped
+
+                def set(self):
+                    self.stopped = True
+
+            event = StopEvent()
+
+            def stop_after_backoff(_seconds):
+                event.set()
+                return True
+
+            result = module.run_session(
+                fixture["python"],
+                fixture["entry"],
+                fixture["binary"],
+                fixture["config"],
+                "bind:42:room",
+                state,
+                popen_factory=lambda *_args, **_kwargs: ImmediateChild(),
+                preflight=lambda *_args: None,
+                stop_event=event,
+                wait=stop_after_backoff,
+                monotonic=lambda: 10.0,
+                time_ns=lambda: 5_000_000_000,
+                status_writer=lambda _path, value: statuses.append(dict(value)),
+                install_signal_handlers=False,
+            )
+
+            self.assertEqual(result, 0)
+            child_exit = next(
+                status for status in statuses if status["reason"] == "child_exited"
+            )
+            self.assertEqual(child_exit["last_exit_code"], 23)
+            self.assertEqual(child_exit["last_session_exit"]["attempt"], 1)
+            self.assertIsNone(child_exit["last_worker_exit"])
+
+    def test_session_watchdog_propagates_only_fresh_bounded_worker_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._fixture(Path(temporary))
+            module = fixture["module"]
+            state = module._private_state_root(fixture["state"])
+            aggregate = state / "aggregate-status.json"
+            statuses = []
+            evidence = {
+                "observed_at_unix_ms": 6_000,
+                "monotonic_elapsed_seconds": 0.25,
+                "worker_kind": "room_supervisor",
+                "room_selector": "id:42",
+                "pid": 7002,
+                "exit_code": None,
+                "signal": 9,
+                "failure_class": "process_signaled",
+                "ignored_detail": "must-not-propagate",
+            }
+
+            class ImmediateChild:
+                pid = 9002
+
+                def poll(self):
+                    return 31
+
+            class StopEvent:
+                stopped = False
+
+                def is_set(self):
+                    return self.stopped
+
+                def set(self):
+                    self.stopped = True
+
+            event = StopEvent()
+
+            def fake_popen(*_args, **_kwargs):
+                aggregate.write_text(
+                    json.dumps(
+                        {"schema_version": 2, "last_unexpected_exit": evidence}
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                aggregate.chmod(0o600)
+                return ImmediateChild()
+
+            def stop_after_backoff(_seconds):
+                event.set()
+                return True
+
+            result = module.run_session(
+                fixture["python"],
+                fixture["entry"],
+                fixture["binary"],
+                fixture["config"],
+                "bind:42:room",
+                state,
+                popen_factory=fake_popen,
+                preflight=lambda *_args: None,
+                stop_event=event,
+                wait=stop_after_backoff,
+                monotonic=lambda: 10.0,
+                time_ns=lambda: 5_000_000_000,
+                status_writer=lambda _path, value: statuses.append(dict(value)),
+                install_signal_handlers=False,
+            )
+
+            self.assertEqual(result, 0)
+            child_exit = next(
+                status for status in statuses if status["reason"] == "child_exited"
+            )
+            self.assertEqual(
+                child_exit["last_worker_exit"],
+                {
+                    "observed_at_unix_ms": 6_000,
+                    "monotonic_elapsed_seconds": 0.25,
+                    "worker_kind": "room_supervisor",
+                    "room_selector": "id:42",
+                    "pid": 7002,
+                    "exit_code": None,
+                    "signal": 9,
+                    "failure_class": "process_signaled",
+                    "session_attempt": 1,
+                },
+            )
+
     def test_session_fence_created_during_preflight_never_spawns(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self._fixture(Path(temporary))
