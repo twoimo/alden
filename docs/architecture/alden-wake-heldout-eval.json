@@ -1,8 +1,8 @@
 {
   "schema": "alden.wake.experimental-eval/1",
-  "generated_at_kst": "2026-09-25T02:13:07+09:00",
+  "generated_at_kst": "2026-09-27T20:44:52+09:00",
   "evaluator": "scripts/evaluate_alden_korean_wake.py",
-  "evaluator_sha256": "184bcf0f3379ea1c6c8d108d7c11ef79ab4305ca482199ea0f83c2e75c5f269c",
+  "evaluator_sha256": "81fac766ac251317eb897534f22c4231f44bd069055cd68dd444f59e1cbace67",
   "threshold": 0.65,
   "threshold_changed": false,
   "candidate": {
@@ -31,18 +31,19 @@
     "synthetic_speech_only": true,
     "human_speakers": false,
     "microphones_or_rooms": false,
-    "note": "One macOS Yuna synthetic voice. Results are a small prototype check, not human-speaker generalization evidence."
+    "independent_clip_state_reset": true,
+    "note": "One macOS Yuna synthetic voice. Each WAV starts from reset, silence-warmed detector state; this remains a small synthetic prototype check, not human-speaker generalization evidence."
   },
   "summary": {
-    "positive_accepts": 3,
+    "positive_accepts": 2,
     "positive_total": 3,
-    "positive_accept_rate": 1.0,
-    "negative_false_accepts": 1,
+    "positive_accept_rate": 0.666667,
+    "negative_false_accepts": 0,
     "negative_total": 3,
-    "negative_false_accept_rate": 0.333333,
+    "negative_false_accept_rate": 0.0,
     "stock_positive_accepts": 0,
     "stock_negative_false_accepts": 0,
-    "closest_negative": "neg-Yuna-0"
+    "closest_negative": "neg-Yuna-1"
   },
   "rows": [
     {
@@ -62,7 +63,7 @@
       "kind": "positive",
       "text": "올든",
       "voice": "Yuna",
-      "custom_max": 0.87356,
+      "custom_max": 0.805785,
       "accepted": true,
       "stock_max": 0.0,
       "stock_accepted": false,
@@ -74,8 +75,8 @@
       "kind": "positive",
       "text": "올든",
       "voice": "Yuna",
-      "custom_max": 0.972938,
-      "accepted": true,
+      "custom_max": 0.404137,
+      "accepted": false,
       "stock_max": 0.0,
       "stock_accepted": false,
       "frames": 18,
@@ -86,8 +87,8 @@
       "kind": "negative",
       "text": "안녕하세요",
       "voice": "Yuna",
-      "custom_max": 0.993801,
-      "accepted": true,
+      "custom_max": 0.264813,
+      "accepted": false,
       "stock_max": 0.0,
       "stock_accepted": false,
       "frames": 45,
@@ -98,7 +99,7 @@
       "kind": "negative",
       "text": "올든 봇이야",
       "voice": "Yuna",
-      "custom_max": 0.64463,
+      "custom_max": 0.383677,
       "accepted": false,
       "stock_max": 0.0,
       "stock_accepted": false,
@@ -110,7 +111,7 @@
       "kind": "negative",
       "text": "오늘 날씨 어때",
       "voice": "Yuna",
-      "custom_max": 0.141505,
+      "custom_max": 0.247573,
       "accepted": false,
       "stock_max": 0.0,
       "stock_accepted": false,
@@ -121,7 +122,7 @@
   "release_gate": {
     "passed": false,
     "reasons": [
-      "synthetic_negative_false_accept_rate_nonzero",
+      "synthetic_positive_accept_rate_below_one",
       "no_human_speaker_trials"
     ],
     "runtime_enabled": false

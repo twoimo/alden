@@ -375,6 +375,14 @@ def score_clip(frontend: Any, samples: np.ndarray) -> dict[str, Any]:
     }
 
 
+def reset_independent_clip(frontend: Any) -> None:
+    """Reset detector history when the next WAV is an independent sample."""
+
+    reset = getattr(frontend, "reset_for_independent_clip", None)
+    if callable(reset):
+        reset()
+
+
 def build_corpus(
     corpus_dir: Path,
     voices: Sequence[str],
@@ -423,6 +431,7 @@ def evaluate(
     rows: list[dict[str, Any]] = []
     for entry in entries:
         samples = loader(Path(entry["wav"]))
+        reset_independent_clip(frontend)
         result = score_clip(frontend, samples)
         rows.append(
             {
@@ -437,6 +446,7 @@ def evaluate(
         candidate = Path(path)
         if not candidate.is_file():
             continue
+        reset_independent_clip(frontend)
         references.append({"wav": candidate.name, "note": "seen_voice_reference", **score_clip(frontend, loader(candidate))})
 
     positives = [row for row in rows if row["kind"] == "positive"]
@@ -460,6 +470,7 @@ def evaluate(
             "human_speakers": False,
             "microphones_or_rooms": False,
             "threshold_changed": False,
+            "independent_clip_state_reset": True,
         },
         "summary": {
             "positive_accepts": accepted,

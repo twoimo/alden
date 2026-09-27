@@ -24,7 +24,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import evaluate_alden_korean_wake as evaluations  # noqa: E402
-from alden_voice import WAKE_THRESHOLD  # noqa: E402
+from alden_voice import OpenWakeVadFrontend, WAKE_THRESHOLD  # noqa: E402
 
 
 try:  # The focused CI interpreter ships without numpy.
@@ -82,6 +82,40 @@ class ScriptedFrontend:
         return FakeAnalysis(self.stock[index], self.custom[index])
 
 
+class StatefulFrontend:
+    """Expose cross-clip carryover unless the evaluator resets clip state."""
+
+    def __init__(self) -> None:
+        self.frame_index = 0
+        self.reset_calls = 0
+
+    def reset_for_independent_clip(self) -> None:
+        self.frame_index = 0
+        self.reset_calls += 1
+
+    def analyze(self, frame: bytes) -> FakeAnalysis:
+        self.frame_index += 1
+        return FakeAnalysis(0.0, 0.7 if self.frame_index >= 2 else 0.1)
+
+
+class FakeResettableWakeModel:
+    def __init__(self) -> None:
+        self.reset_calls = 0
+        self.predict_sizes: list[int] = []
+
+    def reset(self) -> None:
+        self.reset_calls += 1
+
+    def predict(self, samples: object) -> dict[str, float]:
+        self.predict_sizes.append(len(samples))  # type: ignore[arg-type]
+        return {"alden": 0.0}
+
+
+class FakeVad:
+    def is_speech(self, frame: bytes, sample_rate: int) -> bool:
+        return False
+
+
 class WakeThresholdBoundaryTests(unittest.TestCase):
     def test_accepts_exactly_at_the_pinned_threshold(self) -> None:
         frontend = ScriptedFrontend([WAKE_THRESHOLD])
@@ -116,6 +150,16 @@ class WakeThresholdBoundaryTests(unittest.TestCase):
         before = WAKE_THRESHOLD
         evaluations.score_clip(ScriptedFrontend([0.99]), FakeFrames.of(2))
         self.assertEqual(evaluations.WAKE_THRESHOLD, before)
+
+
+@unittest.skipUnless(HAS_NUMPY, "numpy is required for openWakeWord silence warm-up")
+class FrontendClipResetTests(unittest.TestCase):
+    def test_reset_replaces_random_prefill_with_silence_again(self) -> None:
+        model = FakeResettableWakeModel()
+        frontend = OpenWakeVadFrontend(custom_model=model, vad=FakeVad())
+        frontend.reset_for_independent_clip()
+        self.assertEqual(model.reset_calls, 1)
+        self.assertEqual(model.predict_sizes, [1280] * 16)
 
 
 class EvaluationGuardTests(unittest.TestCase):
@@ -179,6 +223,28 @@ class EvaluationReportTests(unittest.TestCase):
         self.assertEqual(summary["false_accept_voices"], ["dylan"])
         self.assertFalse(report["scope"]["threshold_changed"])
         self.assertFalse(report["scope"]["human_speakers"])
+        self.assertTrue(report["scope"]["independent_clip_state_reset"])
+
+    def test_independent_clips_do_not_share_detector_history(self) -> None:
+        entries = self._entries(
+            [
+                ("negative", "aiden", "안녕하세요"),
+                ("negative", "dylan", "오늘 날씨 어때"),
+            ]
+        )
+        frontend = StatefulFrontend()
+        report = evaluations.evaluate(entries, frontend, loader=lambda path: FakeFrames.of(1))
+        self.assertEqual(frontend.reset_calls, 2)
+        self.assertEqual([row["custom_max"] for row in report["rows"]], [0.1, 0.1])
+        self.assertEqual(report["summary"]["negative_false_accepts"], 0)
+
+    def test_temporal_state_is_preserved_within_one_clip(self) -> None:
+        entries = self._entries([("positive", "aiden", "올든")])
+        frontend = StatefulFrontend()
+        report = evaluations.evaluate(entries, frontend, loader=lambda path: FakeFrames.of(2))
+        self.assertEqual(frontend.reset_calls, 1)
+        self.assertEqual(report["rows"][0]["custom_max"], 0.7)
+        self.assertTrue(report["rows"][0]["accepted"])
 
     def test_borderline_negatives_are_reported_below_threshold(self) -> None:
         entries = self._entries([("negative", "aiden", "올든 봇이야")])
@@ -283,4 +349,3 @@ class AudioQualityGuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

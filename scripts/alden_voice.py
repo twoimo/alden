@@ -447,6 +447,26 @@ class OpenWakeVadFrontend:
         for _ in range(16):
             model.predict(silence)
 
+    def reset_for_independent_clip(self) -> None:
+        """Start an offline clip from clean openWakeWord detector state.
+
+        Live microphone input is one continuous stream and must keep temporal
+        state. Offline release evaluation scores independent WAV files, so each
+        detector must be reset between files and silence-warmed again because
+        openWakeWord reset() recreates its random feature prefill.
+        """
+
+        seen: set[int] = set()
+        for model in (self.stock_model, self.custom_model):
+            if model is None or id(model) in seen:
+                continue
+            seen.add(id(model))
+            reset = getattr(model, "reset", None)
+            if not callable(reset):
+                raise RuntimeError("wake_model_reset_unavailable")
+            reset()
+            self._warm_custom_model(model)
+
     @staticmethod
     def _score(prediction: object) -> float:
         if not isinstance(prediction, dict):

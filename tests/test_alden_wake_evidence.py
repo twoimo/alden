@@ -20,7 +20,6 @@ from alden_voice import RELEASED_WAKE_MODEL, WAKE_THRESHOLD, resolve_custom_wake
 EVIDENCE = ROOT / "docs/architecture/alden-wake-heldout-eval.json"
 V5_EVIDENCE = ROOT / "docs/architecture/alden-wake-v5-heldout-eval.json"
 V5_TRAINING_REPORT = ROOT / "voice/models/experimental/alden_ko_ridge_candidate_v5.train.json"
-V4_FROZEN_EVALUATOR_SHA256 = "184bcf0f3379ea1c6c8d108d7c11ef79ab4305ca482199ea0f83c2e75c5f269c"
 V5_FROZEN_FIT_REFERENCE = {
     "positive_clips": 4,
     "negative_clips": 17,
@@ -44,9 +43,10 @@ class WakeEvidenceBundleTests(unittest.TestCase):
         self.assertIs(bundle["scope"]["microphones_or_rooms"], False)
         self.assertEqual(bundle["scope"]["voices"], ["Yuna"])
 
-    def test_v4_evaluator_provenance_is_frozen(self) -> None:
+    def test_v4_evaluator_hash_matches_current_source(self) -> None:
+        evaluator = ROOT / self.bundle["evaluator"]
         self.assertEqual(self.bundle["evaluator"], "scripts/evaluate_alden_korean_wake.py")
-        self.assertEqual(self.bundle["evaluator_sha256"], V4_FROZEN_EVALUATOR_SHA256)
+        self.assertEqual(self.bundle["evaluator_sha256"], hashlib.sha256(evaluator.read_bytes()).hexdigest())
 
     def test_v5_evaluator_hash_matches_current_source(self) -> None:
         bundle = json.loads(V5_EVIDENCE.read_text(encoding="utf-8"))
@@ -70,6 +70,38 @@ class WakeEvidenceBundleTests(unittest.TestCase):
                     "proof_scope": training["proof_scope"],
                 },
             )
+
+    def test_v5_isolated_evidence_still_fails_release_requirements(self) -> None:
+        bundle = json.loads(V5_EVIDENCE.read_text(encoding="utf-8"))
+        summary = bundle["summary"]
+        baseline = bundle["baseline"]["summary"]
+
+        self.assertEqual(bundle["threshold"], WAKE_THRESHOLD)
+        self.assertIs(bundle["scope"]["threshold_changed"], False)
+        self.assertIs(bundle["scope"]["independent_clip_state_reset"], True)
+        self.assertIs(bundle["scope"]["human_speakers"], False)
+        self.assertIs(bundle["scope"]["microphones_or_rooms"], False)
+        self.assertIs(bundle["split"]["disjoint_verified"], True)
+        self.assertEqual(bundle["split"]["voice_overlap"], [])
+        self.assertEqual(bundle["split"]["negative_phrase_overlap"], [])
+        self.assertEqual(bundle["split"]["clip_hash_overlap"], [])
+
+        self.assertEqual(summary["positive_accepts"], 1)
+        self.assertEqual(summary["positive_total"], 2)
+        self.assertAlmostEqual(summary["positive_accept_rate"], 0.5)
+        self.assertEqual(summary["negative_false_accepts"], 0)
+        self.assertEqual(summary["negative_total"], 10)
+        self.assertAlmostEqual(summary["negative_false_accept_rate"], 0.0)
+
+        self.assertEqual(baseline["positive_accepts"], 0)
+        self.assertEqual(baseline["positive_total"], 2)
+        self.assertAlmostEqual(baseline["positive_accept_rate"], 0.0)
+        self.assertEqual(baseline["negative_false_accepts"], 1)
+        self.assertEqual(baseline["negative_total"], 10)
+        self.assertAlmostEqual(baseline["negative_false_accept_rate"], 0.1)
+
+        self.assertIsNone(RELEASED_WAKE_MODEL)
+        self.assertIsNone(resolve_live_wake_model())
 
     def test_experimental_candidate_hash_when_available(self) -> None:
         candidate = self.bundle["candidate"]
@@ -101,16 +133,17 @@ class WakeEvidenceBundleTests(unittest.TestCase):
         self.assertEqual(summary["positive_total"], len(positives))
         self.assertEqual(summary["negative_false_accepts"], sum(row["accepted"] for row in negatives))
         self.assertEqual(summary["negative_total"], len(negatives))
-        self.assertAlmostEqual(summary["positive_accept_rate"], 1.0)
-        self.assertAlmostEqual(summary["negative_false_accept_rate"], 1 / 3, places=6)
+        self.assertAlmostEqual(summary["positive_accept_rate"], 2 / 3, places=6)
+        self.assertAlmostEqual(summary["negative_false_accept_rate"], 0.0)
         self.assertEqual(summary["stock_positive_accepts"], 0)
         self.assertEqual(summary["stock_negative_false_accepts"], 0)
+        self.assertIs(self.bundle["scope"]["independent_clip_state_reset"], True)
 
     def test_failed_gate_cannot_enable_a_live_microphone(self) -> None:
         gate = self.bundle["release_gate"]
         self.assertIs(gate["passed"], False)
         self.assertIs(gate["runtime_enabled"], False)
-        self.assertIn("synthetic_negative_false_accept_rate_nonzero", gate["reasons"])
+        self.assertIn("synthetic_positive_accept_rate_below_one", gate["reasons"])
         self.assertIn("no_human_speaker_trials", gate["reasons"])
         self.assertIsNone(RELEASED_WAKE_MODEL)
         self.assertIsNone(resolve_live_wake_model())
