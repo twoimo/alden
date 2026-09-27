@@ -5634,6 +5634,52 @@ class AldenBrowserBridgeActionTests(unittest.TestCase):
         print_json.assert_called_once_with(expected)
         legacy_main.assert_not_called()
 
+    def test_main_keeps_browser_noise_off_stdout(self):
+        module = load(f"auto_reply_menubar_tool_stdout_{id(self)}")
+        expected = {
+            "ok": True,
+            "status": "completed",
+            "errorCode": "",
+            "result": "example.com",
+        }
+
+        class BinaryInput:
+            def __init__(self, payload):
+                self.buffer = io.BytesIO(payload)
+
+        async def noisy_browser(**_kwargs):
+            print("browser-use progress line")
+            return expected
+
+        saved = sys.argv
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        try:
+            sys.argv = [
+                "auto-reply-menubar.py",
+                "--action",
+                "tool-browser",
+                "--state-root",
+                "/tmp/alden-state",
+                "--job-id",
+                "browser-noise",
+            ]
+            with mock.patch.object(module.sys, "stdin", BinaryInput(b"title task")), mock.patch.object(
+                module, "_scope_menubar_rooms_to_enrollment"
+            ), mock.patch.object(module, "_apply_catalog_mutates"), mock.patch.object(
+                module, "_tool_browser_payload", new=noisy_browser
+            ), mock.patch.object(module, "_orig_main") as legacy_main, contextlib.redirect_stdout(
+                stdout
+            ), contextlib.redirect_stderr(stderr):
+                self.assertEqual(module.main(), 0)
+        finally:
+            sys.argv = saved
+
+        self.assertEqual(json.loads(stdout.getvalue()), expected)
+        self.assertNotIn("browser-use progress line", stdout.getvalue())
+        self.assertIn("browser-use progress line", stderr.getvalue())
+        legacy_main.assert_not_called()
+
 
 class AldenMlxServerActionTests(unittest.TestCase):
     """The app-owned MLX server actions must stay bounded and opt-in gated."""

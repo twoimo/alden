@@ -108,6 +108,8 @@ pub enum BridgeError {
     DevelopmentDisabled,
     #[error("python_environment_missing_or_unsafe")]
     PythonEnv,
+    #[error("browser_environment_missing_or_unsafe")]
+    BrowserEnv,
     #[cfg_attr(not(test), allow(dead_code))]
     #[error("voice_environment_missing")]
     VoiceEnv,
@@ -155,6 +157,7 @@ struct PythonRun<'a> {
     output_limit: usize,
     stdin_payload: Option<&'a [u8]>,
     global_abort_grace: Option<Duration>,
+    browser_runtime: bool,
 }
 
 impl Default for PythonRun<'_> {
@@ -167,6 +170,7 @@ impl Default for PythonRun<'_> {
             output_limit: OUTPUT_LIMIT_BYTES,
             stdin_payload: None,
             global_abort_grace: None,
+            browser_runtime: false,
         }
     }
 }
@@ -174,6 +178,8 @@ impl Default for PythonRun<'_> {
 #[derive(Debug)]
 struct BridgeConfig {
     python: PathBuf,
+    browser_python: PathBuf,
+    browser_browsers_path: PathBuf,
     resources: Result<ResourceLayout, ResourceError>,
     state_root: PathBuf,
     logs_dir: PathBuf,
@@ -522,6 +528,7 @@ impl PythonBridge {
                 output_limit: BROWSER_TOOL_OUTPUT_LIMIT_BYTES,
                 stdin_payload: Some(task.as_bytes()),
                 global_abort_grace: Some(BROWSER_TOOL_ABORT_GRACE),
+                browser_runtime: true,
                 ..PythonRun::default()
             })?;
             let value = parse_json_output(&bytes)?;
@@ -731,16 +738,17 @@ impl PythonBridge {
             output_limit,
             stdin_payload,
             global_abort_grace,
+            browser_runtime,
         } = run;
         let resources = self.config.resources()?;
         resources.validate().map_err(BridgeError::from)?;
-        let python = if !resources.installed && self.config.python == Path::new("python3") {
-            "python3"
-        } else {
-            validate_path(&self.config.python, Kind::Executable)
-                .map_err(|_| BridgeError::PythonEnv)?;
-            self.config.python.to_str().ok_or(BridgeError::PythonEnv)?
-        };
+        let runtime = select_python_runtime(
+            &self.config.python,
+            &self.config.browser_python,
+            &self.config.browser_browsers_path,
+            resources.installed,
+            browser_runtime,
+        )?;
         let script = resources
             .script
             .to_str()
@@ -804,8 +812,8 @@ impl PythonBridge {
         args.push(bin.to_string());
         args.extend(extra.iter().cloned());
 
-        let result = run_process_with_recovery(
-            python,
+        let result = run_process_with_recovery_env(
+            &runtime.executable,
             &args,
             timeout,
             output_limit,
@@ -816,6 +824,7 @@ impl PythonBridge {
                 cooperative_marker: cooperative_marker.as_deref(),
                 recovery_timeout: MODEL_SWAP_RECOVERY_TIMEOUT,
             },
+            &runtime.env,
         );
         if let Some(token) = token_id {
             if let Ok(mut map) = self.cancellations.lock() {
@@ -914,13 +923,68 @@ impl BridgeConfig {
             // Provisioned separately; never copy or inspect a checkout .venv.
             support.join("runtimes/menubar/bin/python3.11")
         };
+        let browser_python = support.join("runtimes/browser/bin/python3.11");
+        let browser_browsers_path = support.join("runtimes/browser/ms-playwright");
         Self {
             python,
+            browser_python,
+            browser_browsers_path,
             resources,
             state_root,
             logs_dir,
         }
     }
+}
+
+struct PythonRuntimeSelection {
+    executable: String,
+    env: Vec<(OsString, OsString)>,
+}
+
+fn select_python_runtime(
+    menubar_python: &Path,
+    browser_python: &Path,
+    browser_browsers_path: &Path,
+    installed_resources: bool,
+    browser_runtime: bool,
+) -> Result<PythonRuntimeSelection, BridgeError> {
+    if browser_runtime {
+        validate_path(browser_python, Kind::Executable).map_err(|_| BridgeError::BrowserEnv)?;
+        validate_path(browser_browsers_path, Kind::Directory)
+            .map_err(|_| BridgeError::BrowserEnv)?;
+        let executable = browser_python
+            .to_str()
+            .ok_or(BridgeError::BrowserEnv)?
+            .to_string();
+        return Ok(PythonRuntimeSelection {
+            executable,
+            env: vec![
+                (
+                    OsString::from("PLAYWRIGHT_BROWSERS_PATH"),
+                    browser_browsers_path.as_os_str().to_owned(),
+                ),
+                (
+                    OsString::from("ANONYMIZED_TELEMETRY"),
+                    OsString::from("false"),
+                ),
+            ],
+        });
+    }
+
+    if !installed_resources && menubar_python == Path::new("python3") {
+        return Ok(PythonRuntimeSelection {
+            executable: "python3".to_string(),
+            env: Vec::new(),
+        });
+    }
+    validate_path(menubar_python, Kind::Executable).map_err(|_| BridgeError::PythonEnv)?;
+    Ok(PythonRuntimeSelection {
+        executable: menubar_python
+            .to_str()
+            .ok_or(BridgeError::PythonEnv)?
+            .to_string(),
+        env: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -953,6 +1017,17 @@ fn run_process_with_recovery(
     output_limit: usize,
     control: ProcessControl<'_>,
 ) -> Result<Vec<u8>, BridgeError> {
+    run_process_with_recovery_env(executable, args, timeout, output_limit, control, &[])
+}
+
+fn run_process_with_recovery_env(
+    executable: &str,
+    args: &[String],
+    timeout: Duration,
+    output_limit: usize,
+    control: ProcessControl<'_>,
+    env_overrides: &[(OsString, OsString)],
+) -> Result<Vec<u8>, BridgeError> {
     let ProcessControl {
         stdin_payload,
         hard_cancel_flag,
@@ -963,6 +1038,7 @@ fn run_process_with_recovery(
     let mut command = Command::new(executable);
     command
         .args(args)
+        .envs(env_overrides.iter().cloned())
         .stdin(if stdin_payload.is_some() {
             Stdio::piped()
         } else {
@@ -2721,6 +2797,7 @@ fn sanitize_knowledge_focus(value: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     fn receipt(event_id: &str, recorded_at: &str, outcome: &str, reason_code: &str) -> Value {
         let outcome_text = match outcome {
@@ -2799,6 +2876,80 @@ mod tests {
         assert!(!valid_browser_tool_job_id(
             &"a".repeat(BROWSER_TOOL_JOB_ID_LIMIT + 1)
         ));
+    }
+
+    #[test]
+    fn browser_runtime_selector_is_fixed_and_action_specific() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "openkakao-browser-runtime-selector-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let menubar_python = root.join("menubar/bin/python3.11");
+        let browser_python = root.join("browser/bin/python3.11");
+        let browsers = root.join("browser/ms-playwright");
+        fs::create_dir_all(menubar_python.parent().unwrap()).unwrap();
+        fs::create_dir_all(browser_python.parent().unwrap()).unwrap();
+        fs::create_dir_all(&browsers).unwrap();
+        for python in [&menubar_python, &browser_python] {
+            fs::write(python, b"fixture interpreter").unwrap();
+            fs::set_permissions(python, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let normal = select_python_runtime(
+            &menubar_python,
+            &browser_python,
+            &browsers,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(normal.executable, menubar_python.to_string_lossy());
+        assert!(normal.env.is_empty());
+
+        let browser = select_python_runtime(
+            &menubar_python,
+            &browser_python,
+            &browsers,
+            true,
+            true,
+        )
+        .unwrap();
+        assert_eq!(browser.executable, browser_python.to_string_lossy());
+        let env = browser.env.into_iter().collect::<HashMap<_, _>>();
+        assert_eq!(
+            env.get(OsStr::new("PLAYWRIGHT_BROWSERS_PATH")),
+            Some(&browsers.clone().into_os_string())
+        );
+        assert_eq!(
+            env.get(OsStr::new("ANONYMIZED_TELEMETRY")),
+            Some(&OsString::from("false"))
+        );
+        assert_eq!(env.len(), 2);
+
+        let linked = root.join("browser-link");
+        symlink(root.join("browser"), &linked).unwrap();
+        assert!(matches!(
+            select_python_runtime(
+                &menubar_python,
+                &linked.join("bin/python3.11"),
+                &linked.join("ms-playwright"),
+                true,
+                true,
+            ),
+            Err(BridgeError::BrowserEnv)
+        ));
+        assert!(matches!(
+            select_python_runtime(
+                &menubar_python,
+                &root.join("missing/python3.11"),
+                &browsers,
+                true,
+                true,
+            ),
+            Err(BridgeError::BrowserEnv)
+        ));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

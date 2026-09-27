@@ -29,6 +29,8 @@
 
 Alden is a macOS menu-bar assistant. Its compact display is drawn with Tauri v2 and Three.js. KakaoTalk messages, local search, and model requests stay on this Mac; sending a reply uses the installed KakaoTalk app. Press **⌘⌥⇧Esc** from any app to latch the global emergency abort.
 
+Browser jobs use a dedicated, fixed CPython runtime with owned Chromium, separate from menu and voice dependencies. See [browser runtime provisioning and evidence](docs/architecture/alden-browser-runtime-20260927.md) for the pinned dependencies, offline installer and verification boundaries.
+
 See the [end-to-end local system map](docs/architecture/alden-system.html) and its [Archify source](docs/architecture/alden-system.architecture.json). The map shows the desktop shell, local tools, model boundary, and read-only conversation index in one view.
 
 ### The animated core

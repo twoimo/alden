@@ -2681,13 +2681,17 @@ def main():
         if task is None:
             _print_json(_tool_browser_error("browser_task_invalid"))
             return 0
-        payload = asyncio.run(
-            _tool_browser_payload(
-                state_root_raw=_argv_flag_value("--state-root"),
-                job_id=_argv_flag_value("--job-id"),
-                task=task,
+        # Browser-Use and its transitive dependencies may write progress text
+        # to stdout. Keep the desktop bridge contract at exactly one JSON
+        # object by routing all browser-job chatter to stderr.
+        with contextlib.redirect_stdout(sys.stderr):
+            payload = asyncio.run(
+                _tool_browser_payload(
+                    state_root_raw=_argv_flag_value("--state-root"),
+                    job_id=_argv_flag_value("--job-id"),
+                    task=task,
+                )
             )
-        )
         _print_json(payload)
         return 0
     if action == "room-upsert":
