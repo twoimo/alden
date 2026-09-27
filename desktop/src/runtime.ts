@@ -225,6 +225,10 @@ export async function setResidentModel(invokeFn: SettingsInvoke = invoke): Promi
   return invokeLocalModelAction("model-set", RESIDENT_MODEL_ID, invokeFn);
 }
 
+export async function setSwapModel(invokeFn: SettingsInvoke = invoke): Promise<ModelActionResult> {
+  return invokeLocalModelAction("model-set", SWAP_MODEL_ID, invokeFn);
+}
+
 type ResidentLaunchReadyReason = "launch_ready" | "launch_already_running";
 
 export interface ResidentLaunchResult {

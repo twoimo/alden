@@ -58,6 +58,10 @@ fn is_local_model_id(candidate: &str) -> bool {
     is_resident_model_id(candidate) || candidate == SWAP_MODEL_ID
 }
 
+fn is_model_set_id(candidate: &str) -> bool {
+    candidate == RESIDENT_MODEL_ID || candidate == SWAP_MODEL_ID
+}
+
 fn is_resident_model_name(candidate: &str) -> bool {
     candidate == RESIDENT_MODEL_NAME || candidate == LEGACY_RESIDENT_MODEL_NAME
 }
@@ -480,7 +484,11 @@ impl PythonBridge {
                 MLX_SERVER_STATUS_ACTION => sanitize_mlx_server_status(&value),
                 MLX_SERVER_LAUNCH_ACTION => sanitize_mlx_lifecycle(&value, true),
                 MLX_SERVER_STOP_ACTION => sanitize_mlx_lifecycle(&value, false),
-                "model-set" => sanitize_model_action(&value, action, RESIDENT_MODEL_ID),
+                "model-set" => sanitize_model_action(
+                    &value,
+                    action,
+                    model.ok_or(BridgeError::ActionNotAllowed)?,
+                ),
                 "model-prepare" => sanitize_model_action(&value, action, SWAP_MODEL_ID),
                 "model-swap" => sanitize_model_swap_action(&value),
                 "room-upsert" => sanitize_room_upsert(&value),
@@ -1359,10 +1367,13 @@ fn settings_action_args(
                 args.push(value);
             }
         }
-        "model-set" if model == Some(RESIDENT_MODEL_ID) => {
+        "model-set" => {
+            let candidate = model
+                .filter(|value| is_model_set_id(value))
+                .ok_or(BridgeError::ActionNotAllowed)?;
             args.extend([
                 "--model".to_string(),
-                RESIDENT_MODEL_ID.to_string(),
+                candidate.to_string(),
                 "--no-wait".to_string(),
             ]);
         }
@@ -2946,26 +2957,15 @@ mod tests {
             LEGACY_RESIDENT_MODEL_ID,
             "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
         );
-        let set_args = settings_action_args(
-            "model-set",
-            None,
-            None,
-            None,
-            Some(RESIDENT_MODEL_ID),
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            set_args,
-            vec![
-                "--action",
-                "model-set",
-                "--model",
-                RESIDENT_MODEL_ID,
-                "--no-wait",
-            ]
-        );
+        for model in [RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            let set_args =
+                settings_action_args("model-set", None, None, None, Some(model), None, None)
+                    .unwrap();
+            assert_eq!(
+                set_args,
+                vec!["--action", "model-set", "--model", model, "--no-wait",]
+            );
+        }
 
         let prepare_args = settings_action_args(
             "model-prepare",
@@ -2983,7 +2983,6 @@ mod tests {
         );
 
         for (action, model) in [
-            ("model-set", SWAP_MODEL_ID),
             ("model-set", LEGACY_RESIDENT_MODEL_ID),
             ("model-prepare", RESIDENT_MODEL_ID),
             ("model-set", "../../tmp/model"),
@@ -3601,28 +3600,30 @@ mod tests {
 
     #[test]
     fn model_action_response_is_sanitized_and_fail_closed() {
-        let safe = sanitize_model_action(
-            &json!({
-                "ok": true,
-                "action": "model-set",
-                "model": RESIDENT_MODEL_ID,
-                "stored": true,
-                "prepared": true,
-                "needs_prepare": false,
-                "prompt": "private",
-                "body": "private",
-                "secret": "private",
-                "warnings": ["untrusted"],
-            }),
-            "model-set",
-            RESIDENT_MODEL_ID,
-        );
-        assert_eq!(safe["ok"], true);
-        assert_eq!(safe["model"], RESIDENT_MODEL_ID);
-        assert!(safe.get("prompt").is_none());
-        assert!(safe.get("body").is_none());
-        assert!(safe.get("secret").is_none());
-        assert!(safe.get("warnings").is_none());
+        for model in [RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            let safe = sanitize_model_action(
+                &json!({
+                    "ok": true,
+                    "action": "model-set",
+                    "model": model,
+                    "stored": true,
+                    "prepared": true,
+                    "needs_prepare": false,
+                    "prompt": "private",
+                    "body": "private",
+                    "secret": "private",
+                    "warnings": ["untrusted"],
+                }),
+                "model-set",
+                model,
+            );
+            assert_eq!(safe["ok"], true);
+            assert_eq!(safe["model"], model);
+            assert!(safe.get("prompt").is_none());
+            assert!(safe.get("body").is_none());
+            assert!(safe.get("secret").is_none());
+            assert!(safe.get("warnings").is_none());
+        }
 
         let mismatched = sanitize_model_action(
             &json!({

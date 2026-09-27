@@ -32,6 +32,7 @@ import {
   fetchSettingsAction,
   normalizeLocalModelId,
   selectResidentModel,
+  setSwapModel,
   swapToLargeModel,
   type SettingsInvoke,
 } from "./runtime";
@@ -189,7 +190,7 @@ function wireModelSelection(invokeFn: SettingsInvoke): void {
   window.addEventListener("pagehide", () => {
     const token = activeSwap;
     activeSwap = null;
-    if (token) void cancelModelSwap(token);
+    if (token) void cancelModelSwap(token, invokeFn);
   }, { once: true });
   setModelBusy(false);
 
@@ -225,10 +226,27 @@ function wireModelSelection(invokeFn: SettingsInvoke): void {
       clearModelFailures();
       setModelBusy(true);
       swap.setAttribute("aria-busy", "true");
+      setText("model-status", "깊은 분석을 선택하고 있습니다…");
+      const direct = await setSwapModel(invokeFn);
+      if (direct.ok) {
+        swap.removeAttribute("aria-busy");
+        setModelBusy(false);
+        setModelSelection(SWAP_MODEL_ID);
+        setText("model-status", "깊은 분석을 사용할 준비가 되었습니다.");
+        return;
+      }
+      if (!direct.needsPrepare) {
+        swap.removeAttribute("aria-busy");
+        setModelBusy(false);
+        swap.classList.add("model-failed");
+        setText("model-status", "깊은 분석을 선택하지 못했습니다. 기존 설정을 유지했습니다.");
+        return;
+      }
+
       setText("model-status", "깊은 분석을 준비하고 있습니다…");
       const token = createCancellationToken();
       activeSwap = token;
-      const result = await swapToLargeModel(token);
+      const result = await swapToLargeModel(token, invokeFn);
       if (activeSwap === token) activeSwap = null;
       swap.removeAttribute("aria-busy");
       setModelBusy(false);

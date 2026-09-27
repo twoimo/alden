@@ -16,6 +16,7 @@ import {
   runBrowserTool,
   selectResidentModel,
   setResidentModel,
+  setSwapModel,
   swapToLargeModel,
   type SettingsInvoke,
 } from "../runtime";
@@ -735,6 +736,64 @@ describe("local model settings bridge", () => {
     } as T);
     expect((await setResidentModel(throwing)).ok).toBe(false);
     expect((await prepareSwapModel(mismatched)).ok).toBe(false);
+  });
+
+  it("selects an already-ready 27B only through the fixed model-set contract", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const fakeInvoke: SettingsInvoke = async <T>(command: string, args?: Record<string, unknown>) => {
+      calls.push({ command, args });
+      return {
+        ok: true,
+        action: "model-set",
+        model: SWAP_MODEL_ID,
+        stored: true,
+        prepared: true,
+        needs_prepare: false,
+      } as T;
+    };
+
+    expect(await setSwapModel(fakeInvoke)).toEqual({
+      ok: true,
+      action: "model-set",
+      model: SWAP_MODEL_ID,
+      stored: true,
+      prepared: true,
+      needsPrepare: false,
+    });
+    expect(calls).toEqual([
+      { command: "fetch_settings_action", args: { action: "model-set", model: SWAP_MODEL_ID } },
+    ]);
+  });
+
+  it("preserves needs_prepare only for an exact failed 27B model-set contract", async () => {
+    const readyFallback: SettingsInvoke = async <T>() => ({
+      ok: false,
+      action: "model-set",
+      model: SWAP_MODEL_ID,
+      stored: false,
+      prepared: false,
+      needs_prepare: true,
+    } as T);
+    const arbitraryModel: SettingsInvoke = async <T>() => ({
+      ok: false,
+      action: "model-set",
+      model: "remote/arbitrary",
+      stored: false,
+      prepared: false,
+      needs_prepare: true,
+    } as T);
+    const malformed: SettingsInvoke = async <T>() => ({
+      ok: false,
+      action: "model-set",
+      model: SWAP_MODEL_ID,
+      stored: false,
+      prepared: false,
+      needs_prepare: "true",
+    } as T);
+
+    expect((await setSwapModel(readyFallback)).needsPrepare).toBe(true);
+    expect((await setSwapModel(arbitraryModel)).needsPrepare).toBe(false);
+    expect((await setSwapModel(malformed)).needsPrepare).toBe(false);
   });
 
   it("keeps a ready resident selection to one model-set call", async () => {

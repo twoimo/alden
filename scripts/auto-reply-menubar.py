@@ -1704,21 +1704,20 @@ def set_reply_model(
             if isinstance(item, dict) and item.get("id"):
                 allowed_model_ids.add(str(item["id"]))
     fixed_requested = canonical_fixed_local_mlx_model_id(requested)
-    # The iQ fast model is served by the independent app-owned 11235 runtime,
-    # so its save gate cannot depend on the 11234 display catalog. The fixed
-    # allowlist still bounds the accepted ID, and readiness must pass below
-    # before the override file is written.
+    # The fixed iQ and 27B models may already be resident even when the display
+    # catalog is stale or omits them. Keep this exception bounded to those
+    # allowlisted IDs and require exact localhost readiness before writing.
     local_wanted = (
-        ALDEN_IQ_MODEL_ID
-        if fixed_requested == ALDEN_IQ_MODEL_ID
+        fixed_requested
+        if fixed_requested in {ALDEN_IQ_MODEL_ID, ALDEN_SWAP_MODEL_ID}
         else resolve_fixed_local_mlx_catalog_model(requested, allowed_model_ids)
     )
     wanted = local_wanted or requested
     allowed = local_wanted is not None or requested in allowed_model_ids
     if allowed:
-        if wanted == ALDEN_IQ_MODEL_ID:
+        if wanted in {ALDEN_IQ_MODEL_ID, ALDEN_SWAP_MODEL_ID}:
             readiness = read_fixed_local_mlx_readiness(
-                ALDEN_IQ_MODEL_ID,
+                wanted,
                 state_root=state_root,
             )
             if not readiness.prepared:
@@ -1726,13 +1725,13 @@ def set_reply_model(
                     "ok": False,
                     "action": "model-set",
                     "privacy": "content_redacted",
-                    "model": ALDEN_IQ_MODEL_ID,
+                    "model": wanted,
                     "reason": readiness.reason,
                     "stored": False,
                     "prepared": False,
                     "needs_prepare": True,
                     "warnings": [
-                        "iQ 3.3bpw는 localhost MLX gateway에서 loaded/ready로 확인된 뒤 선택할 수 있습니다."
+                        "고정 MLX 모델은 localhost gateway에서 loaded/ready로 확인된 뒤 선택할 수 있습니다."
                     ],
                 }
         import time as _time

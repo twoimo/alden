@@ -2364,6 +2364,157 @@ class AutoReplyMenubarTests(unittest.TestCase):
             self.assertFalse(denied["ok"])
             self.assertFalse(module._reply_model_override_path(state).exists())
 
+    def test_27b_model_set_requires_exact_ready_11234_before_write(self):
+        module = load("auto_reply_menubar_27b_model_set_readiness")
+        original_readiness = module.read_fixed_local_mlx_readiness
+
+        class FakeResponse:
+            def __init__(self, payload):
+                self.raw = json.dumps(payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, limit):
+                return self.raw[:limit]
+
+        def reader_for(payload):
+            def fake_readiness(model, *, state_root=None):
+                def opener(_request, *, timeout):
+                    self.assertEqual(timeout, 2.0)
+                    self.assertEqual(
+                        _request.full_url,
+                        "http://127.0.0.1:11234/v1/models",
+                    )
+                    return FakeResponse(payload)
+
+                return original_readiness(
+                    model,
+                    state_root=state_root,
+                    opener=opener,
+                )
+
+            return fake_readiness
+
+        cases = (
+            ("absent", {"data": []}, module.ALDEN_SWAP_MODEL_ID, False, "mlx_gateway_wrong_model"),
+            (
+                "unready",
+                {
+                    "data": [
+                        {
+                            "id": module.ALDEN_SWAP_MODEL_ID,
+                            "loaded": False,
+                            "state": "unloaded",
+                        }
+                    ]
+                },
+                module.ALDEN_SWAP_MODEL_ID,
+                False,
+                "mlx_gateway_not_ready",
+            ),
+            (
+                "wrong-id",
+                {
+                    "data": [
+                        {
+                            "id": module.ALDEN_RESIDENT_MODEL_ID,
+                            "loaded": True,
+                            "state": "ready",
+                        }
+                    ]
+                },
+                module.ALDEN_SWAP_MODEL_ID,
+                False,
+                "mlx_gateway_wrong_model",
+            ),
+            (
+                "ready-prefixless",
+                {
+                    "data": [
+                        {
+                            "id": module.ALDEN_SWAP_MODEL_ID,
+                            "loaded": True,
+                            "state": "ready",
+                        }
+                    ]
+                },
+                module.ALDEN_SWAP_MODEL_ID,
+                True,
+                None,
+            ),
+            (
+                "ready-mlx-alias",
+                {
+                    "data": [
+                        {
+                            "id": module.QWEN38_27B_MODEL_ID,
+                            "loaded": True,
+                            "state": "ready",
+                        }
+                    ]
+                },
+                module.QWEN38_27B_MODEL_ID,
+                True,
+                None,
+            ),
+        )
+
+        for name, payload, requested, should_store, expected_reason in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw:
+                state = Path(raw)
+                override_path = module._reply_model_override_path(state)
+                with mock.patch.object(
+                    module, "_global_catalog_providers", return_value=[]
+                ), mock.patch.object(
+                    module, "_displayed_reply_providers", return_value=[]
+                ), mock.patch.object(
+                    module,
+                    "read_fixed_local_mlx_readiness",
+                    new=reader_for(payload),
+                ):
+                    result = module.set_reply_model(state, requested, now=1000.0)
+
+                self.assertEqual(result["ok"], should_store)
+                self.assertEqual(result.get("stored"), should_store)
+                self.assertEqual(result.get("prepared"), should_store)
+                self.assertEqual(override_path.exists(), should_store)
+                if should_store:
+                    self.assertFalse(result.get("needs_prepare"))
+                    saved = json.loads(override_path.read_text(encoding="utf-8"))
+                    self.assertEqual(saved["model"], module.ALDEN_SWAP_MODEL_ID)
+                    self.assertEqual(result["model"], module.ALDEN_SWAP_MODEL_ID)
+                else:
+                    self.assertEqual(result["reason"], expected_reason)
+                    self.assertTrue(result.get("needs_prepare"))
+                    self.assertFalse(result.get("stored"))
+                    self.assertFalse(result.get("prepared"))
+
+        with tempfile.TemporaryDirectory() as raw:
+            state = Path(raw)
+            readiness = mock.Mock(
+                side_effect=AssertionError(
+                    "non-allowlisted IDs must not probe fixed-model readiness"
+                )
+            )
+            with mock.patch.object(
+                module, "_global_catalog_providers", return_value=[]
+            ), mock.patch.object(
+                module, "_displayed_reply_providers", return_value=[]
+            ), mock.patch.object(
+                module, "read_fixed_local_mlx_readiness", new=readiness
+            ):
+                denied = module.set_reply_model(
+                    state,
+                    "ddalcu/Qwen3.8-27B-MLX-Serve-4bit-lookalike",
+                    now=1000.0,
+                )
+            self.assertFalse(denied["ok"])
+            self.assertFalse(module._reply_model_override_path(state).exists())
+
     def test_model_swap_requires_opt_in_and_verified_owner_before_gateway(self):
         module = load("auto_reply_menubar_model_swap_gates")
         token = "00000000-0000-4000-8000-000000000001"

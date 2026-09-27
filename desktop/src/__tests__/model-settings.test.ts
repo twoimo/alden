@@ -135,6 +135,149 @@ describe("simple model settings", () => {
     );
   });
 
+  it("selects an already-ready deep model directly without model-swap", async () => {
+    const invokeMock = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+      if (args?.action === "model-set" && args?.model === SWAP_MODEL_ID) {
+        return {
+          ok: true,
+          action: "model-set",
+          model: SWAP_MODEL_ID,
+          stored: true,
+          prepared: true,
+          needs_prepare: false,
+        };
+      }
+      throw new Error("unexpected_action");
+    });
+    const invokeCommand = invokeMock as unknown as typeof import("@tauri-apps/api/core").invoke;
+
+    await bootSettings({
+      loadSnapshot: async () => snapshot,
+      loadAction: async (): Promise<Record<string, unknown> | null> => null,
+      wireVoice: () => undefined,
+      invokeCommand,
+      subscribeVisibility: null,
+      readVisibility: null,
+    });
+
+    const fast = document.querySelector<HTMLButtonElement>('[data-model-choice="fast"]')!;
+    const deep = document.querySelector<HTMLButtonElement>('[data-model-choice="deep"]')!;
+    deep.click();
+    await vi.waitFor(() => expect(deep.getAttribute("aria-pressed")).toBe("true"));
+
+    expect(invokeMock.mock.calls).toEqual([
+      ["fetch_settings_action", { action: "model-set", model: SWAP_MODEL_ID }],
+    ]);
+    expect(fast.getAttribute("aria-pressed")).toBe("false");
+    expect(deep.disabled).toBe(false);
+    expect(document.querySelector("#model-status")?.textContent).toBe("깊은 분석을 사용할 준비가 되었습니다.");
+  });
+
+  it("falls back to one cancellable model-swap only after exact needs_prepare", async () => {
+    let resolveSwap!: (value: unknown) => void;
+    const swapPending = new Promise<unknown>((resolve) => { resolveSwap = resolve; });
+    const invokeMock = vi.fn(async (_command: string, args?: Record<string, unknown>) => {
+      if (args?.action === "model-set" && args?.model === SWAP_MODEL_ID) {
+        return {
+          ok: false,
+          action: "model-set",
+          model: SWAP_MODEL_ID,
+          stored: false,
+          prepared: false,
+          needs_prepare: true,
+        };
+      }
+      if (args?.action === "model-swap" && args?.model === SWAP_MODEL_ID) return await swapPending;
+      throw new Error("unexpected_action");
+    });
+    const invokeCommand = invokeMock as unknown as typeof import("@tauri-apps/api/core").invoke;
+
+    await bootSettings({
+      loadSnapshot: async () => snapshot,
+      loadAction: async (): Promise<Record<string, unknown> | null> => null,
+      wireVoice: () => undefined,
+      invokeCommand,
+      subscribeVisibility: null,
+      readVisibility: null,
+    });
+
+    const fast = document.querySelector<HTMLButtonElement>('[data-model-choice="fast"]')!;
+    const deep = document.querySelector<HTMLButtonElement>('[data-model-choice="deep"]')!;
+    deep.click();
+    await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(2));
+
+    const swapCall = invokeMock.mock.calls[1];
+    expect(swapCall[0]).toBe("fetch_settings_action");
+    expect(swapCall[1]).toMatchObject({ action: "model-swap", model: SWAP_MODEL_ID, explicitOptIn: true });
+    expect(typeof swapCall[1]?.tokenId).toBe("string");
+    expect(fast.disabled).toBe(true);
+    expect(deep.disabled).toBe(true);
+    expect(deep.getAttribute("aria-busy")).toBe("true");
+    expect(document.querySelector("#model-status")?.textContent).toBe("깊은 분석을 준비하고 있습니다…");
+
+    resolveSwap({
+      ok: true,
+      action: "model-swap",
+      model: SWAP_MODEL_ID,
+      stage: "ready",
+      reason: "ready",
+      stages: ["drain", "load", "probe", "ready"],
+      stored: true,
+      prepared: true,
+    });
+    await vi.waitFor(() => expect(deep.getAttribute("aria-pressed")).toBe("true"));
+    expect(fast.getAttribute("aria-pressed")).toBe("false");
+    expect(deep.disabled).toBe(false);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not fall through to model-swap for malformed or arbitrary deep model-set failures", async () => {
+    for (const response of [
+      {
+        ok: false,
+        action: "model-set",
+        model: SWAP_MODEL_ID,
+        stored: false,
+        prepared: false,
+        needs_prepare: "true",
+      },
+      {
+        ok: false,
+        action: "model-set",
+        model: "remote/arbitrary",
+        stored: false,
+        prepared: false,
+        needs_prepare: true,
+      },
+    ]) {
+      const invokeMock = vi.fn(async () => response);
+      const invokeCommand = invokeMock as unknown as typeof import("@tauri-apps/api/core").invoke;
+      await bootSettings({
+        loadSnapshot: async () => snapshot,
+        loadAction: async (): Promise<Record<string, unknown> | null> => null,
+        wireVoice: () => undefined,
+        invokeCommand,
+        subscribeVisibility: null,
+        readVisibility: null,
+      });
+
+      const fast = document.querySelector<HTMLButtonElement>('[data-model-choice="fast"]')!;
+      const deep = document.querySelector<HTMLButtonElement>('[data-model-choice="deep"]')!;
+      deep.click();
+      await vi.waitFor(() => expect(deep.disabled).toBe(false));
+      expect(invokeMock).toHaveBeenCalledTimes(1);
+      expect(invokeMock.mock.calls[0]).toEqual([
+        "fetch_settings_action",
+        { action: "model-set", model: SWAP_MODEL_ID },
+      ]);
+      expect(fast.getAttribute("aria-pressed")).toBe("true");
+      expect(deep.getAttribute("aria-pressed")).toBe("false");
+      expect(document.querySelector("#model-status")?.textContent).toBe(
+        "깊은 분석을 선택하지 못했습니다. 기존 설정을 유지했습니다.",
+      );
+    }
+  });
+
   it.each([
     ["model_owner_unmanaged", "현재 사용 중인 AI와 안전하게 바꿀 수 없어 기존 설정을 유지했습니다."],
     ["model_owner_unknown", "AI 실행 상태를 확인하지 못해 기존 설정을 유지했습니다."],
