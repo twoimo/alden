@@ -177,9 +177,19 @@ SQLite files through SQLite's backup API under the private state directory.
 It indexed **50/50** existing graph entities with **384-dimensional** vectors,
 the exact pinned E5 model ID, and `local-embedding-lsh-v2`. A readback query
 returned **two BM25** and **40 dense** candidates with `search_mode=rrf`.
-This checks the persisted graph/index and local adapter; active Kakao reply
-workers still need a controlled runtime cutover before their use of this index
-can be claimed.
+This checks the persisted graph/index and local adapter. The three Kakao reply
+workers were then cut over from immutable runtime `20260927T034834Z-12017` to
+`20260927T082218Z-23471` after a clean drain: all three reported
+`stopped_clean`, their prior watchdog and worker PIDs exited, and the new
+runtime came up **3/3 ready** on watchdog attempt 1 with zero restarts. The
+configured room-selector hash matched, pending gaps and active jobs stayed at
+zero, and acknowledged watermarks did not regress. A read-only query through
+the staged source used by the new workers returned `search_mode=rrf` with two
+BM25 and 40 dense candidates. One completed `sent` and two completed `skipped`
+queue rows crossed the worker's 30-day retention boundary during startup and
+were preserved as three durable tombstones. No new conversation job arrived
+after cutover, so this proves runtime wiring and retrieval availability, not
+reply quality or a measured skip-rate reduction.
 
 The installed Alden bundle now runs the pinned adapter through the dedicated
 LaunchAgent. Its first start with the voice venv under `~/Documents` timed out
