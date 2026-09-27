@@ -138,6 +138,8 @@ class Config:
     ps: Path = Path("/bin/ps")
     readiness_timeout_secs: float = 30.0
     readiness_poll_secs: float = 0.25
+    stop_timeout_secs: float = 2.0
+    stop_poll_secs: float = 0.05
 
     @property
     def service(self) -> str:
@@ -453,12 +455,19 @@ class AldenEmbeddingLaunchdManager:
                 "TRANSFORMERS_OFFLINE": "1",
                 "PYTHONUNBUFFERED": "1",
             },
-            "RunAtLoad": False,
+            "RunAtLoad": True,
             "ThrottleInterval": 10,
             "ProcessType": "Background",
             "StandardOutPath": str(cfg.stdout_path),
             "StandardErrorPath": str(cfg.stderr_path),
         }
+
+    def _legacy_manual_start_plist(self) -> dict[str, Any]:
+        """Return the immediately prior manager plist for a safe resident upgrade."""
+
+        payload = self._expected_plist()
+        payload["RunAtLoad"] = False
+        return payload
 
     def _plist_bytes(self) -> bytes:
         return plistlib.dumps(self._expected_plist(), fmt=plistlib.FMT_XML, sort_keys=False)
@@ -613,7 +622,7 @@ class AldenEmbeddingLaunchdManager:
         if command != expected_command:
             raise SafetyError("managed LaunchAgent command arguments mismatch")
 
-    def _verify_loaded_identity(self, text: str, listeners: dict[int, set[str]]) -> dict[str, Any]:
+    def _verify_loaded_static_identity(self, text: str) -> dict[str, Any]:
         info = self._parse_launchctl_print(text)
         if info["path"] != str(self.config.plist_path):
             raise SafetyError("loaded LaunchAgent plist path mismatch")
@@ -624,16 +633,24 @@ class AldenEmbeddingLaunchdManager:
                 same_program = False
             if not same_program:
                 raise SafetyError("loaded LaunchAgent program mismatch")
+        return info
+
+    def _verify_listener_identity(self, listeners: dict[int, set[str]], pid: int | None) -> None:
+        if not listeners:
+            return
+        if pid is None or set(listeners) != {pid}:
+            raise SafetyError(f"port {self.config.port} listener is not owned by the managed LaunchAgent")
+        expected_name = f"{self.config.host}:{self.config.port}"
+        names = listeners[pid]
+        if not names or any(name != expected_name for name in names):
+            raise SafetyError("embedding listener is not bound exactly to the fixed loopback address")
+
+    def _verify_loaded_identity(self, text: str, listeners: dict[int, set[str]]) -> dict[str, Any]:
+        info = self._verify_loaded_static_identity(text)
         pid = info["pid"]
         if pid is not None:
             self._verify_process(pid)
-        if listeners:
-            if pid is None or set(listeners) != {pid}:
-                raise SafetyError(f"port {self.config.port} listener is not owned by the managed LaunchAgent")
-            expected_name = f"{self.config.host}:{self.config.port}"
-            names = listeners[pid]
-            if not names or any(name != expected_name for name in names):
-                raise SafetyError("embedding listener is not bound exactly to the fixed loopback address")
+        self._verify_listener_identity(listeners, pid)
         return info
 
     def _http_json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
@@ -746,6 +763,42 @@ class AldenEmbeddingLaunchdManager:
                 self.sleep(self.config.readiness_poll_secs)
         raise SafetyError(f"embedding LaunchAgent did not become ready: {last_error or 'timeout'}")
 
+    def _wait_for_stop_absence(self, expected_pid: int | None) -> None:
+        """Wait for asynchronous launchd bootout without relaxing ownership checks."""
+
+        deadline = self.monotonic() + self.config.stop_timeout_secs
+        while True:
+            text = self._launchctl_print()
+            listeners = self._listener_records()
+
+            if text is None:
+                if not listeners:
+                    return
+                if expected_pid is None:
+                    raise SafetyError(f"port {self.config.port} gained an unmanaged listener during bootout")
+                self._verify_listener_identity(listeners, expected_pid)
+                self._verify_process(expected_pid)
+            else:
+                info = self._verify_loaded_static_identity(text)
+                current_pid = info["pid"]
+                if expected_pid is not None and current_pid not in {None, expected_pid}:
+                    raise SafetyError("managed LaunchAgent pid changed during bootout")
+                if expected_pid is None and current_pid is not None:
+                    self._verify_process(current_pid)
+                    expected_pid = current_pid
+
+                listener_pid = current_pid if current_pid is not None else expected_pid
+                self._verify_listener_identity(listeners, listener_pid)
+                if listeners and listener_pid is not None:
+                    self._verify_process(listener_pid)
+
+            now = self.monotonic()
+            if now >= deadline:
+                raise SafetyError(
+                    f"timed out waiting for dedicated embedding LaunchAgent and port {self.config.port} to stop"
+                )
+            self.sleep(min(self.config.stop_poll_secs, max(0.0, deadline - now)))
+
     def status(self) -> dict[str, Any]:
         result: dict[str, Any] = {
             "ok": True,
@@ -833,6 +886,7 @@ class AldenEmbeddingLaunchdManager:
         state = self._read_install_state()
         expected_bytes = self._plist_bytes()
         expected_sha = self._sha256_bytes(expected_bytes)
+        migration_state: dict[str, Any] | None = None
         if state is not None:
             if existing is not None and self._plist_is_exact(existing) and state.get("installed_sha256") == expected_sha:
                 return {
@@ -842,12 +896,20 @@ class AldenEmbeddingLaunchdManager:
                     "plist": str(self.config.plist_path),
                     "backup": state.get("backup_path"),
                 }
-            raise SafetyError("existing embedding install state does not match the current plist")
+            legacy = self._legacy_manual_start_plist()
+            legacy_bytes = plistlib.dumps(legacy, fmt=plistlib.FMT_XML, sort_keys=False)
+            legacy_sha = self._sha256_bytes(legacy_bytes)
+            if existing != legacy or state.get("installed_sha256") != legacy_sha:
+                raise SafetyError("existing embedding install state does not match the current or prior manager plist")
+            migration_state = state
 
         previous_bytes = self.config.plist_path.read_bytes() if existing is not None else None
-        backup_path: Path | None = None
+        rollback_backup_path: Path | None = None
         if previous_bytes is not None:
-            backup_path = self._backup_current_plist(previous_bytes)
+            rollback_backup_path = self._backup_current_plist(previous_bytes)
+        backup_path = migration_state.get("backup_path") if migration_state is not None else (
+            str(rollback_backup_path) if rollback_backup_path is not None else None
+        )
         replaced = False
         try:
             self._ensure_private_directory(self.config.state_root)
@@ -868,17 +930,25 @@ class AldenEmbeddingLaunchdManager:
             installed = self._read_existing_plist(require_compatible=True)
             if installed is None or not self._plist_is_exact(installed):
                 raise SafetyError("installed LaunchAgent plist readback mismatch")
-            self._atomic_write_json(
-                self.config.install_state_path,
-                {
-                    "version": 1,
-                    "label": self.config.label,
-                    "installed_sha256": expected_sha,
-                    "prior_present": previous_bytes is not None,
-                    "backup_path": str(backup_path) if backup_path is not None else None,
-                    "installed_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
+            next_state = {
+                "version": 1,
+                "label": self.config.label,
+                "installed_sha256": expected_sha,
+                "prior_present": (
+                    bool(migration_state.get("prior_present"))
+                    if migration_state is not None
+                    else previous_bytes is not None
+                ),
+                "backup_path": backup_path,
+                "installed_at": (
+                    migration_state.get("installed_at")
+                    if migration_state is not None
+                    else datetime.now(timezone.utc).isoformat()
+                ),
+            }
+            if migration_state is not None:
+                next_state["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._atomic_write_json(self.config.install_state_path, next_state)
         except Exception:
             if replaced:
                 if previous_bytes is None:
@@ -894,7 +964,8 @@ class AldenEmbeddingLaunchdManager:
             "action": "install",
             "changed": True,
             "plist": str(self.config.plist_path),
-            "backup": str(backup_path) if backup_path is not None else None,
+            "backup": backup_path,
+            "migrated": migration_state is not None,
         }
 
     def start(self) -> dict[str, Any]:
@@ -910,14 +981,12 @@ class AldenEmbeddingLaunchdManager:
         listeners = self._listener_records()
         if text is not None:
             self._verify_loaded_identity(text, listeners)
-            if not listeners:
-                raise SafetyError("managed LaunchAgent is loaded without its fixed loopback listener")
             return {
                 "ok": True,
                 "action": "start",
                 "changed": False,
                 "service": self.config.service,
-                "readiness": self._readiness(),
+                "readiness": self._wait_for_readiness(),
             }
         if listeners:
             raise SafetyError(f"port {self.config.port} already has an unmanaged listener")
@@ -925,17 +994,12 @@ class AldenEmbeddingLaunchdManager:
         result = self._run((self.config.launchctl, "bootstrap", f"gui/{os.geteuid()}", self.config.plist_path))
         if result.returncode != 0:
             raise SafetyError(f"failed to bootstrap dedicated embedding LaunchAgent: {(result.stderr or result.stdout).strip()}")
-        bootstrapped = True
         try:
-            result = self._run((self.config.launchctl, "kickstart", "-k", self.config.service))
-            if result.returncode != 0:
-                raise SafetyError(f"failed to kickstart dedicated embedding LaunchAgent: {(result.stderr or result.stdout).strip()}")
             readiness = self._wait_for_readiness()
         except Exception:
-            if bootstrapped:
-                rollback = self._run((self.config.launchctl, "bootout", self.config.service))
-                if rollback.returncode != 0:
-                    raise SafetyError("embedding start failed and launchd rollback also failed")
+            rollback = self._run((self.config.launchctl, "bootout", self.config.service))
+            if rollback.returncode != 0:
+                raise SafetyError("embedding start failed and launchd rollback also failed")
             raise
         return {
             "ok": True,
@@ -955,14 +1019,11 @@ class AldenEmbeddingLaunchdManager:
             return {"ok": True, "action": "stop", "changed": False, "service": self.config.service}
         if plist is None:
             raise SafetyError("loaded LaunchAgent has no manager-owned plist; refusing stop")
-        self._verify_loaded_identity(text, listeners)
+        info = self._verify_loaded_identity(text, listeners)
         result = self._run((self.config.launchctl, "bootout", self.config.service))
         if result.returncode != 0:
             raise SafetyError(f"failed to bootout dedicated embedding LaunchAgent: {(result.stderr or result.stdout).strip()}")
-        if self._launchctl_print() is not None:
-            raise SafetyError("dedicated embedding LaunchAgent is still loaded after bootout")
-        if self._listener_records():
-            raise SafetyError(f"port {self.config.port} is still listening after managed bootout")
+        self._wait_for_stop_absence(info["pid"])
         return {"ok": True, "action": "stop", "changed": True, "service": self.config.service}
 
     def uninstall(self) -> dict[str, Any]:

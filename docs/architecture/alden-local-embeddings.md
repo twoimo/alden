@@ -137,23 +137,34 @@ already provably for the same fixed adapter, makes a private backup before any
 replacement, writes atomically, runs `plutil -lint`, reads the plist back, and
 rolls the plist back if installation cannot finish. `start` requires the
 manager install-state hash, refuses a pre-existing unmanaged `11236` listener,
-then bootstraps only the dedicated label. If kickstart or readiness fails, it
-boots that newly loaded job back out.
+then bootstraps only the dedicated label. The generated plist sets
+`RunAtLoad=true` and deliberately omits `KeepAlive`, so login loading and an
+explicit `bootstrap` start the adapter once without a crash-restart loop.
+`start` does not issue `kickstart -k`; it waits up to 30 seconds for the exact
+managed PID to own the sole `127.0.0.1:11236` listener and for the pinned model
+readiness probes to pass. A job that was already loaded but is still starting
+uses the same bounded wait without a restart.
 
-The generated plist sets `RunAtLoad=false` and deliberately omits `KeepAlive`.
-This keeps `bootstrap` as a load-only step and leaves process creation to the
-manager's explicit `kickstart`. The prior `KeepAlive={SuccessfulExit=false}`
-implicitly made the job runnable during bootstrap, so the process could begin
-before the manager's explicit start step. Crash restart is therefore not
-delegated to launchd; readiness and ownership remain manager-controlled and
-fail closed.
+If readiness fails after `start` itself successfully bootstrapped the job, the
+manager boots out only that newly loaded dedicated label. If the job was loaded
+before `start`, timeout leaves it loaded and reports failure, avoiding a
+destructive restart of a process another invocation may still be loading. With
+no `KeepAlive`, an adapter that later exits is not relaunched automatically;
+an operator can use the owned `stop`/`start` sequence after diagnosis. The
+immediately prior manager plist (`RunAtLoad=false`, no `KeepAlive`) has one
+bounded inactive-state migration path: `install` verifies its exact prior hash,
+preserves the original uninstall backup metadata, and replaces only that plist.
 
 Readiness requires both `GET /v1/models` and a synthetic Korean
 `POST /v1/embeddings` probe to echo the exact pinned model, revision, MIT
 license, ready/loaded state, 384 dimensions, and a finite nonzero vector.
 `stop` verifies the loaded plist path, process uid/arguments, and listener
-ownership before bootout. `uninstall` requires manager install-state ownership
-and restores the backed-up prior plist when one existed.
+ownership before bootout. Because launchd bootout completion is asynchronous,
+`stop` then waits up to 2 seconds for both the dedicated service and the fixed
+`11236` listener to disappear. During that wait it rechecks the loaded plist
+identity, PID continuity, and any remaining listener ownership; an identity
+change or timeout fails closed. `uninstall` requires manager install-state
+ownership and restores the backed-up prior plist when one existed.
 
 The manager contains no discovery or mutation path for the generation gateway,
 the Flash-Next service, or Kakao workers/configuration. Parent review should run
@@ -201,8 +212,15 @@ the same PID as the sole `127.0.0.1:11236` listener, the exact pinned model and
 384 dimensions, and an idempotent second `start` reported `changed=false`.
 After four minutes, the resident process had **688,736 KiB RSS** and 0.0% CPU
 at the sampled instant. The 27B generation listener remained on `11234`.
-These observations verify the local embedding service, not a live KakaoTalk
-dense-index refresh or simultaneous Flash-Next residency.
+The dedicated LaunchAgent was subsequently migrated from `RunAtLoad=false` to
+`RunAtLoad=true`. `plutil -lint` passed, the installed plist read back `true`,
+and a fresh bootstrap returned the pinned model ready with 384 dimensions in
+**22.3 seconds**. Readback found the service and sole `11236` listener owned by
+the same new PID; all three Kakao workers remained ready and idle with no
+pending DB-watch gaps. This verifies the installed login-start configuration
+and current service, while an actual logout/login cycle remains unobserved.
+The live graph was refreshed as described above; simultaneous Flash-Next
+residency remains unverified.
 
 On the same host and voice Python environment, replacing the Transformers
 tokenizer import with the pinned `tokenizer.json` through `tokenizers` changed
