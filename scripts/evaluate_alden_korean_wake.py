@@ -25,6 +25,7 @@ microphones, and rooms remain a separate unverified gap.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -86,6 +87,127 @@ MIN_CLIP_RMS = 32.0
 
 class WakeEvaluationError(RuntimeError):
     """The evaluation cannot be trusted, so it must not report a rate."""
+
+
+def sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stable_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(ROOT.resolve()))
+    except ValueError:
+        return path.name
+
+
+def load_training_report(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise WakeEvaluationError(f"wake_eval_training_report_invalid:{path.name}") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("training"), dict):
+        raise WakeEvaluationError("wake_eval_training_report_schema_invalid")
+    return payload
+
+
+def validate_disjoint_split(
+    training_report: dict[str, Any],
+    *,
+    eval_voices: Sequence[str],
+    eval_negative_phrases: Sequence[str],
+) -> set[str]:
+    """Reject voice, negative-text, or rendered-audio overlap with training."""
+
+    training = training_report.get("training")
+    if not isinstance(training, dict):
+        raise WakeEvaluationError("wake_eval_training_report_schema_invalid")
+
+    provenance = training.get("provenance")
+    if not isinstance(provenance, dict):
+        raise WakeEvaluationError("wake_eval_training_provenance_incomplete")
+    raw_train_voices = provenance.get("voices")
+    raw_train_negative_phrases = provenance.get("negative_phrases")
+    wake_phrase = provenance.get("wake_phrase")
+    if (
+        not isinstance(raw_train_voices, list)
+        or not raw_train_voices
+        or not all(isinstance(item, str) and item.strip() for item in raw_train_voices)
+        or not isinstance(raw_train_negative_phrases, list)
+        or not raw_train_negative_phrases
+        or not all(isinstance(item, str) and item.strip() for item in raw_train_negative_phrases)
+        or not isinstance(wake_phrase, str)
+        or not wake_phrase.strip()
+    ):
+        raise WakeEvaluationError("wake_eval_training_provenance_incomplete")
+
+    train_voices = {item.strip().casefold() for item in raw_train_voices}
+    normalized_eval_voices = {
+        item.strip().casefold() for item in eval_voices if isinstance(item, str) and item.strip()
+    }
+    train_negative_phrases = {item.strip() for item in raw_train_negative_phrases}
+    normalized_eval_negative_phrases = {
+        item.strip() for item in eval_negative_phrases if isinstance(item, str) and item.strip()
+    }
+    voice_overlap = train_voices.intersection(normalized_eval_voices)
+    phrase_overlap = train_negative_phrases.intersection(normalized_eval_negative_phrases)
+    if voice_overlap:
+        raise WakeEvaluationError(f"wake_eval_voice_overlap:{','.join(sorted(voice_overlap))}")
+    if phrase_overlap:
+        raise WakeEvaluationError(f"wake_eval_negative_phrase_overlap:{'|'.join(sorted(phrase_overlap))}")
+
+    manifest = training.get("input_manifest")
+    if not isinstance(manifest, dict):
+        raise WakeEvaluationError("wake_eval_training_manifest_incomplete")
+    hashes: set[str] = set()
+    for kind in ("wake", "control"):
+        rows = manifest.get(kind)
+        if not isinstance(rows, list) or not rows:
+            raise WakeEvaluationError(f"wake_eval_training_manifest_incomplete:{kind}")
+        for row in rows:
+            sha256 = row.get("sha256") if isinstance(row, dict) else None
+            if (
+                not isinstance(sha256, str)
+                or len(sha256.strip()) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in sha256.strip())
+            ):
+                raise WakeEvaluationError(f"wake_eval_training_hash_invalid:{kind}")
+            hashes.add(sha256.strip().lower())
+    return hashes
+
+
+def training_fit_reference(training_report: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the training scope that the supplied report can actually prove."""
+
+    training = training_report.get("training")
+    if not isinstance(training, dict):
+        return None
+    positive_clips = training.get("positive_clips")
+    negative_clips = training.get("negative_clips")
+    if (
+        not isinstance(positive_clips, int)
+        or isinstance(positive_clips, bool)
+        or positive_clips <= 0
+        or not isinstance(negative_clips, int)
+        or isinstance(negative_clips, bool)
+        or negative_clips <= 0
+    ):
+        return None
+    reference: dict[str, Any] = {
+        "positive_clips": positive_clips,
+        "negative_clips": negative_clips,
+    }
+    method = training.get("method")
+    if isinstance(method, str) and method.strip():
+        reference["method"] = method.strip()
+    proof_scope = training.get("proof_scope")
+    if isinstance(proof_scope, str) and proof_scope.strip():
+        reference["proof_scope"] = proof_scope.strip()
+    return reference
 
 
 def _require_numpy() -> Any:
@@ -259,6 +381,7 @@ def build_corpus(
     rate_variants: Iterable[tuple[str, int]],
     *,
     synth: Callable[..., Path],
+    negative_phrases: Sequence[str] = NEGATIVE_PHRASES,
     allow_unusable: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Render the planned clips, refusing any render that is not real speech."""
@@ -271,7 +394,7 @@ def build_corpus(
     for voice, rate in rate_variants:
         planned.append({"kind": "positive", "voice": voice, "rate_mpr": rate, "text": WAKE_PHRASE, "name": f"pos-{voice}-{rate}"})
     for voice in voices:
-        for index, phrase in enumerate(NEGATIVE_PHRASES):
+        for index, phrase in enumerate(negative_phrases):
             planned.append({"kind": "negative", "voice": voice, "rate_mpr": None, "text": phrase, "name": f"neg-{voice}-{index}"})
 
     for item in planned:
@@ -284,7 +407,7 @@ def build_corpus(
                 raise WakeEvaluationError(f"wake_eval_clip_unusable:{item['voice']}:{quality['reason']}")
             unusable.append(record)
             continue
-        entries.append({**item, "wav": target, "quality": quality})
+        entries.append({**item, "wav": target, "sha256": sha256_path(target), "quality": quality})
     return entries, unusable
 
 
@@ -301,14 +424,20 @@ def evaluate(
     for entry in entries:
         samples = loader(Path(entry["wav"]))
         result = score_clip(frontend, samples)
-        rows.append({**{k: v for k, v in entry.items() if k != "wav"}, "wav": str(entry["wav"]), **result})
+        rows.append(
+            {
+                **{k: v for k, v in entry.items() if k != "wav"},
+                "wav": Path(entry["wav"]).name,
+                **result,
+            }
+        )
 
     references: list[dict[str, Any]] = []
     for path in extra_references:
         candidate = Path(path)
         if not candidate.is_file():
             continue
-        references.append({"wav": str(candidate), "note": "seen_voice_reference", **score_clip(frontend, loader(candidate))})
+        references.append({"wav": candidate.name, "note": "seen_voice_reference", **score_clip(frontend, loader(candidate))})
 
     positives = [row for row in rows if row["kind"] == "positive"]
     negatives = [row for row in rows if row["kind"] == "negative"]
@@ -331,7 +460,6 @@ def evaluate(
             "human_speakers": False,
             "microphones_or_rooms": False,
             "threshold_changed": False,
-            "fit_reference": "single synthesized positive clip",
         },
         "summary": {
             "positive_accepts": accepted,
@@ -395,7 +523,10 @@ def run_evaluation(
     voices: Sequence[str] | None = None,
     rate_variants: Iterable[tuple[str, int]] = DEFAULT_RATE_VARIANTS_MPR,
     custom_wake_model: Path | None = None,
+    baseline_model: Path | None = None,
     references: Sequence[Path] = (),
+    negative_phrases: Sequence[str] = NEGATIVE_PHRASES,
+    training_report: Path | None = None,
     allow_unusable: bool = False,
     synth: Callable[..., Path] | None = None,
 ) -> dict[str, Any]:
@@ -408,21 +539,68 @@ def run_evaluation(
     selected = default_voices(backend) if voices is None else tuple(voices)
     if not selected:
         raise WakeEvaluationError("wake_eval_voices_empty")
+    forbidden_hashes: set[str] = set()
+    training_metadata: dict[str, Any] | None = None
+    if training_report is not None:
+        training_metadata = load_training_report(training_report)
+        forbidden_hashes = validate_disjoint_split(
+            training_metadata,
+            eval_voices=selected,
+            eval_negative_phrases=negative_phrases,
+        )
     entries, unusable = build_corpus(
         corpus_dir,
         selected,
         rate_variants if backend == "say" else (),
         synth=renderer,
+        negative_phrases=negative_phrases,
         allow_unusable=allow_unusable,
     )
+    clip_hash_overlap = sorted(
+        {str(entry.get("sha256")) for entry in entries if str(entry.get("sha256")) in forbidden_hashes}
+    )
+    if clip_hash_overlap:
+        raise WakeEvaluationError(f"wake_eval_clip_hash_overlap:{','.join(clip_hash_overlap)}")
     frontend = OpenWakeVadFrontend(custom_wake_model=model_path)
     report = evaluate(entries, frontend, extra_references=references)
+    evaluator_path = Path(__file__).resolve()
     report["backend"] = backend
-    report["custom_model"] = str(model_path)
+    report["evaluator"] = stable_path(evaluator_path)
+    report["evaluator_sha256"] = sha256_path(evaluator_path)
+    report["custom_model"] = stable_path(model_path)
     report["custom_model_bytes"] = model_path.stat().st_size
+    report["custom_model_sha256"] = sha256_path(model_path)
     report["corpus_size"] = len(entries)
     report["unusable_renders"] = unusable
     report["voices"] = list(selected)
+    report["negative_phrases"] = list(negative_phrases)
+    if training_metadata is not None:
+        fit_reference = training_fit_reference(training_metadata)
+        if fit_reference is not None:
+            report["scope"]["fit_reference"] = fit_reference
+    report["split"] = {
+        "training_report": training_report.name if training_report is not None else None,
+        "voice_overlap": [],
+        "negative_phrase_overlap": [],
+        "clip_hash_overlap": [],
+        "disjoint_verified": training_report is not None,
+    }
+    if baseline_model is not None:
+        baseline_path = resolve_custom_wake_model(baseline_model)
+        if baseline_path is None:
+            raise WakeEvaluationError("baseline_wake_model_missing")
+        baseline_report = evaluate(
+            entries,
+            OpenWakeVadFrontend(custom_wake_model=baseline_path),
+            extra_references=references,
+        )
+        report["baseline"] = {
+            "custom_model": stable_path(baseline_path),
+            "custom_model_bytes": baseline_path.stat().st_size,
+            "custom_model_sha256": sha256_path(baseline_path),
+            "summary": baseline_report["summary"],
+            "rows": baseline_report["rows"],
+        }
     return report
 
 
@@ -431,8 +609,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend", choices=("qwen3tts", "say"), default="qwen3tts")
     parser.add_argument("--corpus-dir", type=Path, default=None)
     parser.add_argument("--custom-wake-model", type=Path, default=None)
+    parser.add_argument(
+        "--baseline-model",
+        type=Path,
+        default=None,
+        help="Optional second custom head scored on the exact same rendered corpus.",
+    )
     parser.add_argument("--references", default="", help="Comma-separated WAV paths for seen-voice contrast.")
     parser.add_argument("--voices", default="", help="Comma-separated voices; defaults to every voice of the backend.")
+    parser.add_argument(
+        "--negative-phrase",
+        action="append",
+        default=None,
+        help="Negative phrase to render; repeat for a disjoint custom set.",
+    )
+    parser.add_argument(
+        "--training-report",
+        type=Path,
+        default=None,
+        help="Training report whose voices, negative texts, and clip hashes must be disjoint.",
+    )
     parser.add_argument("--allow-unusable", action="store_true", help="Record unusable renders instead of refusing.")
     parser.add_argument("--probe-only", action="store_true", help="Only report which voices render speech.")
     parser.add_argument("--report", type=Path, default=None)
@@ -440,6 +636,7 @@ def main(argv: list[str] | None = None) -> int:
 
     voices = tuple(part.strip() for part in args.voices.split(",") if part.strip())
     references = tuple(Path(part.strip()) for part in args.references.split(",") if part.strip())
+    negative_phrases = tuple(args.negative_phrase) if args.negative_phrase else NEGATIVE_PHRASES
     with tempfile.TemporaryDirectory(prefix="alden-wake-eval-") as scratch:
         corpus_dir = args.corpus_dir.expanduser() if args.corpus_dir is not None else Path(scratch)
         if args.probe_only:
@@ -453,7 +650,10 @@ def main(argv: list[str] | None = None) -> int:
                 backend=args.backend,
                 voices=voices or None,
                 custom_wake_model=args.custom_wake_model,
+                baseline_model=args.baseline_model,
                 references=references,
+                negative_phrases=negative_phrases,
+                training_report=args.training_report.expanduser() if args.training_report is not None else None,
                 allow_unusable=args.allow_unusable,
             )
     encoded = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)

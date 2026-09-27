@@ -182,6 +182,7 @@ jobs:
           tests.test_alden_unit3.LocalMlxLlmRequestTests
           tests.test_alden_wake_eval
           tests.test_alden_wake_evidence
+          tests.test_alden_wake_disjoint
           tests.test_alden_browser_runtime
           tests.test_alden_desktop_render_check
 

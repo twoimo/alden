@@ -18,6 +18,15 @@ from alden_voice import RELEASED_WAKE_MODEL, WAKE_THRESHOLD, resolve_custom_wake
 
 
 EVIDENCE = ROOT / "docs/architecture/alden-wake-heldout-eval.json"
+V5_EVIDENCE = ROOT / "docs/architecture/alden-wake-v5-heldout-eval.json"
+V5_TRAINING_REPORT = ROOT / "voice/models/experimental/alden_ko_ridge_candidate_v5.train.json"
+V4_FROZEN_EVALUATOR_SHA256 = "184bcf0f3379ea1c6c8d108d7c11ef79ab4305ca482199ea0f83c2e75c5f269c"
+V5_FROZEN_FIT_REFERENCE = {
+    "positive_clips": 4,
+    "negative_clips": 17,
+    "method": "openwakeword_embedding_clip_peak_ridge_head",
+    "proof_scope": "bounded_synthetic_training_only",
+}
 
 
 class WakeEvidenceBundleTests(unittest.TestCase):
@@ -35,13 +44,32 @@ class WakeEvidenceBundleTests(unittest.TestCase):
         self.assertIs(bundle["scope"]["microphones_or_rooms"], False)
         self.assertEqual(bundle["scope"]["voices"], ["Yuna"])
 
-    def test_evaluator_hash_matches(self) -> None:
-        evaluator = ROOT / self.bundle["evaluator"]
+    def test_v4_evaluator_provenance_is_frozen(self) -> None:
         self.assertEqual(self.bundle["evaluator"], "scripts/evaluate_alden_korean_wake.py")
-        self.assertEqual(
-            self.bundle["evaluator_sha256"],
-            hashlib.sha256(evaluator.read_bytes()).hexdigest(),
-        )
+        self.assertEqual(self.bundle["evaluator_sha256"], V4_FROZEN_EVALUATOR_SHA256)
+
+    def test_v5_evaluator_hash_matches_current_source(self) -> None:
+        bundle = json.loads(V5_EVIDENCE.read_text(encoding="utf-8"))
+        evaluator = ROOT / bundle["evaluator"]
+        self.assertEqual(bundle["evaluator"], "scripts/evaluate_alden_korean_wake.py")
+        self.assertEqual(bundle["evaluator_sha256"], hashlib.sha256(evaluator.read_bytes()).hexdigest())
+
+    def test_v5_fit_reference_is_self_contained(self) -> None:
+        bundle = json.loads(V5_EVIDENCE.read_text(encoding="utf-8"))
+        fit_reference = bundle["scope"]["fit_reference"]
+        self.assertEqual(fit_reference, V5_FROZEN_FIT_REFERENCE)
+
+        if V5_TRAINING_REPORT.is_file():
+            training = json.loads(V5_TRAINING_REPORT.read_text(encoding="utf-8"))["training"]
+            self.assertEqual(
+                fit_reference,
+                {
+                    "positive_clips": training["positive_clips"],
+                    "negative_clips": training["negative_clips"],
+                    "method": training["method"],
+                    "proof_scope": training["proof_scope"],
+                },
+            )
 
     def test_experimental_candidate_hash_when_available(self) -> None:
         candidate = self.bundle["candidate"]
