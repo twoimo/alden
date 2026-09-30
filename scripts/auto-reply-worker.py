@@ -28,6 +28,7 @@ import tempfile
 import threading
 import sqlite3
 import time
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -40,6 +41,13 @@ MAX_LINK_URL_TIMEOUT_SECONDS = 8.0
 MAX_LINK_TOTAL_TIMEOUT_SECONDS = 10.0
 MAX_YOUTUBE_CAPTION_TIMEOUT_SECONDS = 20.0
 MAX_LINK_URLS = 2
+MAX_CONTEXT_URL_BYTES = 2048
+LOCAL_IMAGE_EVIDENCE_FAILURES = frozenset({
+    b"image_input_unavailable",
+    b"local_vision_model_required",
+    b"mlx_serve_vision_model_not_resident",
+    b"mlx_serve_vision_capability_unavailable",
+})
 MAX_MODEL_PROMPT_BYTES = 64 * 1024
 MAX_MODEL_OUTPUT_BYTES = 64 * 1024
 MAX_MODEL_STDERR_BYTES = 64 * 1024
@@ -398,6 +406,29 @@ QUOTED_REPLY_DESCRIPTOR_KEYS = frozenset(
         "source_message_sha256",
     }
 )
+FILE_PROVENANCE_SCHEMA_VERSION = 1
+FILE_ATTACHMENT_MESSAGE_TYPES = frozenset({3, 12, 16, 18, 26})
+FILE_PROVENANCE_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "availability",
+        "filename",
+        "message_type",
+        "declared_type",
+        "declared_size",
+        "attachment_sha256",
+        "declared_digest",
+        "chat_id",
+        "log_id",
+        "author_id",
+        "author_nickname",
+        "sent_at",
+    }
+)
+MAX_FILE_NAME_BYTES = 512
+MAX_FILE_DECLARED_TYPE_BYTES = 256
+MAX_FILE_DECLARED_DIGEST_BYTES = 256
 CONVERSATION_TARGET_KEYS = frozenset(
     {
         "kind",
@@ -411,6 +442,7 @@ CONVERSATION_TARGET_KEYS = frozenset(
 )
 MEDIA_UNAVAILABLE_CLARIFICATION = "사진 내용을 확인하지 못했어. 필요한 부분을 글로 알려줄래?"
 MEDIA_UNAVAILABLE_CLARIFICATION_REASON = "media_unavailable_clarification"
+FILE_UNAVAILABLE_CLARIFICATION_REASON = "file_unavailable_clarification"
 REPLY_LAUGHTER_POLICY_REASON = "reply_laughter_policy_violation"
 AI_TELL_PROBE = "그래? 어떤 부분이 AI처럼 느껴졌는데"
 # Trailing laughter, jamo runs and punctuation are ignored when a rule checks the
@@ -4455,6 +4487,123 @@ def conversation_advanced_past_event(event: dict) -> bool | None:
     return watermark > tail
 
 
+def _canonical_context_url(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    try:
+        if (
+            not text
+            or len(text.encode("utf-8")) > MAX_CONTEXT_URL_BYTES
+            or any(char.isspace() or unicodedata.category(char) == "Cc" for char in text)
+            or any(char in text for char in '<>"\\')
+        ):
+            return None
+        parsed = urllib.parse.urlsplit(text)
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        return None
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    try:
+        canonical_host = hostname.rstrip(".").encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return None
+    if not canonical_host:
+        return None
+    if ":" in canonical_host:
+        canonical_host = f"[{canonical_host}]"
+    default_port = 80 if scheme == "http" else 443
+    netloc = canonical_host if port in {None, default_port} else f"{canonical_host}:{port}"
+    canonical = urllib.parse.urlunsplit(
+        (scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+    try:
+        if len(canonical.encode("utf-8")) > MAX_CONTEXT_URL_BYTES:
+            return None
+    except UnicodeEncodeError:
+        return None
+    return canonical
+
+
+def _authoritative_local_attachment_urls(
+    attachment: object,
+    message_type: int,
+) -> list[str]:
+    if message_type != 71 or not isinstance(attachment, str):
+        return []
+    try:
+        if not attachment or len(attachment.encode("utf-8")) > MAX_EVENT_BYTES:
+            return []
+
+        def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            value: dict[str, object] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError("duplicate attachment key")
+                value[key] = item
+            return value
+
+        def reject_nonfinite(_value: str) -> object:
+            raise ValueError("non-finite attachment number")
+
+        payload = json.loads(
+            attachment,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_nonfinite,
+        )
+    except (UnicodeError, ValueError, RecursionError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+
+    def mapping(value: object) -> dict:
+        return value if isinstance(value, dict) else {}
+
+    content = mapping(payload.get("C"))
+    title = mapping(content.get("TI"))
+    header = mapping(content.get("HD"))
+    platform = mapping(payload.get("P"))
+    candidates: list[object] = []
+
+    def add_link_fields(value: object) -> None:
+        link = mapping(value)
+        candidates.extend((link.get("LPC"), link.get("LMO")))
+
+    add_link_fields(title.get("L"))
+    feed_items = content.get("ITL")
+    if isinstance(feed_items, list) and feed_items:
+        add_link_fields(mapping(feed_items[-1]).get("L"))
+    thumbnails = content.get("THL")
+    if isinstance(thumbnails, list):
+        for item in thumbnails:
+            add_link_fields(mapping(item).get("L"))
+    candidates.append(platform.get("DID"))
+    add_link_fields(platform.get("L"))
+    add_link_fields(header.get("L"))
+
+    urls: list[str] = []
+    for raw in candidates:
+        canonical = _canonical_context_url(raw)
+        if canonical is None:
+            continue
+        parsed = urllib.parse.urlsplit(canonical)
+        if parsed.scheme != "https" or not _kakao_daum_link_host(parsed.hostname):
+            continue
+        if canonical not in urls:
+            urls.append(canonical)
+        if len(urls) >= MAX_LINK_URLS:
+            break
+    return urls
+
+
 def refresh_recent_messages_from_local_db(
     event: dict,
     expected_watermark: int,
@@ -4500,6 +4649,15 @@ def refresh_recent_messages_from_local_db(
     if not isinstance(rows, list) or len(rows) > count or not rows:
         return None
 
+    preserved_files: dict[int, dict] = {}
+    raw_recent = event.get("recent_messages")
+    if isinstance(raw_recent, list) and len(raw_recent) <= RECENT_MESSAGE_LIMIT:
+        for item in raw_recent:
+            provenance = _validated_recent_file_provenance(item)
+            log_id = _fence_int(item.get("log_id")) if isinstance(item, dict) else None
+            if provenance is not None and log_id is not None:
+                preserved_files[log_id] = provenance
+
     refreshed: list[dict] = []
     seen_log_ids: set[int] = set()
     for row in rows:
@@ -4513,6 +4671,7 @@ def refresh_recent_messages_from_local_db(
         message = row.get("message")
         sender_name = row.get("sender_name")
         is_self = row.get("is_self")
+        attachment_value = row.get("attachment")
         if (
             row_chat_id != chat_id
             or log_id is None
@@ -4532,20 +4691,47 @@ def refresh_recent_messages_from_local_db(
         ):
             return None
         seen_log_ids.add(log_id)
-        refreshed.append(
-            {
-                "log_id": log_id,
-                "chat_id": chat_id,
-                "author_id": author_id,
-                "author_nickname": sender_name.strip()[:120],
-                "sender_name": sender_name.strip()[:120],
-                "message": message[:500],
-                "message_type": message_type,
-                "attachment": bool(str(row.get("attachment") or "").strip()),
-                "sent_at": sent_at,
-                "is_self": is_self,
-            }
+        refreshed_row = {
+            "log_id": log_id,
+            "chat_id": chat_id,
+            "author_id": author_id,
+            "author_nickname": sender_name.strip()[:120],
+            "sender_name": sender_name.strip()[:120],
+            "message": message[:500],
+            "message_type": message_type,
+            "attachment": (
+                kakao_image_kind(message_type) is not None
+                and bool(str(attachment_value or "").strip())
+            ),
+            "sent_at": sent_at,
+            "is_self": is_self,
+        }
+        attachment_urls = _authoritative_local_attachment_urls(
+            attachment_value,
+            message_type,
         )
+        if attachment_urls:
+            refreshed_row["urls"] = attachment_urls
+        file_provenance = preserved_files.get(log_id)
+        if isinstance(attachment_value, str) and file_provenance is not None:
+            try:
+                attachment_sha256 = hashlib.sha256(
+                    attachment_value.encode("utf-8")
+                ).hexdigest()
+            except UnicodeEncodeError:
+                attachment_sha256 = ""
+            if (
+                attachment_sha256 == file_provenance.get("attachment_sha256")
+                and file_provenance.get("chat_id") == chat_id
+                and file_provenance.get("log_id") == log_id
+                and file_provenance.get("author_id") == author_id
+                and file_provenance.get("author_nickname")
+                == refreshed_row["author_nickname"]
+                and file_provenance.get("message_type") == message_type
+                and file_provenance.get("sent_at") == sent_at
+            ):
+                refreshed_row["file_provenance"] = file_provenance
+        refreshed.append(refreshed_row)
     if max(seen_log_ids) < expected_watermark:
         return None
     refreshed.sort(key=lambda item: (item["sent_at"], item["log_id"]))
@@ -7344,6 +7530,11 @@ def _recent_conversation(event: dict) -> list[dict]:
             "is_self": _is_self_chat_row({**item, "author_id": author_id}),
             "sent_at": item.get("sent_at"),
         }
+        file_provenance = _validated_recent_file_provenance(item)
+        if file_provenance is not None:
+            row["chat_id"] = _fence_int(item.get("chat_id"))
+            row["file_provenance"] = file_provenance
+            row["file_content_available"] = False
         if item.get("self_receipt") is True:
             row["self_receipt"] = True
         raw_urls = item.get("urls")
@@ -12047,6 +12238,8 @@ def _model_fallback_chain(
     keeps a fallback that answered from being reported as circuit_unavailable and
     deferred anyway. Returns None when no candidate could run. Ordinary candidate
     errors may continue; operator cancellation propagates without another call.
+    A local image-input error is terminal for this input. Its lease travels with
+    the result so the caller releases it without marking a provider failure.
     """
 
     for candidate in _reply_fallback_candidates():
@@ -12086,6 +12279,15 @@ def _model_fallback_chain(
                 flush=True,
             )
             continue
+        if returncode != 0 and stderr_bytes in LOCAL_IMAGE_EVIDENCE_FAILURES:
+            return {
+                "model": candidate,
+                "lease_token": slot["lease_token"],
+                "retry_at": slot["retry_at"],
+                "returncode": returncode,
+                "stdout": stdout_bytes,
+                "stderr": stderr_bytes,
+            }
         if returncode != 0:
             failure_class, retry_after = _classify_model_failure(
                 returncode,
@@ -12204,6 +12406,10 @@ def _run_opencodex_generation_unleased(
                 break
         target_base_url = gateway_base_url
         target_model = advertised_model
+        if image_paths and "vision" not in model_capabilities:
+            # A resident text model is not evidence of a vision runtime. Do not
+            # send pixels to it or attribute this local gap to provider health.
+            return 1, b"", b"mlx_serve_vision_capability_unavailable"
     elif target_model in (
         "google-antigravity/gemini-3.8-flash-high",
         "google-antigravity/gemini-3.8-flash-tiered",
@@ -12541,6 +12747,13 @@ def generate_reply(
         raise ValueError("pre-acquired model lease is probe-only")
     dream_rsi_metadata = None if _capacity_probe else _load_dream_rsi_checkpoint_metadata()
     bounded_recent_conversation = list(recent_conversation or [])
+    if not _capacity_probe and any(
+        _validated_recent_file_provenance(row) is not None
+        for row in bounded_recent_conversation
+    ):
+        instructions = list(instructions) + [
+            "A recent file_provenance with availability metadata_only proves only its filename and metadata. Never infer or summarize file contents. If the current turn refers to that file, explicitly ask for the needed text."
+        ]
     bounded_conversation_target = _prompt_conversation_target(
         conversation_target,
         bounded_recent_conversation,
@@ -13084,7 +13297,7 @@ def generate_reply(
                     image_paths=normalized_image_paths,
                     timeout=_model_generation_timeout(active_model, deadline=generation_deadline),
                 )
-            if returncode != 0 and stderr_bytes == b"image_input_unavailable":
+            if returncode != 0 and stderr_bytes in LOCAL_IMAGE_EVIDENCE_FAILURES:
                 # No model request was sent. Release this call's lease without
                 # clearing older failures or opening a model-wide cooldown, and
                 # do not try another model with the same incomplete evidence.
@@ -13238,6 +13451,16 @@ def generate_reply(
         return fail_model_call("runner_output_overflow")
     except OSError:
         return fail_model_call("runner_io_failure")
+    if returncode != 0 and stderr_bytes in LOCAL_IMAGE_EVIDENCE_FAILURES:
+        _release_cancelled_model_call(lease_token, active_model)
+        return with_prompt_receipt({
+            **empty,
+            "reason": "image_unavailable",
+            "evidence_ids": [],
+            # A prior primary request may already have failed before this
+            # fallback. A cooldown fallback alone made no model request.
+            "model_invoked": not cooldown_fallback_answered,
+        })
     if returncode != 0:
         failure_class, retry_after = _classify_model_failure(
             returncode,
@@ -13303,6 +13526,14 @@ def generate_reply(
                     flush=True,
                 )
 
+    if returncode != 0 and stderr_bytes in LOCAL_IMAGE_EVIDENCE_FAILURES:
+        _release_cancelled_model_call(lease_token, active_model)
+        return with_prompt_receipt({
+            **empty,
+            "reason": "image_unavailable",
+            "evidence_ids": [],
+            "model_invoked": not cooldown_fallback_answered,
+        })
     held = turn_hold()
     if held:
         if returncode == 0:
@@ -14558,6 +14789,271 @@ def blank_analysis(reason: str, category: str = "uncertain") -> dict:
             "runner_available": runner_is_trusted(),
         },
     }
+
+
+def _bounded_file_text(value: object, max_bytes: int, *, allow_empty: bool = False) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    try:
+        encoded = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    if (
+        (not text and not allow_empty)
+        or len(encoded) > max_bytes
+        or any(not char.isprintable() for char in text)
+    ):
+        return None
+    return text
+
+
+def _validated_file_provenance(event: dict) -> dict | None:
+    provenance = event.get("file_provenance")
+    if (
+        not isinstance(provenance, dict)
+        or set(provenance) != FILE_PROVENANCE_KEYS
+        or provenance.get("schema_version") != FILE_PROVENANCE_SCHEMA_VERSION
+        or provenance.get("kind") != "file"
+        or provenance.get("availability") != "metadata_only"
+        or event.get("attachment") != "file"
+    ):
+        return None
+    filename = _bounded_file_text(provenance.get("filename"), MAX_FILE_NAME_BYTES)
+    declared_type = _bounded_file_text(
+        provenance.get("declared_type"),
+        MAX_FILE_DECLARED_TYPE_BYTES,
+        allow_empty=True,
+    )
+    declared_digest = _bounded_file_text(
+        provenance.get("declared_digest"),
+        MAX_FILE_DECLARED_DIGEST_BYTES,
+        allow_empty=True,
+    )
+    message_type = provenance.get("message_type")
+    declared_size = provenance.get("declared_size")
+    attachment_sha256 = provenance.get("attachment_sha256")
+    chat_id = _fence_int(provenance.get("chat_id"))
+    log_id = _fence_int(provenance.get("log_id"))
+    author_id = _fence_int(provenance.get("author_id"))
+    author_nickname = _bounded_file_text(
+        provenance.get("author_nickname"),
+        1024,
+    )
+    sent_at = _fence_int(provenance.get("sent_at"))
+    if (
+        filename is None
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or declared_type is None
+        or declared_digest is None
+        or isinstance(message_type, bool)
+        or not isinstance(message_type, int)
+        or message_type not in FILE_ATTACHMENT_MESSAGE_TYPES
+        or event.get("message_type") != message_type
+        or isinstance(declared_size, bool)
+        or not isinstance(declared_size, int)
+        or not 0 <= declared_size < MAX_INT64
+        or not isinstance(attachment_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", attachment_sha256) is None
+        or chat_id != _fence_int(event.get("chat_id"))
+        or log_id != _fence_int(event.get("log_id"))
+        or author_id != _fence_int(event.get("author_id"))
+        or author_nickname is None
+        or author_nickname != str(event.get("author_nickname") or "").strip()
+        or sent_at != _fence_int(event.get("sent_at"))
+        or any(
+            event.get(key) not in (None, "", [])
+            for key in ("file_path", "file_paths", "file_marker")
+        )
+    ):
+        return None
+    return dict(provenance)
+
+
+def _validated_recent_file_provenance(row: object) -> dict | None:
+    if (
+        not isinstance(row, dict)
+        or row.get("is_self") is not False
+        or row.get("direction", "incoming") != "incoming"
+    ):
+        return None
+    return _validated_file_provenance(
+        {
+            "attachment": "file",
+            "file_provenance": row.get("file_provenance"),
+            "chat_id": row.get("chat_id"),
+            "log_id": row.get("log_id"),
+            "author_id": row.get("author_id"),
+            "author_nickname": row.get("author_nickname"),
+            "message_type": row.get("message_type"),
+            "sent_at": row.get("sent_at"),
+        }
+    )
+
+
+def _file_unavailable_clarification_event(event: dict) -> bool:
+    """Recognize one exact metadata-only file without a content capability."""
+    log_id = _fence_int(event.get("log_id"))
+    return bool(
+        canonical_db_event(event)
+        and event.get("source") == "database"
+        and event.get("direction") == "incoming"
+        and event.get("reply_authorized") is True
+        and event.get("is_self") is False
+        and _validated_file_provenance(event) is not None
+        and log_id is not None
+        and event.get("burst_source_log_ids") == [log_id]
+        and event.get("burst_tail_log_id") == log_id
+        and event.get("burst_message_count") == 1
+        and event.get("burst_policy_version")
+        in {LEGACY_BURST_POLICY_VERSION, BURST_POLICY_VERSION}
+        and not str(event.get("image_path") or "")
+        and event.get("image_paths") == []
+        and event.get("media_manifest") is None
+        and not str(event.get("media_marker") or "")
+    )
+
+
+def _recent_unavailable_file_followup(event: dict) -> dict | None:
+    """Bind a short same-author follow-up to the immediately preceding file."""
+    if event.get("attachment") == "file":
+        return None
+    inbound = " ".join(str(event.get("message") or "").split())
+    if not inbound or len(inbound.encode("utf-8")) > 256:
+        return None
+    compact = re.sub(r"\s+", "", inbound)
+    deictic = r"(?:이거|이게|이건|이파일|그거|그게|그건|그파일|저거|저게|저건|저파일|파일|첨부)"
+    action = r"(?:요약|읽|열|봐|보여|확인|내용|뭐|설명|분석|번역|알려)"
+    if not (
+        _is_contextual_followup(inbound)
+        or (re.search(deictic, compact) and re.search(action, compact))
+        or re.match(r"^(?:요약|읽어|열어|봐|보여|확인|설명|분석|번역)", compact)
+    ):
+        return None
+    recent_conversation = _event_recent_conversation(event)
+    if not recent_conversation:
+        return None
+    source = recent_conversation[-1]
+    if not isinstance(source, dict) or _is_self_chat_row(source):
+        return None
+    provenance = _validated_recent_file_provenance(source)
+    current_author_id = _fence_int(event.get("author_id"))
+    source_author_id = _fence_int(source.get("author_id"))
+    current_chat_id = _fence_int(event.get("chat_id"))
+    source_chat_id = _fence_int(source.get("chat_id"))
+    current_log_id = _fence_int(event.get("log_id"))
+    source_log_id = _fence_int(source.get("log_id"))
+    current_sent_at = _fence_int(event.get("sent_at"))
+    source_sent_at = _fence_int(source.get("sent_at"))
+    if (
+        provenance is None
+        or current_chat_id is None
+        or source_chat_id != current_chat_id
+        or current_author_id is None
+        or source_author_id != current_author_id
+        or current_log_id is None
+        or source_log_id is None
+        or source_log_id >= current_log_id
+        or current_sent_at is None
+        or source_sent_at is None
+        or not 0 <= current_sent_at - source_sent_at <= 300
+    ):
+        return None
+    return {
+        "provenance": provenance,
+        "evidence_id": str(source.get("evidence_id") or f"recent:{source_log_id}"),
+        "recent_conversation": recent_conversation,
+    }
+
+
+def _file_unavailable_analysis(
+    event: dict,
+    provenance: dict | None,
+    *,
+    evidence_id: str,
+    recent_conversation: list[dict] | None = None,
+) -> dict:
+    """Build one truthful file clarification without parsing bytes or using a model."""
+    result = blank_analysis("file_unavailable")
+    reason = _reply_turn_hold_reason(event)
+    if reason:
+        _trace_turn_hold(event, reason)
+        result.update(reason=reason, category="policy")
+        return result
+    privacy_required = os.environ.get(DB_MODE_ENV) == "database_authoritative"
+    privacy_attested = not privacy_required or privacy_attestation_current()
+    result["provenance"]["privacy_attested"] = privacy_attested
+    if provenance is None or not privacy_attested:
+        result["reason"] = (
+            "invalid_file_provenance"
+            if provenance is None
+            else "privacy_attestation_invalid"
+        )
+        result["category"] = "policy"
+        return result
+    recipient = _event_author_nickname(event)
+    ending = "알려주세요." if _recipient_requires_honorific(recipient, None) else "알려줘."
+    reply = f"파일 내용은 확인할 수 없어서, 필요한 부분을 텍스트로 {ending}"
+    result.update(
+        decision="reply",
+        reason=FILE_UNAVAILABLE_CLARIFICATION_REASON,
+        category="question",
+        reply=reply,
+        attachment="file",
+        recent_conversation=(
+            list(recent_conversation)
+            if recent_conversation is not None
+            else _event_recent_conversation(event)
+        ),
+        evidence_ids=[evidence_id] if evidence_id else [],
+    )
+    result["provenance"].update(
+        file_requested=True,
+        file_content_available=False,
+        file_metadata={
+            key: provenance[key]
+            for key in (
+                "filename",
+                "message_type",
+                "declared_type",
+                "declared_size",
+                "attachment_sha256",
+                "declared_digest",
+                "chat_id",
+                "log_id",
+                "author_id",
+            )
+        },
+        model_invoked=False,
+    )
+    return result
+
+
+def analyze_file_unavailable_clarification(event: dict) -> dict:
+    return _file_unavailable_analysis(
+        event,
+        _validated_file_provenance(event),
+        evidence_id=str(event.get("event_id") or ""),
+    )
+
+
+def analyze_recent_file_unavailable_clarification(
+    event: dict,
+    reference: dict,
+) -> dict:
+    return _file_unavailable_analysis(
+        event,
+        reference.get("provenance") if isinstance(reference, dict) else None,
+        evidence_id=str(reference.get("evidence_id") or "")
+        if isinstance(reference, dict)
+        else "",
+        recent_conversation=reference.get("recent_conversation")
+        if isinstance(reference, dict)
+        and isinstance(reference.get("recent_conversation"), list)
+        else None,
+    )
 
 
 def _media_unavailable_clarification_event(event: dict) -> bool:
@@ -16406,11 +16902,18 @@ def _process_job_impl(
         }
     else:
         with _active_job_journal(connection, analysis_event):
-            analysis = (
-                analyze_media_unavailable_clarification(analysis_event)
-                if _media_unavailable_clarification_event(event)
-                else analyze_event(analysis_event)
-            )
+            file_followup = _recent_unavailable_file_followup(analysis_event)
+            if _file_unavailable_clarification_event(event):
+                analysis = analyze_file_unavailable_clarification(analysis_event)
+            elif file_followup is not None:
+                analysis = analyze_recent_file_unavailable_clarification(
+                    analysis_event,
+                    file_followup,
+                )
+            elif _media_unavailable_clarification_event(event):
+                analysis = analyze_media_unavailable_clarification(analysis_event)
+            else:
+                analysis = analyze_event(analysis_event)
             retry_count = analysis.get("unparsed_output_retry_count")
             if type(retry_count) is int and 0 <= retry_count <= UNPARSED_OUTPUT_MAX_RETRIES:
                 # Persist the single allowed retry on the source queue event
@@ -18144,6 +18647,17 @@ def main() -> int:
 
     message = str(event.get("message") or "").strip()
     attachment = str(event.get("attachment") or "").strip()
+    if attachment == "file" or event.get("file_provenance") is not None:
+        if _validated_file_provenance(event) is None:
+            event["message"] = message
+            if not durable_policy_skip(event, event_id, "invalid_file_provenance"):
+                return 1
+            return ack_return(
+                "skipped",
+                event_id,
+                "invalid_file_provenance",
+                audit_applied=True,
+            )
     if not message and attachment:
         message = "[사진]" if attachment == "image" else "[파일]"
     if not message or (message in {"[사진]", "[파일]"} and not attachment):

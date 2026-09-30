@@ -2773,19 +2773,18 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             },
             ensure_ascii=False,
         )
-        summary = db_watch._message_summary(
-            {
-                "chat_id": 417780809780519,
-                "log_id": 3910767403422096201,
-                "author_id": 209319606,
-                "sender_name": "현준",
-                "message": "샵검색: #대만 44만원",
-                "message_type": 71,
-                "attachment": attachment,
-                "sent_at": 1787137003,
-                "is_self": False,
-            }
-        )
+        message = {
+            "chat_id": 417780809780519,
+            "log_id": 3910767403422096201,
+            "author_id": 209319606,
+            "sender_name": "현준",
+            "message": "샵검색: #대만 44만원",
+            "message_type": 71,
+            "attachment": attachment,
+            "sent_at": 1787137003,
+            "is_self": False,
+        }
+        summary = db_watch._message_summary(message)
         self.assertIn("민심 달래기", summary["message"])
         self.assertIn("샵검색: #대만 44만원", summary["message"])
         self.assertEqual(
@@ -2796,6 +2795,69 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         dumped = json.dumps(summary, ensure_ascii=False)
         self.assertNotIn("SECRETCODEBLOB", dumped)
         self.assertNotIn("kakaocdn.net", dumped)
+        persisted = db_watch._merge_recent_tail([], [message])
+        self.assertEqual(persisted[0]["urls"], summary["urls"])
+        self.assertEqual(
+            db_watch._recent_messages(
+                persisted,
+                message["log_id"],
+                ordered_messages=persisted,
+            )[0]["urls"],
+            summary["urls"],
+        )
+        worker = self._load_auto_reply_module(
+            "auto_reply_recent_card_url_round_trip_test"
+        )
+        followup = {
+            "log_id": message["log_id"] + 1,
+            "recent_messages": persisted,
+        }
+        recent = worker._recent_conversation(followup)
+        self.assertEqual(recent[0]["urls"], summary["urls"])
+        self.assertEqual(worker._event_link_urls(followup, recent), summary["urls"])
+
+    def test_recent_tail_urls_are_bounded_canonical_and_ordered(self):
+        db_watch = self._load_db_watch_module("auto_reply_recent_url_validation_test")
+        base = {
+            "chat_id": 42,
+            "log_id": 10,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "card",
+            "message_type": 71,
+            "attachment": False,
+            "sent_at": 100,
+            "is_self": False,
+        }
+        urls = [
+            "HTTPS://V.KAKAO.COM:443/v/first?b=2&a=1",
+            "http://EXAMPLE.COM:80/second#part",
+        ]
+        validated = db_watch._validated_recent_summary({**base, "urls": urls})
+        self.assertEqual(
+            validated["urls"],
+            [
+                "https://v.kakao.com/v/first?b=2&a=1",
+                "http://example.com/second#part",
+            ],
+        )
+        self.assertEqual(
+            db_watch._validated_recent_tail([validated])[0]["urls"],
+            validated["urls"],
+        )
+        for invalid in (
+            ["https://example.com/1", "https://example.com/2", "https://example.com/3"],
+            ["javascript:alert(1)"],
+            ["https://user:secret@example.com/path"],
+            ["https://example.com/has space"],
+            ["https://example.com/same", "https://EXAMPLE.COM:443/same"],
+            ["https://example.com/" + "x" * db_watch.MAX_RECENT_URL_BYTES],
+            "https://example.com/not-a-list",
+        ):
+            with self.subTest(invalid=repr(invalid)):
+                self.assertIsNone(
+                    db_watch._validated_recent_summary({**base, "urls": invalid})
+                )
 
     def test_shop_search_article_guess_and_rerank_query(self):
         module = self._load_auto_reply_module("auto_reply_shop_search_article_guess")
@@ -9992,7 +10054,10 @@ print(json.dumps({
         ]
         bounded = db_watch._merge_recent_tail([], many)
         self.assertEqual(len(bounded), db_watch.RECENT_MESSAGE_LIMIT)
-        self.assertEqual(bounded[0]["log_id"], 7)
+        self.assertEqual(
+            bounded[0]["log_id"],
+            many[-db_watch.RECENT_MESSAGE_LIMIT]["log_id"],
+        )
         self.assertEqual(
             db_watch._merge_recent_tail(tail, [second]),
             tail,
@@ -10210,6 +10275,209 @@ print(json.dumps({
                 [source],
             )
         )
+
+    def test_db_watch_off_tail_quote_requires_exact_authoritative_poll_row(self):
+        db_watch = self._load_db_watch_module(
+            "auto_reply_off_tail_quote_authority_test"
+        )
+        source = {
+            "chat_id": 42,
+            "log_id": 400,
+            "author_id": 900,
+            "sender_name": "최연우",
+            "message": "authoritative off-tail body",
+            "message_type": 1,
+            "attachment": "",
+            "is_self": True,
+            "sent_at": 4_000,
+        }
+        current = {
+            "chat_id": 42,
+            "log_id": 410,
+            "author_id": 700,
+            "sender_name": "member",
+            "message": "이 내용 기준으로",
+            "message_type": db_watch.QUOTED_REPLY_MESSAGE_TYPE,
+            "attachment": json.dumps(
+                {
+                    "src_logId": source["log_id"],
+                    "src_userId": source["author_id"],
+                    "src_type": source["message_type"],
+                    "src_message": source["message"],
+                }
+            ),
+            "is_self": False,
+            "sent_at": 4_010,
+        }
+        recent = [db_watch._message_summary(current)]
+        descriptor = db_watch._quoted_reply_descriptor(
+            current,
+            recent,
+            [source, current],
+        )
+        self.assertEqual(
+            descriptor["quoted_source"],
+            {
+                "log_id": 400,
+                "author_id": 900,
+                "author_nickname": "최연우",
+                "message": "authoritative off-tail body",
+                "message_type": 1,
+                "is_self": True,
+            },
+        )
+        self.assertIsNone(
+            db_watch._quoted_reply_descriptor(
+                current,
+                recent,
+                [{**source, "message": "different local row"}, current],
+            )
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"OPENKAKAO_AUTO_REPLY_CLI": "1"},
+                clear=False,
+            ),
+            mock.patch.object(
+                db_watch,
+                "_cli_enrollment_target",
+                return_value={
+                    "reply_author_bindings": [
+                        {"author_id": 900, "nickname": "최연우"}
+                    ]
+                },
+            ),
+        ):
+            self.assertIsNone(
+                db_watch._quoted_reply_descriptor(current, recent, [current])
+            )
+
+    def test_db_watch_file_provenance_distinguishes_type26_quote_and_alias_conflicts(self):
+        db_watch = self._load_db_watch_module(
+            "auto_reply_file_provenance_test"
+        )
+        attachment = {
+            "k": "safe/report.pdf",
+            "name": "report.pdf",
+            "size": 1234,
+            "mt": "application/pdf",
+            "cs": "opaque-kakao-checksum",
+        }
+        message = {
+            "chat_id": 42,
+            "log_id": 420,
+            "author_id": 700,
+            "sender_name": "member",
+            "message": "",
+            "message_type": 26,
+            "attachment": json.dumps(attachment, separators=(",", ":")),
+            "sent_at": 4_200,
+            "source_epoch": 7,
+            "is_self": False,
+            "reply_authorized": True,
+        }
+        provenance = db_watch._file_provenance(message)
+        self.assertEqual(provenance["filename"], "report.pdf")
+        self.assertEqual(provenance["declared_type"], "application/pdf")
+        self.assertEqual(provenance["declared_size"], 1234)
+        self.assertEqual(provenance["declared_digest"], "opaque-kakao-checksum")
+        self.assertEqual(provenance["availability"], "metadata_only")
+        self.assertEqual(
+            provenance["attachment_sha256"],
+            hashlib.sha256(message["attachment"].encode("utf-8")).hexdigest(),
+        )
+        self.assertNotIn("url", provenance)
+        self.assertNotIn("k", provenance)
+        recent_summary = db_watch._message_summary(message)
+        self.assertEqual(recent_summary["message"], "")
+        self.assertFalse(recent_summary["attachment"])
+        self.assertEqual(recent_summary["file_provenance"], provenance)
+        self.assertEqual(
+            db_watch._validated_recent_summary(recent_summary)["file_provenance"],
+            provenance,
+        )
+
+        without_optional = {
+            **message,
+            "attachment": json.dumps(
+                {"name": "plain.txt", "size": 0},
+                separators=(",", ":"),
+            ),
+        }
+        self.assertEqual(
+            db_watch._file_provenance(without_optional)["declared_type"],
+            "",
+        )
+        for conflicting in (
+            {**attachment, "type": "application/octet-stream"},
+            {**attachment, "digest": "second-checksum"},
+        ):
+            with self.subTest(keys=sorted(conflicting)):
+                self.assertIsNone(
+                    db_watch._file_provenance(
+                        {
+                            **message,
+                            "attachment": json.dumps(conflicting),
+                        }
+                    )
+                )
+
+        quote = {
+            **message,
+            "attachment": json.dumps(
+                {
+                    "src_logId": 419,
+                    "src_userId": 900,
+                    "src_type": 1,
+                    "src_message": "quoted",
+                    "name": "must-not-become-a-file.txt",
+                    "size": 10,
+                }
+            ),
+        }
+        self.assertIsNone(db_watch._file_provenance(quote))
+
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=json.dumps(
+                {
+                    "ack": "accepted",
+                    "event_id": "db:42:420",
+                    "owner_id": "owner",
+                    "source_epoch": 7,
+                }
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"OPENKAKAO_SUPERVISOR_OWNER": "owner"},
+                clear=False,
+            ),
+            mock.patch.object(
+                db_watch,
+                "_run_bounded_hook",
+                return_value=completed,
+            ) as hook,
+        ):
+            self.assertEqual(
+                db_watch.emit(
+                    message,
+                    None,
+                    recent_messages=[db_watch._message_summary(message)],
+                    authoritative_messages=[message],
+                    candidate={},
+                ),
+                "accepted",
+            )
+        emitted = json.loads(hook.call_args.args[0])
+        self.assertEqual(emitted["message"], "[파일]")
+        self.assertEqual(emitted["attachment"], "file")
+        self.assertEqual(emitted["file_provenance"], provenance)
+        self.assertIsNone(emitted["reply_to"])
 
     def test_long_replay_backlog_keeps_each_cursor_page_bounded(self):
         db_watch = self._load_db_watch_module("auto_reply_long_replay_test")
@@ -11989,6 +12257,91 @@ print(json.dumps({
                 self.assertEqual(due_claim[1], "scheduled")
             finally:
                 connection.close()
+
+    def test_local_context_refresh_restores_authoritative_attachment_urls(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_context_refresh_attachment_urls_test"
+        )
+        attachment = json.dumps(
+            {
+                "C": {
+                    "TI": {
+                        "L": {
+                            "LPC": "HTTPS://V.KAKAO.COM:443/v/first?b=2&a=1",
+                            "LMO": "https://v.kakao.com/v/first?b=2&a=1",
+                        }
+                    },
+                    "ITL": [
+                        {
+                            "L": {
+                                "LPC": "https://v.daum.net/v/second",
+                                "LMO": "https://outside.invalid/ignored",
+                            }
+                        }
+                    ],
+                    "THL": [
+                        {"L": {"LPC": "https://v.kakao.com/v/third"}}
+                    ],
+                }
+            }
+        )
+        rows = [
+            {
+                "log_id": 420,
+                "chat_id": 42,
+                "author_id": 700,
+                "is_self": False,
+                "sender_name": "member",
+                "message": "샵검색: #합성",
+                "attachment": attachment,
+                "message_type": 71,
+                "sent_at": 1_000,
+            }
+        ]
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(
+                module,
+                "_run_bounded_process",
+                return_value=(0, json.dumps(rows).encode(), b""),
+            ),
+        ):
+            refreshed = module.refresh_recent_messages_from_local_db(
+                {"chat_id": 42, "log_id": 420},
+                420,
+            )
+        self.assertEqual(refreshed[0]["message"], "샵검색: #합성")
+        self.assertEqual(
+            refreshed[0]["urls"],
+            [
+                "https://v.kakao.com/v/first?b=2&a=1",
+                "https://v.daum.net/v/second",
+            ],
+        )
+        self.assertNotIn("outside.invalid", json.dumps(refreshed))
+
+        malformed = json.dumps(
+            {"C": {"TI": {"L": {"LPC": "https://v.kakao.com/first"}}}}
+        ).replace('"LPC":', '"LPC":"https://v.kakao.com/duplicate","LPC":', 1)
+        self.assertEqual(
+            module._authoritative_local_attachment_urls(malformed, 71),
+            [],
+        )
+        foreign = json.dumps(
+            {"C": {"TI": {"L": {"LPC": "https://outside.invalid/card"}}}}
+        )
+        self.assertEqual(
+            module._authoritative_local_attachment_urls(foreign, 71),
+            [],
+        )
+        self.assertEqual(
+            module._authoritative_local_attachment_urls(attachment, 1),
+            [],
+        )
 
     def test_scheduled_question_restart_preserves_timing_without_resampling(self):
         module = self._load_auto_reply_module(
@@ -15748,6 +16101,364 @@ print(json.dumps({
             dict(valid, reply_authorized=False),
         )
         self.assertFalse(any(map(module._media_unavailable_clarification_event, invalid)))
+
+    @staticmethod
+    def _file_unavailable_event(module, log_id, sent_at):
+        raw_attachment = json.dumps(
+            {
+                "k": "safe/report.pdf",
+                "name": "report.pdf",
+                "size": 1234,
+                "mt": "application/pdf",
+                "cs": "opaque-kakao-checksum",
+            },
+            separators=(",", ":"),
+        )
+        event = AutoReplyCliRuntimeTests._burst_event(
+            module,
+            log_id,
+            "[파일]",
+            sent_at,
+            message_type=26,
+        )
+        event.update(
+            attachment="file",
+            image_path="",
+            image_paths=[],
+            media_manifest=None,
+            media_marker="",
+            file_provenance={
+                "schema_version": module.FILE_PROVENANCE_SCHEMA_VERSION,
+                "kind": "file",
+                "availability": "metadata_only",
+                "filename": "report.pdf",
+                "message_type": 26,
+                "declared_type": "application/pdf",
+                "declared_size": 1234,
+                "attachment_sha256": hashlib.sha256(
+                    raw_attachment.encode("utf-8")
+                ).hexdigest(),
+                "declared_digest": "opaque-kakao-checksum",
+                "chat_id": 42,
+                "log_id": log_id,
+                "author_id": 700,
+                "author_nickname": "member",
+                "sent_at": sent_at,
+            },
+        )
+        return module._prepare_burst_event(event)
+
+    def test_metadata_only_file_uses_one_fixed_clarification_without_model(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_file_unavailable_clarification_test"
+        )
+        event = self._file_unavailable_event(module, 923, int(time.time()))
+        self.assertTrue(module._file_unavailable_clarification_event(event))
+        with (
+            mock.patch.object(module, "_reply_turn_hold_reason", return_value=None),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch.object(module, "generate_reply") as generate,
+        ):
+            analysis = module.analyze_file_unavailable_clarification(event)
+        self.assertEqual(analysis["decision"], "reply")
+        self.assertEqual(
+            analysis["reason"],
+            module.FILE_UNAVAILABLE_CLARIFICATION_REASON,
+        )
+        self.assertEqual(
+            analysis["reply"],
+            "파일 내용은 확인할 수 없어서, 필요한 부분을 텍스트로 알려줘.",
+        )
+        self.assertFalse(analysis["provenance"]["file_content_available"])
+        self.assertFalse(analysis["provenance"]["model_invoked"])
+        self.assertTrue(
+            module._policy_valid_draft(
+                analysis["reply"],
+                event["message"],
+                analysis["recent_conversation"],
+                recipient="member",
+            )
+        )
+        generate.assert_not_called()
+
+        invalid = (
+            dict(event, file_provenance=None),
+            {
+                **event,
+                "file_provenance": {
+                    **event["file_provenance"],
+                    "availability": "owned_local",
+                },
+            },
+            {
+                **event,
+                "file_provenance": {
+                    **event["file_provenance"],
+                    "author_id": 701,
+                },
+            },
+            dict(event, file_path="/tmp/unowned.pdf"),
+            dict(event, burst_source_log_ids=[922, 923], burst_message_count=2),
+        )
+        self.assertFalse(any(map(module._file_unavailable_clarification_event, invalid)))
+
+        timing = {
+            "delay_seconds": 5.0,
+            "component": "immediate",
+            "component_weight": 0.5,
+            "component_lower_seconds": 5.0,
+            "component_upper_seconds": 17.0,
+            "distribution_schema_version": module.RESPONSE_TIME_DISTRIBUTION_SCHEMA_VERSION,
+            "distribution_policy_version": module.RESPONSE_TIME_DISTRIBUTION_POLICY_VERSION,
+            "response_window_upper_seconds": 300.0,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self.assertTrue(module.enqueue_event(event))
+            queue = self._worker_queue_connection(module)
+            try:
+                claimed = module.claim_job(
+                    time.time() + module.BURST_SETTLE_SECONDS + 1,
+                    queue,
+                )
+                self.assertIsNotNone(claimed)
+                job, previous_status = claimed
+                with (
+                    mock.patch.object(
+                        module, "db_authoritative_event_allowed", return_value=True
+                    ),
+                    mock.patch.object(
+                        module, "privacy_attestation_current", return_value=True
+                    ),
+                    mock.patch.object(
+                        module, "numeric_author_identity_status", return_value="allowed"
+                    ),
+                    mock.patch.object(
+                        module, "stable_room_watermark_log_id", return_value=923
+                    ),
+                    mock.patch.object(
+                        module,
+                        "sample_response_delay_for_analysis",
+                        return_value=timing,
+                    ),
+                    mock.patch.object(
+                        module, "record_context_decision", return_value=True
+                    ),
+                    mock.patch.object(module, "generate_reply") as generate,
+                    mock.patch.object(module, "analyze_event") as general_analysis,
+                    mock.patch.object(module, "send_reply") as send,
+                    mock.patch.object(module, "complete_event") as complete,
+                ):
+                    module.process_job(job, previous_status, queue)
+                row = queue.execute(
+                    """
+                    SELECT status,decision,reason,category,reply,
+                           scheduled_delay_seconds,error_class
+                    FROM reply_jobs WHERE event_id=?
+                    """,
+                    (event["event_id"],),
+                ).fetchone()
+                self.assertEqual(
+                    tuple(row),
+                    (
+                        "scheduled",
+                        "reply",
+                        module.FILE_UNAVAILABLE_CLARIFICATION_REASON,
+                        "question",
+                        analysis["reply"],
+                        5.0,
+                        None,
+                    ),
+                )
+                generate.assert_not_called()
+                general_analysis.assert_not_called()
+                send.assert_not_called()
+                complete.assert_not_called()
+            finally:
+                queue.close()
+
+    def test_file_provenance_survives_refresh_and_guards_grounded_followup(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_file_followup_provenance_test"
+        )
+        file_event = self._file_unavailable_event(module, 924, 10_000)
+        file_row = {
+            "chat_id": 42,
+            "log_id": 924,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "",
+            "message_type": 26,
+            "attachment": False,
+            "sent_at": 10_000,
+            "is_self": False,
+            "file_provenance": file_event["file_provenance"],
+        }
+        followup_row = {
+            "chat_id": 42,
+            "log_id": 925,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "이거 요약해줘",
+            "message_type": 1,
+            "attachment": False,
+            "sent_at": 10_005,
+            "is_self": False,
+        }
+        followup = self._burst_event(
+            module,
+            925,
+            "이거 요약해줘",
+            10_005,
+            recent=[file_row, followup_row],
+        )
+        prepared = module._prepare_burst_event(followup)
+        reference = module._recent_unavailable_file_followup(prepared)
+        self.assertIsNotNone(reference)
+        self.assertEqual(reference["evidence_id"], "recent:924")
+        with (
+            mock.patch.object(module, "_reply_turn_hold_reason", return_value=None),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch.object(module, "generate_reply") as generate,
+        ):
+            analysis = module.analyze_recent_file_unavailable_clarification(
+                prepared,
+                reference,
+            )
+        self.assertEqual(
+            analysis["reply"],
+            "파일 내용은 확인할 수 없어서, 필요한 부분을 텍스트로 알려줘.",
+        )
+        self.assertEqual(analysis["evidence_ids"], ["recent:924"])
+        self.assertFalse(analysis["provenance"]["file_content_available"])
+        self.assertTrue(
+            module._policy_valid_draft(
+                analysis["reply"],
+                prepared["message"],
+                analysis["recent_conversation"],
+                recipient="member",
+            )
+        )
+        generate.assert_not_called()
+
+        unrelated = {
+            **prepared,
+            "message": "내일 몇 시에 만나",
+        }
+        self.assertIsNone(module._recent_unavailable_file_followup(unrelated))
+        different_author = {
+            **prepared,
+            "author_id": 701,
+            "author_nickname": "other",
+        }
+        self.assertIsNone(
+            module._recent_unavailable_file_followup(different_author)
+        )
+
+        invalid_file_rows = []
+        for is_self in (None, True, 0, "false"):
+            invalid_file_rows.append({**file_row, "is_self": is_self})
+        missing_self = dict(file_row)
+        missing_self.pop("is_self")
+        invalid_file_rows.append(missing_self)
+        invalid_file_rows.append({**file_row, "direction": "outgoing"})
+        invalid_file_rows.append({**file_row, "direction": None})
+        invalid_file_rows.append(
+            {
+                **file_row,
+                "chat_id": 43,
+                "file_provenance": {**file_row["file_provenance"], "chat_id": 43},
+            }
+        )
+        for index, invalid_file in enumerate(invalid_file_rows):
+            with self.subTest(invalid_file_source=index):
+                invalid_event = {
+                    **prepared,
+                    "recent_messages": [invalid_file, followup_row],
+                }
+                self.assertIsNone(
+                    module._recent_unavailable_file_followup(invalid_event)
+                )
+
+        raw_attachment = json.dumps(
+            {
+                "k": "safe/report.pdf",
+                "name": "report.pdf",
+                "size": 1234,
+                "mt": "application/pdf",
+                "cs": "opaque-kakao-checksum",
+            },
+            separators=(",", ":"),
+        )
+        local_rows = [
+            {
+                "chat_id": 42,
+                "log_id": 924,
+                "author_id": 700,
+                "sender_name": "member",
+                "message": "",
+                "message_type": 26,
+                "attachment": raw_attachment,
+                "sent_at": 10_000,
+                "is_self": False,
+            },
+            {
+                "chat_id": 42,
+                "log_id": 925,
+                "author_id": 700,
+                "sender_name": "member",
+                "message": "이거 요약해줘",
+                "message_type": 1,
+                "attachment": "",
+                "sent_at": 10_005,
+                "is_self": False,
+            },
+        ]
+        completed = (0, json.dumps(local_rows).encode("utf-8"), b"")
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(
+                module,
+                "_run_bounded_process",
+                return_value=completed,
+            ),
+        ):
+            refreshed = module.refresh_recent_messages_from_local_db(
+                prepared,
+                925,
+            )
+        self.assertEqual(refreshed[0]["message"], "")
+        self.assertFalse(refreshed[0]["attachment"])
+        self.assertEqual(
+            refreshed[0]["file_provenance"],
+            file_event["file_provenance"],
+        )
+
+        changed_rows = [
+            {
+                **local_rows[0],
+                "attachment": raw_attachment.replace("report.pdf", "other.pdf"),
+            },
+            local_rows[1],
+        ]
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(
+                module,
+                "_run_bounded_process",
+                return_value=(0, json.dumps(changed_rows).encode("utf-8"), b""),
+            ),
+        ):
+            changed = module.refresh_recent_messages_from_local_db(prepared, 925)
+        self.assertNotIn("file_provenance", changed[0])
 
     def test_distinct_image_digests_and_fallback_prior_do_not_false_duplicate(self):
         module = self._load_auto_reply_module(
@@ -20405,6 +21116,48 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertEqual(result["evidence_ids"], [])
         release.assert_called_once_with("c" * 32, module.QWEN38_27B_MODEL_ID)
         fallback.assert_not_called()
+        failure.assert_not_called()
+        success.assert_not_called()
+
+    def test_cooldown_fallback_image_error_is_terminal_without_provider_failure(self):
+        module = self._load_auto_reply_module("image_missing_cooldown_fallback")
+        with tempfile.TemporaryDirectory() as temporary:
+            first = "opencode-go-session/vision-first"
+            second = "opencode-go-session/vision-second"
+            with (
+                mock.patch.object(module, "_operator_state_root", return_value=Path(temporary)),
+                mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_image_path_within_cap", return_value=True),
+                mock.patch.object(module, "_generation_reply_model", return_value=module.QWEN38_27B_MODEL_ID),
+                mock.patch.object(module, "_ensure_omlx_model_resident"),
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": False, "failure_class": "quota_exhausted",
+                    "retry_at": time.time() + 180,
+                }),
+                mock.patch.object(module, "_reply_fallback_candidates", return_value=[first, second]),
+                mock.patch.object(module, "_open_fallback_lease", return_value={
+                    "lease_token": "d" * 32, "retry_at": time.time() + 180,
+                }) as opened,
+                mock.patch.object(module, "_run_generation_candidate", return_value=(1, b"", b"image_input_unavailable")) as generated,
+                mock.patch.object(module, "_release_cancelled_model_call", return_value=True) as release,
+                mock.patch.object(module, "_close_model_lease") as closed,
+                mock.patch.object(module, "_finish_model_call_failure") as failure,
+                mock.patch.object(module, "_finish_model_call_success") as success,
+            ):
+                result = module.generate_reply(
+                    "[사진]", [], [], [], [], attachment="image",
+                    image_paths=[Path(temporary) / "missing.png"],
+                    media_evidence_id="media:" + "a" * 64,
+                )
+        self.assertEqual(result["reason"], "image_unavailable")
+        self.assertFalse(result["model_invoked"])
+        self.assertEqual(result["evidence_ids"], [])
+        opened.assert_called_once_with(first)
+        self.assertEqual(generated.call_count, 1)
+        self.assertEqual(generated.call_args.args[0], first)
+        release.assert_called_once_with("d" * 32, first)
+        closed.assert_not_called()
         failure.assert_not_called()
         success.assert_not_called()
 

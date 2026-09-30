@@ -491,6 +491,37 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
         self.assertTrue(all(data is None for _url, data, _timeout in calls))
         direct_urlopen.assert_not_called()
 
+    def test_resident_image_model_requires_advertised_vision_capability(self):
+        module = self.module
+        model = module.QWEN38_27B_MODEL_ID.removeprefix("mlx/")
+        with tempfile.TemporaryDirectory() as raw:
+            image = Path(raw) / "photo.png"
+            image.write_bytes(b"\x89PNG\r\n\x1a\nfixture")
+            for capabilities in (["chat"], ["chat", "vision"]):
+                with self.subTest(capabilities=capabilities):
+                    catalog = [{"id": model, "loaded": True, "state": "ready",
+                                "capabilities": capabilities}]
+                    with (
+                        mock.patch.object(module, "discover_mlx_gateway", return_value=("http://127.0.0.1:11234/v1", catalog)),
+                        mock.patch.object(module, "detect_mlx_gateway_models", return_value=catalog),
+                        mock.patch("auto_reply_ondevice._local_only_urlopen", return_value=_Response({
+                            "choices": [{"message": {"content": "grounded"}}],
+                        })) as request,
+                        mock.patch("urllib.request.urlopen", side_effect=AssertionError("unmocked transport")),
+                    ):
+                        result = module._run_opencodex_generation_unleased(
+                            module.QWEN38_27B_MODEL_ID, "system", b"photo",
+                            image_paths=[image], timeout=5.0,
+                        )
+                    if "vision" not in capabilities:
+                        self.assertEqual(result, (1, b"", b"mlx_serve_vision_capability_unavailable"))
+                        request.assert_not_called()
+                    else:
+                        self.assertEqual(result[0], 0)
+                        payload = json.loads(request.call_args.args[0].data)
+                        content = payload["messages"][1]["content"]
+                        self.assertTrue(any(part.get("image_url", {}).get("url", "").startswith("data:image/png;") for part in content))
+
     def test_image_candidate_never_falls_back_to_flash_next(self):
         module = self.module
         with (

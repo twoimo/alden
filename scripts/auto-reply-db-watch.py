@@ -25,6 +25,7 @@ import tempfile
 import threading
 import time
 import unicodedata
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -127,6 +128,8 @@ def kakao_image_kind(message_type: object) -> int | None:
     return kind if kind in IMAGE_TYPES else None
 
 SHARP_SEARCH_MESSAGE_TYPE = 71
+RECENT_URL_LIMIT = 2
+MAX_RECENT_URL_BYTES = 2048
 MAX_IMAGE_INPUTS = 10
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_IMAGE_BATCH_BYTES = 20 * 1024 * 1024
@@ -209,6 +212,30 @@ QUOTED_REPLY_REQUIRED_ATTACHMENT_KEYS = frozenset(
 QUOTED_REPLY_OPTIONAL_ATTACHMENT_KEYS = frozenset(
     {"src_linkId", "src_spoilers"}
 )
+FILE_PROVENANCE_SCHEMA_VERSION = 1
+FILE_ATTACHMENT_MESSAGE_TYPES = frozenset({3, 12, 16, 18, 26})
+FILE_PROVENANCE_KEYS = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "availability",
+        "filename",
+        "message_type",
+        "declared_type",
+        "declared_size",
+        "attachment_sha256",
+        "declared_digest",
+        "chat_id",
+        "log_id",
+        "author_id",
+        "author_nickname",
+        "sent_at",
+    }
+)
+MAX_FILE_ATTACHMENT_BYTES = MAX_RECENT_TAIL_BYTES
+MAX_FILE_NAME_BYTES = 512
+MAX_FILE_DECLARED_TYPE_BYTES = 256
+MAX_FILE_DECLARED_DIGEST_BYTES = 256
 HOOK_PYTHON_ISOLATION_FLAGS = ("-E", "-B", "-S")
 SUPPORTED_HOOK_PYTHON_VERSIONS = frozenset({(3, 11), (3, 12), (3, 13)})
 MAX_MEDIA_BYTES = 5 * 1024 * 1024
@@ -3318,6 +3345,7 @@ def _emit_owned_image_candidate(
     media_manifest: dict[str, Any],
     *,
     recent_messages: list[dict],
+    authoritative_messages: list[dict],
     candidate: dict[str, object],
 ) -> str:
     """Transfer an owned bundle only after one exact accepted queue ACK."""
@@ -3329,6 +3357,7 @@ def _emit_owned_image_candidate(
             image_paths=image_paths,
             media_manifest=media_manifest,
             recent_messages=recent_messages,
+            authoritative_messages=authoritative_messages,
             candidate=candidate,
         )
         return ack
@@ -3396,9 +3425,250 @@ def _chronological_key(message: dict) -> tuple[int, int]:
     return sent_at, int(message["log_id"])
 
 
+def _strict_attachment_object(raw_attachment: object, max_bytes: int) -> dict[str, Any] | None:
+    if not isinstance(raw_attachment, str) or not raw_attachment:
+        return None
+    try:
+        if len(raw_attachment.encode("utf-8")) > max_bytes:
+            return None
+    except UnicodeEncodeError:
+        return None
+
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate attachment key")
+            value[key] = item
+        return value
+
+    def reject_nonfinite(_value: str) -> object:
+        raise ValueError("non-finite attachment number")
+
+    try:
+        value = json.loads(
+            raw_attachment,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_nonfinite,
+        )
+    except (UnicodeError, ValueError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _bounded_attachment_text(
+    value: object,
+    *,
+    max_bytes: int,
+    allow_empty: bool = False,
+) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    try:
+        encoded = text.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    if (
+        (not text and not allow_empty)
+        or len(encoded) > max_bytes
+        or any(unicodedata.category(char) == "Cc" for char in text)
+    ):
+        return None
+    return text
+
+
+def _single_attachment_alias(
+    attachment: dict[str, Any],
+    keys: tuple[str, ...],
+) -> tuple[bool, object | None]:
+    present = [key for key in keys if key in attachment]
+    if len(present) > 1:
+        raise ValueError("ambiguous attachment aliases")
+    if not present:
+        return False, None
+    return True, attachment[present[0]]
+
+
+def _file_provenance(message: dict[str, Any]) -> dict[str, Any] | None:
+    """Return metadata-only provenance for one actual non-image file shape.
+
+    Type 26 is overloaded by Kakao for quoted replies. Any quote key keeps the
+    row out of this path, including malformed quote envelopes, so quote text
+    can never be reclassified as file content. This watcher owns no generic
+    file bytes and does not download them; the envelope therefore attests only
+    bounded local-row metadata and its exact attachment digest.
+    """
+    message_type = message.get("message_type")
+    if (
+        isinstance(message_type, bool)
+        or not isinstance(message_type, int)
+        or message_type not in FILE_ATTACHMENT_MESSAGE_TYPES
+        or kakao_image_kind(message_type) is not None
+    ):
+        return None
+    raw_attachment = message.get("attachment")
+    attachment = _strict_attachment_object(
+        raw_attachment,
+        MAX_FILE_ATTACHMENT_BYTES,
+    )
+    if attachment is None or QUOTED_REPLY_REQUIRED_ATTACHMENT_KEYS.intersection(attachment):
+        return None
+
+    try:
+        filename_present, filename_value = _single_attachment_alias(
+            attachment, ("name", "filename")
+        )
+        size_present, size_value = _single_attachment_alias(
+            attachment, ("size", "s")
+        )
+        declared_type_present, declared_type_value = _single_attachment_alias(
+            attachment, ("mt", "type")
+        )
+        declared_digest_present, declared_digest_value = _single_attachment_alias(
+            attachment, ("cs", "digest")
+        )
+    except ValueError:
+        return None
+    filename = _bounded_attachment_text(
+        filename_value,
+        max_bytes=MAX_FILE_NAME_BYTES,
+    )
+    if (
+        not filename_present
+        or not size_present
+        or filename is None
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or isinstance(size_value, bool)
+        or not isinstance(size_value, int)
+        or not 0 <= size_value < MAX_INT64
+    ):
+        return None
+
+    declared_type = ""
+    if declared_type_present:
+        declared_type = _bounded_attachment_text(
+            declared_type_value,
+            max_bytes=MAX_FILE_DECLARED_TYPE_BYTES,
+        ) or ""
+        if not declared_type:
+            return None
+    declared_digest = ""
+    if declared_digest_present:
+        declared_digest = _bounded_attachment_text(
+            declared_digest_value,
+            max_bytes=MAX_FILE_DECLARED_DIGEST_BYTES,
+        ) or ""
+        if not declared_digest:
+            return None
+
+    chat_id = message.get("chat_id")
+    log_id = message.get("log_id")
+    author_id = message.get("author_id")
+    author_nickname = message.get("sender_name")
+    sent_at = message.get("sent_at")
+    if (
+        isinstance(chat_id, bool)
+        or not isinstance(chat_id, int)
+        or not 0 < chat_id < MAX_INT64
+        or isinstance(log_id, bool)
+        or not isinstance(log_id, int)
+        or not 0 < log_id < MAX_INT64
+        or isinstance(author_id, bool)
+        or not isinstance(author_id, int)
+        or not 0 < author_id < MAX_INT64
+        or _bounded_attachment_text(author_nickname, max_bytes=1024) is None
+        or isinstance(sent_at, bool)
+        or not isinstance(sent_at, int)
+        or not 0 < sent_at < MAX_INT64
+    ):
+        return None
+    try:
+        attachment_sha256 = hashlib.sha256(raw_attachment.encode("utf-8")).hexdigest()
+    except (AttributeError, UnicodeEncodeError):
+        return None
+    return {
+        "schema_version": FILE_PROVENANCE_SCHEMA_VERSION,
+        "kind": "file",
+        "availability": "metadata_only",
+        "filename": filename,
+        "message_type": message_type,
+        "declared_type": declared_type,
+        "declared_size": size_value,
+        "attachment_sha256": attachment_sha256,
+        "declared_digest": declared_digest,
+        "chat_id": chat_id,
+        "log_id": log_id,
+        "author_id": author_id,
+        "author_nickname": author_nickname.strip(),
+        "sent_at": sent_at,
+    }
+
+
+def _validated_file_provenance_descriptor(
+    value: object,
+    *,
+    chat_id: int,
+    log_id: int,
+    author_id: int,
+    author_nickname: str,
+    message_type: int,
+    sent_at: int,
+) -> dict[str, Any] | None:
+    if (
+        not isinstance(value, dict)
+        or set(value) != FILE_PROVENANCE_KEYS
+        or value.get("schema_version") != FILE_PROVENANCE_SCHEMA_VERSION
+        or value.get("kind") != "file"
+        or value.get("availability") != "metadata_only"
+        or value.get("chat_id") != chat_id
+        or value.get("log_id") != log_id
+        or value.get("author_id") != author_id
+        or value.get("author_nickname") != author_nickname.strip()
+        or value.get("message_type") != message_type
+        or value.get("sent_at") != sent_at
+    ):
+        return None
+    filename = _bounded_attachment_text(
+        value.get("filename"),
+        max_bytes=MAX_FILE_NAME_BYTES,
+    )
+    declared_type = _bounded_attachment_text(
+        value.get("declared_type"),
+        max_bytes=MAX_FILE_DECLARED_TYPE_BYTES,
+        allow_empty=True,
+    )
+    declared_digest = _bounded_attachment_text(
+        value.get("declared_digest"),
+        max_bytes=MAX_FILE_DECLARED_DIGEST_BYTES,
+        allow_empty=True,
+    )
+    declared_size = value.get("declared_size")
+    attachment_sha256 = value.get("attachment_sha256")
+    if (
+        message_type not in FILE_ATTACHMENT_MESSAGE_TYPES
+        or filename is None
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or declared_type is None
+        or declared_digest is None
+        or isinstance(declared_size, bool)
+        or not isinstance(declared_size, int)
+        or not 0 <= declared_size < MAX_INT64
+        or not isinstance(attachment_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", attachment_sha256) is None
+    ):
+        return None
+    return dict(value)
+
+
 def _quoted_reply_descriptor(
     message: dict[str, Any],
     recent_messages: list[dict[str, Any]],
+    authoritative_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Return a content-bound quote pointer for one local type-26 reply.
 
@@ -3411,20 +3681,9 @@ def _quoted_reply_descriptor(
     raw_attachment = message.get("attachment")
     current_log_id = message.get("log_id")
     current_chat_id = message.get("chat_id")
-    try:
-        raw_attachment_size = (
-            len(raw_attachment.encode("utf-8"))
-            if isinstance(raw_attachment, str)
-            else 0
-        )
-    except UnicodeEncodeError:
-        return None
     if (
         message_type != QUOTED_REPLY_MESSAGE_TYPE
         or isinstance(message_type, bool)
-        or not isinstance(raw_attachment, str)
-        or not raw_attachment
-        or raw_attachment_size > MAX_QUOTED_REPLY_ATTACHMENT_BYTES
         or isinstance(current_log_id, bool)
         or not isinstance(current_log_id, int)
         or not 0 < current_log_id < MAX_INT64
@@ -3433,29 +3692,20 @@ def _quoted_reply_descriptor(
         or not 0 < current_chat_id < MAX_INT64
         or not isinstance(recent_messages, list)
         or len(recent_messages) > RECENT_MESSAGE_LIMIT
+        or (
+            authoritative_messages is not None
+            and (
+                not isinstance(authoritative_messages, list)
+                or len(authoritative_messages) > LOCAL_POLL_MAX_ROWS
+            )
+        )
     ):
         return None
-
-    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        value: dict[str, object] = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError("duplicate quoted-reply attachment key")
-            value[key] = item
-        return value
-
-    def reject_nonfinite(_value: str) -> object:
-        raise ValueError("non-finite quoted-reply attachment number")
-
-    try:
-        attachment = json.loads(
-            raw_attachment,
-            object_pairs_hook=unique_object,
-            parse_constant=reject_nonfinite,
-        )
-    except (UnicodeError, ValueError, RecursionError):
-        return None
-    if not isinstance(attachment, dict):
+    attachment = _strict_attachment_object(
+        raw_attachment,
+        MAX_QUOTED_REPLY_ATTACHMENT_BYTES,
+    )
+    if attachment is None:
         return None
     attachment_keys = set(attachment)
     if (
@@ -3511,70 +3761,69 @@ def _quoted_reply_descriptor(
         or len(source_message_bytes) > MAX_MESSAGE_BYTES
     ):
         return None
-    matches: list[dict[str, Any]] = []
-    for row in recent_messages:
-        if (
-            not isinstance(row, dict)
-            or isinstance(row.get("log_id"), bool)
-            or not isinstance(row.get("log_id"), int)
-            or row.get("log_id") != source_log_id
-        ):
-            continue
-        if (
-            not isinstance(row.get("chat_id"), bool)
-            and isinstance(row.get("chat_id"), int)
-            and row.get("chat_id") == current_chat_id
-            and not isinstance(row.get("author_id"), bool)
-            and isinstance(row.get("author_id"), int)
-            and row.get("author_id") == source_author_id
-            and not isinstance(row.get("message_type"), bool)
-            and isinstance(row.get("message_type"), int)
-            and row.get("message_type") == source_message_type
-            and isinstance(row.get("message"), str)
-            and row.get("message") == source_message
-            and isinstance(row.get("is_self"), bool)
-        ):
-            matches.append(row)
-    if len(matches) != 1:
-        source_author_nickname = ""
-        enrollment = (
-            _cli_enrollment_target()
-            if os.environ.get("OPENKAKAO_AUTO_REPLY_CLI") == "1"
-            else None
-        )
-        if isinstance(enrollment, dict):
-            for item in enrollment.get("reply_author_bindings") or []:
-                if (
-                    isinstance(item, dict)
-                    and item.get("author_id") == source_author_id
-                    and isinstance(item.get("nickname"), str)
-                    and item.get("nickname")
-                ):
-                    source_author_nickname = item["nickname"]
-                    break
-        if not source_author_nickname:
-            return None
+    def exact_matches(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        matches: list[dict[str, Any]] = []
+        for row in rows:
+            if (
+                not isinstance(row, dict)
+                or isinstance(row.get("log_id"), bool)
+                or not isinstance(row.get("log_id"), int)
+                or row.get("log_id") != source_log_id
+            ):
+                continue
+            if (
+                not isinstance(row.get("chat_id"), bool)
+                and isinstance(row.get("chat_id"), int)
+                and row.get("chat_id") == current_chat_id
+                and not isinstance(row.get("author_id"), bool)
+                and isinstance(row.get("author_id"), int)
+                and row.get("author_id") == source_author_id
+                and not isinstance(row.get("message_type"), bool)
+                and isinstance(row.get("message_type"), int)
+                and row.get("message_type") == source_message_type
+                and isinstance(row.get("message"), str)
+                and row.get("message") == source_message
+                and isinstance(row.get("is_self"), bool)
+            ):
+                matches.append(row)
+        return matches
+
+    matches = exact_matches(recent_messages)
+    if len(matches) == 1:
         return {
             "schema_version": QUOTED_REPLY_SCHEMA_VERSION,
             "source_log_id": source_log_id,
             "source_author_id": source_author_id,
             "source_message_type": source_message_type,
             "source_message_sha256": hashlib.sha256(source_message_bytes).hexdigest(),
-            "quoted_source": {
-                "log_id": source_log_id,
-                "author_id": source_author_id,
-                "author_nickname": source_author_nickname,
-                "message": source_message,
-                "message_type": source_message_type,
-                "is_self": False,
-            },
         }
+    if matches:
+        return None
+
+    authoritative_matches = exact_matches(authoritative_messages or [])
+    if len(authoritative_matches) != 1:
+        return None
+    source_row = authoritative_matches[0]
+    source_author_nickname = _bounded_attachment_text(
+        source_row.get("sender_name"),
+        max_bytes=1024,
+    )
+    if source_author_nickname is None:
+        return None
     return {
         "schema_version": QUOTED_REPLY_SCHEMA_VERSION,
         "source_log_id": source_log_id,
         "source_author_id": source_author_id,
         "source_message_type": source_message_type,
         "source_message_sha256": hashlib.sha256(source_message_bytes).hexdigest(),
+        "quoted_source": {
+            "log_id": source_log_id,
+            "author_id": source_author_id,
+            "author_nickname": source_author_nickname,
+            "message": source_row["message"],
+            "message_type": source_message_type,
+            "is_self": source_row["is_self"],
+        },
     }
 
 
@@ -3697,6 +3946,64 @@ def _sharp_search_message_and_urls(message: dict) -> tuple[str, list[str]]:
     return text, urls[:2]
 
 
+def _canonical_recent_url(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    try:
+        if (
+            not text
+            or len(text.encode("utf-8")) > MAX_RECENT_URL_BYTES
+            or any(char.isspace() or unicodedata.category(char) == "Cc" for char in text)
+            or any(char in text for char in '<>"\\')
+        ):
+            return None
+        parsed = urllib.parse.urlsplit(text)
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        return None
+    scheme = parsed.scheme.lower()
+    hostname = parsed.hostname
+    if (
+        scheme not in {"http", "https"}
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return None
+    try:
+        canonical_host = hostname.rstrip(".").encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return None
+    if not canonical_host:
+        return None
+    if ":" in canonical_host:
+        canonical_host = f"[{canonical_host}]"
+    default_port = 80 if scheme == "http" else 443
+    netloc = canonical_host if port in {None, default_port} else f"{canonical_host}:{port}"
+    canonical = urllib.parse.urlunsplit(
+        (scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
+    try:
+        if len(canonical.encode("utf-8")) > MAX_RECENT_URL_BYTES:
+            return None
+    except UnicodeEncodeError:
+        return None
+    return canonical
+
+
+def _validated_recent_urls(value: object) -> list[str] | None:
+    if not isinstance(value, list) or len(value) > RECENT_URL_LIMIT:
+        return None
+    urls: list[str] = []
+    for raw in value:
+        canonical = _canonical_recent_url(raw)
+        if canonical is None or canonical in urls:
+            return None
+        urls.append(canonical)
+    return urls
+
+
 def _proven_self_flag(message: dict) -> bool | None:
     """Keep is_self only when a positive author_id proves it. Names do not."""
     is_self = message.get("is_self")
@@ -3723,6 +4030,9 @@ def _normalize_empty_emoticon_message(message_type: object, body: str) -> str:
 
 def _message_summary(message: dict) -> dict[str, Any]:
     message_type = message.get("message_type", 0)
+    file_provenance = _file_provenance(message)
+    if file_provenance is None and isinstance(message.get("file_provenance"), dict):
+        file_provenance = dict(message["file_provenance"])
     summary: dict[str, Any] = {
         "chat_id": message.get("chat_id", 0),
         "log_id": message["log_id"],
@@ -3752,10 +4062,14 @@ def _message_summary(message: dict) -> dict[str, Any]:
     proven = _proven_self_flag(message)
     if proven is not None:
         summary["is_self"] = proven
-    text, urls = _sharp_search_message_and_urls(message)
+    text, attachment_urls = _sharp_search_message_and_urls(message)
     summary["message"] = _normalize_empty_emoticon_message(message_type, text)
+    raw_urls = attachment_urls or message.get("urls", [])
+    urls = _validated_recent_urls(raw_urls)
     if urls:
         summary["urls"] = urls
+    if file_provenance is not None:
+        summary["file_provenance"] = file_provenance
     return summary
 
 
@@ -3798,6 +4112,24 @@ def _validated_recent_summary(message: object) -> dict[str, Any] | None:
         or (is_self is not None and not isinstance(is_self, bool))
     ):
         return None
+    urls: list[str] | None = []
+    if "urls" in message:
+        urls = _validated_recent_urls(message.get("urls"))
+        if urls is None:
+            return None
+    file_provenance = None
+    if "file_provenance" in message:
+        file_provenance = _validated_file_provenance_descriptor(
+            message.get("file_provenance"),
+            chat_id=chat_id,
+            log_id=log_id,
+            author_id=author_id,
+            author_nickname=author,
+            message_type=message_type,
+            sent_at=sent_at,
+        )
+        if file_provenance is None:
+            return None
     summary = {
         "chat_id": chat_id,
         "log_id": log_id,
@@ -3811,6 +4143,10 @@ def _validated_recent_summary(message: object) -> dict[str, Any] | None:
     proven = _proven_self_flag({"is_self": is_self, "author_id": author_id})
     if proven is not None:
         summary["is_self"] = proven
+    if urls:
+        summary["urls"] = urls
+    if file_provenance is not None:
+        summary["file_provenance"] = file_provenance
     return summary
 
 
@@ -3920,6 +4256,7 @@ def emit(
     image_paths: list[Path] | None = None,
     media_manifest: dict[str, Any] | None = None,
     recent_messages: list[dict] | None = None,
+    authoritative_messages: list[dict] | None = None,
     skip_reason: str = "",
     candidate: dict | None = None,
 ) -> str | None:
@@ -3937,10 +4274,18 @@ def emit(
         else ""
     )
     bounded_recent_messages = recent_messages or []
-    sharp_message, sharp_urls = _sharp_search_message_and_urls(message)
     message_type = message.get("message_type", 0)
-    sharp_message = _normalize_empty_emoticon_message(message_type, sharp_message)
-    reply_to = _quoted_reply_descriptor(message, bounded_recent_messages)
+    file_provenance = _file_provenance(message)
+    sharp_message, sharp_urls = _sharp_search_message_and_urls(message)
+    if file_provenance is None:
+        sharp_message = _normalize_empty_emoticon_message(message_type, sharp_message)
+    else:
+        sharp_message = sharp_message.strip() or "[파일]"
+    reply_to = _quoted_reply_descriptor(
+        message,
+        bounded_recent_messages,
+        authoritative_messages,
+    )
     quoted_source = None
     if isinstance(reply_to, dict) and isinstance(reply_to.get("quoted_source"), dict):
         quoted_source = dict(reply_to["quoted_source"])
@@ -3957,7 +4302,8 @@ def emit(
         "author_id": message.get("author_id", 0), "author_nickname": message.get("sender_name", ""),
         "is_self": message.get("is_self"),
         "reply_authorized": message.get("reply_authorized"),
-        "message": sharp_message, "attachment": "image" if attachment else "",
+        "message": sharp_message,
+        "attachment": "image" if attachment else ("file" if file_provenance else ""),
         "message_type": int(message_type or 0),
         "sent_at": int(message.get("sent_at", 0) or 0),
         "image_path": str(image_path) if image_path else "",
@@ -3968,6 +4314,7 @@ def emit(
         "event_id": f"db:{chat_id}:{log_id}", "canonical_event_id": f"db:{chat_id}:{log_id}",
         "recent_messages": bounded_recent_messages,
         "quoted_source": quoted_source,
+        "file_provenance": file_provenance,
         "candidate": candidate,
     }
     if sharp_urls:
@@ -3992,6 +4339,7 @@ def emit(
             reply_to=None,
             recent_messages=[],
             quoted_source=None,
+            file_provenance=None,
             skip_reason="event_bounds",
             durable_skip=True,
         )
@@ -4006,6 +4354,7 @@ def emit(
             reply_to=None,
             recent_messages=[],
             quoted_source=None,
+            file_provenance=None,
             author_nickname="unknown",
             author_id=0,
             skip_reason=reason,
@@ -4031,6 +4380,7 @@ def emit(
             reply_to=None,
             recent_messages=[],
             quoted_source=None,
+            file_provenance=None,
             skip_reason="event_bounds",
             durable_skip=True,
         )
@@ -4485,6 +4835,7 @@ def poll_once(
                 code="hook_dispatch_intent",
             )
         media = kakao_image_kind(message.get("message_type", 0)) is not None and bool(message.get("attachment"))
+        generic_file = _file_provenance(message)
         image_path: Path | None = None
         image_paths: list[Path] = []
         media_manifest: dict[str, Any] | None = None
@@ -4500,6 +4851,7 @@ def poll_once(
                 )
                 ack = _emit_with_ack_fence(
                     message, None, recent_messages=recent_messages,
+                    authoritative_messages=messages,
                     skip_reason="self_author",
                     candidate=candidate,
                 )
@@ -4513,6 +4865,7 @@ def poll_once(
                 )
                 ack = _emit_with_ack_fence(
                     message, None, recent_messages=recent_messages,
+                    authoritative_messages=messages,
                     skip_reason="author_not_allowlisted",
                     candidate=candidate,
                 )
@@ -4538,6 +4891,7 @@ def poll_once(
                     message,
                     None,
                     recent_messages=recent_messages,
+                    authoritative_messages=messages,
                     candidate=candidate,
                 )
             elif media:
@@ -4567,6 +4921,7 @@ def poll_once(
                     )
                     ack = _emit_with_ack_fence(
                         message, None, recent_messages=recent_messages,
+                        authoritative_messages=messages,
                         skip_reason="media_unavailable",
                         candidate=candidate,
                     )
@@ -4583,9 +4938,10 @@ def poll_once(
                         image_paths,
                         media_manifest,
                         recent_messages=recent_messages,
+                        authoritative_messages=messages,
                         candidate=candidate,
                     )
-            elif str(message.get("message", "")).strip():
+            elif generic_file is not None or str(message.get("message", "")).strip():
                 _journal_candidate(
                     candidate,
                     component="authorization",
@@ -4597,6 +4953,7 @@ def poll_once(
                     message,
                     None,
                     recent_messages=recent_messages,
+                    authoritative_messages=messages,
                     candidate=candidate,
                 )
             else:
@@ -4611,6 +4968,7 @@ def poll_once(
                     message,
                     None,
                     recent_messages=recent_messages,
+                    authoritative_messages=messages,
                     skip_reason="empty_message",
                     candidate=candidate,
                 )
