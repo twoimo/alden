@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "올든의 일관된 읽기 전용 스냅샷",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [
+      1360,
+      570
+    ]
+  },
+  "participants": [
+    {
+      "id": "source",
+      "type": "external",
+      "label": "활성 context mirror"
+    },
+    {
+      "id": "copy",
+      "type": "backend",
+      "label": "파일 복사 경계"
+    },
+    {
+      "id": "private",
+      "type": "database",
+      "label": "임시 DB·WAL"
+    },
+    {
+      "id": "read",
+      "type": "backend",
+      "label": "읽기 전용 연결"
+    },
+    {
+      "id": "index",
+      "type": "database",
+      "label": "별도 지식 인덱스"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 295,
+      "label": "원본을 열지 않고 안정성 확인"
+    },
+    {
+      "from": 305,
+      "to": 445,
+      "label": "사본에서 SHM 재구축·조회"
+    }
+  ],
+  "messages": [
+    {
+      "from": "copy",
+      "to": "source",
+      "y": 170,
+      "label": "DB·WAL·journal 서명 읽기",
+      "variant": "security"
+    },
+    {
+      "from": "source",
+      "to": "copy",
+      "y": 200,
+      "label": "journal 비어 있음 확인",
+      "variant": "return"
+    },
+    {
+      "from": "copy",
+      "to": "private",
+      "y": 230,
+      "label": "DB와 WAL만 복사",
+      "variant": "emphasis"
+    },
+    {
+      "from": "copy",
+      "to": "source",
+      "y": 260,
+      "label": "서명 재확인·변경 시 최대 3회"
+    },
+    {
+      "from": "read",
+      "to": "private",
+      "y": 320,
+      "label": "mode=ro·query_only",
+      "variant": "security"
+    },
+    {
+      "from": "private",
+      "to": "read",
+      "y": 350,
+      "label": "사본 SHM·일관된 행",
+      "variant": "return"
+    },
+    {
+      "from": "read",
+      "to": "index",
+      "y": 380,
+      "label": "출처·시점 있는 증분 색인",
+      "variant": "emphasis"
+    },
+    {
+      "from": "index",
+      "to": "read",
+      "y": 410,
+      "label": "별도 저장소의 검색 근거",
+      "variant": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "원본 보호",
+      "items": [
+        "source SQLite 연결·journal_mode 변경·강제 checkpoint가 없다.",
+        "활성 writer가 서명을 바꾸면 재시도하고 불안정 사본은 거부한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "증거의 범위",
+      "items": [
+        "이번 실측은 Alden plaintext context mirror 1.30GiB·표본 1이다.",
+        "암호화된 카카오 원본은 별도 CLI 경로이며 생산 최신성은 추가 확인한다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "artifact_sha256": "427975d0c3ef8816db92e794eeaad3413742066a9a6e4b7cef4fe10b461fcfac",
+  "reviewer": "parent image review",
+  "capture": "graphrag-search-sequence.visual-check.1440x900.light.png",
+  "result": "1440×900 light: 제목·8개 책임 영역·4구간·전 출처 필터와 최종 예산 경계가 보임. 화살표·라벨 겹침 없음. raw relation 대체 제거와 필터된 provenance 반환이 구현과 일치."
+}

@@ -1,0 +1,6 @@
+{
+  "reviewer": "parent image review",
+  "artifact_sha256": "5264b485a2a9c6496a570d18ec23d627a76562bab26e33be97a06917b48308d3",
+  "capture": "alden-voice-cancellation.visual-check.1440x900.light.png",
+  "result": "전체 제목·6개 책임 영역·세 구간·남은 검증 카드가 한 뷰포트에 보임. 화살표와 글자 겹침 없음. 한국어 콘텐츠, 영어 Viewer chrome fallback. 소켓 중단을 GPU 즉시 중단으로 표기하지 않음."
+}
