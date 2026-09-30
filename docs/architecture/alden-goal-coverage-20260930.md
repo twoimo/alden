@@ -1,6 +1,8 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
 
+2026-10-01 음성 추가: [WAV 취소·게시](alden-voice-wav-20261001.md)는 설치 writer의 취소 중 덮어쓰기 재현·private atomic output·로컬/턴/세션 취소 및 새 root0700 수정과 집중58/필수1020·원격CI4/4, 설치30/27 대조를 마쳤다. 실제 STT admission은 기존 swap 조건 미달로 종료한다. 사람 음성 및 전체 pipeline 성공·native 화면·production 공개 전달은 미완료다. 현재 menubar Python3.11.9와 배포 sidecar3.11.16을 구분하며, 아래 표는 해당 시각의 이력이다.
+
 2026-10-01 파일 추가: [내용 읽기](alden-file-content-20261001.md)는 구현·설치 파서·합성 문서의 실제 local27B 질의4/4까지 검증했다. code c29e263 원격CI4/4 성공, 설치30/27 일치. 실제 Kakao 파일 transport·운영 worker 활성화는 미완료다. 아래 Sep30 표는 이력이다.
 
 2026-10-01 추가: [단일 snapshot·원자적 graph cycle](alden-graph-cycle-20261001.md), 필수981/16skip/실패0, 설치29/26 대조와 실제E5 1회 갱신을 확인했다. 기존 표의 Sep30 관측은 이력이며 native UI·사람 음성·production worker·공개 릴리즈의 미완료 범위를 유지한다.

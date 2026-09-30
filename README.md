@@ -22,6 +22,8 @@
 
 </div>
 
+Alden 음성 파일 출력의 취소 중 덮어쓰기 결함을 [수정·설치·원격 검증](docs/architecture/alden-voice-wav-20261001.md)했습니다. 필수 Python 1,020개 통과(17 skip), code CI4/4 성공. STT/TTS admission과 출시 wake 조건은 유지하며 사람 음성 전체 흐름은 미검증입니다.
+
 Alden 첨부 문서 읽기는 [구현·설치·실제 로컬 모델 측정 기록](docs/architecture/alden-file-content-20261001.md)에서 확인할 수 있습니다. 실제 카카오 파일 transport와 운영 worker 적용은 아직 미검증입니다.
 
 ---
