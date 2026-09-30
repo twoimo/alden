@@ -16277,6 +16277,57 @@ print(json.dumps({
             finally:
                 queue.close()
 
+    def test_recent_file_metadata_does_not_break_normal_question_prompt(self):
+        module = self._load_auto_reply_module("auto_reply_file_prompt_init_test")
+        file_event = self._file_unavailable_event(module, 924, 10_000)
+        file_row = {
+            "chat_id": 42,
+            "log_id": 924,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "",
+            "message_type": 26,
+            "attachment": False,
+            "sent_at": 10_000,
+            "is_self": False,
+            "file_provenance": file_event["file_provenance"],
+        }
+
+        class PromptCaptured(Exception):
+            pass
+
+        captured = []
+
+        def capture_prompt(prompt, _budget):
+            captured.append(prompt)
+            raise PromptCaptured
+
+        with (
+            mock.patch.object(module, "_load_dream_rsi_checkpoint_metadata", return_value=None),
+            mock.patch.object(module, "record_learned_style_tells"),
+            mock.patch.object(module, "learned_style_tell_avoids", return_value=[]),
+            mock.patch.object(module, "runner_is_trusted", return_value=True),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch("auto_reply_knowledge_graph.retrieve_knowledge_bundle", return_value={}),
+            mock.patch.object(module, "_fit_prompt_to_budget", side_effect=capture_prompt),
+            mock.patch.object(module, "_run_generation_candidate") as generate,
+            mock.patch.object(module, "_run_bounded_process") as process,
+        ):
+            for recent in ([file_row], []):
+                with self.subTest(with_file=bool(recent)), self.assertRaises(PromptCaptured):
+                    module.generate_reply(
+                        "내일 몇 시에 만나", [], [], [], [],
+                        recent_conversation=recent,
+                    )
+            generate.assert_not_called()
+            process.assert_not_called()
+        self.assertEqual(len(captured), 2)
+        for prompt in captured:
+            self.assertEqual(prompt["incoming_message"], "내일 몇 시에 만나")
+            self.assertIsInstance(prompt["instructions"], list)
+        self.assertIn("metadata_only", "\n".join(captured[0]["instructions"]))
+        self.assertNotIn("metadata_only", "\n".join(captured[1]["instructions"]))
+
     def test_file_provenance_survives_refresh_and_guards_grounded_followup(self):
         module = self._load_auto_reply_module(
             "auto_reply_file_followup_provenance_test"

@@ -12747,13 +12747,6 @@ def generate_reply(
         raise ValueError("pre-acquired model lease is probe-only")
     dream_rsi_metadata = None if _capacity_probe else _load_dream_rsi_checkpoint_metadata()
     bounded_recent_conversation = list(recent_conversation or [])
-    if not _capacity_probe and any(
-        _validated_recent_file_provenance(row) is not None
-        for row in bounded_recent_conversation
-    ):
-        instructions = list(instructions) + [
-            "A recent file_provenance with availability metadata_only proves only its filename and metadata. Never infer or summarize file contents. If the current turn refers to that file, explicitly ask for the needed text."
-        ]
     bounded_conversation_target = _prompt_conversation_target(
         conversation_target,
         bounded_recent_conversation,
@@ -12809,6 +12802,13 @@ def generate_reply(
     )
     knowledge_graph_evidence: list[dict] = []
     if not _capacity_probe:
+        if any(
+            _validated_recent_file_provenance(row) is not None
+            for row in bounded_recent_conversation
+        ):
+            instructions = list(instructions) + [
+                "A recent file_provenance with availability metadata_only proves only its filename and metadata. Never infer or summarize file contents. If the current turn refers to that file, explicitly ask for the needed text."
+            ]
         # Operator instruction #11 forbids two replies in a row that end with the
         # same final particle. Ordering drafts only helps when a different
         # ending exists, so tell the model which particle to avoid up front.

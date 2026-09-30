@@ -190,6 +190,7 @@ jobs:
           tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_local_context_refresh_restores_authoritative_attachment_urls
           tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_metadata_only_file_uses_one_fixed_clarification_without_model
           tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_file_provenance_survives_refresh_and_guards_grounded_followup
+          tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_recent_file_metadata_does_not_break_normal_question_prompt
           tests.test_auto_reply_fallback_lease
           tests.test_auto_reply_reference_store
           tests.test_auto_reply_session_monitor
