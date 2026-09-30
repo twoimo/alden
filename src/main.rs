@@ -725,6 +725,14 @@ enum Commands {
             help = "Require the exact local row to belong to this numeric author"
         )]
         expected_author_id: Option<i64>,
+        #[arg(long, requires_all = ["local", "expected_author_id", "expected_attachment_sha256"], help = "Download an exact non-image file without LOCO")]
+        file: bool,
+        #[arg(
+            long,
+            requires = "file",
+            help = "Require the polled attachment SHA-256 before fetching any bytes"
+        )]
+        expected_attachment_sha256: Option<String>,
     },
     /// Sync messages to local SQLite cache for offline search
     Cache {
@@ -6691,12 +6699,15 @@ fn run() -> Result<()> {
             output_dir,
             local,
             expected_author_id,
+            file,
+            expected_attachment_sha256,
         } => commands::download::cmd_download(
             chat_id,
             log_id,
             output_dir.as_deref(),
             local,
             expected_author_id,
+            expected_attachment_sha256.as_deref().filter(|_| file),
             json,
         )?,
         Commands::Cache { chat_id, limit } => commands::analytics::cmd_cache(chat_id, limit, json)?,
@@ -8034,12 +8045,16 @@ mod tests {
                 output_dir,
                 local,
                 expected_author_id,
+                file,
+                expected_attachment_sha256,
             } => {
                 assert_eq!(chat_id, 42);
                 assert_eq!(log_id, 100);
                 assert_eq!(output_dir.as_deref(), Some("/tmp/private-media"));
                 assert!(local);
                 assert_eq!(expected_author_id, Some(700));
+                assert!(!file);
+                assert!(expected_attachment_sha256.is_none());
             }
             other => panic!("expected download command, got {other:?}"),
         }
@@ -8062,6 +8077,56 @@ mod tests {
             "0",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn download_file_requires_local_author_and_attachment_binding() {
+        let digest = "a".repeat(64);
+        let base = ["openkakao-cli", "download", "42", "100"];
+        let flags = [
+            "--local",
+            "--file",
+            "--expected-author-id",
+            "700",
+            "--expected-attachment-sha256",
+            digest.as_str(),
+        ];
+        let parsed = Cli::try_parse_from(base.iter().chain(flags.iter()).copied()).unwrap();
+        match parsed.command {
+            Commands::Download {
+                local,
+                file,
+                expected_author_id,
+                expected_attachment_sha256,
+                ..
+            } => {
+                assert!(local && file);
+                assert_eq!(expected_author_id, Some(700));
+                assert_eq!(expected_attachment_sha256.as_deref(), Some(digest.as_str()));
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+        for omitted in [
+            "--local",
+            "--file",
+            "--expected-author-id",
+            "--expected-attachment-sha256",
+        ] {
+            let mut args = base.to_vec();
+            let mut index = 0;
+            while index < flags.len() {
+                let count = if flags[index].starts_with("--expected-") {
+                    2
+                } else {
+                    1
+                };
+                if flags[index] != omitted {
+                    args.extend_from_slice(&flags[index..index + count]);
+                }
+                index += count;
+            }
+            assert!(Cli::try_parse_from(args).is_err(), "missing {omitted}");
+        }
     }
     #[cfg(unix)]
     use crate::auto_reply_runtime::acquire_worker_setup_lock_nonblocking;

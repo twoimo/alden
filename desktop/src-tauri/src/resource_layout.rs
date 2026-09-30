@@ -39,6 +39,7 @@ pub const DATA_FILES: &[&str] = &[
     VOICE_SCRIPT,
     VOICE_AUDIO_LIBRARY,
     "scripts/alden_abort.py",
+    "scripts/alden_file_content.py",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -154,6 +154,7 @@ jobs:
           tests.test_auto_reply_reference_search
           tests.test_auto_reply_knowledge_graph
           tests.test_alden_graph_snapshot_cycle
+          tests.test_alden_file_content
           tests.test_alden_retrieval_eval
           tests.test_auto_reply_finetune
           tests.test_alden_dpo_scorer
