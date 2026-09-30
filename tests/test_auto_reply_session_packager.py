@@ -183,6 +183,16 @@ class SessionRuntimePackagerTests(unittest.TestCase):
                 {"openkakao-cli", "config.toml", *module.RUNTIME_SCRIPT_NAMES,
                  *module.RUNTIME_DATA_NAMES},
             )
+            alden_source = ROOT / "scripts" / "alden_abort.py"
+            alden_asset = manifest["assets"]["alden_abort.py"]
+            self.assertEqual(
+                alden_asset["sha256"],
+                hashlib.sha256(alden_source.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                Path(alden_asset["path"]).read_bytes(),
+                alden_source.read_bytes(),
+            )
 
     def test_runtime_copy_list_covers_repository_import_closure(self):
         module = load("session_packager_import_closure_test")

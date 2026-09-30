@@ -68,6 +68,7 @@ _SEND_PREFLIGHT_DIAGNOSTIC_ROOMS: set[tuple[str, str]] = set()
 import auto_reply_ondevice
 import auto_reply_metrics as perf
 import auto_reply_transition_journal as transition_journal
+from alden_abort import AldenCancelled, AbortController, AbortToken, read_abort_state
 from auto_reply_ondevice import (
     FLASH_NEXT_IQ_MODEL_ID,
     FLASH_NEXT_MODEL_ID,
@@ -578,6 +579,30 @@ NON_HUMAN_AUTHORS = {
 }
 CONTEXT_ONLY_AUTHORS = {"최연우"}
 _ACTIVE_JOURNAL = threading.local()
+_ACTIVE_ABORT_TOKEN = threading.local()
+
+
+@contextmanager
+def _active_job_abort_token(token: AbortToken | None):
+    previous = getattr(_ACTIVE_ABORT_TOKEN, "value", None)
+    _ACTIVE_ABORT_TOKEN.value = token
+    try:
+        if token is not None:
+            token.raise_if_cancelled()
+        yield token
+    finally:
+        _ACTIVE_ABORT_TOKEN.value = previous
+
+
+def _active_abort_token() -> AbortToken | None:
+    token = getattr(_ACTIVE_ABORT_TOKEN, "value", None)
+    return token if isinstance(token, AbortToken) else None
+
+
+def _raise_if_job_aborted() -> None:
+    token = _active_abort_token()
+    if token is not None:
+        token.raise_if_cancelled()
 
 
 def _journal_source_epoch(event: dict | None) -> int | None:
@@ -2052,6 +2077,67 @@ def _finish_model_call_success(lease_token: str, *, model: str | None = None) ->
     finally:
         if connection is not None:
             connection.close()
+
+
+def _release_cancelled_model_call(lease_token: str, model: str) -> bool:
+    """Release only the cancelled call; preserve prior circuit failures."""
+    connection = None
+    transaction_started = False
+    try:
+        connection = _model_circuit_connection()
+        connection.execute("BEGIN IMMEDIATE")
+        transaction_started = True
+        key = _model_circuit_key(model)
+        row = connection.execute(
+            "SELECT state, failure_class, consecutive_failures, open_until, lease_token "
+            "FROM model_circuit_breaker WHERE model_key = ?", (key,),
+        ).fetchone()
+        now = time.time()
+        if (row is None or not _valid_model_circuit_row(row, now)
+                or row["state"] != "in_flight" or row["lease_token"] != lease_token):
+            connection.commit()
+            transaction_started = False
+            return False
+        if int(row["consecutive_failures"]) == 0:
+            changed = connection.execute(
+                "DELETE FROM model_circuit_breaker "
+                "WHERE model_key = ? AND state = 'in_flight' AND lease_token = ?",
+                (key, lease_token),
+            ).rowcount
+        else:
+            changed = connection.execute(
+                "UPDATE model_circuit_breaker SET state = 'open', open_until = ?, "
+                "lease_token = NULL, updated_at = ? "
+                "WHERE model_key = ? AND state = 'in_flight' AND lease_token = ?",
+                (now, now, key, lease_token),
+            ).rowcount
+        connection.commit()
+        transaction_started = False
+        return changed == 1
+    except (OSError, sqlite3.Error, ValueError, TypeError):
+        if transaction_started and connection is not None:
+            _rollback_queue_transaction(connection)
+        return False
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _cancel_model_call_after_abort(lease_token: str, model: str, error: AldenCancelled):
+    """Keep admission closed until this call's blocking transport unwinds."""
+    completed = getattr(error, "transport_finished", None)
+    if not isinstance(completed, threading.Event) or completed.is_set():
+        _release_cancelled_model_call(lease_token, model)
+        return None
+
+    def release_when_finished():
+        completed.wait()
+        _release_cancelled_model_call(lease_token, model)
+
+    cleaner = threading.Thread(target=release_when_finished,
+                               name="openkakao-aborted-call-release", daemon=True)
+    cleaner.start()
+    return cleaner
 
 
 def _bounded_error_scalars(value: object, *, depth: int = 0) -> list[str]:
@@ -5839,6 +5925,7 @@ def _run_bounded_process(
     isolate_group: bool = False,
 ) -> tuple[int, bytes, bytes]:
     """Run a child with concurrent bounded stdin/stdout/stderr pipe I/O."""
+    _raise_if_job_aborted()
     if stdin_bytes is not None and not isinstance(stdin_bytes, bytes):
         raise TypeError("stdin_bytes must be bytes")
     if stdin_cap is not None:
@@ -5899,14 +5986,18 @@ def _run_bounded_process(
             else:
                 process.stdin.close()
         while selector.get_map():
+            _raise_if_job_aborted()
             remaining = deadline - time.monotonic()
             if remaining <= 0.0:
                 _terminate_process(process, process_group_id=process_group_id)
                 raise subprocess.TimeoutExpired(command, timeout)
-            events = selector.select(remaining)
+            events = selector.select(min(remaining, 0.1))
             if not events:
-                _terminate_process(process, process_group_id=process_group_id)
-                raise subprocess.TimeoutExpired(command, timeout)
+                _raise_if_job_aborted()
+                if deadline - time.monotonic() <= 0.0:
+                    _terminate_process(process, process_group_id=process_group_id)
+                    raise subprocess.TimeoutExpired(command, timeout)
+                continue
             for key, _ in events:
                 stream = key.fileobj
                 if key.data == "stdin":
@@ -5961,14 +6052,16 @@ def _run_bounded_process(
                 chunks.extend(chunk)
         remaining = deadline - time.monotonic()
         if process.poll() is None:
-            if remaining <= 0.0:
-                _terminate_process(process, process_group_id=process_group_id)
-                raise subprocess.TimeoutExpired(command, timeout)
-            try:
-                process.wait(timeout=remaining)
-            except subprocess.TimeoutExpired:
-                _terminate_process(process, process_group_id=process_group_id)
-                raise
+            while process.poll() is None:
+                _raise_if_job_aborted()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    _terminate_process(process, process_group_id=process_group_id)
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    process.wait(timeout=min(remaining, 0.1))
+                except subprocess.TimeoutExpired:
+                    continue
         return int(process.returncode or 0), bytes(stdout_chunks), bytes(stderr_chunks)
     finally:
         if process_group_id is not None or process.poll() is None:
@@ -9083,6 +9176,7 @@ def _read_link_body(response: object, deadline: float) -> bytes:
     chunks: list[bytes] = []
     total = 0
     while True:
+        _raise_if_job_aborted()
         remaining = deadline - time.monotonic()
         if remaining <= 0.0:
             raise TimeoutError("link read timeout")
@@ -9096,6 +9190,7 @@ def _read_link_body(response: object, deadline: float) -> bytes:
         if total > MAX_LINK_BODY_BYTES:
             raise ValueError("link body exceeds bounded retrieval size")
         chunks.append(bytes(chunk))
+    _raise_if_job_aborted()
     return b"".join(chunks)
 
 
@@ -9208,9 +9303,10 @@ def _youtube_ytdlp_caption_text(url: str, deadline: float) -> str:
     attempts = [item for item in attempts if item]
     try:
         for cookies in attempts:
+            _raise_if_job_aborted()
             if time.monotonic() >= deadline:
                 break
-            completed = subprocess.run(
+            _run_bounded_process(
                 [
                     ytdlp,
                     "--skip-download",
@@ -9228,11 +9324,14 @@ def _youtube_ytdlp_caption_text(url: str, deadline: float) -> str:
                     str(work / "clip"),
                     url,
                 ],
-                check=False,
-                capture_output=True,
+                cwd=work,
+                env=dict(os.environ),
                 timeout=min(timeout, max(1.0, deadline - time.monotonic())),
+                stdout_cap=MAX_MODEL_OUTPUT_BYTES,
+                stderr_cap=MAX_MODEL_STDERR_BYTES,
+                isolate_group=True,
             )
-            del completed
+            _raise_if_job_aborted()
             chunks: list[str] = []
             for path in sorted(work.glob("*.vtt")):
                 raw = path.read_text(encoding="utf-8", errors="ignore")
@@ -9257,7 +9356,9 @@ def _youtube_ytdlp_caption_text(url: str, deadline: float) -> str:
             if joined:
                 return joined
         return ""
-    except (OSError, subprocess.TimeoutExpired, UnicodeError):
+    except AldenCancelled:
+        raise
+    except (OSError, subprocess.TimeoutExpired, _CaptureOverflow, _CaptureIOError, UnicodeError):
         return ""
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -9290,6 +9391,7 @@ def _github_readme_text(url: str, deadline: float) -> str:
 def _fetch_pinned_http(
     url: str, deadline: float, *, redirects_left: int = 1
 ) -> tuple[bytes, int] | None:
+    _raise_if_job_aborted()
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         return None
@@ -9327,6 +9429,7 @@ def _fetch_pinned_http(
         port,
         min(MAX_LINK_URL_TIMEOUT_SECONDS, remaining),
     )
+    _raise_if_job_aborted()
     if not addresses:
         raise OSError("link DNS returned no addresses")
     for address in addresses:
@@ -9347,6 +9450,7 @@ def _fetch_pinned_http(
     remaining = deadline - time.monotonic()
     if remaining <= 0.0:
         raise TimeoutError("link URL timeout")
+    _raise_if_job_aborted()
     connection, response = _open_pinned_link(
         parsed,
         hostname,
@@ -9381,6 +9485,7 @@ def _fetch_pinned_http(
             body_bytes = _read_link_body(response, deadline)
     finally:
         connection.close()
+    _raise_if_job_aborted()
     if redirect_to:
         return _fetch_pinned_http(
             redirect_to, deadline, redirects_left=redirects_left - 1
@@ -9474,6 +9579,7 @@ def fetch_link_previews(
     extra_messages: list[str] | None = None,
     extra_urls: list[str] | None = None,
 ) -> list[dict]:
+    _raise_if_job_aborted()
     urls = [raw.rstrip(".,)>") for raw in extract_urls(message)]
     seen = set(urls)
     collected_extra: list[str] = []
@@ -9513,12 +9619,15 @@ def fetch_link_previews(
         else MAX_LINK_TOTAL_TIMEOUT_SECONDS
     )
     for url in urls:
+        _raise_if_job_aborted()
         incomplete = _incomplete_link_preview(url)
         remaining = total_deadline - time.monotonic()
         if remaining <= 0.0:
             previews.append(incomplete)
             continue
         result: list[tuple[dict, int]] = [(incomplete, 0)]
+        cancelled = [False]
+        active_token = _active_abort_token()
 
         per_url = (
             MAX_YOUTUBE_CAPTION_TIMEOUT_SECONDS
@@ -9534,19 +9643,34 @@ def fetch_link_previews(
             target: list[tuple[dict, int]] = result,
         ) -> None:
             try:
-                target[0] = _fetch_link_preview_once(current_url, current_deadline)
+                with _active_job_abort_token(active_token):
+                    _raise_if_job_aborted()
+                    target[0] = _fetch_link_preview_once(current_url, current_deadline)
+                    _raise_if_job_aborted()
+            except AldenCancelled:
+                cancelled[0] = True
+                target[0] = (current_incomplete, 0)
             except Exception:
                 target[0] = (current_incomplete, 0)
 
         worker = threading.Thread(target=retrieve, daemon=True)
         worker.start()
-        worker.join(min(per_url, remaining))
+        join_deadline = time.monotonic() + min(per_url, remaining)
+        while worker.is_alive():
+            _raise_if_job_aborted()
+            join_remaining = join_deadline - time.monotonic()
+            if join_remaining <= 0.0:
+                break
+            worker.join(min(0.1, join_remaining))
+        if cancelled[0]:
+            _raise_if_job_aborted()
         preview, body_size = result[0]
         if worker.is_alive() or total_bytes + body_size > MAX_LINK_TOTAL_BYTES:
             preview = incomplete
             body_size = 0
         total_bytes += body_size
         previews.append(preview)
+    _raise_if_job_aborted()
     return previews
 
 
@@ -11557,6 +11681,17 @@ def _operator_state_root() -> Path:
     return parent
 
 
+def _capture_job_abort_token() -> AbortToken:
+    """Capture one Alden abort epoch for the lifetime of a claimed job."""
+    controller = AbortController(_operator_state_root())
+    token = controller.token()
+    state = read_abort_state(controller.path)
+    if state.is_error or state.latched:
+        token.cancel()
+    token.raise_if_cancelled()
+    return token
+
+
 def _load_dream_rsi_checkpoint_metadata() -> dict | None:
     path = _operator_state_root() / DREAM_RSI_CHECKPOINT_NAME
     try:
@@ -11858,6 +11993,7 @@ def _model_fallback_chain(
     on_attempt=None,
     deadline: float | None = None,
     turn_guard=None,
+    primary_lease_token: str | None = None,
 ) -> dict | None:
     """Try each configured fallback model once, in order, until one answers.
 
@@ -11865,14 +12001,19 @@ def _model_fallback_chain(
     candidate takes its own call lease, a failed attempt is closed before the
     next one starts, and the winner's lease travels with the winner. That is what
     keeps a fallback that answered from being reported as circuit_unavailable and
-    deferred anyway. Returns None when no candidate could run, and never raises:
-    one broken candidate is skipped instead of ending the turn (2026-09-15).
+    deferred anyway. Returns None when no candidate could run. Ordinary candidate
+    errors may continue; operator cancellation propagates without another call.
     """
 
     for candidate in _reply_fallback_candidates():
         try:
+            _raise_if_job_aborted()
             if turn_guard is not None and turn_guard():
                 break
+        except AldenCancelled as exc:
+            if primary_lease_token:
+                _cancel_model_call_after_abort(primary_lease_token, active_model, exc)
+            raise
         except Exception:
             break
         if deadline is not None and deadline - time.monotonic() < MODEL_MIN_DEFER_SECONDS:
@@ -11888,6 +12029,11 @@ def _model_fallback_chain(
             on_attempt(candidate, "")
         try:
             returncode, stdout_bytes, stderr_bytes = run_model(candidate)
+        except AldenCancelled as exc:
+            _cancel_model_call_after_abort(slot["lease_token"], candidate, exc)
+            if primary_lease_token:
+                _cancel_model_call_after_abort(primary_lease_token, active_model, exc)
+            raise
         except Exception as exc:
             _close_model_lease(slot["lease_token"], candidate, "runner_failed")
             print(
@@ -11972,6 +12118,7 @@ def _run_opencodex_generation_unleased(
     timeout: float = 30.0,
     base_url: str = "http://127.0.0.1:11234/v1",
 ) -> tuple[int, bytes, bytes]:
+    _raise_if_job_aborted()
     try:
         user_content = prompt_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -12095,6 +12242,7 @@ def _run_opencodex_generation_unleased(
         },
     )
     try:
+        _raise_if_job_aborted()
         if local_mlx:
             with auto_reply_ondevice._local_only_urlopen(req, timeout=timeout) as resp:
                 raw = resp.read(auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES + 1)
@@ -12103,6 +12251,7 @@ def _run_opencodex_generation_unleased(
         else:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 raw = resp.read()
+        _raise_if_job_aborted()
         body = json.loads(raw.decode("utf-8"))
         if local_mlx:
             response_model = body.get("model")
@@ -12112,7 +12261,10 @@ def _run_opencodex_generation_unleased(
             ):
                 return 1, b"", b"mlx_serve_response_model_mismatch"
         content = str(body["choices"][0]["message"]["content"])
+        _raise_if_job_aborted()
         return 0, content.encode("utf-8"), b""
+    except AldenCancelled:
+        raise
     except urllib.error.HTTPError as exc:
         if local_mlx:
             err_bytes = exc.read(auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES + 1)
@@ -12149,6 +12301,53 @@ def _mlx_json_schema_response_format() -> dict:
     }
 
 
+def _run_abortable_generation(operation):
+    """Wait for one generation without letting a cancelled job consume its result.
+
+    The operation runs in a daemon thread only while a job-scoped Alden token
+    is active.  Local MLX callers put the model lease inside ``operation``, so
+    an in-flight HTTP request keeps that lease until it actually unwinds even
+    when the worker job has already been cancelled and durably deferred.
+    """
+    token = _active_abort_token()
+    if token is None:
+        return operation()
+
+    completed = threading.Event()
+    results: list[tuple[int, bytes, bytes]] = []
+    failures: list[BaseException] = []
+
+    def invoke() -> None:
+        try:
+            with _active_job_abort_token(token):
+                _raise_if_job_aborted()
+                results.append(operation())
+                _raise_if_job_aborted()
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            completed.set()
+
+    worker = threading.Thread(
+        target=invoke,
+        name="openkakao-abortable-generation",
+        daemon=True,
+    )
+    worker.start()
+    try:
+        while not completed.wait(0.1):
+            token.raise_if_cancelled()
+        token.raise_if_cancelled()
+    except AldenCancelled as exc:
+        exc.transport_finished = completed
+        raise
+    if failures:
+        raise failures[0]
+    if not results:
+        raise RuntimeError("abortable generation completed without a result")
+    return results[0]
+
+
 def _run_opencodex_generation(
     model: str,
     system_prompt: str,
@@ -12159,18 +12358,10 @@ def _run_opencodex_generation(
     base_url: str = "http://127.0.0.1:11234/v1",
 ) -> tuple[int, bytes, bytes]:
     """Keep local inference inside the same lease used by model swaps."""
+    local_mlx = _is_mlx_serve_text_model(model)
 
-    if not _is_mlx_serve_text_model(model):
-        return _run_opencodex_generation_unleased(
-            model,
-            system_prompt,
-            prompt_bytes,
-            image_paths=image_paths,
-            timeout=timeout,
-            base_url=base_url,
-        )
-    try:
-        with auto_reply_ondevice.mlx_model_request_lease(_operator_state_root()):
+    def generate() -> tuple[int, bytes, bytes]:
+        if not local_mlx:
             return _run_opencodex_generation_unleased(
                 model,
                 system_prompt,
@@ -12179,8 +12370,20 @@ def _run_opencodex_generation(
                 timeout=timeout,
                 base_url=base_url,
             )
-    except auto_reply_ondevice.MlxRequestAdmissionClosed as exc:
-        return 1, b"", exc.code.encode("ascii", "replace")
+        try:
+            with auto_reply_ondevice.mlx_model_request_lease(_operator_state_root()):
+                return _run_opencodex_generation_unleased(
+                    model,
+                    system_prompt,
+                    prompt_bytes,
+                    image_paths=image_paths,
+                    timeout=timeout,
+                    base_url=base_url,
+                )
+        except auto_reply_ondevice.MlxRequestAdmissionClosed as exc:
+            return 1, b"", exc.code.encode("ascii", "replace")
+
+    return _run_abortable_generation(generate)
 
 def _run_generation_candidate(
     model: str,
@@ -12193,6 +12396,7 @@ def _run_generation_candidate(
     image_paths: list[Path] | None,
     timeout: float,
 ) -> tuple[int, bytes, bytes]:
+    _raise_if_job_aborted()
     if not _product_local_model_allowed(model):
         return 1, b"", b"product_cloud_fallback_disabled"
     if image_paths and not _is_mlx_serve_27b_model(model):
@@ -12241,6 +12445,7 @@ def generate_reply(
     _capacity_probe: bool = False,
     turn_guard=None,
 ) -> dict:
+    _raise_if_job_aborted()
     empty = {
         "should_reply": False,
         "reply": "",
@@ -12256,6 +12461,8 @@ def generate_reply(
         if held_reason is None:
             try:
                 held_reason = turn_guard()
+            except AldenCancelled:
+                raise
             except Exception:
                 held_reason = "context_freshness_unavailable"
         if not held_reason:
@@ -12951,7 +13158,10 @@ def generate_reply(
                     _run_timeout_candidate,
                     deadline=generation_deadline,
                     turn_guard=turn_hold,
+                    primary_lease_token=lease_token,
                 )
+            except AldenCancelled:
+                raise
             except Exception:
                 winner = None
             if winner is not None:
@@ -12971,6 +13181,9 @@ def generate_reply(
                 return fail_model_call("runner_timeout")
         else:
             return fail_model_call("runner_timeout")
+    except AldenCancelled as exc:
+        _cancel_model_call_after_abort(lease_token, active_model, exc)
+        raise
     except _CaptureOverflow:
         return fail_model_call("runner_output_overflow")
     except OSError:
@@ -13014,6 +13227,7 @@ def generate_reply(
                 _run_candidate,
                 deadline=generation_deadline,
                 turn_guard=turn_hold,
+                primary_lease_token=lease_token,
             )
             if winner is not None:
                 # The fallback answered. Close the first attempt, then run the
@@ -13979,6 +14193,7 @@ def send_reply(
     preflight_candidate: object = None
     preflight_stderr: object = None
     for attempt in range(PRE_SEND_PREFLIGHT_ATTEMPTS):
+        _raise_if_job_aborted()
         stderr_bytes: object = b""
         try:
             returncode, stdout_bytes, stderr_bytes = _run_bounded_process(
@@ -14066,6 +14281,7 @@ def send_reply(
             preflight_stderr,
         )
         return False
+    _raise_if_job_aborted()
     ready, _ = send_readiness_fence(
         expected_target_chat_id=expected_target_chat_id,
         expected_owner=expected_owner,
@@ -14122,6 +14338,18 @@ def send_reply(
         )
         if transition != "updated":
             return False
+    try:
+        # This is the last Python fence before the local-send child can mutate
+        # the composer.  If the abort wins here, no send process has started,
+        # so restore the proven pre-send processing phase before deferring.
+        _raise_if_job_aborted()
+    except AldenCancelled:
+        if event is not None and event_id and connection is not None:
+            transition_sending_pre_send_unavailable(
+                event_id,
+                connection=connection,
+            )
+        raise
     try:
         returncode, stdout_bytes, _ = _run_bounded_process(
             command,
@@ -15572,7 +15800,7 @@ def finish_turn_policy_skip(
     complete_event(event_id, "")
 
 
-def process_job(
+def _process_job_impl(
     job: dict,
     previous_status: str,
     connection: sqlite3.Connection | None = None,
@@ -16346,6 +16574,71 @@ def process_job(
         scheduled_delay_seconds=delay_seconds,
     ):
         return
+
+
+ALDEN_ABORT_DEFER_REASON = "alden_global_abort"
+
+
+def _defer_alden_cancelled_job(
+    job: dict,
+    previous_status: str,
+    connection: sqlite3.Connection | None,
+) -> None:
+    """Preserve one cancelled job without projecting it as a normal skip."""
+    event_id = str(job["event_id"])
+    event = json.loads(str(job["event_json"]))
+    event.pop(_QUEUE_CREATED_AT_PROOF_KEY, None)
+    phase = reply_job_delivery_phase(connection, event_id) if connection is not None else "processing"
+    reply = str(job.get("reply") or "").strip() or None
+    if phase == "sending":
+        finish_delivery_unknown(
+            event,
+            event_id,
+            connection,
+            reply=reply,
+            error_class=ALDEN_ABORT_DEFER_REASON,
+        )
+        return
+    if phase != "processing":
+        finish_delivery_unknown(
+            event,
+            event_id,
+            connection,
+            reply=reply,
+            error_class=RECONCILE_REQUIRED_REASON,
+        )
+        return
+
+    retry_status = (
+        previous_status
+        if previous_status in {"scheduled", "projection_pending"}
+        else "pending"
+    )
+    fields: dict[str, object] = {
+        "status": retry_status,
+        "due_at": time.time() + MODEL_MIN_DEFER_SECONDS,
+    }
+    if retry_status != "projection_pending":
+        fields["error_class"] = ALDEN_ABORT_DEFER_REASON
+    settle_processing_transition(
+        event,
+        event_id,
+        connection,
+        **fields,
+    )
+
+
+def process_job(
+    job: dict,
+    previous_status: str,
+    connection: sqlite3.Connection | None = None,
+) -> None:
+    try:
+        token = _capture_job_abort_token()
+        with _active_job_abort_token(token):
+            _process_job_impl(job, previous_status, connection)
+    except AldenCancelled:
+        _defer_alden_cancelled_job(job, previous_status, connection)
 
 
 def _worker_sleep_seconds(now: float, next_recovery_at: float) -> float:

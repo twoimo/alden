@@ -153,6 +153,8 @@ jobs:
           tests.test_auto_reply_reference_search
           tests.test_auto_reply_knowledge_graph
           tests.test_auto_reply_finetune
+          tests.test_alden_dpo_scorer
+          tests.test_alden_worker_abort
           tests.test_alden_unit4
           tests.test_alden_desktop_launchers
           tests.test_alden_menubar_runtime_payload
