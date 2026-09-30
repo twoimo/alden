@@ -248,3 +248,5 @@ Privacy paths, KakaoTalk table names, and Korean operator notes live in [README.
 ## License
 
 [MIT License](LICENSE)
+
+The latest objective also names unsupported color judgments. A [read-only historical color-claim replay](docs/architecture/alden-color-claim-replay-20260930.json) found seven reply records across five events, including two persisted sent receipts. The current pure missing-image helper produced zero color/composition/quality judgments. It made no model or send calls and does not establish active-worker correction or pixel understanding.

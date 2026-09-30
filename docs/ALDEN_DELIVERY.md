@@ -1,6 +1,6 @@
 # Alden 전달 진행 기록
 
-최신 목표 원문: `/Users/twoimo/.codex/attachments/ba814151-0eb9-40ae-9f7f-cbdf53d734b7/goal-objective.md`.
+최신 목표 원문: `/Users/twoimo/.codex/attachments/483991c3-119c-40da-b523-1c5ef9687e69/goal-objective.md`.
 이전 목표 원문 `576db5bd-37d1-4ab4-853a-fb1cf0803774`의 미디어 수정과 기존 보존 조건도 이어간다.
 2026-09-30 작업 기준: PR #27의 `74149a41b6c86ead9a1a2794bd1e5c1c2fadfb98`에서
 `codex/alden-delivery-20260930` 분기. 원래 작업 폴더는 main `8012f90`의 깨끗한 detached checkout이었다.
@@ -10,6 +10,8 @@
 과거 문서의 결과는 날짜와 실행 범위가 일치할 때만 재사용한다. 전체 목표는 계속 진행 중이다.
 
 ## 최신 전달 상태
+
+- 22:33 KST 새 목표483991c3 전체 확인: 추가된 색감 실패를 기존 승인 방 ledger에서 조사했다. 실제 응답7행/고유5events/과거sent2행을 찾았고, 현재 worker c9b576의 pure helper 재현에서 근거 없는 시각 판단0이다. 새 모델 호출·전송·DB/큐 변경0. [색감 재현 기록](architecture/alden-color-claim-replay-20260930.json)은 운영 교체나 실제 pixel 해석 성공과 구분한다. 기존 색감 금지 assert가 현재971개 CI에 이미 포함돼 있어 통과한 source 검사를 다시 실행하지 않는다.
 
 - 22:17 KST 네이티브 코드 **effa5c629955093dc64f7370295e789422783ad4**를 normal push하고 [원격 CI36719629616](https://github.com/twoimo/openkakao-bot/actions/runs/36719629616)의 **4/4 작업 성공**을 확인했다. Hosted Python은 971개/73 skip/실패0이고 로컬 pinned 환경은 971개/2 skip/실패0이다. frontend191·desktop Rust85도 통과했다. 설치29/29 파일·26/26 resource·단일PID22050·ad-hoc 서명 및 ZIP29/29 바이트 대조를 확인했다. [오디오 범위](architecture/alden-native-audio-20260930.md), [설치](architecture/alden-native-audio-install-20260930.json), [원격 기록](architecture/alden-native-audio-remote-ci-20260930.json)을 기준으로 읽는다. 이전 패키지는 ignored dist/alden-0.1.6-local-history에 보존했으며, 이하 이전 판본의 관측은 시간순 이력이다.
 - 코드 판본은 `e03a678`, fixture 격리 후 원격 판본은 `b987ad151e97010411f346e2c0aec34839551eba`다. [PR #27](https://github.com/twoimo/openkakao-bot/pull/27)은 draft이며 main merge와 공개 release는 아직 수행하지 않았다.
