@@ -1,5 +1,6 @@
 <div align="center">
 
+
 # openkakao-bot
 
 **A private assistant for the KakaoTalk macOS app.**
@@ -20,6 +21,8 @@
 </p>
 
 </div>
+
+Alden 첨부 문서 읽기는 [구현·설치·실제 로컬 모델 측정 기록](docs/architecture/alden-file-content-20261001.md)에서 확인할 수 있습니다. 실제 카카오 파일 transport와 운영 worker 적용은 아직 미검증입니다.
 
 ---
 

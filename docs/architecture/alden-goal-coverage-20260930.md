@@ -1,6 +1,8 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
 
+2026-10-01 파일 추가: [내용 읽기](alden-file-content-20261001.md)는 구현·설치 파서·합성 문서의 실제 local27B 질의4/4까지 검증했다. code c29e263 원격CI4/4 성공, 설치30/27 일치. 실제 Kakao 파일 transport·운영 worker 활성화는 미완료다. 아래 Sep30 표는 이력이다.
+
 2026-10-01 추가: [단일 snapshot·원자적 graph cycle](alden-graph-cycle-20261001.md), 필수981/16skip/실패0, 설치29/26 대조와 실제E5 1회 갱신을 확인했다. 기존 표의 Sep30 관측은 이력이며 native UI·사람 음성·production worker·공개 릴리즈의 미완료 범위를 유지한다.
 전체 목표는 **진행 중**이다. 최신 진행 기록은 [ALDEN_DELIVERY](../ALDEN_DELIVERY.md)다.
 과거 설치·공유 작업자 기록은 해당 날짜와 판본의 근거로만 사용한다. 이번 소스 변경은
