@@ -56,6 +56,11 @@ const SELF_CLASSIFICATION_RETRY_MAX_SECONDS: i64 = 5;
 // retry window deliberately short and fixed: context sync owns no delivery
 // capability, and it must not advance its durable checkpoint from a gap page.
 const CONTEXT_SYNC_LOCAL_POLL_RETRY_DELAYS_MS: [u64; 3] = [250, 500, 1_000];
+const CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER: &str = "context_sync_snapshot_retry_exhausted";
+
+#[derive(Debug, thiserror::Error)]
+#[error("context_sync_snapshot_retry_exhausted")]
+struct ContextSyncPollGapRetryExhausted;
 
 fn local_message_snapshot_eq(
     left: &local_db::LocalMessage,
@@ -225,7 +230,8 @@ where
         if !retriable_gap {
             return Ok(envelope);
         }
-        let retry_delay_ms = retry_delay_ms.context("context_sync_snapshot_retry_exhausted")?;
+        let retry_delay_ms =
+            retry_delay_ms.ok_or_else(|| anyhow::Error::new(ContextSyncPollGapRetryExhausted))?;
         previous_gap = Some(envelope);
         sleep(Duration::from_millis(retry_delay_ms));
     }
@@ -234,11 +240,22 @@ where
 
 fn context_sync_cli_error(error: anyhow::Error) -> anyhow::Error {
     if error.is::<context_sync_replica::SnapshotRetryExhausted>() {
-        // The watcher accepts only this exact diagnostic. Drop the internal
-        // error chain so Rust's main Result formatter emits one protocol line.
-        anyhow::anyhow!("context_sync_snapshot_retry_exhausted")
+        error.context(CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER)
     } else {
         error
+    }
+}
+
+fn write_cli_termination_error(mut stderr: impl Write, error: &anyhow::Error) -> io::Result<()> {
+    if error.is::<context_sync_replica::SnapshotRetryExhausted>()
+        || error.is::<ContextSyncPollGapRetryExhausted>()
+    {
+        writeln!(
+            stderr,
+            "Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}"
+        )
+    } else {
+        writeln!(stderr, "Error: {error:?}")
     }
 }
 
@@ -6197,7 +6214,7 @@ fn finish_worker_bound_local_send_setup<T>(
     }
 }
 
-fn main() -> Result<()> {
+fn run() -> Result<()> {
     let cli = Cli::parse();
     // The record window's data source must work while the config is broken:
     // "the config is invalid" is exactly one of the facts it has to report.
@@ -7892,6 +7909,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn terminate_cli(result: Result<()>, mut stderr: impl Write) -> std::process::ExitCode {
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = write_cli_termination_error(&mut stderr, &error);
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn main() -> std::process::ExitCode {
+    terminate_cli(run(), io::stderr().lock())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -8192,9 +8223,20 @@ mod tests {
         )
         .expect_err("a persistent source gap must remain fail-closed");
 
-        assert_eq!(error.to_string(), "context_sync_snapshot_retry_exhausted");
+        assert_eq!(
+            error.to_string(),
+            CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER
+        );
+        assert!(error.is::<ContextSyncPollGapRetryExhausted>());
         assert_eq!(calls, [(42, 100); 4]);
         assert_eq!(sleeps, [250, 500, 1_000]);
+
+        let mut stderr = Vec::new();
+        let _ = terminate_cli(Err(error), &mut stderr);
+        assert_eq!(
+            stderr,
+            format!("Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}\n").as_bytes(),
+        );
     }
 
     #[test]
@@ -8213,10 +8255,17 @@ mod tests {
         .expect_err("replica retry exhaustion must surface through the CLI marker");
 
         assert_eq!(calls, 1);
-        assert_eq!(error.to_string(), "context_sync_snapshot_retry_exhausted");
         assert_eq!(
-            format!("Error: {error:?}"),
-            "Error: context_sync_snapshot_retry_exhausted",
+            error.to_string(),
+            CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER
+        );
+        assert!(error.is::<context_sync_replica::SnapshotRetryExhausted>());
+
+        let mut stderr = Vec::new();
+        write_cli_termination_error(&mut stderr, &error).expect("write CLI termination fixture");
+        assert_eq!(
+            stderr,
+            format!("Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}\n").as_bytes(),
         );
     }
 
@@ -8230,6 +8279,11 @@ mod tests {
             error.to_string(),
             "permission denied while reading context_sync_snapshot_retry_exhausted fixture",
         );
+        assert!(!error.is::<context_sync_replica::SnapshotRetryExhausted>());
+        let mut stderr = Vec::new();
+        write_cli_termination_error(&mut stderr, &error)
+            .expect("write terminal diagnostic fixture");
+        assert_eq!(stderr, format!("Error: {error:?}\n").as_bytes());
 
         let io_error = context_sync_cli_error(
             std::io::Error::new(
@@ -8239,6 +8293,97 @@ mod tests {
             .into(),
         );
         assert_eq!(io_error.to_string(), "fixture permission denied");
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture entry"]
+    fn context_sync_cli_termination_subprocess_fixture() {
+        let scenario = std::env::var("OPENKAKAO_CONTEXT_SYNC_TERMINATION_FIXTURE")
+            .expect("subprocess fixture scenario");
+        let error = match scenario.as_str() {
+            "replica" => context_sync_local_poll_page_with_bounded_retry(
+                42,
+                "부자멘토멘티",
+                100,
+                |_chat_id, _checkpoint| Err(context_sync_replica::SnapshotRetryExhausted.into()),
+                |_delay| panic!("replica exhaustion must not sleep"),
+            )
+            .expect_err("replica exhaustion fixture must fail"),
+            "poll-gap" => {
+                let gap = transient_local_source_gap(42, 100, 101, &[]);
+                context_sync_local_poll_page_with_bounded_retry(
+                    42,
+                    "부자멘토멘티",
+                    100,
+                    |_chat_id, _checkpoint| Ok(gap.clone()),
+                    |_delay| {},
+                )
+                .expect_err("persistent gap fixture must fail")
+            }
+            "permission-substring" => context_sync_cli_error(anyhow::anyhow!(
+                "permission denied while reading context_sync_snapshot_retry_exhausted fixture"
+            )),
+            other => panic!("unknown subprocess fixture scenario {other}"),
+        };
+
+        let _ = terminate_cli(Err(error), io::stderr().lock());
+    }
+
+    #[test]
+    fn context_sync_cli_termination_is_backtrace_independent_in_subprocesses() {
+        let current_exe = std::env::current_exe().expect("resolve current test binary");
+        let expected = format!("Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}\n");
+
+        for scenario in ["replica", "poll-gap"] {
+            for rust_backtrace in ["0", "1", "full"] {
+                for rust_lib_backtrace in ["0", "1"] {
+                    let output = Command::new(&current_exe)
+                        .args([
+                            "--exact",
+                            "tests::context_sync_cli_termination_subprocess_fixture",
+                            "--ignored",
+                            "--nocapture",
+                        ])
+                        .env("OPENKAKAO_CONTEXT_SYNC_TERMINATION_FIXTURE", scenario)
+                        .env("RUST_BACKTRACE", rust_backtrace)
+                        .env("RUST_LIB_BACKTRACE", rust_lib_backtrace)
+                        .output()
+                        .expect("run isolated termination fixture");
+                    assert!(
+                        output.status.success(),
+                        "{scenario} fixture failed for RUST_BACKTRACE={rust_backtrace} RUST_LIB_BACKTRACE={rust_lib_backtrace}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert_eq!(
+                        output.stderr,
+                        expected.as_bytes(),
+                        "{scenario} stderr changed for RUST_BACKTRACE={rust_backtrace} RUST_LIB_BACKTRACE={rust_lib_backtrace}"
+                    );
+                }
+            }
+        }
+
+        let output = Command::new(&current_exe)
+            .args([
+                "--exact",
+                "tests::context_sync_cli_termination_subprocess_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(
+                "OPENKAKAO_CONTEXT_SYNC_TERMINATION_FIXTURE",
+                "permission-substring",
+            )
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LIB_BACKTRACE", "1")
+            .output()
+            .expect("run rich terminal diagnostic fixture");
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).expect("fixture stderr is UTF-8");
+        assert!(stderr.starts_with(
+            "Error: permission denied while reading context_sync_snapshot_retry_exhausted fixture"
+        ));
+        assert!(stderr.contains("Stack backtrace:"));
     }
 
     #[test]
