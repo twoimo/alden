@@ -1459,6 +1459,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="로컬 게이트웨이에서 응답 토큰 로그확률을 실제로 수집",
     )
     parser.add_argument(
+        "--dpo-score-local",
+        action="store_true",
+        help="지정한 로컬 MLX checkpoint로 chosen/rejected를 teacher forcing 채점",
+    )
+    parser.add_argument("--dpo-policy-dir", type=Path, default=None, help="로컬 policy checkpoint 절대경로")
+    parser.add_argument(
+        "--dpo-reference-dir", type=Path, default=None, help="로컬 frozen reference checkpoint 절대경로"
+    )
+    parser.add_argument(
         "--dpo-base-url",
         default="http://127.0.0.1:11234/v1",
         help="로컬 MLX 게이트웨이 base URL",
@@ -1525,20 +1534,51 @@ def main(argv: Sequence[str] | None = None) -> int:
             if "baseline" in report:
                 report["comparison"] = compare_runs(report["baseline"], report["tuned"])
 
-    if args.dpo_pairs is not None:
-        # 로컬 게이트웨이가 생성한 토큰의 실제 로그확률만 사용한다. 값이 없으면
-        # build_dpo_report가 평가 불가로 닫고 문자열 유사도로 대체하지 않는다.
-        report["dpo"] = build_dpo_report(
-            pairs_path=args.dpo_pairs.expanduser(),
-            base_url=args.dpo_base_url,
-            model=args.dpo_model or model,
-            ref_pairs_path=(
-                args.dpo_ref_pairs.expanduser() if args.dpo_ref_pairs is not None else None
-            ),
-            max_tokens=args.dpo_max_tokens,
-            samples=args.dpo_samples,
-            tokenizer_id=args.dpo_model or model,
-        )
+    if args.dpo_score_local and args.dpo_pairs is None:
+        report["dpo"] = {
+            "status": DPO_EVAL_UNAVAILABLE,
+            "reason": "pairs_missing",
+            "scoring_method": "mlx_direct_teacher_forcing",
+            "string_similarity_used": False,
+            "pairs": [],
+        }
+    elif args.dpo_pairs is not None:
+        if args.dpo_score_local:
+            pairs, pair_error = load_preference_pairs(args.dpo_pairs.expanduser())
+            if pair_error:
+                report["dpo"] = {
+                    "status": DPO_EVAL_UNAVAILABLE,
+                    "reason": pair_error,
+                    "scoring_method": "mlx_direct_teacher_forcing",
+                    "string_similarity_used": False,
+                    "pairs": [],
+                }
+            else:
+                try:
+                    from scripts.alden_dpo_scorer import score_local_dpo_pairs
+                except ImportError:  # Direct execution: python scripts/auto_reply_finetune.py
+                    from alden_dpo_scorer import score_local_dpo_pairs
+
+                report["dpo"] = score_local_dpo_pairs(
+                    pairs,
+                    policy_dir=args.dpo_policy_dir,
+                    reference_dir=args.dpo_reference_dir,
+                    dpo_loss_fn=dpo_loss_from_logprobs,
+                )
+        else:
+            # 기존 게이트웨이 경로는 생성된 토큰 로그확률을 수집한다. 임의의 고정
+            # 응답 teacher forcing 채점과 구분하며 문자열 유사도로 대체하지 않는다.
+            report["dpo"] = build_dpo_report(
+                pairs_path=args.dpo_pairs.expanduser(),
+                base_url=args.dpo_base_url,
+                model=args.dpo_model or model,
+                ref_pairs_path=(
+                    args.dpo_ref_pairs.expanduser() if args.dpo_ref_pairs is not None else None
+                ),
+                max_tokens=args.dpo_max_tokens,
+                samples=args.dpo_samples,
+                tokenizer_id=args.dpo_model or model,
+            )
 
     report_path = data_dir / "finetune-report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1566,17 +1606,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"손실: {cmp_['baseline_loss']} → {cmp_['tuned_loss']} (개선 {cmp_['improved']})")
         if "dpo" in report:
             dpo = report["dpo"]
-            evaluation = dpo.get("evaluation") or {}
-            probe = dpo.get("scoring_probe") or {}
-            captured = dpo.get("capture") or {}
-            print(
-                f"DPO: {dpo.get('status')} · 수집 {captured.get('captured', 0)}쌍 · "
-                f"평가 {evaluation.get('evaluated', 0)} · 평가 불가 {evaluation.get('unavailable', 0)}"
-            )
-            print(
-                "  응답 문자열 채점 지원: "
-                f"{probe.get('supports_response_scoring')} ({probe.get('reason', '')})"
-            )
+            if dpo.get("scoring_method") == "mlx_direct_teacher_forcing":
+                print(
+                    f"DPO(local): {dpo.get('status')} · 평가 {dpo.get('evaluated', 0)} · "
+                    f"loss {dpo.get('mean_loss')}"
+                )
+            else:
+                evaluation = dpo.get("evaluation") or {}
+                probe = dpo.get("scoring_probe") or {}
+                captured = dpo.get("capture") or {}
+                print(
+                    f"DPO: {dpo.get('status')} · 수집 {captured.get('captured', 0)}쌍 · "
+                    f"평가 {evaluation.get('evaluated', 0)} · 평가 불가 {evaluation.get('unavailable', 0)}"
+                )
+                print(
+                    "  응답 문자열 채점 지원: "
+                    f"{probe.get('supports_response_scoring')} ({probe.get('reason', '')})"
+                )
     return 0
 
 
