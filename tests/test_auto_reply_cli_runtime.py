@@ -16001,7 +16001,10 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as send,
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous_status, queue)
+                    with mock.patch.object(
+                        module, "_operator_state_root", return_value=Path(temporary)
+                    ):
+                        module.process_job(job, previous_status, queue)
 
                 row = queue.execute(
                     """
@@ -16067,7 +16070,10 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as send,
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous_status, queue)
+                    with mock.patch.object(
+                        module, "_operator_state_root", return_value=Path(temporary)
+                    ):
+                        module.process_job(job, previous_status, queue)
                 row = queue.execute(
                     "SELECT status,decision,reason,category,reply FROM reply_jobs WHERE event_id=?",
                     (event["event_id"],),
@@ -16249,7 +16255,10 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as send,
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous_status, queue)
+                    with mock.patch.object(
+                        module, "_operator_state_root", return_value=Path(temporary)
+                    ):
+                        module.process_job(job, previous_status, queue)
                 row = queue.execute(
                     """
                     SELECT status,decision,reason,category,reply,
