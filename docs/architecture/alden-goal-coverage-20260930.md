@@ -19,8 +19,8 @@
 | 동시 DB writer/checkpoint | 독립 synthetic WAL 시험: 80 snapshots, 95 commits, 19 checkpoints, 실패/혼합 transaction 0 | 실제 생산 암호화 DB의 접근·경합 조건 |
 | DREAM-RSI / DPO | 공식 논문 분석과 기존 teacher-forced 실제 로그확률 scorer 근거 유지. alphaXiv PATH 없음, orx help 사용 가능 | 선호쌍 평가·독립 검증·실제 학습·모델 교체를 각각 검증. ln(2) 불변식은 품질 개선 근거가 아님 |
 | 디자인·README·Archify | voice/snapshot/search 새 흐름 deliver9/9 각각, browser bounds 검사와 실제 이미지 검토. 기존 8개 구조 검사 통과 | 설치 화면의 짧은 수정/재검토 루프. 구조 검사와 화면 검토를 구분 |
-| Git / CI / 산출물 / 설치 / 공개 배포 | code e03a678와fixture b987ad1 normalpush, b987ad1 원격5/5checks 성공. 로컬Python959/2skips, hosted959/70skips, 실패0. 0.1.6local설치및ZIP/sidecar/checksums준비 | PR #27 draft/main 미병합, 최종worker 미활성화. 공개 서명/공증은 Developer ID 및 workflow 필수 ALDEN_APPLE_* 6개 부재로 차단 |
+| Git / CI / 산출물 / 설치 / 공개 배포 | native codeeffa5c6 normalpush, 해당 원격CI4/4작업 성공. 로컬Python971/2skip·hosted971/73skip·실패0. 0.1.6설치29/29·resource26/26·ZIP29/29byte대조, 이전패키지보존 | PR #27 draft/main 미병합, 최종worker 미활성화. 공개 서명/공증은 Developer ID 및 workflow 필수 ALDEN_APPLE_* 6개 부재로 차단 |
 
 수치 비교에서 캐시와 다른 세션 부하를 통제하지 못한 표본은 인과적인 성능 개선으로 해석하지 않는다.
 스트림 최종 timing은 12개 요청 중 2개만 완료한 부분 표본이며, 전체 앱 CPU/GPU/전력과 음성 end-to-end는 미측정이다.
-공개 production release와 로컬 ad-hoc 설치는 별개의 전달 단계다. 최종 code e03a678와fixture b987ad1은 원격에 보존됐으며 b987ad1 CI가 성공했다. [정확한 CI 기록](alden-remote-ci-20260930.json)은 hosted 건너뜀 수를 포함한 범위를 명시한다. 전체 목표는 실제 음성·설치 창 검증과 생산 worker·공개 릴리즈 전달까지 계속 진행 중이다.
+공개 production release와 로컬 ad-hoc 설치는 별개의 전달 단계다. 최신 native codeeffa5c6와 [원격 CI](alden-native-audio-remote-ci-20260930.json)를 기준으로 읽고 e03a678 worker 후보 및 b987ad1 fixture 이력은 별도로 보존한다. Hosted 건너뜀 수는 로컬 검사와 다르다. 전체 목표는 실제 음성·설치 창 검증과 생산 worker·공개 릴리즈 전달까지 계속 진행 중이다.

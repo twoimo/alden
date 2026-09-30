@@ -11,7 +11,7 @@
 
 ## 최신 전달 상태
 
-- 22:02 KST 네이티브 오디오 후보: 기존 Python 안에 Swift C ABI의 단일 voice-processing 엔진을 연결하고, 처리된 연속 발화 3프레임으로 이전 재생/턴을 취소하는 경로를 구현했다. 집중 CI **971개/2 skip/실패0**, frontend **191**, desktop Rust **85** 통과. 설치 **29/29 파일·26/26 resource**, 단일 PID22050, ad-hoc 서명 검증. [현재 소스·하드웨어 범위](architecture/alden-native-audio-20260930.md)와 [설치 기록](architecture/alden-native-audio-install-20260930.json)을 기준으로 읽는다. 이 후보의 커밋·푸시와 원격 CI는 아래 과거 판본과 별도로 진행한다.
+- 22:17 KST 네이티브 코드 **effa5c629955093dc64f7370295e789422783ad4**를 normal push하고 [원격 CI36719629616](https://github.com/twoimo/openkakao-bot/actions/runs/36719629616)의 **4/4 작업 성공**을 확인했다. Hosted Python은 971개/73 skip/실패0이고 로컬 pinned 환경은 971개/2 skip/실패0이다. frontend191·desktop Rust85도 통과했다. 설치29/29 파일·26/26 resource·단일PID22050·ad-hoc 서명 및 ZIP29/29 바이트 대조를 확인했다. [오디오 범위](architecture/alden-native-audio-20260930.md), [설치](architecture/alden-native-audio-install-20260930.json), [원격 기록](architecture/alden-native-audio-remote-ci-20260930.json)을 기준으로 읽는다. 이전 패키지는 ignored dist/alden-0.1.6-local-history에 보존했으며, 이하 이전 판본의 관측은 시간순 이력이다.
 - 코드 판본은 `e03a678`, fixture 격리 후 원격 판본은 `b987ad151e97010411f346e2c0aec34839551eba`다. [PR #27](https://github.com/twoimo/openkakao-bot/pull/27)은 draft이며 main merge와 공개 release는 아직 수행하지 않았다.
 - [원격 CI 36706854755](https://github.com/twoimo/openkakao-bot/actions/runs/36706854755)는 성공했고, 해당 SHA의 보안 검사까지 **5/5 성공**이다. Hosted Python은 959개 실행, 70개 건너뜀, 실패 0이다. 로컬 전체 의존성 환경의 959개/2개 건너뜀과 구분한다.
 - Alden 0.1.6 로컬 설치, 28/28 bundle 파일 및 25/25 resource 대조, 27B 한국어 후속질문과 설치된 Python browser entrypoint의 공개 title 1건은 검증됐다. 네이티브 CUA inventory 재조회도 30초 timeout으로 실패해 설치 화면·물리 단축키·마이크의 증거를 추가하지 못했다.
@@ -52,7 +52,7 @@
 3. 검증된 wake 모델, 메모리 admission과 독립적인 재생 에코/끼어들기 경로를 갖춘 뒤 실제 음성 턴을 검증한다. 기존 공유 서비스나 다른 세션을 중단하여 조건을 만들지 않는다.
 4. 기존 서명/공증 prerequisites가 제공되면 정상 PR/CI/main/release 흐름과 산출물·설치·production 버전 대조를 마무리한다.
 
-22:02 KST 추가: native 오디오 변경을 커밋·푸시하고 해당 원격 SHA의 CI와 로컬 ZIP/manifest를 대조한다. 사람이 발화할 수 있는 시점에 8초 기준음 시험을 수행한다. 원음/발화 내용은 저장하지 않으며, 기존 모델 gate를 우회하지 않는다.
+22:17 KST 추가: native 코드effa5c6의 커밋·푸시·원격CI·설치·ZIP대조를 마쳤다. 전달 기록의 마지막 문서 커밋과 asset checksum을 정리한다. 사람이 발화할 수 있는 시점에 8초 기준음 시험을 수행한다. 원음/발화 내용은 저장하지 않으며 기존 모델 gate를 우회하지 않는다.
 
 ## 병렬 담당 (2026-09-30 사용자 추가 지침)
 
