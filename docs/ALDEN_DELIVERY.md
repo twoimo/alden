@@ -1,12 +1,23 @@
 # Alden 전달 진행 기록
 
-목표 원문: `/Users/twoimo/.codex/attachments/576db5bd-37d1-4ab4-853a-fb1cf0803774/goal-objective.md`.
+최신 목표 원문: `/Users/twoimo/.codex/attachments/ba814151-0eb9-40ae-9f7f-cbdf53d734b7/goal-objective.md`.
+이전 목표 원문 `576db5bd-37d1-4ab4-853a-fb1cf0803774`의 미디어 수정과 기존 보존 조건도 이어간다.
 2026-09-30 작업 기준: PR #27의 `74149a41b6c86ead9a1a2794bd1e5c1c2fadfb98`에서
 `codex/alden-delivery-20260930` 분기. 원래 작업 폴더는 main `8012f90`의 깨끗한 detached checkout이었다.
 다른 checkout의 `ed.hup`, 실행 중인 카카오 세션과 전송 큐는 보존한다.
 
 단계는 **미착수 / 구현 / 실제 실행 검증 / 전달 완료**로 기록한다. 테스트 통과는 실제 실행 검증과 별개다.
 과거 문서의 결과는 날짜와 실행 범위가 일치할 때만 재사용한다. 전체 목표는 계속 진행 중이다.
+
+## 최신 전달 상태
+
+- 코드 판본은 `e03a678`, fixture 격리 후 원격 판본은 `b987ad151e97010411f346e2c0aec34839551eba`다. [PR #27](https://github.com/twoimo/openkakao-bot/pull/27)은 draft이며 main merge와 공개 release는 아직 수행하지 않았다.
+- [원격 CI 36706854755](https://github.com/twoimo/openkakao-bot/actions/runs/36706854755)는 성공했고, 해당 SHA의 보안 검사까지 **5/5 성공**이다. Hosted Python은 959개 실행, 70개 건너뜀, 실패 0이다. 로컬 전체 의존성 환경의 959개/2개 건너뜀과 구분한다.
+- Alden 0.1.6 로컬 설치, 28/28 bundle 파일 및 25/25 resource 대조, 27B 한국어 후속질문과 설치된 Python browser entrypoint의 공개 title 1건은 검증됐다. 네이티브 CUA inventory 재조회도 30초 timeout으로 실패해 설치 화면·물리 단축키·마이크의 증거를 추가하지 못했다.
+- 최종 worker 후보 `e03a678`은 독립 scoped Astra 검토와 20개 자산/18개 소스 hash 대조를 마쳤다. 기존 타세션 runtime `20260930T0650Z-termination-74149a4`는 유지한다. 큐와 3개 방을 보존한 교체 허가를 요청했으며 아직 답변을 받지 않았다.
+- TTS 재생 중 microphone frame은 무시된다. **재생 중 음성 끼어들기는 미구현**이며 fake cancellation 통과를 그 기능의 성공으로 해석하지 않는다. `RELEASED_WAKE_MODEL=None`과 swap-free 2GiB admission 미달도 실제 음성 실행을 막는다.
+- 공개 릴리즈는 Developer ID Application 인증서와 기존 workflow의 필수 `ALDEN_APPLE_*` 6개 secrets 부재로 차단된다. 로컬 ad-hoc ZIP/CPython sidecar/manifest/SHA256SUMS는 준비됐다. 후보 worker 활성화, main merge, 공개 서명·공증 릴리즈를 전달 완료로 표기하지 않는다.
+- 아래 관측은 시간순 이력이며, 중간 SHA의 CI·후보·설치는 최신 판본의 근거로 대체하지 않는다.
 
 | 요구사항 | 현재 단계 | 근거 / 다음 확인 |
 | --- | --- | --- |
@@ -24,7 +35,7 @@
 | alphaXiv·DREAM-RSI·독립 평가·실제 DPO 로그확률 | 구현 | 논문/CLI 분석과 teacher-forced scorer 있음. 선호쌍·독립 검증·학습/모델 교체를 구분하고 실제 실행 증거 점검 필요. |
 | 동일 조건 기준선·수치 목표·회귀·CPU/GPU/전력 | 구현 | 27B 동일 case 12×2, stream smoke3 및 final2/12, 취소2경계·실snapshot1·render hidden관측. 공유 캐시/부하 통제 불가. 전체 앱 CPU/GPU/전력과 음성 end-to-end는 미측정. |
 | README·실제 캡처·구현에 맞는 6개 Archify 흐름 | 구현 | 기존 9개 다이어그램 점검 후 바뀐 경로만 갱신. 화면 캡처를 직접 검토해야 시각 검증으로 기록. |
-| 커밋·푸시·PR·릴리즈 산출물·설치·프로덕션 대조 | 실제 실행 검증(일부) | source8ceeea8/graph11bfae7 push·해당 SHA CI 성공,0.1.6 local ZIP+runtime+설치28/28. 최종 미디어/문서 전달과 해당SHA CI 진행. 공개 서명6credentials 부재, 기존 타세션 worker 미교체. |
+| 커밋·푸시·PR·릴리즈 산출물·설치·프로덕션 대조 | 실제 실행 검증(일부) | code e03a678/fixture b987ad1 push, 원격5/5checks 성공. 0.1.6 local ZIP+runtime+설치28/28. PR draft/main 미병합, 공개 서명6credentials 부재, 기존 타세션 worker 미교체. |
 
 ## 이번 작업의 관측
 
@@ -35,10 +46,10 @@
 
 ## 다음 작업
 
-1. 사진·링크·파일출처/후속맥락수정과freeze candidate준비. 검색최종API경계와실E5평가는완료.
-2. 미디어file/quote후속맥락 최종독립검토와집중CI, normalpush/해당SHACI.
-3. 0.1.6설치/backend/browser실행은완료. native화면과물리중단은CUA환경복구후검증.
-4. 정상 PR/CI 전달, 공개 서명·공증 자격 증명 차단을 정확히 기록.
+1. 기존 타세션 worker 교체 허가가 도착하면 최신 큐/불명 전송을 읽어 확인하고, 최종 후보의 생산 경로 준비·안전 종료·활성화·3개 방 readback을 수행한다.
+2. 컴퓨터 제어 연결 복구 후 설치 화면, 창 숨김/복원과 물리 비상 중단을 검증한다. 같은 timeout을 계속 재시도하지 않는다.
+3. 검증된 wake 모델, 메모리 admission과 독립적인 재생 에코/끼어들기 경로를 갖춘 뒤 실제 음성 턴을 검증한다. 기존 공유 서비스나 다른 세션을 중단하여 조건을 만들지 않는다.
+4. 기존 서명/공증 prerequisites가 제공되면 정상 PR/CI/main/release 흐름과 산출물·설치·production 버전 대조를 마무리한다.
 
 ## 병렬 담당 (2026-09-30 사용자 추가 지침)
 
