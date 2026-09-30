@@ -1447,6 +1447,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--test-batches", type=int, default=4)
     parser.add_argument("--json", action="store_true", help="결과를 JSON으로 출력")
     parser.add_argument("--dpo-pairs", type=Path, default=None, help="선호 쌍 JSONL 경로")
+    parser.add_argument("--model-evaluation-dataset", type=Path, default=None,
+                        help="train/validation/test가 분리된 검증 선호 쌍 JSON")
+    parser.add_argument("--evaluation-version", default=None, help="평가 대상 제품 버전")
+    parser.add_argument("--evaluation-root", type=Path, default=None, help="private 버전 평가 receipt 경로")
+    parser.add_argument("--evaluation-final-test", action="store_true", help="최종 held-out test를 명시적으로 평가")
+    parser.add_argument("--evaluation-deadline", type=float, default=120)
+    parser.add_argument("--dpo-beta", type=float, default=0.1)
     parser.add_argument(
         "--dpo-ref-pairs",
         type=Path,
@@ -1484,7 +1491,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.model_evaluation_dataset is not None:
+        if (args.train or args.evaluate or args.prepare_only or args.dpo_pairs is not None
+                or args.dpo_capture or args.dpo_score_local):
+            parser.error("version evaluation cannot be mixed with training, preparation or legacy DPO modes")
+        if args.evaluation_version is None or args.evaluation_root is None:
+            parser.error("version evaluation requires --evaluation-version and --evaluation-root")
+        try:
+            from scripts.alden_model_evaluation import run_cli
+        except ImportError:
+            from alden_model_evaluation import run_cli
+        return run_cli(args)
+    if args.evaluation_version is not None or args.evaluation_root is not None or args.evaluation_final_test:
+        parser.error("version evaluation options require --model-evaluation-dataset")
     state_root = (args.state_root or _default_state_root()).expanduser()
     golden = (args.golden or _default_golden(state_root)).expanduser()
     data_dir = (args.data_dir or state_root / "finetune" / "data").expanduser()

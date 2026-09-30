@@ -18,6 +18,29 @@ if ! (cd "$ROOT" && shasum -a 256 -c scripts/menubar-bytecode.sha256); then
   exit 2
 fi
 
+# Explicit local evaluation settings make each changed source/model/dataset
+# version run once. No evaluator, download or training starts by default.
+if [ -n "${ALDEN_EVALUATION_DATASET:-}" ]; then
+  : "${ALDEN_EVALUATION_PYTHON:?pinned evaluation Python is required}"
+  : "${ALDEN_EVALUATION_POLICY_DIR:?local policy checkpoint is required}"
+  : "${ALDEN_EVALUATION_REFERENCE_DIR:?local reference checkpoint is required}"
+  : "${ALDEN_EVALUATION_ROOT:?private evaluation root is required}"
+  : "${ALDEN_EVALUATION_CHECKPOINT_FORMAT:?explicit checkpoint format is required}"
+  EVALUATION_VERSION=$("$ALDEN_EVALUATION_PYTHON" -c \
+    'import json,sys; print(json.load(open(sys.argv[1]))["version"])' \
+    "$DESKTOP/src-tauri/tauri.conf.json")
+  set -- "$ALDEN_EVALUATION_PYTHON" "$ROOT/scripts/auto_reply_finetune.py" \
+    --model-evaluation-dataset "$ALDEN_EVALUATION_DATASET" \
+    --evaluation-version "$EVALUATION_VERSION" --evaluation-root "$ALDEN_EVALUATION_ROOT" \
+    --dpo-policy-dir "$ALDEN_EVALUATION_POLICY_DIR" \
+    --dpo-reference-dir "$ALDEN_EVALUATION_REFERENCE_DIR" \
+    --dpo-checkpoint-format "$ALDEN_EVALUATION_CHECKPOINT_FORMAT" --json
+  if [ -n "${ALDEN_EVALUATION_STATE_ROOT:-}" ]; then
+    set -- "$@" --state-root "$ALDEN_EVALUATION_STATE_ROOT"
+  fi
+  "$@"
+fi
+
 /bin/sh "$ROOT/scripts/build-alden-voice-audio.sh"
 
 (
