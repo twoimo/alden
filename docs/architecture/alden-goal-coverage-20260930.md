@@ -1,5 +1,8 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
+2026-10-01 최신 네이티브 검증: 소스 `4838fff`의 Alden 0.1.6을 설치했고 **30/30 파일·27/27 리소스**가 일치했다. 설치 바이너리의 별도 WKWebView 인스턴스에서 실제 코어 이미지를 확인하고 **10회 × 350ms 숨김 추가 프레임 0**, 복원 3–4프레임/250ms를 관측했다. 숨김 요청→중단 확인 상한 median **14.622ms**, max **28.442ms**(n=10)다. [화면·측정·범위](alden-native-render-20261001.md)와 [Archify](alden-native-render-20261001.html)를 제공한다. 물리 화면은 [1.0]뿐이므로 Retina, 확장 설정, 상시 PID의 현재 화면, OS 잠금, 물리 단축키와 음성·생산·공개 서명 릴리즈는 미완료다. 기존 기록은 각 당시 결과로 보존한다.
+
+
 2026-10-01 학습 추가: [실제27B 오프라인 DPO](alden-dpo-training-20261001.md)는 합성 train3쌍의 실제 업데이트3회·private adapter 저장·새 base 재로딩·adapter별 validation/cache를 검증했다. 최종학습37.907초, 별도평가24.809초/cache8.899초 각1회·network0·원본SHA/공유124→124/swap 유지. 집중126·필수1054/26skip/실패0. 평균손실 변화와 validation1문항 악화를 공개하며 최종test·대화정확성·검색·제품지연/메모리·promotion은 미완료다. 아래의 과거 “실제 DPO 학습 미완료”는 당시 판본의 기록이다. 전체11항목 목표는 계속 진행 중이다.
 
 2026-10-01 평가 추가: [버전별 오프라인 validation과 빌드 hook](alden-version-evaluation-20261001.md), actual27B first24.772초/cache8.567초 각1회·load1→0·network0, 필수1040/17skip/실패0·독립source검토·network-deny 실제 앱build 성공. 아래 Sep30 표는 이력이다. 실제 DPO 학습·제품 promotion·설치 상주 평가·음성/nativeUI/공개 signed release는 미완료다.
