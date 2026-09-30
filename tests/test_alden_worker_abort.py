@@ -179,6 +179,310 @@ class AldenWorkerAbortTests(unittest.TestCase):
                 with self.assertRaises(module.AldenCancelled):
                     module._capture_job_abort_token()
 
+    def test_managed_send_relays_original_abort_epoch_and_root_to_both_children(self):
+        module = self.worker
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = self._abort_root(base)
+            token = module.AbortController(root).token()
+            binary = base / "openkakao-cli"
+            binary.write_text("fake", encoding="utf-8")
+            queue = base / "state" / "queue.json"
+            queue.parent.mkdir(mode=0o700)
+            calls: list[tuple[list[str], dict[str, str]]] = []
+
+            def fake_process(command, **kwargs):
+                calls.append((list(command), dict(kwargs["env"])))
+                if "--preflight" in command:
+                    payload = {
+                        "status": "preflight_ready",
+                        "preflight_ready": True,
+                        "will_send": False,
+                        "network": False,
+                    }
+                    return 0, json.dumps(payload).encode("utf-8"), b""
+                return 1, b"{}", b""
+
+            event = {
+                "message": "hello",
+                "author_id": 42,
+                "author_nickname": "friend",
+                "log_id": 10,
+            }
+            with (
+                mock.patch.object(module, "BIN", binary),
+                mock.patch.object(module, "QUEUE", queue),
+                mock.patch.object(module, "_WORKER_HEALTH", None),
+                mock.patch.object(module, "_outbound_reaction_allows", return_value=True),
+                mock.patch.object(module, "_outbound_question_allows", return_value=True),
+                mock.patch.object(module, "_outbound_register_allows", return_value=True),
+                mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                mock.patch.object(module, "send_readiness_fence", return_value=(True, "fence")),
+                mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
+                mock.patch.object(module, "_pre_mutation_send_hold", return_value=None),
+                mock.patch.object(module, "_run_bounded_process", side_effect=fake_process),
+                mock.patch.dict(
+                    os.environ,
+                    {"OPENKAKAO_HOOK_DRY_RUN": "0", "OPENKAKAO_DB_MODE": ""},
+                    clear=False,
+                ),
+                module._active_job_abort_token(token),
+            ):
+                self.assertFalse(
+                    module.send_reply(
+                        "reply",
+                        event=event,
+                        expected_target_chat_id=7,
+                        expected_owner="worker",
+                        expected_epoch=1,
+                    )
+                )
+
+            self.assertEqual(len(calls), 2)
+            self.assertIn("--preflight", calls[0][0])
+            self.assertNotIn("--preflight", calls[1][0])
+            for _, environment in calls:
+                self.assertEqual(
+                    environment["OPENKAKAO_ALDEN_ABORT_STATE_ROOT"], str(root)
+                )
+                self.assertEqual(
+                    environment["OPENKAKAO_ALDEN_ABORT_EPOCH"],
+                    str(token.captured_epoch),
+                )
+            self.assertEqual(
+                calls[0][1]["OPENKAKAO_ALDEN_ABORT_EPOCH"],
+                calls[1][1]["OPENKAKAO_ALDEN_ABORT_EPOCH"],
+            )
+
+    def test_stop_resume_old_token_refuses_send_without_recapture_or_child(self):
+        module = self.worker
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = self._abort_root(base)
+            controller = module.AbortController(root)
+            token = controller.token()
+            controller.abort("race_test")
+            controller.resume_after_human_action()
+            binary = base / "openkakao-cli"
+            binary.write_text("fake", encoding="utf-8")
+            queue = base / "state" / "queue.json"
+            queue.parent.mkdir(mode=0o700)
+            event = {
+                "message": "hello",
+                "author_id": 42,
+                "author_nickname": "friend",
+                "log_id": 10,
+            }
+            previous = getattr(module._ACTIVE_ABORT_TOKEN, "value", None)
+            module._ACTIVE_ABORT_TOKEN.value = token
+            try:
+                with (
+                    mock.patch.object(module, "BIN", binary),
+                    mock.patch.object(module, "QUEUE", queue),
+                    mock.patch.object(module, "_WORKER_HEALTH", None),
+                    mock.patch.object(module, "_outbound_reaction_allows", return_value=True),
+                    mock.patch.object(module, "_outbound_question_allows", return_value=True),
+                    mock.patch.object(module, "_outbound_register_allows", return_value=True),
+                    mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                    mock.patch.object(module, "send_readiness_fence", return_value=(True, "fence")),
+                    mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
+                    mock.patch.object(module, "_capture_job_abort_token") as capture,
+                    mock.patch.object(module, "_run_bounded_process") as process,
+                    mock.patch.dict(
+                        os.environ,
+                        {"OPENKAKAO_HOOK_DRY_RUN": "0", "OPENKAKAO_DB_MODE": ""},
+                        clear=False,
+                    ),
+                ):
+                    with self.assertRaises(module.AldenCancelled):
+                        module.send_reply(
+                            "reply",
+                            event=event,
+                            expected_target_chat_id=7,
+                            expected_owner="worker",
+                            expected_epoch=1,
+                        )
+                capture.assert_not_called()
+                process.assert_not_called()
+            finally:
+                module._ACTIVE_ABORT_TOKEN.value = previous
+
+    def test_no_active_abort_token_preserves_local_send_legacy_environment(self):
+        module = self.worker
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            binary = base / "openkakao-cli"
+            binary.write_text("fake", encoding="utf-8")
+            queue = base / "state" / "queue.json"
+            queue.parent.mkdir(mode=0o700)
+            environments: list[dict[str, str]] = []
+
+            def fake_process(command, **kwargs):
+                environments.append(dict(kwargs["env"]))
+                if "--preflight" in command:
+                    payload = {
+                        "status": "preflight_ready",
+                        "preflight_ready": True,
+                        "will_send": False,
+                        "network": False,
+                    }
+                    return 0, json.dumps(payload).encode("utf-8"), b""
+                return 1, b"{}", b""
+
+            event = {
+                "message": "hello",
+                "author_id": 42,
+                "author_nickname": "friend",
+                "log_id": 10,
+            }
+            with (
+                mock.patch.object(module, "BIN", binary),
+                mock.patch.object(module, "QUEUE", queue),
+                mock.patch.object(module, "_WORKER_HEALTH", None),
+                mock.patch.object(module, "_outbound_reaction_allows", return_value=True),
+                mock.patch.object(module, "_outbound_question_allows", return_value=True),
+                mock.patch.object(module, "_outbound_register_allows", return_value=True),
+                mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                mock.patch.object(module, "send_readiness_fence", return_value=(True, "fence")),
+                mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
+                mock.patch.object(module, "_pre_mutation_send_hold", return_value=None),
+                mock.patch.object(module, "_run_bounded_process", side_effect=fake_process),
+                mock.patch.dict(
+                    os.environ,
+                    {"OPENKAKAO_HOOK_DRY_RUN": "0", "OPENKAKAO_DB_MODE": ""},
+                    clear=False,
+                ),
+            ):
+                self.assertFalse(
+                    module.send_reply(
+                        "reply",
+                        event=event,
+                        expected_target_chat_id=7,
+                        expected_owner="worker",
+                        expected_epoch=1,
+                    )
+                )
+
+            self.assertEqual(len(environments), 2)
+            for environment in environments:
+                self.assertNotIn("OPENKAKAO_ALDEN_ABORT_STATE_ROOT", environment)
+                self.assertNotIn("OPENKAKAO_ALDEN_ABORT_EPOCH", environment)
+
+    def test_invalid_active_abort_token_path_or_epoch_fails_closed(self):
+        module = self.worker
+        previous = getattr(module._ACTIVE_ABORT_TOKEN, "value", None)
+        try:
+            module._ACTIVE_ABORT_TOKEN.value = object()
+            with self.assertRaises(module.AldenCancelled):
+                module._local_send_abort_relay_environment()
+
+            with tempfile.TemporaryDirectory() as temporary:
+                root = self._abort_root(Path(temporary))
+                token = module.AbortController(root).token()
+                token.path = Path("relative") / "alden-abort.json"
+                module._ACTIVE_ABORT_TOKEN.value = token
+                with self.assertRaises(module.AldenCancelled):
+                    module._local_send_abort_relay_environment()
+
+                token = module.AbortController(root).token()
+                token._epoch = 0.5
+                module._ACTIVE_ABORT_TOKEN.value = token
+                with self.assertRaises(module.AldenCancelled):
+                    module._local_send_abort_relay_environment()
+        finally:
+            module._ACTIVE_ABORT_TOKEN.value = previous
+
+    def test_operator_state_root_uses_legacy_default_when_only_legacy_enrolled(self):
+        module = self.worker
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            legacy = home / "Library" / "Application Support" / "openkakao" / "bujamentor"
+            legacy.mkdir(parents=True)
+            (legacy / "enrollment.json").write_text("{}", encoding="utf-8")
+            with (
+                mock.patch.object(module.Path, "home", return_value=home),
+                mock.patch.dict(os.environ, {}, clear=True),
+            ):
+                self.assertEqual(module._operator_state_root(), legacy)
+
+    def test_native_pre_send_unavailable_returns_sending_row_to_processing(self):
+        module = self.worker
+        event = {
+            "message": "hello",
+            "author_id": 42,
+            "author_nickname": "friend",
+            "log_id": 10,
+        }
+        connection = self._queue_connection(event, status="processing", reply="reply")
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = self._abort_root(base)
+            token = module.AbortController(root).token()
+            binary = base / "openkakao-cli"
+            binary.write_text("fake", encoding="utf-8")
+            queue = base / "state" / "queue.json"
+            queue.parent.mkdir(mode=0o700)
+            calls: list[list[str]] = []
+
+            def fake_process(command, **_kwargs):
+                calls.append(list(command))
+                if "--preflight" in command:
+                    payload = {
+                        "status": "preflight_ready",
+                        "preflight_ready": True,
+                        "will_send": False,
+                        "network": False,
+                    }
+                    return 0, json.dumps(payload).encode("utf-8"), b""
+                payload = {
+                    "chat_name": module.CHAT,
+                    "status": "pre_send_unavailable",
+                    "mutation_started": False,
+                    "confirmed": False,
+                    "network": False,
+                }
+                return 0, json.dumps(payload).encode("utf-8"), b""
+
+            with (
+                mock.patch.object(module, "BIN", binary),
+                mock.patch.object(module, "QUEUE", queue),
+                mock.patch.object(module, "_WORKER_HEALTH", None),
+                mock.patch.object(module, "_outbound_reaction_allows", return_value=True),
+                mock.patch.object(module, "_outbound_question_allows", return_value=True),
+                mock.patch.object(module, "_outbound_register_allows", return_value=True),
+                mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                mock.patch.object(module, "send_readiness_fence", return_value=(True, "fence")),
+                mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
+                mock.patch.object(module, "_pre_mutation_send_hold", return_value=None),
+                mock.patch.object(module, "_journal_checkpoint"),
+                mock.patch.object(module, "_append_semantic_job_transitions"),
+                mock.patch.object(module, "_append_job_transition"),
+                mock.patch.object(module, "_run_bounded_process", side_effect=fake_process),
+                mock.patch.dict(
+                    os.environ,
+                    {"OPENKAKAO_HOOK_DRY_RUN": "0", "OPENKAKAO_DB_MODE": ""},
+                    clear=False,
+                ),
+                module._active_job_abort_token(token),
+            ):
+                self.assertFalse(
+                    module.send_reply(
+                        "reply",
+                        event=event,
+                        event_id="event-1",
+                        connection=connection,
+                        expected_target_chat_id=7,
+                        expected_owner="worker",
+                        expected_epoch=1,
+                    )
+                )
+
+            self.assertEqual(len(calls), 2)
+            row = connection.execute(
+                "SELECT status FROM reply_jobs WHERE event_id = 'event-1'"
+            ).fetchone()
+            self.assertEqual(row["status"], "processing")
+
     def test_abort_in_preflight_send_gap_never_launches_local_send(self):
         module = self.worker
         with tempfile.TemporaryDirectory() as temporary:

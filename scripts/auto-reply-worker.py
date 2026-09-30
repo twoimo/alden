@@ -68,7 +68,14 @@ _SEND_PREFLIGHT_DIAGNOSTIC_ROOMS: set[tuple[str, str]] = set()
 import auto_reply_ondevice
 import auto_reply_metrics as perf
 import auto_reply_transition_journal as transition_journal
-from alden_abort import AldenCancelled, AbortController, AbortToken, read_abort_state
+from alden_abort import (
+    ABORT_MAX_EPOCH,
+    ABORT_STATE_NAME,
+    AldenCancelled,
+    AbortController,
+    AbortToken,
+    read_abort_state,
+)
 from auto_reply_ondevice import (
     FLASH_NEXT_IQ_MODEL_ID,
     FLASH_NEXT_MODEL_ID,
@@ -603,6 +610,43 @@ def _raise_if_job_aborted() -> None:
     token = _active_abort_token()
     if token is not None:
         token.raise_if_cancelled()
+
+
+def _local_send_abort_relay_environment() -> dict[str, str]:
+    """Relay the exact managed-job abort token into local-send children."""
+    token = getattr(_ACTIVE_ABORT_TOKEN, "value", None)
+    if token is None:
+        return {}
+    if not isinstance(token, AbortToken):
+        raise AldenCancelled("alden_abort_relay_invalid_token")
+
+    token.raise_if_cancelled()
+    path = token.path
+    epoch = token.captured_epoch
+    if (
+        not isinstance(path, Path)
+        or not path.is_absolute()
+        or path.name != ABORT_STATE_NAME
+        or isinstance(epoch, bool)
+        or not isinstance(epoch, int)
+        or epoch < 0
+        or epoch > ABORT_MAX_EPOCH
+    ):
+        raise AldenCancelled("alden_abort_relay_invalid_token")
+    state_root = path.parent
+    try:
+        if not state_root.exists():
+            raise AldenCancelled("alden_abort_relay_invalid_token")
+    except OSError as exc:
+        raise AldenCancelled("alden_abort_relay_invalid_token") from exc
+
+    # Re-check the captured token immediately before materializing the relay.
+    # A stop/resume race must never substitute the newly persisted epoch.
+    token.raise_if_cancelled()
+    return {
+        "OPENKAKAO_ALDEN_ABORT_STATE_ROOT": str(state_root),
+        "OPENKAKAO_ALDEN_ABORT_EPOCH": str(epoch),
+    }
 
 
 def _journal_source_epoch(event: dict | None) -> int | None:
@@ -11665,20 +11709,29 @@ def _operator_state_root() -> Path:
             or (path / "rooms").is_dir()
         )
 
-    raw = os.environ.get(
+    for variable in (
         "OPENKAKAO_AUTO_REPLY_STATE_ROOT",
-        os.environ.get("OPENKAKAO_BUJAMENTOR_STATE_ROOT", ""),
-    ).strip()
-    if raw:
-        candidate = Path(raw)
-        if _looks_like_state_root(candidate):
-            return candidate
-    parent = STATE.resolve().parent
-    if parent.name.isdigit() and parent.parent.name == "rooms":
-        return parent.parent.parent
-    if _looks_like_state_root(parent):
-        return parent
-    return parent
+        "OPENKAKAO_BUJAMENTOR_STATE_ROOT",
+    ):
+        raw = os.environ.get(variable, "").strip()
+        if raw:
+            candidate = Path(raw)
+            if _looks_like_state_root(candidate):
+                return candidate
+
+    if os.environ.get("OPENKAKAO_REPLY_STATE", "").strip():
+        parent = STATE.resolve().parent
+        if parent.name.isdigit() and parent.parent.name == "rooms":
+            return parent.parent.parent
+        if _looks_like_state_root(parent):
+            return parent
+
+    support = Path.home() / "Library" / "Application Support" / "openkakao"
+    modern = support / "auto-reply"
+    legacy = support / "bujamentor"
+    if (modern / "enrollment.json").is_file() or not (legacy / "enrollment.json").is_file():
+        return modern
+    return legacy
 
 
 def _capture_job_abort_token() -> AbortToken:
@@ -14124,6 +14177,7 @@ def send_reply(
         "--no-prefix",
         "--preflight",
     ]
+    abort_relay_environment = _local_send_abort_relay_environment()
     worker_environment = {
         "HOME": str(Path.home()),
         "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
@@ -14187,6 +14241,7 @@ def send_reply(
             "OPENKAKAO_PRIVACY_ATTESTATION", ""
         ),
         "OPENKAKAO_COMPOSER_ALLOWLIST": str(composer_allowlist_path),
+        **abort_relay_environment,
     }
     preflight = None
     preflight_returncode: object = None

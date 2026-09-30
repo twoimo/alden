@@ -363,6 +363,10 @@ class AbortToken:
         if initial.latched:
             self._local.set()
 
+    @property
+    def captured_epoch(self) -> int:
+        return self._epoch
+
     def cancel(self) -> None:
         self._local.set()
 

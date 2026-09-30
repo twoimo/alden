@@ -19,10 +19,12 @@ A read-only aggregate preflight using the **existing enrollment's three `bind:` 
 
 The local one-shot helper and private raw preflight output remain under `/private/tmp/`; they contain operational identities and are not published. The [public receipt](alden-queue-reconciliation-20260930.json) contains only aggregate metadata.
 
-## Runtime is still failing
+## Runtime recovery and remaining risks
 
 The initial readback found all three supervisors stopped for about 48 hours. The existing watchdog was `circuit_open/preflight_failed` after **552 consecutive failures**, blocked by the unresolved `sending` row.
 
-After reconciliation, that watchdog automatically passed its prior startup gate and attempted its existing restart policy. Readback observed it alternate between `running` and `circuit_open/child_exited`; the public receipt still found **0/3 reply-ready supervisor records**. Database-watch logs contain SQLite lock contention, source-change rejection during isolated copying, and `reconcile_required:delivery_ack_uncertain`. These require separate diagnosis and correction; the repair does **not** prove live reply recovery or a lower skip rate.
+After reconciliation, that watchdog automatically passed its prior startup gate and attempted its existing restart policy. The initial readback observed it alternate between `running` and `circuit_open/child_exited`, with **0/3 reply-ready supervisor records**. Database-watch logs contain SQLite lock contention, source-change rejection during isolated copying, and `reconcile_required:delivery_ack_uncertain`.
+
+It subsequently recovered. **Four readbacks over 76.227 seconds** all reported the stable host's `healthy=true`, exit code zero, and **3/3 running, ready supervisors** with fresh status files. The public receipt preserves both the initial failure and this final bounded observation. No test message or new watchdog was started by the parent. This restores the observed service readiness; it does **not** establish lower skip rates, reply quality, future uptime, or the absence of the earlier lock/ACK failure paths.
 
 The newly committed Python abort integration and the Rust send fence under review have not been activated in the immutable production worker runtime. The historical 2026-09-27 `3/3 ready` observations elsewhere in the README are dated evidence, not current health.

@@ -78,5 +78,182 @@
     "The older immutable runtime remains active; current Python/Rust abort source is not deployed.",
     "This readback does not establish reply latency or skip-rate improvement."
   ],
-  "privacy": "No chat IDs, names, log IDs, message bodies, reply bodies, or author identities included."
+  "privacy": "No chat IDs, names, log IDs, message bodies, reply bodies, or author identities included.",
+  "restoration_readback": {
+    "schema_version": 1,
+    "status": "healthy",
+    "elapsed_seconds": 76.227,
+    "samples": [
+      {
+        "observed_at_utc": "2026-09-30T04:34:53.630815+00:00",
+        "offset_seconds": 0.263,
+        "host_exit_code": 0,
+        "host_healthy": true,
+        "room_count": 3,
+        "ready_room_count": 3,
+        "rooms": [
+          {
+            "room_index": 1,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.461,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 2,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.847,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 3,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.698,
+            "model_available": null,
+            "fence_reason": ""
+          }
+        ],
+        "watchdog": {
+          "state": "running",
+          "reason": "",
+          "attempt": 561,
+          "restart_count": 6,
+          "consecutive_failures": 557
+        }
+      },
+      {
+        "observed_at_utc": "2026-09-30T04:35:18.899120+00:00",
+        "offset_seconds": 25.595,
+        "host_exit_code": 0,
+        "host_healthy": true,
+        "room_count": 3,
+        "ready_room_count": 3,
+        "rooms": [
+          {
+            "room_index": 1,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.438,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 2,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.83,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 3,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.714,
+            "model_available": null,
+            "fence_reason": ""
+          }
+        ],
+        "watchdog": {
+          "state": "running",
+          "reason": "",
+          "attempt": 561,
+          "restart_count": 6,
+          "consecutive_failures": 557
+        }
+      },
+      {
+        "observed_at_utc": "2026-09-30T04:35:44.229520+00:00",
+        "offset_seconds": 50.916,
+        "host_exit_code": 0,
+        "host_healthy": true,
+        "room_count": 3,
+        "ready_room_count": 3,
+        "rooms": [
+          {
+            "room_index": 1,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.471,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 2,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 1.754,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 3,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.81,
+            "model_available": null,
+            "fence_reason": ""
+          }
+        ],
+        "watchdog": {
+          "state": "running",
+          "reason": "",
+          "attempt": 561,
+          "restart_count": 6,
+          "consecutive_failures": 557
+        }
+      },
+      {
+        "observed_at_utc": "2026-09-30T04:36:09.550868+00:00",
+        "offset_seconds": 76.227,
+        "host_exit_code": 0,
+        "host_healthy": true,
+        "room_count": 3,
+        "ready_room_count": 3,
+        "rooms": [
+          {
+            "room_index": 1,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.448,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 2,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.716,
+            "model_available": null,
+            "fence_reason": ""
+          },
+          {
+            "room_index": 3,
+            "running": true,
+            "ready": true,
+            "status_age_seconds": 0.833,
+            "model_available": null,
+            "fence_reason": ""
+          }
+        ],
+        "watchdog": {
+          "state": "running",
+          "reason": "",
+          "attempt": 561,
+          "restart_count": 6,
+          "consecutive_failures": 557
+        }
+      }
+    ],
+    "new_test_sends": 0,
+    "limitations": [
+      "Readback does not prove reply quality or skip-rate improvement.",
+      "Observed stability window is bounded; it does not guarantee future uptime.",
+      "Current Python/Rust abort source is not active in the older immutable runtime."
+    ]
+  }
 }

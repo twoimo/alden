@@ -902,11 +902,23 @@ where
 /// skips the 전송 button which just proved inert. A second failure is
 /// terminal — the worker records accepted_unconfirmed without retransmitting.
 #[allow(clippy::too_many_arguments)]
-fn verify_submit_and_escalate_once<Read, Attest, Focus, Begin, Set, Press, Escalate>(
+fn verify_submit_and_escalate_once<
+    Read,
+    Attest,
+    Checkpoint,
+    Focus,
+    BeginEffect,
+    Begin,
+    Set,
+    Press,
+    Escalate,
+>(
     message: &str,
     read: &mut Read,
     attest: &mut Attest,
+    checkpoint: &mut Checkpoint,
     focus: &mut Focus,
+    begin_effect: &mut BeginEffect,
     begin_mutation: &mut Begin,
     set_value: &mut Set,
     press_return: &mut Press,
@@ -915,7 +927,9 @@ fn verify_submit_and_escalate_once<Read, Attest, Focus, Begin, Set, Press, Escal
 where
     Read: FnMut() -> Option<String>,
     Attest: FnMut(&str) -> anyhow::Result<()>,
+    Checkpoint: FnMut(&str) -> anyhow::Result<()>,
     Focus: FnMut() -> anyhow::Result<()>,
+    BeginEffect: FnMut(),
     Begin: FnMut(),
     Set: FnMut() -> bool,
     Press: FnMut() -> anyhow::Result<()>,
@@ -925,12 +939,20 @@ where
     if read().as_deref() != Some(message) {
         anyhow::bail!("message composer changed before send; refusing to press Return");
     }
+    checkpoint("before submit focus")?;
+    begin_effect();
     focus()?;
+    checkpoint("before primary submit")?;
+    begin_effect();
     press_return()?;
     if wait_for_composer_clear(read, message, SUBMIT_CLEAR_WINDOW) {
         return Ok(());
     }
+    checkpoint("before escalation focus")?;
+    begin_effect();
     focus()?;
+    checkpoint("before escalation composer reapply")?;
+    begin_effect();
     begin_mutation();
     if !set_value() && read().as_deref() != Some(message) {
         anyhow::bail!(
@@ -941,6 +963,8 @@ where
     if read().as_deref() != Some(message) {
         anyhow::bail!("message composer changed before the escalated Return");
     }
+    checkpoint("before escalated Return")?;
+    begin_effect();
     escalate_return()?;
     if wait_for_composer_clear(read, message, ESCALATE_CLEAR_WINDOW) {
         Ok(())
@@ -954,11 +978,24 @@ where
     clippy::too_many_arguments,
     reason = "separate composer callbacks make every AX side effect and the mutation boundary independently testable"
 )]
-fn guarded_composer_send_once<Read, Attest, Focus, Begin, Set, Type, Press, Escalate>(
+fn guarded_composer_send_once<
+    Read,
+    Attest,
+    Checkpoint,
+    Focus,
+    BeginEffect,
+    Begin,
+    Set,
+    Type,
+    Press,
+    Escalate,
+>(
     message: &str,
     mut read: Read,
     mut attest: Attest,
+    mut checkpoint: Checkpoint,
     mut focus: Focus,
+    mut begin_effect: BeginEffect,
     mut begin_mutation: Begin,
     mut set_value: Set,
     mut type_text: Type,
@@ -968,7 +1005,9 @@ fn guarded_composer_send_once<Read, Attest, Focus, Begin, Set, Type, Press, Esca
 where
     Read: FnMut() -> Option<String>,
     Attest: FnMut(&str) -> anyhow::Result<()>,
+    Checkpoint: FnMut(&str) -> anyhow::Result<()>,
     Focus: FnMut() -> anyhow::Result<()>,
+    BeginEffect: FnMut(),
     Begin: FnMut(),
     Set: FnMut() -> bool,
     Type: FnMut() -> anyhow::Result<()>,
@@ -978,6 +1017,8 @@ where
     attest("before composer inspection")?;
     let mut initial = read();
     if initial.is_none() {
+        checkpoint("before focus for unreadable composer")?;
+        begin_effect();
         let _ = focus();
         initial = read();
     }
@@ -992,7 +1033,11 @@ where
             if read().as_deref().is_none_or(|value| !composer_equivalent(value, message)) {
                 anyhow::bail!("message composer changed before send; refusing to overwrite it");
             }
+            checkpoint("before existing composer focus")?;
+            begin_effect();
             focus()?;
+            checkpoint("before existing composer reapply")?;
+            begin_effect();
             begin_mutation();
             if !set_value()
                 && read()
@@ -1011,7 +1056,9 @@ where
                 message,
                 &mut read,
                 &mut attest,
+                &mut checkpoint,
                 &mut focus,
+                &mut begin_effect,
                 &mut begin_mutation,
                 &mut set_value,
                 &mut press_return,
@@ -1046,6 +1093,8 @@ where
     // This is the first operation that can change composer content. Mark the
     // boundary immediately before calling AXSetValue; any error from this
     // point onward has an uncertain mutation outcome.
+    checkpoint("before composer AXSetValue")?;
+    begin_effect();
     begin_mutation();
     if !set_value() {
         // An AX set error has an uncertain mutation outcome.  Use keyboard
@@ -1056,6 +1105,8 @@ where
         match read() {
             Some(value) if value == message => {}
             Some(value) if value.is_empty() => {
+                checkpoint("before composer typing focus")?;
+                begin_effect();
                 focus()?;
                 attest("before composer typing")?;
                 if read().as_deref() != Some("") {
@@ -1063,6 +1114,8 @@ where
                         "message composer changed before typing; refusing to append to it"
                     );
                 }
+                checkpoint("before composer keyboard typing")?;
+                begin_effect();
                 type_text()?;
             }
             _ => {
@@ -1082,7 +1135,9 @@ where
         message,
         &mut read,
         &mut attest,
+        &mut checkpoint,
         &mut focus,
+        &mut begin_effect,
         &mut begin_mutation,
         &mut set_value,
         &mut press_return,
@@ -1152,7 +1207,9 @@ mod match_tests {
     struct ComposerProbe {
         reads: std::collections::VecDeque<Option<String>>,
         attestations: usize,
+        checkpoints: usize,
         focuses: usize,
+        effect_begins: usize,
         set_attempts: usize,
         typed: usize,
         returns: usize,
@@ -1163,6 +1220,14 @@ mod match_tests {
     fn run_composer_probe(
         reads: impl IntoIterator<Item = Option<&'static str>>,
         direct_set_succeeds: bool,
+    ) -> (anyhow::Result<()>, ComposerProbe) {
+        run_composer_probe_with_checkpoint_failure(reads, direct_set_succeeds, None)
+    }
+
+    fn run_composer_probe_with_checkpoint_failure(
+        reads: impl IntoIterator<Item = Option<&'static str>>,
+        direct_set_succeeds: bool,
+        fail_checkpoint: Option<usize>,
     ) -> (anyhow::Result<()>, ComposerProbe) {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -1195,9 +1260,29 @@ mod match_tests {
             },
             {
                 let probe = Rc::clone(&probe);
+                move |_| {
+                    let checkpoint = {
+                        let mut probe = probe.borrow_mut();
+                        probe.checkpoints += 1;
+                        probe.checkpoints
+                    };
+                    if fail_checkpoint == Some(checkpoint) {
+                        anyhow::bail!("alden_global_abort");
+                    }
+                    Ok(())
+                }
+            },
+            {
+                let probe = Rc::clone(&probe);
                 move || {
                     probe.borrow_mut().focuses += 1;
                     Ok(())
+                }
+            },
+            {
+                let probe = Rc::clone(&probe);
+                move || {
+                    probe.borrow_mut().effect_begins += 1;
                 }
             },
             {
@@ -2308,6 +2393,79 @@ mod match_tests {
     }
 
     #[test]
+    fn composer_abort_before_first_effect_reports_no_mutation() {
+        let (result, probe) =
+            run_composer_probe_with_checkpoint_failure([Some(""), Some("")], true, Some(1));
+        let failure = BoundSendFailure::new(result.unwrap_err(), probe.effect_begins > 0);
+        assert!(!failure.mutation_started());
+        assert_eq!(probe.focuses, 0);
+        assert_eq!(probe.set_attempts, 0);
+        assert_eq!(probe.typed, 0);
+        assert_eq!(probe.returns, 0);
+    }
+
+    #[test]
+    fn composer_abort_after_focus_preserves_unknown_effect_boundary() {
+        let (result, probe) =
+            run_composer_probe_with_checkpoint_failure([None, Some(""), Some("")], true, Some(2));
+        let failure = BoundSendFailure::new(result.unwrap_err(), probe.effect_begins > 0);
+        assert!(failure.mutation_started());
+        assert_eq!(probe.focuses, 1);
+        assert_eq!(probe.set_attempts, 0);
+        assert_eq!(probe.typed, 0);
+        assert_eq!(probe.returns, 0);
+    }
+
+    #[test]
+    fn composer_abort_before_submit_keeps_draft_and_never_presses_return() {
+        let (result, probe) = run_composer_probe_with_checkpoint_failure(
+            [Some(""), Some(""), Some("reply"), Some("reply")],
+            true,
+            Some(3),
+        );
+        assert!(result.is_err());
+        assert_eq!(probe.set_attempts, 1);
+        assert_eq!(probe.focuses, 1);
+        assert_eq!(probe.effect_begins, 2);
+        assert_eq!(probe.returns, 0);
+        assert_eq!(probe.escalates, 0);
+    }
+
+    #[test]
+    fn composer_abort_before_keyboard_fallback_stops_typing() {
+        let (result, probe) = run_composer_probe_with_checkpoint_failure(
+            [Some(""), Some(""), Some(""), Some("")],
+            false,
+            Some(3),
+        );
+        assert!(result.is_err());
+        assert_eq!(probe.set_attempts, 1);
+        assert_eq!(probe.focuses, 1);
+        assert_eq!(probe.typed, 0);
+        assert_eq!(probe.returns, 0);
+    }
+
+    #[test]
+    fn composer_abort_after_first_submit_prevents_escalation() {
+        let (result, probe) = run_composer_probe_with_checkpoint_failure(
+            [
+                Some(""),
+                Some(""),
+                Some("reply"),
+                Some("reply"),
+                Some("reply"),
+            ],
+            true,
+            Some(4),
+        );
+        assert!(result.is_err());
+        assert_eq!(probe.set_attempts, 1);
+        assert_eq!(probe.focuses, 1);
+        assert_eq!(probe.returns, 1);
+        assert_eq!(probe.escalates, 0);
+    }
+
+    #[test]
     fn composer_guard_never_mutates_nonempty_composer() {
         let (result, probe) = run_composer_probe([Some("human draft")], true);
         assert!(result.is_err());
@@ -3121,18 +3279,56 @@ mod imp {
             .map_err(|e| anyhow!("could not raise the target chat window: {e:?}"))
     }
 
-    fn submit_composer(pid: i32, window: Option<&AXUIElement>) -> Result<()> {
+    fn submit_composer(
+        pid: i32,
+        window: Option<&AXUIElement>,
+        abort_fence: Option<&crate::alden_abort::AldenAbortFence>,
+        mutation_started: &std::cell::Cell<bool>,
+    ) -> Result<()> {
+        if abort_fence.is_none() {
+            if let Some(window) = window {
+                raise_chat_window(window)?;
+            }
+            return super::submit_composer_once(
+                || {
+                    window
+                        .and_then(send_button_in)
+                        .map(|button| press_send_button(&button))
+                },
+                || press_return(pid),
+            );
+        }
+
+        let checkpoint = || -> Result<()> {
+            abort_fence
+                .expect("guarded submit requires abort fence")
+                .check()
+        };
         if let Some(window) = window {
+            checkpoint()?;
+            mutation_started.set(true);
             raise_chat_window(window)?;
         }
-        super::submit_composer_once(
-            || {
-                window
-                    .and_then(send_button_in)
-                    .map(|button| press_send_button(&button))
-            },
-            || press_return(pid),
-        )
+        if let Some(button) = window.and_then(send_button_in) {
+            checkpoint()?;
+            mutation_started.set(true);
+            if button
+                .perform_action(&CFString::new(kAXPressAction))
+                .is_ok()
+            {
+                return Ok(());
+            }
+            if let Ok(point) = ax_frame_center(&button) {
+                checkpoint()?;
+                mutation_started.set(true);
+                if left_click_point(point).is_ok() {
+                    return Ok(());
+                }
+            }
+        }
+        checkpoint()?;
+        mutation_started.set(true);
+        press_return(pid)
     }
     fn focus_composer(field: &AXUIElement) -> Result<()> {
         let focused_attr: AXAttribute<CFType> = AXAttribute::new(&CFString::new("AXFocused"));
@@ -4030,7 +4226,10 @@ mod imp {
             message,
             field,
             Some(&window),
-            &mutation_started,
+            SendEffectState {
+                abort_fence: None,
+                mutation_started: &mutation_started,
+            },
         )
     }
 
@@ -4175,6 +4374,11 @@ mod imp {
         Ok(())
     }
 
+    struct SendEffectState<'a> {
+        abort_fence: Option<&'a crate::alden_abort::AldenAbortFence>,
+        mutation_started: &'a std::cell::Cell<bool>,
+    }
+
     fn send_with_attested_field(
         app: &AXUIElement,
         pid: i32,
@@ -4182,23 +4386,51 @@ mod imp {
         message: &str,
         field: AXUIElement,
         expected_window: Option<&AXUIElement>,
-        mutation_started: &std::cell::Cell<bool>,
+        effects: SendEffectState<'_>,
     ) -> Result<()> {
+        let SendEffectState {
+            abort_fence,
+            mutation_started,
+        } = effects;
         // A duplicate exact-title window appearing after transcript attestation
         // is ambiguous. Bound sends additionally require the same AXUIElement
         // window instance through every composer read, write, and Return.
         super::guarded_composer_send_once(
             message,
             || composer_text(&field),
-            |stage| ensure_same_exact_chat_window(app, chat_display_name, expected_window, stage),
+            |stage| {
+                if let Some(fence) = abort_fence {
+                    fence.check()?;
+                }
+                ensure_same_exact_chat_window(app, chat_display_name, expected_window, stage)
+            },
+            |_| {
+                if let Some(fence) = abort_fence {
+                    fence.check()?;
+                }
+                Ok(())
+            },
             || focus_composer(&field),
+            || {
+                if abort_fence.is_some() {
+                    mutation_started.set(true);
+                }
+            },
             || mutation_started.set(true),
             || field.set_value(CFString::new(message).as_CFType()).is_ok(),
             || type_text_to_pid(pid, message),
-            || submit_composer(pid, expected_window),
+            || submit_composer(pid, expected_window, abort_fence, mutation_started),
             || {
                 if let Some(window) = expected_window {
+                    if let Some(fence) = abort_fence {
+                        fence.check()?;
+                        mutation_started.set(true);
+                    }
                     raise_chat_window(window)?;
+                }
+                if let Some(fence) = abort_fence {
+                    fence.check()?;
+                    mutation_started.set(true);
                 }
                 press_return(pid)
             },
@@ -4215,6 +4447,7 @@ mod imp {
         chat_id: i64,
         message: &str,
         local_tail: &[super::BindingToken],
+        abort_fence: Option<&crate::alden_abort::AldenAbortFence>,
     ) -> std::result::Result<(), super::BoundSendFailure> {
         let mutation_started = std::cell::Cell::new(false);
         let send = || -> Result<()> {
@@ -4260,7 +4493,10 @@ mod imp {
                 message,
                 field,
                 Some(&window),
-                &mutation_started,
+                SendEffectState {
+                    abort_fence,
+                    mutation_started: &mutation_started,
+                },
             )
         };
         send().map_err(|error| super::BoundSendFailure::new(error, mutation_started.get()))
@@ -4274,6 +4510,7 @@ mod imp {
         chat_display_name: &str,
         chat_id: i64,
         local_tail: &[super::BindingToken],
+        abort_fence: Option<&crate::alden_abort::AldenAbortFence>,
     ) -> Result<()> {
         let pid = find_kakaotalk_pid()?;
         ensure_ax_permission()?;
@@ -4318,7 +4555,12 @@ mod imp {
         })?;
         super::guarded_composer_preflight(
             || composer_text(&field),
-            |stage| ensure_same_exact_chat_window(&app, chat_display_name, Some(&window), stage),
+            |stage| {
+                if let Some(fence) = abort_fence {
+                    fence.check()?;
+                }
+                ensure_same_exact_chat_window(&app, chat_display_name, Some(&window), stage)
+            },
         )
     }
 
@@ -4379,7 +4621,10 @@ mod imp {
             message,
             field,
             Some(&window),
-            &mutation_started,
+            SendEffectState {
+                abort_fence: None,
+                mutation_started: &mutation_started,
+            },
         )
     }
 
@@ -4708,6 +4953,7 @@ mod stub {
         _chat_id: i64,
         _message: &str,
         _local_tail: &[super::BindingToken],
+        _abort_fence: Option<&crate::alden_abort::AldenAbortFence>,
     ) -> std::result::Result<(), super::BoundSendFailure> {
         Err(super::BoundSendFailure::new(
             anyhow!("bound local-send (AX automation) is only supported on macOS"),
@@ -4719,6 +4965,7 @@ mod stub {
         _chat_display_name: &str,
         _chat_id: i64,
         _local_tail: &[super::BindingToken],
+        _abort_fence: Option<&crate::alden_abort::AldenAbortFence>,
     ) -> Result<()> {
         Err(anyhow!(
             "bound local-send preflight (AX automation) is only supported on macOS"

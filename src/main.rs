@@ -7499,6 +7499,11 @@ fn main() -> Result<()> {
             require_auto_reply_worker_preflight(preflight, worker_identity)?;
             let is_auto_reply_worker = !dry_run && worker_identity;
             let setup = (|| -> Result<_> {
+                let alden_abort_fence =
+                    openkakao_cli::alden_abort::AldenAbortFence::from_worker_env(
+                        worker_identity,
+                        || auto_reply_state_root(&config),
+                    )?;
                 let _generation_lock = if is_auto_reply_worker && !preflight {
                     let home = dirs::home_dir().context("cannot resolve home directory")?;
                     let lock_path = std::env::var_os("OPENKAKAO_AUTO_REPLY_GENERATION_LOCK")
@@ -7684,6 +7689,7 @@ fn main() -> Result<()> {
                             chat_id: target_chat_id,
                             expected_source_log_id: expected_last_observed,
                             local_tail,
+                            abort_fence: alden_abort_fence.clone(),
                         });
                     }
                 }
