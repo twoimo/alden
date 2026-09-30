@@ -1,5 +1,7 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
+2026-10-01 사진 추가: [같은27B owned 비전 검증](alden-local-vision-20261001.md)은 같은 가중치로 public fixture4/4와 실제 worker 생성 함수의 image+JSON 요청1회를 확인했다. 기존 공유 서버는 `--no-vision`이며 운영 사진 경로는 여전히 미완료다. namespace catalog 용량과 MLX allocation, 텍스트 후속과 사진 기억, private adapter 경로와 운영 caller를 구분한다. 아래 Sep30 표의 실제vision 미완료는 당시 기록이다.
+
 
 2026-10-01 음성 추가: [WAV 취소·게시](alden-voice-wav-20261001.md)는 설치 writer의 취소 중 덮어쓰기 재현·private atomic output·로컬/턴/세션 취소 및 새 root0700 수정과 집중58/필수1020·원격CI4/4, 설치30/27 대조를 마쳤다. 실제 STT admission은 기존 swap 조건 미달로 종료한다. 사람 음성 및 전체 pipeline 성공·native 화면·production 공개 전달은 미완료다. 현재 menubar Python3.11.9와 배포 sidecar3.11.16을 구분하며, 아래 표는 해당 시각의 이력이다.
 
