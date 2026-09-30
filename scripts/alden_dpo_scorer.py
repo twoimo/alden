@@ -258,7 +258,8 @@ class MlxBackend:
         self.checkpoint_format = checkpoint_format
 
     @classmethod
-    def from_checkpoint(cls, checkpoint: Path, *, checkpoint_format=CHECKPOINT_FORMAT_AUTO):
+    def from_checkpoint(cls, checkpoint: Path, *, checkpoint_format=CHECKPOINT_FORMAT_AUTO,
+                        adapter=None):
         checkpoint_format = _checkpoint_format(checkpoint_format)
         checkpoint = _checkpoint(checkpoint, "missing_policy_dir")
         config = json.loads((checkpoint / "config.json").read_text(encoding="utf-8"))
@@ -291,6 +292,12 @@ class MlxBackend:
                 )
             else:
                 model, tokenizer = load(str(checkpoint), tokenizer_config=tokenizer_config)
+            if adapter is not None:
+                try:
+                    from scripts.alden_dpo_adapter import apply
+                except ImportError:
+                    from alden_dpo_adapter import apply
+                apply(model, adapter, mx)
         return cls(model, tokenizer, mx, nn, make_prompt_cache, selected["format"])
 
     def reset_peak_memory(self):
@@ -352,10 +359,13 @@ def score_fixed_response(backend: Any, prepared: dict[str, Any], *, chunk_size=D
 
 
 def _score_checkpoint(checkpoint, pairs, chunk_size, backend_factory, abort_check, deadline,
-                      checkpoint_format=CHECKPOINT_FORMAT_AUTO):
+                      checkpoint_format=CHECKPOINT_FORMAT_AUTO, adapter=None):
     _check_abort(abort_check, deadline)
-    backend = (backend_factory(checkpoint) if backend_factory is not None else
-               MlxBackend.from_checkpoint(checkpoint, checkpoint_format=checkpoint_format))
+    if backend_factory is not None:
+        backend = backend_factory(checkpoint) if adapter is None else backend_factory(checkpoint, adapter=adapter)
+    else:
+        options = {} if adapter is None else {"adapter":adapter}
+        backend = MlxBackend.from_checkpoint(checkpoint, checkpoint_format=checkpoint_format, **options)
     try:
         if hasattr(backend, "reset_peak_memory"):
             backend.reset_peak_memory()
@@ -420,6 +430,7 @@ def score_local_dpo_pairs(
     dpo_loss_fn: Callable[..., dict[str, Any]] | None = None,
     abort_check: Callable[[], bool] | None = None, deadline_seconds: float | None = None,
     checkpoint_format: str = CHECKPOINT_FORMAT_AUTO,
+    policy_adapter_dir: Path | str | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     pair_count = len(pairs) if isinstance(pairs, (list, tuple)) else 0
@@ -440,10 +451,21 @@ def score_local_dpo_pairs(
             raise ScorerError("tokenizer_fingerprint_mismatch")
         policy_sha = checkpoint_fingerprint(policy, abort_check, deadline)
         reference_sha = policy_sha if policy == reference else checkpoint_fingerprint(reference, abort_check, deadline)
-        same_checkpoint = policy_sha == reference_sha
-        policy_scores, policy_peak, policy_format = _score_checkpoint(
-            policy, pairs, chunk_size, backend_factory, abort_check, deadline, checkpoint_format
-        )
+        adapter_context = contextlib.nullcontext(None)
+        if policy_adapter_dir is not None:
+            try:
+                from scripts.alden_dpo_adapter import snapshot
+            except ImportError:
+                from alden_dpo_adapter import snapshot
+            adapter_context = snapshot(policy_adapter_dir, base_sha256=policy_sha,
+                                       checkpoint_format=checkpoint_format,
+                                       abort_check=abort_check, deadline=deadline)
+        with adapter_context as adapter:
+            adapter_sha = adapter["sha256"] if adapter is not None else None
+            policy_scores, policy_peak, policy_format = _score_checkpoint(
+                policy, pairs, chunk_size, backend_factory, abort_check, deadline, checkpoint_format, adapter
+            )
+        same_checkpoint = policy_sha == reference_sha and adapter_sha is None
         if same_checkpoint:
             reference_scores, reference_peak, reference_format = policy_scores, policy_peak, policy_format
         else:
@@ -488,6 +510,7 @@ def score_local_dpo_pairs(
             "mean_loss": sum(losses) / len(losses), "runtime_seconds": round(time.monotonic() - started, 6),
             "peak_bytes": max(policy_peak, reference_peak), "peak_bytes_scope": PEAK_BYTES_SCOPE,
             "policy_sha256": policy_sha,
+            "policy_adapter_sha256": adapter_sha,
             "reference_sha256": reference_sha, "tokenizer_sha256": policy_tok,
             "reference_frozen": True, "reference_reused": same_checkpoint,
             "requested_checkpoint_format": checkpoint_format,

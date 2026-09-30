@@ -248,6 +248,11 @@ class VersionEvaluationTests(unittest.TestCase):
         self.assertEqual(arguments[arguments.index('--evaluation-version')+1],'0.1.6')
         self.assertEqual(arguments[arguments.index('--model-evaluation-dataset')+1],str(self.dataset))
         self.assertEqual(arguments[arguments.index('--state-root')+1],str(self.root/'abort'))
+        self.assertNotIn('--dpo-adapter-dir',arguments)
+        env['ALDEN_EVALUATION_ADAPTER_DIR']=str(self.root/'private adapter')
+        self.assertEqual(build().returncode,0)
+        arguments=json.loads(calls.read_text().splitlines()[-1])
+        self.assertEqual(arguments[arguments.index('--dpo-adapter-dir')+1],str(self.root/'private adapter'))
         baseline = build_calls.read_bytes(); env['EVAL_STATUS'] = '2'
         self.assertEqual(build().returncode,2); self.assertEqual(build_calls.read_bytes(),baseline)
 

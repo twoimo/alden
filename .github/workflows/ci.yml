@@ -159,6 +159,7 @@ jobs:
           tests.test_auto_reply_finetune
           tests.test_alden_dpo_scorer
           tests.test_alden_model_evaluation
+          tests.test_alden_dpo_training
           tests.test_alden_worker_abort
           tests.test_alden_unit4
           tests.test_alden_desktop_launchers

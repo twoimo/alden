@@ -38,6 +38,9 @@ if [ -n "${ALDEN_EVALUATION_DATASET:-}" ]; then
   if [ -n "${ALDEN_EVALUATION_STATE_ROOT:-}" ]; then
     set -- "$@" --state-root "$ALDEN_EVALUATION_STATE_ROOT"
   fi
+  if [ -n "${ALDEN_EVALUATION_ADAPTER_DIR:-}" ]; then
+    set -- "$@" --dpo-adapter-dir "$ALDEN_EVALUATION_ADAPTER_DIR"
+  fi
   "$@"
 fi
 

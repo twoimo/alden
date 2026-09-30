@@ -98,7 +98,8 @@ def source_fingerprint():
     digest = hashlib.sha256()
     root = Path(__file__).parent
     for name in ("alden_model_evaluation.py", "alden_dpo_scorer.py",
-                 "auto_reply_finetune.py", "auto-reply-worker.py"):
+                 "auto_reply_finetune.py", "auto-reply-worker.py",
+                 "alden_dpo_adapter.py", "alden_dpo_training.py"):
         digest.update(name.encode() + b"\0" + (root / name).read_bytes())
     return digest.hexdigest()
 
@@ -144,6 +145,7 @@ def _scoring_identity(scoring, key, pairs):
     identity = (isinstance(scoring, dict) and scoring.get("status") == "ok"
             and scoring.get("policy_sha256") == key["policy_sha256"]
             and scoring.get("reference_sha256") == key["reference_sha256"]
+            and scoring.get("policy_adapter_sha256") == key.get("policy_adapter_sha256")
             and type(scoring.get("evaluated")) is int and scoring["evaluated"] == len(pairs)
             and scoring.get("requested_checkpoint_format") == key["checkpoint_format"]
             and scoring.get("scoring_method") == scorer.SCORING_METHOD
@@ -175,7 +177,7 @@ def _scoring_identity(scoring, key, pairs):
             return False
         if not math.isclose(row["loss"], loss, rel_tol=1e-12, abs_tol=1e-12):
             return False
-        if key["policy_sha256"] == key["reference_sha256"] and (
+        if not key.get("policy_adapter_sha256") and key["policy_sha256"] == key["reference_sha256"] and (
                 row["policy_chosen_logprob"] != row["reference_chosen_logprob"]
                 or row["policy_rejected_logprob"] != row["reference_rejected_logprob"]
                 or row["delta"] != 0.0 or row["loss"] != math.log(2.0)):
@@ -240,7 +242,8 @@ def _publish(root_fd, path, name, receipt, token, deadline):
 
 def evaluate_version(*, dataset_path, policy_dir, reference_dir, version,
                      evaluation_root, checkpoint_format, beta=0.1, final_test=False,
-                     token=None, deadline_seconds=120, score_fn=None, admission=None):
+                     token=None, deadline_seconds=120, score_fn=None, admission=None,
+                     policy_adapter_dir=None):
     """Evaluate validation per version; final held-out test is explicit opt-in."""
     if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}", version):
         raise EvaluationError("invalid_version")
@@ -262,9 +265,18 @@ def evaluate_version(*, dataset_path, policy_dir, reference_dir, version,
     with _locked_root(Path(evaluation_root)) as root_fd:
         policy_sha = scorer.checkpoint_fingerprint(policy, abort, deadline)
         reference_sha = policy_sha if policy == reference else scorer.checkpoint_fingerprint(reference, abort, deadline)
+        adapter_sha = None
+        if policy_adapter_dir is not None:
+            try:
+                from scripts.alden_dpo_adapter import fingerprint
+            except ImportError:
+                from alden_dpo_adapter import fingerprint
+            adapter_sha = fingerprint(policy_adapter_dir, base_sha256=policy_sha,
+                                      checkpoint_format=checkpoint_format, abort_check=abort, deadline=deadline)
         key = {"schema_version": 1, "version": version, "source_sha256": source_fingerprint(),
                "dataset_sha256": dataset_sha, "policy_sha256": policy_sha,
                "reference_sha256": reference_sha, "checkpoint_format": checkpoint_format,
+               "policy_adapter_sha256": adapter_sha,
                "split": split, "beta": beta, "runtime_versions": scorer._versions()}
         identifier = hashlib.sha256(_encode(key)).hexdigest()
         name = identifier + ".json"
@@ -277,9 +289,10 @@ def evaluate_version(*, dataset_path, policy_dir, reference_dir, version,
         if admission is not None:
             admission(policy, reference)
         fn = score_fn or scorer.score_local_dpo_pairs
+        options = {} if policy_adapter_dir is None else {"policy_adapter_dir":policy_adapter_dir}
         scoring = fn(splits[split], policy_dir=policy, reference_dir=reference,
                      beta=beta, checkpoint_format=checkpoint_format,
-                     abort_check=abort, deadline_seconds=max(.001, deadline - time.monotonic()))
+                     abort_check=abort, deadline_seconds=max(.001, deadline - time.monotonic()), **options)
         scorer._check_abort(abort, deadline)
         if scoring.get("status") == "ok" and not _scoring_identity(scoring, key, splits[split]):
             raise EvaluationError("scoring_identity_mismatch")
@@ -321,7 +334,8 @@ def run_cli(args):
             reference_dir=args.dpo_reference_dir, version=args.evaluation_version,
             evaluation_root=args.evaluation_root, checkpoint_format=args.dpo_checkpoint_format,
             final_test=args.evaluation_final_test, deadline_seconds=args.evaluation_deadline,
-            beta=args.dpo_beta, token=token, admission=memory_admission)
+            beta=args.dpo_beta, token=token, admission=memory_admission,
+            policy_adapter_dir=args.dpo_adapter_dir)
     except (EvaluationError, scorer.ScorerError, AldenCancelled, OSError, ValueError, KeyError, TypeError) as exc:
         reason = str(exc) if isinstance(exc, (EvaluationError, scorer.ScorerError, AldenCancelled)) else type(exc).__name__
         result = {"phase": "unavailable", "reason": reason, "cached": False,

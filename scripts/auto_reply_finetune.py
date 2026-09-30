@@ -1454,6 +1454,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evaluation-final-test", action="store_true", help="최종 held-out test를 명시적으로 평가")
     parser.add_argument("--evaluation-deadline", type=float, default=120)
     parser.add_argument("--dpo-beta", type=float, default=0.1)
+    parser.add_argument("--dpo-train-dataset", type=Path, default=None,
+                        help="분리된 선호 쌍 JSON으로 offline DPO adapter를 학습")
+    parser.add_argument("--dpo-training-root", type=Path, default=None, help="private DPO candidate 경로")
+    parser.add_argument("--dpo-training-steps", type=int, default=10)
+    parser.add_argument("--dpo-training-learning-rate", type=float, default=1e-5)
+    parser.add_argument("--dpo-training-rank", type=int, default=8)
+    parser.add_argument("--dpo-training-layers", type=int, default=1)
+    parser.add_argument("--dpo-training-deadline", type=float, default=300)
+    parser.add_argument("--dpo-adapter-dir", type=Path, default=None, help="기본 모델에 묶인 DPO policy adapter")
     parser.add_argument(
         "--dpo-ref-pairs",
         type=Path,
@@ -1493,6 +1502,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.dpo_train_dataset is not None:
+        if (args.train or args.evaluate or args.prepare_only or args.dpo_pairs is not None
+                or args.dpo_capture or args.dpo_score_local or args.model_evaluation_dataset is not None
+                or args.dpo_adapter_dir is not None or args.evaluation_version is not None
+                or args.evaluation_root is not None or args.evaluation_final_test):
+            parser.error("offline DPO training cannot be mixed with SFT or evaluation modes")
+        if args.dpo_training_root is None:
+            parser.error("offline DPO training requires --dpo-training-root")
+        try:
+            from scripts.alden_dpo_training import run_cli
+        except ImportError:
+            from alden_dpo_training import run_cli
+        return run_cli(args)
+    if args.dpo_training_root is not None:
+        parser.error("--dpo-training-root requires --dpo-train-dataset")
     if args.model_evaluation_dataset is not None:
         if (args.train or args.evaluate or args.prepare_only or args.dpo_pairs is not None
                 or args.dpo_capture or args.dpo_score_local):
@@ -1506,6 +1530,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_cli(args)
     if args.evaluation_version is not None or args.evaluation_root is not None or args.evaluation_final_test:
         parser.error("version evaluation options require --model-evaluation-dataset")
+    if args.dpo_adapter_dir is not None:
+        parser.error("--dpo-adapter-dir requires --model-evaluation-dataset")
     state_root = (args.state_root or _default_state_root()).expanduser()
     golden = (args.golden or _default_golden(state_root)).expanduser()
     data_dir = (args.data_dir or state_root / "finetune" / "data").expanduser()
