@@ -166,6 +166,56 @@ describe("render lifecycle wiring", () => {
     });
   });
 
+  it("rejects DOM resume after native hide until the shell reopens the window", async () => {
+    await withVisibilityAsync("visible", async () => {
+      const { scheduler, signal, loop } = harness(async () => () => undefined);
+      await settle();
+      signal(false);
+      const frozen = loop.renderCount;
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      scheduler.step(5000);
+      expect(scheduler.callbacks.size).toBe(0);
+      expect(loop.renderCount).toBe(frozen);
+      signal(true);
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(scheduler.callbacks.size).toBe(1);
+    });
+  });
+
+  it("keeps DOM focus paused during the native boot handshake", async () => {
+    await withVisibilityAsync("visible", async () => {
+      const handshake = deferred<boolean>();
+      const { scheduler } = harness(async () => () => undefined, () => handshake.promise);
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(scheduler.callbacks.size).toBe(0);
+      await settle();
+      handshake.settle(false);
+      await settle();
+      window.dispatchEvent(new Event("focus"));
+      expect(scheduler.callbacks.size).toBe(0);
+    });
+  });
+
+  it("does not revoke native hide when a pending boot read fails", async () => {
+    await withVisibilityAsync("visible", async () => {
+      let rejectRead: ((reason: Error) => void) | undefined;
+      const read = new Promise<boolean>((_, reject) => { rejectRead = reject; });
+      const { scheduler, signal } = harness(async () => () => undefined, () => read);
+      await settle();
+      signal(false);
+      rejectRead?.(new Error("bridge closed"));
+      await settle();
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(scheduler.callbacks.size).toBe(0);
+      signal(true);
+      expect(scheduler.callbacks.size).toBe(1);
+    });
+  });
+
   it("follows document visibility changes without an explicit signal", () => {
     withVisibility("visible", () => {
       const { scheduler } = harness();

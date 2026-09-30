@@ -2,6 +2,8 @@ mod python_bridge;
 #[cfg(target_os = "macos")]
 mod render_audit;
 mod resource_layout;
+#[cfg(target_os = "macos")]
+mod workspace_visibility;
 
 use python_bridge::{PythonBridge, SafeBrowserToolResult, SafeEmergencyState, SafeRuntimeSnapshot};
 use serde_json::Value;
@@ -250,7 +252,7 @@ fn main() {
         Ok(None) => {}
     }
     let abort_shortcut = global_abort_shortcut();
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(PythonBridge::new())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -309,8 +311,15 @@ fn main() {
             Ok(())
         })
         .on_window_event(handle_window_event)
-        .run(context)
+        .build(context)
         .expect("error while running Alden");
+    #[cfg(target_os = "macos")]
+    let workspace_observers = workspace_visibility::install(app.handle())
+        .expect("error while observing Alden workspace visibility");
+    let exit_code = app.run_return(|_, _| {});
+    #[cfg(target_os = "macos")]
+    drop(workspace_observers);
+    std::process::exit(exit_code);
 }
 
 fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {

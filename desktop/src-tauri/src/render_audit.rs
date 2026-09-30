@@ -331,6 +331,76 @@ fn density_matches(state: &Value) -> bool {
         && state["canvas"]["height"].as_u64() == Some(pixels)
 }
 
+fn workspace_notification_audit(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    deadline: Instant,
+) -> Result<Vec<Value>, String> {
+    use super::workspace_visibility::{WorkspaceCounters, WorkspaceNote};
+    let settings = app
+        .get_webview_window("settings")
+        .ok_or("settings native window missing")?;
+    let counters = app
+        .try_state::<WorkspaceCounters>()
+        .ok_or("workspace observers not installed")?;
+    let mut results = Vec::new();
+    for note in WorkspaceNote::ALL {
+        visibility(window, true, deadline)?;
+        visibility(&settings, true, deadline)?;
+        std::thread::sleep(Duration::from_millis(250));
+        if window.is_visible().ok() != Some(true) || settings.is_visible().ok() != Some(true) {
+            return Err("workspace audit windows not visible before injection".into());
+        }
+        let prior = collect(window, deadline)?;
+        if prior["loop"]["running"] != true || prior["loop"]["pendingFrame"] != true {
+            return Err("workspace audit renderer not running before injection".into());
+        }
+        let previous = prior["pause"]["eventAtMs"].as_f64().unwrap_or(-1.0);
+        let seen = counters.count(note);
+        live(deadline)?;
+        let (tx, rx) = mpsc::sync_channel(1);
+        let started = Instant::now();
+        window
+            .run_on_main_thread(move || {
+                let result = live(deadline)
+                    .and_then(|_| super::workspace_visibility::post_process_local_audit_note(note));
+                let _ = tx.try_send(result);
+            })
+            .map_err(|_| "workspace audit dispatch failed")?;
+        receive(rx, deadline)?;
+        let stopped = loop {
+            let state = collect(window, deadline)?;
+            if counters.count(note) > seen
+                && fresh_pause(&state, previous)
+                && window.is_visible().ok() == Some(false)
+                && settings.is_visible().ok() == Some(false)
+            {
+                break state;
+            }
+            live(deadline)?;
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stop_observed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        std::thread::sleep(Duration::from_millis(350));
+        let hidden = collect(window, deadline)?;
+        if count(&hidden) != count(&stopped) || hidden["pause"]["rendersAfterEvent"] != 0 {
+            return Err("workspace notification left rendering active".into());
+        }
+        results.push(json!({"signal":note.code(),"scope":"process-local synthetic NSWorkspace notification; not physical sleep, switch or lock",
+            "notificationCountDelta":counters.count(note)-seen,"bothNativeWindowsHidden":true,
+            "postToStoppedObservationUpperBoundMs":stop_observed_ms,"hiddenSampleMs":350,
+            "hiddenRenderDelta":count(&hidden)-count(&stopped),"pause":hidden["pause"],
+            "settingsRenderScope":"native visibility only; backend-free settings renderer unexercised"}));
+    }
+    visibility(window, true, deadline)?;
+    std::thread::sleep(Duration::from_millis(250));
+    let resumed = collect(window, deadline)?;
+    if resumed["loop"]["running"] != true {
+        return Err("renderer failed to reopen after workspace signals".into());
+    }
+    Ok(results)
+}
+
 fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<Value, String> {
     let window = app
         .get_webview_window("alden")
@@ -451,9 +521,11 @@ fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<V
         retina = json!({"available":true,"nativeScaleFactor":window.scale_factor().map_err(|_| "native scale unavailable")?,
             "transition":metrics,"observed":observed,"densityMatches":density_matches(&observed)});
     }
+    let workspace_signals = workspace_notification_audit(app, &window, deadline)?;
     visibility(&window, false, deadline)?;
     Ok(json!({"before":before,"restored":restored,"cycles":cycles,
         "nativeScaleFactor":initial_scale,"retina":retina,
+        "workspaceSignals":workspace_signals,
         "monitorScaleFactors":monitors.iter().map(|monitor|monitor.scale_factor()).collect::<Vec<_>>()}))
 }
 
@@ -464,7 +536,7 @@ pub fn run(directory: PathBuf, context: tauri::Context<tauri::Wry>) {
     });
     let status = Arc::new(AtomicI32::new(1));
     let worker_status = Arc::clone(&status);
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // Deliberately no PythonBridge or production command handler. The real
         // packaged frontend renders idle; runtime requests are unavailable.
         .invoke_handler(tauri::generate_handler![super::window_is_visible])
@@ -491,9 +563,18 @@ pub fn run(directory: PathBuf, context: tauri::Context<tauri::Wry>) {
             });
             Ok(())
         })
-        .run(context)
+        .build(context)
         .expect("error while running Alden render audit");
-    std::process::exit(status.load(Ordering::Acquire));
+    let observers = super::workspace_visibility::install(app.handle())
+        .expect("error while observing Alden audit workspace");
+    let exit_code = app.run_return(|_, _| {});
+    drop(observers);
+    let audit_status = status.load(Ordering::Acquire);
+    std::process::exit(if audit_status == 0 {
+        exit_code
+    } else {
+        audit_status
+    });
 }
 
 #[cfg(test)]
