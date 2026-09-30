@@ -646,6 +646,7 @@ export async function bootPanel(
     core = await dependencies.createCore(canvas);
     const activeCore = core;
     Object.defineProperty(window, "__aldenRenderCount", { configurable: true, get: () => activeCore.renderCount });
+    Object.defineProperty(window, "__aldenRenderDiagnostics", { configurable: true, get: () => activeCore.diagnostics() });
     const polling = new RuntimeSnapshotPoller(
       activeCore,
       dependencies.loadSnapshot,

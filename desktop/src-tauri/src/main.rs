@@ -1,4 +1,6 @@
 mod python_bridge;
+#[cfg(target_os = "macos")]
+mod render_audit;
 mod resource_layout;
 
 use python_bridge::{PythonBridge, SafeBrowserToolResult, SafeEmergencyState, SafeRuntimeSnapshot};
@@ -234,6 +236,19 @@ fn global_abort_shortcut() -> Shortcut {
 
 fn main() {
     ignore_terminal_hangup();
+    let context = tauri::generate_context!();
+    #[cfg(target_os = "macos")]
+    match render_audit::parse_args(std::env::args_os().skip(1)) {
+        Ok(Some(directory)) => {
+            render_audit::run(directory, context);
+            return;
+        }
+        Err(error) => {
+            eprintln!("Alden render audit: {error}");
+            std::process::exit(2);
+        }
+        Ok(None) => {}
+    }
     let abort_shortcut = global_abort_shortcut();
     tauri::Builder::default()
         .manage(PythonBridge::new())
@@ -293,32 +308,36 @@ fn main() {
                 .build(&handle)?;
             Ok(())
         })
-        .on_window_event(|window, event| match event {
-            // Only a hide the OS actually applied may pause the renderer:
-            // announcing hidden for a window that is still on screen would
-            // freeze the core while the user is looking at it.
-            WindowEvent::Focused(false) if window.label() == "alden" && window.hide().is_ok() => {
+        .on_window_event(handle_window_event)
+        .run(context)
+        .expect("error while running Alden");
+}
+
+fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
+    match event {
+        // Only a hide the OS actually applied may pause the renderer:
+        // announcing hidden for a window that is still on screen would
+        // freeze the core while the user is looking at it.
+        WindowEvent::Focused(false) if window.label() == "alden" && window.hide().is_ok() => {
+            announce_visibility(window.app_handle(), window.label(), false);
+        }
+        WindowEvent::CloseRequested { api, .. }
+            if window.label() == "alden" || window.label() == "settings" =>
+        {
+            api.prevent_close();
+            if window.hide().is_ok() {
                 announce_visibility(window.app_handle(), window.label(), false);
             }
-            WindowEvent::CloseRequested { api, .. }
-                if window.label() == "alden" || window.label() == "settings" =>
-            {
-                api.prevent_close();
-                if window.hide().is_ok() {
-                    announce_visibility(window.app_handle(), window.label(), false);
-                }
-            }
-            // Any focus of an already visible window re-states the visible
-            // state. A tray click that lands while the webview is still
-            // registering its listener would otherwise be the only announce of
-            // that show, and it would be lost.
-            WindowEvent::Focused(true) if window.is_visible().unwrap_or(false) => {
-                announce_visibility(window.app_handle(), window.label(), true);
-            }
-            _ => {}
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running Alden");
+        }
+        // Any focus of an already visible window re-states the visible
+        // state. A tray click that lands while the webview is still
+        // registering its listener would otherwise be the only announce of
+        // that show, and it would be lost.
+        WindowEvent::Focused(true) if window.is_visible().unwrap_or(false) => {
+            announce_visibility(window.app_handle(), window.label(), true);
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
