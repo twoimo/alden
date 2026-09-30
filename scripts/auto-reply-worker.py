@@ -12709,6 +12709,7 @@ def generate_reply(
     image_paths: list[Path] | None = None,
     media_evidence_id: str = "",
     source_log_id: int | None = None,
+    media_source_log_ids: list[int] | None = None,
     _preacquired_model_slot: dict | None = None,
     _capacity_probe: bool = False,
     turn_guard=None,
@@ -12806,7 +12807,7 @@ def generate_reply(
     if image_path is not None and (
         not normalized_image_paths or normalized_image_paths[0] != image_path
     ):
-        return {**empty, "reason": "image_unavailable"}
+        return {**empty, "reason": "image_unavailable", "model_invoked": False, "evidence_ids": []}
     if (
         len(normalized_image_paths) > MAX_IMAGE_INPUTS
         or any(
@@ -12814,9 +12815,14 @@ def generate_reply(
             for path in normalized_image_paths
         )
     ):
-        return {**empty, "reason": "image_unavailable"}
+        return {**empty, "reason": "image_unavailable", "model_invoked": False, "evidence_ids": []}
+    try:
+        if sum(path.stat().st_size for path in normalized_image_paths) > MAX_IMAGE_BATCH_BYTES:
+            return {**empty, "reason": "image_unavailable", "model_invoked": False, "evidence_ids": []}
+    except OSError:
+        return {**empty, "reason": "image_unavailable", "model_invoked": False, "evidence_ids": []}
     if normalized_image_paths and re.fullmatch(r"media:[0-9a-f]{64}", media_evidence_id) is None:
-        return {**empty, "reason": "image_unavailable"}
+        return {**empty, "reason": "image_unavailable", "model_invoked": False, "evidence_ids": []}
     instructions = (
         [
             "Return exactly one JSON object with should_reply, reply, category, reason, and evidence_ids.",
@@ -12895,6 +12901,16 @@ def generate_reply(
             ]
 
     bounded_source_log_id = _fence_int(source_log_id)
+    if media_source_log_ids is not None and (
+        not normalized_image_paths
+        or not isinstance(media_source_log_ids, list)
+        or not 1 <= len(media_source_log_ids) <= MAX_IMAGE_INPUTS
+        or bounded_source_log_id is None
+        or any(_fence_int(value) is None or value >= bounded_source_log_id
+               for value in media_source_log_ids)
+        or len(set(media_source_log_ids)) != len(media_source_log_ids)
+    ):
+        return {**empty, "reason": "image_unavailable", "model_invoked": False, "evidence_ids": []}
     current_inbound_evidence = (
         {
             "evidence_id": f"recent:{bounded_source_log_id}",
@@ -12934,8 +12950,14 @@ def generate_reply(
             "media_evidence": (
                 {
                     "evidence_id": media_evidence_id,
-                    "source_log_id": bounded_source_log_id,
+                    "source_log_id": (
+                        media_source_log_ids[0] if media_source_log_ids is not None
+                        and len(media_source_log_ids) == 1 else
+                        (None if media_source_log_ids is not None else bounded_source_log_id)
+                    ),
                     "image_count": len(normalized_image_paths),
+                    **({"source_log_ids": media_source_log_ids}
+                       if media_source_log_ids is not None else {}),
                 }
                 if normalized_image_paths
                 else None
@@ -15189,16 +15211,15 @@ def _media_unavailable_clarification_event(event: dict) -> bool:
 
 
 def _same_author_recent_photo_events(event: dict, limit: int = 4) -> list[dict]:
+    chat_id = _fence_int(event.get("chat_id"))
     author_id = _fence_int(event.get("author_id"))
     current_log_id = _fence_int(event.get("log_id"))
-    sent_at = event.get("sent_at")
-    if not author_id or not current_log_id:
+    current_sent_at = _fence_int(event.get("sent_at"))
+    if (chat_id is None or author_id is None or current_log_id is None
+            or current_sent_at is None or _fence_int(limit) is None):
         return []
-    try:
-        current_sent_at = float(sent_at)
-    except (TypeError, ValueError):
-        current_sent_at = None
     photos: list[tuple[int, dict]] = []
+    seen_log_ids: set[int] = set()
     for item in event.get("recent_messages") or []:
         if not isinstance(item, dict):
             continue
@@ -15206,32 +15227,33 @@ def _same_author_recent_photo_events(event: dict, limit: int = 4) -> list[dict]:
             continue
         item_author = _fence_int(item.get("author_id"))
         item_log_id = _fence_int(item.get("log_id"))
-        try:
-            item_type = int(item.get("message_type", 0) or 0)
-        except (TypeError, ValueError):
-            continue
+        item_sent_at = _fence_int(item.get("sent_at"))
+        item_type = item.get("message_type")
         if (
             item_author != author_id
-            or not item_log_id
-            or item_log_id == current_log_id
+            or item_log_id is None
+            or item_log_id >= current_log_id
+            or item_sent_at is None
+            or not 0 <= current_sent_at - item_sent_at <= 300
+            # Older scoped recent rows omitted chat_id. A recovery still asks
+            # the CLI to re-read the exact row in this room and attest author.
+            or ("chat_id" in item and _fence_int(item["chat_id"]) != chat_id)
+            or _fence_int(item_type) is None
             or kakao_image_kind(item_type) is None
+            or item_log_id in seen_log_ids
         ):
             continue
-        if current_sent_at is not None:
-            try:
-                item_sent_at = float(item.get("sent_at"))
-            except (TypeError, ValueError):
-                continue
-            if abs(current_sent_at - item_sent_at) > 300.0:
-                continue
+        seen_log_ids.add(item_log_id)
         photo_evt = dict(event)
         photo_evt["log_id"] = item_log_id
         photo_evt["author_id"] = item_author
         photo_evt["message_type"] = item_type
+        photo_evt["sent_at"] = item_sent_at
+        photo_evt["attachment"] = "image"
         photo_evt["message"] = str(item.get("message") or "사진")
         photos.append((item_log_id, photo_evt))
     photos.sort(key=lambda pair: pair[0], reverse=True)
-    return [p[1] for p in photos[:limit]]
+    return [p[1] for p in photos[:min(limit, MAX_IMAGE_INPUTS)]]
 
 
 def _same_author_recent_photo_event(event: dict) -> dict | None:
@@ -15256,9 +15278,11 @@ def _recover_local_media_bundle(event: dict) -> list[Path] | None:
     if not log_id or not author_id or not chat_id or not BIN.is_file():
         return None
     directory = Path(tempfile.mkdtemp(prefix=MEDIA_DIR_PREFIX))
+    directory_identity = directory.stat()
     try:
         os.chmod(directory, 0o700)
-        completed = subprocess.run(
+        (directory / MEDIA_ACTIVE_MARKER).touch(mode=0o600)
+        returncode, stdout, _ = _run_bounded_process(
             [
                 str(BIN),
                 "download",
@@ -15271,30 +15295,53 @@ def _recover_local_media_bundle(event: dict) -> list[Path] | None:
                 str(author_id),
                 "--json",
             ],
-            capture_output=True,
+            cwd=ROOT,
+            env=dict(os.environ),
             timeout=45,
+            stdout_cap=MAX_EVENT_BYTES,
+            stderr_cap=MAX_MODEL_STDERR_BYTES,
+            isolate_group=True,
         )
-        if completed.returncode != 0:
-            raise ValueError(f"local download rc={completed.returncode}")
-        payload = json.loads(completed.stdout.decode("utf-8", "replace"))
+        if returncode != 0:
+            raise ValueError(f"local download rc={returncode}")
+        payload = json.loads(stdout.decode("utf-8", "replace"))
+        if not isinstance(payload, dict) or not isinstance(payload.get("paths"), list):
+            raise ValueError("download response has no image paths")
         paths: list[Path] = []
-        for value in payload.get("paths") or []:
-            resolved = Path(value).resolve(strict=True)
-            if not _image_path_within_cap(resolved):
+        identities: set[tuple[int, int]] = set()
+        total_bytes = 0
+        for value in payload["paths"]:
+            if not isinstance(value, str) or not value:
+                raise ValueError("download path is not a string")
+            path = Path(value)
+            if not _image_path_within_cap(path):
+                raise ValueError("recovered image is not a private regular file")
+            resolved = path.resolve(strict=True)
+            if resolved.parent != directory.resolve(strict=True):
                 raise ValueError("recovered image outside owned directory")
-            if resolved.stat().st_size > MAX_IMAGE_BYTES:
-                raise ValueError("recovered image exceeds size cap")
+            info = resolved.stat()
+            identity = (info.st_dev, info.st_ino)
+            total_bytes += info.st_size
+            if identity in identities or total_bytes > MAX_IMAGE_BATCH_BYTES:
+                raise ValueError("download response duplicates or exceeds image budget")
+            identities.add(identity)
             paths.append(resolved)
         if not paths or len(paths) > MAX_IMAGE_INPUTS:
             raise ValueError("download response has no bounded images")
+        _raise_if_job_aborted()
         return paths
-    except (OSError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired):
-        for stale in sorted(directory.iterdir()):
-            cleanup_media_path(stale)
+    except (AldenCancelled, OSError, ValueError, _CaptureOverflow, _CaptureIOError,
+            subprocess.TimeoutExpired) as exc:
         try:
-            directory.rmdir()
+            current = directory.lstat()
+            if (stat.S_ISDIR(current.st_mode)
+                    and (current.st_dev, current.st_ino) ==
+                    (directory_identity.st_dev, directory_identity.st_ino)):
+                shutil.rmtree(directory)
         except OSError:
             pass
+        if isinstance(exc, AldenCancelled):
+            raise
         return None
 
 
@@ -15495,6 +15542,17 @@ def analyze_event(event: dict, *, file_context: dict | None = None) -> dict:
     image_paths: list[Path] = []
     youtube_frames: list[Path] = []
     media_bundle_digest = ""
+    image_source_log_ids: list[int] = []
+    recovered_bundles: list[tuple[list[Path], Path]] = []
+    def recover_photo(photo_event: dict) -> list[Path] | None:
+        paths = _recover_local_media_bundle(photo_event)
+        if paths:
+            for parent in {path.parent for path in paths}:
+                recovered_bundles.append((
+                    [path for path in paths if path.parent == parent],
+                    parent / MEDIA_ACTIVE_MARKER,
+                ))
+        return paths
     db_owned_bundle = False
     if attachment == "image" and media_fields_present:
         validated = _validated_image_bundle(
@@ -15507,32 +15565,48 @@ def analyze_event(event: dict, *, file_context: dict | None = None) -> dict:
         if validated is not None:
             image_paths, media_bundle_digest = validated
             db_owned_bundle = True
-    if not image_paths and file_context is None:
-        if attachment == "image":
-            recovered_paths = _recover_local_media_bundle(event)
-        else:
-            recent_photo_events = _same_author_recent_photo_events(event, limit=2)
-            recovered_paths = []
-            for p_evt in recent_photo_events:
-                p_paths = _recover_local_media_bundle(p_evt)
-                if p_paths:
-                    recovered_paths.extend(p_paths)
-            if not recovered_paths:
-                recovered_paths = None
-        if recovered_paths:
-            image_paths = recovered_paths
-            media_bundle_digest = hashlib.sha256(
-                b"".join(path.read_bytes() for path in recovered_paths)
-            ).hexdigest()
-        captured = None if privacy_required else capture_visible_image(event.get("image_rect"))
-        if captured is not None and _image_path_within_cap(captured):
-            try:
-                captured_digest = hashlib.sha256(captured.read_bytes()).hexdigest()
-            except OSError:
-                cleanup_media_path(captured)
+    try:
+        if not image_paths and file_context is None:
+            if attachment == "image":
+                recovered_paths = recover_photo(event)
             else:
-                image_paths = [captured]
-                media_bundle_digest = captured_digest
+                recent_photo_events = _same_author_recent_photo_events(event, limit=2)
+                recovered_paths = []
+                for p_evt in recent_photo_events:
+                    p_paths = recover_photo(p_evt)
+                    if p_paths:
+                        recovered_paths.extend(p_paths)
+                        image_source_log_ids.append(p_evt["log_id"])
+                if not recovered_paths:
+                    recovered_paths = None
+            if recovered_paths:
+                try:
+                    if (len(recovered_paths) > MAX_IMAGE_INPUTS or
+                            sum(path.stat().st_size for path in recovered_paths) > MAX_IMAGE_BATCH_BYTES):
+                        raise ValueError("recovered image set exceeds budget")
+                    media_bundle_digest = hashlib.sha256(
+                        b"".join(path.read_bytes() for path in recovered_paths)
+                    ).hexdigest()
+                except (OSError, ValueError):
+                    for paths, marker in recovered_bundles:
+                        cleanup_media_bundle(paths, marker)
+                    result.update(reason="image_unavailable", category="uncertain", decision="skip")
+                    return result
+                image_paths = recovered_paths
+            captured = (None if privacy_required or image_paths else
+                        capture_visible_image(event.get("image_rect")))
+            if captured is not None and _image_path_within_cap(captured):
+                try:
+                    captured_digest = hashlib.sha256(captured.read_bytes()).hexdigest()
+                except OSError:
+                    cleanup_media_path(captured)
+                else:
+                    image_paths = [captured]
+                    media_bundle_digest = captured_digest
+    except BaseException:
+        for paths, marker in recovered_bundles:
+            cleanup_media_bundle(paths, marker)
+        raise
     preserve_media_for_defer = False
     try:
         image_owned = bool(image_paths) and all(
@@ -15543,6 +15617,8 @@ def analyze_event(event: dict, *, file_context: dict | None = None) -> dict:
         provenance["image_marker_owned"] = image_owned and db_owned_bundle
         provenance["image_input_count"] = len(image_paths)
         provenance["media_bundle_digest"] = media_bundle_digest
+        if image_source_log_ids:
+            provenance["image_source_log_ids"] = image_source_log_ids
         if attachment == "image" and (not image_paths or not image_owned):
             cleanup_media_bundle(candidate_paths, provided_image_marker)
             result["reason"] = "image_unavailable"
@@ -15762,6 +15838,8 @@ def analyze_event(event: dict, *, file_context: dict | None = None) -> dict:
             ),
             source_log_id=_fence_int(event.get("log_id")),
             turn_guard=lambda: _reply_turn_hold_reason(event),
+            **({"media_source_log_ids": image_source_log_ids}
+               if image_source_log_ids else {}),
             **({"file_context": file_context} if file_context is not None else {}),
         )
         if type(model.get("model_invoked")) is bool:
@@ -16005,6 +16083,11 @@ def analyze_event(event: dict, *, file_context: dict | None = None) -> dict:
                 )
         return result
     finally:
+        # Recovery paths are private scratch, absent from the queued event's
+        # capabilities. A deferred event re-reads its authoritative source;
+        # only its original producer bundle must survive that defer.
+        for paths, marker in recovered_bundles:
+            cleanup_media_bundle(paths, marker)
         if not preserve_media_for_defer:
             cleanup_media_bundle(
                 image_paths,

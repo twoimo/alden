@@ -170,6 +170,7 @@ jobs:
           tests.test_menubar_layout_check
           tests.test_auto_reply_turn_holds
           tests.test_auto_reply_worker_mlx
+          tests.test_auto_reply_photo_context
           tests.test_auto_reply_retry_policy
           tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_geeknews_operator_send_uses_bounded_exact_room_readback
           tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_geeknews_operator_does_not_confirm_an_old_matching_message_in_same_second

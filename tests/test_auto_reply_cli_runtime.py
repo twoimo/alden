@@ -21148,6 +21148,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
     def test_missing_image_input_does_not_fallback_or_open_model_cooldown(self):
         module = self._load_auto_reply_module("image_missing_generation_boundary")
         with tempfile.TemporaryDirectory() as temporary:
+            # The adapter below simulates loss after model-lease admission.
+            (Path(temporary) / "disappeared.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
             with (
                 mock.patch.object(module, "_operator_state_root", return_value=Path(temporary)),
                 mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
@@ -21182,6 +21184,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
     def test_cooldown_fallback_image_error_is_terminal_without_provider_failure(self):
         module = self._load_auto_reply_module("image_missing_cooldown_fallback")
         with tempfile.TemporaryDirectory() as temporary:
+            # The adapter below simulates loss after model-lease admission.
+            (Path(temporary) / "missing.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
             first = "opencode-go-session/vision-first"
             second = "opencode-go-session/vision-second"
             with (
