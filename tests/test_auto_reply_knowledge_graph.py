@@ -46,7 +46,16 @@ CHAT_ID = "417780809780519"
 
 def make_state_root(tmp: str) -> Path:
     """A state root with one room ledger, shaped like the real one."""
-    root = Path(tmp)
+    root = Path(tmp) / "state"
+    # A successful graph refresh needs an actual canonical source snapshot.
+    # Previously this fixture omitted it and relied on a false fresh stamp.
+    with sqlite3.connect(Path(tmp) / "context.sqlite3") as context:
+        context.executescript("""
+            CREATE TABLE context_messages(id INTEGER PRIMARY KEY,source TEXT,
+                chat TEXT,date TEXT,user_name TEXT,message TEXT,vector BLOB);
+            CREATE TABLE context_topic_stats(chat TEXT,topic TEXT,message_count INTEGER);
+            CREATE TABLE context_message_topics(message_id INTEGER,topic TEXT);
+        """)
     room = root / "rooms" / CHAT_ID
     room.mkdir(parents=True, exist_ok=True)
     rows = [
@@ -615,6 +624,7 @@ class RealIndexPathTests(unittest.TestCase):
 
     def test_reindex_is_decoupled_from_dream_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
+            self._write_index(Path(tmp))
             root = self._state_root(Path(tmp))
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:

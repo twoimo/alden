@@ -274,7 +274,10 @@ class LiveRetrievalTests(unittest.TestCase):
 
     def test_reindex_all_calls_dense_refresh_as_an_isolated_stage(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "state"
+            root.mkdir()
+            with sqlite3.connect(Path(tmp) / "context.sqlite3") as source:
+                source.execute("CREATE TABLE context_messages(id INTEGER PRIMARY KEY)")
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             KG.ensure_seeded(conn)
             with mock.patch.multiple(
@@ -298,13 +301,17 @@ class LiveRetrievalTests(unittest.TestCase):
             self.assertIn("dense unavailable", KG.read_meta(conn, "last_dense_status"))
             conn.close()
 
-    def test_reindex_all_graph_failure_still_runs_dense_without_success_stamp(self):
+    def test_reindex_all_graph_failure_keeps_previous_dense_and_success_stamp(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp) / "state"
+            root.mkdir()
+            with sqlite3.connect(Path(tmp) / "context.sqlite3") as source:
+                source.execute("CREATE TABLE context_messages(id INTEGER PRIMARY KEY)")
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             KG.ensure_seeded(conn)
             KG.write_meta(conn, "last_indexed_at", "12345")
             KG.write_meta(conn, "last_snapshot_status", "previous_snapshot")
+            KG.write_meta(conn, "last_dense_status", "previous_dense")
             with mock.patch.object(
                 KG,
                 "index_topic_entities",
@@ -325,13 +332,13 @@ class LiveRetrievalTests(unittest.TestCase):
             ) as refresh:
                 KG._reindex_all(conn, root, cycle_started_at=1)
 
-            refresh.assert_called_once_with(conn, root)
+            refresh.assert_not_called()
             index_error = KG.read_meta(conn, "last_index_error")
             self.assertIn("topics: RuntimeError: graph unavailable", index_error)
             self.assertNotIn("dense unavailable", index_error)
             self.assertEqual(KG.read_meta(conn, "last_indexed_at"), "12345")
-            self.assertEqual(KG.read_meta(conn, "last_snapshot_status"), "previous_snapshot")
-            self.assertIn("dense unavailable", KG.read_meta(conn, "last_dense_status"))
+            self.assertEqual(KG.read_meta(conn, "last_snapshot_status"), "fail_closed")
+            self.assertEqual(KG.read_meta(conn, "last_dense_status"), "previous_dense")
             conn.close()
 
     def test_empty_graph_marks_dense_empty_without_creating_dense_file(self):

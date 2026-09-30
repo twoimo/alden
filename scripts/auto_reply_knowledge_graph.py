@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 import zlib
 from datetime import datetime, timezone
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -671,6 +672,85 @@ import shutil
 
 ISOLATED_COPY_MAX_ATTEMPTS = 3
 
+_INDEX_CYCLE_SNAPSHOT: ContextVar[dict[str, Any] | None] = ContextVar(
+    "knowledge_graph_index_cycle_snapshot", default=None
+)
+
+
+class _IndexCycleCursor(sqlite3.Cursor):
+    """Retain failures even when a legacy indexer catches sqlite3.Error."""
+
+    def _observed(self, operation, *args, **kwargs):
+        try:
+            return operation(*args, **kwargs)
+        except sqlite3.Error as error:
+            cycle = _INDEX_CYCLE_SNAPSHOT.get()
+            if cycle is not None:
+                cycle["errors"].append(f"sqlite:{type(error).__name__}")
+            raise
+
+    def execute(self, *args, **kwargs):
+        return self._observed(super().execute, *args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self._observed(super().executemany, *args, **kwargs)
+
+    def fetchone(self):
+        return self._observed(super().fetchone)
+
+    def fetchall(self):
+        return self._observed(super().fetchall)
+
+    def fetchmany(self, *args):
+        return self._observed(super().fetchmany, *args)
+
+    def __next__(self):
+        return self._observed(super().__next__)
+
+
+class _IndexCycleReadConnection(sqlite3.Connection):
+    def cursor(self, *args, **kwargs):
+        kwargs.setdefault("factory", _IndexCycleCursor)
+        return super().cursor(*args, **kwargs)
+
+    def execute(self, *args, **kwargs):
+        return self.cursor().execute(*args, **kwargs)
+
+
+class _IndexCycleGraphWriter:
+    """Existing indexers may commit; the owner publishes the whole cycle."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self.connection = connection
+
+    def cursor(self):
+        return self.connection.cursor(factory=_IndexCycleCursor)
+
+    def execute(self, *args, **kwargs):
+        return self.cursor().execute(*args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return self.cursor().executemany(*args, **kwargs)
+
+    def commit(self) -> None:
+        pass
+
+
+@contextmanager
+def _index_cycle_snapshot(db_path: Path):
+    """One private DB+WAL version for all source reads in this thread."""
+    with tempfile.TemporaryDirectory(prefix="kg-cycle-copy-") as directory:
+        try:
+            copied = _copy_consistent_sqlite_replica(db_path, Path(directory))
+        except (OSError, sqlite3.Error) as error:
+            raise sqlite3.OperationalError("isolated read-only snapshot unavailable") from error
+        cycle = {"source": db_path, "path": copied, "errors": []}
+        token = _INDEX_CYCLE_SNAPSHOT.set(cycle)
+        try:
+            yield cycle
+        finally:
+            _INDEX_CYCLE_SNAPSHOT.reset(token)
+
 
 def _snapshot_signature(db_path: Path) -> tuple[tuple[str, bool, int, int, int, int], ...]:
     """Detect committed-data changes, including rollback-journal appearance.
@@ -741,6 +821,27 @@ def _open_isolated_ro_conn(db_path: Path):
     """DB Lock 방지: 카카오톡 DB 동기화 시 실행 중 파일 잠금을 방지하기 위해
     임시 디렉터리로 복제한 뒤 Read Only 모드로 안전하게 연결한다 (2026-09-17).
     """
+    cycle = _INDEX_CYCLE_SNAPSHOT.get()
+    if cycle is not None and db_path == cycle["source"]:
+        conn = None
+        try:
+            conn = sqlite3.connect(
+                f"file:{cycle['path']}?mode=ro", uri=True,
+                factory=_IndexCycleReadConnection,
+            )
+            conn.execute("PRAGMA query_only = ON")
+            yield conn
+        except (sqlite3.Error, OSError, ValueError) as error:
+            cycle["errors"].append(f"context_read:{type(error).__name__}")
+            raise
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except sqlite3.Error as error:
+                    cycle["errors"].append(f"context_close:{type(error).__name__}")
+                    raise
+        return
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
@@ -2064,67 +2165,78 @@ def _reindex_all(
     chat: str = "",
     cycle_started_at: int = 0,
 ) -> None:
-    """Rebuild every indexed neuron and synapse for the graph.
+    """Read one committed source snapshot and publish one complete graph.
 
-    This is the body that used to run inline in collect_knowledge_graph.
-    Each step is isolated: a failure in one indexer must not stop the others,
-    because a graph with topics but no rooms is still better than no refresh
-    (2026-09-16, 2026-09-17).
-
-    A step that dies is recorded in kg_meta instead of being swallowed. The
-    menu showed a freshly indexed, empty graph while every indexer had been
-    failing on a NameError that only the real database path reached
-    (2026-09-17, 사용자 지시).
+    Individual indexers still work outside this cycle. Their intermediate
+    commits are deferred here, and swallowed SQLite failures are retained by
+    the cycle cursor. A failed cycle preserves prior rows, FTS and watermark;
+    it never spends embedding work or stamps the old graph as freshly indexed.
     """
     failures: list[str] = []
+    savepoint = False
+    # A caller may own a surrounding transaction. Status updates must not
+    # accidentally commit its pending work, including on a snapshot failure.
+    status_writer = _IndexCycleGraphWriter(conn) if conn.in_transaction else conn
 
     def _note(step: str, error: BaseException) -> None:
         failures.append(f"{step}: {type(error).__name__}: {error}"[:400])
 
     try:
-        index_topic_entities(conn, state_root, chat=chat)
-        index_topic_relations(conn, state_root, chat=chat)
-    except Exception as error:  # noqa: BLE001 - 색인은 한 걸음이 죽어도 계속한다
-        _note("topics", error)
-    try:
-        index_chat_entities(conn, state_root, chat=chat)
-        index_person_entities(conn, state_root, chat=chat)
-        index_membership_relations(conn, state_root, chat=chat)
-        prune_indexed_entities(conn, cycle_started_at=cycle_started_at)
-        _merge_seed_rooms(conn)
-    except Exception as error:  # noqa: BLE001
-        _note("rooms", error)
-    try:
-        attach_ledger_evidence(conn, state_root)
-    except Exception as error:  # noqa: BLE001
-        _note("evidence", error)
-    if failures:
-        # 실패를 남기고 "색인했다"는 도장은 찍지 않는다. 찍으면 다음 폴링이
-        # 같은 일을 다시 하지 않아 그래프가 영영 낡은 채로 남는다
-        # (2026-09-17).
-        write_meta(conn, "last_index_error", " | ".join(failures))
-        if any("isolated read-only snapshot unavailable" in failure for failure in failures):
-            # 카카오 원본 DB로 폴백하지 않았음을 상태 화면에서도 확인할 수
-            # 있게 남긴다. 이 값은 다음 정상 색인이 성공할 때만 해제된다.
-            write_meta(conn, "last_snapshot_status", "fail_closed")
-    else:
-        write_meta(conn, "last_index_error", "")
-        write_meta(conn, "last_snapshot_status", "copy_ok")
-        # 이번 색인이 언제 끝났는지 남긴다. 이 값이 없으면 다음 폴링이 방금
-        # 끝난 색인을 모르고 같은 일을 다시 시작한다 (2026-09-17).
-        # Dense는 optional이므로 이 도장은 dense endpoint 상태와 독립적이다.
-        write_meta(conn, "last_indexed_at", str(int(time.time())))
+        with _index_cycle_snapshot(_index_db_path(state_root)) as cycle:
+            conn.execute("SAVEPOINT alden_graph_index_cycle")
+            savepoint = True
+            writer = _IndexCycleGraphWriter(conn)
+            try:
+                index_topic_entities(writer, state_root, chat=chat)
+                index_topic_relations(writer, state_root, chat=chat)
+            except Exception as error:
+                _note("topics", error)
+            try:
+                index_chat_entities(writer, state_root, chat=chat)
+                index_person_entities(writer, state_root, chat=chat)
+                index_membership_relations(writer, state_root, chat=chat)
+                prune_indexed_entities(writer, cycle_started_at=cycle_started_at)
+                _merge_seed_rooms(writer)
+            except Exception as error:
+                _note("rooms", error)
+            try:
+                attach_ledger_evidence(writer, state_root)
+            except Exception as error:
+                _note("evidence", error)
+            failures.extend(cycle["errors"])
+            if not failures:
+                write_meta(writer, "last_index_error", "")
+                write_meta(writer, "last_snapshot_status", "copy_ok")
+                write_meta(writer, "last_indexed_at", str(int(time.time())))
+                failures.extend(cycle["errors"])
+        if failures:
+            conn.execute("ROLLBACK TO alden_graph_index_cycle")
+        conn.execute("RELEASE alden_graph_index_cycle")
+        savepoint = False
+    except BaseException as error:
+        if savepoint:
+            conn.execute("ROLLBACK TO alden_graph_index_cycle")
+            conn.execute("RELEASE alden_graph_index_cycle")
+        if not isinstance(error, Exception):
+            raise
+        _note("snapshot", error)
 
-    # Dense ANN은 그래프 재색인의 독립 단계다. 로컬 임베딩 서비스가 없거나
-    # 깨져도 그래프 색인 성공/실패 판정(last_index_error)을 오염시키지 않는다.
-    # refresh 자체도 fail-closed지만 이 경계에서도 막아 detached child와
-    # background thread 밖으로 예외가 새지 않게 한다.
+    if failures:
+        write_meta(status_writer, "last_index_error", " | ".join(dict.fromkeys(failures))[:400])
+        write_meta(status_writer, "last_snapshot_status", "fail_closed")
+        return
+
+    if conn.in_transaction:
+        write_meta(status_writer, "last_dense_status", "deferred:graph_transaction_uncommitted")
+        return
+
+    # Dense is optional and starts only after a complete graph is committed.
+    # Its own watermark validation rejects stale vectors after a failed update.
     try:
         refresh_dense_index(conn, state_root)
-    except Exception as error:  # noqa: BLE001 - optional dense stage must never escape
+    except Exception as error:
         write_meta(
-            conn,
-            "last_dense_status",
+            conn, "last_dense_status",
             _bounded_dense_status(f"unavailable:{type(error).__name__}:{error}"),
         )
 
