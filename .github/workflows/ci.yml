@@ -120,6 +120,7 @@ jobs:
       - name: Validate Tauri launcher contracts
         run: |
           sh -n scripts/build-alden-desktop.sh
+          sh -n scripts/build-alden-voice-audio.sh
           sh -n scripts/install-alden-desktop.sh
           sh -n scripts/build-auto-reply-menubar.sh
           sh -n scripts/install-auto-reply-menubar.sh
@@ -203,6 +204,7 @@ jobs:
           tests.test_alden_tool_runtime
           tests.test_alden_voice_runtime
           tests.test_alden_voice_turns
+          tests.test_alden_voice_bargein
           tests.test_alden_unit3.LocalMlxLlmRequestTests
           tests.test_alden_wake_eval
           tests.test_alden_wake_evidence
@@ -328,6 +330,7 @@ jobs:
           app="desktop/src-tauri/target/release/bundle/macos/Alden.app"
           main="$app/Contents/MacOS/openkakao-alden-desktop"
           embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
+          embedded_audio="$app/Contents/Resources/scripts/libalden_audio.dylib"
           release_cli="target/release/openkakao-cli"
 
           test -x "$main"
@@ -336,6 +339,8 @@ jobs:
           test ! -e "$app/Contents/_CodeSignature"
           test "$(/usr/bin/lipo -archs "$main")" = "arm64"
           test "$(/usr/bin/lipo -archs "$embedded_cli")" = "arm64"
+          test "$(/usr/bin/lipo -archs "$embedded_audio")" = "arm64"
+          /usr/bin/codesign --verify --strict "$embedded_audio"
           test "$(/usr/bin/lipo -archs "$release_cli")" = "arm64"
           /usr/bin/cmp -s "$embedded_cli" "$release_cli"
 

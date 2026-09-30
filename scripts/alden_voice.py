@@ -8,12 +8,14 @@ a bounded in-memory ring and is never written to disk by default.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import http.client
 import json
 import math
 import os
 import re
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -64,6 +66,7 @@ VOICE_STATUS_HEARTBEAT_SECONDS = 5.0
 VOICE_MIC_POLL_SECONDS = 0.02
 VOICE_MIC_STALE_SECONDS = 15.0
 VOICE_MIC_FRAME_SAMPLES = 320
+VOICE_BARGE_IN_SPEECH_FRAMES = 3
 # The last bounded host run began with 1.65 GiB of swap headroom and crossed
 # the 512 MiB emergency stop while a voice model stage was still running.
 # Keep 2 GiB free before starting either large local voice model, plus enough
@@ -449,6 +452,164 @@ class VoiceTurn:
     reply: str = ""
 
 
+def _load_voice_audio_library() -> Any:
+    """Load only the fixed library beside this validated bundled voice script."""
+    if sys.platform != "darwin":
+        raise RuntimeError("voice_audio_platform_unsupported")
+    path = Path(__file__).absolute().parent / "libalden_audio.dylib"
+    current = Path(path.anchor)
+    for part in path.parts[1:]:
+        current = current / part
+        info = current.lstat()
+        if stat.S_ISLNK(info.st_mode) or (current != path and not stat.S_ISDIR(info.st_mode)):
+            raise RuntimeError("voice_audio_library_unsafe")
+        if current == path and (not stat.S_ISREG(info.st_mode) or info.st_size == 0
+                                or info.st_mode & 0o022 or info.st_nlink != 1):
+            raise RuntimeError("voice_audio_library_unsafe")
+    return ctypes.CDLL(str(path))
+
+
+class MacVoiceAudio:
+    """One native voice-processing engine; a bounded PCM queue and owned playback tickets."""
+
+    def __init__(self) -> None:
+        self._library = _load_voice_audio_library()
+        signatures = {
+            "abi": ([], ctypes.c_int32), "permission": ([], ctypes.c_int32),
+            "request_permission": ([], None),
+            "create": ([], ctypes.c_void_p), "start": ([ctypes.c_void_p], ctypes.c_int32),
+            "processed": ([ctypes.c_void_p], ctypes.c_int32),
+            "available": ([ctypes.c_void_p], ctypes.c_int32),
+            "dropped": ([ctypes.c_void_p], ctypes.c_uint64),
+            "read": ([ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32], ctypes.c_int32),
+            "play": ([ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32, ctypes.c_double], ctypes.c_uint64),
+            "playing": ([ctypes.c_void_p, ctypes.c_uint64], ctypes.c_int32),
+            "cancel": ([ctypes.c_void_p, ctypes.c_uint64], None),
+            "destroy": ([ctypes.c_void_p], None),
+        }
+        for name, (arguments, result) in signatures.items():
+            function = getattr(self._library, "alden_audio_" + name)
+            function.argtypes, function.restype = arguments, result
+        if self._library.alden_audio_abi() != 1:
+            raise RuntimeError("voice_audio_abi_unsupported")
+        self._lock = threading.RLock()
+        self._handle: int | None = None
+        self._disposed = False
+        self._frame = ctypes.create_string_buffer(640)
+        self._dropped = 0
+
+    def __enter__(self) -> "MacVoiceAudio":
+        with self._lock:
+            if self._handle is not None:
+                raise RuntimeError("voice_audio_already_running")
+            if self._disposed:
+                raise RuntimeError("voice_audio_closed")
+            if self._library.alden_audio_permission() != 3:
+                raise RuntimeError("mic_access_required")
+            handle = self._library.alden_audio_create()
+            if not handle:
+                raise RuntimeError("voice_audio_unavailable")
+            self._handle = handle
+            try:
+                result = self._library.alden_audio_start(handle)
+                if result != 0 or not self.echo_processed:
+                    raise RuntimeError(f"voice_audio_processing_unavailable:{result}")
+            except BaseException:
+                self.close()
+                raise
+            return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
+
+    def ensure_permission(self, token: AbortToken) -> None:
+        """Foreground user-start only; remain cancellable while the OS decides."""
+        token.raise_if_cancelled()
+        status = self._library.alden_audio_permission()
+        if status == 0:
+            self._library.alden_audio_request_permission()
+            deadline = time.monotonic() + 30
+            while status == 0 and time.monotonic() < deadline:
+                token.raise_if_cancelled()
+                time.sleep(VOICE_MIC_POLL_SECONDS)
+                status = self._library.alden_audio_permission()
+        token.raise_if_cancelled()
+        if status != 3:
+            raise RuntimeError("mic_access_required")
+
+    def close(self) -> None:
+        with self._lock:
+            handle, self._handle = self._handle, None
+            self._disposed = True
+            if handle is not None:
+                self._library.alden_audio_destroy(handle)
+
+    @property
+    def echo_processed(self) -> bool:
+        with self._lock:
+            return self._handle is not None and self._library.alden_audio_processed(self._handle) == 1
+
+    @property
+    def active(self) -> bool:
+        return self.echo_processed
+
+    @property
+    def read_available(self) -> int:
+        with self._lock:
+            if self._handle is None:
+                raise RuntimeError("mic_disconnected")
+            available = self._library.alden_audio_available(self._handle)
+            if available < 0:
+                raise RuntimeError("mic_disconnected")
+            return available // 2
+
+    def read(self, samples: int) -> tuple[bytes, bool]:
+        with self._lock:
+            if self._handle is None or samples != VOICE_MIC_FRAME_SAMPLES:
+                raise RuntimeError("voice_frame_size_invalid")
+            count = self._library.alden_audio_read(self._handle, self._frame, 640)
+            if count != 640:
+                raise RuntimeError("mic_disconnected")
+            dropped = self._library.alden_audio_dropped(self._handle)
+            overflowed = dropped != self._dropped
+            self._dropped = dropped
+            return self._frame.raw, overflowed
+
+    def play(self, audio: Any, sample_rate: int, token: AbortToken) -> None:
+        import numpy as np
+
+        if hasattr(audio, "detach"):
+            audio = audio.detach().cpu().numpy()
+        samples = np.asarray(audio, dtype=np.float32).squeeze()
+        if (samples.ndim != 1 or not 0 < samples.size <= 2_880_000
+                or sample_rate != 24_000 or not np.isfinite(samples).all()):
+            raise RuntimeError("voice_playback_format_invalid")
+        samples = np.ascontiguousarray(samples)
+        token.raise_if_cancelled()
+        with self._lock:
+            if self._handle is None:
+                raise RuntimeError("voice_audio_unavailable")
+            ticket = self._library.alden_audio_play(
+                self._handle, samples.ctypes.data, int(samples.size), float(sample_rate))
+            if ticket == 0:
+                raise RuntimeError("voice_playback_unavailable")
+        try:
+            while True:
+                token.raise_if_cancelled()
+                with self._lock:
+                    if self._handle is None:
+                        raise RuntimeError("voice_audio_unavailable")
+                    if not self.echo_processed:
+                        raise RuntimeError("mic_disconnected")
+                    if self._library.alden_audio_playing(self._handle, ticket) != 1:
+                        return
+                time.sleep(VOICE_MIC_POLL_SECONDS)
+        finally:
+            with self._lock:
+                if self._handle is not None:
+                    self._library.alden_audio_cancel(self._handle, ticket)
+
+
 class BoundedAudioRing:
     def __init__(self, *, sample_rate: int = 16_000, seconds: float = 12.0, sample_width: int = 2):
         self.sample_rate = sample_rate
@@ -649,6 +810,12 @@ class OpenWakeVadFrontend:
             custom_wake_score=custom,
         )
 
+    def analyze_speech(self, pcm16: bytes) -> AudioFrameAnalysis:
+        """Do not contaminate wake-model temporal state with the playback interval."""
+        if len(pcm16) != 640:
+            raise ValueError("voice_frame_size_invalid")
+        return AudioFrameAnalysis(self._rms(pcm16), bool(self.vad.is_speech(pcm16, self.sample_rate)), 0.0)
+
 
 def resolve_custom_wake_model(explicit: Path | None = None) -> Path | None:
     """Return an explicitly supplied experimental model, or None by default.
@@ -751,6 +918,7 @@ class AldenVoicePipeline:
         status: VoiceStatusStore | None = None,
         sample_rate: int = 16_000,
         ring_seconds: float = 12.0,
+        echo_processed_microphone: bool = False,
     ) -> None:
         self.stt = stt
         self.llm = llm
@@ -769,6 +937,8 @@ class AldenVoicePipeline:
         self._speech_frames = 0
         self._silence_frames = 0
         self._noise_frames = 0
+        self._echo_processed_microphone = echo_processed_microphone
+        self._barge_frames: deque[bytes] = deque(maxlen=VOICE_BARGE_IN_SPEECH_FRAMES)
         self._conversation: deque[dict[str, str]] = deque(maxlen=VOICE_CONTEXT_TURNS * 2)
         self._last_conversation_turn = 0.0
         self._lock = threading.RLock()
@@ -808,6 +978,7 @@ class AldenVoicePipeline:
         self.ring.clear()
         self._speech_frames = self._silence_frames = self._noise_frames = 0
         self._wake_source = "none"
+        self._barge_frames.clear()
         if publish:
             self._publish()
 
@@ -865,8 +1036,20 @@ class AldenVoicePipeline:
             if self.token.is_cancelled():
                 return self._end(VoiceState.ABORTED, "global_abort")
             if self.state == VoiceState.SPEAKING:
-                # Playback mute/ignore-while-speaking blocks TTS from feeding
-                # the wake detector or user-speech ring.
+                if (self._echo_processed_microphone and len(pcm16) == 640
+                        and speech and math.isfinite(self.last_rms) and self.last_rms > 0):
+                    self._barge_frames.append(bytes(pcm16))
+                    if len(self._barge_frames) >= VOICE_BARGE_IN_SPEECH_FRAMES:
+                        leading = tuple(self._barge_frames)
+                        self.interrupt()
+                        self.state = VoiceState.USER_LISTEN
+                        self._wake_source = "none"
+                        for frame in leading:
+                            self.ring.append(frame)
+                        self._speech_frames = len(leading)
+                        self._silence_frames = self._noise_frames = 0
+                else:
+                    self._barge_frames.clear()
                 self._publish()
                 return None
             if self.state in {VoiceState.WAKE_LISTEN, VoiceState.TRANSCRIBING, VoiceState.GENERATING}:
@@ -925,13 +1108,15 @@ class AldenVoicePipeline:
             if self.token.is_cancelled():
                 return self._end(VoiceState.ABORTED, "global_abort")
             if self.state == VoiceState.SPEAKING:
-                # Reject playback before it reaches the stateful detector.
                 self._frontend_needs_reset = True
-                return None
-            if self._frontend_needs_reset:
-                frontend.reset_for_independent_clip()
-                self._frontend_needs_reset = False
-            analysis = frontend.analyze(pcm16)
+                if not self._echo_processed_microphone:
+                    return None
+                analysis = frontend.analyze_speech(pcm16)
+            else:
+                if self._frontend_needs_reset:
+                    frontend.reset_for_independent_clip()
+                    self._frontend_needs_reset = False
+                analysis = frontend.analyze(pcm16)
         # Never wait for the processing lock while holding the state lock:
         # the previous turn needs that state lock to discard its late result.
         return self.feed_audio(
@@ -967,6 +1152,7 @@ class AldenVoicePipeline:
             self._active_turn = turn
             self._transcript = self._reply = ""
             self.ring.clear()
+            self._barge_frames.clear()
             return turn
 
     def interrupt(self) -> None:
@@ -982,6 +1168,7 @@ class AldenVoicePipeline:
                 self._pending_turn[3].cancel()
                 self._pending_turn = None
             self.ring.clear()
+            self._barge_frames.clear()
 
     def close(self) -> None:
         with self._work_ready:
@@ -1372,9 +1559,10 @@ class MlxWhisperAdapter:
 
 
 class Qwen3TtsAdapter:
-    def __init__(self, model: str = QWEN3_TTS_MODEL_ID):
+    def __init__(self, model: str = QWEN3_TTS_MODEL_ID, *, audio_backend: MacVoiceAudio | None = None):
         self.model = model
         self._engine: Any | None = None
+        self.audio_backend = audio_backend
 
     def _load(self) -> Any:
         if self._engine is None:
@@ -1464,6 +1652,12 @@ class Qwen3TtsAdapter:
             self.write_wav(text, tts_out, token)
             return
 
+        if self.audio_backend is not None:
+            audio, sample_rate = self.synthesize(text, token)
+            token.raise_if_cancelled()
+            self.audio_backend.play(audio, sample_rate, token)
+            return
+
         import sounddevice as sd
 
         audio, sample_rate = self.synthesize(text, token)
@@ -1511,7 +1705,7 @@ class _MicrophoneDisconnected(RuntimeError):
 
 
 class _MicrophoneFramePoller:
-    """Read one complete frame only when PortAudio reports it is available."""
+    """Read one complete frame only when the owned audio backend reports it available."""
 
     def __init__(
         self,
@@ -1564,7 +1758,6 @@ def run_microphone_session(
 
     assert_isolated_voice_environment()
     from alden_abort import AbortController
-    import sounddevice as sd
 
     controller = AbortController(state_root)
     token = controller.token()
@@ -1586,19 +1779,17 @@ def run_microphone_session(
         pipeline._custom_model_selected = selected is not None
         pipeline._publish()
         frontend = OpenWakeVadFrontend(custom_wake_model=selected)
-        # Keep input polling separate from the single inference worker. A new
-        # wake during STT/generation cancels that turn; playback remains muted
-        # until an independently validated echo/barge-in path is available.
+        # One echo-processing engine owns both input and TTS output. Input
+        # polling remains independent of the single inference worker.
         wake_suppressed_until = 0.0
         stream_entered = False
         try:
-            with sd.RawInputStream(
-                samplerate=16_000,
-                channels=1,
-                dtype="int16",
-                blocksize=VOICE_MIC_FRAME_SAMPLES,
-            ) as stream:
+            audio = MacVoiceAudio()
+            audio.ensure_permission(token)
+            with audio as stream:
                 stream_entered = True
+                pipeline.tts.audio_backend = stream
+                pipeline._echo_processed_microphone = stream.echo_processed
                 poller = _MicrophoneFramePoller(stream)
                 while True:
                     if token.is_cancelled():
@@ -1620,7 +1811,7 @@ def run_microphone_session(
                         continue
                     raw, overflowed = polled
                     if overflowed:
-                        pipeline._noise_frames += 1
+                        return pipeline._end(VoiceState.ERROR, "mic_audio_gap")
                     if time.monotonic() < wake_suppressed_until:
                         pipeline._publish()
                         continue
@@ -1633,6 +1824,14 @@ def run_microphone_session(
                     return result
         except AldenCancelled:
             raise
+        except RuntimeError as error:
+            if str(error) == "mic_access_required":
+                return pipeline._end(VoiceState.ERROR, "mic_access_required")
+            if str(error).startswith("voice_audio_"):
+                return pipeline._end(VoiceState.ERROR, "voice_audio_processing_unavailable")
+            if not stream_entered:
+                return pipeline.mic_unavailable()
+            return pipeline.mic_disconnected()
         except Exception:
             if not stream_entered:
                 return pipeline.mic_unavailable()

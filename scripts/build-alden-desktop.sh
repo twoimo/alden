@@ -18,6 +18,8 @@ if ! (cd "$ROOT" && shasum -a 256 -c scripts/menubar-bytecode.sha256); then
   exit 2
 fi
 
+/bin/sh "$ROOT/scripts/build-alden-voice-audio.sh"
+
 (
   cd "$ROOT"
   cargo build --release --bin openkakao-cli

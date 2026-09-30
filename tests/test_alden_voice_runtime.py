@@ -47,6 +47,7 @@ class FakeStream:
         **_kwargs: object,
     ) -> None:
         self.active = active
+        self.echo_processed = True
         self.available = available
         self.frame = frame if frame is not None else b"\0\0" * VOICE_MIC_FRAME_SAMPLES
         self.overflowed = overflowed
@@ -66,6 +67,9 @@ class FakeStream:
 
     def __enter__(self) -> "FakeStream":
         return self
+
+    def ensure_permission(self, token):
+        token.raise_if_cancelled()
 
     def __exit__(self, *_args: object) -> bool:
         return False
@@ -153,11 +157,9 @@ class VoiceStatusStoreTests(unittest.TestCase):
 class MicrophoneSessionErrorTests(unittest.TestCase):
     @staticmethod
     def _run_with_stream_factory(factory: object):
-        fake_sounddevice = types.ModuleType("sounddevice")
-        fake_sounddevice.RawInputStream = factory  # type: ignore[attr-defined]
         with TemporaryDirectory() as temp_dir, mock.patch.dict(
             os.environ, {"OPENKAKAO_VOICE_ENV": "1"}
-        ), mock.patch.dict(sys.modules, {"sounddevice": fake_sounddevice}), mock.patch(
+        ), mock.patch("alden_voice.MacVoiceAudio", side_effect=factory), mock.patch(
             "alden_voice.resolve_live_wake_model", return_value=Path(__file__)
         ), mock.patch("alden_voice.OpenWakeVadFrontend", return_value=object()):
             return run_microphone_session(state_root=Path(temp_dir))
@@ -180,11 +182,9 @@ class MicrophoneSessionErrorTests(unittest.TestCase):
         def must_not_open(**_kwargs: object):
             self.fail("microphone opened without a validated Alden wake model")
 
-        fake_sounddevice = types.ModuleType("sounddevice")
-        fake_sounddevice.RawInputStream = must_not_open  # type: ignore[attr-defined]
         with TemporaryDirectory() as temp_dir, mock.patch.dict(
             os.environ, {"OPENKAKAO_VOICE_ENV": "1"}
-        ), mock.patch.dict(sys.modules, {"sounddevice": fake_sounddevice}), mock.patch(
+        ), mock.patch("alden_voice.MacVoiceAudio", side_effect=must_not_open), mock.patch(
             "alden_voice.resolve_live_wake_model", return_value=None
         ):
             result = run_microphone_session(state_root=Path(temp_dir))

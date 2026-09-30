@@ -15,6 +15,12 @@ export function voiceErrorMessage(errorCode: string | null): string | null {
       return "마이크를 사용할 수 없습니다. 연결을 확인해 주세요.";
     case "mic_unavailable":
       return "마이크를 열 수 없습니다. 연결 상태를 확인해 주세요.";
+    case "mic_access_required":
+      return "음성 입력을 사용하려면 마이크 접근을 허용해 주세요.";
+    case "mic_audio_gap":
+      return "음성 입력의 일부를 놓쳐 중단했습니다. 다시 시작해 주세요.";
+    case "voice_audio_processing_unavailable":
+      return "음성 입력과 재생을 연결하지 못해 중단했습니다. 다시 시작해 주세요.";
     case "stt_empty":
       return "말씀을 알아듣지 못했습니다. 다시 말씀해 주세요.";
     case "generation_error":

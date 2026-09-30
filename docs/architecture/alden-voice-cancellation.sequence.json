@@ -7,7 +7,7 @@
     "column_fit": "spread",
     "viewBox": [
       1360,
-      630
+      660
     ]
   },
   "participants": [
@@ -34,7 +34,7 @@
     {
       "id": "tts",
       "type": "backend",
-      "label": "음성 출력"
+      "label": "오디오 엔진"
     },
     {
       "id": "abort",
@@ -138,16 +138,23 @@
       "variant": "emphasis"
     },
     {
-      "from": "tts",
+      "from": "input",
       "to": "turn",
       "y": 500,
-      "label": "재생 완료 뒤 응답 기록",
-      "variant": "return"
+      "label": "에코 처리 후 연속 발화",
+      "variant": "emphasis"
+    },
+    {
+      "from": "turn",
+      "to": "tts",
+      "y": 530,
+      "label": "이전 재생 중단·새 발화 보존",
+      "variant": "security"
     },
     {
       "from": "abort",
       "to": "worker",
-      "y": 530,
+      "y": 560,
       "label": "중단 epoch·재개 전 실행 금지",
       "variant": "security"
     }
@@ -158,15 +165,15 @@
       "title": "현재 구현",
       "items": [
         "취소된 STT·LLM 결과는 최신 상태를 바꾸지 않는다.",
-        "사용자 발화는 확정 시, 답변은 재생 완료 뒤 기억한다."
+        "에코 처리 입력의 연속 3프레임으로 이전 재생을 중단한다."
       ]
     },
     {
       "dot": "amber",
       "title": "검증이 남은 경계",
       "items": [
-        "재생 중 마이크는 차단한다. 실제 음성 끼어들기와 에코 처리는 미완료다.",
-        "STT·TTS 실가동, 설치본·물리 단축키와 서버 취소는 별도로 확인한다."
+        "실제 입출력과 녹음된 기준음 재생은 확인했다. 사람의 발화·에코 품질은 미검증이다.",
+        "wake·STT·LLM·TTS 전체 턴과 물리 단축키는 별도로 확인한다."
       ]
     }
   ]

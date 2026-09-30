@@ -85,3 +85,5 @@ docs/architecture/alden-live-settings.png
 docs/architecture/alden-settings-panel.png
 docs/architecture/alden-system.architecture.pre-main-*.json
 voice/models/experimental/
+scripts/libalden_audio.dylib
+scripts/libalden_audio.dylib.build-*

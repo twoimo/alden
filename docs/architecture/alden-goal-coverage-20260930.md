@@ -6,11 +6,11 @@
 
 | 요구사항 | 이번 작업에서 확인한 근거 | 남은 완료 근거 |
 | --- | --- | --- |
-| 최신 맥락·턴·취소·출처·중복 | 확정 사용자 입력 보존, conversation/turn/context ID, 최신 pending slot, 취소 epoch와 늦은 결과 폐기. 관련 97/97 검사 | 실제 설치 앱의 자연 대화와 마이크. 재생 중 microphone frame을 무시하므로 음성 끼어들기는 미구현 |
-| Tauri v2 / Three.js / Alden | 기존 구현 재사용, 0.1.6 metadata와 release CLI·frontend·native bundle build | 25/25 resource와28/28설치파일일치·단일PID50010실행확인. native화면/Retina는CUA타임아웃으로미검증 |
+| 최신 맥락·턴·취소·출처·중복 | conversation/turn/context ID, 최신 pending slot, 취소 epoch와 늦은 결과 폐기. native processed input의 연속 3프레임으로 이전 재생/턴 취소·앞부분 보존, 집중 CI971/2skip/실패0 | 실제 설치 앱의 자연 대화와 사람의 음성 끼어들기·에코 품질 |
+| Tauri v2 / Three.js / Alden | 기존 구현 재사용, 0.1.6 release CLI·frontend·native 오디오 번들. 26/26 resource·29/29 설치파일·단일PID22050·ad-hoc 서명 확인 | native 화면/Retina는 CUA 타임아웃으로 미검증 |
 | 숨김/복원·GPU 자원 수명 | 191 frontend 검사, 실제 Chromium/WebGL2와 합성 Tauri bridge에서 숨김 750ms 추가 frame 0; 50회 복원 후 listener 1 | 설치 AppKit/WKWebView 숨김·잠금·Retina 관측, 앱 전체 GPU/배터리 측정 |
 | 로컬 27B / Flash-Next | resident 27B에서 한국어 후속 질문 12/12 두 판본. 정확한 모델과 checkpoint 기록 유지 | Flash/iQ 현재 admission·생성 및 동일 조건 cold/warm 비교. 공유 서버 설정을 바꾸지 않음 |
-| 웨이크 → STT → LLM → Qwen TTS | 체크포인트·로컬 runtime 존재, wake release gate 및 메모리 admission 유지 | 검증된 wake 모델, 실제 음성 턴과 에코·소음·침묵·짧은 발화·끼어들기 |
+| 웨이크 → STT → LLM → Qwen TTS | 체크포인트·로컬 runtime 존재, wake release gate 및 메모리 admission 유지. native 입출력·녹음된 기준음 재생/취소 일부 실제 검증, 설치 waiter 종료1회12.418ms | 입력은 RMS0. 검증된 wake 모델, 실제 음성 턴과 사람 발화·에코·소음·침묵·짧은 발화·끼어들기 |
 | 비상 중단·명시적 재개 | 취소 전 epoch의 작업 재개 방지, owned HTTP socket 중단. 실제 SSE client 3.082–5.383ms 종료, reply 없음 | 물리 단축키, 재생·외부 작업 전체 중단. backend idle은 2.279–2.464초, 즉시 추론 중단 미달 |
 | Browser-use / macOS AX | 설치된 Python browser entrypoint가 local27B로 공개 title1건48.556초 성공, 독립 title 일치. live send 없이 AX 회귀 | 실제 Tauri UI caller·macOS AX·포커스 영향. 네이티브 CUA app/inventory 조회는 timeout |
 | 사진·링크·파일 맥락 | 실제 ledger 사진 실패16events helper replay, 이미지 누락/읽기 실패의 HTTP 요청 차단 및 recipient/register 전달. 이미지10검사 | active worker는기존판본. 링크recent-tail/refresh,파일metadata/후속맥락,off-tailquote수정완료. 최종통합959 tests/2skips/실패0. 실제vision/file내용읽기는미완료 |

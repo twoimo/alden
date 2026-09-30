@@ -11,21 +11,22 @@
 
 ## 최신 전달 상태
 
+- 22:02 KST 네이티브 오디오 후보: 기존 Python 안에 Swift C ABI의 단일 voice-processing 엔진을 연결하고, 처리된 연속 발화 3프레임으로 이전 재생/턴을 취소하는 경로를 구현했다. 집중 CI **971개/2 skip/실패0**, frontend **191**, desktop Rust **85** 통과. 설치 **29/29 파일·26/26 resource**, 단일 PID22050, ad-hoc 서명 검증. [현재 소스·하드웨어 범위](architecture/alden-native-audio-20260930.md)와 [설치 기록](architecture/alden-native-audio-install-20260930.json)을 기준으로 읽는다. 이 후보의 커밋·푸시와 원격 CI는 아래 과거 판본과 별도로 진행한다.
 - 코드 판본은 `e03a678`, fixture 격리 후 원격 판본은 `b987ad151e97010411f346e2c0aec34839551eba`다. [PR #27](https://github.com/twoimo/openkakao-bot/pull/27)은 draft이며 main merge와 공개 release는 아직 수행하지 않았다.
 - [원격 CI 36706854755](https://github.com/twoimo/openkakao-bot/actions/runs/36706854755)는 성공했고, 해당 SHA의 보안 검사까지 **5/5 성공**이다. Hosted Python은 959개 실행, 70개 건너뜀, 실패 0이다. 로컬 전체 의존성 환경의 959개/2개 건너뜀과 구분한다.
 - Alden 0.1.6 로컬 설치, 28/28 bundle 파일 및 25/25 resource 대조, 27B 한국어 후속질문과 설치된 Python browser entrypoint의 공개 title 1건은 검증됐다. 네이티브 CUA inventory 재조회도 30초 timeout으로 실패해 설치 화면·물리 단축키·마이크의 증거를 추가하지 못했다.
 - 최종 worker 후보 `e03a678`은 독립 scoped Astra 검토와 20개 자산/18개 소스 hash 대조를 마쳤다. 기존 타세션 runtime `20260930T0650Z-termination-74149a4`는 유지한다. 큐와 3개 방을 보존한 교체 허가를 요청했으며 아직 답변을 받지 않았다.
-- TTS 재생 중 microphone frame은 무시된다. **재생 중 음성 끼어들기는 미구현**이며 fake cancellation 통과를 그 기능의 성공으로 해석하지 않는다. `RELEASED_WAKE_MODEL=None`과 swap-free 2GiB admission 미달도 실제 음성 실행을 막는다.
+- 재생 중 microphone 차단은 처리되지 않은 입력에만 유지한다. 실제 native processing 활성화·입출력·녹음된 기준음 재생을 확인했고, 최종 설치 Python의 1회 취소 waiter 종료는 **12.418ms**였다. 입력은 모두 무음이므로 사람의 음성 끼어들기와 에코 품질은 미검증이다. `RELEASED_WAKE_MODEL=None`과 기존 메모리 admission은 유지한다.
 - 공개 릴리즈는 Developer ID Application 인증서와 기존 workflow의 필수 `ALDEN_APPLE_*` 6개 secrets 부재로 차단된다. 로컬 ad-hoc ZIP/CPython sidecar/manifest/SHA256SUMS는 준비됐다. 후보 worker 활성화, main merge, 공개 서명·공증 릴리즈를 전달 완료로 표기하지 않는다.
 - 아래 관측은 시간순 이력이며, 중간 SHA의 CI·후보·설치는 최신 판본의 근거로 대체하지 않는다.
 
 | 요구사항 | 현재 단계 | 근거 / 다음 확인 |
 | --- | --- | --- |
-| 장치·브랜치·설치본·모델·실행 프로세스 확인 | 실제 실행 검증 | M5 Max, 128GB, AC 연결. Alden 0.1.6 설치(28/28 파일 일치, 단일PID50010). 27B 11234 ready, E5 11236 ready, Flash 11235 부재. 기존 Jarvis 음성 PID 25865는 며칠 전 상태를 유지. |
+| 장치·브랜치·설치본·모델·실행 프로세스 확인 | 실제 실행 검증 | M5 Max, 128GB, AC 연결. Alden 0.1.6 최신 native-audio 설치(29/29 파일·26/26 resource 일치, 단일PID22050). 27B/E5 공유 서비스와 기존 Jarvis 음성 PID25865는 보존. |
 | 맥락 오류 재현·최신 턴·역할·취소·중복·끼어들기 | 구현 | conversation/turn/context·출처·중복·취소 token, 단일 worker/최신 pending slot 구현. 집중 97/97. 한국어 후속 질문 12/12 두 판본. 실제 재생 중 끼어들기와 자연 발화는 미검증. |
 | Tauri v2·Three.js·Alden 명칭·기존 데이터 호환 | 구현 | PR #27 구현 재사용. 설치본 화면과 권한/저장 경로 호환 재확인 필요. |
 | 정확한 27B·Flash 가중치·리비전·로컬 전용 추론 | 구현 | 기존 27B와 Flash의 합성 생성 기록 있음. 27B 한국어 후속질문12/12×2와 설치 browser title1건 실제 성공. Flash는 현재메모리admission미달·listener없음. 둘을동시상주시킬근거는없음. |
-| openWakeWord·mlx-whisper·Qwen3-TTS·음성 타이밍 | 구현 | wake release gate 미달, 실제 마이크 턴 미검증. STT/TTS 체크포인트·런타임·로컬 실행·에코/소음/긴 침묵/짧은 발화/끼어들기 검증 필요. |
+| openWakeWord·mlx-whisper·Qwen3-TTS·음성 타이밍 | 구현·실제 실행 검증(오디오 일부) | 단일 native 입출력·녹음된 기준음 재생/취소 확인. 모든 입력 RMS0, 사람 발화·에코 품질 미검증. wake release gate 미달·메모리 gate 유지로 실제 STT/LLM/TTS 전체 턴은 미검증. |
 | 로컬 browser-use·Playwright·macOS AX | 실제 실행 검증(일부) | 설치된 Python entrypoint가 local27B로 공개 title1건48.556초 성공, 독립 title 일치. 실제 Tauri caller·macOS AX·포커스 영향은 미검증. |
 | 비상 중단·명시적 재개·외부 작업 중단 | 구현 | worker/native AX epoch fence 존재. 실제 단축키 입력과 응답 시간·중단 후 재실행 없음 확인 필요. |
 | Alden 시각 디자인·토큰·3D 코어·창 크기·Retina | 구현 | 기존 DESIGN.md와 Archify 자료 존재. oh-my-design/style.gallery 직접 확인. 설치 창의 캡처·검토·동일 조건 재확인 필요. |
@@ -50,6 +51,8 @@
 2. 컴퓨터 제어 연결 복구 후 설치 화면, 창 숨김/복원과 물리 비상 중단을 검증한다. 같은 timeout을 계속 재시도하지 않는다.
 3. 검증된 wake 모델, 메모리 admission과 독립적인 재생 에코/끼어들기 경로를 갖춘 뒤 실제 음성 턴을 검증한다. 기존 공유 서비스나 다른 세션을 중단하여 조건을 만들지 않는다.
 4. 기존 서명/공증 prerequisites가 제공되면 정상 PR/CI/main/release 흐름과 산출물·설치·production 버전 대조를 마무리한다.
+
+22:02 KST 추가: native 오디오 변경을 커밋·푸시하고 해당 원격 SHA의 CI와 로컬 ZIP/manifest를 대조한다. 사람이 발화할 수 있는 시점에 8초 기준음 시험을 수행한다. 원음/발화 내용은 저장하지 않으며, 기존 모델 gate를 우회하지 않는다.
 
 ## 병렬 담당 (2026-09-30 사용자 추가 지침)
 

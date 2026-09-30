@@ -186,6 +186,7 @@ jobs:
           mkdir -p target/release
           cp "target/$TARGET/release/openkakao-cli" target/release/openkakao-cli
           chmod 755 target/release/openkakao-cli
+          /bin/sh scripts/build-alden-voice-audio.sh
 
           (
             cd desktop
@@ -200,10 +201,12 @@ jobs:
           app="desktop/src-tauri/target/$TARGET/release/bundle/macos/Alden.app"
           main="$app/Contents/MacOS/openkakao-alden-desktop"
           embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
+          embedded_audio="$app/Contents/Resources/scripts/libalden_audio.dylib"
           test -x "$main"
           test -x "$embedded_cli"
           test "$(lipo -archs "$main")" = "arm64"
           test "$(lipo -archs "$embedded_cli")" = "arm64"
+          test "$(lipo -archs "$embedded_audio")" = "arm64"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.openkakao.alden.desktop"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" = "$VERSION"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "openkakao-alden-desktop"
@@ -240,10 +243,13 @@ jobs:
           app="desktop/src-tauri/target/$TARGET/release/bundle/macos/Alden.app"
           embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
           submission_zip="$RUNNER_TEMP/alden-notary-submission.zip"
+          embedded_audio="$app/Contents/Resources/scripts/libalden_audio.dylib"
 
           codesign --force --options runtime --timestamp --keychain "$KEYCHAIN_PATH" --sign "$ALDEN_APPLE_SIGNING_IDENTITY" "$embedded_cli"
+          codesign --force --options runtime --timestamp --keychain "$KEYCHAIN_PATH" --sign "$ALDEN_APPLE_SIGNING_IDENTITY" "$embedded_audio"
           codesign --force --options runtime --timestamp --keychain "$KEYCHAIN_PATH" --sign "$ALDEN_APPLE_SIGNING_IDENTITY" "$app"
           codesign --verify --strict --verbose=2 "$embedded_cli"
+          codesign --verify --strict --verbose=2 "$embedded_audio"
           codesign --verify --deep --strict --verbose=2 "$app"
 
           python3 - <<'PY'

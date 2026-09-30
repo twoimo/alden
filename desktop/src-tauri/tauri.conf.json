@@ -85,6 +85,7 @@
       "bundle-resources/scripts/alden_browser_use.py": "scripts/alden_browser_use.py",
       "bundle-resources/scripts/alden_tool_runtime.py": "scripts/alden_tool_runtime.py",
       "bundle-resources/scripts/alden_voice.py": "scripts/alden_voice.py",
+      "bundle-resources/scripts/libalden_audio.dylib": "scripts/libalden_audio.dylib",
       "bundle-resources/scripts/alden_abort.py": "scripts/alden_abort.py",
       "bundle-resources/bin/openkakao-cli": "bin/openkakao-cli"
     }
