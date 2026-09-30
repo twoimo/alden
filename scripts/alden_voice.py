@@ -18,6 +18,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -28,6 +29,7 @@ from array import array
 from collections.abc import Mapping, Sequence
 from collections import deque
 from concurrent.futures import Future
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -440,6 +442,14 @@ class VoiceTurnToken(AbortToken):
 
     def is_cancelled(self) -> bool:
         return self._session.is_cancelled() or super().is_cancelled()
+
+    @contextmanager
+    def commit_guard(self):
+        # Session-local and per-turn cancellation use the same lock order.
+        # Acquire the shared epoch fence only once in the base guard.
+        with self._session._commit_lock:
+            with super().commit_guard():
+                yield
 
 
 @dataclass
@@ -1601,7 +1611,15 @@ class Qwen3TtsAdapter:
     def write_wav(self, text: str, path: Path, token: AbortToken) -> dict[str, Any]:
         import wave
 
+        token.raise_if_cancelled()
+        # Ensure a new abort root is created with its required private mode
+        # before output-directory preparation can create an ancestor of it.
+        with token.commit_guard():
+            pass
+        Path(path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = _validate_voice_tts_output_path(Path(path))
         audio, sample_rate = self.synthesize(text, token)
+        token.raise_if_cancelled()
         try:
             import numpy as np
 
@@ -1636,14 +1654,32 @@ class Qwen3TtsAdapter:
             pcm_bytes = pcm_arr.tobytes()
             nframes = len(pcm_arr)
 
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with wave.open(str(path), "wb") as handle:
-            handle.setnchannels(1)
-            handle.setsampwidth(2)
-            handle.setframerate(sample_rate)
-            handle.writeframes(pcm_bytes)
-        return {"path": str(path), "bytes": path.stat().st_size, "sample_rate": sample_rate, "nframes": nframes}
+        token.raise_if_cancelled()
+        # Complete the owned private file before publishing it. Conversion or
+        # disk failures, and cancellation during either, must leave the previous
+        # WAV intact. Never truncate the destination in place.
+        fd, temporary = tempfile.mkstemp(prefix=".alden-tts-", suffix=".wav", dir=path.parent)
+        try:
+            with os.fdopen(fd, "wb") as output:
+                with wave.open(output, "wb") as handle:
+                    handle.setnchannels(1)
+                    handle.setsampwidth(2)
+                    handle.setframerate(sample_rate)
+                    handle.writeframes(pcm_bytes)
+            size = os.stat(temporary).st_size
+            token.raise_if_cancelled()
+            _validate_voice_tts_output_path(path)
+            # Only the atomic directory-entry commit belongs under the abort
+            # fence; model work, conversion and WAV I/O stay outside it.
+            with token.commit_guard():
+                token.raise_if_cancelled()
+                os.replace(temporary, path)
+            return {"path": str(path), "bytes": size, "sample_rate": sample_rate, "nframes": nframes}
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
     def speak(self, text: str, token: AbortToken) -> None:
         token.raise_if_cancelled()
@@ -1674,23 +1710,27 @@ class Qwen3TtsAdapter:
                 sd.stop()
 
 
-def _voice_tts_output_path() -> Path | None:
-    raw = os.environ.get("OPENKAKAO_VOICE_TTS_OUT")
-    if raw is None:
-        return None
-
-    path = Path(raw)
+def _validate_voice_tts_output_path(path: Path) -> Path:
     try:
-        if not raw or path.suffix.lower() != ".wav" or path.is_symlink():
+        if path.suffix.lower() != ".wav" or path.is_symlink():
             raise RuntimeError("voice_tts_output_invalid")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.parent.is_dir() or not os.access(path.parent, os.W_OK):
+        # Validation must not create directories: it can run before a token's
+        # private abort root has been prepared by write_wav().
+        parent = path.parent
+        while not parent.exists() and parent != parent.parent:
+            parent = parent.parent
+        if not parent.is_dir() or not os.access(parent, os.W_OK):
             raise RuntimeError("voice_tts_output_invalid")
         if path.exists() and (not path.is_file() or not os.access(path, os.W_OK)):
             raise RuntimeError("voice_tts_output_invalid")
     except OSError as exc:
         raise RuntimeError("voice_tts_output_invalid") from exc
     return path
+
+
+def _voice_tts_output_path() -> Path | None:
+    raw = os.environ.get("OPENKAKAO_VOICE_TTS_OUT")
+    return None if raw is None else _validate_voice_tts_output_path(Path(raw))
 
 
 def assert_isolated_voice_environment() -> None:

@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import types
 import unittest
+import wave
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -19,10 +21,195 @@ from alden_voice import (  # noqa: E402
     VOICE_MIC_FRAME_SAMPLES,
     VoiceState,
     VoiceStatusStore,
+    Qwen3TtsAdapter,
+    VoiceTurnToken,
     _MicrophoneDisconnected,
     _MicrophoneFramePoller,
     run_microphone_session,
 )
+from alden_abort import AbortController, AldenCancelled  # noqa: E402
+
+
+class VoiceWavCommitTests(unittest.TestCase):
+    def test_conversion_cancellation_preserves_existing_wav_without_numpy(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            token = AbortController(root).token()
+            destination = root / "reply.wav"
+            destination.write_bytes(b"previous owned artifact")
+
+            class Audio:
+                def tolist(self):
+                    token.cancel()
+                    return [0.0, 0.25]
+
+            adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "synthesize", return_value=(Audio(), 24000)), mock.patch.dict(sys.modules, {"numpy": None}):
+                with self.assertRaises(AldenCancelled):
+                    adapter.write_wav("public synthetic probe", destination, token)
+            self.assertEqual(destination.read_bytes(), b"previous owned artifact")
+            self.assertEqual(list(root.glob(".alden-tts-*")), [])
+
+    def test_numpy_conversion_cancellation_preserves_existing_wav(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("numpy is absent from the focused CI interpreter")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            token = AbortController(root).token()
+            destination = root / "reply.wav"
+            destination.write_bytes(b"previous owned artifact")
+            adapter = Qwen3TtsAdapter()
+            asarray = np.asarray
+
+            def cancel_during_conversion(*args, **kwargs):
+                token.cancel()
+                return asarray(*args, **kwargs)
+
+            with mock.patch.object(adapter, "synthesize", return_value=([0.0, 0.25], 24000)), mock.patch.object(np, "asarray", side_effect=cancel_during_conversion):
+                with self.assertRaises(AldenCancelled):
+                    adapter.write_wav("public synthetic probe", destination, token)
+            self.assertEqual(destination.read_bytes(), b"previous owned artifact")
+            self.assertEqual(list(root.glob(".alden-tts-*")), [])
+
+    def test_cancel_resume_or_partial_disk_failure_never_publishes_wav(self):
+        for failure in ("cancel", "abort_resume", "disk_failure"):
+            with self.subTest(failure=failure), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                controller = AbortController(root)
+                token = controller.token()
+                destination = root / "reply.wav"
+                destination.write_bytes(b"previous owned artifact")
+                adapter = Qwen3TtsAdapter()
+                original_write = wave.Wave_write.writeframes
+
+                def write_then_fail(handle, data):
+                    original_write(handle, data)
+                    if failure == "disk_failure":
+                        raise OSError("owned simulated partial write")
+                    if failure == "cancel":
+                        token.cancel()
+                    else:
+                        controller.abort("test_abort")
+                        controller.resume_after_human_action()
+
+                with mock.patch.object(adapter, "synthesize", return_value=([0.0, 0.25], 24000)), mock.patch.object(wave.Wave_write, "writeframes", write_then_fail):
+                    with self.assertRaises(OSError if failure == "disk_failure" else AldenCancelled):
+                        adapter.write_wav("public synthetic probe", destination, token)
+                self.assertEqual(destination.read_bytes(), b"previous owned artifact")
+                self.assertEqual(list(root.glob(".alden-tts-*")), [])
+
+    def test_pre_cancelled_job_does_not_synthesize_or_create_output(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            token = AbortController(root).token()
+            token.cancel()
+            adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "synthesize") as synthesize:
+                with self.assertRaises(AldenCancelled):
+                    adapter.write_wav("public synthetic probe", root / "reply.wav", token)
+            synthesize.assert_not_called()
+            self.assertEqual(list(root.glob("*.wav")), [])
+
+    def test_direct_file_mode_rejects_symlink_before_synthesis(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "reply.wav"
+            original = root / "original.wav"
+            original.write_bytes(b"previous owned artifact")
+            destination.symlink_to(original)
+            adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "synthesize") as synthesize:
+                with self.assertRaisesRegex(RuntimeError, "voice_tts_output_invalid"):
+                    adapter.write_wav("public synthetic probe", destination, AbortController(root).token())
+            synthesize.assert_not_called()
+            self.assertTrue(destination.is_symlink())
+            self.assertEqual(original.read_bytes(), b"previous owned artifact")
+
+    def test_success_replaces_complete_wav_with_private_file_and_cleans_staging(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            destination = root / "reply.wav"
+            destination.write_bytes(b"previous owned artifact")
+            adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "synthesize", return_value=([0.0, 0.25, -0.25], 24000)), mock.patch.dict(sys.modules, {"numpy": None}):
+                result = adapter.write_wav("public synthetic probe", destination, AbortController(root).token())
+            with wave.open(str(destination), "rb") as saved:
+                self.assertEqual((saved.getframerate(), saved.getnchannels(), saved.getsampwidth(), saved.getnframes()), (24000, 1, 2, 3))
+            self.assertEqual(result["bytes"], destination.stat().st_size)
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(root.glob(".alden-tts-*")), [])
+
+    def test_new_abort_root_and_nested_env_output_keep_private_permissions(self):
+        for nested in (False, True):
+            with self.subTest(nested=nested), TemporaryDirectory() as temporary:
+                root = Path(temporary) / "state"
+                output = root / "nested" / "reply.wav" if nested else root / "reply.wav"
+                adapter = Qwen3TtsAdapter()
+                token = AbortController(root).token()
+                with mock.patch.object(adapter, "synthesize", return_value=([0.0, 0.25], 24000)), mock.patch.dict(os.environ, {"OPENKAKAO_VOICE_TTS_OUT": str(output)}):
+                    adapter.speak("public synthetic probe", token)
+                self.assertFalse(token.is_cancelled())
+                self.assertEqual(root.stat().st_mode & 0o777, 0o700)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+
+    def test_local_turn_and_session_cancel_are_ordered_against_atomic_publish(self):
+        for kind in ("local", "turn", "session"):
+            with self.subTest(kind=kind), TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                session = AbortController(root).token()
+                token = session if kind == "local" else VoiceTurnToken(session)
+                cancel_token = session if kind == "session" else token
+                destination = root / "reply.wav"
+                destination.write_bytes(b"previous owned artifact")
+                adapter = Qwen3TtsAdapter()
+                entered, release, attempted, cancelled = (threading.Event() for _ in range(4))
+                errors, order = [], []
+                original_replace = os.replace
+
+                def delayed_replace(source, target):
+                    entered.set()
+                    if not release.wait(2):
+                        raise TimeoutError("owned test commit was not released")
+                    original_replace(source, target)
+                    order.append("published")
+
+                def write():
+                    try:
+                        adapter.write_wav("public synthetic probe", destination, token)
+                    except BaseException as error:
+                        errors.append(error)
+
+                def cancel():
+                    attempted.set()
+                    cancel_token.cancel()
+                    order.append("cancelled")
+                    cancelled.set()
+
+                with mock.patch.object(adapter, "synthesize", return_value=([0.0, 0.25], 24000)), mock.patch("alden_voice.os.replace", delayed_replace):
+                    writer = threading.Thread(target=write)
+                    canceller = threading.Thread(target=cancel)
+                    writer.start()
+                    try:
+                        self.assertTrue(entered.wait(1))
+                        canceller.start()
+                        self.assertTrue(attempted.wait(1))
+                        # Commit was admitted first. A concurrent local cancel
+                        # must not complete before this atomic publication.
+                        self.assertFalse(cancelled.wait(.05))
+                    finally:
+                        release.set()
+                        writer.join(2)
+                        if canceller.ident is not None:
+                            canceller.join(2)
+                self.assertFalse(writer.is_alive())
+                self.assertFalse(canceller.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(order, ["published", "cancelled"])
+                self.assertTrue(token.is_cancelled())
+                self.assertEqual(destination.read_bytes()[:4], b"RIFF")
+                self.assertEqual(list(root.glob(".alden-tts-*")), [])
 
 
 class FakeClock:

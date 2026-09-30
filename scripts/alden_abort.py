@@ -361,6 +361,7 @@ class AbortToken:
         initial = read_abort_state(path)
         self._epoch = initial.epoch
         self._local = threading.Event()
+        self._commit_lock = threading.RLock()
         if initial.latched:
             self._local.set()
 
@@ -369,7 +370,10 @@ class AbortToken:
         return self._epoch
 
     def cancel(self) -> None:
-        self._local.set()
+        # A prepared commit admitted first may finish; when cancellation
+        # completes first, no later commit on this token can publish output.
+        with self._commit_lock:
+            self._local.set()
 
     def is_cancelled(self) -> bool:
         if self._local.is_set():
@@ -385,11 +389,18 @@ class AbortToken:
 
     @contextmanager
     def commit_guard(self):
-        """Linearize a small in-memory commit against cross-process abort.
+        """Linearize a small commit against cross-process abort.
 
-        Do not perform model, playback, or status I/O inside this boundary.
+        Only in-memory updates or a prepared atomic file rename belong here.
+        Do not perform model, playback, bulk file, or status I/O inside this boundary.
         Abort and resume use the same lock; an older epoch never becomes valid.
         """
+        with self._commit_lock:
+            with self._shared_commit_guard():
+                yield
+
+    @contextmanager
+    def _shared_commit_guard(self):
         root_fd, error = _open_root(self.path.parent, create=True)
         if error is not None or root_fd is None:
             raise AldenCancelled("alden_abort_commit_root_unsafe")
