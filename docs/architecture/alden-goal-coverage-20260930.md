@@ -1,5 +1,7 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
+2026-10-01 학습 추가: [실제27B 오프라인 DPO](alden-dpo-training-20261001.md)는 합성 train3쌍의 실제 업데이트3회·private adapter 저장·새 base 재로딩·adapter별 validation/cache를 검증했다. 최종학습37.907초, 별도평가24.809초/cache8.899초 각1회·network0·원본SHA/공유124→124/swap 유지. 집중126·필수1054/26skip/실패0. 평균손실 변화와 validation1문항 악화를 공개하며 최종test·대화정확성·검색·제품지연/메모리·promotion은 미완료다. 아래의 과거 “실제 DPO 학습 미완료”는 당시 판본의 기록이다. 전체11항목 목표는 계속 진행 중이다.
+
 2026-10-01 평가 추가: [버전별 오프라인 validation과 빌드 hook](alden-version-evaluation-20261001.md), actual27B first24.772초/cache8.567초 각1회·load1→0·network0, 필수1040/17skip/실패0·독립source검토·network-deny 실제 앱build 성공. 아래 Sep30 표는 이력이다. 실제 DPO 학습·제품 promotion·설치 상주 평가·음성/nativeUI/공개 signed release는 미완료다.
 
 2026-10-01 사진 문맥 추가: [원본 photo ID와 질문 분리·취소 복구](alden-photo-followup-20261001.md)는 미래/foreign 사진 선택을 차단하고 소유한 CLI·자식/scratch 정리를 구현했다. 같은 27B의 clean isolated 후속 1회 정답·16.325초를 확인했으며 private fixture seams와 실제 운영을 구분한다. 필수1027/17skip/실패0, worker 후보21/19·기존3selectors/config 일치·미활성화. 설치 앱 사진 기억·운영 적용과 11항목 전체 목표는 여전히 미완료다.

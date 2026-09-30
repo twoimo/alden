@@ -95,6 +95,8 @@ The settings UI marks voice status unavailable when its heartbeat is more than f
 - [27B checkpoint compatibility and corrected local DPO scoring](docs/architecture/alden-dpo-checkpoint-compatibility-20260930.md)
 - [Versioned offline evaluation, real 27B receipts, and build integration](docs/architecture/alden-version-evaluation-20261001.md)
 - [Versioned evaluation workflow](docs/architecture/alden-version-evaluation.html)
+- [Actual offline 27B DPO updates, adapter reload, and evaluation](docs/architecture/alden-dpo-training-20261001.md)
+- [Offline training workflow and product promotion boundary](docs/architecture/alden-dpo-training.html)
 - [Browser-use lifecycle](docs/architecture/alden-browser-use-lifecycle.html)
 
 The [dated local-tool evidence](docs/architecture/alden-local-tools-evidence-20260927.md) records two real Browser-use navigations through the local 27B model: navigation succeeded in **2/2** cases, but the requested field was correct in **1/2**. The source now includes an opt-in exact-target background AX CLI with a five-second maximum and explicit uncertain-effect reporting; **59/59** focused fake-adapter tests passed. No real AX press or installed desktop invocation is established by those tests.
