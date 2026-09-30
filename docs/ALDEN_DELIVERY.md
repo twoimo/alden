@@ -11,6 +11,8 @@
 
 ## 최신 전달 상태
 
+- 2026-10-01 00:36 KST: source code1a728e8은 주기당 단일 snapshot·원자적 graph/FTS 확정·실패/취소 rollback·호출자 transaction 보존을 구현했다. 필수981개/16skip/실패0. 실제 고정 mirror 교대5쌍의 graph-only 중앙5.383→3.390초(관측37.04%)·결과10/10동일·복제5→1회. Dense는 이 비교에서 stub이다. 설치29/29·resource26/26·PID92542·strict signature 확인 후 백업/전용lock 아래 실제E5 1회3.335초 refresh·무결성/watermark일치, enrollment/queue5개식별자 보존·backend3/3ready. [근거](architecture/alden-graph-cycle-20261001.md). 설치 창/사람 음성/worker 교체/공개 signed release는 미완료이며 전체목표를 축소하지 않는다. 최신 worker후보도 private state에20/20assets·18/18source·기존3selectors/config 일치로 준비했으며 활성화하지 않았다. 최종 전달 SHA·원격CI는 ignored dist/alden-0.1.6-local/alden-delivery-readback-v1.json으로 대조한다.
+
 - 23:24 KST 새 목표 ba814151의 11개 항목 전체를 읽고 기존 범위를 유지했다. 실제 암호화 DB 874,995,712 bytes와 WAL 4,676,208 bytes의 private read-only SQLCipher 4.6.1 복제본에서 quick_check=ok. 설치 CLI의 3방/8회 증분 조회 모두 성공했고, 새 실제 메시지 4건을 private index에 0.535초로 반영·재조회 추가/중복0. 기존 production mirror에서도 4/4 digest/context row를 독립 대조했다. [측정 근거](architecture/alden-encrypted-snapshot-20260930.md)는 sent_at→mirror receipt n=4 중앙37.625초를 DB insertion latency와 구분한다. 보존 사본·기존 전용 잠금 아래 설치 GraphRAG를 6.522초에 1회 갱신하고 graph/E5 watermark·무결성을 대조했다. 백업 보존, worker 재시작·프로브 전송0, backend3/3ready·설치 strict 서명 valid. 지속 최신성·native 화면·사람 음성·최종worker 교체·공개 릴리즈는 미완료다.
 
 - 22:33 KST 새 목표483991c3 전체 확인: 추가된 색감 실패를 기존 승인 방 ledger에서 조사했다. 실제 응답7행/고유5events/과거sent2행을 찾았고, 현재 worker c9b576의 pure helper 재현에서 근거 없는 시각 판단0이다. 새 모델 호출·전송·DB/큐 변경0. [색감 재현 기록](architecture/alden-color-claim-replay-20260930.json)은 운영 교체나 실제 pixel 해석 성공과 구분한다. 기존 색감 금지 assert가 현재971개 CI에 이미 포함돼 있어 통과한 source 검사를 다시 실행하지 않는다.
