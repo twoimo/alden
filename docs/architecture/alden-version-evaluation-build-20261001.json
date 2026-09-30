@@ -149,5 +149,34 @@
   "notarized": false,
   "installed_app_replaced": false,
   "evaluation_in_installed_bundle": false,
-  "runtime_network_sandbox": "deny network*"
+  "runtime_network_sandbox": "deny network*",
+  "invocation_provenance": {
+    "source": "parent exec_command tool invocation and completed session readback",
+    "session_id": 8482,
+    "launcher": "/usr/bin/sandbox-exec",
+    "policy": "(version 1) (allow default) (deny network*)",
+    "arguments": [
+      "-p",
+      "(version 1) (allow default) (deny network*)",
+      "/bin/sh",
+      "scripts/build-alden-desktop.sh"
+    ],
+    "configured_environment_names": [
+      "ALDEN_EVALUATION_PYTHON",
+      "ALDEN_EVALUATION_DATASET",
+      "ALDEN_EVALUATION_POLICY_DIR",
+      "ALDEN_EVALUATION_REFERENCE_DIR",
+      "ALDEN_EVALUATION_CHECKPOINT_FORMAT",
+      "ALDEN_EVALUATION_ROOT",
+      "ALDEN_EVALUATION_STATE_ROOT",
+      "OPENKAKAO_SIGN_IDENTITY"
+    ],
+    "openkakao_sign_identity": "-",
+    "completed_exit_code": 0,
+    "private_raw_log_sha256": "366d2e4e847e6974e49d788a1db79eee7370732a466db07dead4de6d6b857ad6",
+    "published_redacted_log": "alden-version-evaluation-build-20261001.log",
+    "published_log_sha256": "70225f4987bbcfa607e8a1b7223f91ae447ffd86b1fb8510c7a589f6d2dbb32a",
+    "source_sha256": "6b4a176d97715434a74a044f7d3df62c6b43bf2d1e39efe10b694f6d96a0cf08",
+    "evaluation_id": "2981a25da238be9a9ae686ed5cac2457d53a5f64962f57890241e536731b5a66"
+  }
 }

@@ -57,6 +57,8 @@ sh scripts/build-alden-desktop.sh
 
 [빌드 readback](alden-version-evaluation-build-20261001.json)에서 Alden0.1.6·기존 identifier·resource27/27 source 일치·strict ad-hoc signature를 확인했다. 기존 설치본의 27개 resource도 같은 bytes이며 설치 앱을 교체하지 않았다. evaluator는 별도 source CLI이고 설치 bundle에 포함하지 않았다. public notarization은 여전히 미완료다.
 
+빌드 readback의 `invocation_provenance`는 부모의 실제 sandbox-exec 호출, `deny network*` 정책, 구성 변수 이름, 종료0과 private 원본/공개 정리 로그의 SHA를 기록한다. [공개 빌드 로그](alden-version-evaluation-build-20261001.log)는 같은 평가 ID와 source SHA에 묶이며 사용자 경로를 정리했다. sandbox 실행 근거와 모델 probe의 Python network audit는 별개의 검증이다.
+
 ## 검증과 전달
 
 - 집중13개/실패0, 필수 workflow의 65 selectors에서 **1,040개/17skip/실패0/오류0**, pinned menu Python3.11.9, 119.144초. 격리 guard가 기존 검사 세 곳의 shared11234 연결을 차단했다. 모든 기존 fixture가 네트워크를 완전히 mock했다는 주장은 하지 않는다.
