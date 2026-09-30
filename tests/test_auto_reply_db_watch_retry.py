@@ -216,6 +216,90 @@ class AutoReplyDbWatchRetryTests(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, module.SqliteBusyTransient)
         self.assertEqual(module._fixed_fence_reason(caught.exception), "reconcile_required")
 
+    def test_exact_context_sync_replica_exhaustion_marker_retries_fenced_without_state_reset(self):
+        module = load_db_watch("auto_reply_db_watch_replica_exhaustion_test")
+        with mock.patch.object(
+            module,
+            "_run_bounded_cli",
+            return_value=(
+                1,
+                b"",
+                b"Error: context_sync_snapshot_retry_exhausted\n",
+            ),
+        ):
+            with self.assertRaises(module.ContextSyncTransient) as caught:
+                module.run_json(["context-sync-local", "42"])
+
+        self.assertEqual(
+            str(caught.exception),
+            "context_sync_snapshot_retry_exhausted",
+        )
+        state = self._clean_state(module)
+        state.update(
+            last_observed_log_id=124,
+            pending_log_ids=[124],
+            observed_log_ids=[123, 124],
+        )
+        fenced, retry_delay = module._context_sync_transient_state(
+            state,
+            target_chat_id=42,
+            consecutive_failures=1,
+            now=100.0,
+        )
+        self.assertEqual(fenced["acked_watermark"], 123)
+        self.assertEqual(fenced["acked_log_ids"], [123])
+        self.assertEqual(fenced["pending_log_ids"], [124])
+        self.assertEqual(fenced["pending_gaps"], [])
+        self.assertEqual(fenced["observed_log_ids"], [123, 124])
+        self.assertEqual(fenced["fence_reason"], "context_sync_transient")
+        self.assertFalse(fenced["delivery_enabled"])
+        self.assertEqual(
+            retry_delay,
+            module.CONTEXT_SYNC_TRANSIENT_RETRY_DELAYS_SECONDS[0],
+        )
+        self.assertEqual(fenced["context_sync_retry_at"], 100.0 + retry_delay)
+
+    def test_context_sync_replica_exhaustion_marker_match_is_exact(self):
+        module = load_db_watch("auto_reply_db_watch_replica_marker_exact_test")
+        terminal_cases = [
+            (
+                ["context-sync-local", "42"],
+                b"Error: context_sync_snapshot_retry_exhausted: permission denied\n",
+            ),
+            (
+                ["context-sync-local", "42"],
+                b"warning\nError: context_sync_snapshot_retry_exhausted\n",
+            ),
+            (
+                ["local-read", "42"],
+                b"Error: context_sync_snapshot_retry_exhausted\n",
+            ),
+        ]
+        for index, (args, stderr) in enumerate(terminal_cases):
+            with self.subTest(index=index):
+                with mock.patch.object(
+                    module,
+                    "_run_bounded_cli",
+                    return_value=(1, b"", stderr),
+                ):
+                    with self.assertRaises(module.DbFence) as caught:
+                        module.run_json(args)
+                self.assertNotIsInstance(caught.exception, module.ContextSyncTransient)
+
+        with mock.patch.object(
+            module,
+            "_run_bounded_cli",
+            return_value=(
+                0,
+                b"{not-json",
+                b"Error: context_sync_snapshot_retry_exhausted\n",
+            ),
+        ):
+            with self.assertRaises(module.DbFence) as caught:
+                module.run_json(["context-sync-local", "42"])
+        self.assertNotIsInstance(caught.exception, module.ContextSyncTransient)
+        self.assertEqual(str(caught.exception), "malformed database response")
+
     def test_periodic_context_sync_preserves_unconsumed_result(self):
         module = load_db_watch("auto_reply_db_watch_sync_result_test")
         worker = module._PeriodicContextSync()

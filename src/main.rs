@@ -195,7 +195,8 @@ where
         .map(Some)
         .chain(std::iter::once(None))
     {
-        let envelope = poll(expected_chat_id, expected_checkpoint)?;
+        let envelope =
+            poll(expected_chat_id, expected_checkpoint).map_err(context_sync_cli_error)?;
         let retriable_gap = validate_context_sync_local_poll_page(
             &envelope,
             expected_chat_id,
@@ -229,6 +230,16 @@ where
         sleep(Duration::from_millis(retry_delay_ms));
     }
     unreachable!("bounded context-sync retry loop must return or fail")
+}
+
+fn context_sync_cli_error(error: anyhow::Error) -> anyhow::Error {
+    if error.is::<context_sync_replica::SnapshotRetryExhausted>() {
+        // The watcher accepts only this exact diagnostic. Drop the internal
+        // error chain so Rust's main Result formatter emits one protocol line.
+        anyhow::anyhow!("context_sync_snapshot_retry_exhausted")
+    } else {
+        error
+    }
 }
 
 /// Return a short caller-managed retry delay while a fresh outgoing row may
@@ -8184,6 +8195,50 @@ mod tests {
         assert_eq!(error.to_string(), "context_sync_snapshot_retry_exhausted");
         assert_eq!(calls, [(42, 100); 4]);
         assert_eq!(sleeps, [250, 500, 1_000]);
+    }
+
+    #[test]
+    fn context_sync_local_replica_retry_exhaustion_emits_exact_cli_marker() {
+        let mut calls = 0;
+        let error = context_sync_local_poll_page_with_bounded_retry(
+            42,
+            "부자멘토멘티",
+            100,
+            |_chat_id, _checkpoint| {
+                calls += 1;
+                Err(context_sync_replica::SnapshotRetryExhausted.into())
+            },
+            |_delay| panic!("replica copy exhaustion must not enter poll-gap sleep"),
+        )
+        .expect_err("replica retry exhaustion must surface through the CLI marker");
+
+        assert_eq!(calls, 1);
+        assert_eq!(error.to_string(), "context_sync_snapshot_retry_exhausted");
+        assert_eq!(
+            format!("Error: {error:?}"),
+            "Error: context_sync_snapshot_retry_exhausted",
+        );
+    }
+
+    #[test]
+    fn context_sync_cli_error_does_not_substring_reclassify_terminal_errors() {
+        let terminal = anyhow::anyhow!(
+            "permission denied while reading context_sync_snapshot_retry_exhausted fixture"
+        );
+        let error = context_sync_cli_error(terminal);
+        assert_eq!(
+            error.to_string(),
+            "permission denied while reading context_sync_snapshot_retry_exhausted fixture",
+        );
+
+        let io_error = context_sync_cli_error(
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture permission denied",
+            )
+            .into(),
+        );
+        assert_eq!(io_error.to_string(), "fixture permission denied");
     }
 
     #[test]
