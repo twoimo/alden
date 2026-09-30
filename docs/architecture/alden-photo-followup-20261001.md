@@ -18,7 +18,7 @@
 
 실제 검증에는 [공개 사진](alden-vision-fixtures-20261001/image-2.png)의 왼쪽 녹색 사각형·오른쪽 주황 삼각형을 사용했다. 합성 tail 텍스트는 `사진`, 현재 질문은 `왼쪽 색은?`으로 색상 답을 포함하지 않는다. selector → 실제 fixture-download subprocess → checkout `analyze_event`/`generate_reply` → native MLX HTTP JSON-schema 경로를 실행했다. 원본 photo99의 한 image block으로 **“초록색이네”**가 나왔고, 원본/current ID와 scratch 삭제를 독립 확인했다. [원시 receipt](alden-photo-followup-20261001.json), [로그](alden-photo-followup-20261001.log)를 보존한다.
 
-모델은 `/Users/twoimo/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit`의 기존 같은 가중치다. native MLX Core 26.9.5, owned namespace, context8192, concurrency1, registry24GB, OS/wired reserve8GiB, KV4bit, MTP/drafter/PLD/cache 비활성화 조건이다. 이전 context4096 비전 실험과 속도를 비교하지 않는다. 원본 가중치 정보와 post-run fingerprints는 [앞선 비전 근거](alden-local-vision-20261001.md)에 있다.
+모델은 `<USER_HOME>/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit`의 기존 같은 가중치다. native MLX Core 26.9.5, owned namespace, context8192, concurrency1, registry24GB, OS/wired reserve8GiB, KV4bit, MTP/drafter/PLD/cache 비활성화 조건이다. 이전 context4096 비전 실험과 속도를 비교하지 않는다. 원본 가중치 정보와 post-run fingerprints는 [앞선 비전 근거](alden-local-vision-20261001.md)에 있다.
 
 | 관측 | 값 / 범위 |
 | --- | --- |
@@ -41,3 +41,5 @@ parent HTTP는 proxy와 redirect를 차단하고 audit hook으로 loopback 지�
 [private worker 후보](alden-photo-worker-candidate-20261001.json)는 21 asset/19 source bytes, 기존 3 selectors와 config를 대조했으며 미활성화 상태다. 준비 전후 enrollment/config/stable CLI/활성 3방 queue의 ID/status digest가 같았다. 이 동등성은 후보 준비 구간만 보증하며 앞선 테스트 전체에 소급하지 않는다. private config는 배포 archive에 넣지 않는다. 설치된 Alden0.1.6 native bundle은 이번 외부 worker를 소비하는 증거가 아니며 다시 빌드한 것으로 보고하지 않는다.
 
 최종 code `247c676`의 worker SHA-256은 `20bc0ac046dc022fecbf34596d81784eea513a49ab92784b85446de96d0dafbb`다. Astra/max code 검토는 PASS였다. [최종 로컬 검사 receipt](alden-photo-context-tests-20261001.json): pinned Python3.11.9, 필수1027/17skip/실패0/오류0/104.957초, 집중7/실패0/1.098초. 필수 검사 socket guard는 기존 fixture의 shared port 연결 시도3개를 연결 전 차단했다. 따라서 구 fixture 모두가 hermetic하다고 주장하지 않는다.
+
+公開用 receiptでは home prefix と 방별 production 집계·queue fingerprint를 제거했다. 원본은 private stage/experiment root에 보존한다. Astra/max 검토에서 이 publication 경계를 수정했으며, 기존 커밋은 정상 Git 이력에 남는다.

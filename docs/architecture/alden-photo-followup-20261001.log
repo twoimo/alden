@@ -1,4 +1,4 @@
-{"root": "<owned-runtime>", "owned_pid": 31624, "checkpoint": "/Users/twoimo/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit"}
+{"root": "<owned-runtime>", "owned_pid": 31624, "checkpoint": "<USER_HOME>/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit"}
 [reply-gen] start prompt_bytes=11986 prompt_sha256=9bd5cdea174ee796 model=mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit
 [reply-gen] prompt_bytes=11986 gen_elapsed=15.78s rc=0 model=mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit
 [reply-rerank] drafts=4 scores=- winner=0 fallback=fixture_rerank_not_executed

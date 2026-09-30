@@ -1,7 +1,7 @@
 {
   "created_utc": "2026-09-30T20:20:00Z",
   "root": "/private/tmp/alden-owned-photo-followup-20261001-v_8f7e0_",
-  "checkpoint": "/Users/twoimo/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+  "checkpoint": "<USER_HOME>/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
   "samples": [],
   "inference_policy": "same local checkpoint; external sockets rejected",
   "source_tag": "v26.9.5",
@@ -11,7 +11,7 @@
     "swap_used_bytes": 25389107773
   },
   "shared_before": {
-    "command": "/Applications/MLX Core.app/Contents/MacOS/mlx-serve --serve --model /Users/twoimo/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit --model-dir /Users/twoimo/.mlx-serve/models --host 127.0.0.1 --port 11234 --log-level info --log-file /Users/twoimo/.mlx-serve/logs/mlx-serve-11234.log --ctx-size 786432 --no-vision --timeout 300 --metrics --pld --pld-draft-len 5 --pld-key-len 3 --mtp --max-concurrent 2 --kv-quant 4 --prefix-cache-entries 16 --prefix-cache-mem 8GB --prefix-cache-disk 10GB --max-resident-models 3 --max-resident-mem 0 --llama-kv-quant off --llama-cache-entries 4 --tokenize-cache-entries 4 --draft-block-size 4 --temp 0.42 --top-p 0.95 --top-k 0 --max-tokens 16384",
+    "command": "/Applications/MLX Core.app/Contents/MacOS/mlx-serve --serve --model <USER_HOME>/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit --model-dir <USER_HOME>/.mlx-serve/models --host 127.0.0.1 --port 11234 --log-level info --log-file <USER_HOME>/.mlx-serve/logs/mlx-serve-11234.log --ctx-size 786432 --no-vision --timeout 300 --metrics --pld --pld-draft-len 5 --pld-key-len 3 --mtp --max-concurrent 2 --kv-quant 4 --prefix-cache-entries 16 --prefix-cache-mem 8GB --prefix-cache-disk 10GB --max-resident-models 3 --max-resident-mem 0 --llama-kv-quant off --llama-cache-entries 4 --tokenize-cache-entries 4 --draft-block-size 4 --temp 0.42 --top-p 0.95 --top-k 0 --max-tokens 16384",
     "models": {
       "object": "list",
       "data": [
@@ -1122,7 +1122,7 @@
     "swap_used_bytes": 25389107773
   },
   "shared_after": {
-    "command": "/Applications/MLX Core.app/Contents/MacOS/mlx-serve --serve --model /Users/twoimo/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit --model-dir /Users/twoimo/.mlx-serve/models --host 127.0.0.1 --port 11234 --log-level info --log-file /Users/twoimo/.mlx-serve/logs/mlx-serve-11234.log --ctx-size 786432 --no-vision --timeout 300 --metrics --pld --pld-draft-len 5 --pld-key-len 3 --mtp --max-concurrent 2 --kv-quant 4 --prefix-cache-entries 16 --prefix-cache-mem 8GB --prefix-cache-disk 10GB --max-resident-models 3 --max-resident-mem 0 --llama-kv-quant off --llama-cache-entries 4 --tokenize-cache-entries 4 --draft-block-size 4 --temp 0.42 --top-p 0.95 --top-k 0 --max-tokens 16384",
+    "command": "/Applications/MLX Core.app/Contents/MacOS/mlx-serve --serve --model <USER_HOME>/.mlx-serve/models/ddalcu/Qwen3.8-27B-MLX-Serve-4bit --model-dir <USER_HOME>/.mlx-serve/models --host 127.0.0.1 --port 11234 --log-level info --log-file <USER_HOME>/.mlx-serve/logs/mlx-serve-11234.log --ctx-size 786432 --no-vision --timeout 300 --metrics --pld --pld-draft-len 5 --pld-key-len 3 --mtp --max-concurrent 2 --kv-quant 4 --prefix-cache-entries 16 --prefix-cache-mem 8GB --prefix-cache-disk 10GB --max-resident-models 3 --max-resident-mem 0 --llama-kv-quant off --llama-cache-entries 4 --tokenize-cache-entries 4 --draft-block-size 4 --temp 0.42 --top-p 0.95 --top-k 0 --max-tokens 16384",
     "models": {
       "object": "list",
       "data": [
@@ -1784,5 +1784,6 @@
     ],
     "owned_port_connect_ex": 61,
     "read_utc": "2026-09-30T20:22:56Z"
-  }
+  },
+  "redaction": "User home prefix redacted; unredacted raw report retained privately."
 }
