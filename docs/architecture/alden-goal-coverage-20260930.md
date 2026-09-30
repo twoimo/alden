@@ -1,5 +1,7 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
+2026-10-01 사진 문맥 추가: [원본 photo ID와 질문 분리·취소 복구](alden-photo-followup-20261001.md)는 미래/foreign 사진 선택을 차단하고 소유한 CLI·자식/scratch 정리를 구현했다. 같은 27B의 clean isolated 후속 1회 정답·16.325초를 확인했으며 private fixture seams와 실제 운영을 구분한다. 필수1027/17skip/실패0, worker 후보21/19·기존3selectors/config 일치·미활성화. 설치 앱 사진 기억·운영 적용과 11항목 전체 목표는 여전히 미완료다.
+
 2026-10-01 사진 추가: [같은27B owned 비전 검증](alden-local-vision-20261001.md)은 같은 가중치로 public fixture4/4와 실제 worker 생성 함수의 image+JSON 요청1회를 확인했다. 기존 공유 서버는 `--no-vision`이며 운영 사진 경로는 여전히 미완료다. namespace catalog 용량과 MLX allocation, 텍스트 후속과 사진 기억, private adapter 경로와 운영 caller를 구분한다. 아래 Sep30 표의 실제vision 미완료는 당시 기록이다.
 
 

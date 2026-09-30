@@ -1,0 +1,78 @@
+{
+  "schema": "alden-photo-worker-candidate-v1",
+  "prepared_utc": "2026-09-30T20:16:33Z",
+  "worker_sha256": "20bc0ac046dc022fecbf34596d81784eea513a49ab92784b85446de96d0dafbb",
+  "runtime_root": "/private/var/folders/8d/nwv_19w124zbq0dxqx2r1jn40000gn/T/alden-photo-candidate-20261001-ro66_nru/state/runtime-candidates/alden-0.1.6-photo-20bc0ac046dc",
+  "prepared": true,
+  "activated": false,
+  "assets_verified": 21,
+  "source_files_byte_equal": 19,
+  "chat_selector_count": 3,
+  "selectors_preserved": true,
+  "config_byte_equal": true,
+  "shared_state_before": {
+    "enrollment_sha256": "d75eace9ebbc2eea1cf2d7bd5b9312115918355d24bb1e5e8b0f6148ae45c3a4",
+    "config_sha256": "543e3b924fb5f661507f035d21463151bd6a3e71dfe209338fb5a421e85cfa1c",
+    "stable_cli_sha256": "4899521d4e2efbd0fc87bdb017ca6f2010a588685aacbc131c90862bcd147b92",
+    "active_runtime": "/Users/twoimo/Library/Application Support/openkakao/bujamentor/runtime-candidates/20260930T0650Z-termination-74149a4",
+    "queues": [
+      {
+        "status_counts": {
+          "sent": 116,
+          "skipped": 2275
+        },
+        "row_identity_sha256": "989b6a2b94d2b2610a24a2d46d247e35ea6b963b2e0c5621df3fc35fdf2b991d"
+      },
+      {
+        "status_counts": {
+          "sent": 15,
+          "skipped": 31
+        },
+        "row_identity_sha256": "5ca22fb53cf18f2d97a93bf9ce12db85a2a27e2c5c3d90d7c1847f722e01498f"
+      },
+      {
+        "status_counts": {
+          "sent": 17,
+          "skipped": 385
+        },
+        "row_identity_sha256": "45416eeb353daca95b321f83f70bdcd460b05e3430ac7a66909e084d09a08a50"
+      }
+    ]
+  },
+  "shared_state_after": {
+    "enrollment_sha256": "d75eace9ebbc2eea1cf2d7bd5b9312115918355d24bb1e5e8b0f6148ae45c3a4",
+    "config_sha256": "543e3b924fb5f661507f035d21463151bd6a3e71dfe209338fb5a421e85cfa1c",
+    "stable_cli_sha256": "4899521d4e2efbd0fc87bdb017ca6f2010a588685aacbc131c90862bcd147b92",
+    "active_runtime": "/Users/twoimo/Library/Application Support/openkakao/bujamentor/runtime-candidates/20260930T0650Z-termination-74149a4",
+    "queues": [
+      {
+        "status_counts": {
+          "sent": 116,
+          "skipped": 2275
+        },
+        "row_identity_sha256": "989b6a2b94d2b2610a24a2d46d247e35ea6b963b2e0c5621df3fc35fdf2b991d"
+      },
+      {
+        "status_counts": {
+          "sent": 15,
+          "skipped": 31
+        },
+        "row_identity_sha256": "5ca22fb53cf18f2d97a93bf9ce12db85a2a27e2c5c3d90d7c1847f722e01498f"
+      },
+      {
+        "status_counts": {
+          "sent": 17,
+          "skipped": 385
+        },
+        "row_identity_sha256": "45416eeb353daca95b321f83f70bdcd460b05e3430ac7a66909e084d09a08a50"
+      }
+    ]
+  },
+  "shared_state_equal_during_stage": true,
+  "limits": [
+    "No supervisor/worker adopted, killed, restarted or activated.",
+    "Candidate private config is excluded from distributable artifacts.",
+    "Readback equality covers candidate staging only, not earlier test execution."
+  ],
+  "code_commit": "247c676"
+}
