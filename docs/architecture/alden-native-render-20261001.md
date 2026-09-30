@@ -1,5 +1,8 @@
 # Alden 설치 바이너리의 네이티브 코어와 숨김·복원 검증
 
+네이티브 전달 링크: [Alden 0.1.6 로컬 후보 초안 릴리즈](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-179cb6167afd74a68bd5). 앱 ZIP·Python 동반 실행 환경·소스/증거·체크섬 **7개 산출물**을 다운로드하여 원본과 바이트 일치를 확인했다. 증거 커밋 `60fdb04`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36790224085)도 **4/4 성공**이다. [전달 readback](alden-native-render-release-20261001.json)에 소스·설치·릴리즈의 범위를 대조했으며 공개 공증/프로덕션 완료를 뜻하지 않는다.
+
+
 소스 `4838fffc9323e499fd734178b1b42b606dbc7514`를 빌드하여 Alden 0.1.6에 설치했다. **설치 파일 30/30, 리소스 27/27**이 빌드·소스와 일치하고 ad-hoc 서명 검사가 통과했다. 기존 번들 30개 파일과 LaunchAgent 설정을 먼저 백업하고 바이트 일치를 확인했다. 정상 LaunchAgent는 PID 39125이며 공유 MLX PID 3273과 기존 카카오톡 작업 PID 87952/87955/88035를 유지했다.
 
 **상태: 구현·실제 실행 검증·로컬 설치·코드 전달 완료.** `/Applications/Alden.app`의 실제 실행 파일로 별도 검증 인스턴스 PID 39541을 실행했다. WebKit `takeSnapshot`으로 실제 Three 코어가 담긴 PNG를 캡처하고 직접 이미지를 확인했다. 브라우저의 Tauri 모형이나 합성 업무 부하를 사용하지 않았다. 검증 인스턴스는 PythonBridge·생산 명령·트레이·전역 단축키를 등록하지 않아 코어는 실제 작업 입력 없는 idle 상태다. 네트워크를 거부하는 macOS sandbox 정책 안에서 실행했다.
