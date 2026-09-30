@@ -8,6 +8,7 @@ import {
   type RuntimeSnapshot,
 } from "./contracts";
 import type { SourceLoads } from "./core/load-mapping";
+import type { AnimationLoopDiagnostics } from "./core/animation-loop";
 import { RenderLifecycle } from "./core/lifecycle";
 import {
   tauriVisibilitySubscriber,
@@ -64,6 +65,7 @@ interface AldenCoreControl {
   readonly renderCount: number;
   start(): void;
   stop(): void;
+  diagnostics(): AnimationLoopDiagnostics;
   setSignals(jobLoad: number, voiceRms: number, sources?: SourceLoads): void;
   dispose(): void;
 }
@@ -652,6 +654,10 @@ export async function bootPanel(
       dependencies.pollScheduler,
     );
     const lifecycle = new RenderLifecycle(activeCore, () => polling.stop(), () => polling.start());
+    Object.defineProperty(window, "__aldenRenderPause", {
+      configurable: true,
+      get: () => lifecycle.lastPauseMeasurement(),
+    });
     let disposed = false;
     let detachLifecycle: (() => void) | null = null;
 

@@ -409,7 +409,7 @@ CONVERSATION_TARGET_KEYS = frozenset(
         "directed_at_self",
     }
 )
-MEDIA_UNAVAILABLE_CLARIFICATION = "사진이 안 열리네 다시 보내봐"
+MEDIA_UNAVAILABLE_CLARIFICATION = "사진 내용을 확인하지 못했어. 필요한 부분을 글로 알려줄래?"
 MEDIA_UNAVAILABLE_CLARIFICATION_REASON = "media_unavailable_clarification"
 REPLY_LAUGHTER_POLICY_REASON = "reply_laughter_policy_violation"
 AI_TELL_PROBE = "그래? 어떤 부분이 AI처럼 느껴졌는데"
@@ -6989,40 +6989,31 @@ def _is_contextual_followup(inbound: str) -> bool:
 
 
 def _photo_fallback_reply(
-    inbound: str, recent_conversation: list[dict] | None = None
+    inbound: str,
+    recent_conversation: list[dict] | None = None,
+    *,
+    recipient: str | None = None,
+    register: str | None = None,
 ) -> str:
-    honorific = False
-    for row in recent_conversation or []:
-        if not isinstance(row, dict) or _is_self_chat_row(row):
-            continue
-        if str(row.get("author_nickname") or "") == "현준":
-            honorific = True
-            break
-    informal = (
-        "화면이 좀 깨지네",
-        "화질이 별로네",
-        "이거 잘 안 보이네",
-        "구도가 이상하네",
-        "색감이 별로네",
-    )
-    formal = (
-        "화면이 좀 깨지네요",
-        "화질이 별로네요",
-        "잘 안 보이네요",
-        "구도가 이상하네요",
-        "색감이 별로네요",
-    )
-    pool = formal if honorific else informal
-    recent_self = [
-        " ".join(str(row.get("message") or "").split())
-        for row in (recent_conversation or [])
-        if isinstance(row, dict) and _is_self_chat_row(row)
-    ][-6:]
-    used = set(recent_self)
-    unused = [line for line in pool if line not in used]
-    seed = abs(hash(" ".join(recent_self[-2:] + [str(inbound or "")])))
-    chosen = (unused or list(pool))[seed % len(unused or pool)]
-    return chosen
+    """Ask for missing image content without inventing a visual observation.
+
+    This path runs when the image/model could not be used. Neither an image
+    placeholder nor a local image path proves that its pixels were inspected.
+    Keep that limitation explicit even when the model is unavailable.
+    """
+    honorific = _recipient_requires_honorific(recipient, register)
+    if recipient is None and register is None:
+        # Retain compatibility for callers without recipient metadata. Real
+        # event paths pass the current recipient rather than an earlier author.
+        honorific = any(
+            isinstance(row, dict)
+            and not _is_self_chat_row(row)
+            and _recipient_requires_honorific(str(row.get("author_nickname") or ""))
+            for row in recent_conversation or []
+        )
+    if honorific:
+        return "사진 내용을 확인하지 못했어요. 필요한 부분을 글로 알려주시겠어요?"
+    return MEDIA_UNAVAILABLE_CLARIFICATION
 
 
 def _reply_ending(text: str) -> str:
@@ -7200,7 +7191,7 @@ def select_ranked_reply(
             }
         if str(event.get("attachment") or "") == "image":
             fallback_text = fallback_text or _photo_fallback_reply(
-                inbound, recent_conversation
+                inbound, recent_conversation, recipient=recipient, register=register
             )
             return {
                 "reply": fallback_text,
@@ -12269,17 +12260,12 @@ def _run_opencodex_generation_unleased(
                 file=sys.stderr,
                 flush=True,
             )
-        if len(user_parts) > 1:
-            payload["messages"][1]["content"] = user_parts
-        elif image_paths:
-            # Every image failed to load. Sending the text alone would answer a
-            # question about a photo without the photo, so say so in the prompt
-            # instead of pretending the message had no attachment.
-            payload["messages"][1]["content"] = (
-                user_content
-                + "\n\n[첨부한 사진을 읽지 못했습니다. 사진 내용을 모르는 상태이므로,"
-                + " 사진에 대해 추측하지 말고 사진을 다시 보내 달라고 답하세요.]"
-            )
+            # The requested evidence set is incomplete. Do not send a text-only
+            # or partial-image request and trust prompt wording to prevent a
+            # fabricated visual answer. The caller retains its bounded failure
+            # handling and truthful no-pixel clarification.
+            return 1, b"", b"image_input_unavailable"
+        payload["messages"][1]["content"] = user_parts
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     session_lane = "openkakao-bujamentor"
     session_digest = hashlib.sha256(
@@ -13098,6 +13084,17 @@ def generate_reply(
                     image_paths=normalized_image_paths,
                     timeout=_model_generation_timeout(active_model, deadline=generation_deadline),
                 )
+            if returncode != 0 and stderr_bytes == b"image_input_unavailable":
+                # No model request was sent. Release this call's lease without
+                # clearing older failures or opening a model-wide cooldown, and
+                # do not try another model with the same incomplete evidence.
+                _release_cancelled_model_call(lease_token, active_model)
+                return with_prompt_receipt({
+                    **empty,
+                    "reason": "image_unavailable",
+                    "evidence_ids": [],
+                    "model_invoked": False,
+                })
             if returncode != 0:
                 err_str = stderr_bytes.decode("utf-8", "replace").casefold()
                 failure_class, _ = _classify_model_failure(
@@ -14775,8 +14772,13 @@ def analyze_media_unavailable_clarification(event: dict) -> dict:
         {
             "decision": "reply",
             "reason": MEDIA_UNAVAILABLE_CLARIFICATION_REASON,
-            "category": "social",
-            "reply": _photo_fallback_reply(inbound_text, recent_conversation),
+            "category": "question",
+            "reply": _photo_fallback_reply(
+                inbound_text,
+                recent_conversation,
+                recipient=_event_author_nickname(event),
+                register=str((recipient_style_profile or {}).get("register") or "") or None,
+            ),
             "context": context,
             "styles": styles,
             "prior_decisions": prior_decisions,
@@ -15151,6 +15153,8 @@ def analyze_event(event: dict) -> dict:
             source_log_id=_fence_int(event.get("log_id")),
             turn_guard=lambda: _reply_turn_hold_reason(event),
         )
+        if type(model.get("model_invoked")) is bool:
+            provenance["model_invoked"] = model["model_invoked"]
         reason = _reply_turn_hold_reason(event)
         if reason:
             _trace_turn_hold(event, reason)
@@ -16519,6 +16523,8 @@ def _process_job_impl(
                 analysis["reply"] = str(analysis.get("reply") or "").strip() or _photo_fallback_reply(
                     str(event.get("message") or ""),
                     _event_recent_conversation(event),
+                    recipient=_event_author_nickname(event),
+                    register=str((analysis.get("recipient_style_profile") or {}).get("register") or "") or None,
                 )
             else:
                 # The model remained unavailable through this message's learned

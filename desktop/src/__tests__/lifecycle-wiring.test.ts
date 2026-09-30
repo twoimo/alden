@@ -356,6 +356,39 @@ describe("render lifecycle wiring", () => {
       expect(scheduler.callbacks.size).toBe(0);
     });
   });
+
+  it("leaves no DOM or bridge listener after repeated attach and detach", async () => {
+    await withVisibilityAsync("visible", async () => {
+      let released = 0;
+      let transitionsAfterDetach = 0;
+      const subscribers: VisibilityHandler[] = [];
+      const subscriber: VisibilitySubscriber = async (handler) => {
+        subscribers.push(handler);
+        return () => { released += 1; };
+      };
+
+      for (let index = 0; index < 25; index += 1) {
+        let detached = false;
+        const detach = wireRenderLifecycle({
+          transition: () => {
+            if (detached) transitionsAfterDetach += 1;
+          },
+        }, { subscribeVisibility: subscriber });
+        await settle();
+        detached = true;
+        detach();
+        detach();
+      }
+
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      subscribers.forEach((handler) => handler(true));
+
+      expect(released).toBe(25);
+      expect(transitionsAfterDetach).toBe(0);
+    });
+  });
 });
 
 function wiringSource(): string {

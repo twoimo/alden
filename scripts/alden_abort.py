@@ -16,6 +16,7 @@ import threading
 import time
 import unicodedata
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -382,6 +383,37 @@ class AbortToken:
         if self.is_cancelled():
             raise AldenCancelled("alden_global_abort")
 
+    @contextmanager
+    def commit_guard(self):
+        """Linearize a small in-memory commit against cross-process abort.
+
+        Do not perform model, playback, or status I/O inside this boundary.
+        Abort and resume use the same lock; an older epoch never becomes valid.
+        """
+        root_fd, error = _open_root(self.path.parent, create=True)
+        if error is not None or root_fd is None:
+            raise AldenCancelled("alden_abort_commit_root_unsafe")
+        lock_fd = None
+        try:
+            lock_fd = _open_lock(root_fd)
+            deadline = time.monotonic() + ABORT_LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except (BlockingIOError, InterruptedError) as exc:
+                    if time.monotonic() >= deadline:
+                        raise AldenCancelled("alden_abort_commit_lock_timeout") from exc
+                    time.sleep(.005)
+            self.raise_if_cancelled()
+            yield
+        except AbortStateError as exc:
+            raise AldenCancelled("alden_abort_commit_lock_unsafe") from exc
+        finally:
+            if lock_fd is not None:
+                os.close(lock_fd)
+            os.close(root_fd)
+
 
 class AldenCancelled(RuntimeError):
     pass
@@ -392,29 +424,38 @@ class AbortableJobQueue:
 
     def __init__(self, controller: AbortController):
         self.controller = controller
-        self._jobs: list[Callable[[AbortToken], object]] = []
+        self._jobs: list[tuple[Callable[[AbortToken], object], AbortToken]] = []
         self._lock = threading.Lock()
-        controller.register_cancel_callback(self.cancel_queued)
+        controller.register_cancel_callback(self.cancel_stale)
 
     def enqueue(self, job: Callable[[AbortToken], object]) -> bool:
-        if read_abort_state(self.controller.path).latched:
+        token = self.controller.token()
+        if token.is_cancelled():
             return False
         with self._lock:
-            self._jobs.append(job)
+            if token.is_cancelled():
+                return False
+            self._jobs.append((job, token))
         return True
 
     def cancel_queued(self) -> None:
         with self._lock:
             self._jobs.clear()
 
+    def cancel_stale(self) -> None:
+        # A callback can arrive after human resume and new enqueue. The saved
+        # epoch distinguishes cancelled work from those newly authorized jobs.
+        with self._lock:
+            self._jobs = [(job, token) for job, token in self._jobs if not token.is_cancelled()]
+
     def run_next(self) -> object | None:
         if read_abort_state(self.controller.path).latched:
-            self.cancel_queued()
+            self.cancel_stale()
             return None
         with self._lock:
             if not self._jobs:
                 return None
-            job = self._jobs.pop(0)
-        token = self.controller.token()
-        token.raise_if_cancelled()
+            job, token = self._jobs.pop(0)
+        if token.is_cancelled():
+            return None
         return job(token)

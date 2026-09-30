@@ -8,20 +8,24 @@ a bounded in-memory ring and is never written to disk by default.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import math
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.parse
 import urllib.request
 from array import array
 from collections.abc import Mapping, Sequence
 from collections import deque
+from concurrent.futures import Future
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -80,6 +84,95 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         del req, fp, code, msg, headers, newurl
         return None
+
+
+class _CancellableLocalResponse:
+    """Own one loopback socket and shut it down on per-turn/global cancellation.
+
+    The socket watcher also covers waiting for response headers. Closing only
+    a buffered urllib response after generation would leave that wait alive.
+    """
+
+    def __init__(self, request: urllib.request.Request, timeout: float, token: AbortToken):
+        self.request, self.timeout, self.token = request, timeout, token
+        self.connection: http.client.HTTPConnection | None = None
+        self.response: http.client.HTTPResponse | None = None
+        self._done = threading.Event()
+        self._watcher: threading.Thread | None = None
+
+    def __enter__(self):
+        self.token.raise_if_cancelled()
+        parsed = urllib.parse.urlsplit(self.request.full_url)
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != 11234 or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"/v1/models", "/v1/chat/completions"}:
+            raise ValueError("local_llm_endpoint_invalid")
+        started = time.monotonic()
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=min(3.0, self.timeout))
+        self.connection = connection
+        try:
+            connection.connect()
+            transport = connection.sock
+            if transport is None:
+                raise OSError("local_llm_socket_missing")
+            transport.settimeout(max(.001, self.timeout - (time.monotonic() - started)))
+
+            def watch() -> None:
+                while not self._done.wait(.02):
+                    if self.token.is_cancelled() or time.monotonic() - started >= self.timeout:
+                        try:
+                            transport.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                        return
+
+            self._watcher = threading.Thread(target=watch, daemon=True, name="alden-llm-cancel")
+            self._watcher.start()
+            self.token.raise_if_cancelled()
+            connection.request(self.request.get_method(), parsed.path, body=self.request.data, headers=dict(self.request.header_items()))
+            self.response = connection.getresponse()
+            self.token.raise_if_cancelled()
+            if self.response.status != 200:
+                raise urllib.error.HTTPError(self.request.full_url, self.response.status, "local inference rejected", self.response.headers, None)
+            return self
+        except Exception:
+            self.__exit__(None, None, None)
+            self.token.raise_if_cancelled()
+            raise
+
+    def read(self, limit: int = -1) -> bytes:
+        try:
+            if self.response is None:
+                raise OSError("local_llm_response_missing")
+            raw = self.response.read(limit)
+            self.token.raise_if_cancelled()
+            return raw
+        except Exception:
+            self.token.raise_if_cancelled()
+            raise
+
+    @property
+    def headers(self):
+        return self.response.headers if self.response is not None else {}
+
+    def readline(self, limit: int = -1) -> bytes:
+        try:
+            if self.response is None:
+                raise OSError("local_llm_response_missing")
+            raw = self.response.readline(limit)
+            self.token.raise_if_cancelled()
+            return raw
+        except Exception:
+            self.token.raise_if_cancelled()
+            raise
+
+    def __exit__(self, *_args: object) -> bool:
+        self._done.set()
+        if self._watcher is not None:
+            self._watcher.join(timeout=.25)
+        if self.response is not None:
+            self.response.close()
+        if self.connection is not None:
+            self.connection.close()
+        return False
 
 
 @dataclass(frozen=True)
@@ -255,6 +348,10 @@ def _resolve_qwen3_tts_model_path(
 def _local_urlopen(request: urllib.request.Request, *, timeout: float):
     """Open the fixed local endpoint without proxies or redirects."""
 
+    token = getattr(request, "_alden_abort_token", None)
+    if isinstance(token, AbortToken):
+        return _CancellableLocalResponse(request, timeout, token)
+
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         _RejectRedirects(),
@@ -323,6 +420,31 @@ class AudioFrameAnalysis:
 class VoiceResult:
     state: VoiceState
     error_code: str = ""
+    transcript: str = ""
+    reply: str = ""
+    conversation_id: str = ""
+    turn_id: int = 0
+    context_version: int = 0
+    cancelled: bool = False
+
+
+class VoiceTurnToken(AbortToken):
+    """Local supersession never changes the shared emergency latch/epoch."""
+
+    def __init__(self, session: AbortToken):
+        super().__init__(session.path)
+        self._session = session
+
+    def is_cancelled(self) -> bool:
+        return self._session.is_cancelled() or super().is_cancelled()
+
+
+@dataclass
+class VoiceTurn:
+    turn_id: int
+    context_version: int
+    source: str
+    token: VoiceTurnToken
     transcript: str = ""
     reply: str = ""
 
@@ -554,7 +676,7 @@ class VoiceStatusStore:
     def __init__(self, state_root: Path):
         self.path = state_root / VOICE_STATUS_NAME
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._last_signature: tuple[str, str, str, bool] | None = None
+        self._last_signature: tuple[object, ...] | None = None
         self._last_write_monotonic = float("-inf")
 
     def write(
@@ -565,6 +687,10 @@ class VoiceStatusStore:
         error_code: str = "",
         wake_source: str = "stock",
         custom_model_selected: bool = False,
+        conversation_id: str = "",
+        turn_id: int = 0,
+        context_version: int = 0,
+        cancelled: bool = False,
     ) -> None:
         normalized_error = str(error_code or "")[:96]
         normalized_wake_source = (
@@ -575,13 +701,14 @@ class VoiceStatusStore:
             normalized_error,
             normalized_wake_source,
             bool(custom_model_selected),
+            conversation_id,
+            turn_id,
+            context_version,
+            bool(cancelled),
         )
         now = time.monotonic()
-        if (
-            state == VoiceState.WAKE_LISTEN
-            and signature == self._last_signature
-            and now - self._last_write_monotonic < VOICE_STATUS_HEARTBEAT_SECONDS
-        ):
+        interval = VOICE_STATUS_HEARTBEAT_SECONDS if state == VoiceState.WAKE_LISTEN else .1
+        if signature == self._last_signature and now - self._last_write_monotonic < interval:
             return
         payload = {
             "schema_version": VOICE_STATUS_SCHEMA_VERSION,
@@ -593,6 +720,10 @@ class VoiceStatusStore:
             "threshold": WAKE_THRESHOLD,
             "custom_model_selected": bool(custom_model_selected),
             "updated_at": int(time.time()),
+            "conversation_id": conversation_id,
+            "turn_id": turn_id,
+            "context_version": context_version,
+            "cancelled": bool(cancelled),
         }
         temp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
         fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -640,7 +771,21 @@ class AldenVoicePipeline:
         self._noise_frames = 0
         self._conversation: deque[dict[str, str]] = deque(maxlen=VOICE_CONTEXT_TURNS * 2)
         self._last_conversation_turn = 0.0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        # One inference owner; a new input cancels the previous ticket before
+        # waiting for this lock. Native STT/TTS may finish late but cannot commit.
+        self._processing_lock = threading.Lock()
+        self.conversation_id = uuid.uuid4().hex
+        self.turn_id = 0
+        self.context_version = 0
+        self._active_turn: VoiceTurn | None = None
+        self._seen_events: deque[tuple[str, str]] = deque(maxlen=128)
+        self._closed = False
+        self._worker: threading.Thread | None = None
+        self._work_ready = threading.Condition(self._lock)
+        self._pending_turn: tuple[VoiceTurn, bytes, str | None, Future[VoiceResult]] | None = None
+        self._frontend_needs_reset = False
+        self._latest_future: Future[VoiceResult] | None = None
         self._publish()
 
     def _recent_conversation(self) -> list[dict[str, str]]:
@@ -649,39 +794,48 @@ class AldenVoicePipeline:
             and time.monotonic() - self._last_conversation_turn > VOICE_CONTEXT_TTL_SECONDS
         ):
             self._conversation.clear()
+            self.context_version += 1
         return [dict(message) for message in self._conversation]
 
-    def _remember_conversation_turn(self, transcript: str, reply: str) -> None:
-        self._conversation.append(
-            {"role": "user", "content": transcript[:VOICE_CONTEXT_ITEM_MAX_CHARS]}
-        )
+    def _remember_conversation_reply(self, reply: str) -> None:
         self._conversation.append(
             {"role": "assistant", "content": reply[:VOICE_CONTEXT_ITEM_MAX_CHARS]}
         )
         self._last_conversation_turn = time.monotonic()
 
-    def _rearm_after_reply(self) -> None:
+    def _rearm_after_reply(self, *, publish: bool = True) -> None:
         self.state = VoiceState.WAKE_LISTEN
         self.ring.clear()
         self._speech_frames = self._silence_frames = self._noise_frames = 0
         self._wake_source = "none"
-        self._publish()
+        if publish:
+            self._publish()
 
     def _publish(self, error_code: str = "") -> None:
-        if self.status is not None:
-            self.status.write(
-                state=self.state,
-                rms=self.last_rms,
-                error_code=error_code,
-                wake_source=self._wake_source,
-                custom_model_selected=self._custom_model_selected,
-            )
+        with self._lock:
+            if self.status is not None:
+                self.status.write(
+                    state=self.state,
+                    rms=self.last_rms,
+                    error_code=error_code,
+                    wake_source=self._wake_source,
+                    custom_model_selected=self._custom_model_selected,
+                    conversation_id=self.conversation_id,
+                    turn_id=self.turn_id,
+                    context_version=self.context_version,
+                    cancelled=self.state == VoiceState.ABORTED or bool(self._active_turn and self._active_turn.token.is_cancelled()),
+                )
 
     def _end(self, state: VoiceState, error_code: str) -> VoiceResult:
-        self.state = state
-        self.ring.clear()
-        self._publish(error_code)
-        return VoiceResult(state=state, error_code=error_code, transcript=getattr(self, "_transcript", ""), reply=getattr(self, "_reply", ""))
+        with self._lock:
+            self.interrupt()
+            if self.token.is_cancelled():
+                state = VoiceState.ABORTED
+                self._reply = ""
+            self.state = state
+            self.ring.clear()
+            self._publish(error_code)
+            return VoiceResult(state=state, error_code=error_code, transcript=self._transcript, reply=self._reply, conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version, cancelled=state == VoiceState.ABORTED)
 
     def mic_disconnected(self) -> VoiceResult:
         return self._end(VoiceState.ERROR, "mic_disconnected")
@@ -700,8 +854,13 @@ class AldenVoicePipeline:
         speech: bool,
         stock_wake_score: float = 0.0,
         custom_wake_score: float | None = None,
+        source: str = "microphone",
+        asynchronous: bool = False,
     ) -> VoiceResult | None:
+        audio: bytes | None = None
         with self._lock:
+            if self._closed or source != "microphone":
+                return None
             self.last_rms = max(0.0, min(float(rms), 1.0))
             if self.token.is_cancelled():
                 return self._end(VoiceState.ABORTED, "global_abort")
@@ -710,11 +869,13 @@ class AldenVoicePipeline:
                 # the wake detector or user-speech ring.
                 self._publish()
                 return None
-            if self.state == VoiceState.WAKE_LISTEN:
+            if self.state in {VoiceState.WAKE_LISTEN, VoiceState.TRANSCRIBING, VoiceState.GENERATING}:
                 accepted = self.wake_gate.accepts(stock_wake_score, custom_wake_score)
                 if not accepted:
                     self._publish()
                     return None
+                if self.state != VoiceState.WAKE_LISTEN:
+                    self.interrupt()
                 self._wake_source = (
                     "stock" if stock_wake_score >= self.wake_gate.threshold else "custom"
                 )
@@ -742,75 +903,273 @@ class AldenVoicePipeline:
                 return self._end(VoiceState.ENDED, "silence_timeout")
             if self._speech_frames > 0 and self._silence_frames >= 12:
                 audio = self.ring.bytes()
-                return self.process_utterance(audio)
-            self._publish()
-            return None
+            else:
+                self._publish()
+        if audio is not None:
+            if asynchronous:
+                self.submit_utterance(audio)
+                return None
+            return self.process_utterance(audio)
+        return None
 
     def feed_frontend_frame(
         self,
         frontend: OpenWakeVadFrontend,
         pcm16: bytes,
+        *,
+        asynchronous: bool = False,
     ) -> VoiceResult | None:
-        analysis = frontend.analyze(pcm16)
+        with self._lock:
+            if self._closed:
+                return None
+            if self.token.is_cancelled():
+                return self._end(VoiceState.ABORTED, "global_abort")
+            if self.state == VoiceState.SPEAKING:
+                # Reject playback before it reaches the stateful detector.
+                self._frontend_needs_reset = True
+                return None
+            if self._frontend_needs_reset:
+                frontend.reset_for_independent_clip()
+                self._frontend_needs_reset = False
+            analysis = frontend.analyze(pcm16)
+        # Never wait for the processing lock while holding the state lock:
+        # the previous turn needs that state lock to discard its late result.
         return self.feed_audio(
             pcm16,
             rms=analysis.rms,
             speech=analysis.speech,
             stock_wake_score=analysis.stock_wake_score,
             custom_wake_score=analysis.custom_wake_score,
+            asynchronous=asynchronous,
         )
 
-    def process_utterance(self, pcm16: bytes) -> VoiceResult:
+    def _begin_turn(self, source: str, event_id: str | None) -> VoiceTurn | None:
+        with self._lock:
+            if self._closed or source not in {"microphone", "text"}:
+                return None
+            if event_id is not None:
+                if not isinstance(event_id, str) or not event_id or len(event_id) > 256:
+                    return None
+                key = (source, event_id)
+                if key in self._seen_events:
+                    return None
+                self._seen_events.append(key)
+            if self._active_turn is not None:
+                self._active_turn.token.cancel()
+            if self._latest_future is not None:
+                self._latest_future.cancel()
+                self._latest_future = None
+            if self._pending_turn is not None:
+                self._pending_turn[3].cancel()
+                self._pending_turn = None
+            self.turn_id += 1
+            turn = VoiceTurn(self.turn_id, self.context_version, source, VoiceTurnToken(self.token))
+            self._active_turn = turn
+            self._transcript = self._reply = ""
+            self.ring.clear()
+            return turn
+
+    def interrupt(self) -> None:
+        """Cancel the active turn without resuming or changing global state."""
+        with self._lock:
+            if self._active_turn is not None:
+                self._active_turn.token.cancel()
+            self._active_turn = None
+            if self._latest_future is not None:
+                self._latest_future.cancel()
+                self._latest_future = None
+            if self._pending_turn is not None:
+                self._pending_turn[3].cancel()
+                self._pending_turn = None
+            self.ring.clear()
+
+    def close(self) -> None:
+        with self._work_ready:
+            self._closed = True
+            self.interrupt()
+            self._work_ready.notify_all()
+
+    def _submit_turn(self, turn: VoiceTurn, pcm16: bytes = b"", text: str | None = None) -> None:
+        future: Future[VoiceResult] = Future()
+        self._latest_future = future
+        if turn.token.is_cancelled():
+            future.set_result(self._turn_end(turn, VoiceState.ABORTED, "global_abort"))
+            return
         try:
-            self.token.raise_if_cancelled()
-            if not pcm16:
-                return self._end(VoiceState.ENDED, "silence_timeout")
-            self.state = VoiceState.TRANSCRIBING
-            self._publish()
-            transcript = self.stt.transcribe(pcm16, self.sample_rate, self.token).strip()
-            self.token.raise_if_cancelled()
-            self._transcript = transcript
-            if not transcript:
-                return self._end(VoiceState.ERROR, "stt_empty")
+            self._turn_state(turn, VoiceState.TRANSCRIBING if text is None else VoiceState.GENERATING)
         except AldenCancelled:
-            return self._end(VoiceState.ABORTED, "global_abort")
+            future.set_result(self._turn_end(turn, VoiceState.ABORTED, "turn_cancelled"))
+            return
+        self._pending_turn = (turn, pcm16, text, future)
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._work_loop, daemon=True, name="alden-voice")
+            self._worker.start()
+        self._work_ready.notify()
+
+    def _work_loop(self) -> None:
+        while True:
+            with self._work_ready:
+                self._work_ready.wait_for(lambda: self._closed or self._pending_turn is not None)
+                if self._closed:
+                    return
+                turn, pcm16, text, future = self._pending_turn
+                self._pending_turn = None
+                if not future.set_running_or_notify_cancel():
+                    continue
+            try:
+                with self._processing_lock:
+                    result = self._process_turn(turn, pcm16=pcm16, text=text)
+                future.set_result(result)
+            except Exception as exc:
+                future.set_exception(exc)
+
+    def submit_utterance(self, pcm16: bytes) -> None:
+        with self._lock:
+            turn = self._begin_turn("microphone", None)
+            if turn is None:
+                return
+            self._submit_turn(turn, pcm16=pcm16)
+
+    def submit_text(self, text: str, *, source: str = "text", event_id: str | None = None) -> bool:
+        with self._lock:
+            turn = self._begin_turn(source, event_id)
+            if turn is None:
+                return False
+            self._submit_turn(turn, text=text)
+            return True
+
+    def poll_result(self) -> VoiceResult | None:
+        with self._lock:
+            future = self._latest_future
+            if future is None or not future.done():
+                return None
+            self._latest_future = None
+            return future.result()
+
+    def _result(self, turn: VoiceTurn, state: VoiceState, error: str = "") -> VoiceResult:
+        return VoiceResult(state, error, turn.transcript, turn.reply, self.conversation_id, turn.turn_id, turn.context_version, turn.token.is_cancelled())
+
+    def _turn_state(self, turn: VoiceTurn, state: VoiceState, error: str = "") -> None:
+        with self._lock:
+            turn.token.raise_if_cancelled()
+            if self._active_turn is not turn:
+                raise AldenCancelled("voice_turn_superseded")
+            self.state = state
+            self._publish(error)
+            turn.token.raise_if_cancelled()
+
+    def _turn_end(self, turn: VoiceTurn, state: VoiceState, error: str) -> VoiceResult:
+        with self._lock:
+            if self._active_turn is not turn:
+                return self._result(turn, VoiceState.ABORTED, "turn_superseded")
+            if turn.token.is_cancelled():
+                state = VoiceState.ABORTED
+                error = "global_abort" if self.token.is_cancelled() else "turn_cancelled"
+            self.state = state
+            self.ring.clear()
+            self._publish(error)
+            return self._result(turn, state, error)
+
+    def process_utterance(self, pcm16: bytes, *, source: str = "microphone", event_id: str | None = None) -> VoiceResult:
+        turn = self._begin_turn(source, event_id)
+        if turn is None:
+            return VoiceResult(VoiceState.ENDED, "input_ignored", conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version)
+        with self._processing_lock:
+            return self._process_turn(turn, pcm16=pcm16)
+
+    def process_text(self, text: str, *, source: str = "text", event_id: str | None = None) -> VoiceResult:
+        turn = self._begin_turn(source, event_id)
+        if turn is None:
+            return VoiceResult(VoiceState.ENDED, "input_ignored", conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version)
+        with self._processing_lock:
+            return self._process_turn(turn, text=text)
+
+    def _process_turn(self, turn: VoiceTurn, *, pcm16: bytes = b"", text: str | None = None) -> VoiceResult:
+        try:
+            turn.token.raise_if_cancelled()
+            if text is None:
+                if not pcm16:
+                    return self._turn_end(turn, VoiceState.ENDED, "silence_timeout")
+                self._turn_state(turn, VoiceState.TRANSCRIBING)
+                transcript = self.stt.transcribe(pcm16, self.sample_rate, turn.token).strip()
+            else:
+                transcript = text.strip()
+            turn.token.raise_if_cancelled()
+            turn.transcript = transcript
+            if not transcript:
+                return self._turn_end(turn, VoiceState.ERROR, "stt_empty")
+        except AldenCancelled:
+            return self._turn_end(turn, VoiceState.ABORTED, "global_abort" if self.token.is_cancelled() else "turn_cancelled")
         except VoiceMemoryBudgetError as exc:
-            return self._end(VoiceState.ERROR, exc.code)
+            return self._turn_end(turn, VoiceState.ERROR, exc.code)
         except Exception:
-            return self._end(VoiceState.ERROR, "stt_error")
+            return self._turn_end(turn, VoiceState.ERROR, "stt_error")
 
         try:
-            self.state = VoiceState.GENERATING
-            self._publish()
+            with self._lock:
+                self._turn_state(turn, VoiceState.GENERATING)
+                with self.token.commit_guard():
+                    turn.token.raise_if_cancelled()
+                    history = self._recent_conversation()
+                    self._transcript = transcript
+                    # Confirmed input survives interruption of its answer;
+                    # late/cancelled recognition never becomes user history.
+                    self._conversation.append({"role": "user", "content": transcript[:VOICE_CONTEXT_ITEM_MAX_CHARS]})
+                    self._last_conversation_turn = time.monotonic()
+                    self.context_version += 1
+                    turn.context_version = self.context_version
             reply = self.llm.generate(
                 transcript,
-                self.token,
-                history=self._recent_conversation(),
+                turn.token,
+                history=history,
             ).strip()
-            self.token.raise_if_cancelled()
+            turn.token.raise_if_cancelled()
             if not reply:
-                return self._end(VoiceState.ERROR, "generation_error")
+                return self._turn_end(turn, VoiceState.ERROR, "generation_error")
+            turn.reply = reply
         except AldenCancelled:
-            return self._end(VoiceState.ABORTED, "global_abort")
+            return self._turn_end(turn, VoiceState.ABORTED, "global_abort" if self.token.is_cancelled() else "turn_cancelled")
         except Exception as exc:
             code = "model_swap_failed" if "model_swap" in str(exc).casefold() else "generation_error"
-            return self._end(VoiceState.ERROR, code)
+            return self._turn_end(turn, VoiceState.ERROR, code)
 
         try:
-            self.state = VoiceState.SPEAKING
-            self._publish()
-            self.tts.speak(reply, self.token)
-            self.token.raise_if_cancelled()
+            self._turn_state(turn, VoiceState.SPEAKING)
+            self.tts.speak(reply, turn.token)
+            turn.token.raise_if_cancelled()
         except AldenCancelled:
-            return self._end(VoiceState.ABORTED, "global_abort")
+            return self._turn_end(turn, VoiceState.ABORTED, "global_abort" if self.token.is_cancelled() else "turn_cancelled")
         except VoiceMemoryBudgetError as exc:
-            return self._end(VoiceState.ERROR, exc.code)
+            return self._turn_end(turn, VoiceState.ERROR, exc.code)
         except Exception:
-            return self._end(VoiceState.ERROR, "tts_error")
+            return self._turn_end(turn, VoiceState.ERROR, "tts_error")
 
-        self._remember_conversation_turn(transcript, reply)
-        self._rearm_after_reply()
-        return VoiceResult(VoiceState.ENDED, transcript=transcript, reply=reply)
+        with self._lock:
+            previous_history = list(self._conversation)
+            try:
+                self._turn_state(turn, VoiceState.SPEAKING)
+                with self.token.commit_guard():
+                    turn.token.raise_if_cancelled()
+                    if self._closed or self._active_turn is not turn:
+                        raise AldenCancelled("voice_turn_superseded")
+                    self._reply = reply
+                    self._remember_conversation_reply(reply)
+                    self.context_version += 1
+                    turn.context_version = self.context_version
+                    self._rearm_after_reply(publish=False)
+                self._publish()
+                # Status I/O can overlap an abort in another process. Do not
+                # return normal completion or retain its answer in that case.
+                with self.token.commit_guard():
+                    turn.token.raise_if_cancelled()
+                    return self._result(turn, VoiceState.ENDED)
+            except AldenCancelled:
+                self._reply = ""
+                if list(self._conversation) != previous_history:
+                    self._conversation = deque(previous_history, maxlen=VOICE_CONTEXT_TURNS * 2)
+                    self.context_version += 1
+                    turn.context_version = self.context_version
+                return self._turn_end(turn, VoiceState.ABORTED, "turn_cancelled")
 
 
 class LocalMlxLlm:
@@ -824,16 +1183,72 @@ class LocalMlxLlm:
         self.base_url = _validate_local_llm_base_url(base_url)
         self.model = model
         self.state_root = state_root
+        self.last_metrics: dict[str, Any] = {}
 
-    def _require_selected_model_ready(self) -> None:
+    def _read_stream(self, response, token: AbortToken, started: float) -> dict[str, Any]:
+        total = 0
+        parts: list[str] = []
+        model = None
+        usage = None
+        finish_reason = None
+        while True:
+            token.raise_if_cancelled()
+            line = response.readline(LOCAL_LLM_MAX_RESPONSE_BYTES + 1)
+            if not line:
+                raise RuntimeError("local_llm_stream_incomplete")
+            total += len(line)
+            if total > LOCAL_LLM_MAX_RESPONSE_BYTES:
+                raise RuntimeError("local_llm_response_too_large")
+            if not line.startswith(b"data:"):
+                continue
+            data = line[5:].strip()
+            if data == b"[DONE]":
+                break
+            chunk = json.loads(data)
+            if not isinstance(chunk, dict):
+                raise RuntimeError("local_llm_response_invalid")
+            if mlx_response_model_conflicts(self.model, chunk.get("model")):
+                raise RuntimeError("local_llm_model_mismatch")
+            if chunk.get("model") is not None:
+                model = chunk["model"]
+            if chunk.get("usage") is not None:
+                usage = chunk["usage"]
+            choices = chunk.get("choices")
+            if not isinstance(choices, list):
+                raise RuntimeError("local_llm_response_invalid")
+            if not choices:
+                continue
+            choice = choices[0]
+            if not isinstance(choice, dict) or not isinstance(choice.get("delta"), dict):
+                raise RuntimeError("local_llm_response_invalid")
+            delta = choice["delta"]
+            content = delta.get("content")
+            if content or delta.get("reasoning_content"):
+                self.last_metrics.setdefault("first_model_token_seconds", time.perf_counter() - started)
+            if content is not None:
+                if not isinstance(content, str):
+                    raise RuntimeError("local_llm_response_invalid")
+                if content:
+                    self.last_metrics.setdefault("first_visible_token_seconds", time.perf_counter() - started)
+                    parts.append(content)
+            if choice.get("finish_reason") is not None:
+                finish_reason = choice["finish_reason"]
+        elapsed = time.perf_counter() - started
+        self.last_metrics.update({"elapsed_seconds": elapsed, "usage": usage, "finish_reason": finish_reason})
+        return {"model": model, "usage": usage, "choices": [{"finish_reason": finish_reason, "message": {"content": "".join(parts)}}]}
+
+    def _require_selected_model_ready(self, token: AbortToken) -> None:
         request = urllib.request.Request(
             f"{self.base_url}/models",
             headers={"Accept": "application/json"},
         )
+        request._alden_abort_token = token
         try:
             with _local_urlopen(request, timeout=3.0) as response:
                 raw = response.read(MLX_GATEWAY_MAX_RESPONSE_BYTES + 1)
             payload = json.loads(raw.decode("utf-8", "replace"))
+        except AldenCancelled:
+            raise
         except Exception as exc:
             raise RuntimeError("local_llm_model_not_ready") from exc
 
@@ -868,6 +1283,8 @@ class LocalMlxLlm:
         *,
         history: Sequence[Mapping[str, str]] = (),
     ) -> str:
+        started = time.perf_counter()
+        self.last_metrics = {}
         token.raise_if_cancelled()
         if self.model not in LOCAL_LLM_ALLOWED_MODEL_IDS:
             raise RuntimeError("model_swap_required")
@@ -889,6 +1306,8 @@ class LocalMlxLlm:
                 ],
                 "temperature": 0.3,
                 "max_tokens": 128,
+                "stream": True,
+                "stream_options": {"include_usage": True},
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -897,11 +1316,15 @@ class LocalMlxLlm:
             data=payload,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
+        request._alden_abort_token = token
         try:
             with mlx_model_request_lease(self.state_root):
-                self._require_selected_model_ready()
+                self._require_selected_model_ready(token)
                 with _local_urlopen(request, timeout=90.0) as response:
-                    raw = response.read(LOCAL_LLM_MAX_RESPONSE_BYTES + 1)
+                    if "text/event-stream" in str(getattr(response, "headers", {}).get("Content-Type", "")).lower():
+                        raw = json.dumps(self._read_stream(response, token, started)).encode("utf-8")
+                    else:
+                        raw = response.read(LOCAL_LLM_MAX_RESPONSE_BYTES + 1)
         except MlxRequestAdmissionClosed as exc:
             raise RuntimeError(exc.code) from exc
         except (OSError, urllib.error.URLError, ValueError) as exc:
@@ -1163,9 +1586,9 @@ def run_microphone_session(
         pipeline._custom_model_selected = selected is not None
         pipeline._publish()
         frontend = OpenWakeVadFrontend(custom_wake_model=selected)
-        # Poll frame availability so an idle device cannot block status heartbeats
-        # or global abort checks. STT/LLM/TTS ordering remains synchronous; after
-        # TTS, a short suppression interval prevents its tail becoming a new wake.
+        # Keep input polling separate from the single inference worker. A new
+        # wake during STT/generation cancels that turn; playback remains muted
+        # until an independently validated echo/barge-in path is available.
         wake_suppressed_until = 0.0
         stream_entered = False
         try:
@@ -1180,6 +1603,12 @@ def run_microphone_session(
                 while True:
                     if token.is_cancelled():
                         return pipeline._end(VoiceState.ABORTED, "global_abort")
+                    completed = pipeline.poll_result()
+                    if completed is not None:
+                        if completed.state == VoiceState.ENDED and pipeline.state == VoiceState.WAKE_LISTEN:
+                            wake_suppressed_until = time.monotonic() + VOICE_WAKE_RESUME_DELAY_SECONDS
+                        else:
+                            return completed
                     try:
                         polled = poller.poll()
                     except _MicrophoneDisconnected:
@@ -1195,7 +1624,7 @@ def run_microphone_session(
                     if time.monotonic() < wake_suppressed_until:
                         pipeline._publish()
                         continue
-                    result = pipeline.feed_frontend_frame(frontend, raw)
+                    result = pipeline.feed_frontend_frame(frontend, raw, asynchronous=True)
                     if result is None:
                         continue
                     if result.state == VoiceState.ENDED and pipeline.state == VoiceState.WAKE_LISTEN:
@@ -1212,6 +1641,8 @@ def run_microphone_session(
         return pipeline._end(VoiceState.ABORTED, "global_abort")
     except Exception:
         return pipeline.mic_disconnected()
+    finally:
+        pipeline.close()
 
 
 def _default_state_root() -> Path:

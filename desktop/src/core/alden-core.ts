@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { AnimationLoop } from "./animation-loop";
+import { AnimationLoop, type AnimationLoopDiagnostics } from "./animation-loop";
 import type { SourceLoads } from "./load-mapping";
 import { createNucleusMaterial } from "./nucleus-material";
 import { buildPulseLattice, pulseLatticeDrawCount } from "./pulse-lattice";
@@ -35,6 +35,7 @@ export class AldenCore {
   private latticeDrawCount: number;
   private readonly nucleus: THREE.Mesh;
   private readonly loop: AnimationLoop;
+  private disposed = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "low-power" });
@@ -113,6 +114,7 @@ export class AldenCore {
   }
 
   start(): void {
+    if (this.disposed) return;
     this.loop.start();
   }
 
@@ -129,7 +131,13 @@ export class AldenCore {
     return this.loop.renderCount;
   }
 
+  diagnostics(): AnimationLoopDiagnostics {
+    return this.loop.diagnostics();
+  }
+
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.stop();
     this.scene.traverse((object) => {
       if (object instanceof THREE.Mesh || object instanceof THREE.Points || object instanceof THREE.LineSegments) {

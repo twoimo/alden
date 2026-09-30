@@ -300,10 +300,26 @@ class AldenAbortStateWriterTests(unittest.TestCase):
                 )
                 for index in range(12)
             ]
+            # Keep the directory alive until every owned child is reaped. An
+            # early assertion used to remove it while other writers still ran,
+            # hiding the original failure behind ENOENT and leaked processes.
+            outputs = []
+            try:
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=5)
+                    outputs.append((process.returncode, stdout, stderr))
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.communicate(timeout=1)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.communicate(timeout=1)
             epochs: list[int] = []
-            for process in processes:
-                stdout, stderr = process.communicate(timeout=5)
-                self.assertEqual(process.returncode, 0, stderr)
+            for returncode, stdout, stderr in outputs:
+                self.assertEqual(returncode, 0, stderr)
                 epochs.append(int(stdout.strip()))
 
             self.assertEqual(sorted(epochs), list(range(1, 13)))

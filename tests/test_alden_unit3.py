@@ -186,7 +186,7 @@ class AldenAbortAndVoiceTests(unittest.TestCase):
         self.assertEqual(result.state, VoiceState.ERROR)
         self.assertEqual(result.error_code, "generation_error")
         self.assertEqual(tts.calls, 0)
-        self.assertEqual(pipeline._recent_conversation(), [])
+        self.assertEqual(pipeline._recent_conversation(), [{"role": "user", "content": "테스트 요청"}])
 
     def test_abort_during_tts_stops_session(self):
         with TemporaryDirectory() as temp_dir:
@@ -722,7 +722,7 @@ class VoiceMemoryBudgetPipelineTests(unittest.TestCase):
         self.assertEqual(llm.calls, [])
         self.assertEqual(tts.calls, 0)
 
-    def test_tts_budget_error_is_reported_without_retaining_turn(self):
+    def test_tts_budget_error_keeps_user_input_without_committing_unheard_reply(self):
         class DeniedTts:
             def speak(self, _text, _token):
                 raise VoiceMemoryBudgetError("voice_memory_budget_low")
@@ -740,7 +740,7 @@ class VoiceMemoryBudgetPipelineTests(unittest.TestCase):
         self.assertEqual(result.state, VoiceState.ERROR)
         self.assertEqual(result.error_code, "voice_memory_budget_low")
         self.assertEqual(len(llm.calls), 1)
-        self.assertEqual(pipeline._recent_conversation(), [])
+        self.assertEqual(pipeline._recent_conversation(), [{"role": "user", "content": "테스트 요청"}])
 
 
 class LocalMlxLlmRequestTests(unittest.TestCase):

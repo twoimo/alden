@@ -506,12 +506,14 @@ class IsolatedCopyTests(unittest.TestCase):
             conn.execute("CREATE TABLE t (id INTEGER)")
             conn.commit()
             conn.close()
-            signatures = [
-                (("a", True, 1, 1, 1),),
-                (("b", True, 2, 2, 2),),
-                (("c", True, 3, 3, 3),),
-                (("c", True, 3, 3, 3),),
-            ]
+            def signature(version):
+                return (
+                    (src.name, True, 8192, version, 1, version),
+                    (src.name + "-wal", False, 0, 0, 0, 0),
+                    (src.name + "-journal", False, 0, 0, 0, 0),
+                )
+
+            signatures = [signature(1), signature(2), signature(3), signature(3)]
 
             def fake_signature(_path):
                 return signatures.pop(0)

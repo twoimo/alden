@@ -37,7 +37,7 @@ The desktop settings split uses the golden ratio `φ = (1 + √5) / 2 ≈ 1.618`
 - `AldenPanel`: opaque 276×260 root. The Three.js canvas is transparent and exactly 236×236. The panel has no interactive controls; settings open from a right-click on the menu-bar tray icon.
 - `AldenCore`: three independently damped gimbal rings, 96 neuron points, three synapses per neuron, 30 particles, a spring nucleus, and an acoustic wire lattice. GPU buffers are allocated once and updated in place.
 - `UnifiedSettings`: target rooms, two plain-language AI choices, voice start, one conversation status, holographic conversation search, and recent replies. There are no bulk-verification, feature-checklist, permission, model-owner, hardware, index, or training-status controls in this window.
-- AI models: Flash-Next is the default resident choice; the 27B model is shown as an on-demand swap target and is never prepared or loaded by this unit.
+- AI models: the existing ready Qwen3.8 27B service is the verified local voice choice. The exact Flash-Next iQ option is admitted only with 60 GiB of reclaimable memory and a matching ready catalog entry. The current host does not meet that budget; the UI must not imply that Flash is resident or available. A second resident model is not started just to populate the chooser.
 
 ## Motion model
 

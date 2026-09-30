@@ -1332,8 +1332,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "style:youtube_reaction_register:v1",
         )
 
-    def test_photo_fallback_varies_and_media_placeholder_is_not_echo(self):
-        module = self._load_auto_reply_module("auto_reply_photo_fallback_vary_test")
+    def test_photo_fallback_states_missing_pixels_without_visual_judgment(self):
+        module = self._load_auto_reply_module("auto_reply_photo_fallback_truth_test")
         self.assertTrue(module._inbound_is_media_placeholder("사진"))
         self.assertFalse(module._outbound_echoes_inbound("화면이 좀 깨지네", "사진"))
         self.assertTrue(
@@ -1341,13 +1341,43 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
         recent = [{"is_self": True, "message": "화면이 좀 깨지네"}]
         first = module._photo_fallback_reply("사진", recent)
-        self.assertNotEqual(first, "이거 뭐야")
-        self.assertNotIn(first, {"화면이 좀 깨지네"})
+        self.assertIn("사진 내용을 확인하지 못했어", first)
+        self.assertEqual(first.count("?"), 1)
         second = module._photo_fallback_reply(
             "사진",
             recent + [{"is_self": True, "message": first}],
         )
-        self.assertNotEqual(second, first)
+        self.assertEqual(second, first)
+        formal = module._photo_fallback_reply(
+            "사진", [{"author_nickname": "현준", "is_self": False}]
+        )
+        self.assertIn("사진 내용을 확인하지 못했어요", formal)
+        for reply in (first, second, formal):
+            for unsupported in ("화질", "구도", "색감", "깨지", "안 보이"):
+                self.assertNotIn(unsupported, reply)
+
+    def test_image_rank_fallback_does_not_invent_pixel_observations(self):
+        module = self._load_auto_reply_module("auto_reply_photo_rank_truth_test")
+        with mock.patch.object(module, "_policy_valid_draft", return_value=False):
+            ranked = module.select_ranked_reply(
+                "[사진]", "", [], {"attachment": "image"}, []
+            )
+        self.assertEqual(ranked["fallback"], "photo_passthrough")
+        self.assertIn("사진 내용을 확인하지 못했어", ranked["reply"])
+        self.assertEqual(ranked["reply"].count("?"), 1)
+
+    def test_photo_fallback_uses_current_recipient_and_explicit_register(self):
+        module = self._load_auto_reply_module("auto_reply_photo_recipient_truth_test")
+        for recipient, register, recent, formal in (
+            ("현준", None, [], True),
+            ("member", "honorific", [], True),
+            ("member", "informal", [{"author_nickname": "현준"}], False),
+        ):
+            with self.subTest(recipient=recipient, register=register):
+                reply = module._photo_fallback_reply(
+                    "[사진]", recent, recipient=recipient, register=register
+                )
+                self.assertEqual("못했어요" in reply, formal)
     def test_unsolicited_plan_is_rejected(self):
         module = self._load_auto_reply_module("auto_reply_unsolicited_plan_test")
         self.assertTrue(
@@ -15606,6 +15636,7 @@ print(json.dumps({
                     mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
                     mock.patch.object(module, "privacy_attestation_current", return_value=True),
                     mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                    mock.patch.object(module, "stable_room_watermark_log_id", return_value=920),
                     mock.patch.object(module, "run_context_reply_bundle", return_value=bundle),
                     mock.patch.object(
                         module,
@@ -20276,48 +20307,33 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertTrue(module._inbound_asks_question("리드미 요약해줘"))
 
     def test_unreadable_image_is_named_and_never_answered_blind(self):
-        """A photo the worker cannot read must not be dropped in silence.
-
-        The old code swallowed the read error, so a question about a photo was
-        sent as plain text and answered as if no photo had been attached
-        (2026-09-16).
-        """
-
+        """Incomplete image evidence never becomes a text-only model request."""
         module = self._load_auto_reply_module("image_unreadable_payload")
-        captured: dict = {}
-
-        class _Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps(
-                    {"choices": [{"message": {"content": "ok"}}]}
-                ).encode("utf-8")
-
-        def fake_urlopen(request, timeout=None):
-            captured["body"] = json.loads(request.data.decode("utf-8"))
-            return _Response()
-
-        missing = Path(tempfile.gettempdir()) / "openkakao-not-here-20260916.png"
-        with mock.patch.object(module.urllib.request, "urlopen", fake_urlopen):
-            code, _stdout, _stderr = module._run_opencodex_generation(
-                "opencode-go-session/deepseek-v4.1-flash",
-                "시스템",
-                '{"inbound":"얼마나 먹는 거임"}'.encode("utf-8"),
-                image_paths=[missing],
-                timeout=5.0,
-            )
-        self.assertEqual(code, 0)
-        content = captured["body"]["messages"][1]["content"]
-        # The text is still sent, but with an explicit note that the photo was
-        # not readable, so the model cannot guess at a picture it never saw.
-        self.assertIsInstance(content, str)
-        self.assertIn("사진을 읽지 못했습니다", content)
-        self.assertIn("추측하지 말고", content)
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing.png"
+            readable = Path(temporary) / "present.png"
+            readable.write_bytes(b"PNG fixture")
+            for images in ([missing], [readable, missing]):
+                with self.subTest(images=len(images)):
+                    with mock.patch.object(module.urllib.request, "urlopen") as request:
+                        code, stdout, stderr = module._run_opencodex_generation(
+                            "opencode-go-session/deepseek-v4.1-flash",
+                            "시스템", b"fixture", image_paths=images, timeout=5.0,
+                        )
+                    self.assertEqual(code, 1)
+                    self.assertEqual(stdout, b"")
+                    self.assertEqual(stderr, b"image_input_unavailable")
+                    request.assert_not_called()
+            with (
+                mock.patch.object(Path, "read_bytes", side_effect=PermissionError("fixture")),
+                mock.patch.object(module.urllib.request, "urlopen") as request,
+            ):
+                code, stdout, stderr = module._run_opencodex_generation(
+                    "opencode-go-session/deepseek-v4.1-flash",
+                    "시스템", b"fixture", image_paths=[readable], timeout=5.0,
+                )
+            self.assertEqual((code, stdout, stderr), (1, b"", b"image_input_unavailable"))
+            request.assert_not_called()
 
     def test_readable_image_is_still_attached_as_a_data_url(self):
         """The failure path must not disturb the working path."""
@@ -20357,6 +20373,40 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertIsInstance(content, list)
         urls = [part.get("image_url", {}).get("url", "") for part in content]
         self.assertTrue(any(url.startswith("data:image/") for url in urls), urls)
+
+    def test_missing_image_input_does_not_fallback_or_open_model_cooldown(self):
+        module = self._load_auto_reply_module("image_missing_generation_boundary")
+        with tempfile.TemporaryDirectory() as temporary:
+            with (
+                mock.patch.object(module, "_operator_state_root", return_value=Path(temporary)),
+                mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_image_path_within_cap", return_value=True),
+                mock.patch.object(module, "_generation_reply_model", return_value=module.QWEN38_27B_MODEL_ID),
+                mock.patch.object(module, "_ensure_omlx_model_resident"),
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": True, "failure_class": "", "retry_at": time.time() + 180,
+                    "lease_token": "c" * 32,
+                }),
+                mock.patch.object(module, "_run_generation_candidate", return_value=(1, b"", b"image_input_unavailable")),
+                mock.patch.object(module, "_release_cancelled_model_call", return_value=True) as release,
+                mock.patch.object(module, "_model_fallback_chain") as fallback,
+                mock.patch.object(module, "_finish_model_call_failure") as failure,
+                mock.patch.object(module, "_finish_model_call_success") as success,
+            ):
+                result = module.generate_reply(
+                    "[사진]", [], [], [], [], attachment="image",
+                    image_paths=[Path(temporary) / "disappeared.png"],
+                    media_evidence_id="media:" + "a" * 64,
+                )
+        self.assertEqual(result["reason"], "image_unavailable")
+        self.assertFalse(result["should_reply"])
+        self.assertFalse(result["model_invoked"])
+        self.assertEqual(result["evidence_ids"], [])
+        release.assert_called_once_with("c" * 32, module.QWEN38_27B_MODEL_ID)
+        fallback.assert_not_called()
+        failure.assert_not_called()
+        success.assert_not_called()
 
     def test_empty_image_list_leaves_the_text_message_alone(self):
         """No images means no note about images."""
