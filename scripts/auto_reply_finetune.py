@@ -1465,6 +1465,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dpo-policy-dir", type=Path, default=None, help="로컬 policy checkpoint 절대경로")
     parser.add_argument(
+        "--dpo-checkpoint-format",
+        choices=("auto", "mlx-lm", "mlx-serve-qwen3_5-converted"), default="auto",
+        help="로컬 checkpoint 정규화/Conv1d 변환 계약; 추측이 필요한 auto 입력은 평가 불가",
+    )
+    parser.add_argument(
         "--dpo-reference-dir", type=Path, default=None, help="로컬 frozen reference checkpoint 절대경로"
     )
     parser.add_argument(
@@ -1563,6 +1568,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     pairs,
                     policy_dir=args.dpo_policy_dir,
                     reference_dir=args.dpo_reference_dir,
+                    checkpoint_format=args.dpo_checkpoint_format,
                     dpo_loss_fn=dpo_loss_from_logprobs,
                 )
         else:

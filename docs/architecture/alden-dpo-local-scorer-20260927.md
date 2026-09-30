@@ -1,5 +1,7 @@
 # Alden local teacher-forced DPO scorer (2026-09-27)
 
+2026-09-30 업데이트: 실제 27B MLX-Serve 체크포인트에서 발견한 norm 중복 보정을 수정했다. 아래의 9월 27일 fake 검증 기록과 별도로 [실제 모델 호환성 검증 및 수치](alden-dpo-checkpoint-compatibility-20260930.md)를 기록했다. `auto`는 MTP가 남아 있고 Conv1d가 이미 변환된 모호한 입력을 차단하며, 이 체크포인트에는 `--dpo-checkpoint-format mlx-serve-qwen3_5-converted`를 명시해야 한다.
+
 ## 목적
 
 기존 `auto_reply_finetune.py`의 DPO 산술은 응답 토큰 로그확률이 주어졌을 때 표준 DPO loss를 계산할 수 있다. 그러나 로컬 OpenAI-compatible gateway의 응답 logprobs는 모델이 샘플링해 생성한 토큰에 대한 값이며, `/v1/completions`의 `echo=true`도 저장된 chosen/rejected 응답을 teacher forcing으로 채점하는 계약을 제공하지 않는다. 기존 probe는 이 경로를 `echo_unsupported`로 닫는다.
@@ -42,6 +44,7 @@ reference가 없거나 검증이 실패하면 `status=eval_unavailable`, `mean_l
 --dpo-score-local
 --dpo-policy-dir /absolute/local/policy
 --dpo-reference-dir /absolute/local/reference
+--dpo-checkpoint-format auto|mlx-lm|mlx-serve-qwen3_5-converted
 ```
 
 `--dpo-score-local`이 없으면 기존 gateway DPO 경로를 그대로 사용한다. local scorer는 `--dpo-pairs`와 함께 사용할 때만 동작하며 기존 `dpo_loss_from_logprobs(..., require_reference=True)`에 teacher-forced policy/reference log-probs를 전달한다.

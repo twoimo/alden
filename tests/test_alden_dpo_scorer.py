@@ -7,6 +7,7 @@ import math
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -198,6 +199,150 @@ class ScoreValidationTests(unittest.TestCase):
             S.validate_pair_scores(_pair_score(), reference)
 
 
+class CheckpointFormatTests(unittest.TestCase):
+    def weights(self, *, shape=(12, 4, 1), mtp=True):
+        weights = {
+            "model.layers.0.linear_attn.conv1d.weight": types.SimpleNamespace(shape=shape),
+            "model.layers.0.input_layernorm.weight": object(),
+        }
+        if mtp:
+            weights["mtp.layers.0.weight"] = object()
+        return weights
+
+    def test_auto_rejects_converted_conv_with_mtp(self):
+        with self.assertRaisesRegex(S.ScorerError, "checkpoint_layout_ambiguous"):
+            S._qwen35_sanitize_input(self.weights(), S.CHECKPOINT_FORMAT_AUTO)
+
+    def test_auto_keeps_unconverted_norm_contract(self):
+        weights = self.weights(shape=(12, 1, 4))
+        prepared, selected = S._qwen35_sanitize_input(weights, S.CHECKPOINT_FORMAT_AUTO)
+        self.assertIs(prepared, weights)
+        self.assertEqual(selected, S.CHECKPOINT_FORMAT_MLX_LM)
+
+    def test_converted_format_removes_mtp_without_mutating_norms(self):
+        weights = self.weights()
+        prepared, selected = S._qwen35_sanitize_input(weights, S.CHECKPOINT_FORMAT_MLX_SERVE)
+        self.assertEqual(selected, S.CHECKPOINT_FORMAT_MLX_SERVE)
+        self.assertNotIn("mtp.layers.0.weight", prepared)
+        self.assertIn("mtp.layers.0.weight", weights)
+        self.assertIs(prepared["model.layers.0.input_layernorm.weight"],
+                      weights["model.layers.0.input_layernorm.weight"])
+
+    def test_converted_format_allows_already_removed_mtp(self):
+        weights = self.weights(mtp=False)
+        prepared, _ = S._qwen35_sanitize_input(weights, S.CHECKPOINT_FORMAT_MLX_SERVE)
+        self.assertEqual(prepared, weights)
+
+    def test_converted_format_rejects_unconverted_or_missing_conv(self):
+        for weights, reason in (
+            (self.weights(shape=(12, 1, 4)), "mlx_serve_conv_layout_unconverted"),
+            ({"mtp.layers.0.weight": object()}, "mlx_serve_conv_layout_missing"),
+        ):
+            with self.subTest(reason=reason):
+                with self.assertRaisesRegex(S.ScorerError, reason):
+                    S._qwen35_sanitize_input(weights, S.CHECKPOINT_FORMAT_MLX_SERVE)
+
+    def test_malformed_conv_shapes_fail(self):
+        for shape in ((12, 4), (12, 0, 1), (12, 4, "bad")):
+            with self.subTest(shape=shape):
+                with self.assertRaisesRegex(S.ScorerError, "checkpoint_layout_ambiguous"):
+                    S._qwen35_sanitize_input(self.weights(shape=shape), S.CHECKPOINT_FORMAT_AUTO)
+
+    def test_mixed_conv_layouts_fail(self):
+        weights = self.weights()
+        weights["model.layers.1.linear_attn.conv1d.weight"] = types.SimpleNamespace(shape=(12, 1, 4))
+        with self.assertRaisesRegex(S.ScorerError, "checkpoint_conv_layout_mixed"):
+            S._qwen35_sanitize_input(weights, S.CHECKPOINT_FORMAT_AUTO)
+
+    def test_unknown_format_fails_before_loading(self):
+        FakeBackend.reset()
+        result = S.score_local_dpo_pairs(
+            [PAIR], policy_dir="/tmp/unused", reference_dir="/tmp/unused",
+            checkpoint_format="guess", backend_factory=FakeBackend,
+        )
+        self.assertEqual(result["reason"], "unknown_checkpoint_format")
+        self.assertIsNone(result["mean_loss"])
+        self.assertEqual(FakeBackend.loads, 0)
+
+    def test_scoped_subclass_leaves_upstream_class_unchanged(self):
+        class Upstream:
+            def sanitize(self, weights):
+                return dict(weights)
+        original = Upstream.sanitize
+        selected = {}
+        scoped = S._scoped_qwen35_model_class(Upstream, S.CHECKPOINT_FORMAT_MLX_SERVE, selected)
+        weights = self.weights()
+        self.assertNotIn("mtp.layers.0.weight", scoped().sanitize(weights))
+        self.assertIn("mtp.layers.0.weight", Upstream().sanitize(weights))
+        self.assertIs(Upstream.sanitize, original)
+        self.assertEqual(selected["format"], S.CHECKPOINT_FORMAT_MLX_SERVE)
+
+    def test_converted_format_rejects_other_architecture_before_importing_mlx(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = _checkpoint(Path(tmp), "other")
+            with self.assertRaisesRegex(S.ScorerError, "checkpoint_format_model_mismatch"):
+                S.MlxBackend.from_checkpoint(checkpoint, checkpoint_format=S.CHECKPOINT_FORMAT_MLX_SERVE)
+
+    def test_custom_model_file_falsey_values_are_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkpoint = _checkpoint(Path(tmp), "custom")
+            for value in ("custom.py", "", False, 0):
+                with self.subTest(value=value):
+                    (checkpoint / "config.json").write_text(json.dumps({"model_file": value}))
+                    with self.assertRaisesRegex(S.ScorerError, "checkpoint_custom_model_code_forbidden"):
+                        S._checkpoint(checkpoint, "missing")
+
+
+class UpstreamQwen35NumericsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            import mlx.core as mx
+            from mlx_lm.models import qwen3_5
+        except ImportError as exc:
+            raise unittest.SkipTest("MLX numerical test requires the pinned evaluation runtime") from exc
+        cls.mx, cls.qwen = mx, qwen3_5
+
+    def test_upstream_sanitizer_preserves_folded_norms_and_shifts_raw_norms_once(self):
+        mx, qwen = self.mx, self.qwen
+        original = qwen.Model.sanitize
+        args = qwen.ModelArgs(model_type="qwen3_5", text_config={
+            "hidden_size": 4, "intermediate_size": 8, "num_hidden_layers": 1,
+            "num_attention_heads": 1, "num_key_value_heads": 1, "head_dim": 4,
+            "vocab_size": 8, "linear_num_value_heads": 1, "linear_num_key_heads": 1,
+            "linear_key_head_dim": 4, "linear_value_head_dim": 4,
+            "rope_parameters": {"type": "default", "partial_rotary_factor": 1.0, "rope_theta": 10000},
+        })
+        keys = ["model.layers.0.input_layernorm.weight", "model.layers.0.post_attention_layernorm.weight",
+                "model.norm.weight", "model.layers.0.self_attn.q_norm.weight",
+                "model.layers.0.self_attn.k_norm.weight"]
+        raw = mx.array([-0.5, 0.0, 0.5, 1.0])
+        folded = raw + 1.0
+        gdn_key = "model.layers.0.linear_attn.norm.weight"
+        conv_key = "model.layers.0.linear_attn.conv1d.weight"
+        converted = {key: folded for key in keys}
+        converted.update({gdn_key: raw, conv_key: mx.zeros((12, 4, 1)), "mtp.weight": mx.zeros((1,))})
+        # Exercise the real upstream heuristic: retaining MTP would shift a second time.
+        wrong = qwen.Model(args).sanitize(dict(converted))
+        self.assertEqual(wrong["language_model.model.norm.weight"].tolist(), (folded + 1.0).tolist())
+        selected = {}
+        scoped = S._scoped_qwen35_model_class(qwen.Model, S.CHECKPOINT_FORMAT_MLX_SERVE, selected)
+        correct = scoped(args).sanitize(converted)
+        for key in keys:
+            self.assertEqual(correct["language_model." + key].tolist(), folded.tolist())
+        self.assertEqual(correct["language_model." + gdn_key].tolist(), raw.tolist())
+        self.assertFalse(any("mtp." in key for key in correct))
+        raw_weights = {key: raw for key in keys}
+        raw_weights.update({gdn_key: raw, conv_key: mx.zeros((12, 1, 4)), "mtp.weight": mx.zeros((1,))})
+        raw_scoped = S._scoped_qwen35_model_class(qwen.Model, S.CHECKPOINT_FORMAT_AUTO, {})
+        raw_correct = raw_scoped(args).sanitize(raw_weights)
+        for key in keys:
+            self.assertEqual(raw_correct["language_model." + key].tolist(), folded.tolist())
+        self.assertEqual(raw_correct["language_model." + conv_key].shape, (12, 4, 1))
+        self.assertEqual(raw_correct["language_model." + gdn_key].tolist(), raw.tolist())
+        self.assertIs(qwen.Model.sanitize, original)
+
+
 class LocalReportTests(unittest.TestCase):
     def setUp(self):
         FakeBackend.reset()
@@ -287,6 +432,7 @@ class CliIntegrationTests(unittest.TestCase):
         self.assertFalse(args.dpo_score_local)
         self.assertIsNone(args.dpo_policy_dir)
         self.assertIsNone(args.dpo_reference_dir)
+        self.assertEqual(args.dpo_checkpoint_format, S.CHECKPOINT_FORMAT_AUTO)
 
     def test_local_cli_report_uses_scorer_without_gateway(self):
         fake_report = {
@@ -306,11 +452,13 @@ class CliIntegrationTests(unittest.TestCase):
                         "--state-root", tmp, "--prepare-only", "--json",
                         "--dpo-pairs", str(pairs), "--dpo-score-local",
                         "--dpo-policy-dir", str(policy), "--dpo-reference-dir", str(reference),
+                        "--dpo-checkpoint-format", S.CHECKPOINT_FORMAT_MLX_SERVE,
                     ])
             report = json.loads(buffer.getvalue())
         self.assertEqual(code, 0)
         self.assertEqual(report["dpo"], fake_report)
         scorer.assert_called_once()
+        self.assertEqual(scorer.call_args.kwargs["checkpoint_format"], S.CHECKPOINT_FORMAT_MLX_SERVE)
 
     def test_direct_script_cli_imports_sibling_scorer(self):
         repo = Path(__file__).resolve().parents[1]

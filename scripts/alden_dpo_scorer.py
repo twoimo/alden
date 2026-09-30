@@ -16,6 +16,14 @@ from typing import Any, Callable, Sequence
 
 SCORING_METHOD = "mlx_direct_teacher_forcing"
 PEAK_BYTES_SCOPE = "scoring_after_model_load"
+CHECKPOINT_FORMAT_AUTO = "auto"
+CHECKPOINT_FORMAT_MLX_LM = "mlx-lm"
+CHECKPOINT_FORMAT_MLX_SERVE = "mlx-serve-qwen3_5-converted"
+CHECKPOINT_FORMAT_CHOICES = (
+    CHECKPOINT_FORMAT_AUTO,
+    CHECKPOINT_FORMAT_MLX_LM,
+    CHECKPOINT_FORMAT_MLX_SERVE,
+)
 MAX_PAIRS = 32
 MAX_TOTAL_TOKENS = 2048
 MAX_RESPONSE_TOKENS = 256
@@ -32,6 +40,71 @@ class ScorerError(RuntimeError):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+def _checkpoint_format(value: str | None) -> str:
+    normalized = str(value or CHECKPOINT_FORMAT_AUTO).strip().lower()
+    if normalized not in CHECKPOINT_FORMAT_CHOICES:
+        raise ScorerError("unknown_checkpoint_format")
+    return normalized
+
+
+def _qwen35_sanitize_input(
+    weights: dict[str, Any], checkpoint_format: str
+) -> tuple[dict[str, Any], str]:
+    """Prepare qwen3_5 weights for the upstream MLX-LM sanitizer.
+
+    MLX-LM 0.31.3 uses either MTP weights or an unconverted Conv1d layout as
+    evidence that layer/final/qk norms still need the Hugging Face +1 fold.
+    ddalcu MLX-Serve checkpoints preserve inference-only MTP weights after that
+    fold and Conv1d conversion, so MTP must be removed before the upstream
+    sanitizer makes that decision.
+    """
+    checkpoint_format = _checkpoint_format(checkpoint_format)
+    mtp_keys = tuple(key for key in weights if "mtp." in key)
+    conv_weights = [value for key, value in weights.items() if "conv1d.weight" in key]
+    conv_last_dims: list[int] = []
+    for value in conv_weights:
+        shape = getattr(value, "shape", None)
+        if not shape or len(shape) != 3:
+            raise ScorerError("checkpoint_layout_ambiguous")
+        try:
+            if any(int(dim) <= 0 for dim in shape):
+                raise ScorerError("checkpoint_layout_ambiguous")
+            conv_last_dims.append(int(shape[-1]))
+        except (TypeError, ValueError, IndexError) as exc:
+            raise ScorerError("checkpoint_layout_ambiguous") from exc
+    has_unconverted_conv = any(last_dim != 1 for last_dim in conv_last_dims)
+    if has_unconverted_conv and any(last_dim == 1 for last_dim in conv_last_dims):
+        raise ScorerError("checkpoint_conv_layout_mixed")
+
+    if checkpoint_format == CHECKPOINT_FORMAT_AUTO:
+        if mtp_keys and not has_unconverted_conv:
+            raise ScorerError("checkpoint_layout_ambiguous")
+        return weights, CHECKPOINT_FORMAT_MLX_LM
+
+    if checkpoint_format == CHECKPOINT_FORMAT_MLX_LM:
+        return weights, CHECKPOINT_FORMAT_MLX_LM
+
+    if not conv_weights:
+        raise ScorerError("mlx_serve_conv_layout_missing")
+    if has_unconverted_conv:
+        raise ScorerError("mlx_serve_conv_layout_unconverted")
+    prepared = {key: value for key, value in weights.items() if "mtp." not in key}
+    return prepared, CHECKPOINT_FORMAT_MLX_SERVE
+
+
+def _scoped_qwen35_model_class(base_model_class, checkpoint_format: str, selected: dict[str, str]):
+    """Return a scorer-only Model subclass without mutating mlx_lm globals."""
+
+    class ScorerQwen35Model(base_model_class):
+        def sanitize(self, weights):
+            prepared, actual_format = _qwen35_sanitize_input(weights, checkpoint_format)
+            selected["format"] = actual_format
+            self._alden_checkpoint_format = actual_format
+            return super().sanitize(prepared)
+
+    return ScorerQwen35Model
 
 
 def _versions() -> dict[str, str]:
@@ -67,7 +140,7 @@ def _checkpoint(path: Path | str | None, missing_reason: str) -> Path:
         config = json.loads((resolved / "config.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise ScorerError("checkpoint_config_invalid") from exc
-    if not isinstance(config, dict) or config.get("model_file"):
+    if not isinstance(config, dict) or config.get("model_file") is not None:
         raise ScorerError("checkpoint_custom_model_code_forbidden")
     if not list(resolved.glob("model*.safetensors")):
         raise ScorerError("checkpoint_weights_missing")
@@ -178,24 +251,47 @@ def prepare_pair_tokens(tokenizer: Any, pair: dict[str, Any], index: int = 0):
 
 
 class MlxBackend:
-    def __init__(self, model, tokenizer, mx, nn, make_cache):
+    def __init__(self, model, tokenizer, mx, nn, make_cache,
+                 checkpoint_format=CHECKPOINT_FORMAT_MLX_LM):
         self.model, self.tokenizer, self.mx, self.nn = model, tokenizer, mx, nn
         self._make_cache = make_cache
+        self.checkpoint_format = checkpoint_format
 
     @classmethod
-    def from_checkpoint(cls, checkpoint: Path):
+    def from_checkpoint(cls, checkpoint: Path, *, checkpoint_format=CHECKPOINT_FORMAT_AUTO):
+        checkpoint_format = _checkpoint_format(checkpoint_format)
+        checkpoint = _checkpoint(checkpoint, "missing_policy_dir")
+        config = json.loads((checkpoint / "config.json").read_text(encoding="utf-8"))
+        qwen35 = config.get("model_type") in {"qwen3_5", "qwen3_5_text"}
+        if checkpoint_format == CHECKPOINT_FORMAT_MLX_SERVE and not qwen35:
+            raise ScorerError("checkpoint_format_model_mismatch")
         os.environ["HF_HUB_OFFLINE"] = "1"
         os.environ["TRANSFORMERS_OFFLINE"] = "1"
         import mlx.core as mx
         import mlx.nn as nn
         from mlx_lm.models.cache import make_prompt_cache
-        from mlx_lm.utils import load
+        from mlx_lm.utils import load, load_model, load_tokenizer
+        selected = {"format": CHECKPOINT_FORMAT_MLX_LM}
         with contextlib.redirect_stdout(sys.stderr):
-            model, tokenizer = load(
-                str(checkpoint),
-                tokenizer_config={"trust_remote_code": False, "local_files_only": True},
-            )
-        return cls(model, tokenizer, mx, nn, make_prompt_cache)
+            tokenizer_config = {"trust_remote_code": False, "local_files_only": True}
+            if qwen35:
+                from mlx_lm.models import qwen3_5
+                base_model, args_class = (
+                    (qwen3_5.TextModel, qwen3_5.TextModelArgs)
+                    if config["model_type"] == "qwen3_5_text"
+                    else (qwen3_5.Model, qwen3_5.ModelArgs)
+                )
+                scoped_model = _scoped_qwen35_model_class(base_model, checkpoint_format, selected)
+                # load_model calls its factory with the named `config` argument.
+                def model_classes(config):
+                    return scoped_model, args_class
+                model, loaded_config = load_model(checkpoint, get_model_classes=model_classes)
+                tokenizer = load_tokenizer(
+                    checkpoint, tokenizer_config, eos_token_ids=loaded_config.get("eos_token_id")
+                )
+            else:
+                model, tokenizer = load(str(checkpoint), tokenizer_config=tokenizer_config)
+        return cls(model, tokenizer, mx, nn, make_prompt_cache, selected["format"])
 
     def reset_peak_memory(self):
         self.mx.reset_peak_memory()
@@ -255,8 +351,11 @@ def score_fixed_response(backend: Any, prepared: dict[str, Any], *, chunk_size=D
     }
 
 
-def _score_checkpoint(checkpoint, pairs, chunk_size, backend_factory, abort_check, deadline):
-    backend = (backend_factory or MlxBackend.from_checkpoint)(checkpoint)
+def _score_checkpoint(checkpoint, pairs, chunk_size, backend_factory, abort_check, deadline,
+                      checkpoint_format=CHECKPOINT_FORMAT_AUTO):
+    _check_abort(abort_check, deadline)
+    backend = (backend_factory(checkpoint) if backend_factory is not None else
+               MlxBackend.from_checkpoint(checkpoint, checkpoint_format=checkpoint_format))
     try:
         if hasattr(backend, "reset_peak_memory"):
             backend.reset_peak_memory()
@@ -271,7 +370,7 @@ def _score_checkpoint(checkpoint, pairs, chunk_size, backend_factory, abort_chec
                     abort_check=abort_check, deadline=deadline),
             })
         peak = int(backend.peak_bytes()) if hasattr(backend, "peak_bytes") else 0
-        return scored, peak
+        return scored, peak, getattr(backend, "checkpoint_format", "injected_backend")
     finally:
         try:
             backend.close()
@@ -320,11 +419,13 @@ def score_local_dpo_pairs(
     chunk_size: int = DEFAULT_CHUNK_SIZE, backend_factory: Callable[[Path], Any] | None = None,
     dpo_loss_fn: Callable[..., dict[str, Any]] | None = None,
     abort_check: Callable[[], bool] | None = None, deadline_seconds: float | None = None,
+    checkpoint_format: str = CHECKPOINT_FORMAT_AUTO,
 ) -> dict[str, Any]:
     started = time.monotonic()
     pair_count = len(pairs) if isinstance(pairs, (list, tuple)) else 0
     deadline = started + float(deadline_seconds) if deadline_seconds is not None else None
     try:
+        checkpoint_format = _checkpoint_format(checkpoint_format)
         if not isinstance(pairs, (list, tuple)) or not pairs:
             raise ScorerError("no_pairs")
         if pair_count > MAX_PAIRS:
@@ -340,14 +441,14 @@ def score_local_dpo_pairs(
         policy_sha = checkpoint_fingerprint(policy, abort_check, deadline)
         reference_sha = policy_sha if policy == reference else checkpoint_fingerprint(reference, abort_check, deadline)
         same_checkpoint = policy_sha == reference_sha
-        policy_scores, policy_peak = _score_checkpoint(
-            policy, pairs, chunk_size, backend_factory, abort_check, deadline
+        policy_scores, policy_peak, policy_format = _score_checkpoint(
+            policy, pairs, chunk_size, backend_factory, abort_check, deadline, checkpoint_format
         )
         if same_checkpoint:
-            reference_scores, reference_peak = policy_scores, policy_peak
+            reference_scores, reference_peak, reference_format = policy_scores, policy_peak, policy_format
         else:
-            reference_scores, reference_peak = _score_checkpoint(
-                reference, pairs, chunk_size, backend_factory, abort_check, deadline
+            reference_scores, reference_peak, reference_format = _score_checkpoint(
+                reference, pairs, chunk_size, backend_factory, abort_check, deadline, checkpoint_format
             )
         if len(policy_scores) != len(reference_scores):
             raise ScorerError("reference_pair_count_mismatch")
@@ -389,6 +490,9 @@ def score_local_dpo_pairs(
             "policy_sha256": policy_sha,
             "reference_sha256": reference_sha, "tokenizer_sha256": policy_tok,
             "reference_frozen": True, "reference_reused": same_checkpoint,
+            "requested_checkpoint_format": checkpoint_format,
+            "policy_checkpoint_format": policy_format,
+            "reference_checkpoint_format": reference_format,
             "identical_checkpoint_delta_zero": same_checkpoint, "versions": _versions(), "pairs": public_pairs,
         }
     except ScorerError as exc:

@@ -2,6 +2,12 @@
 
 This records an actual local menu-bar app cutover from the working tree. It is not a release receipt or a measurement of conversational performance.
 
+## Latest local rebuild — 2026-09-30 KST
+
+The `18a6d4b` desktop source was rebuilt and installed through the existing rollback-capable installer. The post-build source snapshot covered 174 build inputs with zero changes. Fresh readback at 12:11 KST found all **28 installed files** equal to the built bundle, strict code-signature verification exit 0, and `com.openkakao.alden.desktop` running with PID 22124. See the [metadata-only receipt](alden-install-readback-20260930.json). The previous bundle/service backup is retained in the private installer backup directory.
+
+This is an ad-hoc signature and an owned local installation. Computer Use inventory/accessory-app observation timed out; no fresh installed-screen, physical abort-shortcut or GPU/battery result is established. The opt-in DPO source scorer's separate numerical verification is recorded in the [27B compatibility evidence](alden-dpo-checkpoint-compatibility-20260930.md); it is not bundled into this installation. Existing room workers were not restarted by this desktop cutover.
+
 ## Offline installer verification
 
 `python3.11 -m unittest discover -s tests -p test_alden_desktop_launchers.py -v` completed with exit 0: **34 tests passed in 59.467 seconds**. The interpreter was the existing menu-bar Python 3.11 runtime. The installer fixtures used temporary app, LaunchAgent, and backup directories plus fake launchd, process enumeration, and executable-path adapters. They did not send KakaoTalk messages or stop live services.

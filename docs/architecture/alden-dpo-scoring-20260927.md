@@ -1,5 +1,9 @@
 # Local DPO scoring gap — 2026-09-27
 
+Update, 2026-09-30: the separate direct MLX teacher-forced scorer now has a real
+27B checkpoint compatibility check. The echo-based gateway observation below
+still applies to that transport. See the [checkpoint compatibility evidence](alden-dpo-checkpoint-compatibility-20260930.md).
+
 The parent ran the existing `probe_response_scoring()` against the loaded local
 `ddalcu/Qwen3.8-27B-MLX-Serve-4bit` model on `127.0.0.1:11234/v1`.
 The bounded, synthetic `completions_echo` probe completed in **0.931584 s**.
@@ -24,8 +28,8 @@ alone do not provide scores for arbitrary previously stored response pairs.
 This observation is limited to the existing echo-based transport; it does not
 prove that every native MLX scoring interface is unavailable.
 
-Remaining implementation: a local teacher-forced response scorer with an exact
-tokenizer/model contract and fixed reference probabilities, integrated with
-the offline preference-pair loop. Continuous standard DPO evaluation, adapter
+The subsequently implemented local teacher-forced scorer provides an exact
+tokenizer/checkpoint contract and fixed reference probabilities through the
+opt-in offline preference-pair CLI. Continuous standard DPO evaluation, adapter
 training, promotion and measured quality improvement remain unverified. No
 KakaoTalk conversation or message was sent for this probe.
