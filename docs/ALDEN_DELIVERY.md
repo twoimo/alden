@@ -1,6 +1,6 @@
 # Alden 전달 진행 기록
 
-최신 목표 원문: `/Users/twoimo/.codex/attachments/483991c3-119c-40da-b523-1c5ef9687e69/goal-objective.md`.
+최신 목표 원문: `/Users/twoimo/.codex/attachments/ba814151-0eb9-40ae-9f7f-cbdf53d734b7/goal-objective.md`.
 이전 목표 원문 `576db5bd-37d1-4ab4-853a-fb1cf0803774`의 미디어 수정과 기존 보존 조건도 이어간다.
 2026-09-30 작업 기준: PR #27의 `74149a41b6c86ead9a1a2794bd1e5c1c2fadfb98`에서
 `codex/alden-delivery-20260930` 분기. 원래 작업 폴더는 main `8012f90`의 깨끗한 detached checkout이었다.
@@ -10,6 +10,8 @@
 과거 문서의 결과는 날짜와 실행 범위가 일치할 때만 재사용한다. 전체 목표는 계속 진행 중이다.
 
 ## 최신 전달 상태
+
+- 23:24 KST 새 목표 ba814151의 11개 항목 전체를 읽고 기존 범위를 유지했다. 실제 암호화 DB 874,995,712 bytes와 WAL 4,676,208 bytes의 private read-only SQLCipher 4.6.1 복제본에서 quick_check=ok. 설치 CLI의 3방/8회 증분 조회 모두 성공했고, 새 실제 메시지 4건을 private index에 0.535초로 반영·재조회 추가/중복0. 기존 production mirror에서도 4/4 digest/context row를 독립 대조했다. [측정 근거](architecture/alden-encrypted-snapshot-20260930.md)는 sent_at→mirror receipt n=4 중앙37.625초를 DB insertion latency와 구분한다. 보존 사본·기존 전용 잠금 아래 설치 GraphRAG를 6.522초에 1회 갱신하고 graph/E5 watermark·무결성을 대조했다. 백업 보존, worker 재시작·프로브 전송0, backend3/3ready·설치 strict 서명 valid. 지속 최신성·native 화면·사람 음성·최종worker 교체·공개 릴리즈는 미완료다.
 
 - 22:33 KST 새 목표483991c3 전체 확인: 추가된 색감 실패를 기존 승인 방 ledger에서 조사했다. 실제 응답7행/고유5events/과거sent2행을 찾았고, 현재 worker c9b576의 pure helper 재현에서 근거 없는 시각 판단0이다. 새 모델 호출·전송·DB/큐 변경0. [색감 재현 기록](architecture/alden-color-claim-replay-20260930.json)은 운영 교체나 실제 pixel 해석 성공과 구분한다. 기존 색감 금지 assert가 현재971개 CI에 이미 포함돼 있어 통과한 source 검사를 다시 실행하지 않는다.
 
@@ -33,8 +35,8 @@
 | 비상 중단·명시적 재개·외부 작업 중단 | 구현 | worker/native AX epoch fence 존재. 실제 단축키 입력과 응답 시간·중단 후 재실행 없음 확인 필요. |
 | Alden 시각 디자인·토큰·3D 코어·창 크기·Retina | 구현 | 기존 DESIGN.md와 Archify 자료 존재. oh-my-design/style.gallery 직접 확인. 설치 창의 캡처·검토·동일 조건 재확인 필요. |
 | 실제 부하·음량 매핑·숨김/잠금 렌더 중단·복원 | 구현 | 이전 Chromium stub 확인은 설치 WKWebView 증거가 아님. 현재 설치본 숨김 중단 지연·호출 수·루프/리스너/GPU 누적 검증 필요. |
-| GraphRAG 정규화·별칭·출처·시간·삭제·BM25/Dense/RRF | 실제 실행 검증(일부) | 최종 source4cc536·실E5 synthetic13query Recall/nDCG=.9091/.9091·public context leak0. 독립 방/철회 fixture2→0. 실제 생산 인덱스 최신성과 설치 그래프 탐색 UI는 별도. Threads 조회 실패. |
-| 원본 DB 보호·일관된 스냅샷·증분 색인 | 구현 | Python stable DB+WAL와 private SHM 수정, graph 94/94 및 실제 context mirror 무결성 확인. 독립 동시 writer/checkpoint 80 snapshot 실패0. 암호화된 카카오 원본 전체 경로·생산 최신성은 별도. |
+| GraphRAG 정규화·별칭·출처·시간·삭제·BM25/Dense/RRF | 실제 실행 검증(일부) | 최종 source4cc536·실E5 synthetic13query Recall/nDCG=.9091/.9091·public context leak0. 설치 graph 6.522초 refresh·무결성·E5 watermark 일치. 지속 최신성·생산 quality·설치 그래프 탐색 UI는 별도. Threads 조회 실패. |
+| 원본 DB 보호·일관된 스냅샷·증분 색인 | 실제 실행 검증 | 실제 암호화 DB+WAL private read-only/query_only 복제본 quick_check=ok. 설치 CLI 3방/8회·실제 새4건 private ingest·production mirror4/4 대조. 원본 연결/체크포인트 없이 진행. 실제 경합·삭제 반영·지속 최신성은 남음. |
 | alphaXiv·DREAM-RSI·독립 평가·실제 DPO 로그확률 | 구현 | 논문/CLI 분석과 teacher-forced scorer 있음. 선호쌍·독립 검증·학습/모델 교체를 구분하고 실제 실행 증거 점검 필요. |
 | 동일 조건 기준선·수치 목표·회귀·CPU/GPU/전력 | 구현 | 27B 동일 case 12×2, stream smoke3 및 final2/12, 취소2경계·실snapshot1·render hidden관측. 공유 캐시/부하 통제 불가. 전체 앱 CPU/GPU/전력과 음성 end-to-end는 미측정. |
 | README·실제 캡처·구현에 맞는 6개 Archify 흐름 | 구현 | 기존 9개 다이어그램 점검 후 바뀐 경로만 갱신. 화면 캡처를 직접 검토해야 시각 검증으로 기록. |

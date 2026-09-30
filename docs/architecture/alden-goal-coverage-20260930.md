@@ -15,7 +15,7 @@
 | Browser-use / macOS AX | 설치된 Python browser entrypoint가 local27B로 공개 title1건48.556초 성공, 독립 title 일치. live send 없이 AX 회귀 | 실제 Tauri UI caller·macOS AX·포커스 영향. 네이티브 CUA app/inventory 조회는 timeout |
 | 사진·링크·파일 맥락 | 실제 ledger 사진 실패16events helper replay, 이미지 누락/읽기 실패의 HTTP 요청 차단 및 recipient/register 전달. 이미지10검사 | active worker는기존판본. 링크recent-tail/refresh,파일metadata/후속맥락,off-tailquote수정완료. 최종통합959 tests/2skips/실패0. 실제vision/file내용읽기는미완료 |
 | GraphRAG / BM25 + Dense RRF | 13syntheticqueries dev6/heldout7, finalfilteredbundle4cc536. 실제E5Recall3/nDCG3=.9091/.9091,24.941/45.865ms,whole-contextleak0 | 독립누출tiny2→0. 과거valid_to없는aliascandidate1/7유지. 설치graph시각drill-down및productionquality미검증 |
-| 읽기 전용 DB/WAL 스냅샷 | Python DB+WAL stable copy, private SHM 재구축, rollback journal fail-closed. 실제 plaintext mirror 1.30GiB quick_check=ok, 5.314초 | 암호화된 카카오 원본의 생산 전체 경로·최신성. plaintext mirror 관측을 encrypted DB 검증으로 확대하지 않음 |
+| 읽기 전용 DB/WAL 스냅샷 | 실제 암호화 DB+WAL(835MiB/4.46MiB) private SQLCipher4.6.1 read-only/query_only quick_check=ok. 설치 CLI3방/8회·실제 새4건0.535초 private ingest·production mirror4/4 digest/context row 대조. 설치graph6.522초1회 refresh·무결성·E5 watermark 일치 | 원본 DB metadata는 자연 writer 중 변경됨. 경합·삭제 반영·지속 최신성·생산 검색 quality는 미검증. [범위와 수치](alden-encrypted-snapshot-20260930.md) |
 | 동시 DB writer/checkpoint | 독립 synthetic WAL 시험: 80 snapshots, 95 commits, 19 checkpoints, 실패/혼합 transaction 0 | 실제 생산 암호화 DB의 접근·경합 조건 |
 | DREAM-RSI / DPO | 공식 논문 분석과 기존 teacher-forced 실제 로그확률 scorer 근거 유지. alphaXiv PATH 없음, orx help 사용 가능 | 선호쌍 평가·독립 검증·실제 학습·모델 교체를 각각 검증. ln(2) 불변식은 품질 개선 근거가 아님 |
 | 디자인·README·Archify | voice/snapshot/search 새 흐름 deliver9/9 각각, browser bounds 검사와 실제 이미지 검토. 기존 8개 구조 검사 통과 | 설치 화면의 짧은 수정/재검토 루프. 구조 검사와 화면 검토를 구분 |

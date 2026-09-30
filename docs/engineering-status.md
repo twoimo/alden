@@ -2,6 +2,12 @@
 
 This appendix preserves the repository's detailed implementation notes and point-in-time checks. A recorded check is historical evidence, not a claim about the current runtime.
 
+## Actual encrypted snapshots and GraphRAG catch-up — 2026-09-30
+
+The installed 0.1.6 CLI completed eight bounded incremental sync commands across three enrolled rooms into a private mirror. A production-source inspection of an 835 MiB encrypted DB plus WAL passed SQLCipher 4.6.1 `quick_check`, read-only and query-only checks, then removed its private replica. Four naturally arriving events were imported in 0.535 s; the following call added zero duplicates. An independent private-copy readback found the same four event digests and context rows in the existing production mirror. Its sent_at-to-receipt age was 33.271–40.806 s (median 37.625 s, n=4); this is not SQLite insertion latency or an improvement comparison.
+
+The stale graph and dense stores were backed up and refreshed once under their existing lock through the installed module and pinned CPython 3.11.16. The 6.522 s run used local E5, persisted 50 matching 384-dimensional vectors and aligned graph/dense watermark `1790777937`. Both stores passed integrity checks; enrollment and queue identities were preserved, the backend remained healthy/3 of 3 ready, and the app's strict signature remained valid. Continuous freshness, production relevance, native UI and voice remain separate checks. See the [bounded measurements and private backup](architecture/alden-encrypted-snapshot-20260930.md).
+
 ## 2026-09-25 Alden installation and independent readback
 
 The installer regression suite passed 34 tests in 59.467 seconds using the installed Python 3.11 interpreter and temporary directories with fake launchd/process adapters. The reviewed installer then completed the actual Jarvis-to-Alden cutover; its backup directory was created at 13:22:45 KST. Independent readback found `com.openkakao.alden.desktop` running PID 93566 from `/Applications/Alden.app`, exactly one matching Alden/Jarvis process (Alden), and no loaded `com.openkakao.jarvis.desktop` service. A recursive comparison of the built and installed bundles returned exit 0 with no differences.
