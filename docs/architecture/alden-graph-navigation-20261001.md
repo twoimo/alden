@@ -37,13 +37,13 @@ UI199/199, desktop Rust90/90, pinned CPython3.11.9 필수1,056개/26skip/실패0
 
 ## 전달과 남은 범위
 
-Git push·CI·초안 산출물 전달은 후속 readback으로 대조한다. [설정 감사](alden-graph-navigation-settings-20261001.json), [코어 감사](alden-graph-navigation-core-20261001.json), [측정 요약](alden-graph-navigation-summary-20261001.json), [설치](alden-graph-navigation-install-20261001.json), [검사](alden-graph-navigation-tests-20261001.json), [독립 검토](alden-graph-navigation-review-20261001.json).
+[후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-25ad469edd80663739aa)에7파일을 올리고 모두 다시 다운로드해 byte/digest를 확인했다. ZIP30파일은 설치본과 일치하고 소스/증거 overlay30파일 hash도 일치한다. 코드`51f71c2`, 증거/릴리즈target`5cfea2b`, [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36799335869)4/4 성공(hosted Python1056/83skip/실패0·45.479초). [CI 기록](alden-graph-navigation-ci-20261001.json), [릴리즈 대조](alden-graph-navigation-release-20261001.json). 부모·독립 reviewer가 실제 설치 이미지4개·숫자·개인정보 제거를 확인했다. 요청된gpt-6-astra/max 경로는 attestation 불가이며 대체하지 않았다. [설정 감사](alden-graph-navigation-settings-20261001.json), [코어 감사](alden-graph-navigation-core-20261001.json), [측정 요약](alden-graph-navigation-summary-20261001.json), [설치](alden-graph-navigation-install-20261001.json), [검사](alden-graph-navigation-tests-20261001.json), [독립 검토](alden-graph-navigation-review-20261001.json).
 
 | 항목 | 단계 | 범위 |
 | --- | --- | --- |
 | 그래프 이전·전체 보기·epoch/dispose fence | 구현 | 집중·필수 회귀 통과 |
 | 설치·별도 WKWebView 설정/코어 | 실제 실행 검증 | real persisted graph, 감사 전용 가시성 조건 |
-| Git·릴리즈 | 구현 | 전달 readback 준비 |
+| Git·후보 초안 산출물 | 전달 완료 | 7asset byte/digest readback, CI4/4; 공개 공증/production과 구분 |
 | 전체11개 목표·생산·공개 signed release | 미완료 | 기존 gates 유지 |
 
 MLX와 기존 자동 답변 작업자의 process identity는 유지했다. 물리 잠금·세션 전환·tray·비상 단축키·사람 음성·Retina·전체 설정 backend와 production worker 교체는 미완료다. swap-free1,387.06M는 음성2GiB gate 미만이며 wake release/human mic gate도 유지한다. Developer ID Application0개와 release workflow의 Apple secret6개가 없어 공개 서명·공증/프로덕션 릴리즈는 차단돼 있다. 전체11개 목표는 계속 진행 중이다.

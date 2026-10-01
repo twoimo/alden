@@ -1,5 +1,8 @@
 <div align="center">
 
+전달: [Alden 그래프 탐색 후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-25ad469edd80663739aa)의 **7개 파일**을 다시 다운로드해 바이트·원격 digest를 대조했다. ZIP30파일은 설치본과 일치하고 overlay30파일도 hash 일치다. 소스`51f71c2`/증거`5cfea2b`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36799335869)4/4 성공·독립 설치/개인정보 검토 통과. [릴리즈 대조](docs/architecture/alden-graph-navigation-release-20261001.json). 공개 공증/프로덕션 완료를 뜻하지 않는다.
+
+
 2026-10-01 추가: [그래프 탐색 복원·설정 렌더링](docs/architecture/alden-graph-navigation-20261001.md)을 소스`51f71c2`의 설치 바이너리에서 확인했다. 이전32단계·전체 보기·A→B→A epoch/dispose fence, 실제 persisted graph·기본/최소 WKWebView·숨김350ms 렌더0·재개 frame 진행, 설치30/30·resource27/27, UI199/Rust90/Python1056·Clippy/build 통과다. [Archify](docs/architecture/alden-graph-navigation-20261001.html)9/9·4viewport·이미지4개 검토도 통과했다. 감사용 floating 창과 unavailable 다른 backend라는 범위, private native PNG·초기 foreign-exception2회 미해결을 기록한다. 전체 목표·물리UX·음성·worker·signed release/production은 미완료이며 Git/CI/초안 전달은 후속 readback으로 대조한다.
 
 
