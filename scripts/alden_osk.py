@@ -18,17 +18,77 @@ import shutil
 import sys
 import tempfile
 import time
+import uuid
 import zipfile
 from pathlib import Path
 
 VERSION = "v4.1.2"
 COMMIT = "9bbf08febc5a1fb2af068006735ed79cbdb71178"
 ARCHIVE_HASH = "74feda64efb68c819a45746359de4158e426f87d74f682602f23fb6d46c9d4e3"
-MAX_MUTATIONS = 32  # Persist progress after every node; larger vaults converge over ticks.
+MAX_MUTATIONS = 32  # Source writes + moves share one budget; at most 9 hub writes extra.
 MAX_BODY = 12000
 _ENGINE = None
 _ROOT = None
+GROUPS = {
+    'kakao': ('Alden 카카오톡', '00_Scope/Alden/Alden 카카오톡', '카카오톡'),
+    'rooms': ('Alden 대화방', '00_Scope/Alden/Alden 카카오톡/Alden 대화방', '대화방'),
+    'people': ('Alden 카카오톡 인물', '00_Person/Alden 카카오톡 인물', '인물'),
+    'topics': ('Alden 대화 주제', '00_Scope/Alden/Alden 카카오톡/Alden 대화 주제', '주제'),
+}
 
+def _group(node: dict) -> str:
+    kind=str(node.get('category','')).casefold()
+    if kind in ('person','people','인물','사람','대화 상대','대화상대','화자'): return 'people'
+    if kind in ('room','chat','chatroom','대화방'): return 'rooms'
+    return 'topics'
+
+def _organize_vault(home: Path, checkpoint: dict, contract, graph, write, budget: int) -> int:
+    """User-requested Kakao/person structure through real OSK mutation APIs.
+
+    Existing source IDs and OSK IDs survive moves. Edited/protected notes are
+    held; no name-based identity merge or human approval ledger is fabricated.
+    """
+    groups=checkpoint.setdefault('groups',{})
+    for key,(title,space,label) in GROUPS.items():
+        path=home/'vault'/space/(title+'.md')
+        if not path.exists():
+            body='카카오톡 대화에서 얻은 '+label+' 지식을 모으는 군집입니다.'
+            try: write.create_node(title,body,body,'agent',space=space)
+            except write.WriteError as error:
+                # This exact new Person cluster was explicitly requested by the
+                # human. Honor OSK's first notification/retry formation gate.
+                if key=='people' and '새 군집 신설' in str(error):
+                    write.create_node(title,body,body,'agent',space=space)
+                else: raise
+        note=contract.parse(path)
+        if contract.validate(note): raise RuntimeError('osk_group_contract_invalid')
+        groups.setdefault(key,{'title':title,'space':space,'osk_id':note.id,'written_hash':digest(path.read_bytes())})
+    moved=0
+    for key,item in sorted(checkpoint['managed'].items()):
+        if not item.get('active') or item.get('held'): continue
+        old_space=item.get('space','00_Scope/Alden');new_space=GROUPS[_group(item['source'])][1]
+        if old_space==new_space or moved>=budget: continue
+        old_path=home/'vault'/old_space/(item['title']+'.md')
+        if not old_path.is_file() or digest(old_path.read_bytes())!=item['written_hash']: continue
+        try: write.move_node(item['title'],new_space)
+        except write.WriteError:
+            item['held']=True;continue
+        path=home/'vault'/new_space/(item['title']+'.md');note=contract.parse(path)
+        if contract.validate(note) or note.id!=item['osk_id']: raise RuntimeError('osk_move_identity_changed')
+        item.update(space=new_space,written_hash=digest(path.read_bytes()));moved+=1
+        _save(home/'sync.json',checkpoint)
+    for key,item in groups.items():
+        path=home/'vault'/item['space']/(item['title']+'.md')
+        if digest(path.read_bytes())!=item['written_hash']: continue
+        targets=[GROUPS[k][0] for k in ('rooms','people','topics')] if key=='kakao' else [m['title'] for m in checkpoint['managed'].values() if m.get('active') and _group(m['source'])==key]
+        body='카카오톡 '+GROUPS[key][2]+' 지식입니다.\n\n'+'\n'.join('- [['+title+']]' for title in targets)
+        note=contract.parse(path)
+        if note.body.strip()!=body.strip():
+            try: write.update_node(item['title'],body=body,expect_hash=item['written_hash'])
+            except write.WriteError: continue
+            item['written_hash']=digest(path.read_bytes())
+
+    return moved
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
@@ -188,7 +248,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         contract, graph, secrets, write = _load_engine(state_root)
         if source is None:
             from auto_reply_knowledge_graph import collect_knowledge_graph
-            source = collect_knowledge_graph(state_root / "context.sqlite3", state_root=state_root)
+            source = collect_knowledge_graph(state_root / "context.sqlite3", state_root=state_root,wait_for_reindex=True)
         if source.get("ok") is not True:
             raise RuntimeError("osk_source_unavailable")
         source = json.loads(secrets.filter_text(json.dumps(source, ensure_ascii=False))[0])
@@ -211,7 +271,12 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             relations = [e for e in source.get("edges", []) if e.get("source") == key or e.get("target") == key]
             body = _body(node, relations, titles, secrets)
             revision = _revision(node, body)
-            path = home / "vault/00_Scope/Alden" / f"{title}.md"
+            space=old.get('space','00_Scope/Alden') if old else '00_Scope/Alden'
+            path = home / 'vault' / space / f"{title}.md"
+            if old is None and not path.exists():
+                found=graph.Index().nodes.get(title)
+                if found:
+                    path=found[0];space=str(path.parent.relative_to(home/'vault'))
             if path.is_symlink():
                 raise RuntimeError("osk_symlink_note")
             current = path.read_bytes() if path.exists() else None
@@ -230,7 +295,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             summary = _clean(node.get("description") or node.get("label"), secrets, 78).replace("\n", " ").replace("［［", "") or "대화에서 찾은 지식"
             try:
                 if current is None:
-                    result = write.create_node(title, summary, body, "agent", space="00_Scope/Alden")
+                    result = write.create_node(title, summary, body, "agent", space=space)
                 elif old:
                     history = _safe_directory(home / "history" / digest(key.encode())[:16])
                     backup = history / f"{current_hash}.md"
@@ -251,7 +316,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             if contract.validate(parsed):
                 raise RuntimeError("osk_written_contract_invalid")
             managed[key] = {"title": title, "osk_id": parsed.id, "written_hash": digest(path.read_bytes()),
-                            "revision": revision, "active": True, "held": False, "source": node}
+                            "revision": revision, "active": True, "held": False, "source": node, "space": space}
             changed += 1
             _save(checkpoint_path, checkpoint)
         # Do not retract while the source reindex is pending or cancellation occurs.
@@ -260,9 +325,13 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
                 if key not in nodes:
                     item["active"] = False
         active = {key for key, item in managed.items() if item.get("active")}
+        moved = 0
+        if not _aborted(state_root):
+            moved = _organize_vault(home,checkpoint,contract,graph,write,MAX_MUTATIONS-changed)
+        layout_pending=sum(1 for m in managed.values() if m.get('active') and not m.get('held') and m.get('space','00_Scope/Alden')!=GROUPS[_group(m['source'])][1])
         checkpoint.update({"engine": VERSION, "commit": COMMIT, "generation": checkpoint.get("generation", 0) + 1,
-                           "synced_at": int(time.time()), "source_indexed_at": source.get("indexed_at", 0),
-                           "stale": bool(source.get("stale")), "changed": changed, "conflicts": conflicts,
+                           "synced_at": int(time.time()), "source_indexed_at": source.get("indexed_at", 0),"layout_pending":layout_pending,
+                           "stale": bool(source.get("stale")), "changed": changed, "moved": moved, "conflicts": conflicts,
                            "pending": sum(managed.get(k, {}).get("revision") != _revision(n, _body(n, [e for e in source.get("edges", []) if k in (e.get("source"), e.get("target"))], titles, secrets)) for k, n in nodes.items()),
                            "edges": [e for e in source.get("edges", []) if e.get("source") in active and e.get("target") in active]})
         _save(checkpoint_path, checkpoint)
@@ -303,8 +372,24 @@ def read_graph(state_root: Path) -> dict:
         identities[title] = key
         nodes.append({"id": key, "label": title, "category": "memory", "description": str(note.meta.get("summary", "")),
                       "importance": 45, "updated_at": int(path.stat().st_mtime), "evidence": {"kind": "seed"}})
+    group_ids={}
+    for key,item in checkpoint.get('groups',{}).items():
+        resolved=idx.nodes.get(item['title'])
+        if not resolved: continue
+        note=contract.parse(resolved[0])
+        if contract.validate(note) or note.id!=item['osk_id']: continue
+        node_id='osk:'+note.id;group_ids[key]=node_id;identities[item['title']]=node_id
+        nodes.append({'id':node_id,'label':GROUPS[key][2],'category':'collection','description':str(note.meta.get('summary','')),'importance':100 if key=='kakao' else 98,'updated_at':int(resolved[0].stat().st_mtime),'evidence':{'kind':'structure'}})
+    for node in nodes:
+        if node['category']!='collection': node['importance']=min(int(node.get('importance',50)),94)
     ids = {n["id"] for n in nodes}
     edges = [e for e in checkpoint.get("edges", []) if e.get("source") in ids and e.get("target") in ids]
+    if 'kakao' in group_ids:
+        for key,target in group_ids.items():
+            if key!='kakao': edges.append({'source':group_ids['kakao'],'target':target,'relation':'contains','weight':2,'evidence':{'kind':'structure'}})
+    for key,item in checkpoint.get('managed',{}).items():
+        parent=group_ids.get(_group(item['source']))
+        if key in ids and parent: edges.append({'source':parent,'target':key,'relation':'contains','weight':1,'evidence':{'kind':'structure'}})
     existing = {(e["source"], e["target"]) for e in edges}
     for title, key in identities.items():
         note = contract.parse(idx.nodes[title][0])
@@ -343,11 +428,28 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--sync", action="store_true")
+    parser.add_argument('--bin',type=Path)
     args = parser.parse_args()
+    cycle=uuid.uuid4().hex
     try:
+        if args.sync and args.bin:
+            from alden_history import cycle_step,_local_cli,context_coverage
+            if _aborted(args.state_root):
+                cycle_step(args.state_root,cycle,'paused');print(json.dumps({'ok':False,'state':'paused'}));return 1
+            cycle_step(args.state_root,cycle,'collecting')
+            collected=_local_cli(args.bin,['local-db-collect'])
+            coverage=context_coverage(args.state_root)
+            cycle_step(args.state_root,cycle,'graphing',rooms=collected['rooms'],messages=collected['messages'],**coverage)
         result = synchronize(args.state_root) if args.sync else read_graph(args.state_root)
+        if args.sync and args.bin:
+            checkpoint=_read_json(_home(args.state_root)/'sync.json')
+            pending=int(result.get('pending',0))+int(checkpoint.get('layout_pending',0))+int(result.get('conflicts',0))
+            phase='paused' if _aborted(args.state_root) else 'complete' if result.get('ok') and result.get('state')!='busy' and not result.get('stale') and pending==0 else 'pending'
+            cycle_step(args.state_root,cycle,phase,rooms=collected['rooms'],messages=collected['messages'],nodes=sum(1 for m in checkpoint.get('managed',{}).values() if m.get('active')),pending=pending,changed=result.get('changed',0),**coverage)
     except Exception as error:
         result = {"ok": False, "state": "unavailable", "error": type(error).__name__}
+        if args.sync and args.bin:
+            cycle_step(args.state_root,cycle,'failed',reason=type(error).__name__)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result.get("ok") else 1
 

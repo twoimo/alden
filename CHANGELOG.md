@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-10-02
+
+내부 소스 단계입니다. 별도 설치본이나 공개 릴리스를 만들지 않았습니다.
+
+- 카카오톡 로컬 대화 전체를 고정 커서로 읽는 API와 원본 DB·WAL을 함께 검증하는 수집 API를 추가했습니다. 메시지 원문과 큰 ID를 보존합니다.
+- 확인된 음성 대화와 DB 수집·지식 정리 단계를 별도 로컬 기록에 저장합니다. 취소된 답변은 음성 기록에 확정하지 않습니다.
+- 실제 OSK 4.1.2 API로 카카오톡 아래 대화방·인물·주제를 관리하고 기존 노드 ID와 사용자 편집을 보존합니다.
+- 자동화 등록 CRUD에 이전 설정 백업과 명시적 기능 선택, 변경 후 읽기 확인을 연결했습니다. 기존 전송 조건과 실행 중인 워커는 유지합니다.
+
 ## [Unreleased]
 
 대화 턴 처리와 응답 안정성, 운영 비용을 함께 개선하는 변경 묶음입니다.

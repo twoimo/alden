@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -15,12 +15,12 @@
         "label": "alden",
         "title": "",
         "url": "index.html",
-        "width": 276,
-        "height": 260,
-        "minWidth": 276,
-        "minHeight": 260,
-        "maxWidth": 276,
-        "maxHeight": 260,
+        "width": 560,
+        "height": 420,
+        "minWidth": 560,
+        "minHeight": 420,
+        "maxWidth": 560,
+        "maxHeight": 420,
         "resizable": false,
         "maximizable": false,
         "minimizable": false,
@@ -34,7 +34,7 @@
       },
       {
         "label": "settings",
-        "title": "Alden 설정",
+        "title": "Alden \uc124\uc815",
         "url": "index.html?view=settings",
         "width": 1200,
         "height": 760,
@@ -90,6 +90,7 @@
       "bundle-resources/scripts/alden_abort.py": "scripts/alden_abort.py",
       "bundle-resources/bin/openkakao-cli": "bin/openkakao-cli",
       "bundle-resources/scripts/alden_osk.py": "scripts/alden_osk.py",
+      "bundle-resources/scripts/alden_history.py": "scripts/alden_history.py",
       "bundle-resources/scripts/vendor/osk-v4.1.2.zip": "scripts/vendor/osk-v4.1.2.zip",
       "bundle-resources/scripts/vendor/osk-v4.1.2.json": "scripts/vendor/osk-v4.1.2.json"
     }

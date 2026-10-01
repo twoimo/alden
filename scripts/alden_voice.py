@@ -1,8 +1,8 @@
 """Local-only Alden voice pipeline.
 
 Runtime order: openWakeWord -> VAD -> mlx-whisper -> Qwen3.8 27B -> Qwen3-TTS.
-The module stores only a small status envelope; raw microphone audio remains in
-a bounded in-memory ring and is never written to disk by default.
+Confirmed conversation text is kept in a private history at the user's request;
+raw microphone audio stays in a bounded ring and is never stored by default.
 """
 
 from __future__ import annotations
@@ -979,6 +979,7 @@ class AldenVoicePipeline:
         self.tts = tts
         self.token = token
         self.status = status
+        self.history_root = status.path.parent if isinstance(status, VoiceStatusStore) else None
         self.sample_rate = sample_rate
         self.ring = BoundedAudioRing(sample_rate=sample_rate, seconds=ring_seconds)
         self.wake_gate = WakePhraseGate()
@@ -1390,6 +1391,9 @@ class AldenVoicePipeline:
                     self._last_conversation_turn = time.monotonic()
                     self.context_version += 1
                     turn.context_version = self.context_version
+                    if self.history_root is not None:
+                        from alden_history import record_voice
+                        record_voice(self.history_root,self.conversation_id,turn.turn_id,"user",transcript,turn.context_version,source=turn.source)
             reply = self.llm.generate(
                 transcript,
                 turn.token,
@@ -1434,6 +1438,9 @@ class AldenVoicePipeline:
                 # return normal completion or retain its answer in that case.
                 with self.token.commit_guard():
                     turn.token.raise_if_cancelled()
+                    if self.history_root is not None:
+                        from alden_history import record_voice
+                        record_voice(self.history_root,self.conversation_id,turn.turn_id,"assistant",reply,turn.context_version,source=turn.source)
                     return self._result(turn, VoiceState.ENDED)
             except AldenCancelled:
                 self._reply = ""

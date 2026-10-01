@@ -12,7 +12,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{Emitter, Manager, PhysicalPosition, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-const PANEL_WIDTH: f64 = 276.0;
+const PANEL_WIDTH: f64 = 560.0;
 const VISIBILITY_EVENT: &str = "alden://visibility";
 const EMERGENCY_EVENT: &str = "alden://emergency-state";
 
@@ -96,6 +96,23 @@ async fn operator_resume(
         .await
         .map_err(|_| "operator_resume_worker_failed".to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn operator_pause(
+    app: tauri::AppHandle,
+    bridge: tauri::State<'_, PythonBridge>,
+) -> Result<SafeEmergencyState, String> {
+    let bridge = bridge.inner().clone();
+    let state = tauri::async_runtime::spawn_blocking(move || {
+        bridge.global_abort()?;
+        bridge.emergency_state()
+    })
+    .await
+    .map_err(|_| "pause_worker_failed")?
+    .map_err(|e: python_bridge::BridgeError| e.to_string())?;
+    let _ = app.emit(EMERGENCY_EVENT, &state);
+    Ok(state)
 }
 
 // These parameters mirror the invoke payload keys one for one; grouping or
@@ -213,8 +230,15 @@ fn toggle_panel(app: &tauri::AppHandle, position: PhysicalPosition<f64>) {
         return;
     }
     let scale = window.scale_factor().unwrap_or(1.0);
-    let x = (position.x - (PANEL_WIDTH * scale / 2.0)).round() as i32;
+    let mut x = (position.x - (PANEL_WIDTH * scale / 2.0)).round() as i32;
     let y = (position.y + 12.0 * scale).round() as i32;
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let minimum = monitor.position().x + 8;
+        let maximum = monitor.position().x + monitor.size().width as i32
+            - (PANEL_WIDTH * scale).round() as i32
+            - 8;
+        x = x.clamp(minimum, maximum.max(minimum));
+    }
     let _ = window.set_position(PhysicalPosition::new(x, y));
     set_window_visible(&window, true);
 }
@@ -273,6 +297,7 @@ fn main() {
             fetch_runtime_snapshot,
             fetch_emergency_state,
             operator_resume,
+            operator_pause,
             fetch_settings_action,
             run_browser_tool,
             cancel_python,

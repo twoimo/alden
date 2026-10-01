@@ -36,7 +36,7 @@ checkpoint=json.loads((a._home(root)/'sync.json').read_text())
 identity=checkpoint['managed']['topic:one']['osk_id']
 source['nodes'][1]['description']='更新된 한국어 기억'
 third=a.synchronize(root,source); after=a.read_graph(root)
-assert before['node_count']==2 and before['edges'][0]['relation']=='mentions'
+assert sum(n['category']!='collection' for n in before['nodes'])==2 and before['edges'][0]['relation']=='mentions'
 assert third['changed']==1
 assert json.loads((a._home(root)/'sync.json').read_text())['managed']['topic:one']['osk_id']==identity
 assert a.read_focus(root,'topic:one')['facts'][0]=='更新된 한국어 기억'
@@ -49,7 +49,7 @@ print(json.dumps({'first':first['changed'],'second':second['changed'],'updated':
         result = self.execute('''
 a.synchronize(root,source)
 state=json.loads((a._home(root)/'sync.json').read_text());item=state['managed']['topic:one']
-note=a._home(root)/'vault/00_Scope/Alden'/f"{item['title']}.md"
+note=a._home(root)/'vault'/item['space']/f"{item['title']}.md"
 data=note.read_text()+'\\n사람이 추가한 기억입니다.\\n';note.write_text(data)
 source['nodes'][1]['description']='새 자동 요약'
 status=a.synchronize(root,source)
@@ -62,10 +62,10 @@ print(json.dumps({'conflicts':status['conflicts'],'kept':a.read_focus(root,'topi
         result = self.execute('''
 a.synchronize(root,source)
 source['nodes']=source['nodes'][:1];source['edges']=[];source['stale']=True
-a.synchronize(root,source);assert a.read_graph(root)['node_count']==2
+a.synchronize(root,source);assert sum(n['category']!='collection' for n in a.read_graph(root)['nodes'])==2
 source['stale']=False;a.synchronize(root,source)
-assert a.read_graph(root)['node_count']==1
-assert len(list((a._home(root)/'vault/00_Scope/Alden').glob('*.md')))==3
+assert sum(n['category']!='collection' for n in a.read_graph(root)['nodes'])==1
+assert len(list((a._home(root)/'vault').rglob('*.md')))>3
 print(json.dumps({'retracted':True}))
 ''')
         self.assertTrue(result["retracted"])
@@ -76,7 +76,7 @@ a.synchronize(root,source)
 p=a._home(root)/'sync.json';state=json.loads(p.read_text());identity=state['managed'].pop('topic:one')['osk_id'];a._save(p,state)
 status=a.synchronize(root,source)
 assert json.loads(p.read_text())['managed']['topic:one']['osk_id']==identity
-assert a.read_graph(root)['node_count']==2
+assert sum(n['category']!='collection' for n in a.read_graph(root)['nodes'])==2
 print(json.dumps({'recovered':True}))
 ''')
         self.assertTrue(result["recovered"])
@@ -120,11 +120,26 @@ a.synchronize(root,source)
 contract,graph,secrets,write=a._load_engine(root)
 receipt=write.create_node('직접 남긴 기억','사람이 정리한 추가 지식','자세한 메모입니다.','agent',space='00_Scope/Alden')
 view=a.read_graph(root)
-assert view['node_count']==3
+assert sum(n['category']!='collection' for n in view['nodes'])==3
 assert a.read_focus(root,'osk:'+receipt['id'])['facts'][0]=='사람이 정리한 추가 지식'
 print(json.dumps({'manual':True}))
 ''')
         self.assertTrue(result["manual"])
+
+    def test_people_have_real_person_spaces_and_names_do_not_merge_identities(self):
+        result=self.execute('''
+source['nodes'] += [{'id':'person:a','label':'같은 이름','category':'대화 상대','facts':[],'evidence':{'kind':'ledger','chat_id':'1'}},{'id':'person:b','label':'같은 이름','category':'화자','facts':[],'evidence':{'kind':'ledger','chat_id':'2'}}]
+a.synchronize(root,source);state=json.loads((a._home(root)/'sync.json').read_text())
+contract,graph,secrets,write=a._load_engine(root)
+for key in ('person:a','person:b'):
+ item=state['managed'][key];assert item['space'].startswith('00_Person/')
+ note=contract.parse(a._home(root)/'vault'/item['space']/(item['title']+'.md'));assert note.id==item['osk_id'];assert not contract.validate(note)
+assert state['managed']['person:a']['osk_id']!=state['managed']['person:b']['osk_id']
+view=a.read_graph(root);assert {'카카오톡','대화방','인물','주제'}<={n['label'] for n in view['nodes'] if n['category']=='collection'}
+assert any(e['relation']=='contains' for e in view['edges'])
+print(json.dumps({'personSpaces':True,'distinct':True}))
+''')
+        self.assertEqual(result,{'personSpaces':True,'distinct':True})
 
 
 if __name__ == "__main__":

@@ -51,7 +51,7 @@ class AldenVoiceTurnTests(unittest.TestCase):
 
         with TemporaryDirectory() as temp:
             controller = AbortController(Path(temp))
-            pipeline = AldenVoicePipeline(stt=object(), llm=Llm(), tts=Speech(), token=controller.token())
+            pipeline = AldenVoicePipeline(stt=object(), llm=Llm(), tts=Speech(), token=controller.token(), status=VoiceStatusStore(Path(temp)))
             original = pipeline._publish
             fired = False
 
@@ -70,12 +70,35 @@ class AldenVoiceTurnTests(unittest.TestCase):
             self.assertTrue(result.cancelled)
             self.assertEqual(pipeline.state, VoiceState.ABORTED)
             self.assertEqual(pipeline._recent_conversation(), [{"role": "user", "content": "요청"}])
+            from alden_history import read
+            stored = read(Path(temp), Path('/unused'), 'voice-history-messages', chat_id=pipeline.conversation_id)
+            self.assertEqual([(row['role'], row['content']) for row in stored['items']], [('user', '요청')])
             next_frame = pipeline.feed_audio(b"silence", rms=0, speech=False)
             self.assertEqual(next_frame.state, VoiceState.ABORTED)
             self.assertTrue(next_frame.cancelled)
             self.assertEqual(next_frame.reply, "")
             self.assertEqual(next_frame.conversation_id, result.conversation_id)
             pipeline.close()
+
+    def test_confirmed_voice_text_is_persisted_in_session_order(self):
+        class Llm:
+            def generate(self, text, *_args, **_kwargs):
+                return "답변 " + text
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            pipeline = AldenVoicePipeline(stt=object(), llm=Llm(), tts=Speech(),
+                token=AbortController(root).token(), status=VoiceStatusStore(root))
+            try:
+                self.assertEqual(pipeline.process_text("첫 말씀").state, VoiceState.ENDED)
+                self.assertEqual(pipeline.process_text("다음 말씀").state, VoiceState.ENDED)
+                from alden_history import read
+                page = read(root, Path('/unused'), 'voice-history-messages', chat_id=pipeline.conversation_id)
+                self.assertEqual([(row['role'], row['content']) for row in page['items']], [
+                    ('user', '첫 말씀'), ('assistant', '답변 첫 말씀'),
+                    ('user', '다음 말씀'), ('assistant', '답변 다음 말씀')])
+                self.assertFalse(list(root.glob('*.wav')))
+            finally:
+                pipeline.close()
 
     def test_delayed_abort_callback_preserves_jobs_enqueued_after_resume(self):
         with TemporaryDirectory() as temp:

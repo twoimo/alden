@@ -41,6 +41,7 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/alden_abort.py",
     "scripts/alden_file_content.py",
     "scripts/alden_osk.py",
+    "scripts/alden_history.py",
     "scripts/vendor/osk-v4.1.2.zip",
     "scripts/vendor/osk-v4.1.2.json",
 ];

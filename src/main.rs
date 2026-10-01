@@ -854,6 +854,20 @@ enum Commands {
         #[arg(long, help = "Filter messages after this date (YYYY-MM-DD)")]
         since: Option<String>,
     },
+    /// All local chat rooms for the history browser; no registration or server contact.
+    LocalHistoryRooms,
+    /// Collect a consistent isolated DB+WAL snapshot summary; never alters Kakao.
+    LocalDbCollect,
+    /// Browse the entire available local room history with stable keyset cursors.
+    LocalHistory {
+        chat_id: i64,
+        #[arg(long)]
+        anchor: Option<i64>,
+        #[arg(long)]
+        before: Option<i64>,
+        #[arg(short = 'n', long, default_value_t = 100)]
+        count: usize,
+    },
     #[command(name = "local-poll", hide = true)]
     /// Stream bounded local database polls as versioned JSONL (no server contact).
     LocalPoll {
@@ -1218,6 +1232,9 @@ fn is_local_only_command(command: &Commands) -> bool {
         command,
         Commands::LocalChats { .. }
             | Commands::LocalRead { .. }
+            | Commands::LocalHistoryRooms
+            | Commands::LocalDbCollect
+            | Commands::LocalHistory { .. }
             | Commands::LocalPoll { .. }
             | Commands::LocalSearch { .. }
             | Commands::LocalSchema
@@ -6841,6 +6858,35 @@ fn run() -> Result<()> {
                     println!("\n{} chats (local DB, no server contact)", chats.len());
                 }
             }
+        }
+        Commands::LocalHistoryRooms => {
+            let reader = local_db::LocalDbReader::open_no_mutation()?;
+            println!(
+                "{}",
+                serde_json::to_string(
+                    &serde_json::json!({"ok":true,"account":reader.account_fingerprint(),"rooms":reader.list_all_chats()?})
+                )?
+            );
+        }
+        Commands::LocalDbCollect => {
+            let source = context_sync_replica::ContextSyncReplicaSource::discover()?;
+            let snapshot = source.open_fresh()?;
+            println!(
+                "{}",
+                serde_json::to_string(&snapshot.reader().collection_summary()?)?
+            );
+        }
+        Commands::LocalHistory {
+            chat_id,
+            anchor,
+            before,
+            count,
+        } => {
+            let reader = local_db::LocalDbReader::open_no_mutation()?;
+            println!(
+                "{}",
+                serde_json::to_string(&reader.history_page(chat_id, anchor, before, count)?)?
+            );
         }
         Commands::LocalRead {
             chat_id,

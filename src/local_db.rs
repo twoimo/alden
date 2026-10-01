@@ -49,6 +49,99 @@ const MAX_CHAT_TARGETS: usize = 32;
 const MAX_CHAT_NAME_BYTES: usize = 256;
 const MAX_CHAT_INDEX_ROWS: usize = 10_000;
 
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    fn fixture() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE NTChatMessage(logId INTEGER PRIMARY KEY,chatId INTEGER,authorId INTEGER,message TEXT,attachment TEXT,type INTEGER,sentAt INTEGER); CREATE TABLE NTUser(userId INTEGER,linkId INTEGER,displayName TEXT,friendNickName TEXT,nickName TEXT);").unwrap();
+        c.execute("INSERT INTO NTUser VALUES(7,0,'화자','','')", [])
+            .unwrap();
+        for id in 1..=235 {
+            c.execute(
+                "INSERT INTO NTChatMessage VALUES(?1,42,7,?2,'',1,1234)",
+                rusqlite::params![id, format!("전체 본문 {id}")],
+            )
+            .unwrap();
+        }
+        c
+    }
+    #[test]
+    fn whole_history_has_no_gap_with_identical_timestamps_and_live_appends() {
+        let c = fixture();
+        let mut p = history_page_from_connection(&c, 7, "account", 42, None, None, 50).unwrap();
+        assert_eq!(p.total, 235);
+        let anchor = p.anchor_log_id.parse().unwrap();
+        let mut ids = Vec::new();
+        c.execute(
+            "INSERT INTO NTChatMessage VALUES(999,42,7,'새 메시지','',1,1234)",
+            [],
+        )
+        .unwrap();
+        loop {
+            ids.extend(
+                p.messages
+                    .iter()
+                    .map(|m| m["id"].as_str().unwrap().parse::<i64>().unwrap()),
+            );
+            match p.next_before {
+                Some(ref cursor) => {
+                    p = history_page_from_connection(
+                        &c,
+                        7,
+                        "account",
+                        42,
+                        Some(anchor),
+                        Some(cursor.parse().unwrap()),
+                        50,
+                    )
+                    .unwrap()
+                }
+                None => break,
+            }
+        }
+        ids.sort();
+        assert_eq!(ids, (1..=235).collect::<Vec<_>>());
+        let latest = history_page_from_connection(&c, 7, "account", 42, None, None, 50).unwrap();
+        assert_eq!(latest.total, 236);
+    }
+    #[test]
+    fn room_boundary_full_text_and_large_ids_are_preserved() {
+        let c = fixture();
+        let id = 9_007_199_254_740_995i64;
+        let text = "긴 원문 <script> 값\n".repeat(2000);
+        c.execute(
+            "INSERT INTO NTChatMessage VALUES(?1,84,8,?2,'첨부',26,1234)",
+            rusqlite::params![id, text],
+        )
+        .unwrap();
+        let p = history_page_from_connection(&c, 7, "account", 84, None, None, 1).unwrap();
+        assert_eq!(p.total, 1);
+        assert_eq!(p.messages[0]["id"], id.to_string());
+        assert_eq!(p.messages[0]["text"], text);
+        assert_eq!(p.messages[0]["is_self"], false);
+    }
+    #[test]
+    fn invalid_cursors_leave_connection_usable() {
+        let c = fixture();
+        for (anchor, before, limit) in [
+            (None, Some(10), 50),
+            (Some(5), Some(6), 50),
+            (None, None, 201),
+        ] {
+            assert!(
+                history_page_from_connection(&c, 7, "account", 42, anchor, before, limit).is_err()
+            );
+        }
+        assert_eq!(
+            history_page_from_connection(&c, 7, "account", 42, None, None, 50)
+                .unwrap()
+                .total,
+            235
+        );
+    }
+}
+
 const GROUP_TITLE_KEYS: &[&str] = &[
     "name",
     "title",
@@ -450,6 +543,95 @@ pub struct LocalMessage {
     pub attachment: String,
     pub message_type: i32,
     pub sent_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalHistoryPage {
+    pub account: String,
+    pub chat_id: String,
+    pub anchor_log_id: String,
+    pub total: i64,
+    pub next_before: Option<String>,
+    pub messages: Vec<serde_json::Value>,
+}
+
+/// Keyset paging over every available local message. A fixed high-water mark
+/// prevents new messages from shifting later pages; source rows are never edited.
+fn history_page_from_connection(
+    conn: &Connection,
+    account_user_id: i64,
+    account: &str,
+    chat_id: i64,
+    anchor: Option<i64>,
+    before: Option<i64>,
+    limit: usize,
+) -> Result<LocalHistoryPage> {
+    if chat_id <= 0
+        || !(1..=200).contains(&limit)
+        || anchor.is_some_and(|v| v < 0)
+        || before.is_some_and(|v| v <= 0)
+        || (before.is_some() && anchor.is_none())
+    {
+        anyhow::bail!("local history cursor is invalid");
+    }
+    conn.execute_batch("BEGIN")?;
+    let result = (|| -> Result<LocalHistoryPage> {
+        let high = match anchor {
+            Some(v) => v,
+            None => conn.query_row(
+                "SELECT COALESCE(MAX(logId),0) FROM NTChatMessage WHERE chatId=?",
+                [chat_id],
+                |r| r.get(0),
+            )?,
+        };
+        if before.is_some_and(|v| v > high) {
+            anyhow::bail!("local history cursor exceeds its anchor");
+        }
+        let total = conn.query_row(
+            "SELECT COUNT(*) FROM NTChatMessage WHERE chatId=? AND logId<=?",
+            [chat_id, high],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT m.logId,m.authorId,COALESCE((SELECT COALESCE(NULLIF(u.displayName,''),NULLIF(u.friendNickName,''),u.nickName,'') FROM NTUser u WHERE u.userId=m.authorId AND u.linkId=0 LIMIT 1),''),COALESCE(m.message,''),COALESCE(m.attachment,''),m.type,m.sentAt FROM NTChatMessage m WHERE m.chatId=?1 AND m.logId<=?2 AND (?3 IS NULL OR m.logId<?3) ORDER BY m.logId DESC LIMIT ?4"
+        )?;
+        let mut messages = stmt.query_map(rusqlite::params![chat_id,high,before,(limit+1) as i64],|row| {
+            let id:i64=row.get(0)?;let author:i64=row.get(1)?;
+            Ok(json!({"id":id.to_string(),"chat_id":chat_id.to_string(),"author_id":author.to_string(),
+                "is_self":is_self_author(author,account_user_id),"sender":row.get::<_,String>(2)?,
+                "text":row.get::<_,String>(3)?,"attachment":row.get::<_,String>(4)?,
+                "type":row.get::<_,i32>(5)?,"sent_at":row.get::<_,i64>(6)?}))
+        })?.collect::<Result<Vec<_>,_>>()?;
+        let more = messages.len() > limit;
+        messages.truncate(limit);
+        let next = if more {
+            messages
+                .last()
+                .and_then(|m| m["id"].as_str())
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        messages.reverse();
+        Ok(LocalHistoryPage {
+            account: account.to_owned(),
+            chat_id: chat_id.to_string(),
+            anchor_log_id: high.to_string(),
+            total,
+            next_before: next,
+            messages,
+        })
+    })();
+    match result {
+        Ok(page) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(page)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
 }
 
 /// Numeric self proof only. Display names and `author_id == 0` never count.
@@ -1986,6 +2168,43 @@ impl LocalDbReader {
 
         self.ensure_database_identity()?;
         Ok(rows)
+    }
+
+    pub fn history_page(
+        &self,
+        chat_id: i64,
+        anchor: Option<i64>,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<LocalHistoryPage> {
+        self.ensure_database_identity()?;
+        let page = history_page_from_connection(
+            &self.conn,
+            self.account_user_id,
+            &self.account_fingerprint,
+            chat_id,
+            anchor,
+            before,
+            limit,
+        )?;
+        self.ensure_database_identity()?;
+        Ok(page)
+    }
+
+    pub fn collection_summary(&self) -> Result<serde_json::Value> {
+        self.ensure_database_identity()?;
+        let rooms: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM NTChatRoom", [], |r| r.get(0))?;
+        let (messages, first, last): (i64, i64, i64) = self.conn.query_row(
+            "SELECT COUNT(*),COALESCE(MIN(logId),0),COALESCE(MAX(logId),0) FROM NTChatMessage",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        self.ensure_database_identity()?;
+        Ok(
+            json!({"ok":true,"account":self.account_fingerprint,"rooms":rooms,"messages":messages,"first_log_id":first.to_string(),"last_log_id":last.to_string(),"source":"consistent-read-only-db-wal-replica"}),
+        )
     }
 
     /// Read one exact media row without contacting Kakao servers.

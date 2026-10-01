@@ -503,6 +503,12 @@ impl PythonBridge {
             "--state-root".into(),
             self.config.state_root.to_string_lossy().into_owned(),
             "--sync".into(),
+            "--bin".into(),
+            resources
+                .root
+                .join("bin/openkakao-cli")
+                .to_string_lossy()
+                .into_owned(),
         ];
         let result = run_process_with_recovery_env(
             &runtime.executable,
@@ -643,6 +649,13 @@ impl PythonBridge {
                 "model-prepare" => sanitize_model_action(&value, action, SWAP_MODEL_ID),
                 "model-swap" => sanitize_model_swap_action(&value),
                 "room-upsert" => sanitize_room_upsert(&value),
+                "history-rooms"
+                | "history-messages"
+                | "voice-history-sessions"
+                | "voice-history-messages"
+                | "db-sync-history"
+                | "room-catalog"
+                | "room-delete" => value,
                 _ => return Err(BridgeError::ActionNotAllowed),
             })
         })();
@@ -1585,6 +1598,31 @@ fn settings_action_args(
         | "knowledge-graph"
         | "model-owner-status"
         | MLX_SERVER_STATUS_ACTION => {}
+        "room-catalog" => {}
+        "history-rooms"
+        | "history-messages"
+        | "voice-history-sessions"
+        | "voice-history-messages"
+        | "db-sync-history" => {
+            if let Some(value) = bounded_arg(query, 4096) {
+                let parsed: Value =
+                    serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
+                if !parsed.is_object() {
+                    return Err(BridgeError::ActionNotAllowed);
+                }
+                args.extend(["--history-query".into(), value.to_owned()]);
+            }
+            if let Some(value) = bounded_arg(chat_id, 128) {
+                args.extend(["--history-chat".into(), value.to_owned()]);
+            }
+        }
+        "room-delete" => {
+            let id = chat_id
+                .and_then(|s| s.parse::<i64>().ok())
+                .filter(|v| *v > 0)
+                .ok_or(BridgeError::ActionNotAllowed)?;
+            args.extend(["--catalog-delete".into(), id.to_string()]);
+        }
         MLX_SERVER_LAUNCH_ACTION => {
             // Starting a resident model needs a deliberate opt-in and one of
             // the fixed local models; the app supplies the binary, models
@@ -1659,13 +1697,25 @@ fn settings_action_args(
                 .and_then(|v| v.parse::<i64>().ok())
                 .filter(|id| *id > 0)
                 .ok_or(BridgeError::ActionNotAllowed)?;
-            let title = bounded_arg(query, 128).unwrap_or_default();
-            let payload = serde_json::json!({
+            let title = bounded_arg(query, 4096).unwrap_or_default();
+            let mut payload = serde_json::json!({
                 "chat_id": id,
                 "title": title,
                 "auto_reply": true,
                 "geeknews": false,
             });
+            if title.starts_with('{') {
+                let edited: Value =
+                    serde_json::from_str(&title).map_err(|_| BridgeError::ActionNotAllowed)?;
+                for key in ["auto_reply", "geeknews"] {
+                    let flag = edited
+                        .get(key)
+                        .and_then(Value::as_bool)
+                        .ok_or(BridgeError::ActionNotAllowed)?;
+                    payload[key] = Value::Bool(flag);
+                }
+                payload["title"] = Value::String(bounded_json_string(edited.get("title"), 128));
+            }
             args.extend(["--catalog-upsert".to_string(), payload.to_string()]);
         }
         _ => return Err(BridgeError::ActionNotAllowed),

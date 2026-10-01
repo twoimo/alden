@@ -1113,7 +1113,20 @@ def _apply_catalog_mutates() -> None:
     # be lost to a concurrent mutation. Serialize across processes and let the
     # impl's atomic writer persist the entry (2026-09-13).
     lock = _catalog_lock(state_root)
+    if lock is None:
+        raise MenubarError('catalog_lock_unavailable')
     try:
+        catalog=state_root/'menubar-room-catalog.json'
+        if catalog.exists():
+            if catalog.is_symlink():raise MenubarError('catalog_path_unsafe')
+            data=catalog.read_bytes()
+            folder=state_root/'catalog-history';folder.mkdir(mode=0o700,exist_ok=True)
+            if folder.is_symlink():raise MenubarError('catalog_history_unsafe')
+            import hashlib
+            backup=folder/(hashlib.sha256(data).hexdigest()+'.json')
+            if not backup.exists():
+                fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+                with os.fdopen(fd,'wb') as saved:saved.write(data);saved.flush();os.fsync(saved.fileno())
         if upsert_raw:
             payload = json.loads(upsert_raw)
             if not isinstance(payload, dict):
@@ -2683,6 +2696,24 @@ def main():
         )
         return 0
     action = _argv_flag_value("--action")
+    if action in {"history-rooms","history-messages","voice-history-sessions","voice-history-messages","db-sync-history"}:
+        from alden_history import read
+        state_raw=_argv_flag_value("--state-root")
+        state_root=Path(state_raw).expanduser() if state_raw else _DEFAULT_STATE_ROOT
+        try:
+            _print_json(read(state_root,Path(_argv_flag_value("--bin") or ""),action,_argv_flag_value("--history-query"),_argv_flag_value("--history-chat")))
+        except Exception as error:
+            _print_json({"ok":False,"items":[],"reason":str(error)[:96]})
+        return 0
+    if action in {"room-catalog","room-delete"}:
+        state_raw=_argv_flag_value("--state-root")
+        root=Path(state_raw).expanduser() if state_raw else _DEFAULT_STATE_ROOT
+        try:
+            payload=json.loads((root/"menubar-room-catalog.json").read_text())
+            _print_json({"ok":True,"rooms":[{**room,"chat_id":str(room["chat_id"])} for room in payload.get("rooms",[])]})
+        except FileNotFoundError:
+            _print_json({"ok":True,"rooms":[]})
+        return 0
     if action == "tool-browser":
         task, task_error = _read_tool_browser_task()
         if task_error is not None:
