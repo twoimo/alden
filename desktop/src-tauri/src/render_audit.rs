@@ -324,6 +324,13 @@ fn fresh_pause(state: &Value, previous: f64) -> bool {
             .as_f64()
             .is_some_and(|event| event > previous)
 }
+fn css_extent(value: &Value, expected: f64) -> bool {
+    // WKWebView quantizes CSS layout to 1/64 px, unlike Chromium's integral
+    // rectangle here. Admit one quantum; keep the logical window exact.
+    value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && (number - expected).abs() <= 1.0 / 64.0)
+}
 fn validate_layout(state: &Value) -> Result<(), String> {
     if state["ready"] != true
         || state["canvas"]["contextLost"] != false
@@ -331,10 +338,10 @@ fn validate_layout(state: &Value) -> Result<(), String> {
         || state["height"] != 420
         || state["scrollWidth"] != 560
         || state["scrollHeight"] != 420
-        || state["canvas"]["cssWidth"] != 558
-        || state["canvas"]["cssHeight"] != 418
-        || state["canvas"]["x"] != 1
-        || state["canvas"]["y"] != 1
+        || !css_extent(&state["canvas"]["cssWidth"], 558.0)
+        || !css_extent(&state["canvas"]["cssHeight"], 418.0)
+        || !css_extent(&state["canvas"]["x"], 1.0)
+        || !css_extent(&state["canvas"]["y"], 1.0)
     {
         return Err(format!(
             "native panel layout or WebGL context invalid: {state}"
@@ -349,8 +356,14 @@ fn density_matches(state: &Value) -> bool {
     else {
         return false;
     };
-    let width = (558.0 * dpr.min(2.0)).floor() as u64;
-    let height = (418.0 * dpr.min(2.0)).floor() as u64;
+    let Some(css_width) = state["canvas"]["cssWidth"].as_f64() else {
+        return false;
+    };
+    let Some(css_height) = state["canvas"]["cssHeight"].as_f64() else {
+        return false;
+    };
+    let width = (css_width.floor() * dpr.min(2.0)).floor() as u64;
+    let height = (css_height.floor() * dpr.min(2.0)).floor() as u64;
     state["canvas"]["width"].as_u64() == Some(width)
         && state["canvas"]["height"].as_u64() == Some(height)
 }
@@ -936,6 +949,14 @@ mod tests {
         assert!(fresh_pause(&state, 10.0));
         state["loop"]["running"] = json!(true);
         assert!(!fresh_pause(&state, 10.0));
+    }
+    #[test]
+    fn webkit_quantization_keeps_real_bounds_and_backing_density() {
+        let mut state = json!({"ready":true,"width":560,"height":420,"scrollWidth":560,"scrollHeight":420,"dpr":1,"canvas":{"contextLost":false,"cssWidth":558,"cssHeight":417.984375,"x":1,"y":1,"width":558,"height":417}});
+        assert!(validate_layout(&state).is_ok());
+        assert!(density_matches(&state));
+        state["canvas"]["cssHeight"] = json!(417.5);
+        assert!(validate_layout(&state).is_err());
     }
     #[test]
     fn layout_rejects_context_loss_overflow_and_wrong_backing_density() {
