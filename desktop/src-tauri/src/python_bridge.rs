@@ -3073,6 +3073,7 @@ fn sanitize_knowledge_evidence(value: Option<&Value>) -> Value {
         .and_then(Value::as_str)
     {
         Some("ledger") => "ledger",
+        Some("snapshot") => "snapshot",
         _ => "seed",
     };
     json!({

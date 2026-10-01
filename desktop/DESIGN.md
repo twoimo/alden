@@ -95,3 +95,9 @@ LaunchAgent is bootstrapped.
 - Settings use the golden-ratio 61.8:38.2 split with a 16px gap in the 960px desktop window and return to one column below 800px, preserving the 300px minimum for the right column.
 - The conversation graph shares its row with recent replies; narrow layouts keep the graph readable and stack the sections.
 - Knowledge copy uses everyday Korean and does not expose retrieval implementation details.
+
+## Corpus-backed graph and timeline
+
+0.3.0 uses a resumable account-scoped corpus populated from a consistent encrypted DB+WAL snapshot. Working and published SQLite databases are separate. A complete publication invalidates the graph cache; actual numeric author IDs identify people across rooms. Same names never establish identity. Snapshot evidence records observed source rows and is separate from decision-ledger evidence. Focus lookup returns scoped quoted history, with unclassified outgoing history marked explicitly. Dense/model inference coverage is not implied by raw full-text coverage.
+
+DB history resets its oldest-page cursor when a newly fetched page does not overlap the prior window after a long hidden interval. All loaded rows remain available while the live DOM is bounded. Row keys preserve reading position through append, prepend and height measurement. Hidden views cancel their animation requests and observers.

@@ -1147,7 +1147,7 @@ const INTEREST_TOPICS: &[&str] = &[
 ];
 const TOPIC_LEXICON_VERSION: &str = "2";
 
-fn classify_message_topics(message: &str) -> Vec<&'static str> {
+pub fn classify_message_topics(message: &str) -> Vec<&'static str> {
     let text = message.trim();
     if text.is_empty() {
         return Vec::new();

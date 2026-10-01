@@ -335,6 +335,86 @@ impl ContextSyncReplicaSource {
         self.source.account_user_id()
     }
 
+    /// Persist one already-consistent encrypted DB+WAL copy across bounded
+    /// ingestion batches. The lock is held until its read-only reader drops.
+    pub(crate) fn open_corpus_snapshot(
+        &self,
+        root: &Path,
+    ) -> Result<(ContextSyncReplicaReader, String, i64)> {
+        use openkakao_cli::alden_corpus::{account_directory, private_directory, private_file};
+        use std::io::Write;
+        use std::os::fd::AsRawFd;
+        let account = self.account_fingerprint();
+        let directory = account_directory(root, account)?;
+        let lock = private_file(&directory.join("ingest.lock"))?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            anyhow::bail!("corpus_ingest_busy")
+        }
+        let snapshot = directory.join("snapshot");
+        let manifest = directory.join("snapshot.json");
+        let now = chrono::Utc::now().timestamp();
+        let mut state: serde_json::Value = if manifest.exists() {
+            if manifest.is_symlink() || manifest.metadata()?.len() > 8192 {
+                anyhow::bail!("corpus_snapshot_manifest_unsafe")
+            }
+            serde_json::from_slice(&fs::read(&manifest)?)?
+        } else {
+            serde_json::Value::Null
+        };
+        let complete = directory.join("snapshot-complete");
+        let aged = state["created_at"]
+            .as_i64()
+            .is_some_and(|at| now - at >= 300);
+        if !manifest.exists() || (complete.is_file() && aged) {
+            private_directory(&snapshot)?;
+            self.source.ensure_source_identity()?;
+            let db = copy_consistent_sqlite_replica(self.source.path(), &snapshot)?;
+            // Decryption/query-only readback precedes publication of the cache.
+            let reader = self.source.open_replica(&db)?;
+            drop(reader);
+            self.source.ensure_source_identity()?;
+            let id = format!(
+                "{}-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_nanos(),
+                std::process::id()
+            );
+            state = serde_json::json!({"schema_version":1,"account":account,"id":id,"created_at":now,"file":db.file_name().and_then(|n|n.to_str()).ok_or_else(||anyhow::anyhow!("corpus_snapshot_filename_invalid"))?});
+            let temporary = directory.join("snapshot.next.json");
+            let mut file = private_file(&temporary)?;
+            file.set_len(0)?;
+            file.write_all(&serde_json::to_vec(&state)?)?;
+            file.sync_all()?;
+            fs::rename(temporary, &manifest)?;
+            if complete.exists() {
+                fs::remove_file(&complete)?;
+            }
+        }
+        if state["schema_version"] != 1 || state["account"] != account {
+            anyhow::bail!("corpus_snapshot_identity_invalid")
+        }
+        let name = state["file"]
+            .as_str()
+            .filter(|n| !n.is_empty() && !n.contains(['/', '\\']) && *n != "." && *n != "..")
+            .ok_or_else(|| anyhow::anyhow!("corpus_snapshot_filename_invalid"))?;
+        let reader = self.source.open_replica(&snapshot.join(name))?;
+        Ok((
+            ContextSyncReplicaReader {
+                reader: Some(reader),
+                replica: None,
+                _corpus_lock: Some(lock),
+            },
+            state["id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("corpus_snapshot_id_invalid"))?
+                .into(),
+            state["created_at"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("corpus_snapshot_time_invalid"))?,
+        ))
+    }
+
     pub(crate) fn open_fresh(&self) -> Result<ContextSyncReplicaReader> {
         self.source.ensure_source_identity()?;
         let replica = IsolatedSqliteReplica::create(self.source.path())?;
@@ -343,6 +423,7 @@ impl ContextSyncReplicaSource {
         Ok(ContextSyncReplicaReader {
             reader: Some(reader),
             replica: Some(replica),
+            _corpus_lock: None,
         })
     }
 }
@@ -350,6 +431,7 @@ impl ContextSyncReplicaSource {
 pub(crate) struct ContextSyncReplicaReader {
     reader: Option<LocalDbReader>,
     replica: Option<IsolatedSqliteReplica>,
+    _corpus_lock: Option<std::fs::File>,
 }
 
 impl ContextSyncReplicaReader {

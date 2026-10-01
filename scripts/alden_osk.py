@@ -421,6 +421,15 @@ def read_focus(state_root: Path, node_id: str) -> dict:
     note = contract.parse(idx.nodes[title][0])
     if contract.validate(note):
         return {"ok": False, "facts": [], "fact_count": 0}
+    actor=re.fullmatch(r'person:kakao:([0-9a-f]{64}):actor:([0-9]+)',node_id)
+    room=re.fullmatch(r'chat:kakao:([0-9a-f]{64}):room:([0-9]+)',node_id)
+    if actor or room:
+        from alden_corpus import search
+        scope=actor or room
+        result=search(state_root,'',author_id=actor[2] if actor else '',chat_id=room[2] if room else '',expected_account=scope[1])
+        if result.get('ok'):
+            facts=[str(note.meta.get('summary',''))]+[str(row['date'])[:10]+' · '+str(row['sender'])+' · '+str(row['content']) for row in result['items']]
+            return {'ok':True,'facts':facts,'fact_count':len(facts),'focus_node_id':node_id,'sources':result['items'],'search_mode':'bm25'}
     return {"ok": True, "facts": [str(note.meta.get("summary", "")), note.body[:1200]], "fact_count": 2, "focus_node_id": node_id}
 
 
@@ -437,15 +446,16 @@ def main() -> int:
             if _aborted(args.state_root):
                 cycle_step(args.state_root,cycle,'paused');print(json.dumps({'ok':False,'state':'paused'}));return 1
             cycle_step(args.state_root,cycle,'collecting')
-            collected=_local_cli(args.bin,['local-db-collect'])
+            collected=_local_cli(args.bin,['local-db-collect','--index-dir',str(args.state_root/'knowledge'/'corpus'),'--max-rows','500000','--abort-state',str(args.state_root/'alden-abort.json')])
+            corpus=collected.get('index',{})
             coverage=context_coverage(args.state_root)
-            cycle_step(args.state_root,cycle,'graphing',rooms=collected['rooms'],messages=collected['messages'],**coverage)
+            cycle_step(args.state_root,cycle,'graphing',rooms=collected['rooms'],messages=collected['messages'],corpus_messages=corpus.get('indexed_messages',0),corpus_pending=corpus.get('pending_messages',0),**coverage)
         result = synchronize(args.state_root) if args.sync else read_graph(args.state_root)
         if args.sync and args.bin:
             checkpoint=_read_json(_home(args.state_root)/'sync.json')
-            pending=int(result.get('pending',0))+int(checkpoint.get('layout_pending',0))+int(result.get('conflicts',0))
+            pending=int(corpus.get('pending_messages',0))+int(result.get('pending',0))+int(checkpoint.get('layout_pending',0))+int(result.get('conflicts',0))
             phase='paused' if _aborted(args.state_root) else 'complete' if result.get('ok') and result.get('state')!='busy' and not result.get('stale') and pending==0 else 'pending'
-            cycle_step(args.state_root,cycle,phase,rooms=collected['rooms'],messages=collected['messages'],nodes=sum(1 for m in checkpoint.get('managed',{}).values() if m.get('active')),pending=pending,changed=result.get('changed',0),**coverage)
+            cycle_step(args.state_root,cycle,phase,rooms=collected['rooms'],messages=collected['messages'],nodes=sum(1 for m in checkpoint.get('managed',{}).values() if m.get('active')),pending=pending,changed=result.get('changed',0),corpus_messages=corpus.get('indexed_messages',0),corpus_pending=corpus.get('pending_messages',0),**coverage)
     except Exception as error:
         result = {"ok": False, "state": "unavailable", "error": type(error).__name__}
         if args.sync and args.bin:

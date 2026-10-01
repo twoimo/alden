@@ -272,3 +272,9 @@ body.panel-view { --canvas:#fafbf6; --surface:#ffffff; --text:#273329; --muted:#
 .preferences-page .model-desc { font-size:11px; }
 .automation-toggle strong { font-size:13px; }
 .automation-toggle small { font-size:11px; }
+
+/* A bounded scroll surface preserves long update timelines. */
+.settings-shell[data-settings-page="history"] .settings-content { overflow:hidden; }
+.settings-view .db-history-page { height:100%; display:flex; flex-direction:column; min-height:0; }
+.db-history-page > header, .db-current, .db-history-page > .history-older { flex:none; }
+.db-cycle-list { flex:1; min-height:0; overflow:auto; position:relative; }

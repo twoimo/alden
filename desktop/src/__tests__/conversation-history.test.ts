@@ -47,4 +47,29 @@ describe('complete local histories', () => {
     host.scrollTop = 9999 * 78; host.dispatchEvent(new Event('scroll')); list.set(messages, { end: true });
     expect(host.textContent).toContain('message 9999'); expect(host.querySelectorAll('p').length).toBeLessThanOrEqual(80); list.dispose();
   });
+  it('reopens a missing middle range after more than one page arrives while hidden', async () => {
+    vi.useFakeTimers();
+    let total = 10;
+    const cursors: Array<number | null> = [];
+    const load = vi.fn<typeof fetchSettingsAction>(async (action, input = {}) => {
+      if (action !== 'db-sync-history') return null;
+      const before = JSON.parse(input.query!).before as number | null;
+      cursors.push(before);
+      const high = before === null ? total : Math.min(total, before - 1);
+      const low = Math.max(1, high - 49);
+      return { ok: true, current: { phase: 'complete' }, next: low > 1 ? low : null,
+        items: Array.from({ length: high - low + 1 }, (_, i) => ({ id: high - i, phase: 'complete', details: { messages: high - i } })) };
+    });
+    const views = wireConversationViews(load); views.select('history'); await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById('db-history-older')!.hidden).toBe(true);
+    views.visible(false); total = 130; views.visible(true); await vi.advanceTimersByTimeAsync(0);
+    expect(document.getElementById('db-history-older')!.hidden).toBe(false);
+    document.getElementById('db-history-older')!.click(); await vi.advanceTimersByTimeAsync(0);
+    expect(cursors.at(-1)).toBe(81);
+    document.getElementById('db-history-older')!.click(); await vi.advanceTimersByTimeAsync(0);
+    expect(cursors.at(-1)).toBe(31);
+    expect(document.getElementById('db-history-older')!.hidden).toBe(true);
+    expect(document.querySelectorAll('.db-cycle-row').length).toBeLessThanOrEqual(80);
+    views.dispose(); vi.useRealTimers();
+  });
 });

@@ -5157,129 +5157,121 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
         <!-- Data Stages -->
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="0" x="16" y="46" width="168" height="380" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / 로컬 출처</text>
+        <text x="100" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">01 / 원본</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="1" x="231" y="46" width="168" height="380" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / 확인과 정리</text>
+        <text x="315" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">02 / 고정 복제</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="2" x="446" y="46" width="168" height="380" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / 별도 저장</text>
+        <text x="530" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">03 / 작업과 기록</text>
 
         <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="3" x="661" y="46" width="168" height="380" rx="10" class="c-lane" stroke-width="1"/>
-        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / 올든 화면</text>
+        <text x="745" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">04 / 원자적 공개</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="stage" data-composition-frame-id="4" x="876" y="46" width="168" height="380" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="960" y="68" class="t-dim" font-size="9" font-weight="600" text-anchor="middle">05 / 지식과 화면</text>
 
         <!-- Flow paths -->
-        <path data-edge-from="kakao" data-edge-to="snapshot" data-edge-label="수집" data-edge-key="0" data-composition-points="156,157;259,157" d="M 156 157 L 259 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="snapshot" data-edge-to="cycles" data-edge-label="단계 저장" data-edge-key="1" data-composition-points="371,157;474,157" d="M 371 157 L 474 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="cycles" data-edge-to="dbview" data-edge-label="상태 조회" data-edge-key="2" data-composition-points="586,157;689,157" d="M 586 157 L 689 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="index" data-edge-to="entities" data-edge-label="지식 생성" data-edge-key="3" data-composition-points="156,271;259,271" d="M 156 271 L 259 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="entities" data-edge-to="osk" data-edge-label="실제 OSK API" data-edge-key="4" data-composition-points="371,271;474,271" d="M 371 271 L 474 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="osk" data-edge-to="graph" data-edge-label="읽기 전용 표시" data-edge-key="5" data-composition-points="586,271;689,271" d="M 586 271 L 689 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="kakao" data-edge-to="snapshot" data-edge-label="일관성 확인" data-edge-key="0" data-composition-points="156,157;259,157" d="M 156 157 L 259 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="snapshot" data-edge-to="working" data-edge-label="중단 뒤 재개" data-edge-key="1" data-composition-points="371,157;474,157" d="M 371 157 L 474 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="working" data-edge-to="published" data-edge-label="전체 완료" data-edge-key="2" data-composition-points="586,157;689,157" d="M 586 157 L 689 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="published" data-edge-to="knowledge" data-edge-label="지식 갱신" data-edge-key="3" data-composition-points="801,157;904,157" d="M 801 157 L 904 157" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="working" data-edge-to="updates" data-edge-label="단계 기록" data-edge-key="4" data-composition-points="530,186;530,242" d="M 530 186 L 530 242" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="knowledge" data-edge-to="graph" data-edge-label="읽기 전용" data-edge-key="5" data-composition-points="960,186;960,242" d="M 960 186 L 960 242" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="voice" data-edge-to="confirmed" data-edge-label="턴 확정" data-edge-key="6" data-composition-points="156,385;259,385" d="M 156 385 L 259 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="confirmed" data-edge-to="journal" data-edge-label="기록 저장" data-edge-key="7" data-composition-points="371,385;474,385" d="M 371 385 L 474 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="journal" data-edge-to="voiceview" data-edge-label="페이지 조회" data-edge-key="8" data-composition-points="586,385;689,385" d="M 586 385 L 689 385" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
 
         <!-- Nodes -->
-        <g id="node-kakao" data-node-id="kakao" data-node-label="카카오톡 원본 DB" tabindex="0" role="button" aria-label="Focus 카카오톡 원본 DB, DB와 WAL 함께 확인, 01 / 로컬 출처" aria-pressed="false" data-node-kind="database" data-node-sublabel="DB와 WAL 함께 확인" data-node-context="01 / 로컬 출처">
-          <title>카카오톡 원본 DB · DB와 WAL 함께 확인 · 01 / 로컬 출처</title>
+        <g id="node-kakao" data-node-id="kakao" data-node-label="카카오톡 DB" tabindex="0" role="button" aria-label="Focus 카카오톡 DB, 원본은 읽기 전용, 01 / 원본" aria-pressed="false" data-node-kind="database" data-node-sublabel="원본은 읽기 전용" data-node-context="01 / 원본">
+          <title>카카오톡 DB · 원본은 읽기 전용 · 01 / 원본</title>
           <rect x="44" y="128" width="112" height="58" rx="6" class="c-mask"/>
           <rect x="44" y="128" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(50 134) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">카카오톡 원본 DB</text>
-          <text data-detail="context" x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">DB와 WAL 함께 확인</text>
+          <text data-node-label="" data-detail-anchor="" x="100" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">카카오톡 DB</text>
+          <text data-detail="context" x="100" y="165" class="t-muted" font-size="7" text-anchor="middle">원본은 읽기 전용</text>
         </g>
 
-        <g id="node-snapshot" data-node-id="snapshot" data-node-label="일관된 복제본" tabindex="0" role="button" aria-label="Focus 일관된 복제본, 원본 변경 없이 수집, 02 / 확인과 정리" aria-pressed="false" data-node-kind="backend" data-node-sublabel="원본 변경 없이 수집" data-node-context="02 / 확인과 정리">
-          <title>일관된 복제본 · 원본 변경 없이 수집 · 02 / 확인과 정리</title>
+        <g id="node-snapshot" data-node-id="snapshot" data-node-label="DB·WAL 복제본" tabindex="0" role="button" aria-label="Focus DB·WAL 복제본, 배치 동안 고정, 02 / 고정 복제" aria-pressed="false" data-node-kind="database" data-node-sublabel="배치 동안 고정" data-node-context="02 / 고정 복제">
+          <title>DB·WAL 복제본 · 배치 동안 고정 · 02 / 고정 복제</title>
           <rect x="259" y="128" width="112" height="58" rx="6" class="c-mask"/>
-          <rect x="259" y="128" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(265 134) scale(0.6875)">
-            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          <rect x="259" y="128" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(265 134) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="315" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">일관된 복제본</text>
-          <text data-detail="context" x="315" y="165" class="t-muted" font-size="7" text-anchor="middle">원본 변경 없이 수집</text>
+          <text data-node-label="" data-detail-anchor="" x="315" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">DB·WAL 복제본</text>
+          <text data-detail="context" x="315" y="165" class="t-muted" font-size="7" text-anchor="middle">배치 동안 고정</text>
         </g>
 
-        <g id="node-cycles" data-node-id="cycles" data-node-label="DB 갱신 기록" tabindex="0" role="button" aria-label="Focus DB 갱신 기록, 수집·정리·대기·실패, 03 / 별도 저장" aria-pressed="false" data-node-kind="database" data-node-sublabel="수집·정리·대기·실패" data-node-context="03 / 별도 저장">
-          <title>DB 갱신 기록 · 수집·정리·대기·실패 · 03 / 별도 저장</title>
+        <g id="node-working" data-node-id="working" data-node-label="작업 검색 저장소" tabindex="0" role="button" aria-label="Focus 작업 검색 저장소, 원문·커서 함께 저장, 03 / 작업과 기록" aria-pressed="false" data-node-kind="database" data-node-sublabel="원문·커서 함께 저장" data-node-context="03 / 작업과 기록">
+          <title>작업 검색 저장소 · 원문·커서 함께 저장 · 03 / 작업과 기록</title>
           <rect x="474" y="128" width="112" height="58" rx="6" class="c-mask"/>
           <rect x="474" y="128" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(480 134) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="530" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">DB 갱신 기록</text>
-          <text data-detail="context" x="530" y="165" class="t-muted" font-size="7" text-anchor="middle">수집·정리·대기·실패</text>
+          <text data-node-label="" data-detail-anchor="" x="530" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">작업 검색 저장소</text>
+          <text data-detail="context" x="530" y="165" class="t-muted" font-size="7" text-anchor="middle">원문·커서 함께 저장</text>
         </g>
 
-        <g id="node-dbview" data-node-id="dbview" data-node-label="DB 갱신 화면" tabindex="0" role="button" aria-label="Focus DB 갱신 화면, 현재 상태와 과거 기록, 04 / 올든 화면" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="현재 상태와 과거 기록" data-node-context="04 / 올든 화면">
-          <title>DB 갱신 화면 · 현재 상태와 과거 기록 · 04 / 올든 화면</title>
+        <g id="node-published" data-node-id="published" data-node-label="완료된 검색 자료" tabindex="0" role="button" aria-label="Focus 완료된 검색 자료, 이전 버전 유지, 04 / 원자적 공개" aria-pressed="false" data-node-kind="database" data-node-sublabel="이전 버전 유지" data-node-context="04 / 원자적 공개">
+          <title>완료된 검색 자료 · 이전 버전 유지 · 04 / 원자적 공개</title>
           <rect x="689" y="128" width="112" height="58" rx="6" class="c-mask"/>
-          <rect x="689" y="128" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(695 134) scale(0.6875)">
-            <rect x="2" y="3" width="12" height="10" rx="2"/>
-            <path d="M2 6.5h12"/>
-            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
-            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="745" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">DB 갱신 화면</text>
-          <text data-detail="context" x="745" y="165" class="t-muted" font-size="7" text-anchor="middle">현재 상태와 과거 기록</text>
-        </g>
-
-        <g id="node-index" data-node-id="index" data-node-label="기존 검색 자료" tabindex="0" role="button" aria-label="Focus 기존 검색 자료, 원본 전체 수집량과 별도, 01 / 로컬 출처" aria-pressed="false" data-node-kind="database" data-node-sublabel="원본 전체 수집량과 별도" data-node-context="01 / 로컬 출처">
-          <title>기존 검색 자료 · 원본 전체 수집량과 별도 · 01 / 로컬 출처</title>
-          <rect x="44" y="242" width="112" height="58" rx="6" class="c-mask"/>
-          <rect x="44" y="242" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(50 248) scale(0.6875)">
+          <rect x="689" y="128" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(695 134) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">기존 검색 자료</text>
-          <text data-detail="context" x="100" y="279" class="t-muted" font-size="7" text-anchor="middle">원본 전체 수집량과 별도</text>
+          <text data-node-label="" data-detail-anchor="" x="745" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">완료된 검색 자료</text>
+          <text data-detail="context" x="745" y="165" class="t-muted" font-size="7" text-anchor="middle">이전 버전 유지</text>
         </g>
 
-        <g id="node-entities" data-node-id="entities" data-node-label="GraphRAG 지식" tabindex="0" role="button" aria-label="Focus GraphRAG 지식, 출처와 안정적인 ID, 02 / 확인과 정리" aria-pressed="false" data-node-kind="backend" data-node-sublabel="출처와 안정적인 ID" data-node-context="02 / 확인과 정리">
-          <title>GraphRAG 지식 · 출처와 안정적인 ID · 02 / 확인과 정리</title>
-          <rect x="259" y="242" width="112" height="58" rx="6" class="c-mask"/>
-          <rect x="259" y="242" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(265 248) scale(0.6875)">
+        <g id="node-knowledge" data-node-id="knowledge" data-node-label="GraphRAG·OSK" tabindex="0" role="button" aria-label="Focus GraphRAG·OSK, 숫자 ID와 출처, 05 / 지식과 화면" aria-pressed="false" data-node-kind="backend" data-node-sublabel="숫자 ID와 출처" data-node-context="05 / 지식과 화면">
+          <title>GraphRAG·OSK · 숫자 ID와 출처 · 05 / 지식과 화면</title>
+          <rect x="904" y="128" width="112" height="58" rx="6" class="c-mask"/>
+          <rect x="904" y="128" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(910 134) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="315" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">GraphRAG 지식</text>
-          <text data-detail="context" x="315" y="279" class="t-muted" font-size="7" text-anchor="middle">출처와 안정적인 ID</text>
+          <text data-node-label="" data-detail-anchor="" x="960" y="149" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">GraphRAG·OSK</text>
+          <text data-detail="context" x="960" y="165" class="t-muted" font-size="7" text-anchor="middle">숫자 ID와 출처</text>
         </g>
 
-        <g id="node-osk" data-node-id="osk" data-node-label="OSK 지식 저장소" tabindex="0" role="button" aria-label="Focus OSK 지식 저장소, 인물·대화방·주제, 03 / 별도 저장" aria-pressed="false" data-node-kind="database" data-node-sublabel="인물·대화방·주제" data-node-context="03 / 별도 저장">
-          <title>OSK 지식 저장소 · 인물·대화방·주제 · 03 / 별도 저장</title>
+        <g id="node-updates" data-node-id="updates" data-node-label="DB 갱신 기록" tabindex="0" role="button" aria-label="Focus DB 갱신 기록, 수집·정리·대기, 03 / 작업과 기록" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="수집·정리·대기" data-node-context="03 / 작업과 기록">
+          <title>DB 갱신 기록 · 수집·정리·대기 · 03 / 작업과 기록</title>
           <rect x="474" y="242" width="112" height="58" rx="6" class="c-mask"/>
-          <rect x="474" y="242" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(480 248) scale(0.6875)">
-            <ellipse cx="8" cy="4" rx="5" ry="2"/>
-            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
-          </g>
-          <text data-node-label="" data-detail-anchor="" x="530" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">OSK 지식 저장소</text>
-          <text data-detail="context" x="530" y="279" class="t-muted" font-size="7" text-anchor="middle">인물·대화방·주제</text>
-        </g>
-
-        <g id="node-graph" data-node-id="graph" data-node-label="3D 지식 그래프" tabindex="0" role="button" aria-label="Focus 3D 지식 그래프, 설정과 메뉴바 팝업, 04 / 올든 화면" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="설정과 메뉴바 팝업" data-node-context="04 / 올든 화면">
-          <title>3D 지식 그래프 · 설정과 메뉴바 팝업 · 04 / 올든 화면</title>
-          <rect x="689" y="242" width="112" height="58" rx="6" class="c-mask"/>
-          <rect x="689" y="242" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(695 248) scale(0.6875)">
+          <rect x="474" y="242" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(480 248) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="745" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">3D 지식 그래프</text>
-          <text data-detail="context" x="745" y="279" class="t-muted" font-size="7" text-anchor="middle">설정과 메뉴바 팝업</text>
+          <text data-node-label="" data-detail-anchor="" x="530" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">DB 갱신 기록</text>
+          <text data-detail="context" x="530" y="279" class="t-muted" font-size="7" text-anchor="middle">수집·정리·대기</text>
         </g>
 
-        <g id="node-voice" data-node-id="voice" data-node-label="음성 대화 턴" tabindex="0" role="button" aria-label="Focus 음성 대화 턴, 취소와 순서 확인, 01 / 로컬 출처" aria-pressed="false" data-node-kind="backend" data-node-sublabel="취소와 순서 확인" data-node-context="01 / 로컬 출처">
-          <title>음성 대화 턴 · 취소와 순서 확인 · 01 / 로컬 출처</title>
+        <g id="node-graph" data-node-id="graph" data-node-label="3D 지식 그래프" tabindex="0" role="button" aria-label="Focus 3D 지식 그래프, 탐색과 범위 조회, 05 / 지식과 화면" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="탐색과 범위 조회" data-node-context="05 / 지식과 화면">
+          <title>3D 지식 그래프 · 탐색과 범위 조회 · 05 / 지식과 화면</title>
+          <rect x="904" y="242" width="112" height="58" rx="6" class="c-mask"/>
+          <rect x="904" y="242" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(910 248) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="960" y="263" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">3D 지식 그래프</text>
+          <text data-detail="context" x="960" y="279" class="t-muted" font-size="7" text-anchor="middle">탐색과 범위 조회</text>
+        </g>
+
+        <g id="node-voice" data-node-id="voice" data-node-label="음성 대화 턴" tabindex="0" role="button" aria-label="Focus 음성 대화 턴, 취소와 순서 확인, 01 / 원본" aria-pressed="false" data-node-kind="backend" data-node-sublabel="취소와 순서 확인" data-node-context="01 / 원본">
+          <title>음성 대화 턴 · 취소와 순서 확인 · 01 / 원본</title>
           <rect x="44" y="356" width="112" height="58" rx="6" class="c-mask"/>
           <rect x="44" y="356" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(50 362) scale(0.6875)">
@@ -5289,19 +5281,19 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="100" y="393" class="t-muted" font-size="7" text-anchor="middle">취소와 순서 확인</text>
         </g>
 
-        <g id="node-confirmed" data-node-id="confirmed" data-node-label="확정된 말씀과 답변" tabindex="0" role="button" aria-label="Focus 확정된 말씀과 답변, 늦은 취소 결과 제외, 02 / 확인과 정리" aria-pressed="false" data-node-kind="backend" data-node-sublabel="늦은 취소 결과 제외" data-node-context="02 / 확인과 정리">
-          <title>확정된 말씀과 답변 · 늦은 취소 결과 제외 · 02 / 확인과 정리</title>
+        <g id="node-confirmed" data-node-id="confirmed" data-node-label="확정된 대화" tabindex="0" role="button" aria-label="Focus 확정된 대화, 늦은 취소 제외, 02 / 고정 복제" aria-pressed="false" data-node-kind="backend" data-node-sublabel="늦은 취소 제외" data-node-context="02 / 고정 복제">
+          <title>확정된 대화 · 늦은 취소 제외 · 02 / 고정 복제</title>
           <rect x="259" y="356" width="112" height="58" rx="6" class="c-mask"/>
           <rect x="259" y="356" width="112" height="58" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(265 362) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="315" y="377" class="t-primary" font-size="9.6" font-weight="600" text-anchor="middle">확정된 말씀과 답변</text>
-          <text data-detail="context" x="315" y="393" class="t-muted" font-size="7" text-anchor="middle">늦은 취소 결과 제외</text>
+          <text data-node-label="" data-detail-anchor="" x="315" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">확정된 대화</text>
+          <text data-detail="context" x="315" y="393" class="t-muted" font-size="7" text-anchor="middle">늦은 취소 제외</text>
         </g>
 
-        <g id="node-journal" data-node-id="journal" data-node-label="로컬 대화 기록" tabindex="0" role="button" aria-label="Focus 로컬 대화 기록, 텍스트만 저장, 03 / 별도 저장" aria-pressed="false" data-node-kind="database" data-node-sublabel="텍스트만 저장" data-node-context="03 / 별도 저장">
-          <title>로컬 대화 기록 · 텍스트만 저장 · 03 / 별도 저장</title>
+        <g id="node-journal" data-node-id="journal" data-node-label="로컬 대화 기록" tabindex="0" role="button" aria-label="Focus 로컬 대화 기록, 텍스트만 저장, 03 / 작업과 기록" aria-pressed="false" data-node-kind="database" data-node-sublabel="텍스트만 저장" data-node-context="03 / 작업과 기록">
+          <title>로컬 대화 기록 · 텍스트만 저장 · 03 / 작업과 기록</title>
           <rect x="474" y="356" width="112" height="58" rx="6" class="c-mask"/>
           <rect x="474" y="356" width="112" height="58" rx="6" class="c-database" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(480 362) scale(0.6875)">
@@ -5312,8 +5304,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="530" y="393" class="t-muted" font-size="7" text-anchor="middle">텍스트만 저장</text>
         </g>
 
-        <g id="node-voiceview" data-node-id="voiceview" data-node-label="음성 대화 화면" tabindex="0" role="button" aria-label="Focus 음성 대화 화면, 세션별 전체 기록 탐색, 04 / 올든 화면" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="세션별 전체 기록 탐색" data-node-context="04 / 올든 화면">
-          <title>음성 대화 화면 · 세션별 전체 기록 탐색 · 04 / 올든 화면</title>
+        <g id="node-voiceview" data-node-id="voiceview" data-node-label="음성 대화 화면" tabindex="0" role="button" aria-label="Focus 음성 대화 화면, 세션별 기록 탐색, 04 / 원자적 공개" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="세션별 기록 탐색" data-node-context="04 / 원자적 공개">
+          <title>음성 대화 화면 · 세션별 기록 탐색 · 04 / 원자적 공개</title>
           <rect x="689" y="356" width="112" height="58" rx="6" class="c-mask"/>
           <rect x="689" y="356" width="112" height="58" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(695 362) scale(0.6875)">
@@ -5323,33 +5315,33 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" data-detail-anchor="" x="745" y="377" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">음성 대화 화면</text>
-          <text data-detail="context" x="745" y="393" class="t-muted" font-size="7" text-anchor="middle">세션별 전체 기록 탐색</text>
+          <text data-detail="context" x="745" y="393" class="t-muted" font-size="7" text-anchor="middle">세션별 기록 탐색</text>
         </g>
 
         <!-- Flow labels -->
-        <g data-detail="context" data-edge-from="kakao" data-edge-to="snapshot" data-edge-label="수집" data-edge-key="0">
-          <rect x="190.5" y="136" width="34" height="16" rx="4" class="c-mask"/>
-          <text x="207.5" y="147" class="t-backend" font-size="8" text-anchor="middle">수집</text>
+        <g data-detail="context" data-edge-from="kakao" data-edge-to="snapshot" data-edge-label="일관성 확인" data-edge-key="0">
+          <rect x="174.55" y="136" width="65.9" height="16" rx="4" class="c-mask"/>
+          <text x="207.5" y="147" class="t-backend" font-size="8" text-anchor="middle">일관성 확인</text>
         </g>
-        <g data-detail="context" data-edge-from="snapshot" data-edge-to="cycles" data-edge-label="단계 저장" data-edge-key="1">
-          <rect x="394.45" y="136" width="56.1" height="16" rx="4" class="c-mask"/>
-          <text x="422.5" y="147" class="t-backend" font-size="8" text-anchor="middle">단계 저장</text>
+        <g data-detail="context" data-edge-from="snapshot" data-edge-to="working" data-edge-label="중단 뒤 재개" data-edge-key="1">
+          <rect x="387.1" y="136" width="70.8" height="16" rx="4" class="c-mask"/>
+          <text x="422.5" y="147" class="t-backend" font-size="8" text-anchor="middle">중단 뒤 재개</text>
         </g>
-        <g data-detail="context" data-edge-from="cycles" data-edge-to="dbview" data-edge-label="상태 조회" data-edge-key="2">
+        <g data-detail="context" data-edge-from="working" data-edge-to="published" data-edge-label="전체 완료" data-edge-key="2">
           <rect x="609.45" y="136" width="56.1" height="16" rx="4" class="c-mask"/>
-          <text x="637.5" y="147" class="t-backend" font-size="8" text-anchor="middle">상태 조회</text>
+          <text x="637.5" y="147" class="t-backend" font-size="8" text-anchor="middle">전체 완료</text>
         </g>
-        <g data-detail="context" data-edge-from="index" data-edge-to="entities" data-edge-label="지식 생성" data-edge-key="3">
-          <rect x="179.45" y="250" width="56.1" height="16" rx="4" class="c-mask"/>
-          <text x="207.5" y="261" class="t-backend" font-size="8" text-anchor="middle">지식 생성</text>
+        <g data-detail="context" data-edge-from="published" data-edge-to="knowledge" data-edge-label="지식 갱신" data-edge-key="3">
+          <rect x="824.45" y="136" width="56.1" height="16" rx="4" class="c-mask"/>
+          <text x="852.5" y="147" class="t-backend" font-size="8" text-anchor="middle">지식 갱신</text>
         </g>
-        <g data-detail="context" data-edge-from="entities" data-edge-to="osk" data-edge-label="실제 OSK API" data-edge-key="4">
-          <rect x="387.1" y="250" width="70.8" height="16" rx="4" class="c-mask"/>
-          <text x="422.5" y="261" class="t-backend" font-size="8" text-anchor="middle">실제 OSK API</text>
+        <g data-detail="context" data-edge-from="working" data-edge-to="updates" data-edge-label="단계 기록" data-edge-key="4">
+          <rect x="501.95" y="189" width="56.1" height="16" rx="4" class="c-mask"/>
+          <text x="530" y="200" class="t-backend" font-size="8" text-anchor="middle">단계 기록</text>
         </g>
-        <g data-detail="context" data-edge-from="osk" data-edge-to="graph" data-edge-label="읽기 전용 표시" data-edge-key="5">
-          <rect x="597.2" y="250" width="80.6" height="16" rx="4" class="c-mask"/>
-          <text x="637.5" y="261" class="t-backend" font-size="8" text-anchor="middle">읽기 전용 표시</text>
+        <g data-detail="context" data-edge-from="knowledge" data-edge-to="graph" data-edge-label="읽기 전용" data-edge-key="5">
+          <rect x="931.95" y="189" width="56.1" height="16" rx="4" class="c-mask"/>
+          <text x="960" y="200" class="t-backend" font-size="8" text-anchor="middle">읽기 전용</text>
         </g>
         <g data-detail="context" data-edge-from="voice" data-edge-to="confirmed" data-edge-label="턴 확정" data-edge-key="6">
           <rect x="184.35" y="364" width="46.3" height="16" rx="4" class="c-mask"/>
@@ -5565,22 +5557,22 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>출처와 범위</h3>
+          <h3>일관성과 공개</h3>
         </div>
         <ul>
-          <li>&bull; 원본 수집량과 검색 자료의 범위를 구분합니다.</li>
-          <li>&bull; OSK ID와 사용자 편집을 보존합니다.</li>
+          <li>&bull; DB와 WAL을 함께 고정하고 원본을 변경하지 않습니다.</li>
+          <li>&bull; 검색 저장소는 전체 완료 후 Online Backup으로 공개합니다.</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot slate"></div>
-          <h3>기록과 개인정보</h3>
+          <h3>정체성과 입력 출처</h3>
         </div>
         <ul>
-          <li>&bull; 카카오톡은 원문을 자르지 않고 커서로 읽습니다.</li>
-          <li>&bull; 음성 원본 오디오와 취소된 답변은 기록하지 않습니다.</li>
+          <li>&bull; 같은 이름을 합치지 않고 계정·방·발신자 숫자 ID를 보존합니다.</li>
+          <li>&bull; 과거 발신 기록은 인용 자료이며 새로운 사용자 발화가 아닙니다.</li>
         </ul>
       </div>
     </div>

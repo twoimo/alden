@@ -857,7 +857,14 @@ enum Commands {
     /// All local chat rooms for the history browser; no registration or server contact.
     LocalHistoryRooms,
     /// Collect a consistent isolated DB+WAL snapshot summary; never alters Kakao.
-    LocalDbCollect,
+    LocalDbCollect {
+        #[arg(long)]
+        index_dir: Option<std::path::PathBuf>,
+        #[arg(long, default_value_t = 100_000)]
+        max_rows: usize,
+        #[arg(long)]
+        abort_state: Option<std::path::PathBuf>,
+    },
     /// Browse the entire available local room history with stable keyset cursors.
     LocalHistory {
         chat_id: i64,
@@ -1233,7 +1240,7 @@ fn is_local_only_command(command: &Commands) -> bool {
         Commands::LocalChats { .. }
             | Commands::LocalRead { .. }
             | Commands::LocalHistoryRooms
-            | Commands::LocalDbCollect
+            | Commands::LocalDbCollect { .. }
             | Commands::LocalHistory { .. }
             | Commands::LocalPoll { .. }
             | Commands::LocalSearch { .. }
@@ -6868,13 +6875,37 @@ fn run() -> Result<()> {
                 )?
             );
         }
-        Commands::LocalDbCollect => {
+        Commands::LocalDbCollect {
+            index_dir,
+            max_rows,
+            abort_state,
+        } => {
             let source = context_sync_replica::ContextSyncReplicaSource::discover()?;
-            let snapshot = source.open_fresh()?;
-            println!(
-                "{}",
-                serde_json::to_string(&snapshot.reader().collection_summary()?)?
-            );
+            if let Some(root) = index_dir {
+                let (snapshot, id, at) = source.open_corpus_snapshot(&root)?;
+                let mut report = snapshot.reader().collection_summary()?;
+                let index = snapshot.reader().synchronize_corpus(
+                    &root,
+                    &id,
+                    at,
+                    max_rows,
+                    abort_state.as_deref(),
+                )?;
+                if index.complete {
+                    let path = root
+                        .join(source.account_fingerprint())
+                        .join("snapshot-complete");
+                    drop(openkakao_cli::alden_corpus::private_file(&path)?);
+                }
+                report["index"] = serde_json::to_value(index)?;
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                let snapshot = source.open_fresh()?;
+                println!(
+                    "{}",
+                    serde_json::to_string(&snapshot.reader().collection_summary()?)?
+                );
+            }
         }
         Commands::LocalHistory {
             chat_id,

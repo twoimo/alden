@@ -165,6 +165,7 @@ jobs:
           tests.test_alden_unit4
           tests.test_alden_osk
           tests.test_alden_history
+          tests.test_alden_corpus
           tests.test_alden_desktop_launchers
           tests.test_alden_menubar_runtime_payload
           tests.test_local_mlx_model_readiness

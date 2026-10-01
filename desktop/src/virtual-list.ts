@@ -8,27 +8,46 @@ export class VirtualList<T> {
   private frame: number | null = null;
   private disposed = false;
   private endPinned = false;
+  private visible = true;
   constructor(private host: HTMLElement, private key: (item:T)=>string, private render: (item:T)=>HTMLElement, private estimate=78) {
     this.surface.style.position="relative"; host.replaceChildren(this.surface);
     this.observer=typeof ResizeObserver==='undefined'?null:new ResizeObserver(entries=>{
       let changed=false;
+      const anchor=this.anchor();
       for(const entry of entries){const id=(entry.target as HTMLElement).dataset.virtualKey!;const height=entry.borderBoxSize?.[0]?.blockSize || entry.contentRect.height;
         if(height>0 && Math.abs((this.heights.get(id)??this.estimate)-height)>1){this.heights.set(id,height);changed=true;}}
-      if(changed){this.measure();if(this.endPinned)this.host.scrollTop=this.offsets.at(-1)!;this.schedule();}
+      if(changed){this.measure();if(this.endPinned)this.host.scrollTop=this.offsets.at(-1)!;else this.restore(anchor);this.schedule();}
     });
     host.addEventListener('scroll',this.scroll,{passive:true});
   }
   set(items:T[],options:{end?:boolean;preserve?:boolean}={}):void {
-    const oldHeight=this.offsets.at(-1)!;const oldTop=this.host.scrollTop;
+    const anchor=options.preserve?this.anchor():null;
     this.items=items;this.measure();this.endPinned=options.end===true;
-    this.host.scrollTop=options.end?this.offsets.at(-1)!:options.preserve?oldTop+this.offsets.at(-1)!-oldHeight:0;
+    if(options.end)this.host.scrollTop=this.offsets.at(-1)!;else if(options.preserve)this.restore(anchor);else this.host.scrollTop=0;
     this.draw();
+  }
+  private anchor():{key:string;within:number}|null {
+    if(!this.items.length)return null;
+    let low=0,high=this.items.length;
+    while(low<high){const mid=(low+high)>>>1;if(this.offsets[mid]<=this.host.scrollTop)low=mid+1;else high=mid;}
+    const index=Math.max(0,low-1);
+    return {key:this.key(this.items[index]),within:this.host.scrollTop-this.offsets[index]};
+  }
+  private restore(anchor:{key:string;within:number}|null):void {
+    if(!anchor)return;
+    const index=this.items.findIndex(item=>this.key(item)===anchor.key);
+    if(index>=0)this.host.scrollTop=this.offsets[index]+anchor.within;
+  }
+  setVisible(visible:boolean):void {
+    if(this.visible===visible||this.disposed)return;
+    this.visible=visible;
+    if(visible)this.draw();else{this.observer?.disconnect();if(this.frame!==null)cancelAnimationFrame(this.frame);this.frame=null;}
   }
   private measure():void {this.offsets=[0];for(const item of this.items)this.offsets.push(this.offsets.at(-1)!+(this.heights.get(this.key(item))??this.estimate));this.surface.style.height=this.offsets.at(-1)+'px';}
   private readonly scroll=():void=>{this.endPinned=this.host.scrollTop+this.host.clientHeight>=this.offsets.at(-1)!-12;this.schedule();};
-  private schedule():void {if(this.frame!==null||this.disposed)return;this.frame=requestAnimationFrame(()=>{this.frame=null;this.draw();});}
+  private schedule():void {if(this.frame!==null||this.disposed||!this.visible)return;this.frame=requestAnimationFrame(()=>{this.frame=null;this.draw();});}
   private draw():void {
-    if(this.disposed)return;this.observer?.disconnect();this.surface.replaceChildren();
+    if(this.disposed||!this.visible)return;this.observer?.disconnect();this.surface.replaceChildren();
     let low=0,high=this.items.length;const top=this.host.scrollTop;
     while(low<high){const mid=(low+high)>>>1;if(this.offsets[mid]<top)low=mid+1;else high=mid;}
     const start=Math.max(0,low-5);const bottom=top+Math.max(this.host.clientHeight,400)+500;

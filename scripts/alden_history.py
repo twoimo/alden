@@ -76,7 +76,7 @@ def context_coverage(state_root: Path) -> dict:
 def cycle_step(state_root: Path, cycle: str, phase: str, **details) -> None:
     if phase not in PHASES: raise ValueError('db_cycle_phase_invalid')
     # Receipts contain status/counts, never message bodies or private DB keys.
-    safe={k:v for k,v in details.items() if k in ('rooms','messages','nodes','changed','pending','conflicts','reason','indexed_messages','indexed_rooms') and isinstance(v,(int,str,bool))}
+    safe={k:v for k,v in details.items() if k in ('rooms','messages','nodes','changed','pending','conflicts','reason','indexed_messages','indexed_rooms','corpus_messages','corpus_pending') and isinstance(v,(int,str,bool))}
     encoded=json.dumps(safe,ensure_ascii=False);now=time.time()
     with database(state_root,write=True) as db:
         signature=subprocess.run(['ps','-p',str(os.getpid()),'-o','lstart='],capture_output=True,text=True,timeout=2).stdout.strip()
@@ -87,7 +87,7 @@ def cycle_step(state_root: Path, cycle: str, phase: str, **details) -> None:
 def _local_cli(binary: Path, args: list[str]) -> dict:
     if not binary.is_absolute() or binary.is_symlink() or not binary.is_file():
         raise RuntimeError('history_cli_invalid')
-    result=subprocess.run([str(binary),*args,'--json'],capture_output=True,text=True,timeout=90 if args==['local-db-collect'] else 20)
+    result=subprocess.run([str(binary),*args,'--json'],capture_output=True,text=True,timeout=90 if args and args[0]=='local-db-collect' else 20)
     if result.returncode: raise RuntimeError('local_history_unavailable')
     if len(result.stdout.encode())>8*1024*1024: raise RuntimeError('history_page_too_large')
     data=json.loads(result.stdout)

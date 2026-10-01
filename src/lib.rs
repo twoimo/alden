@@ -1,4 +1,5 @@
 pub mod alden_abort;
+pub mod alden_corpus;
 pub mod auto_reply_service;
 pub mod ax_send;
 pub mod breaker;

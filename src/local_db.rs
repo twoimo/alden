@@ -106,6 +106,17 @@ mod history_tests {
         assert_eq!(latest.total, 236);
     }
     #[test]
+    fn whole_history_accepts_older_real_timestamp_rows() {
+        let c = fixture();
+        c.execute(
+            "UPDATE NTChatMessage SET sentAt=1234.125 WHERE logId=235",
+            [],
+        )
+        .unwrap();
+        let page = history_page_from_connection(&c, 7, "account", 42, None, None, 2).unwrap();
+        assert_eq!(page.messages.last().unwrap()["sent_at"], json!(1234.125));
+    }
+    #[test]
     fn room_boundary_full_text_and_large_ids_are_preserved() {
         let c = fixture();
         let id = 9_007_199_254_740_995i64;
@@ -600,7 +611,12 @@ fn history_page_from_connection(
             Ok(json!({"id":id.to_string(),"chat_id":chat_id.to_string(),"author_id":author.to_string(),
                 "is_self":is_self_author(author,account_user_id),"sender":row.get::<_,String>(2)?,
                 "text":row.get::<_,String>(3)?,"attachment":row.get::<_,String>(4)?,
-                "type":row.get::<_,i32>(5)?,"sent_at":row.get::<_,i64>(6)?}))
+                "type":row.get::<_,i32>(5)?,"sent_at":match row.get_ref(6)? {
+                    rusqlite::types::ValueRef::Integer(n)=>json!(n),
+                    rusqlite::types::ValueRef::Real(n)=>json!(n),
+                    rusqlite::types::ValueRef::Null=>serde_json::Value::Null,
+                    _=>serde_json::Value::Null,
+                }}))
         })?.collect::<Result<Vec<_>,_>>()?;
         let more = messages.len() > limit;
         messages.truncate(limit);
@@ -1551,6 +1567,7 @@ fn database_identity(path: &Path) -> Result<DatabaseIdentity> {
 // ---------------------------------------------------------------------------
 
 pub struct LocalDbReader {
+    isolated_replica: bool,
     conn: Connection,
     db_path: PathBuf,
     db_identity: DatabaseIdentity,
@@ -1621,6 +1638,7 @@ impl LocalDbReplicaSource {
         }
         self.ensure_source_identity()?;
         Ok(LocalDbReader {
+            isolated_replica: true,
             conn,
             db_path: replica_path.to_path_buf(),
             db_identity: replica_identity,
@@ -1775,6 +1793,7 @@ impl LocalDbReader {
         }
 
         Ok(Self {
+            isolated_replica: false,
             conn,
             db_path,
             db_identity,
@@ -2189,6 +2208,34 @@ impl LocalDbReader {
         )?;
         self.ensure_database_identity()?;
         Ok(page)
+    }
+
+    pub fn synchronize_corpus(
+        &self,
+        root: &Path,
+        snapshot_id: &str,
+        snapshot_at: i64,
+        max_rows: usize,
+        abort: Option<&Path>,
+    ) -> Result<crate::alden_corpus::Report> {
+        if !self.isolated_replica {
+            anyhow::bail!("corpus_requires_isolated_replica");
+        }
+        self.ensure_database_identity()?;
+        let report = crate::alden_corpus::synchronize(
+            &self.conn,
+            crate::alden_corpus::Options {
+                root,
+                account: &self.account_fingerprint,
+                self_id: self.account_user_id,
+                snapshot_id,
+                snapshot_at,
+                max_rows,
+                abort,
+            },
+        )?;
+        self.ensure_database_identity()?;
+        Ok(report)
     }
 
     pub fn collection_summary(&self) -> Result<serde_json::Value> {
@@ -2873,6 +2920,7 @@ mod tests {
             .expect("create local-poll reader fixture");
         let db_identity = database_identity(&db_path).expect("read fixture identity");
         let reader = LocalDbReader {
+            isolated_replica: false,
             conn: connection,
             db_path,
             db_identity,

@@ -7,7 +7,11 @@
 // Include the production modules unchanged so this measurement exercises the
 // actual cloner and SQLCipher opener. Keeping the inspection in their lexical
 // scope avoids adding an unchecked SQL or key-export API to the product.
+extern crate openkakao_cli as production;
 extern crate self as openkakao_cli;
+pub use production::context;
+#[path = "../src/alden_corpus.rs"]
+mod alden_corpus;
 
 mod local_db {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/local_db.rs"));

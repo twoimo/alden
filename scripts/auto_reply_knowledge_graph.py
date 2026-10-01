@@ -92,6 +92,7 @@ KST = ZoneInfo("Asia/Seoul")
 # which of the two it is and what backs it (2026-09-16).
 PROVENANCE_SEED = "seed"
 PROVENANCE_LEDGER = "ledger"
+PROVENANCE_SNAPSHOT = "snapshot"
 MAX_EVIDENCE_PER_NODE = 8
 
 
@@ -193,7 +194,7 @@ def _normalize_evidence(raw: Any) -> dict[str, Any]:
     if not isinstance(ids, list):
         ids = []
     return {
-        "kind": PROVENANCE_LEDGER if raw.get("kind") == PROVENANCE_LEDGER else PROVENANCE_SEED,
+        "kind": raw["kind"] if raw.get("kind") in (PROVENANCE_LEDGER,PROVENANCE_SNAPSHOT) else PROVENANCE_SEED,
         "source_event_ids": [str(item) for item in ids if str(item).strip()][:MAX_EVIDENCE_PER_NODE],
         "chat_id": str(raw.get("chat_id") or ""),
         "confirmed_at": raw.get("confirmed_at") or None,
@@ -1031,8 +1032,52 @@ def k_hop_neighborhood(
 
 
 def _index_db_path(state_root: Path) -> Path:
-    """The shared context index. Sibling of the state root's parent."""
+    """Prefer only a completely published, account-scoped Alden corpus."""
+    root=state_root/'knowledge'/'corpus'
+    pointer=root/'current.json'
+    if pointer.exists():
+        if pointer.is_symlink() or pointer.stat().st_size>8192: raise RuntimeError('corpus_pointer_unsafe')
+        manifest=json.loads(pointer.read_text())
+        account=manifest.get('account','')
+        if manifest.get('schema_version')!=1 or not re.fullmatch('[0-9a-f]{64}',account): raise RuntimeError('corpus_pointer_invalid')
+        path=root/account/'context.sqlite3'
+        if path.is_symlink() or path.parent.is_symlink() or not path.is_file(): raise RuntimeError('corpus_publication_missing')
+        return path
     return state_root.parent / "context.sqlite3"
+
+
+def _corpus_labels(index_conn: sqlite3.Connection) -> tuple[dict[str,str],dict[str,str]]:
+    if not index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='corpus_meta'").fetchone():
+        return {},{}
+    return (dict(index_conn.execute('SELECT chat,label FROM alden_rooms')),dict(index_conn.execute('SELECT author_id,label FROM alden_authors')))
+
+
+def _corpus_person_id(room:str,actor:str)->str:
+    match=re.fullmatch(r'kakao:([0-9a-f]{64}):room:[0-9]+',room)
+    if not match or not actor.isdigit() or int(actor)<=0: raise ValueError('corpus_actor_identity_invalid')
+    return 'person:kakao:'+match[1]+':actor:'+actor
+
+
+def _index_corpus_people(conn,index_conn,*,chat='',limit=60):
+    labels,authors=_corpus_labels(index_conn)
+    where='WHERE CAST(author_id AS INTEGER)>0'
+    params=[]
+    if chat: where+=' AND chat=?';params.append(chat)
+    rows=index_conn.execute('SELECT author_id,COUNT(*) FROM context_messages '+where+' GROUP BY author_id ORDER BY COUNT(*) DESC LIMIT ?',[*params,max(int(limit),1)]).fetchall()
+    written=0;now=int(time.time())
+    for actor,count in rows:
+        actor=str(actor)
+        rooms=index_conn.execute('SELECT chat,COUNT(*) FROM context_messages WHERE author_id=? GROUP BY chat ORDER BY COUNT(*) DESC',(actor,)).fetchall()
+        if not rooms: continue
+        key=_corpus_person_id(str(rooms[0][0]),actor)
+        name=authors.get(actor) or '이름 없는 대화 상대'
+        facts=[f'{len(rooms)}개 대화방에 {count:,}건의 메시지가 있습니다.']
+        samples=index_conn.execute('SELECT date,message,chat_id,log_id FROM context_messages WHERE author_id=? ORDER BY id DESC LIMIT 3',(actor,)).fetchall()
+        facts += [str(row[0])[:10]+' · '+str(row[1])[:90] for row in samples if row[1]]
+        conn.execute('INSERT INTO kg_entities(entity_id,name,category,aliases_json,description,key_facts_json,importance,evidence_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(entity_id)DO UPDATE SET name=excluded.name,category=excluded.category,aliases_json=excluded.aliases_json,description=excluded.description,key_facts_json=excluded.key_facts_json,importance=excluded.importance,evidence_json=excluded.evidence_json,updated_at=excluded.updated_at',(key,name,'대화 상대',json.dumps([name,actor],ensure_ascii=False),name+'의 대화 기록입니다.',json.dumps(facts,ensure_ascii=False),min(94,50+int(count)//4000),json.dumps({'kind':'snapshot','author_id':actor,'room_ids':[str(r[0]) for r in rooms[:16]],'source_event_ids':['kakao:'+str(rooms[0][0]).split(':')[1]+':room:'+str(r[2])+':log:'+str(r[3]) for r in samples]}),now))
+        written+=1
+    conn.commit()
+    return {'persons':written,'written':written,'with_lines':written}
 
 
 def _index_topic_rows(conn: sqlite3.Connection, *, chat: str = "") -> list[tuple[str, int]]:
@@ -1149,6 +1194,8 @@ def _topic_terms(topic: str) -> list[str]:
 def _chat_label(chat: str) -> str:
     """A room id becomes a readable name, and stays findable by its number."""
     raw = (chat or "").strip()
+    if re.fullmatch(r'kakao:[0-9a-f]{64}:room:[0-9]+',raw):
+        return '이름 없는 채팅방'
     if raw.startswith("그룹:"):
         return f"그룹방 {raw.split(':', 1)[1]}"
     return raw
@@ -1293,8 +1340,10 @@ def index_chat_entities(
             bucket[1] = start
         if end and (not bucket[2] or end > bucket[2]):
             bucket[2] = end
+    room_labels={}
+    with _open_isolated_ro_conn(index_path) as label_conn: room_labels,_=_corpus_labels(label_conn)
     for key, (total, start, end) in merged.items():
-        name = _chat_label(key)
+        name = room_labels.get(key) or _chat_label(key)
         span = f"{start} ~ {end}" if start and end else ""
         facts = [f"이 방에 {total:,}건의 메시지가 색인되어 있습니다"]
         if span:
@@ -1325,6 +1374,12 @@ def index_chat_entities(
                 now,
             ),
         )
+        if key in room_labels:
+            with _open_isolated_ro_conn(index_path) as evidence_conn:
+                observed=evidence_conn.execute('SELECT chat_id,log_id FROM context_messages WHERE chat=? ORDER BY id DESC LIMIT ?',(key,MAX_EVIDENCE_PER_NODE)).fetchall()
+            account=key.split(':')[1]
+            evidence={'kind':PROVENANCE_SNAPSHOT,'chat_id':key,'source_event_ids':[f'kakao:{account}:room:{r}:log:{log}' for r,log in observed]}
+            conn.execute('UPDATE kg_entities SET evidence_json=? WHERE entity_id=?',(json.dumps(evidence),'chat:'+key))
         stats["written"] += 1
     conn.commit()
     stats["chats"] = len(merged)
@@ -1352,6 +1407,9 @@ def index_person_entities(
     selected: list[tuple[str, str, int, float, str, list[str]]] = []
     try:
         with _open_isolated_ro_conn(index_path) as index_conn:
+            if index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='corpus_meta'").fetchone():
+                return _index_corpus_people(conn,index_conn,chat=chat,limit=limit)
+
             sql = (
                 "SELECT chat, user_name, COUNT(*) FROM context_messages"
                 " WHERE chat IS NOT NULL AND chat != ''"
@@ -1667,9 +1725,10 @@ def index_membership_relations(
     try:
         with _open_isolated_ro_conn(index_path) as index_conn:
             now = int(time.time())
+            is_corpus=index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='corpus_meta'").fetchone() is not None
             # 사람 → 방
             sql = (
-                "SELECT chat, user_name, COUNT(*) FROM context_messages"
+                ("SELECT chat, author_id, COUNT(*) FROM context_messages" if is_corpus else "SELECT chat, user_name, COUNT(*) FROM context_messages") +
                 " WHERE chat IS NOT NULL AND chat != ''"
                 "   AND user_name IS NOT NULL AND user_name != ''"
             )
@@ -1677,12 +1736,12 @@ def index_membership_relations(
             if chat:
                 sql += " AND chat = ?"
                 params.append(chat)
-            sql += " GROUP BY chat, user_name ORDER BY COUNT(*) DESC LIMIT ?"
+            sql += (" GROUP BY chat, author_id ORDER BY COUNT(*) DESC LIMIT ?" if is_corpus else " GROUP BY chat, user_name ORDER BY COUNT(*) DESC LIMIT ?")
             params.append(max(int(limit), 1))
             try:
                 for room, user, count in index_conn.execute(sql, params):
                     room_key, name = _room_key(state_root, str(room)), str(user).strip()
-                    source = f"person:{room_key}:{name}"
+                    source = _corpus_person_id(room_key,name) if is_corpus and name.isdigit() and int(name)>0 else f"person:{room_key}:{name}"
                     target = f"chat:{room_key}"
                     if source not in known or target not in known:
                         continue
@@ -1733,7 +1792,7 @@ def index_membership_relations(
             # 사람 → 주제. 사람 뉴런은 `person:방:이름` 꼴이라, 그 사람의 메시지에
             # 붙은 주제를 세면 곧 사람과 주제의 연결이 된다.
             sql = (
-                "SELECT m.chat, m.user_name, t.topic, COUNT(*)"
+                ("SELECT m.chat, m.author_id, t.topic, COUNT(*)" if is_corpus else "SELECT m.chat, m.user_name, t.topic, COUNT(*)") +
                 " FROM context_message_topics t"
                 " JOIN context_messages m ON m.id = t.message_id"
                 " WHERE m.chat IS NOT NULL AND m.chat != ''"
@@ -1743,11 +1802,11 @@ def index_membership_relations(
             if chat:
                 sql += " AND m.chat = ?"
                 params.append(chat)
-            sql += " GROUP BY m.chat, m.user_name, t.topic ORDER BY COUNT(*) DESC LIMIT ?"
+            sql += (" GROUP BY m.chat, m.author_id, t.topic ORDER BY COUNT(*) DESC LIMIT ?" if is_corpus else " GROUP BY m.chat, m.user_name, t.topic ORDER BY COUNT(*) DESC LIMIT ?")
             params.append(max(int(limit), 1))
             try:
                 for room, user, topic, count in index_conn.execute(sql, params):
-                    source = f"person:{_room_key(state_root, str(room))}:{str(user).strip()}"
+                    source = _corpus_person_id(str(room),str(user)) if is_corpus and str(user).isdigit() and int(user)>0 else f"person:{_room_key(state_root, str(room))}:{str(user).strip()}"
                     target = f"topic:{topic}"
                     if source not in known or target not in known:
                         continue
@@ -1909,6 +1968,11 @@ def attach_ledger_evidence(
                     stats["matched"] += 1
 
     for entity_id, hits in found.items():
+        previous=conn.execute('SELECT evidence_json FROM kg_entities WHERE entity_id=?',(entity_id,)).fetchone()
+        try: existing=json.loads(previous[0] or '{}') if previous else {}
+        except (TypeError,ValueError):existing={}
+        if existing.get('kind')==PROVENANCE_SNAPSHOT and 'kakao:' in entity_id:
+            continue  # Actual DB observation is separate from decision-ledger proof.
         if not hits:
             conn.execute(
                 "UPDATE kg_entities SET evidence_json = ? WHERE entity_id = ?",
@@ -2208,6 +2272,10 @@ def _reindex_all(
                 write_meta(writer, "last_index_error", "")
                 write_meta(writer, "last_snapshot_status", "copy_ok")
                 write_meta(writer, "last_indexed_at", str(int(time.time())))
+                with _open_isolated_ro_conn(_index_db_path(state_root)) as published_source:
+                    if published_source.execute("SELECT 1 FROM sqlite_master WHERE name='corpus_meta'").fetchone():
+                        snapshot_row=published_source.execute("SELECT value FROM corpus_meta WHERE key='snapshot'").fetchone()
+                        if snapshot_row: write_meta(writer,'source_corpus_snapshot',str(snapshot_row[0]))
                 failures.extend(cycle["errors"])
         if failures:
             conn.execute("ROLLBACK TO alden_graph_index_cycle")
@@ -2326,7 +2394,13 @@ def collect_knowledge_graph(
         # 으로 대신하면, 방금 심은 시드 뉴런의 시각이 "최신"으로 읽혀 색인이
         # 영영 돌지 않는다. 그게 6 Pro가 지적한 빈 그래프의 원인이었다
         # (2026-09-17).
-        needs_reindex = force_reindex or (
+        corpus_pointer=state_root/'knowledge'/'corpus'/'current.json' if state_root else None
+        corpus_snapshot=''
+        if corpus_pointer and corpus_pointer.is_file():
+            _index_db_path(state_root)  # Validate the fixed account-scoped pointer.
+            corpus_snapshot=str(json.loads(corpus_pointer.read_text()).get('snapshot',''))
+        source_changed=bool(corpus_snapshot and read_meta(conn,'source_corpus_snapshot')!=corpus_snapshot)
+        needs_reindex = force_reindex or source_changed or (
             last_updated == 0 or now - last_updated >= reindex_interval_seconds
         )
         # 재색인을 백그라운드로 돌리면 이 응답은 저장된 그래프를 담는다.
@@ -2453,7 +2527,7 @@ def collect_knowledge_graph(
             "node_count": len(nodes),
             "edge_count": len(edges),
             "grounded_nodes": sum(
-                1 for node in nodes if node["evidence"]["kind"] == PROVENANCE_LEDGER
+                1 for node in nodes if node["evidence"]["kind"] in (PROVENANCE_LEDGER,PROVENANCE_SNAPSHOT)
             ),
             **_dense_status_payload(conn),
         }
@@ -3803,7 +3877,7 @@ def _candidate_provenance(
             provenance_valid = True
         else:
             provenance_valid = (
-                payload.get("kind") in {PROVENANCE_SEED, PROVENANCE_LEDGER}
+                payload.get("kind") in {PROVENANCE_SEED, PROVENANCE_LEDGER, PROVENANCE_SNAPSHOT}
                 and isinstance(payload.get("source_event_ids"), list)
                 and isinstance(payload.get("chat_id"), str)
                 and isinstance(payload.get("retracted"), bool)

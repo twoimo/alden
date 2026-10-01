@@ -5,7 +5,7 @@ export const ON_SCREEN_NODE_CAP = 24;
 export const NAVIGATION_HISTORY_LIMIT = 32;
 
 export interface KnowledgeEvidence {
-  kind: "seed" | "ledger";
+  kind: "seed" | "ledger" | "snapshot";
   sourceEventIds: string[];
   chatId: string;
   confirmedAt: string | null;
@@ -73,7 +73,7 @@ function parseEvidence(value: unknown): KnowledgeEvidence {
     ? item.source_event_ids.filter((entry): entry is string => typeof entry === "string").slice(0, 16)
     : [];
   return {
-    kind: item.kind === "ledger" ? "ledger" : "seed",
+    kind: item.kind === "ledger" || item.kind === "snapshot" ? item.kind : "seed",
     sourceEventIds: ids,
     chatId: stringValue(item.chat_id),
     confirmedAt: typeof item.confirmed_at === "string" ? item.confirmed_at : null,

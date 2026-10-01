@@ -1009,7 +1009,7 @@ def _knowledge_graph_focus_payload(
             vault_result = read_focus(state_root, selected_id)
         except Exception:
             vault_result = {"ok": False, "facts": []}
-        if selected_id.startswith("osk:"):
+        if selected_id.startswith("osk:") or vault_result.get("sources"):
             return vault_result
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle
 
