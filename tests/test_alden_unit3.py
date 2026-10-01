@@ -259,6 +259,10 @@ class AldenAbortAndVoiceTests(unittest.TestCase):
         self.assertIsNone(frontend.custom_model)
 
     def test_custom_model_warmup_flushes_the_full_embedding_window(self):
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("NumPy is required for the real wake feature warmup")
         class FakeModel:
             def __init__(self) -> None:
                 self.inputs = []
@@ -562,6 +566,58 @@ class Qwen3TtsModelPathTests(unittest.TestCase):
 
 
 class Qwen3TtsAdapterApiTests(unittest.TestCase):
+    def test_korean_integer_pronunciation_preserves_other_meanings(self):
+        from alden_voice import _tts_spoken_text
+        for original, spoken in (("0입니다.","영입니다."),("4입니다.","사입니다."),("12입니다.","십이입니다."),("100입니다!","백입니다!"),("1234입니다.","천이백삼십사입니다.")):
+            self.assertEqual(_tts_spoken_text(original),spoken)
+        for original in ("0012입니다.","-12입니다.","1.2입니다.","2026-10-01입니다.","답은 12입니다.","https://example.com/12", "10000입니다."):
+            self.assertEqual(_tts_spoken_text(original),original)
+
+    def test_local_backend_keeps_bf16_and_ryan_without_loading_twice(self):
+        import types
+        for platform, available, expected in (("darwin", True, "mps"), ("darwin", False, "cpu"), ("linux", True, "cpu")):
+            with self.subTest(platform=platform, available=available), TemporaryDirectory() as temporary:
+                engine = mock.Mock()
+                engine.get_supported_speakers.return_value = ["aiden", "Ryan", "vivian"]
+                engine.generate_custom_voice.return_value = ([[0.0, 0.25]], 24000)
+                factory = mock.Mock(return_value=engine)
+                mps_available = mock.Mock(return_value=available)
+                clear_cache = mock.Mock()
+                set_fraction = mock.Mock()
+                torch = types.SimpleNamespace(bfloat16="bf16", float16="fp16", backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=mps_available)), mps=types.SimpleNamespace(empty_cache=clear_cache, recommended_max_memory=lambda: 128 * 1024**3, set_per_process_memory_fraction=set_fraction))
+                token = AbortController(Path(temporary)).token()
+                with (
+                    mock.patch("alden_voice.sys.platform", platform),
+                    mock.patch("alden_voice._require_voice_memory_budget") as admission,
+                    mock.patch("alden_voice._resolve_qwen3_tts_model_path", return_value="/owned/model"),
+                    mock.patch.dict(sys.modules, {"torch": torch, "qwen_tts": types.SimpleNamespace(Qwen3TTSModel=types.SimpleNamespace(from_pretrained=factory))}),
+                ):
+                    adapter = Qwen3TtsAdapter()
+                    adapter.synthesize("첫 답변", token)
+                    adapter.synthesize("다음 답변", token)
+                    factory.assert_called_once_with("/owned/model", dtype="bf16", device_map=expected, local_files_only=True)
+                    self.assertEqual(admission.call_count, 2)
+                    self.assertEqual(engine.generate_custom_voice.call_count, 2)
+                    args = engine.generate_custom_voice.call_args.kwargs
+                    self.assertEqual((args["speaker"], args["language"]), ("ryan", "Korean"))
+                    self.assertIn("절제", args["instruct"])
+                    self.assertEqual(mps_available.call_count, int(platform == "darwin"))
+                    self.assertEqual(clear_cache.call_count, 2 if expected == "mps" else 0)
+                    if expected == "mps":
+                        set_fraction.assert_called_once_with(10 / 128)
+                    else:
+                        set_fraction.assert_not_called()
+
+    def test_missing_ryan_does_not_silently_change_product_voice(self):
+        engine = mock.Mock()
+        engine.get_supported_speakers.return_value = ["vivian"]
+        adapter = Qwen3TtsAdapter()
+        adapter._engine = engine
+        with TemporaryDirectory() as temporary, mock.patch("alden_voice._require_voice_memory_budget"):
+            with self.assertRaisesRegex(RuntimeError, "qwen3_tts_speaker_unavailable"):
+                adapter.synthesize("안녕하세요", AbortController(Path(temporary)).token())
+        engine.generate_custom_voice.assert_not_called()
+
     def test_speak_writes_env_wav_without_playback(self):
         import types
         from unittest import mock
@@ -599,7 +655,7 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
                     sys.modules,
                     {
                         "qwen_tts": fake_mod,
-                        "torch": types.SimpleNamespace(bfloat16="bf16", float16="fp16"),
+                        "torch": types.SimpleNamespace(bfloat16="bf16", float16="fp16", backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False))),
                         "sounddevice": fake_sounddevice,
                     },
                 ),
@@ -642,7 +698,7 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
                 "alden_voice._resolve_qwen3_tts_model_path",
                 return_value=QWEN3_TTS_MODEL_ID,
             ),
-            mock.patch.dict(sys.modules, {"qwen_tts": fake_mod, "torch": types.SimpleNamespace(bfloat16="bf16", float16="fp16"), "sounddevice": types.SimpleNamespace(play=lambda *a, **k: None, get_stream=lambda: types.SimpleNamespace(active=False), stop=lambda: None)}),
+            mock.patch.dict(sys.modules, {"qwen_tts": fake_mod, "torch": types.SimpleNamespace(bfloat16="bf16", float16="fp16", backends=types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False))), "sounddevice": types.SimpleNamespace(play=lambda *a, **k: None, get_stream=lambda: types.SimpleNamespace(active=False), stop=lambda: None)}),
         ):
             adapter.speak("안녕하세요", token)  # type: ignore[arg-type]
         self.assertEqual(adapter._engine.loaded_model, QWEN3_TTS_MODEL_ID)
@@ -664,14 +720,48 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
 
 
 class VoiceMemoryBudgetTests(unittest.TestCase):
+    def test_resident_models_require_workspace_and_keep_pressure_reserve(self):
+        for stage, minimum in (("stt", 10), ("tts", 14)):
+            for resident in (False, True):
+                budget = VoiceMemoryBudget(minimum * 1024**3, 0, 2 * 1024**3, 1)
+                with self.subTest(stage=stage, resident=resident), mock.patch("alden_voice._read_voice_memory_budget", return_value=budget):
+                    if resident:
+                        self.assertEqual(_require_voice_memory_budget(stage, model_resident=True), budget)
+                    else:
+                        with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_low"):
+                            _require_voice_memory_budget(stage)
+            for pressure, delta in ((2, 0), (1, -1)):
+                budget = VoiceMemoryBudget(minimum * 1024**3 + delta, 0, 2 * 1024**3, pressure)
+                with self.subTest(stage=stage, pressure=pressure, delta=delta), mock.patch("alden_voice._read_voice_memory_budget", return_value=budget):
+                    with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_low"):
+                        _require_voice_memory_budget(stage, model_resident=True)
+
+    def test_whisper_residency_is_the_exact_current_sdk_cache(self):
+        import types
+        class Samples:
+            def astype(self, _dtype): return self
+            def __truediv__(self, _scale): return self
+        numpy = types.SimpleNamespace(frombuffer=lambda *a, **k: Samples(), int16="i16", float32="f32")
+        core = types.SimpleNamespace(clear_cache=mock.Mock())
+        mlx = types.ModuleType("mlx"); mlx.core = core
+        whisper = types.SimpleNamespace(transcribe=mock.Mock(return_value={"text":"확인"}))
+        for holder, expected in ((None, False), (types.SimpleNamespace(model=None, model_path="same"), False), (types.SimpleNamespace(model=object(), model_path="other"), False), (types.SimpleNamespace(model=object(), model_path="same"), True)):
+            with self.subTest(holder=holder), TemporaryDirectory() as temporary:
+                with (
+                    mock.patch.dict(sys.modules, {"numpy":numpy,"mlx":mlx,"mlx.core":core,"mlx_whisper":whisper,"mlx_whisper.transcribe":types.SimpleNamespace(ModelHolder=holder)}),
+                    mock.patch("alden_voice._require_voice_memory_budget") as admission,
+                ):
+                    self.assertEqual(MlxWhisperAdapter("same").transcribe(b"\0\0"*320,16000,AbortController(Path(temporary)).token()), "확인")
+                    admission.assert_called_once_with("stt", model_resident=expected)
+
     def test_tts_requires_ten_gib_reclaimable_and_two_gib_swap(self):
         from unittest import mock
 
-        enough = VoiceMemoryBudget(10 * 1024**3, 2 * 1024**3)
+        enough = VoiceMemoryBudget(10 * 1024**3, 2 * 1024**3, 2 * 1024**3, 1)
         with mock.patch("alden_voice._read_voice_memory_budget", return_value=enough):
             self.assertEqual(_require_voice_memory_budget("tts"), enough)
 
-        low_swap = VoiceMemoryBudget(32 * 1024**3, 2 * 1024**3 - 1)
+        low_swap = VoiceMemoryBudget(22 * 1024**3 - 1, 2 * 1024**3 - 1, 4 * 1024**3, 1)
         with mock.patch("alden_voice._read_voice_memory_budget", return_value=low_swap):
             with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_low"):
                 _require_voice_memory_budget("tts")
@@ -679,7 +769,7 @@ class VoiceMemoryBudgetTests(unittest.TestCase):
     def test_whisper_refuses_when_reclaimable_ram_is_below_eight_gib(self):
         from unittest import mock
 
-        low_ram = VoiceMemoryBudget(8 * 1024**3 - 1, 4 * 1024**3)
+        low_ram = VoiceMemoryBudget(8 * 1024**3 - 1, 4 * 1024**3, 2 * 1024**3, 1)
         with mock.patch("alden_voice._read_voice_memory_budget", return_value=low_ram):
             with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_low"):
                 _require_voice_memory_budget("stt")
@@ -698,6 +788,90 @@ class VoiceMemoryBudgetTests(unittest.TestCase):
                     VoiceMemoryBudgetError, "voice_memory_budget_unavailable"
                 ):
                     adapter.transcribe(b"\0\0" * 320, 16_000, token)
+
+    def test_normal_pressure_reclaimable_reserve_accepts_unallocated_swap_at_boundary(self):
+        for stage, reclaimable_gib in (("stt", 18), ("tts", 22)):
+            for delta, allowed in ((0, True), (-1, False)):
+                with self.subTest(stage=stage, delta=delta):
+                    budget = VoiceMemoryBudget(reclaimable_gib * 1024**3 + delta, 0, 2 * 1024**3, 1)
+                    with mock.patch("alden_voice._read_voice_memory_budget", return_value=budget):
+                        if allowed:
+                            self.assertEqual(_require_voice_memory_budget(stage), budget)
+                        else:
+                            with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_low"):
+                                _require_voice_memory_budget(stage)
+
+    def test_high_pressure_never_admits_even_with_plentiful_ram_and_swap(self):
+        for pressure in (2, 4):
+            budget = VoiceMemoryBudget(64 * 1024**3, 8 * 1024**3, 40 * 1024**3, pressure)
+            with mock.patch("alden_voice._read_voice_memory_budget", return_value=budget):
+                with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_low"):
+                    _require_voice_memory_budget("tts")
+
+    def test_incomplete_or_invalid_sensor_metrics_fail_closed(self):
+        for budget in (
+            VoiceMemoryBudget(64 * 1024**3, 8 * 1024**3),
+            VoiceMemoryBudget(64 * 1024**3, 8 * 1024**3, None, 1),
+            VoiceMemoryBudget(64 * 1024**3, 8 * 1024**3, 40 * 1024**3, 3),
+            VoiceMemoryBudget(64 * 1024**3, 8 * 1024**3, 40 * 1024**3, True),
+            VoiceMemoryBudget(64 * 1024**3, -1, 40 * 1024**3, 1),
+            VoiceMemoryBudget(64 * 1024**3, 8 * 1024**3, 65 * 1024**3, 1),
+        ):
+            with self.subTest(budget=budget), mock.patch("alden_voice._read_voice_memory_budget", return_value=budget):
+                with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_unavailable"):
+                    _require_voice_memory_budget("stt")
+
+    def test_cli_parser_keeps_inactive_pages_out_of_physical_reserve(self):
+        from alden_voice import _parse_voice_memory_budget
+
+        vm = "page size of 16384 bytes\nPages free: 100.\nPages inactive: 500.\nPages speculative: 20.\n"
+        budget = _parse_voice_memory_budget(vm, "free = 0.00M (encrypted)", "1\n")
+        self.assertEqual(budget.free_physical_bytes, 120 * 16384)
+        self.assertEqual(budget.reclaimable_bytes, 620 * 16384)
+        self.assertEqual(budget.swap_free_bytes, 0)
+        self.assertEqual(budget.pressure_level, 1)
+
+    def test_cli_parser_rejects_incomplete_or_malformed_reports(self):
+        from alden_voice import _parse_voice_memory_budget
+
+        vm = "page size of 16384 bytes\nPages free: 100.\nPages inactive: 500.\nPages speculative: 20.\n"
+        for values in (
+            (vm, "free = NaNM", "1"), (vm, "free = -1M", "1"),
+            (vm, "free = 20M", ""), (vm, "free = 20M", "0"),
+            (vm, "free = 20M", "3"), (vm, "free = 20M", "1 2"),
+            (vm.replace("Pages speculative: 20.", ""), "free = 20M", "1"),
+            (vm.replace("16384", "0"), "free = 20M", "1"),
+            (vm.replace("16384", "16385"), "free = 20M", "1"),
+        ):
+            with self.subTest(values=values), self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_unavailable"):
+                _parse_voice_memory_budget(*values)
+
+    def test_sensor_failure_or_timeout_does_not_admit(self):
+        import subprocess
+        from alden_voice import _read_voice_memory_budget
+
+        vm = "page size of 16384 bytes\nPages free: 100.\nPages inactive: 500.\nPages speculative: 20.\n"
+        success = lambda text: subprocess.CompletedProcess([], 0, stdout=text)
+        for failure in (subprocess.CompletedProcess([], 1, stdout="1"), subprocess.TimeoutExpired("sysctl", 2)):
+            with mock.patch("alden_voice.sys.platform", "darwin"), mock.patch("alden_voice.subprocess.run", side_effect=[success(vm), success("free = 20M"), failure]):
+                with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_unavailable"):
+                    _read_voice_memory_budget()
+
+    def test_cached_tts_rechecks_pressure_before_next_generation(self):
+        engine = mock.Mock()
+        engine.get_supported_speakers.return_value = ["ryan"]
+        engine.generate_custom_voice.return_value = ([[0.0, 0.25]], 24000)
+        adapter = Qwen3TtsAdapter()
+        adapter._engine = engine
+        good = VoiceMemoryBudget(64 * 1024**3, 0, 40 * 1024**3, 1)
+        warning = VoiceMemoryBudget(64 * 1024**3, 8 * 1024**3, 40 * 1024**3, 2)
+        with TemporaryDirectory() as temporary:
+            token = AbortController(Path(temporary)).token()
+            with mock.patch("alden_voice._read_voice_memory_budget", side_effect=[good, warning]):
+                self.assertEqual(adapter.synthesize("첫 답변", token), ([0.0, 0.25], 24000))
+                with self.assertRaisesRegex(VoiceMemoryBudgetError, "voice_memory_budget_low"):
+                    adapter.synthesize("다음 답변", token)
+        self.assertEqual(engine.generate_custom_voice.call_count, 1)
 
 
 class VoiceMemoryBudgetPipelineTests(unittest.TestCase):

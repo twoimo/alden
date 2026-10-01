@@ -1,3 +1,5 @@
+2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 실제 Whisper와 Qwen1.7B BF16 CPU/MPS, 두 턴의 STT→27B→TTS파일을 검증했다. 사람 음성·wake·재생·숫자 발음 품질은 미완료다.
+
 2026-10-01 설정 개편: [넓은 설정과 OSK 지식 관리](docs/architecture/alden-settings-osk-20261001.md). 기본 설정은 전체 지식 그래프이며 Style Gallery의 린넨·세이지 디자인을 적용한다. 실제 OSK v4.1.2가 개인 Markdown 지식을 증분 관리한다. 올든 0.1.7 설치·33파일 일치·상시 앱 자동 갱신과 설치된 지식 50개 readback을 확인했다. 상시 창의 직접 조작은 도구 시간 초과로 미검증이며 공개 공증/production은 미완료다.
 
 <div align="center">

@@ -161,6 +161,7 @@ jobs:
           tests.test_alden_model_evaluation
           tests.test_alden_dpo_training
           tests.test_alden_worker_abort
+          tests.test_alden_unit3
           tests.test_alden_unit4
           tests.test_alden_osk
           tests.test_alden_desktop_launchers
@@ -211,7 +212,6 @@ jobs:
           tests.test_alden_voice_runtime
           tests.test_alden_voice_turns
           tests.test_alden_voice_bargein
-          tests.test_alden_unit3.LocalMlxLlmRequestTests
           tests.test_alden_wake_eval
           tests.test_alden_wake_evidence
           tests.test_alden_wake_disjoint

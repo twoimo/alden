@@ -57,6 +57,8 @@ VOICE_STATUS_SCHEMA_VERSION = 1
 WHISPER_MODEL_ID = "mlx-community/whisper-large-v3-turbo"
 QWEN3_TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 QWEN3_TTS_PRECISION = "bf16"
+QWEN3_TTS_SPEAKER = "ryan"
+QWEN3_TTS_INSTRUCTION = "차분하고 절제된 집사 말투로, 낮고 또렷한 남성 음성으로 한국어를 읽으세요. 감정을 과장하지 마세요."
 LOCAL_LLM_BASE_URL = "http://127.0.0.1:11234/v1"
 LOCAL_LLM_MAX_RESPONSE_BYTES = 64 * 1024
 LOCAL_LLM_ALLOWED_MODEL_IDS = frozenset((QWEN38_27B_MODEL_ID, FLASH_NEXT_MODEL_ID))
@@ -71,11 +73,19 @@ VOICE_MIC_FRAME_SAMPLES = 320
 VOICE_BARGE_IN_SPEECH_FRAMES = 3
 # The last bounded host run began with 1.65 GiB of swap headroom and crossed
 # the 512 MiB emergency stop while a voice model stage was still running.
-# Keep 2 GiB free before starting either large local voice model, plus enough
-# reclaimable RAM for the model and its temporary inference buffers.
+# Keep that swap reserve when physical headroom is limited. macOS creates and
+# reclaims swap files dynamically, so unused allocated slots are not total
+# allocatable capacity. A normal-pressure host may instead admit a stage with
+# reclaimable pages covering twice its stage RAM budget and 2 GiB reserve.
+# macOS keeps disposable cache on inactive pages; low free-page counts alone
+# do not establish pressure. The 8/10 GiB budgets exceed the short-clip MLX peak (2.38
+# GiB) and TTS MPS driver allocation (4.85 GiB); neither observation is a cap.
 VOICE_MIN_SWAP_FREE_BYTES = 2 * 1024**3
 VOICE_STT_MIN_RECLAIMABLE_BYTES = 8 * 1024**3
 VOICE_TTS_MIN_RECLAIMABLE_BYTES = 10 * 1024**3
+VOICE_STT_WARM_WORKSPACE_BYTES = 4 * 1024**3
+VOICE_TTS_WARM_WORKSPACE_BYTES = 6 * 1024**3
+VOICE_NORMAL_MEMORY_PRESSURE = 1  # userspace NOTE_MEMORYSTATUS_PRESSURE_NORMAL
 VOICE_PERSONA_PROMPT = (
     "당신은 건조하고 절제된 영국식 집사 말투의 Alden다. "
     "항상 한국어로 짧고 정확하게 답한다. 과장된 감탄이나 아첨은 하지 않는다. "
@@ -184,6 +194,8 @@ class _CancellableLocalResponse:
 class VoiceMemoryBudget:
     reclaimable_bytes: int
     swap_free_bytes: int
+    free_physical_bytes: int | None = None
+    pressure_level: int | None = None
 
 
 class VoiceMemoryBudgetError(RuntimeError):
@@ -192,8 +204,32 @@ class VoiceMemoryBudgetError(RuntimeError):
         self.code = code
 
 
+def _parse_voice_memory_budget(vm: str, swap: str, pressure: str) -> VoiceMemoryBudget:
+    page_match = re.search(r"page size of\s+(\d+) bytes", vm)
+    swap_match = re.search(r"free\s*=\s*([0-9]+(?:\.[0-9]+)?)M", swap)
+    if page_match is None or swap_match is None or re.fullmatch(r"[124]", pressure.strip()) is None:
+        raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
+    page_size = int(page_match.group(1))
+    if not 4096 <= page_size <= 65536 or page_size & (page_size - 1):
+        raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
+    counts = {}
+    for label in ("Pages free", "Pages inactive", "Pages speculative"):
+        match = re.search(rf"^{re.escape(label)}:\s+(\d+)\.", vm, re.MULTILINE)
+        if match is None:
+            raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
+        counts[label] = int(match.group(1))
+    # vm_stat subtracts speculative from its displayed free count; Mach's
+    # raw free_count does not. This parser accepts the CLI format only.
+    physical = (counts["Pages free"] + counts["Pages speculative"]) * page_size
+    reclaimable = physical + counts["Pages inactive"] * page_size
+    swap_free = int(float(swap_match.group(1)) * 1024**2)
+    if reclaimable <= 0:
+        raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
+    return VoiceMemoryBudget(reclaimable, swap_free, physical, int(pressure.strip()))
+
+
 def _read_voice_memory_budget() -> VoiceMemoryBudget:
-    """Read reclaimable macOS pages and swap headroom without network access."""
+    """Read fresh macOS pages, allocated swap slots and kernel pressure."""
 
     if sys.platform != "darwin":
         raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
@@ -208,30 +244,21 @@ def _read_voice_memory_budget() -> VoiceMemoryBudget:
             timeout=2.0,
             check=False,
         )
+        pressure = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+            check=False,
+        )
     except (OSError, subprocess.SubprocessError) as exc:
         raise VoiceMemoryBudgetError("voice_memory_budget_unavailable") from exc
-    if vm.returncode != 0 or swap.returncode != 0:
+    if vm.returncode != 0 or swap.returncode != 0 or pressure.returncode != 0:
         raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
-
-    page_match = re.search(r"page size of\s+(\d+) bytes", vm.stdout)
-    swap_match = re.search(r"free\s*=\s*([0-9]+(?:\.[0-9]+)?)M", swap.stdout)
-    if page_match is None or swap_match is None:
-        raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
-    page_size = int(page_match.group(1))
-    pages = 0
-    for label in ("Pages free", "Pages inactive", "Pages speculative"):
-        match = re.search(rf"^{re.escape(label)}:\s+(\d+)\.", vm.stdout, re.MULTILINE)
-        if match is None:
-            raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
-        pages += int(match.group(1))
-    reclaimable = pages * page_size
-    swap_free = int(float(swap_match.group(1)) * 1024**2)
-    if reclaimable <= 0 or swap_free < 0:
-        raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
-    return VoiceMemoryBudget(reclaimable, swap_free)
+    return _parse_voice_memory_budget(vm.stdout, swap.stdout, pressure.stdout)
 
 
-def _require_voice_memory_budget(stage: str) -> VoiceMemoryBudget:
+def _require_voice_memory_budget(stage: str, *, model_resident: bool = False) -> VoiceMemoryBudget:
     """Fail closed before STT/TTS loads when the host lacks measured headroom."""
 
     minimum_reclaimable = {
@@ -240,10 +267,27 @@ def _require_voice_memory_budget(stage: str) -> VoiceMemoryBudget:
     }.get(stage)
     if minimum_reclaimable is None:
         raise ValueError("voice_memory_stage_invalid")
+    if model_resident:
+        # The weights already consume host RAM; require additional workspace,
+        # not a second full allocation. Pressure and swap/physical reserve stay.
+        minimum_reclaimable = {"stt": VOICE_STT_WARM_WORKSPACE_BYTES, "tts": VOICE_TTS_WARM_WORKSPACE_BYTES}[stage]
     budget = _read_voice_memory_budget()
+    metrics = (budget.reclaimable_bytes, budget.swap_free_bytes, budget.free_physical_bytes)
     if (
-        budget.reclaimable_bytes < minimum_reclaimable
-        or budget.swap_free_bytes < VOICE_MIN_SWAP_FREE_BYTES
+        any(type(value) is not int or value < 0 for value in metrics)
+        or type(budget.pressure_level) is not int
+        or budget.pressure_level not in (1, 2, 4)
+        or budget.free_physical_bytes > budget.reclaimable_bytes
+    ):
+        raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
+    reclaimable_reserve = 2 * minimum_reclaimable + VOICE_MIN_SWAP_FREE_BYTES
+    if (
+        budget.pressure_level != VOICE_NORMAL_MEMORY_PRESSURE
+        or budget.reclaimable_bytes < minimum_reclaimable
+        or (
+            budget.swap_free_bytes < VOICE_MIN_SWAP_FREE_BYTES
+            and budget.reclaimable_bytes < reclaimable_reserve
+        )
     ):
         raise VoiceMemoryBudgetError("voice_memory_budget_low")
     return budget
@@ -1550,7 +1594,12 @@ class MlxWhisperAdapter:
 
     def transcribe(self, pcm16: bytes, sample_rate: int, token: AbortToken) -> str:
         token.raise_if_cancelled()
-        _require_voice_memory_budget("stt")
+        model = os.environ.get("OPENKAKAO_WHISPER_MODEL_PATH", self.model).strip() or self.model
+        # mlx-whisper 0.4.3 owns a one-model cache. Unknown/new SDK state stays
+        # cold; do not infer residency merely from an earlier successful turn.
+        holder = getattr(sys.modules.get("mlx_whisper.transcribe"), "ModelHolder", None)
+        resident = holder is not None and getattr(holder, "model", None) is not None and getattr(holder, "model_path", None) == model
+        _require_voice_memory_budget("stt", model_resident=resident)
         _force_local_model_cache()
         import numpy as np
         import mlx_whisper
@@ -1558,30 +1607,58 @@ class MlxWhisperAdapter:
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
         if sample_rate != 16_000:
             raise RuntimeError("voice_sample_rate_unsupported")
-        model = os.environ.get("OPENKAKAO_WHISPER_MODEL_PATH", self.model).strip() or self.model
         result: dict[str, Any] = mlx_whisper.transcribe(
             samples,
             path_or_hf_repo=model,
             language="ko",
         )
+        import mlx.core as mx
+        mx.clear_cache()  # Keep model weights, release temporary decode buffers.
         token.raise_if_cancelled()
         return str(result.get("text") or "")
+
+
+def _tts_spoken_text(text: str) -> str:
+    """Expand a standalone integer answer for Korean pronunciation only.
+
+    Leave identifiers, dates, decimals, negatives and surrounding prose intact.
+    The conversation and visible answer always retain the original text.
+    """
+    match = re.fullmatch(r"(0|[1-9][0-9]{0,3})입니다([.!]?)", text.strip())
+    if match is None:
+        return text
+    value = int(match[1])
+    parts = []
+    for place, unit in ((1000, "천"), (100, "백"), (10, "십"), (1, "")):
+        digit, value = divmod(value, place)
+        if digit:
+            parts.append(("" if digit == 1 and unit else "일이삼사오육칠팔구"[digit - 1]) + unit)
+    return ("".join(parts) or "영") + "입니다" + match[2]
 
 
 class Qwen3TtsAdapter:
     def __init__(self, model: str = QWEN3_TTS_MODEL_ID, *, audio_backend: MacVoiceAudio | None = None):
         self.model = model
         self._engine: Any | None = None
+        self._device = "cpu"
         self.audio_backend = audio_backend
 
     def _load(self) -> Any:
+        # Cached engines still allocate inference buffers on the next utterance.
+        _require_voice_memory_budget("tts", model_resident=self._engine is not None)
         if self._engine is None:
-            _require_voice_memory_budget("tts")
             _force_local_model_cache()
             from qwen_tts import Qwen3TTSModel
             import torch
 
             dtype = torch.bfloat16 if QWEN3_TTS_PRECISION == "bf16" else torch.float16
+            self._device = "mps" if sys.platform == "darwin" and torch.backends.mps.is_available() else "cpu"
+            if self._device == "mps":
+                recommended = torch.mps.recommended_max_memory()
+                if type(recommended) is not int or recommended <= 0:
+                    raise VoiceMemoryBudgetError("voice_memory_budget_unavailable")
+                # This affects only this dedicated voice process, never MLX Core.
+                torch.mps.set_per_process_memory_fraction(min(1.0, VOICE_TTS_MIN_RECLAIMABLE_BYTES / recommended))
             model = _resolve_qwen3_tts_model_path(
                 self.model,
                 environment=os.environ,
@@ -1590,6 +1667,7 @@ class Qwen3TtsAdapter:
             self._engine = Qwen3TTSModel.from_pretrained(
                 model,
                 dtype=dtype,
+                device_map=self._device,
                 local_files_only=True,
             )
         return self._engine
@@ -1598,12 +1676,19 @@ class Qwen3TtsAdapter:
         token.raise_if_cancelled()
         engine = self._load()
         speakers = engine.get_supported_speakers() or []
-        speaker = speakers[0] if speakers else "ryan"
-        wavs, sample_rate = engine.generate_custom_voice(
-            text=text,
-            speaker=speaker,
-            language="Korean",
-        )
+        if QWEN3_TTS_SPEAKER not in {str(speaker).casefold() for speaker in speakers}:
+            raise RuntimeError("qwen3_tts_speaker_unavailable")
+        try:
+            wavs, sample_rate = engine.generate_custom_voice(
+                text=_tts_spoken_text(text),
+                speaker=QWEN3_TTS_SPEAKER,
+                language="Korean",
+                instruct=QWEN3_TTS_INSTRUCTION,
+            )
+        finally:
+            if self._device == "mps":
+                import torch
+                torch.mps.empty_cache()  # The SDK returns CPU audio, not a GPU view.
         audio = wavs[0] if isinstance(wavs, list) else wavs
         token.raise_if_cancelled()
         return audio, int(sample_rate)
