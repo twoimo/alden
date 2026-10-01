@@ -38,6 +38,18 @@ Rust 90/90, UI 194/194, Clippy all-targets `-D warnings`, TypeScript/Vite 및 �
 
 기존 [검증된 Archify 감사 흐름](alden-native-render-20261001.html)은 당시의 숨김·복원/캡처 경로를 보존한 자료이며 새 NSWorkspace 구독을 포함하지 않는다. 새 도식은 가독성 검사 1건이 남아 전달하지 않았다. [Archify delivery contract](https://github.com/tt-a1i/archify)의 로컬 규칙인 “never exceed a maximum of two focused correction rounds”에 따라 2회 수정 후 중단했다. 후보와 진단은 private 작업 폴더에 보존했다. 기존 Archify의 한국어 본문과 영어 고정 Viewer UI를 구분한다.
 
+## 전달 상태
+
+전달: [Alden 0.1.6 화면 가시성 후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-6730d9c69d5ac88931de)에 7개 파일을 올리고 다시 다운로드하여 모두 바이트 일치를 확인했다. 앱 ZIP 내부30파일·소스/증거 overlay23파일도 대조했다. 소스 `8791ea1`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36793165993)는 4/4 성공이다. 초안 target/overlay는 증거 checkout `b7bdda9`이며 공개 공증/프로덕션 완료를 뜻하지 않는다. [릴리즈 대조 기록](alden-workspace-release-20261001.json).
+
+| 항목 | 단계 | 범위 |
+| --- | --- | --- |
+| 네이티브 구독·가시성 fence | 구현 | 코드와 집중 회귀 통과 |
+| 설치·별도 바이너리 감사 | 실제 실행 검증 | 프로세스 내부 합성 알림과 일반 hide/resume |
+| Git push·초안 파일 전달 | 전달 완료 | 공개 서명 릴리즈/프로덕션과 구분 |
+| 물리 잠자기·전환·잠금 | 미착수 | 이 감사에서 실제 OS 전환을 실행하지 않음 |
+| 새 Archify 도식 | 구현 | 가독성 검사 실패로 미전달 |
+
 ## 증거와 남은 범위
 
 - [원본 감사 JSON](alden-workspace-20261001.json), [측정 요약](alden-workspace-summary-20261001.json), [설치 대조](alden-workspace-install-20261001.json), [검사](alden-workspace-tests-20261001.json), [CI](alden-workspace-ci-20261001.json), [독립 검토](alden-workspace-review-20261001.json).

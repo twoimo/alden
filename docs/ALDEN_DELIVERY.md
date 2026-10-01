@@ -1,5 +1,8 @@
 # Alden 전달 진행 기록
 
+전달: [Alden 0.1.6 화면 가시성 후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-6730d9c69d5ac88931de)에 7개 파일을 올리고 다시 다운로드하여 모두 바이트 일치를 확인했다. 앱 ZIP 내부30파일·소스/증거 overlay23파일도 대조했다. 소스 `8791ea1`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36793165993)는 4/4 성공이다. 초안 target/overlay는 증거 checkout `b7bdda9`이며 공개 공증/프로덕션 완료를 뜻하지 않는다.
+
+
 2026-10-01 추가: [화면 잠자기·세션 전환 처리](architecture/alden-workspace-20261001.md)를 소스 `8791ea1`의 Alden 0.1.6 설치본에서 검증했다. 별도 설치 바이너리의 두 **프로세스 내부 합성 알림** 모두 두 창 숨김·350ms 추가 렌더0, 일반 숨김·복원10회도 렌더0이다. 네이티브 숨김 뒤 DOM 재개 차단과 종료 구독 정리를 추가했으며 Rust90/UI194/Clippy/build 통과·설치30/30·리소스27/27 일치를 확인했다. 물리 잠자기·세션 전환·잠금과 설정 렌더러는 미검증이며 전체 목표/공개 릴리즈/프로덕션은 미완료다. 새 Archify 도식은 가독성 미통과로 미전달이며 기존 검증 도식을 보존한다. Git·CI·릴리즈의 최종 상태는 후속 readback으로 대조한다.
 
 
