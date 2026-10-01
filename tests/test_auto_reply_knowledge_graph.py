@@ -83,6 +83,40 @@ def make_state_root(tmp: str) -> Path:
     return root
 
 
+class PersistedReadOnlyViewTests(unittest.TestCase):
+    def test_read_only_view_never_seeds_migrates_reindexes_or_embeds(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / KG.KNOWLEDGE_GRAPH_DB_NAME
+            conn = KG._connect_kg(path)
+            KG.ensure_seeded(conn)
+            KG.write_meta(conn, "last_indexed_at", "1")
+            conn.commit()
+            conn.close()
+            before = hashlib.sha256(path.read_bytes()).hexdigest()
+            with mock.patch.object(KG, "_connect_kg", side_effect=AssertionError("no writable connector")), \
+                 mock.patch.object(KG, "ensure_seeded", side_effect=AssertionError("no seed")), \
+                 mock.patch.object(KG, "_start_background_reindex", side_effect=AssertionError("no process")), \
+                 mock.patch.object(KG, "_reindex_all", side_effect=AssertionError("no indexing")), \
+                 mock.patch.object(KG, "_local_dense_embeddings", side_effect=AssertionError("no inference")):
+                result = KG.collect_knowledge_graph(root / "context.sqlite3", state_root=root,
+                    read_only=True, force_reindex=True, wait_for_reindex=True)
+            self.assertTrue(result["ok"])
+            self.assertGreater(result["node_count"], 0)
+            self.assertTrue(result["stale"])
+            self.assertIsNone(result["reindex"])
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), before)
+            self.assertFalse((root / "context.sqlite3").exists())
+
+    def test_missing_read_only_store_does_not_create_files_or_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "missing"
+            result = KG.collect_knowledge_graph(root / "context.sqlite3", state_root=root, read_only=True)
+            self.assertFalse(result["ok"])
+            self.assertFalse(root.exists())
+
+
 class GraphShapeTests(unittest.TestCase):
     def test_graph_returns_nodes_and_edges(self):
         with tempfile.TemporaryDirectory() as tmp:

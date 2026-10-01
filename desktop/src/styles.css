@@ -241,7 +241,7 @@ body.settings-view { min-width: 0; min-height: 700px; overflow-y: auto; line-hei
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-#knowledge-expand-hop {
+.knowledge-hologram-toolbar button {
   pointer-events: auto;
   min-width: 64px;
   border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
@@ -252,9 +252,9 @@ body.settings-view { min-width: 0; min-height: 700px; overflow-y: auto; line-hei
   font-size: 10px;
   font-weight: 650;
 }
-#knowledge-expand-hop:disabled { opacity: 0.42; }
-#knowledge-expand-hop:not(:disabled):hover,
-#knowledge-expand-hop:not(:disabled):focus-visible {
+.knowledge-hologram-toolbar button:disabled { opacity: 0.42; }
+.knowledge-hologram-toolbar button:not(:disabled):hover,
+.knowledge-hologram-toolbar button:not(:disabled):focus-visible {
   background: var(--selection);
   outline: none;
 }

@@ -47,6 +47,8 @@ export const SETTINGS_IDS = Object.freeze([
   "knowledge-graph-canvas",
   "knowledge-accessible-nodes",
   "knowledge-expand-hop",
+  "knowledge-back",
+  "knowledge-overview",
   "knowledge-focus-title",
   "knowledge-relations",
   "knowledge-retrieve",
@@ -114,6 +116,8 @@ export function settingsMarkup(): string {
         <div id="knowledge-accessible-nodes" class="sr-only" role="region" aria-label="대화 검색 항목 목록"></div>
         <div class="knowledge-hologram-toolbar">
           <span>연결된 항목</span>
+          <button id="knowledge-back" type="button" disabled>이전</button>
+          <button id="knowledge-overview" type="button" disabled>전체 보기</button>
           <button id="knowledge-expand-hop" type="button" disabled>더 보기</button>
         </div>
       </div>

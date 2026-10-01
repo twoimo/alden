@@ -1,10 +1,13 @@
-//! One-shot capture of this instance's real WKWebView. No production bridge,
-//! shortcut, tray, arbitrary JavaScript, selectors, or caller-selected files.
+//! One-shot capture of owned WKWebViews. Core mode has no production bridge;
+//! settings mode admits only a fixed read-only persisted graph command.
+//! No tray, shortcut, caller-selected script, selector or output filename.
 use block2::RcBlock;
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, MainThreadMarker};
-use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage, NSWindow};
-use objc2_foundation::{NSDictionary, NSError, NSString};
+use objc2_app_kit::{
+    NSBitmapImageFileType, NSBitmapImageRep, NSFloatingWindowLevel, NSImage, NSWindow,
+};
+use objc2_foundation::{NSDictionary, NSError, NSSize, NSString};
 use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
 use serde_json::{json, Value};
 use std::ffi::{CString, OsString};
@@ -22,6 +25,11 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 
 const FLAG: &str = "--audit-own-webview";
+const SETTINGS_FLAG: &str = "--audit-own-settings";
+pub struct Request {
+    pub directory: PathBuf,
+    pub settings: bool,
+}
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const COLLECT: &str = r#"JSON.stringify((() => {
   const c = document.querySelector('canvas.alden-core');
@@ -44,18 +52,20 @@ const COLLECT: &str = r#"JSON.stringify((() => {
       pendingFrame:p.pendingFrame} : null};
 })())"#;
 
-pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<PathBuf>, String> {
+pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request>, String> {
     let args: Vec<_> = args.collect();
-    if !args
-        .iter()
-        .any(|arg| arg.to_string_lossy().starts_with(FLAG))
-    {
+    if !args.iter().any(|arg| {
+        arg.to_string_lossy().starts_with(FLAG) || arg.to_string_lossy().starts_with(SETTINGS_FLAG)
+    }) {
         return Ok(None);
     }
-    if args.len() != 2 || args[0] != FLAG {
+    if args.len() != 2 || (args[0] != FLAG && args[0] != SETTINGS_FLAG) {
         return Err("expected --audit-own-webview /absolute/private/directory".into());
     }
-    Ok(Some(PathBuf::from(&args[1])))
+    Ok(Some(Request {
+        directory: PathBuf::from(&args[1]),
+        settings: args[0] == SETTINGS_FLAG,
+    }))
 }
 
 /// Hold the actual directory inode. Each path component is opened relative to
@@ -113,6 +123,9 @@ impl Output {
             "alden-core-before.png"
                 | "alden-core-restored.png"
                 | "alden-core-retina.png"
+                | "alden-settings-default.png"
+                | "alden-settings-compact.png"
+                | "settings-layout.json"
                 | "render-audit.json"
         ) || bytes.len() > MAX_BYTES
         {
@@ -166,6 +179,14 @@ fn publish(output: &Output, name: &str, bytes: &[u8], deadline: Instant) -> Resu
 }
 
 fn collect(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    collect_script(window, COLLECT.to_string(), deadline)
+}
+
+fn collect_script(
+    window: &tauri::WebviewWindow,
+    script: String,
+    deadline: Instant,
+) -> Result<Value, String> {
     live(deadline)?;
     let (tx, rx) = mpsc::sync_channel(1);
     window
@@ -193,7 +214,7 @@ fn collect(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, St
                 let _ = tx.try_send(parsed);
             });
             webview.evaluateJavaScript_completionHandler(
-                &NSString::from_str(COLLECT),
+                &NSString::from_str(&script),
                 Some(&callback),
             );
         })
@@ -329,6 +350,306 @@ fn density_matches(state: &Value) -> bool {
     let pixels = (236.0 * dpr.min(2.0)).floor() as u64;
     state["canvas"]["width"].as_u64() == Some(pixels)
         && state["canvas"]["height"].as_u64() == Some(pixels)
+}
+
+#[tauri::command]
+async fn fetch_settings_action(
+    bridge: tauri::State<'_, super::PythonBridge>,
+    action: String,
+) -> Result<Value, String> {
+    if !matches!(
+        action.as_str(),
+        "knowledge-graph" | "knowledge-graph-status"
+    ) {
+        return Err("settings audit admits persisted graph reads only".into());
+    }
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || bridge.fetch_persisted_graph())
+        .await
+        .map_err(|_| "graph read worker failed".to_string())?
+        .map_err(|error| error.to_string())
+}
+
+const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
+  const d=window.__knowledgeRenderDiagnostics, p=window.__knowledgeRenderPause;
+  const c=document.querySelector('#knowledge-graph-canvas'), r=c?.getBoundingClientRect();
+  return {ready:!!d, width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
+    documentVisibility:document.visibilityState,documentFocused:document.hasFocus(),
+    scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
+    settingsState:document.getElementById('app')?.dataset.state,
+    renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
+    navigation:d?{focused:d.focused,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount}:null,
+    canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
+    backDisabled:document.querySelector('#knowledge-back')?.disabled,
+    overviewDisabled:document.querySelector('#knowledge-overview')?.disabled,
+    expandDisabled:document.querySelector('#knowledge-expand-hop')?.disabled,
+    clearedDetail:document.querySelector('#knowledge-relations')?.children.length===0
+      &&document.querySelector('#knowledge-focus-title')?.textContent==='항목을 선택하면 관련 정보를 보여드립니다.',
+    accessibleNodes:document.querySelectorAll('.knowledge-a11y-node').length,
+    pause:p?{state:p.state,eventAtMs:p.eventAtMs,rendersAfterEvent:p.rendersAfterEvent}:null};
+})())"#;
+
+fn graph_step(
+    window: &tauri::WebviewWindow,
+    action: &str,
+    deadline: Instant,
+) -> Result<Value, String> {
+    // Internal fixed actions only; no caller-selected script or selector.
+    let script = match action {
+        "first" => "document.querySelectorAll('.knowledge-a11y-node')[0]?.click()",
+        "second" => "document.querySelectorAll('.knowledge-a11y-node')[1]?.click()",
+        "expand" => "document.querySelector('#knowledge-expand-hop')?.click()",
+        "back" => "document.querySelector('#knowledge-back')?.click()",
+        "overview" => "document.querySelector('#knowledge-overview')?.click()",
+        "scroll" => {
+            "document.querySelector('#settings-knowledge-card')?.scrollIntoView({block:'center'})"
+        }
+        _ => return Err("unknown internal graph action".into()),
+    };
+    collect_script(window, format!("{script};{GRAPH_COLLECT}"), deadline)?;
+    std::thread::sleep(Duration::from_millis(250));
+    collect_script(window, GRAPH_COLLECT.into(), deadline)
+}
+
+fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    live(deadline)?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    let target = window.clone();
+    window
+        .with_webview(move |platform| {
+            let result = live(deadline).and_then(|_| {
+                let native = target
+                    .ns_window()
+                    .map_err(|_| "settings native window missing")?;
+                let native = unsafe { &*native.cast::<NSWindow>() };
+                let content = native
+                    .contentView()
+                    .ok_or("settings content view missing")?
+                    .frame();
+                let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
+                let bounds = webview.bounds();
+                let layout = native.contentLayoutRect();
+                Ok(
+                    json!({"contentWidth":content.size.width,"contentHeight":content.size.height,
+                "layoutWidth":layout.size.width,"layoutHeight":layout.size.height,
+                "webviewWidth":bounds.size.width,"webviewHeight":bounds.size.height}),
+                )
+            });
+            let _ = tx.try_send(result);
+        })
+        .map_err(|_| "settings size dispatch failed")?;
+    receive(rx, deadline)
+}
+
+fn audit_settings(
+    app: &tauri::AppHandle,
+    output: &Output,
+    deadline: Instant,
+) -> Result<Value, String> {
+    use super::workspace_visibility::{WorkspaceCounters, WorkspaceNote};
+    let window = app
+        .get_webview_window("settings")
+        .ok_or("settings window missing")?;
+    // Only this short-lived audit instance: keep its settings renderer
+    // unoccluded without activating the app or changing the user's key window.
+    live(deadline)?;
+    let target = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window
+        .run_on_main_thread(move || {
+            let result = live(deadline).and_then(|_| {
+                let native = target
+                    .ns_window()
+                    .map_err(|_| "settings native window missing")?;
+                live(deadline)?;
+                unsafe {
+                    (&*native.cast::<NSWindow>()).setLevel(NSFloatingWindowLevel);
+                }
+                Ok(())
+            });
+            let _ = tx.try_send(result);
+        })
+        .map_err(|_| "settings level dispatch failed")?;
+    receive(rx, deadline)?;
+    visibility(&window, true, deadline)?;
+    let initial = loop {
+        let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+        if state["ready"] == true && count(&state) >= 3 {
+            break state;
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    if initial["accessibleNodes"].as_u64().unwrap_or(0) < 2
+        || initial["navigation"]["focused"] != false
+    {
+        return Err("persisted graph has insufficient nodes or invalid overview".into());
+    }
+    graph_step(&window, "scroll", deadline)?;
+    publish(
+        output,
+        "alden-settings-default.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    let first = graph_step(&window, "first", deadline)?;
+    let expanded = graph_step(&window, "expand", deadline)?;
+    let second = graph_step(&window, "second", deadline)?;
+    let back_expanded = graph_step(&window, "back", deadline)?;
+    let back_first = graph_step(&window, "back", deadline)?;
+    let back_overview = graph_step(&window, "back", deadline)?;
+    if first["navigation"]["focusSlot"] != 0
+        || first["navigation"]["hops"] != 2
+        || expanded["navigation"]["hops"] != 3
+        || second["navigation"]["focusSlot"] != 1
+        || back_expanded["navigation"] != expanded["navigation"]
+        || back_first["navigation"] != first["navigation"]
+        || back_overview["navigation"] != initial["navigation"]
+        || back_overview["backDisabled"] != true
+        || back_overview["clearedDetail"] != true
+    {
+        return Err("native graph back navigation did not restore view and targets".into());
+    }
+    graph_step(&window, "first", deadline)?;
+    let reset = graph_step(&window, "overview", deadline)?;
+    if reset["navigation"]["focused"] != false
+        || reset["clearedDetail"] != true
+        || reset["overviewDisabled"] != true
+    {
+        return Err("native graph overview did not clear selection".into());
+    }
+    live(deadline)?;
+    let resize_window = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window
+        .run_on_main_thread(move || {
+            let result = live(deadline).and_then(|_| {
+                let native = resize_window
+                    .ns_window()
+                    .map_err(|_| "settings native window missing")?;
+                // Tao set_size requeues through GCD even on main. Mutate this
+                // owned NSWindow synchronously inside the deadline gate.
+                live(deadline)?;
+                unsafe {
+                    (&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0, 680.0));
+                }
+                Ok(())
+            });
+            let _ = tx.try_send(result);
+        })
+        .map_err(|_| "settings resize dispatch failed")?;
+    receive(rx, deadline)?;
+    let first_layout = native_settings_size(&window, deadline)?;
+    publish(
+        output,
+        "settings-layout.json",
+        &serde_json::to_vec_pretty(&first_layout).map_err(|_| "settings size JSON failed")?,
+        deadline,
+    )?;
+    let native_compact = {
+        let settled_by = deadline.min(Instant::now() + Duration::from_secs(2));
+        loop {
+            let compact = collect_script(&window, GRAPH_COLLECT.into(), settled_by)?;
+            let native = native_settings_size(&window, settled_by)?;
+            if compact["width"].as_f64() == native["layoutWidth"].as_f64()
+                && compact["height"].as_f64() == native["layoutHeight"].as_f64()
+            {
+                live(settled_by)?;
+                break native;
+            }
+            if Instant::now() >= settled_by {
+                return Err(format!(
+                    "settings viewport did not settle: {compact}; native: {native}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    visibility(&window, true, deadline)?;
+    let compact = graph_step(&window, "scroll", deadline)?;
+    if native_compact["contentWidth"].as_f64() != Some(640.0)
+        || native_compact["contentHeight"].as_f64() != Some(680.0)
+        || compact["width"].as_f64() != native_compact["layoutWidth"].as_f64()
+        || compact["height"].as_f64() != native_compact["layoutHeight"].as_f64()
+        || compact["scrollWidth"].as_u64().unwrap_or(u64::MAX) > 640
+        || compact["canvas"]["contextLost"] != false
+    {
+        return Err(format!(
+            "compact native settings overflow or context loss: {compact}; native: {native_compact}"
+        ));
+    }
+    publish(
+        output,
+        "alden-settings-compact.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    let counters = app.state::<WorkspaceCounters>();
+    let mut hidden_samples = Vec::new();
+    let mut last_hidden_count = count(&compact);
+    for note in WorkspaceNote::ALL {
+        let show_baseline = count(&collect_script(&window, GRAPH_COLLECT.into(), deadline)?);
+        visibility(&window, true, deadline)?;
+        std::thread::sleep(Duration::from_millis(250));
+        let before = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+        if before["loop"]["running"] != true
+            || before["loop"]["pendingFrame"] != true
+            || count(&before) <= show_baseline
+            || before["canvas"]["contextLost"] != false
+            || window.is_visible().ok() != Some(true)
+        {
+            return Err(format!(
+                "settings graph not running before notification: {before}"
+            ));
+        }
+        let previous = before["pause"]["eventAtMs"].as_f64().unwrap_or(-1.0);
+        let seen = counters.count(note);
+        let started = Instant::now();
+        let (tx, rx) = mpsc::sync_channel(1);
+        window
+            .run_on_main_thread(move || {
+                let result = live(deadline)
+                    .and_then(|_| super::workspace_visibility::post_process_local_audit_note(note));
+                let _ = tx.try_send(result);
+            })
+            .map_err(|_| "settings note dispatch failed")?;
+        receive(rx, deadline)?;
+        let stopped = loop {
+            let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+            if counters.count(note) > seen
+                && fresh_pause(&state, previous)
+                && window.is_visible().ok() == Some(false)
+            {
+                break state;
+            }
+            live(deadline)?;
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let latency = started.elapsed().as_secs_f64() * 1000.0;
+        std::thread::sleep(Duration::from_millis(350));
+        let hidden = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+        if count(&hidden) != count(&stopped) || hidden["pause"]["rendersAfterEvent"] != 0 {
+            return Err("settings graph rendered while hidden".into());
+        }
+        last_hidden_count = count(&hidden);
+        hidden_samples.push(json!({"signal":note.code(),"scope":"process-local synthetic notification; no physical sleep/session/lock test","postToStoppedObservationUpperBoundMs":latency,"hiddenRenderDelta":0,"sampleMs":350}));
+    }
+    visibility(&window, true, deadline)?;
+    std::thread::sleep(Duration::from_millis(250));
+    let reopened = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+    if reopened["loop"]["running"] != true
+        || reopened["loop"]["pendingFrame"] != true
+        || count(&reopened) <= last_hidden_count
+        || reopened["canvas"]["contextLost"] != false
+    {
+        return Err("settings graph did not resume".into());
+    }
+    visibility(&window, false, deadline)?;
+    Ok(
+        json!({"initial":initial,"first":first,"expanded":expanded,"second":second,"backExpanded":back_expanded,
+        "backFirst":back_first,"backOverview":back_overview,"reset":reset,"compact":compact,"nativeCompact":native_compact,"workspaceSignals":hidden_samples,"reopened":reopened,
+        "scope":"real persisted graph and renderer/navigation in owned floating audit window without key-window activation; runtime snapshot/GraphRAG focus lookup intentionally unavailable; captures private"}),
+    )
 }
 
 fn workspace_notification_audit(
@@ -529,30 +850,38 @@ fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<V
         "monitorScaleFactors":monitors.iter().map(|monitor|monitor.scale_factor()).collect::<Vec<_>>()}))
 }
 
-pub fn run(directory: PathBuf, context: tauri::Context<tauri::Wry>) {
-    let output = Output::open(&directory).unwrap_or_else(|error| {
+pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
+    let output = Output::open(&request.directory).unwrap_or_else(|error| {
         eprintln!("Alden render audit: {error}");
         std::process::exit(2);
     });
     let status = Arc::new(AtomicI32::new(1));
     let worker_status = Arc::clone(&status);
-    let app = tauri::Builder::default()
-        // Deliberately no PythonBridge or production command handler. The real
-        // packaged frontend renders idle; runtime requests are unavailable.
-        .invoke_handler(tauri::generate_handler![super::window_is_visible])
+    let settings_mode = request.settings;
+    let builder = if settings_mode {
+        tauri::Builder::default()
+            .manage(super::PythonBridge::new())
+            .invoke_handler(tauri::generate_handler![
+                super::window_is_visible,
+                fetch_settings_action
+            ])
+    } else {
+        tauri::Builder::default().invoke_handler(tauri::generate_handler![super::window_is_visible])
+    };
+    let app = builder
         .on_window_event(super::handle_window_event)
         .setup(move |app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(40);
-                let result = audit(&handle, &output, deadline);
+                let result = if settings_mode { audit_settings(&handle, &output, deadline) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
-                    "mode":"isolated-own-webview-no-production-bridge",
+                    "mode":if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-own-webview-no-production-bridge"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":"own native WKWebView; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"});
+                    "scope":if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"own native WKWebView; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();

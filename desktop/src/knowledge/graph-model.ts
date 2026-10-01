@@ -2,6 +2,7 @@ export const DEFAULT_FOCUS_HOPS = 2;
 export const MAX_FOCUS_HOPS = 3;
 export const FOCUS_NEIGHBOR_LIMIT = 10;
 export const ON_SCREEN_NODE_CAP = 24;
+export const NAVIGATION_HISTORY_LIMIT = 32;
 
 export interface KnowledgeEvidence {
   kind: "seed" | "ledger";
@@ -182,6 +183,7 @@ export function kHopNodeIds(
 export class KnowledgeDrilldown {
   private focusId: string | null = null;
   private hops = 0;
+  private readonly history: Array<{ focusId: string | null; hops: number }> = [];
 
   constructor(private readonly graph: KnowledgeGraph) {}
 
@@ -197,19 +199,42 @@ export class KnowledgeDrilldown {
 
   clickNode(nodeId: string): KnowledgeView {
     if (!this.graph.nodes.some((node) => node.id === nodeId)) return this.current();
+    this.remember(nodeId, DEFAULT_FOCUS_HOPS);
     this.focusId = nodeId;
     this.hops = DEFAULT_FOCUS_HOPS;
     return this.current();
   }
 
   expandOneHop(): KnowledgeView {
-    if (this.focusId) this.hops = Math.min(MAX_FOCUS_HOPS, Math.max(DEFAULT_FOCUS_HOPS, this.hops + 1));
+    if (this.focusId) {
+      const next = Math.min(MAX_FOCUS_HOPS, Math.max(DEFAULT_FOCUS_HOPS, this.hops + 1));
+      this.remember(this.focusId, next);
+      this.hops = next;
+    }
     return this.current();
   }
 
   reset(): KnowledgeView {
+    this.remember(null, 0);
     this.focusId = null;
     this.hops = 0;
     return this.current();
+  }
+
+  get canGoBack(): boolean { return this.history.length > 0; }
+
+  back(): KnowledgeView {
+    const previous = this.history.pop();
+    if (previous) {
+      this.focusId = previous.focusId;
+      this.hops = previous.hops;
+    }
+    return this.current();
+  }
+
+  private remember(focusId: string | null, hops: number): void {
+    if (this.focusId === focusId && this.hops === hops) return;
+    this.history.push({ focusId: this.focusId, hops: this.hops });
+    if (this.history.length > NAVIGATION_HISTORY_LIMIT) this.history.shift();
   }
 }

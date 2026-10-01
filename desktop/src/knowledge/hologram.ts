@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { AnimationLoop } from "../core/animation-loop";
+import type { AnimationLoopDiagnostics } from "../core/animation-loop";
 import {
   KnowledgeDrilldown,
   type KnowledgeGraph,
@@ -8,7 +9,7 @@ import {
 } from "./graph-model";
 
 export interface KnowledgeFocusEvent {
-  node: KnowledgeNode;
+  node: KnowledgeNode | null;
   view: KnowledgeView;
 }
 
@@ -53,11 +54,13 @@ export class KnowledgeHologram {
   private readonly lookAt = new THREE.Vector3();
   private readonly resizeObserver: ResizeObserver | null;
   private view: KnowledgeView;
+  private disposed = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly graph: KnowledgeGraph,
     private readonly onFocus: FocusHandler,
+    private readonly onDispose: () => void = () => undefined,
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "low-power" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -89,6 +92,7 @@ export class KnowledgeHologram {
   }
 
   start(): void {
+    if (this.disposed) return;
     this.loop.start();
   }
 
@@ -104,7 +108,15 @@ export class KnowledgeHologram {
     return this.view;
   }
 
+  get canGoBack(): boolean { return this.drilldown.canGoBack; }
+
+  diagnostics(): AnimationLoopDiagnostics { return this.loop.diagnostics(); }
+  get navigationTargets(): { camera: number[]; lookAt: number[] } {
+    return { camera: this.desiredCamera.toArray(), lookAt: this.desiredLookAt.toArray() };
+  }
+
   clickNode(nodeId: string): KnowledgeView {
+    if (this.disposed) return this.view;
     const node = this.graph.nodes.find((candidate) => candidate.id === nodeId);
     if (!node) return this.view;
     this.view = this.drilldown.clickNode(nodeId);
@@ -115,21 +127,46 @@ export class KnowledgeHologram {
   }
 
   expandOneHop(): KnowledgeView {
+    if (this.disposed) return this.view;
     this.view = this.drilldown.expandOneHop();
     this.rebuildGraph();
     if (this.view.focusId) this.focusCamera(this.view.focusId);
+    this.notifyView();
     return this.view;
   }
 
   reset(): KnowledgeView {
+    if (this.disposed) return this.view;
     this.view = this.drilldown.reset();
     this.rebuildGraph();
     this.desiredCamera.set(0, 0, 5.2);
     this.desiredLookAt.set(0, 0, 0);
+    this.notifyView();
     return this.view;
   }
 
+  back(): KnowledgeView {
+    if (this.disposed) return this.view;
+    this.view = this.drilldown.back();
+    this.rebuildGraph();
+    if (this.view.focusId) this.focusCamera(this.view.focusId);
+    else {
+      this.desiredCamera.set(0, 0, 5.2);
+      this.desiredLookAt.set(0, 0, 0);
+    }
+    this.notifyView();
+    return this.view;
+  }
+
+  private notifyView(): void {
+    const node = this.graph.nodes.find((candidate) => candidate.id === this.view.focusId) ?? null;
+    this.onFocus({ node, view: this.view });
+  }
+
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.onDispose();
     this.stop();
     this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
     this.resizeObserver?.disconnect();
@@ -226,6 +263,7 @@ export class KnowledgeHologram {
   };
 
   private resize(): void {
+    if (this.disposed) return;
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width || 640));
     const height = Math.max(1, Math.floor(rect.height || 320));
@@ -235,6 +273,7 @@ export class KnowledgeHologram {
   }
 
   private render(dt: number): void {
+    if (this.disposed) return;
     const alpha = 1 - Math.exp(-6.2 * Math.min(dt, 0.05));
     this.camera.position.lerp(this.desiredCamera, alpha);
     this.lookAt.lerp(this.desiredLookAt, alpha);

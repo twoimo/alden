@@ -416,13 +416,16 @@ function renderKnowledgeRelations(
   });
 }
 
-async function setupKnowledgeGraph(
+export async function setupKnowledgeGraph(
   payload: Record<string, unknown> | null,
   snapshot: RuntimeSnapshot,
+  loadAction: typeof fetchSettingsAction = fetchSettingsAction,
 ): Promise<KnowledgeHologram | null> {
   const graph = parseKnowledgeGraph(payload);
   const canvas = document.querySelector<HTMLCanvasElement>("#knowledge-graph-canvas");
   const expand = document.querySelector<HTMLButtonElement>("#knowledge-expand-hop");
+  const back = document.querySelector<HTMLButtonElement>("#knowledge-back");
+  const overview = document.querySelector<HTMLButtonElement>("#knowledge-overview");
   if (!canvas || !expand || graph.nodes.length === 0) {
     setText("knowledge-summary", "아직 연결된 대화가 없습니다.");
     setText("knowledge-mode", "준비 중");
@@ -437,24 +440,37 @@ async function setupKnowledgeGraph(
 
   const a11yContainer = document.querySelector<HTMLDivElement>("#knowledge-accessible-nodes");
 
-  let activeNodeId = "";
+  let selectionEpoch = 0;
+  let disposed = false;
+  const controls = new AbortController();
   const { KnowledgeHologram } = await import("./knowledge/hologram");
   const hologram = new KnowledgeHologram(canvas, graph, ({ node, view }) => {
-    activeNodeId = node.id;
+    if (disposed) return;
+    const epoch = ++selectionEpoch;
+    if (back) back.disabled = !hologram.canGoBack;
+    if (overview) overview.disabled = view.focusId === null;
+    expand.disabled = view.focusId === null || view.hops >= MAX_FOCUS_HOPS;
+    if (!node) {
+      setText("knowledge-focus-title", "항목을 선택하면 관련 정보를 보여드립니다.");
+      document.getElementById("knowledge-relations")?.replaceChildren();
+      setText("knowledge-retrieve", "항목을 선택하면 관련 대화를 찾아 보여드립니다.");
+      return;
+    }
     setText("knowledge-focus-title", node.label);
-    expand.disabled = view.hops >= MAX_FOCUS_HOPS;
     renderKnowledgeRelations(graph, node, view, snapshot);
     setText("knowledge-retrieve", "관련 대화를 찾고 있습니다…");
 
     const localRoom = view.edges.find((edge) => edge.source === node.id || edge.target === node.id)?.roomId
       || node.evidence.chatId
       || String(snapshot.rooms[0]?.chatId ?? "");
-    void fetchSettingsAction("knowledge-graph-focus", {
+    void loadAction("knowledge-graph-focus", {
       query: node.label,
       nodeId: node.id,
       chatId: localRoom,
     }).then((focus) => {
-      if (activeNodeId !== node.id) return;
+      // A → B → A and overview/back are different selections even when the
+      // node ID repeats. Earlier retrievals cannot overwrite the current one.
+      if (selectionEpoch !== epoch) return;
       if (!focus || focus.ok !== true) {
         setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
         return;
@@ -464,17 +480,20 @@ async function setupKnowledgeGraph(
       setText("knowledge-retrieve", facts.length
         ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
         : "관련 대화를 찾지 못했습니다.");
+    }).catch(() => {
+      if (selectionEpoch === epoch) setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
     });
+  }, () => {
+    disposed = true;
+    selectionEpoch += 1;
+    controls.abort();
   });
 
   expand.addEventListener("click", () => {
-    const view = hologram.expandOneHop();
-    if (!view.focusId) return;
-    const node = graph.nodes.find((candidate) => candidate.id === view.focusId);
-    if (!node) return;
-    expand.disabled = view.hops >= MAX_FOCUS_HOPS;
-    renderKnowledgeRelations(graph, node, view, snapshot);
-  });
+    hologram.expandOneHop();
+  }, { signal: controls.signal });
+  back?.addEventListener("click", () => hologram.back(), { signal: controls.signal });
+  overview?.addEventListener("click", () => hologram.reset(), { signal: controls.signal });
 
   if (a11yContainer) {
     a11yContainer.replaceChildren();
@@ -487,7 +506,7 @@ async function setupKnowledgeGraph(
       btn.setAttribute("aria-label", `${node.label} 선택`);
       btn.addEventListener("click", () => {
         hologram.clickNode(node.id);
-      });
+      }, { signal: controls.signal });
       a11yContainer.append(btn);
     });
   }
@@ -573,12 +592,21 @@ export async function bootSettings(
       setText("settings-sync-source", "대화 준비 상태를 확인하지 못했습니다.");
     }
 
-    hologram = await setupKnowledgeGraph(graphPayload, snapshot);
+    hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction);
     app.dataset.state = degraded ? "unavailable" : "ready";
     if (hologram) {
       const graph = hologram;
+      const focusSlots = new Map(parseKnowledgeGraph(graphPayload).nodes.map((node, index) => [node.id, index]));
       Object.defineProperty(window, "__knowledgeRenderCount", { configurable: true, get: () => graph.renderCount });
       const lifecycle = new RenderLifecycle(graph, () => undefined, () => undefined);
+      Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({
+        ...graph.diagnostics(), nodeCount: graph.currentView.nodes.length, edgeCount: graph.currentView.edges.length,
+        hops: graph.currentView.hops, focused: graph.currentView.focusId !== null,
+        focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? -1,
+        canGoBack: graph.canGoBack,
+        targets: graph.navigationTargets,
+      }) });
+      Object.defineProperty(window, "__knowledgeRenderPause", { configurable: true, get: () => lifecycle.lastPauseMeasurement() });
       wireRenderLifecycle(lifecycle, {
         subscribeVisibility: dependencies.subscribeVisibility,
         readVisibility: dependencies.readVisibility,

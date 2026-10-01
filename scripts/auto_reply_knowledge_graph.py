@@ -2254,6 +2254,7 @@ def collect_knowledge_graph(
     reindex_interval_seconds: int = 300,
     wait_for_reindex: bool = False,
     reindex_mode: str = "process",
+    read_only: bool = False,
 ) -> dict[str, Any]:
     """Return the whole graph as nodes and edges for a force-directed view.
 
@@ -2273,8 +2274,12 @@ def collect_knowledge_graph(
     """
     kg_path = db_path.parent / KNOWLEDGE_GRAPH_DB_NAME
     try:
-        kg_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = _connect_kg(kg_path)
+        if read_only:
+            conn = sqlite3.connect(kg_path.resolve().as_uri() + "?mode=ro", uri=True)
+            conn.execute("PRAGMA query_only = ON")
+        else:
+            kg_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = _connect_kg(kg_path)
     except (OSError, sqlite3.Error) as error:
         # A window that cannot reach its store must draw an empty graph and say
         # why, not take the menu down with it (2026-09-16).
@@ -2290,7 +2295,8 @@ def collect_knowledge_graph(
             "reason": str(error) or "knowledge_graph_unavailable",
         }
     try:
-        ensure_seeded(conn)
+        if not read_only:
+            ensure_seeded(conn)
         # 이미 색인된 데이터가 있고 최근(기본 5분)에 갱신되었다면 매번
         # 1.4GB DB 전체를 다시 훑지 않고 저장된 그래프를 즉시 반환한다.
         # 메뉴바 폴링(2초 주기)과 감사에서 프로세스가 25초 타임아웃에
@@ -2329,9 +2335,10 @@ def collect_knowledge_graph(
             "indexed_count": indexed_count,
             "indexed_at": last_updated,
             "needs_reindex": needs_reindex,
+            "stale": needs_reindex if read_only else False,
         }
 
-        if needs_reindex and state_root is not None:
+        if needs_reindex and state_root is not None and not read_only:
             # 재색인은 1.4GB 컨텍스트 DB를 훑는다. 예전에는 이 요청 안에서
             # 동기로 돌려, 캐시가 만료된 첫 조회가 25초 타임아웃에 걸려 빈
             # 그래프로 떨어졌다. 지금은 저장된 그래프를 즉시 돌려주고,
@@ -4533,4 +4540,10 @@ def _query_knowledge_ranked(
 if __name__ == "__main__":
     import sys as _sys
 
+    if len(_sys.argv) == 3 and _sys.argv[1] == "--read-persisted-view":
+        root = Path(_sys.argv[2])
+        if not root.is_absolute():
+            raise SystemExit("absolute state root required")
+        print(json.dumps(collect_knowledge_graph(root / "context.sqlite3", state_root=root, read_only=True), ensure_ascii=False))
+        raise SystemExit(0)
     raise SystemExit(_reindex_once_entry(_sys.argv[1:]))

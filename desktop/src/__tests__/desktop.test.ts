@@ -1237,6 +1237,31 @@ function drilldownGraph(): KnowledgeGraph {
 }
 
 describe("knowledge hologram drilldown", () => {
+  it("restores focus, hop depth and overview through bounded navigation history", () => {
+    const model = new KnowledgeDrilldown(drilldownGraph());
+    const overview = model.current();
+    const first = model.clickNode("root");
+    const expanded = model.expandOneHop();
+    model.clickNode("a0");
+    expect(model.back()).toEqual(expanded);
+    expect(model.back()).toEqual(first);
+    expect(model.back()).toEqual(overview);
+    expect(model.canGoBack).toBe(false);
+    expect(model.back()).toEqual(overview);
+  });
+
+  it("ignores invalid and unchanged navigation, and bounds history at 32 entries", () => {
+    const model = new KnowledgeDrilldown(drilldownGraph());
+    model.clickNode("missing"); model.expandOneHop(); model.reset();
+    expect(model.canGoBack).toBe(false);
+    model.clickNode("root"); model.clickNode("root");
+    expect(model.back().focusId).toBe(null);
+    for (let i=0;i<100;i++) model.clickNode(i%2===0?"root":"a0");
+    let count=0;
+    while(model.canGoBack) { model.back(); count++; }
+    expect(count).toBe(32);
+  });
+
   it("click focuses the node at exactly 2 hops; another click does not add a hop", () => {
     const drilldown = new KnowledgeDrilldown(drilldownGraph());
     const focused = drilldown.clickNode("root");

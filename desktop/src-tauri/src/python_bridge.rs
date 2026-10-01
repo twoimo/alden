@@ -459,6 +459,49 @@ impl PythonBridge {
         }
     }
 
+    /// Native settings audit only: bypass the general dispatcher and read the
+    /// persisted graph with mode=ro/query_only, no seeds, indexing or inference.
+    #[cfg(target_os = "macos")]
+    pub fn fetch_persisted_graph(&self) -> Result<Value, BridgeError> {
+        let resources = self.config.resources()?;
+        resources.validate()?;
+        let runtime = select_python_runtime(
+            &self.config.python,
+            &self.config.browser_python,
+            &self.config.browser_browsers_path,
+            resources.installed,
+            false,
+        )?;
+        let script = resources.root.join("scripts/auto_reply_knowledge_graph.py");
+        let args = vec![
+            "-E".into(),
+            "-B".into(),
+            "-s".into(),
+            script.to_str().ok_or(BridgeError::ResourceUnsafe)?.into(),
+            "--read-persisted-view".into(),
+            self.config
+                .state_root
+                .to_str()
+                .ok_or(BridgeError::StateIo)?
+                .into(),
+        ];
+        let bytes = run_process_with_recovery_env(
+            &runtime.executable,
+            &args,
+            DEFAULT_TIMEOUT,
+            OUTPUT_LIMIT_BYTES,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: Arc::new(AtomicBool::new(false)),
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+            &[],
+        )?;
+        Ok(sanitize_knowledge_graph(&parse_json_output(&bytes)?))
+    }
+
     pub fn fetch_snapshot(
         &self,
         token_id: Option<&str>,
