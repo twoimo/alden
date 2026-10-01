@@ -1,5 +1,7 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
+2026-10-01 실패 경로 추가 검증: 설치본의 실제 그래프 탐색·resize 뒤 compact PNG 충돌1회는 exit1·유효한 failure JSON·기존 파일 보존으로 종료했다(3.629초, 전체 자식 실행). [근거](alden-graph-navigation-failure-20261001.json). 이전 foreign-exception2회 원인은 여전히 미해결이며 코드 변경·운영 교체·전체 목표 완료로 계산하지 않는다.
+
 전달: [Alden 그래프 탐색 후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-25ad469edd80663739aa)의 **7개 파일**을 다시 다운로드해 바이트·원격 digest를 대조했다. ZIP30파일은 설치본과 일치하고 overlay30파일도 hash 일치다. 소스`51f71c2`/증거`5cfea2b`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36799335869)4/4 성공·독립 설치/개인정보 검토 통과. [릴리즈 대조](alden-graph-navigation-release-20261001.json). 공개 공증/프로덕션 완료를 뜻하지 않는다.
 
 

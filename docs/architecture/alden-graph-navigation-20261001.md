@@ -27,6 +27,8 @@
 
 초기 창 치수 가정과 가려진 창의 blank graph는 검사에서 실패했으며 합격으로 계산하지 않았다. 그 준비 과정에서 foreign-exception abort2회가 있었고 원인은 미해결이다. 최종 후보·설치 실행 성공이 해당 실패 경로의 원인 해결을 증명하지 않는다. 실패 로그와 native PNG는 private에 보존한다.
 
+같은 설치 바이너리에 compact PNG 파일 충돌을 유도해 실제 탐색·resize 뒤의 실패 경로를 확인했다. **exit1·유효한 failure JSON·기존 파일 보존**, 강제 종료와 abort 없음(1회·3.629초, 자식 실행 전체 시간). [실패 readback](alden-graph-navigation-failure-20261001.json). 과거 두 crash의 main thread는 Tao 외부 예외 cleanup, 감사 worker는 `openat`/`Output::write`에 있었지만 macOS 예외 사유와 원래 실패 바이너리는 확보하지 못했다. 이는 쓰기나 종료가 원인이라는 증거가 아니며 모든 실패 경로의 안전성을 입증하지 않는다. 원인 미해결과 전체 목표의 남은 gates를 유지한다.
+
 ## 검사·화면·다이어그램
 
 UI199/199, desktop Rust90/90, pinned CPython3.11.9 필수1,056개/26skip/실패0(108.049초), Clippy all-targets `-D warnings`, TypeScript/Vite·offline native build를 통과했다. UI 경합 테스트는 controlled adapters이며 네이티브 WebGL 증거와 구분한다. RO 회귀는 writable connector·seed·migration·reindex·embedding 경로를 금지하고 실제 테스트 DB SHA 불변·missing root fail-closed를 확인했다.
