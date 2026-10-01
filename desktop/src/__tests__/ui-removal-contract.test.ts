@@ -11,7 +11,7 @@ import { MAIN_PANEL_CONTROLS, mainPanelMarkup, settingsMarkup } from "../ui";
 const read = (relative: string): string =>
   readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
 
-const STYLES = read("../styles.css");
+const STYLES = read("../styles.css") + read("../settings.css");
 const PANEL = mainPanelMarkup();
 const SETTINGS = settingsMarkup();
 
@@ -35,11 +35,10 @@ const REMOVED_TOKENS = [
 ];
 
 const SETTINGS_SECTIONS = [
-  "대상 채팅방",
+  "등록된 채팅방",
   "AI 답변",
-  "음성",
   "카카오톡 대화",
-  "대화에서 찾기",
+  "음성 대화",
   "최근 답변",
 ];
 
@@ -85,7 +84,7 @@ describe("removed UI surfaces stay removed", () => {
 
   it("keeps every settings surface inside the one window", () => {
     expect((SETTINGS.match(/<main\b/g) ?? []).length).toBe(1);
-    expect(SETTINGS).toContain('<main class="settings-shell">');
+    expect(SETTINGS).toContain('<main class="settings-shell" aria-label="올든 설정"');
     expect(SETTINGS).not.toContain("<iframe");
     expect(PANEL).not.toContain("<iframe");
   });

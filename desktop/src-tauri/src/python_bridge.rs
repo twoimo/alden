@@ -459,6 +459,75 @@ impl PythonBridge {
         }
     }
 
+    /// App-owned, local, bounded background tick. It shares the emergency latch
+    /// and never registers hooks, creates a service or adopts another worker.
+    pub fn synchronize_knowledge(&self) -> Result<(), BridgeError> {
+        if global_abort_is_latched(&self.config.state_root)? {
+            return Ok(());
+        }
+        let resources = self.config.resources()?;
+        resources.validate()?;
+        let runtime = select_python_runtime(
+            &self.config.python,
+            &self.config.browser_python,
+            &self.config.browser_browsers_path,
+            resources.installed,
+            false,
+        )?;
+        let script = resources.root.join("scripts/alden_osk.py");
+        let hard = Arc::new(AtomicBool::new(false));
+        let abort = Arc::new(AtomicBool::new(false));
+        let key = "alden-osk-sync";
+        {
+            let mut map = self
+                .cancellations
+                .lock()
+                .map_err(|_| BridgeError::StateIo)?;
+            if map.contains_key(key) {
+                return Ok(());
+            }
+            map.insert(
+                key.into(),
+                CancellationHandle {
+                    flag: hard.clone(),
+                    cooperative_marker: None,
+                    global_abort_flag: Some(abort.clone()),
+                },
+            );
+        }
+        let args = vec![
+            "-E".into(),
+            "-B".into(),
+            "-s".into(),
+            script.to_str().ok_or(BridgeError::ResourceUnsafe)?.into(),
+            "--state-root".into(),
+            self.config.state_root.to_string_lossy().into_owned(),
+            "--sync".into(),
+        ];
+        let result = run_process_with_recovery_env(
+            &runtime.executable,
+            &args,
+            Duration::from_secs(60),
+            OUTPUT_LIMIT_BYTES,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: hard,
+                global_abort: Some((abort, Duration::from_secs(2))),
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+            &runtime.env,
+        );
+        if let Ok(mut map) = self.cancellations.lock() {
+            map.remove(key);
+        }
+        let payload = parse_json_output(&result?)?;
+        if payload.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(BridgeError::StateIo);
+        }
+        Ok(())
+    }
+
     /// Native settings audit only: bypass the general dispatcher and read the
     /// persisted graph with mode=ro/query_only, no seeds, indexing or inference.
     #[cfg(target_os = "macos")]
@@ -3034,6 +3103,13 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
         "indexed_at": as_u64(value.get("indexed_at")),
         "indexed_count": as_u64(value.get("indexed_count")),
         "stale": value.get("stale").and_then(Value::as_bool).unwrap_or(true),
+        "osk": {
+            "state": bounded_json_string(value.get("osk").and_then(|v| v.get("state")), 32),
+            "engine": bounded_json_string(value.get("osk").and_then(|v| v.get("engine")), 32),
+            "synced_at": as_u64(value.get("osk").and_then(|v| v.get("synced_at"))),
+            "pending": as_u64(value.get("osk").and_then(|v| v.get("pending"))),
+            "conflicts": as_u64(value.get("osk").and_then(|v| v.get("conflicts"))),
+        },
     })
 }
 

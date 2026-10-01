@@ -1004,6 +1004,13 @@ def _knowledge_graph_focus_payload(
             "reason": "knowledge_graph_focus_query_missing",
         }
     try:
+        try:
+            from alden_osk import read_focus
+            vault_result = read_focus(state_root, selected_id)
+        except Exception:
+            vault_result = {"ok": False, "facts": []}
+        if selected_id.startswith("osk:"):
+            return vault_result
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle
 
         bundle = retrieve_knowledge_bundle(
@@ -1012,6 +1019,9 @@ def _knowledge_graph_focus_payload(
             chat_id=room or None,
             also=[selected_id] if selected_id else None,
         )
+        if vault_result.get("ok"):
+            bundle["facts"] = list(dict.fromkeys([*vault_result["facts"], *bundle.get("facts", [])]))[:12]
+            bundle["fact_count"] = len(bundle["facts"])
         return {"ok": True, **bundle}
     except Exception as exc:  # click drill-down must stay fail-closed
         return {
@@ -2746,11 +2756,8 @@ def main():
         state_raw = _argv_flag_value("--state-root")
         state_root = Path(state_raw).expanduser() if state_raw else _DEFAULT_STATE_ROOT
         try:
-            from auto_reply_knowledge_graph import collect_knowledge_graph
-
-            payload = collect_knowledge_graph(
-                state_root / "context.sqlite3", state_root=state_root
-            )
+            from alden_osk import read_graph
+            payload = read_graph(state_root)
         except Exception as exc:  # never crash the menu: report and keep going
             payload = {
                 "ok": False,

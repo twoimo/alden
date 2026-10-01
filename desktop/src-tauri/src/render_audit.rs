@@ -376,7 +376,7 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
   return {ready:!!d, width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
     documentVisibility:document.visibilityState,documentFocused:document.hasFocus(),
     scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
-    settingsState:document.getElementById('app')?.dataset.state,
+    settingsState:document.getElementById('app')?.dataset.state,settingsPage:document.querySelector('.settings-shell')?.dataset.settingsPage,
     renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
     navigation:d?{focused:d.focused,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount}:null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
@@ -396,6 +396,7 @@ fn graph_step(
 ) -> Result<Value, String> {
     // Internal fixed actions only; no caller-selected script or selector.
     let script = match action {
+        "memory-page" => "document.querySelector('#settings-tab-memory')?.click()",
         "first" => "document.querySelectorAll('.knowledge-a11y-node')[0]?.click()",
         "second" => "document.querySelectorAll('.knowledge-a11y-node')[1]?.click()",
         "expand" => "document.querySelector('#knowledge-expand-hop')?.click()",
@@ -472,6 +473,19 @@ fn audit_settings(
         .map_err(|_| "settings level dispatch failed")?;
     receive(rx, deadline)?;
     visibility(&window, true, deadline)?;
+    loop {
+        let mounted = collect_script(
+            &window,
+            "JSON.stringify({mounted:!!document.querySelector('#settings-tab-memory')})".into(),
+            deadline,
+        )?;
+        if mounted["mounted"] == true {
+            break;
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    graph_step(&window, "memory-page", deadline)?;
     let initial = loop {
         let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
         if state["ready"] == true && count(&state) >= 3 {

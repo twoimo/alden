@@ -1237,6 +1237,17 @@ function drilldownGraph(): KnowledgeGraph {
 }
 
 describe("knowledge hologram drilldown", () => {
+  it("retains navigation through a refresh and removes retracted destinations", () => {
+    const graph = drilldownGraph(), model = new KnowledgeDrilldown(graph);
+    model.clickNode("root"); model.expandOneHop(); model.clickNode("a0");
+    model.replaceGraph(graph);
+    expect(model.current().focusId).toBe("a0");
+    expect(model.back().hops).toBe(3);
+    model.clickNode("a0");
+    model.replaceGraph({ nodes: graph.nodes.filter(node => node.id !== "a0"), edges: graph.edges.filter(edge => edge.source !== "a0" && edge.target !== "a0") });
+    expect(model.current().focusId).toBeNull();
+    while (model.canGoBack) expect(model.back().focusId).not.toBe("a0");
+  });
   it("restores focus, hop depth and overview through bounded navigation history", () => {
     const model = new KnowledgeDrilldown(drilldownGraph());
     const overview = model.current();

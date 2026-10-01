@@ -1,5 +1,8 @@
+import { KnowledgeRefresh } from "./knowledge/refresh";
 import { invoke } from "@tauri-apps/api/core";
 import "./styles.css";
+import "./settings.css";
+import { renderSettingsIcons, wireSettingsNavigation } from "./settings-navigation";
 import {
   createCancellationToken,
   unavailableSnapshot,
@@ -20,7 +23,6 @@ import {
 import type { KnowledgeHologram } from "./knowledge/hologram";
 import {
   MAX_FOCUS_HOPS,
-  ON_SCREEN_NODE_CAP,
   parseKnowledgeGraph,
   type KnowledgeEdge,
   type KnowledgeGraph,
@@ -156,6 +158,12 @@ function clearModelFailures(): void {
 }
 
 function renderModels(snapshot: RuntimeSnapshot): void {
+  if (!snapshot.available) {
+    setModelSelection(null);
+    setModelBusy(true);
+    setText("model-status", "AI 답변 설정을 확인할 수 없습니다.");
+    return;
+  }
   const current = snapshot.replyModelId;
   const normalized = normalizeLocalModelId(current);
   const selected = current === null ? RESIDENT_MODEL_ID : normalized;
@@ -297,6 +305,9 @@ function renderVoice(snapshot: RuntimeSnapshot): void {
 function renderSettingsUnavailable(): void {
   app.innerHTML = settingsMarkup();
   app.dataset.state = "unavailable";
+  renderSettingsIcons();
+  const navigation = wireSettingsNavigation();
+  window.addEventListener("pagehide", navigation.dispose, { once: true });
   const snapshot = unavailableSnapshot("desktop_boot_failed");
   renderRooms(snapshot);
   renderModels(snapshot);
@@ -307,7 +318,7 @@ function renderSettingsUnavailable(): void {
   setText("settings-sync-source", "대화 준비 상태를 확인할 수 없습니다.");
   setText("knowledge-summary", "대화에서 찾은 연결 정보를 확인할 수 없습니다.");
   setText("knowledge-mode", "확인 필요");
-  document.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+  document.querySelectorAll<HTMLButtonElement>("button:not([data-settings-view])").forEach((button) => {
     button.disabled = true;
   });
 }
@@ -416,29 +427,52 @@ function renderKnowledgeRelations(
   });
 }
 
+function renderKnowledgeSync(payload: Record<string, unknown> | null): void {
+  const raw = payload?.osk;
+  const state = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
+  if (!state || state.state !== "ready") {
+    setText("knowledge-sync", state?.state === "paused" ? "기억 갱신이 일시 중지되었습니다." : state?.state === "preparing" ? "대화에서 첫 기억을 정리하고 있습니다." : "기억의 갱신 상태를 확인할 수 없습니다.");
+    return;
+  }
+  const at = typeof state.synced_at === "number" ? new Date(state.synced_at * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "";
+  setText("knowledge-sync", Number(state.conflicts) > 0 ? "직접 편집한 기억을 보존했습니다." : Number(state.pending) > 0 ? "새로운 기억을 정리하고 있습니다." : `자동으로 기억을 정리합니다.${at ? ` 마지막 갱신 ${at}` : ""}`);
+}
+
 export async function setupKnowledgeGraph(
   payload: Record<string, unknown> | null,
   snapshot: RuntimeSnapshot,
   loadAction: typeof fetchSettingsAction = fetchSettingsAction,
+  allowEmpty = false,
 ): Promise<KnowledgeHologram | null> {
   const graph = parseKnowledgeGraph(payload);
+  renderKnowledgeSync(payload);
   const canvas = document.querySelector<HTMLCanvasElement>("#knowledge-graph-canvas");
   const expand = document.querySelector<HTMLButtonElement>("#knowledge-expand-hop");
   const back = document.querySelector<HTMLButtonElement>("#knowledge-back");
   const overview = document.querySelector<HTMLButtonElement>("#knowledge-overview");
-  if (!canvas || !expand || graph.nodes.length === 0) {
-    setText("knowledge-summary", "아직 연결된 대화가 없습니다.");
-    setText("knowledge-mode", "준비 중");
-    return null;
-  }
+  if (!canvas || !expand) return null;
+  if (graph.nodes.length === 0) {
+    const empty = payload?.ok !== false && Array.isArray(payload?.nodes) && payload.nodes.length === 0;
+    setText("knowledge-summary", empty ? "아직 연결된 대화가 없습니다." : "대화의 연결 정보를 확인할 수 없습니다.");
+    setText("knowledge-mode", empty ? "준비 중" : "확인 필요");
+    const shell = document.querySelector<HTMLElement>(".knowledge-hologram-shell");
+    const detail = document.querySelector<HTMLElement>(".knowledge-focus-card");
+    if (shell) shell.hidden = false;
+    if (canvas) canvas.hidden = true;
+    if (detail) detail.hidden = true;
+    if (!allowEmpty) return null;
+  } else {
 
   setText(
     "knowledge-summary",
     `대화에서 찾은 연결 항목 ${graph.nodes.length}개`,
   );
   setText("knowledge-mode", payload?.stale === true ? "자료 확인 필요" : "연결된 주제");
+  renderKnowledgeSync(payload);
 
-  const a11yContainer = document.querySelector<HTMLDivElement>("#knowledge-accessible-nodes");
+  }
+  canvas.hidden = graph.nodes.length === 0;
+  const detailPanel = document.querySelector<HTMLElement>(".knowledge-focus-card");
 
   let selectionEpoch = 0;
   let disposed = false;
@@ -447,6 +481,7 @@ export async function setupKnowledgeGraph(
   const hologram = new KnowledgeHologram(canvas, graph, ({ node, view }) => {
     if (disposed) return;
     const epoch = ++selectionEpoch;
+    if (detailPanel) detailPanel.hidden = node === null;
     if (back) back.disabled = !hologram.canGoBack;
     if (overview) overview.disabled = view.focusId === null;
     expand.disabled = view.focusId === null || view.hops >= MAX_FOCUS_HOPS;
@@ -495,21 +530,6 @@ export async function setupKnowledgeGraph(
   back?.addEventListener("click", () => hologram.back(), { signal: controls.signal });
   overview?.addEventListener("click", () => hologram.reset(), { signal: controls.signal });
 
-  if (a11yContainer) {
-    a11yContainer.replaceChildren();
-    graph.nodes.slice(0, ON_SCREEN_NODE_CAP).forEach((node) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "knowledge-a11y-node";
-      btn.dataset.nodeId = node.id;
-      btn.textContent = node.label;
-      btn.setAttribute("aria-label", `${node.label} 선택`);
-      btn.addEventListener("click", () => {
-        hologram.clickNode(node.id);
-      }, { signal: controls.signal });
-      a11yContainer.append(btn);
-    });
-  }
 
   return hologram;
 }
@@ -544,6 +564,13 @@ export async function bootSettings(
   };
   app.innerHTML = settingsMarkup();
   app.dataset.state = "loading";
+  renderSettingsIcons();
+  let graphLifecycle: RenderLifecycle | null = null;
+  const navigation = wireSettingsNavigation(document, (page) => {
+    graphLifecycle?.setSurfaceVisible(page === "memory");
+    if (page === "memory") window.dispatchEvent(new Event("resize"));
+  });
+  window.addEventListener("pagehide", navigation.dispose, { once: true });
   let hologram: KnowledgeHologram | null = null;
   try {
     const emergency = wireEmergencyResume(dependencies.resumeEmergency);
@@ -578,7 +605,7 @@ export async function bootSettings(
     renderRooms(snapshot);
     wireRoomAdd(dependencies.loadSnapshot, dependencies.loadAction);
     renderModels(snapshot);
-    wireModelSelection(dependencies.invokeCommand);
+    if (snapshot.available) wireModelSelection(dependencies.invokeCommand);
     renderVoice(snapshot);
     renderHistory(snapshot);
     renderBackground(snapshot);
@@ -592,13 +619,31 @@ export async function bootSettings(
       setText("settings-sync-source", "대화 준비 상태를 확인하지 못했습니다.");
     }
 
-    hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction);
+    try {
+      hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction, snapshot.available);
+    } catch {
+      setText("knowledge-summary", "지식 그래프 화면을 준비하지 못했습니다.");
+      // A graphics failure must not disable the other already-confirmed settings.
+    }
     app.dataset.state = degraded ? "unavailable" : "ready";
     if (hologram) {
       const graph = hologram;
       const focusSlots = new Map(parseKnowledgeGraph(graphPayload).nodes.map((node, index) => [node.id, index]));
       Object.defineProperty(window, "__knowledgeRenderCount", { configurable: true, get: () => graph.renderCount });
-      const lifecycle = new RenderLifecycle(graph, () => undefined, () => undefined);
+      let graphVersion = JSON.stringify(parseKnowledgeGraph(graphPayload));
+      const refresh = new KnowledgeRefresh(() => dependencies.loadAction("knowledge-graph"), payload => {
+        renderKnowledgeSync(payload);
+        if (payload.ok !== true) return;
+        const next = parseKnowledgeGraph(payload);
+        const version = JSON.stringify(next);
+        if (version === graphVersion) return;
+        graphVersion = version;
+        graph.replaceGraph(next);
+        setText("knowledge-summary", `대화에서 찾은 연결 항목 ${next.nodes.length}개`);
+      });
+      const lifecycle = new RenderLifecycle(graph, () => refresh.stop(), () => refresh.start());
+      graphLifecycle = lifecycle;
+      lifecycle.setSurfaceVisible(navigation.current() === "memory");
       Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({
         ...graph.diagnostics(), nodeCount: graph.currentView.nodes.length, edgeCount: graph.currentView.edges.length,
         hops: graph.currentView.hops, focused: graph.currentView.focusId !== null,
@@ -625,6 +670,7 @@ export async function bootSettings(
     } catch {
       // Rendering the fixed unavailable state takes precedence over cleanup errors.
     }
+    navigation.dispose();
     renderSettingsUnavailable();
   }
 }

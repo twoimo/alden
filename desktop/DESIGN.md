@@ -1,5 +1,17 @@
 # Alden desktop design contract
 
+## 2026-10-01 — wide settings workspace
+
+The user requested a full settings redesign, a wide rectangular window, and explicitly allowed a palette beyond champagne gold. The selected reference is [Fieldwork · A workspace that remembers](https://style.gallery/components/21st-49e34572c05d/), reviewed in its running example on Style Gallery. Its independently authored MIT study supplies the layout direction: a quiet fixed sidebar, an independent scroll area, selected-view feedback, thin separators and a restrained linen/sage surface. The product's existing controls and real backend remain authoritative; example accounts, project metrics and dates are not copied.
+
+Default settings window: **1200×760**, minimum **640×680**. The default view is the knowledge graph, filling the main area beside the sidebar. Conversation/AI, voice and recent replies remain accessible from the sidebar. A selected node opens a floating detail panel; overview closes it. Labels are local DOM text projected onto the bounded Three.js scene. OSK automatically maintains the private knowledge vault while Alden runs. Keyboard arrows/Home/End move selection and focus together. Each view retains its scroll position. The memory renderer runs only when both its view and the native window are visible; switching views never invents activity.
+
+Settings light tokens: canvas `#FAFBF6`, sidebar `#F0F3E9`, surface `#FFFFFF`, text `#273329`, muted `#697361`, sage `#657E50`, accent ink `#3F5630`, selected surface `#DFE8D0`, border `#E1E5D9`. Muted text contrast on canvas is **4.78:1**; selected text contrast is **6.42:1**. Dark surfaces use charcoal greens and muted sage with the same hierarchy. The core-only panel retains its established material and geometry.
+
+The wordmark uses the system Georgia serif and controls use existing local system sans fonts. No external font request is required. [Lucide1.49.0](https://lucide.dev/) supplies icons; ISC/Feather notices are included in the source and preserved in the built JavaScript. UI assets are local, and no neon effects or added shader background is introduced.
+
+The older contracts below describe the preceding settings layout and remain historical references for the panel, runtime and motion rules. The new wide settings geometry/view grouping supersedes their 960px card split.
+
 ## Experience
 
 Alden should feel like a quiet instrument panel: warm, legible, and composed. A new user should understand each setting without knowing model, retrieval, or runtime terminology. Status copy gives one useful next step; diagnostic detail stays in developer documentation. The trade-off is deliberate: expert users see fewer live counters in the settings window.

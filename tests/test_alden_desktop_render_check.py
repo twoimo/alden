@@ -60,11 +60,10 @@ class SharedExpectations(unittest.TestCase):
         self.assertEqual(
             self.contract["settings_sections"],
             [
-                "\ub300\uc0c1 \ucc44\ud305\ubc29",
+                "등록된 채팅방",
                 "AI \ub2f5\ubcc0",
-                "\uc74c\uc131",
                 "\uce74\uce74\uc624\ud1a1 \ub300\ud654",
-                "\ub300\ud654\uc5d0\uc11c \ucc3e\uae30",
+                "음성 대화",
                 "\ucd5c\uadfc \ub2f5\ubcc0",
             ],
         )

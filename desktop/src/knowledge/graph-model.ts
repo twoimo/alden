@@ -185,7 +185,15 @@ export class KnowledgeDrilldown {
   private hops = 0;
   private readonly history: Array<{ focusId: string | null; hops: number }> = [];
 
-  constructor(private readonly graph: KnowledgeGraph) {}
+  constructor(private graph: KnowledgeGraph) {}
+
+  replaceGraph(graph: KnowledgeGraph): KnowledgeView {
+    this.graph = graph;
+    const ids = new Set(graph.nodes.map(node => node.id));
+    this.history.splice(0, this.history.length, ...this.history.filter(entry => entry.focusId === null || ids.has(entry.focusId)));
+    if (this.focusId && !ids.has(this.focusId)) { this.focusId = null; this.hops = 0; }
+    return this.current();
+  }
 
   current(): KnowledgeView {
     if (!this.focusId) return overviewGraph(this.graph);

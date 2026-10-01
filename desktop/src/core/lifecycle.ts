@@ -32,6 +32,8 @@ interface PauseSeed {
 
 export class RenderLifecycle {
   private active = false;
+  private surfaceVisible = true;
+  private requestedState: LifecycleState | null = null;
   private state: LifecycleState | null = null;
   private pauseSeed: PauseSeed | null = null;
   private completedPause: RenderPauseMeasurement | null = null;
@@ -43,7 +45,22 @@ export class RenderLifecycle {
     private readonly now: () => number = () => performance.now(),
   ) {}
 
+  setSurfaceVisible(visible: boolean): void {
+    if (this.surfaceVisible === visible) return;
+    this.surfaceVisible = visible;
+    if (this.requestedState !== null) this.apply(this.effectiveState(this.requestedState));
+  }
+
   transition(state: LifecycleState): void {
+    this.requestedState = state;
+    this.apply(this.effectiveState(state));
+  }
+
+  private effectiveState(state: LifecycleState): LifecycleState {
+    return state === "visible" && !this.surfaceVisible ? "hidden" : state;
+  }
+
+  private apply(state: LifecycleState): void {
     if (state === "visible") {
       if (this.active) return;
       this.completedPause = this.measurePause();

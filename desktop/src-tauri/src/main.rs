@@ -283,6 +283,11 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            let knowledge_bridge = app.state::<PythonBridge>().inner().clone();
+            std::thread::spawn(move || loop {
+                let _ = knowledge_bridge.synchronize_knowledge();
+                std::thread::sleep(std::time::Duration::from_secs(60));
+            });
             handle
                 .global_shortcut()
                 .register(abort_shortcut)

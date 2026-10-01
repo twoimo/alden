@@ -40,6 +40,9 @@ pub const DATA_FILES: &[&str] = &[
     VOICE_AUDIO_LIBRARY,
     "scripts/alden_abort.py",
     "scripts/alden_file_content.py",
+    "scripts/alden_osk.py",
+    "scripts/vendor/osk-v4.1.2.zip",
+    "scripts/vendor/osk-v4.1.2.json",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

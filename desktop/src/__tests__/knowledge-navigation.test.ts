@@ -64,8 +64,20 @@ describe("knowledge navigation UI and retrieval epochs",()=>{
     document.querySelector<HTMLButtonElement>("#knowledge-back")!.click();
     document.querySelector<HTMLButtonElement>("#knowledge-overview")!.click();
     document.querySelector<HTMLButtonElement>("#knowledge-expand-hop")!.click();
-    document.querySelector<HTMLButtonElement>(".knowledge-a11y-node")!.click();
+    expect(document.querySelector(".knowledge-a11y-node")).toBeNull();
     graph.clickNode("a");
     expect(load).toHaveBeenCalledTimes(2);expect(text()).toBe(before);
+  });
+});
+
+describe("knowledge availability states",()=>{
+  it("distinguishes a failed read from a confirmed empty graph",async()=>{
+    expect(await setup(null,unavailableSnapshot(),vi.fn())).toBeNull();
+    expect(document.getElementById("knowledge-summary")!.textContent).toContain("확인할 수 없습니다");
+    expect(document.querySelector<HTMLElement>(".knowledge-hologram-shell")!.hidden).toBe(false);
+    expect(document.querySelector<HTMLCanvasElement>("#knowledge-graph-canvas")!.hidden).toBe(true);
+    document.body.innerHTML=settingsMarkup();
+    expect(await setup({nodes:[],edges:[]},unavailableSnapshot(),vi.fn())).toBeNull();
+    expect(document.getElementById("knowledge-summary")!.textContent).toBe("아직 연결된 대화가 없습니다.");
   });
 });

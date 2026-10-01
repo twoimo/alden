@@ -15,8 +15,8 @@ export interface KnowledgeFocusEvent {
 
 type FocusHandler = (event: KnowledgeFocusEvent) => void;
 
-function cssColor(name: string, fallback: string): THREE.Color {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function cssColor(surface: Element, name: string, fallback: string): THREE.Color {
+  const value = getComputedStyle(surface).getPropertyValue(name).trim();
   return new THREE.Color(value || fallback);
 }
 
@@ -46,19 +46,24 @@ export class KnowledgeHologram {
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly loop: AnimationLoop;
-  private readonly drilldown: KnowledgeDrilldown;
+  private drilldown: KnowledgeDrilldown;
   private readonly positions = new Map<string, THREE.Vector3>();
   private readonly nodeMeshes = new Map<string, THREE.Mesh>();
+  private readonly labels = new Map<string, HTMLSpanElement>();
+  private readonly labelBounds: Array<{ width: number; left: number; top: number; visible: boolean }> = [];
+  private readonly projected = new THREE.Vector3();
   private readonly desiredCamera = new THREE.Vector3(0, 0, 5.2);
   private readonly desiredLookAt = new THREE.Vector3();
   private readonly lookAt = new THREE.Vector3();
   private readonly resizeObserver: ResizeObserver | null;
   private view: KnowledgeView;
   private disposed = false;
+  private requestedAnimation = false;
+  private viewport = { x: 0, y: 0, width: 1, height: 1 };
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly graph: KnowledgeGraph,
+    private graph: KnowledgeGraph,
     private readonly onFocus: FocusHandler,
     private readonly onDispose: () => void = () => undefined,
   ) {
@@ -69,8 +74,8 @@ export class KnowledgeHologram {
     this.camera.position.copy(this.desiredCamera);
     this.scene.add(this.graphRoot);
 
-    const ambient = new THREE.AmbientLight(0xfffbf2, 1.55);
-    const key = new THREE.DirectionalLight(0xffe2a8, 1.45);
+    const ambient = new THREE.AmbientLight(0xffffff, 1.55);
+    const key = new THREE.DirectionalLight(0xffffff, 1.45);
     key.position.set(2.5, 3.5, 5);
     this.scene.add(ambient, key);
     this.addGuidePlane();
@@ -93,10 +98,12 @@ export class KnowledgeHologram {
 
   start(): void {
     if (this.disposed) return;
-    this.loop.start();
+    this.requestedAnimation = true;
+    if (this.view.nodes.length > 0) this.loop.start();
   }
 
   stop(): void {
+    this.requestedAnimation = false;
     this.loop.stop();
   }
 
@@ -109,6 +116,26 @@ export class KnowledgeHologram {
   }
 
   get canGoBack(): boolean { return this.drilldown.canGoBack; }
+
+  replaceGraph(graph: KnowledgeGraph): void {
+    if (this.disposed) return;
+    const focus = this.view.focusId;
+    this.graph = graph;
+    const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
+    sorted.forEach((node, index) => {
+      if (!this.positions.has(node.id)) this.positions.set(node.id, spherePoint(index, sorted.length, 1.42));
+    });
+    const ids = new Set(sorted.map(node => node.id));
+    for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
+    this.view = this.drilldown.replaceGraph(graph);
+    if (!focus || !ids.has(focus)) { this.desiredCamera.set(0, 0, 5.2); this.desiredLookAt.set(0, 0, 0); }
+    this.rebuildGraph();
+    this.canvas.hidden = graph.nodes.length === 0;
+    this.resize();
+    if (this.requestedAnimation && graph.nodes.length > 0) this.loop.start();
+    else this.loop.stop();
+    this.notifyView();
+  }
 
   diagnostics(): AnimationLoopDiagnostics { return this.loop.diagnostics(); }
   get navigationTargets(): { camera: number[]; lookAt: number[] } {
@@ -175,11 +202,15 @@ export class KnowledgeHologram {
       .filter((child) => child !== this.graphRoot)
       .forEach((child) => disposeObject(child));
     this.renderer.dispose();
+    this.labels.clear();
+    this.labelBounds.length = 0;
+    this.canvas.parentElement?.querySelector(".knowledge-node-labels")?.replaceChildren();
+    this.canvas.parentElement?.querySelector("#knowledge-accessible-nodes")?.replaceChildren();
   }
 
   private addGuidePlane(): void {
-    const accent = cssColor("--accent", "#B88A45");
-    const muted = cssColor("--muted", "#6D655B");
+    const accent = cssColor(this.canvas, "--accent", "#B88A45");
+    const muted = cssColor(this.canvas, "--muted", "#6D655B");
     const grid = new THREE.GridHelper(4.8, 12, accent, muted);
     const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
     gridMaterials.forEach((material) => {
@@ -205,9 +236,14 @@ export class KnowledgeHologram {
       if (child) disposeObject(child);
     }
     this.nodeMeshes.clear();
-    const accent = cssColor("--accent", "#B88A45");
-    const text = cssColor("--text", "#241F1A");
-    const muted = cssColor("--muted", "#6D655B");
+    this.labels.clear();
+    this.labelBounds.length = 0;
+    const labelLayer = this.canvas.parentElement?.querySelector(".knowledge-node-labels");
+    labelLayer?.replaceChildren();
+    const accessible = this.canvas.parentElement?.querySelector("#knowledge-accessible-nodes");
+    accessible?.replaceChildren();
+    const accent = cssColor(this.canvas, "--accent", "#B88A45");
+    const muted = cssColor(this.canvas, "--muted", "#6D655B");
     const focusId = this.view.focusId;
 
     for (const edge of this.view.edges) {
@@ -228,10 +264,10 @@ export class KnowledgeHologram {
       const position = this.positions.get(node.id);
       if (!position) continue;
       const focused = node.id === focusId;
-      const radius = 0.065 + (node.importance / 100) * 0.055 + (focused ? 0.025 : 0);
+      const radius = 0.04 + (node.importance / 100) * 0.025 + (focused ? 0.02 : 0);
       const geometry = new THREE.SphereGeometry(radius, 18, 12);
       const material = new THREE.MeshStandardMaterial({
-        color: focused ? accent : text,
+        color: accent,
         roughness: 0.74,
         metalness: focused ? 0.16 : 0.04,
       });
@@ -240,6 +276,25 @@ export class KnowledgeHologram {
       mesh.userData.nodeId = node.id;
       this.nodeMeshes.set(node.id, mesh);
       this.graphRoot.add(mesh);
+      if (accessible) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "knowledge-a11y-node";
+        button.dataset.nodeId = node.id;
+        button.textContent = node.label;
+        button.setAttribute("aria-label", `${node.label} 선택`);
+        button.onclick = () => this.clickNode(node.id);
+        accessible.append(button);
+      }
+      if (labelLayer) {
+        const label = document.createElement("span");
+        label.className = "knowledge-node-label";
+        label.textContent = node.label;
+        label.dataset.focused = String(focused);
+        labelLayer.append(label);
+        this.labels.set(node.id, label);
+        this.labelBounds.push({ width: 0, left: 0, top: 0, visible: false });
+      }
     }
   }
 
@@ -253,8 +308,11 @@ export class KnowledgeHologram {
   private readonly handlePointerDown = (event: PointerEvent): void => {
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
-    this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointer.y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+    const x = event.clientX - rect.left - this.viewport.x;
+    const y = event.clientY - rect.top - this.viewport.y;
+    if (x < 0 || y < 0 || x > this.viewport.width || y > this.viewport.height) return;
+    this.pointer.x = (x / this.viewport.width) * 2 - 1;
+    this.pointer.y = -(y / this.viewport.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointer, this.camera);
     const hit = this.raycaster.intersectObjects([...this.nodeMeshes.values()], false)[0];
     const nodeId = typeof hit?.object.userData.nodeId === "string" ? hit.object.userData.nodeId : "";
@@ -268,8 +326,12 @@ export class KnowledgeHologram {
     const width = Math.max(1, Math.floor(rect.width || 640));
     const height = Math.max(1, Math.floor(rect.height || 320));
     this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
+    const top = width < 650 ? 246 : 84;
+    this.viewport = { x: 28, y: Math.min(top, height / 2), width: Math.max(1, width - 56), height: Math.max(1, height - Math.min(top, height / 2) - 80) };
+    this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
+    this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
+    for (const box of this.labelBounds) box.width = 0;
   }
 
   private render(dt: number): void {
@@ -279,5 +341,29 @@ export class KnowledgeHologram {
     this.lookAt.lerp(this.desiredLookAt, alpha);
     this.camera.lookAt(this.lookAt);
     this.renderer.render(this.scene, this.camera);
+    const { x, y, width, height } = this.viewport;
+    let index = 0;
+    for (const [id, label] of this.labels) {
+      const box = this.labelBounds[index++];
+      box.visible = false;
+      const position = this.positions.get(id);
+      if (!position) continue;
+      this.projected.copy(position).project(this.camera);
+      label.hidden = Math.abs(this.projected.x) > 1 || Math.abs(this.projected.y) > 1 || this.projected.z > 1 || this.projected.z < -1;
+      if (label.hidden) continue;
+      // Measure only after a rebuild/resize. Reuse at most 24 collision boxes.
+      if (!box.width) box.width = label.offsetWidth || Math.min(156, label.textContent!.length * 11 + 12);
+      box.left = Math.max(x, Math.min(x + width - box.width, x + (this.projected.x + 1) * width / 2 - box.width / 2));
+      box.top = Math.min(y + height - 24, y + (1 - this.projected.y) * height / 2 + 10);
+      for (let previous = 0; previous < index - 1; previous++) {
+        const other = this.labelBounds[previous];
+        if (other.visible && box.left < other.left + other.width + 5 && box.left + box.width + 5 > other.left && box.top < other.top + 24 && box.top + 24 > other.top) {
+          label.hidden = true;
+          break;
+        }
+      }
+      box.visible = !label.hidden;
+      if (box.visible) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
+    }
   }
 }
