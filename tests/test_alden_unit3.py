@@ -566,6 +566,16 @@ class Qwen3TtsModelPathTests(unittest.TestCase):
 
 
 class Qwen3TtsAdapterApiTests(unittest.TestCase):
+    def test_close_releases_engine_before_interpreter_teardown(self):
+        import types
+        adapter = Qwen3TtsAdapter(); adapter._engine = object(); adapter._device = "mps"
+        events = []
+        mps = types.SimpleNamespace(synchronize=lambda: events.append("sync"), empty_cache=lambda: events.append("cache"))
+        with mock.patch.dict(sys.modules, {"torch":types.SimpleNamespace(mps=mps)}), mock.patch("gc.collect",side_effect=lambda: events.append("released" if adapter._engine is None else "held")):
+            adapter.close(); adapter.close()
+        self.assertEqual(events,["sync","released","cache","sync"])
+        self.assertIsNone(adapter._engine)
+
     def test_korean_integer_pronunciation_preserves_other_meanings(self):
         from alden_voice import _tts_spoken_text
         for original, spoken in (("0입니다.","영입니다."),("4입니다.","사입니다."),("12입니다.","십이입니다."),("100입니다!","백입니다!"),("1234입니다.","천이백삼십사입니다.")):
@@ -720,6 +730,25 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
 
 
 class VoiceMemoryBudgetTests(unittest.TestCase):
+    def test_pipeline_close_waits_for_owned_turn_before_disposal(self):
+        import threading
+        entered = threading.Event(); release = threading.Event(); closed = []
+        class Stt:
+            def close(self): closed.append("stt")
+        class Llm:
+            def generate(self, *args, **kwargs):
+                entered.set(); release.wait(2); return "확인"
+        class Tts:
+            def close(self): closed.append("tts")
+            def speak(self, *args): raise AssertionError("cancelled reply must not be spoken")
+        with TemporaryDirectory() as temporary:
+            pipeline = AldenVoicePipeline(stt=Stt(),llm=Llm(),tts=Tts(),token=AbortController(Path(temporary)).token())
+            pipeline.submit_text("질문")
+            self.assertTrue(entered.wait(1));pipeline.close();self.assertEqual(closed,[])
+            release.set();pipeline._worker.join(2)
+            self.assertFalse(pipeline._worker.is_alive());pipeline.close()
+            self.assertEqual(closed,["tts","stt"])
+
     def test_resident_models_require_workspace_and_keep_pressure_reserve(self):
         for stage, minimum in (("stt", 10), ("tts", 14)):
             for resident in (False, True):

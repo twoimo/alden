@@ -1005,6 +1005,7 @@ class AldenVoicePipeline:
         self._active_turn: VoiceTurn | None = None
         self._seen_events: deque[tuple[str, str]] = deque(maxlen=128)
         self._closed = False
+        self._adapters_closed = False
         self._worker: threading.Thread | None = None
         self._work_ready = threading.Condition(self._lock)
         self._pending_turn: tuple[VoiceTurn, bytes, str | None, Future[VoiceResult]] | None = None
@@ -1229,6 +1230,29 @@ class AldenVoicePipeline:
             self._closed = True
             self.interrupt()
             self._work_ready.notify_all()
+        # Never release a model while an owned inference is still using it.
+        # A busy turn disposes on its way out; close itself does not wait on GPU.
+        if self._processing_lock.acquire(blocking=False):
+            try:
+                self._close_adapters()
+            finally:
+                self._processing_lock.release()
+
+    def _close_adapters(self) -> None:
+        with self._lock:
+            if self._adapters_closed:
+                return
+            self._adapters_closed = True
+        failure = None
+        for adapter in (self.tts, self.stt):
+            close = getattr(adapter, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as error:
+                    failure = failure or error
+        if failure is not None:
+            raise RuntimeError("voice_resource_cleanup_failed") from failure
 
     def _submit_turn(self, turn: VoiceTurn, pcm16: bytes = b"", text: str | None = None) -> None:
         future: Future[VoiceResult] = Future()
@@ -1326,6 +1350,13 @@ class AldenVoicePipeline:
             return self._process_turn(turn, text=text)
 
     def _process_turn(self, turn: VoiceTurn, *, pcm16: bytes = b"", text: str | None = None) -> VoiceResult:
+        try:
+            return self._process_turn_body(turn, pcm16=pcm16, text=text)
+        finally:
+            if self._closed:
+                self._close_adapters()
+
+    def _process_turn_body(self, turn: VoiceTurn, *, pcm16: bytes = b"", text: str | None = None) -> VoiceResult:
         try:
             turn.token.raise_if_cancelled()
             if text is None:
@@ -1591,6 +1622,21 @@ class LocalMlxLlm:
 class MlxWhisperAdapter:
     def __init__(self, model: str = WHISPER_MODEL_ID):
         self.model = model
+        self._last_model: str | None = None
+
+    def close(self) -> None:
+        holder = getattr(sys.modules.get("mlx_whisper.transcribe"), "ModelHolder", None)
+        if self._last_model is None or holder is None or getattr(holder, "model_path", None) != self._last_model:
+            return
+        import gc
+        import mlx.core as mx
+        mx.synchronize()
+        holder.model = None
+        holder.model_path = None
+        self._last_model = None
+        gc.collect()
+        mx.clear_cache()
+        mx.synchronize()
 
     def transcribe(self, pcm16: bytes, sample_rate: int, token: AbortToken) -> str:
         token.raise_if_cancelled()
@@ -1600,6 +1646,7 @@ class MlxWhisperAdapter:
         holder = getattr(sys.modules.get("mlx_whisper.transcribe"), "ModelHolder", None)
         resident = holder is not None and getattr(holder, "model", None) is not None and getattr(holder, "model_path", None) == model
         _require_voice_memory_budget("stt", model_resident=resident)
+        self._last_model = model
         _force_local_model_cache()
         import numpy as np
         import mlx_whisper
@@ -1642,6 +1689,19 @@ class Qwen3TtsAdapter:
         self._engine: Any | None = None
         self._device = "cpu"
         self.audio_backend = audio_backend
+
+    def close(self) -> None:
+        if self._engine is None:
+            return
+        import gc
+        import torch
+        if self._device == "mps":
+            torch.mps.synchronize()
+        self._engine = None
+        gc.collect()
+        if self._device == "mps":
+            torch.mps.empty_cache()
+            torch.mps.synchronize()
 
     def _load(self) -> Any:
         # Cached engines still allocate inference buffers on the next utterance.
@@ -2027,6 +2087,9 @@ def run_file_pipeline(
         def speak(self, text: str, speak_token: AbortToken) -> None:
             self.meta = engine.write_wav(text, tts_out, speak_token)
 
+        def close(self) -> None:
+            engine.close()
+
     tts = _FileTts()
     pipeline = AldenVoicePipeline(
         stt=MlxWhisperAdapter(model=os.environ.get("OPENKAKAO_WHISPER_MODEL", WHISPER_MODEL_ID)),
@@ -2035,63 +2098,67 @@ def run_file_pipeline(
         token=token,
         status=status,
     )
-    pipeline._custom_model_selected = selected is not None
-    pipeline._publish()
-    frontend = OpenWakeVadFrontend(custom_wake_model=selected)
-    wake_pcm = _load_wav_pcm16(wake_wav)
-    accepted = False
-    stock_max = 0.0
-    custom_max = 0.0
-    for offset in range(0, len(wake_pcm) - 639, 640):
-        analysis = frontend.analyze(wake_pcm[offset : offset + 640])
-        stock_max = max(stock_max, analysis.stock_wake_score)
-        if analysis.custom_wake_score is not None:
-            custom_max = max(custom_max, analysis.custom_wake_score)
-        result = pipeline.feed_audio(
-            wake_pcm[offset : offset + 640],
-            rms=analysis.rms,
-            speech=analysis.speech,
-            stock_wake_score=analysis.stock_wake_score,
-            custom_wake_score=analysis.custom_wake_score,
-        )
-        if pipeline.state == VoiceState.USER_LISTEN:
-            accepted = True
-            break
-        if result is not None:
+    try:
+        pipeline._custom_model_selected = selected is not None
+        pipeline._publish()
+        frontend = OpenWakeVadFrontend(custom_wake_model=selected)
+        wake_pcm = _load_wav_pcm16(wake_wav)
+        accepted = False
+        stock_max = 0.0
+        custom_max = 0.0
+        for offset in range(0, len(wake_pcm) - 639, 640):
+            analysis = frontend.analyze(wake_pcm[offset : offset + 640])
+            stock_max = max(stock_max, analysis.stock_wake_score)
+            if analysis.custom_wake_score is not None:
+                custom_max = max(custom_max, analysis.custom_wake_score)
+            result = pipeline.feed_audio(
+                wake_pcm[offset : offset + 640],
+                rms=analysis.rms,
+                speech=analysis.speech,
+                stock_wake_score=analysis.stock_wake_score,
+                custom_wake_score=analysis.custom_wake_score,
+            )
+            if pipeline.state == VoiceState.USER_LISTEN:
+                accepted = True
+                break
+            if result is not None:
+                return {
+                    "accepted": False,
+                    "state": result.state.value,
+                    "error_code": result.error_code,
+                    "stock_max": stock_max,
+                    "custom_max": custom_max,
+                    "custom_model_selected": selected is not None,
+                }
+        if not accepted:
+            ended = pipeline._end(VoiceState.ENDED, "wake_miss")
             return {
                 "accepted": False,
-                "state": result.state.value,
-                "error_code": result.error_code,
+                "state": ended.state.value,
+                "error_code": ended.error_code,
                 "stock_max": stock_max,
                 "custom_max": custom_max,
                 "custom_model_selected": selected is not None,
             }
-    if not accepted:
-        ended = pipeline._end(VoiceState.ENDED, "wake_miss")
+
+        utterance = _load_wav_pcm16(utterance_wav)
+        voice = pipeline.process_utterance(utterance)
         return {
-            "accepted": False,
-            "state": ended.state.value,
-            "error_code": ended.error_code,
+            "accepted": True,
+            "state": voice.state.value,
+            "error_code": voice.error_code,
+            "transcript": voice.transcript,
+            "reply": voice.reply,
             "stock_max": stock_max,
             "custom_max": custom_max,
             "custom_model_selected": selected is not None,
+            "threshold": WAKE_THRESHOLD,
+            "tts": tts.meta,
+            "wake_source": pipeline._wake_source,
         }
 
-    utterance = _load_wav_pcm16(utterance_wav)
-    voice = pipeline.process_utterance(utterance)
-    return {
-        "accepted": True,
-        "state": voice.state.value,
-        "error_code": voice.error_code,
-        "transcript": voice.transcript,
-        "reply": voice.reply,
-        "stock_max": stock_max,
-        "custom_max": custom_max,
-        "custom_model_selected": selected is not None,
-        "threshold": WAKE_THRESHOLD,
-        "tts": tts.meta,
-        "wake_source": pipeline._wake_source,
-    }
+    finally:
+        pipeline.close()
 
 
 def main(argv: list[str] | None = None) -> int:
