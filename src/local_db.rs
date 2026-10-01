@@ -1008,6 +1008,18 @@ fn get_user_id_from_plist() -> Result<i64> {
 }
 
 fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
+    // TCC can suspend open() before SQLite's own bounded opener is reached.
+    // Keep the discovery stage bounded too, without using a cached identity
+    // to evade the OS's access decision.
+    run_bounded(
+        std::time::Duration::from_secs(3),
+        "local_account_metadata_access_waiting: macOS app-data access confirmation may be pending"
+            .into(),
+        move || read_user_id_from_plist_with_mode(mode),
+    )
+}
+
+fn read_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
     let home = dirs::home_dir().context("No home directory")?;
     let current_uuid = if mode == IdentityCacheMode::NoMutation {
         get_platform_uuid_without_process().ok()

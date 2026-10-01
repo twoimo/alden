@@ -13,6 +13,9 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
+class LocalDataAccessWaiting(RuntimeError):
+    pass
+
 PHASES = frozenset(('collecting', 'graphing', 'complete', 'pending', 'paused', 'failed', 'interrupted'))
 
 @contextmanager
@@ -88,7 +91,9 @@ def _local_cli(binary: Path, args: list[str]) -> dict:
     if not binary.is_absolute() or binary.is_symlink() or not binary.is_file():
         raise RuntimeError('history_cli_invalid')
     result=subprocess.run([str(binary),*args,'--json'],capture_output=True,text=True,timeout=90 if args and args[0]=='local-db-collect' else 20)
-    if result.returncode: raise RuntimeError('local_history_unavailable')
+    if result.returncode:
+        if 'local_account_metadata_access_waiting' in result.stderr: raise LocalDataAccessWaiting('local_account_metadata_access_waiting')
+        raise RuntimeError('local_history_unavailable')
     if len(result.stdout.encode())>8*1024*1024: raise RuntimeError('history_page_too_large')
     data=json.loads(result.stdout)
     if not isinstance(data,dict): raise RuntimeError('history_response_invalid')

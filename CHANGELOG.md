@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-02
+
+- 실제 앱 백그라운드 수집이 macOS 접근 확인 단계의 카카오톡 설정 파일 open()에서 멈추는 것을 샘플링으로 확인했습니다.
+- SQLite를 열기 전 계정 설정 파일 조회에도 3초 상한을 두고, 접근 대기 원인을 DB 갱신 화면에 표시합니다. 기존 캐시로 OS 접근 결정을 우회하지 않습니다.
+- 앱의 자동 원본 수집은 macOS 접근 허용 확인이 남아 있습니다. 완성된 로컬 검색 자료와 범위별 읽기는 별도로 검증됐습니다.
+
 ## [0.3.0] - 2026-10-02
 
 - 카카오톡 원본 DB·WAL의 고정 복제본을 재사용해 전체 메시지를 별도 로컬 검색 저장소로 수집합니다. 배치 데이터와 커서를 함께 커밋하며 중단 뒤 이어집니다.
