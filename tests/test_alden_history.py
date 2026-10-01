@@ -54,4 +54,15 @@ class HistoryTests(unittest.TestCase):
                 self.assertEqual(cli.call_args.args[1],['local-history','42','-n','50','--anchor','123','--before','100'])
                 with self.assertRaises(ValueError):h.read(root,Path('/absolute/cli'),'history-messages','{}','42;echo x')
 
+    def test_only_raw_collection_has_the_longer_bounded_timeout(self):
+        with TemporaryDirectory() as directory:
+            binary=Path(directory)/'cli';binary.write_bytes(b'test adapter')
+            result=mock.Mock(returncode=0,stdout='{"ok":true}')
+            with mock.patch('alden_history.subprocess.run',return_value=result) as run:
+                h._local_cli(binary,['local-db-collect'])
+                self.assertEqual(run.call_args.kwargs['timeout'],90)
+                h._local_cli(binary,['local-history','42','-n','100'])
+                self.assertEqual(run.call_args.kwargs['timeout'],20)
+                self.assertNotIn('shell',run.call_args.kwargs)
+
 if __name__=='__main__':unittest.main()

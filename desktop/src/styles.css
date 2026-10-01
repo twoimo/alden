@@ -32,7 +32,7 @@
 * { box-sizing: border-box; }
 html, body, #app { margin: 0; width: 100%; min-height: 100%; }
 body { background: var(--canvas); color: var(--text); }
-body.panel-view, body.panel-view #app { width: 276px; height: 260px; overflow: hidden; }
+body.panel-view, body.panel-view #app { width: 100%; height: 100dvh; overflow: hidden; }
 button, select { font: inherit; }
 
 .alden-panel {

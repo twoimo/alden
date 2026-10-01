@@ -513,7 +513,7 @@ impl PythonBridge {
         let result = run_process_with_recovery_env(
             &runtime.executable,
             &args,
-            Duration::from_secs(60),
+            Duration::from_secs(120),
             OUTPUT_LIMIT_BYTES,
             ProcessControl {
                 stdin_payload: None,
@@ -613,6 +613,7 @@ impl PythonBridge {
         )?;
         let is_swap = action == "model-swap";
         let is_mlx_launch = action == MLX_SERVER_LAUNCH_ACTION;
+        let is_history = matches!(action, "history-rooms" | "history-messages");
         let swap_job_id = token_id.unwrap_or("model-swap");
         if is_swap {
             self.begin_job(swap_job_id, "model_swap", "swap", 0.9);
@@ -624,6 +625,8 @@ impl PythonBridge {
                     MODEL_SWAP_TIMEOUT
                 } else if is_mlx_launch {
                     MLX_LAUNCH_TIMEOUT
+                } else if is_history {
+                    SNAPSHOT_TIMEOUT
                 } else {
                     DEFAULT_TIMEOUT
                 },

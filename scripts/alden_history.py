@@ -87,7 +87,7 @@ def cycle_step(state_root: Path, cycle: str, phase: str, **details) -> None:
 def _local_cli(binary: Path, args: list[str]) -> dict:
     if not binary.is_absolute() or binary.is_symlink() or not binary.is_file():
         raise RuntimeError('history_cli_invalid')
-    result=subprocess.run([str(binary),*args,'--json'],capture_output=True,text=True,timeout=20)
+    result=subprocess.run([str(binary),*args,'--json'],capture_output=True,text=True,timeout=90 if args==['local-db-collect'] else 20)
     if result.returncode: raise RuntimeError('local_history_unavailable')
     if len(result.stdout.encode())>8*1024*1024: raise RuntimeError('history_page_too_large')
     data=json.loads(result.stdout)

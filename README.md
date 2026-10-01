@@ -1,6 +1,6 @@
 2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 실제 Whisper와 Qwen1.7B BF16 CPU/MPS, 두 턴의 STT→27B→TTS파일을 검증했다. 사람 음성·wake·재생·숫자 발음 품질은 미완료다.
 
-Alden Desktop 0.2.0 reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
+Alden Desktop 0.2.1 includes the redesigned 0.2.0 workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
 
 History reads all messages available in the local Kakao DB through fixed-anchor pages; it does not restore messages absent from that DB. Confirmed voice text is stored locally by session. DB collection and semantic/search coverage are reported separately: the full collected corpus is not claimed to be fully indexed. Existing foreground automation workers and send gates are preserved; catalog changes take effect when automation restarts.
 

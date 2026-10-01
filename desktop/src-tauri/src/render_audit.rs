@@ -336,7 +336,9 @@ fn validate_layout(state: &Value) -> Result<(), String> {
         || state["canvas"]["x"] != 1
         || state["canvas"]["y"] != 1
     {
-        return Err("native panel layout or WebGL context invalid".into());
+        return Err(format!(
+            "native panel layout or WebGL context invalid: {state}"
+        ));
     }
     Ok(())
 }

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-02
+
+- 실제 설치본 검사에서 발견한 팝업의 이전 276px 너비와 캔버스 여백 규칙을 제거했습니다. 560×420 창 전체에 그래프가 그려집니다.
+- DB 원본 수집에 별도 90초 상한, 앱의 전체 지식 갱신에 120초 상한을 두고, 대화 기록 읽기는 25초 동안 기다리게 했습니다. 짧은 일반 상태 조회의 상한은 유지합니다.
+- 네이티브 레이아웃 검사 실패 시 실제 창·캔버스 치수를 기록합니다. 실패한 갱신은 히스토리에 남아 있으며 자동 성공으로 표시하지 않습니다.
+
 ## [0.2.0] - 2026-10-02
 
 - 넓은 설정 창에 지식 그래프·카카오톡 대화·음성 대화·DB 갱신·설정 메뉴를 배치했습니다. 별도 설정 아이콘과 모달을 제거했습니다.
