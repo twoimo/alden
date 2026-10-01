@@ -49,8 +49,8 @@ DEFAULT_TAURI_MAIN = ROOT / "desktop" / "src-tauri" / "src" / "main.rs"
 DEFAULT_OUT = ROOT / "docs" / "architecture"
 DEFAULT_PORT = 8712
 
-PANEL_SIZE = (276, 260)
-SETTINGS_SIZE = (960, 880)
+PANEL_SIZE = (560, 420)
+SETTINGS_SIZE = (1200, 740)
 CONTRACT_INTERACTIVE_TAGS = "button,select,input,textarea,a,details,summary"
 # The Rust shell's window-visibility event. desktop/src/core/lifecycle-wiring.ts
 # exports this as VISIBILITY_EVENT, and the contract tests pin the two together
@@ -218,6 +218,7 @@ BUSY_SNAPSHOT["voice"]["state"] = "listening"
 BUSY_SNAPSHOT["voice"]["rms"] = 0.42
 
 KNOWLEDGE_GRAPH: dict[str, Any] = {
+    "ok": True,
     "stale": False,
     "nodes": [
         {"id": "person:\uc608\uc2dc\uc778\ubb3c", "label": "\uc608\uc2dc\uc778\ubb3c", "category": "person", "importance": 95, "updated_at": 1790000000},
@@ -241,6 +242,12 @@ SETTINGS_ACTIONS: dict[str, Any] = {
     "model-prepare": {"ok": True, "action": "model-prepare", "model": "ddalcu/Qwen3.8-27B-MLX-Serve-4bit", "stored": True, "prepared": True, "needs_prepare": False},
     "model-swap": {"ok": False, "action": "model-swap", "model": "ddalcu/Qwen3.8-27B-MLX-Serve-4bit", "stage": "failed", "reason": "model_owner_unmanaged", "stages": [], "stored": False, "prepared": False},
     "room-upsert": {"ok": True, "action": "room-upsert"},
+    "room-delete": {"ok": True}, "room-catalog": {"ok": True, "rooms": []},
+    "history-rooms": {"ok": True, "rooms": []},
+    "history-messages": {"ok": True, "messages": [], "anchor_log_id": "0", "next_before": None, "total": 0},
+    "voice-history-sessions": {"ok": True, "items": []},
+    "voice-history-messages": {"ok": True, "items": [], "next": None},
+    "db-sync-history": {"ok": True, "items": [], "next": None, "current": None},
     "knowledge-graph-status": {
         "stale": False,
         "snapshot_status": "copy_ok",
@@ -358,7 +365,7 @@ PROBE_SOURCE = r"""
       disabled: element.disabled === true
     })),
     extraFocusable: all("[tabindex]:not([tabindex='-1']), [contenteditable='true']").filter((element) => !element.matches(contractTags)).map((element) => element.tagName.toLowerCase()),
-    headings: all("h2").map((element) => text(element).trim()),
+    headings: all("#settings-page-settings h2").map((element) => text(element).trim()),
     mains: all("main").length,
     mainClasses: all("main").map((element) => String(element.className || "")),
     viewportWidth: window.innerWidth,

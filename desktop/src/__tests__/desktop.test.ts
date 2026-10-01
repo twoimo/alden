@@ -22,7 +22,7 @@ import {
 } from "../runtime";
 import { RuntimeSnapshotPoller } from "../runtime-poller";
 import { LEGACY_RESIDENT_MODEL_ID, LAYOUT, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "../tokens";
-import { MAIN_PANEL_CONTROLS, mainPanelMarkup, renderBackground, renderHistory, renderRooms, settingsMarkup } from "../ui";
+import { MAIN_PANEL_CONTROLS, mainPanelMarkup, renderBackground, renderRooms, settingsMarkup } from "../ui";
 
 class FakeScheduler implements FrameScheduler {
   nowMs = 0;
@@ -392,79 +392,6 @@ describe("safe shared contracts", () => {
   });
 });
 
-describe("history settings card", () => {
-  it("renders present receipts without forbidden content", () => {
-    document.body.innerHTML = settingsMarkup();
-    const snapshot = parseRuntimeSnapshot({
-      available: true,
-      rooms: [],
-      jobs: [],
-      context_sync: { mode: "async", waited: false },
-      recent_receipts: [{
-        chatId: 7,
-        title: "부자멘토멘티",
-        displayTime: "09-21 16:00",
-        clock: "16:00",
-        outcome: "sent",
-        outcomeText: "전송 완료",
-        reasonCode: "direct_question about prior conversation topic",
-        reasonText: "기록된 사유",
-        retrievalState: "ok",
-        message: "SHOULD_NOT_RENDER",
-        prompt: "SECRET_PROMPT",
-        token: "SECRET_TOKEN",
-        model_attempts: [{ model: "SECRET_MODEL" }],
-      }],
-    });
-    renderHistory(snapshot);
-    expect(document.getElementById("history-summary")?.textContent).toContain("최근 1건");
-    expect(document.getElementById("history-list")?.textContent).toContain("부자멘토멘티");
-    expect(document.getElementById("history-list")?.textContent).toContain("전송 완료");
-    expect(document.getElementById("history-list")?.textContent).toContain("기록된 사유");
-    expect(document.body.textContent).not.toContain("direct_question about prior conversation topic");
-    expect(document.body.textContent).not.toContain("SHOULD_NOT_RENDER");
-    expect(document.body.textContent).not.toContain("SECRET_PROMPT");
-    expect(document.body.textContent).not.toContain("SECRET_TOKEN");
-    expect(document.body.textContent).not.toContain("SECRET_MODEL");
-  });
-
-  it("renders the empty state", () => {
-    document.body.innerHTML = settingsMarkup();
-    const snapshot = parseRuntimeSnapshot({ available: true, rooms: [], jobs: [], context_sync: { mode: "async", waited: false } });
-    renderHistory(snapshot);
-    expect(document.getElementById("history-summary")?.textContent).toBe("최근 기록이 없습니다.");
-    expect(document.querySelectorAll("#history-list [role='listitem']")).toHaveLength(0);
-  });
-
-  it("falls back to the outcome code when outcomeText is absent", () => {
-    document.body.innerHTML = settingsMarkup();
-    const snapshot = parseRuntimeSnapshot({
-      available: true,
-      rooms: [],
-      jobs: [],
-      context_sync: { mode: "async", waited: false },
-      recent_receipts: [{
-        chatId: 9,
-        title: "방",
-        displayTime: "09-21 16:00",
-        clock: "16:00",
-        outcome: "scheduled",
-        reasonCode: "social_reply",
-        reasonText: "대화 참여",
-        retrievalState: "skipped",
-      }],
-    });
-    renderHistory(snapshot);
-    expect(document.getElementById("history-list")?.textContent).toContain("예약됨");
-  });
-
-  it("renders the unavailable state", () => {
-    document.body.innerHTML = settingsMarkup();
-    renderHistory(parseRuntimeSnapshot({ available: false, rooms: [], jobs: [], context_sync: { mode: "async", waited: false } }));
-    expect(document.getElementById("history-summary")?.textContent).toBe("최근 답변 기록을 불러오지 못했습니다.");
-  });
-});
-
 describe("background settings activity", () => {
   it("renders valid, empty, and unavailable states", () => {
     document.body.innerHTML = settingsMarkup();
@@ -625,7 +552,7 @@ describe("background signal polling", () => {
 
 describe("layout and settings contract", () => {
   it("keeps live Extra geometry", () => {
-    expect(LAYOUT).toMatchObject({ panelWidth: 276, panelHeight: 260, panelInset: 12, coreSize: 236 });
+    expect(LAYOUT).toMatchObject({ panelWidth: 560, panelHeight: 420, panelInset: 12, coreSize: 236 });
   });
 
   it("main panel has zero interactive controls", () => {
@@ -643,7 +570,9 @@ describe("layout and settings contract", () => {
     expect(markup).toContain('id="voice-status"');
     expect(markup).toContain('호출어: 올든');
     expect(markup).toContain('‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력이 꺼져 있습니다.');
-    expect(markup).toContain("긴급 중단은 ⌘⌥⇧Esc를 누르세요.");
+    expect(markup).not.toContain("긴급 중단은 ⌘⌥⇧Esc를 누르세요.");
+    expect(markup).toContain('id="settings-tab-settings"');
+    expect(markup).not.toContain('id="settings-gear"');
     expect(markup).toContain('id="voice-start"');
     expect(markup).toContain('id="voice-start" type="button" disabled');
     expect(mainPanelMarkup()).not.toContain('id="voice-start"');
@@ -669,7 +598,7 @@ describe("layout and settings contract", () => {
     expect(markup).not.toContain(SWAP_MODEL_ID);
   });
 
-  it("renders enrolled rooms and populates add-room selector with un-enrolled chats", () => {
+  it("renders the current operating roster separately from automation registration", () => {
     document.body.innerHTML = settingsMarkup();
     const snapshot = unavailableSnapshot();
     snapshot.available = true;
@@ -687,10 +616,7 @@ describe("layout and settings contract", () => {
     expect(enrolledSelect.options[0].value).toBe("424242");
     expect(enrolledSelect.options[0].textContent).toBe("예시 채팅방");
 
-    const addSelect = document.getElementById("settings-add-room-select") as HTMLSelectElement;
-    expect(addSelect.options.length).toBe(2);
-    expect(addSelect.options[1].value).toBe("1234567890");
-    expect(addSelect.options[1].textContent).toBe("새로운 카카오방");
+
   });
 });
 

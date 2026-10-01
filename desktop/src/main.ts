@@ -1,5 +1,8 @@
 import { KnowledgeRefresh } from "./knowledge/refresh";
+import { wireConversationViews } from './conversations';
+import { wireSettingsPreferences } from './settings-preferences';
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from '@tauri-apps/api/app';
 import "./styles.css";
 import "./settings.css";
 import { renderSettingsIcons, wireSettingsNavigation } from "./settings-navigation";
@@ -37,6 +40,7 @@ import {
   fetchSettingsAction,
   normalizeLocalModelId,
   operatorResume,
+  operatorPause,
   selectResidentModel,
   setSwapModel,
   subscribeEmergencyState,
@@ -51,7 +55,7 @@ import {
   type SnapshotCanceller,
   type SnapshotLoader,
 } from "./runtime-poller";
-import { mainPanelMarkup, renderBackground, renderEmergencyState, renderHistory, renderRooms, settingsMarkup, voiceErrorMessage } from "./ui";
+import { mainPanelMarkup, renderBackground, renderEmergencyState,  renderRooms, settingsMarkup, voiceErrorMessage } from "./ui";
 import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 import { wireVoiceStart } from "./voice-controls";
 
@@ -96,39 +100,8 @@ function showPanelUnavailable(message: string): void {
 function renderPanelUnavailable(): void {
   app.innerHTML = mainPanelMarkup();
   document.querySelector<HTMLCanvasElement>(".alden-core")
-    ?.setAttribute("aria-label", "Alden core 확인 불가");
-  showPanelUnavailable("Alden 상태를 확인할 수 없습니다.");
-}
-
-function wireRoomAdd(loadSnapshot: SnapshotLoader, loadAction: typeof fetchSettingsAction): void {
-  const addBtn = document.querySelector<HTMLButtonElement>("#settings-add-room-button");
-  const addSelect = document.querySelector<HTMLSelectElement>("#settings-add-room-select");
-  if (!addBtn || !addSelect) return;
-  addBtn.addEventListener("click", async () => {
-    const selectedId = addSelect.value;
-    if (!selectedId) return;
-    const selectedTitle = addSelect.selectedOptions[0]?.textContent || "";
-    addBtn.disabled = true;
-    setText("room-summary", "채팅방을 등록하는 중...");
-    try {
-      const res = await loadAction("room-upsert", {
-        chatId: selectedId,
-        query: selectedTitle,
-      });
-      if (res && res.ok === true) {
-        setText("room-summary", `채팅방이 등록되었습니다: ${selectedTitle}`);
-        const token = createCancellationToken();
-        const updatedSnapshot = await loadSnapshot(token);
-        renderRooms(updatedSnapshot);
-      } else {
-        setText("room-summary", "채팅방을 등록하지 못했습니다. 확인 후 다시 시도해 주세요.");
-      }
-    } catch {
-      setText("room-summary", "채팅방 등록 중 오류가 발생했습니다.");
-    } finally {
-      addBtn.disabled = false;
-    }
-  });
+    ?.setAttribute("aria-label", "올든 지식 그래프 확인 불가");
+  showPanelUnavailable("지식의 연결을 불러오지 못했습니다.");
 }
 
 function modelButton(modelId: string): HTMLButtonElement | null {
@@ -306,13 +279,13 @@ function renderSettingsUnavailable(): void {
   app.innerHTML = settingsMarkup();
   app.dataset.state = "unavailable";
   renderSettingsIcons();
+  void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
   const navigation = wireSettingsNavigation();
   window.addEventListener("pagehide", navigation.dispose, { once: true });
   const snapshot = unavailableSnapshot("desktop_boot_failed");
   renderRooms(snapshot);
   renderModels(snapshot);
   renderVoice(snapshot);
-  renderHistory(snapshot);
   renderBackground(snapshot);
   setText("model-status", "AI 답변 설정을 확인할 수 없습니다.");
   setText("settings-sync-source", "대화 준비 상태를 확인할 수 없습니다.");
@@ -328,6 +301,7 @@ type EmergencyResumeAction = (explicitOptIn: boolean) => Promise<EmergencyState 
 export function wireEmergencyResume(
   resumeAction: EmergencyResumeAction,
   root: Document = document,
+  pauseAction: typeof operatorPause = operatorPause,
 ): { update: (state: EmergencyState) => void } {
   const button = root.querySelector<HTMLButtonElement>("#emergency-resume");
   let current: EmergencyState | null = null;
@@ -335,7 +309,7 @@ export function wireEmergencyResume(
 
   const renderCurrent = (): void => {
     if (current) renderEmergencyState(current, root);
-    if (button) button.disabled = busy || current?.latched !== true;
+    if (button) button.disabled = busy || current === null;
   };
   const update = (state: EmergencyState): void => {
     if (current && state.epoch <= current.epoch) {
@@ -348,12 +322,12 @@ export function wireEmergencyResume(
 
   button?.addEventListener("click", async () => {
     const before = current;
-    if (!before?.latched || busy) return;
+    if (!before || busy) return;
     busy = true;
     renderCurrent();
     let resumed: EmergencyState | null = null;
     try {
-      resumed = await resumeAction(true);
+      resumed = before.latched ? await resumeAction(true) : await pauseAction();
     } catch {
       resumed = null;
     }
@@ -361,8 +335,8 @@ export function wireEmergencyResume(
     if (
       resumed
       && resumed.epoch > before.epoch
-      && !resumed.latched
-      && resumed.reason === "human_resume"
+      && resumed.latched !== before.latched
+      && (resumed.latched || resumed.reason === "human_resume")
     ) {
       update(resumed);
       return;
@@ -539,6 +513,7 @@ interface SettingsBootDependencies {
   loadAction: typeof fetchSettingsAction;
   loadEmergency: typeof fetchEmergencyState;
   resumeEmergency: EmergencyResumeAction;
+  pauseEmergency: typeof operatorPause;
   subscribeEmergency: EmergencyStateSubscriber | null;
   wireVoice: typeof wireVoiceStart;
   invokeCommand: typeof invoke;
@@ -555,6 +530,7 @@ export async function bootSettings(
     loadAction: fetchSettingsAction,
     loadEmergency: fetchEmergencyState,
     resumeEmergency: operatorResume,
+    pauseEmergency: operatorPause,
     subscribeEmergency: subscribeEmergencyState,
     wireVoice: wireVoiceStart,
     invokeCommand: invoke,
@@ -565,15 +541,23 @@ export async function bootSettings(
   app.innerHTML = settingsMarkup();
   app.dataset.state = "loading";
   renderSettingsIcons();
+  void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
+  const archives=wireConversationViews(dependencies.loadAction);
+  const preferences=wireSettingsPreferences(dependencies.loadAction);
+  window.addEventListener('pagehide',()=>{archives.dispose();preferences.dispose();},{once:true});
   let graphLifecycle: RenderLifecycle | null = null;
+  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility});
+  window.addEventListener('pagehide',detachArchiveVisibility,{once:true});
   const navigation = wireSettingsNavigation(document, (page) => {
+    archives.select(page);
+    preferences.select(page);
     graphLifecycle?.setSurfaceVisible(page === "memory");
     if (page === "memory") window.dispatchEvent(new Event("resize"));
   });
   window.addEventListener("pagehide", navigation.dispose, { once: true });
   let hologram: KnowledgeHologram | null = null;
   try {
-    const emergency = wireEmergencyResume(dependencies.resumeEmergency);
+    const emergency = wireEmergencyResume(dependencies.resumeEmergency,document,dependencies.pauseEmergency);
     if (dependencies.subscribeEmergency) {
       try {
         const unsubscribe = await dependencies.subscribeEmergency(emergency.update);
@@ -603,12 +587,10 @@ export async function bootSettings(
     }
 
     renderRooms(snapshot);
-    wireRoomAdd(dependencies.loadSnapshot, dependencies.loadAction);
     renderModels(snapshot);
     if (snapshot.available) wireModelSelection(dependencies.invokeCommand);
     renderVoice(snapshot);
-    renderHistory(snapshot);
-    renderBackground(snapshot);
+      renderBackground(snapshot);
     dependencies.wireVoice(document, dependencies.invokeCommand);
 
     if (knowledge) {
@@ -678,6 +660,7 @@ export async function bootSettings(
 type CommandInvoker = (command: string) => Promise<unknown>;
 
 interface PanelBootDependencies {
+  loadKnowledge: typeof fetchSettingsAction;
   createCore: (canvas: HTMLCanvasElement) => AldenCoreControl | Promise<AldenCoreControl>;
   loadSnapshot: SnapshotLoader;
   cancelSnapshot: SnapshotCanceller;
@@ -693,9 +676,15 @@ export async function bootPanel(
   overrides: Partial<PanelBootDependencies> = {},
 ): Promise<void> {
   const dependencies: PanelBootDependencies = {
+    loadKnowledge: fetchSettingsAction,
     createCore: async (canvas) => {
-      const { AldenCore } = await import("./core/alden-core");
-      return new AldenCore(canvas);
+      const payload=await dependencies.loadKnowledge('knowledge-graph');
+      const parsed=parseKnowledgeGraph(payload);
+      if(!payload||payload.ok!==true)throw new Error('graph_unavailable');
+      const {KnowledgeHologram}=await import('./knowledge/hologram');
+      const graph=new KnowledgeHologram(canvas,parsed,({node})=>setText('panel-knowledge-title',node?.label??'카카오톡'),()=>undefined,'popover');
+      const refresh=new KnowledgeRefresh(()=>dependencies.loadKnowledge('knowledge-graph'),next=>{if(next?.ok===true)graph.replaceGraph(parseKnowledgeGraph(next));});
+      return {get renderCount(){return graph.renderCount;},start:()=>{graph.start();refresh.start();},stop:()=>{refresh.stop();graph.stop();},diagnostics:()=>graph.diagnostics(),setSignals:(load,rms)=>graph.setSignals(load,rms),dispose:()=>{refresh.stop();graph.dispose();}};
     },
     loadSnapshot: fetchRuntimeSnapshot,
     cancelSnapshot: cancelRuntimeRequest,
@@ -798,4 +787,10 @@ export async function startDesktopApp(
   }
 }
 
-void startDesktopApp().catch(() => undefined);
+if(import.meta.env.DEV&&new URLSearchParams(location.search).has('demo')) {
+  void import('./dev-fixture').then(async fixture=>{
+    if(isSettings)await bootSettings({loadSnapshot:fixture.snapshot,loadAction:fixture.action,loadEmergency:async()=>fixture.emergency,pauseEmergency:fixture.pause,resumeEmergency:fixture.resume,subscribeEmergency:null,subscribeVisibility:null,readVisibility:null,wireVoice:()=>undefined});
+    else await bootPanel({loadKnowledge:fixture.action,loadSnapshot:fixture.snapshot,subscribeVisibility:null,readVisibility:null});
+    const label=document.createElement('span');label.className='development-preview-label';label.textContent='예시 데이터 · 개발 미리보기';document.body.append(label);
+  });
+}else void startDesktopApp().catch(() => undefined);

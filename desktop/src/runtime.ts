@@ -8,7 +8,14 @@ type SettingsAction =
   | "knowledge-graph-status"
   | "knowledge-graph"
   | "knowledge-graph-focus"
-  | "room-upsert";
+  | "room-upsert" | "room-delete" | "room-catalog"
+  | "history-rooms" | "history-messages"
+  | "voice-history-sessions" | "voice-history-messages" | "db-sync-history";
+
+export async function operatorPause(): Promise<EmergencyState | null> {
+  try { return parseEmergencyState(await invoke<unknown>("operator_pause")); }
+  catch { return null; }
+}
 
 export interface SettingsActionInput {
   query?: string;

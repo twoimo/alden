@@ -44,13 +44,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 */
-import { createIcons, Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap } from "lucide";
+import { createIcons, Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X } from "lucide";
 
-export type SettingsPage = "conversation" | "voice" | "memory" | "history";
-const labels: Record<SettingsPage, string> = { conversation: "대화 · AI", voice: "음성 대화", memory: "지식 그래프", history: "최근 답변" };
+export type SettingsPage = "conversation" | "voice" | "memory" | "history" | "settings";
+const labels: Record<SettingsPage, string> = { conversation: "카카오톡 대화", voice: "음성 대화", memory: "지식 그래프", history: "DB 갱신", settings: "설정" };
 
 export function renderSettingsIcons(): void {
-  createIcons({ icons: { Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap }, attrs: { "stroke-width": 1.6, "aria-hidden": "true" } });
+  createIcons({ icons: { Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X }, attrs: { "stroke-width": 1.6, "aria-hidden": "true" } });
 }
 
 export function wireSettingsNavigation(root: Document = document, changed: (page: SettingsPage) => void = () => undefined): { current: () => SettingsPage; dispose: () => void } {

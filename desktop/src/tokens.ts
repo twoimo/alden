@@ -1,6 +1,6 @@
 export const LAYOUT = Object.freeze({
-  panelWidth: 276,
-  panelHeight: 260,
+  panelWidth: 560,
+  panelHeight: 420,
   panelInset: 12,
   coreSize: 236,
   settingsMaxWidth: 912,

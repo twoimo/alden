@@ -59,13 +59,7 @@ class SharedExpectations(unittest.TestCase):
         self.assertIn("permission", self.contract["banned_tokens"])
         self.assertEqual(
             self.contract["settings_sections"],
-            [
-                "등록된 채팅방",
-                "AI \ub2f5\ubcc0",
-                "\uce74\uce74\uc624\ud1a1 \ub300\ud654",
-                "음성 대화",
-                "\ucd5c\uadfc \ub2f5\ubcc0",
-            ],
+            ["채팅방 자동화", "답변 방식", "음성 대화"],
         )
 
     def test_contract_hash_is_recorded_from_the_file_it_read(self) -> None:
@@ -80,7 +74,8 @@ class SharedExpectations(unittest.TestCase):
             check._array_literals("const OTHER = [];", "REMOVED_TOKENS")
 
     def test_contract_sections_match_the_settings_source(self) -> None:
-        headings = check.headings_from_markup(template_body(UI_SOURCE.read_text(encoding="utf-8"), "settingsMarkup"))
+        markup = template_body(UI_SOURCE.read_text(encoding="utf-8"), "settingsMarkup")
+        headings = check.headings_from_markup(markup.split('id="settings-page-settings"', 1)[1])
         self.assertEqual(headings, self.contract["settings_sections"])
 
     def test_ui_sources_carry_no_banned_token(self) -> None:
@@ -177,7 +172,8 @@ class BridgeStub(unittest.TestCase):
                 "knowledge-graph-status",
                 "knowledge-graph",
                 "knowledge-graph-focus",
-                "room-upsert",
+                "room-upsert", "room-delete", "room-catalog",
+                "history-rooms", "history-messages", "voice-history-sessions", "voice-history-messages", "db-sync-history",
             },
         )
         extra = {"model-set", "model-prepare", "model-swap"}

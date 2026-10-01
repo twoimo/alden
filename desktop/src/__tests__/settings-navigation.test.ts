@@ -22,8 +22,8 @@ describe("wide settings navigation", () => {
   it("moves keyboard focus and selection together, including wrapping", () => {
     const nav = wireSettingsNavigation(); tab("conversation").focus();
     tab("conversation").dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    expect(document.activeElement).toBe(tab("history")); expect(nav.current()).toBe("history");
-    tab("history").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    expect(document.activeElement).toBe(tab("settings")); expect(nav.current()).toBe("settings");
+    tab("settings").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     expect(nav.current()).toBe("memory"); expect(document.activeElement).toBe(tab("memory"));
     expect([...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].filter(b=>b.tabIndex===0)).toHaveLength(1);
     nav.dispose();

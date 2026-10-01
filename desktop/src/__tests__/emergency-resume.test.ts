@@ -38,30 +38,30 @@ describe("explicit emergency resume", () => {
     expect(parseEmergencyState({ ...resumed, reason: "automatic_resume" })).toBeNull();
   });
 
-  it("never resumes on boot and shows the control only while latched", () => {
+  it("never resumes on boot and keeps one operation control visible", () => {
     const action = vi.fn(async () => resumed);
     const { controls, area, button } = fixture(action);
-    expect(area.hidden).toBe(true);
+    expect(area.hidden).toBe(false);
     controls.update(paused);
     expect(area.hidden).toBe(false);
-    expect(button.textContent).toBe("다시 시작");
+    expect(button.getAttribute("aria-label")).toBe("올든 운영 재개");
     expect(document.querySelector("#emergency-status")?.textContent).toBe("일시 중지됨");
     expect(action).not.toHaveBeenCalled();
     controls.update(resumed);
-    expect(area.hidden).toBe(true);
-    expect(button.disabled).toBe(true);
+    expect(area.hidden).toBe(false);
+    expect(button.disabled).toBe(false);
   });
 
   it("sends explicit opt-in once and requires resumed epoch readback", async () => {
     let resolve!: (state: typeof resumed) => void;
     const action = vi.fn(() => new Promise<typeof resumed>((accept) => { resolve = accept; }));
-    const { controls, area, button } = fixture(action);
+    const { controls, button } = fixture(action);
     controls.update(paused);
     button.click(); button.click();
     expect(action.mock.calls).toEqual([[true]]);
     expect(button.disabled).toBe(true);
     resolve(resumed);
-    await vi.waitFor(() => expect(area.hidden).toBe(true));
+    await vi.waitFor(() => expect(button.getAttribute("aria-label")).toBe("올든 일시 중지"));
   });
 
   it("keeps the stop state when resume fails or returns an old epoch", async () => {

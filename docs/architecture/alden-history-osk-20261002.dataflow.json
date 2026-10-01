@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "올든 기록과 지식 갱신",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      500
+    ]
+  },
+  "stages": [
+    {
+      "label": "로컬 출처"
+    },
+    {
+      "label": "확인과 정리"
+    },
+    {
+      "label": "별도 저장"
+    },
+    {
+      "label": "올든 화면"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "kakao",
+      "type": "database",
+      "label": "카카오톡 원본 DB",
+      "sublabel": "DB와 WAL 함께 확인",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "snapshot",
+      "type": "backend",
+      "label": "일관된 복제본",
+      "sublabel": "원본 변경 없이 수집",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "cycles",
+      "type": "database",
+      "label": "DB 갱신 기록",
+      "sublabel": "수집·정리·대기·실패",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "dbview",
+      "type": "frontend",
+      "label": "DB 갱신 화면",
+      "sublabel": "현재 상태와 과거 기록",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "index",
+      "type": "database",
+      "label": "기존 검색 자료",
+      "sublabel": "원본 전체 수집량과 별도",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "entities",
+      "type": "backend",
+      "label": "GraphRAG 지식",
+      "sublabel": "출처와 안정적인 ID",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "osk",
+      "type": "database",
+      "label": "OSK 지식 저장소",
+      "sublabel": "인물·대화방·주제",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "graph",
+      "type": "frontend",
+      "label": "3D 지식 그래프",
+      "sublabel": "설정과 메뉴바 팝업",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "voice",
+      "type": "backend",
+      "label": "음성 대화 턴",
+      "sublabel": "취소와 순서 확인",
+      "stage": 0,
+      "row": 2
+    },
+    {
+      "id": "confirmed",
+      "type": "backend",
+      "label": "확정된 말씀과 답변",
+      "sublabel": "늦은 취소 결과 제외",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "journal",
+      "type": "database",
+      "label": "로컬 대화 기록",
+      "sublabel": "텍스트만 저장",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "voiceview",
+      "type": "frontend",
+      "label": "음성 대화 화면",
+      "sublabel": "세션별 전체 기록 탐색",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "kakao",
+      "to": "snapshot",
+      "label": "수집",
+      "variant": "emphasis"
+    },
+    {
+      "from": "snapshot",
+      "to": "cycles",
+      "label": "단계 저장",
+      "variant": "emphasis"
+    },
+    {
+      "from": "cycles",
+      "to": "dbview",
+      "label": "상태 조회",
+      "variant": "emphasis"
+    },
+    {
+      "from": "index",
+      "to": "entities",
+      "label": "지식 생성",
+      "variant": "emphasis"
+    },
+    {
+      "from": "entities",
+      "to": "osk",
+      "label": "실제 OSK API",
+      "variant": "emphasis"
+    },
+    {
+      "from": "osk",
+      "to": "graph",
+      "label": "읽기 전용 표시",
+      "variant": "emphasis"
+    },
+    {
+      "from": "voice",
+      "to": "confirmed",
+      "label": "턴 확정",
+      "variant": "emphasis"
+    },
+    {
+      "from": "confirmed",
+      "to": "journal",
+      "label": "기록 저장",
+      "variant": "emphasis"
+    },
+    {
+      "from": "journal",
+      "to": "voiceview",
+      "label": "페이지 조회",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "출처와 범위",
+      "items": [
+        "원본 수집량과 검색 자료의 범위를 구분합니다.",
+        "OSK ID와 사용자 편집을 보존합니다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "기록과 개인정보",
+      "items": [
+        "카카오톡은 원문을 자르지 않고 커서로 읽습니다.",
+        "음성 원본 오디오와 취소된 답변은 기록하지 않습니다."
+      ]
+    }
+  ]
+}

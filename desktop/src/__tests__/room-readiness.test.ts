@@ -97,7 +97,7 @@ describe("room readiness display", () => {
     expect(document.getElementById("room-summary")?.textContent)
       .toBe("채팅방 목록을 불러오지 못했습니다. 다시 확인해 주세요.");
     expect(document.getElementById("room-summary")?.textContent).not.toContain("답변 가능");
-    for (const id of ["settings-room-popup", "settings-add-room-select"]) {
+    for (const id of ["settings-room-popup"]) {
       const select = document.getElementById(id) as HTMLSelectElement;
       expect(select.options).toHaveLength(1);
       expect(select.value).toBe("");
@@ -125,21 +125,16 @@ describe("room readiness display", () => {
     });
     renderRooms(snapshot);
     const enrolled = document.getElementById("settings-room-popup") as HTMLSelectElement;
-    const add = document.getElementById("settings-add-room-select") as HTMLSelectElement;
     enrolled.value = "12";
-    add.value = "13";
     const enrolledOption = enrolled.selectedOptions[0];
-    const candidateOption = add.selectedOptions[0];
     const summaryText = document.getElementById("room-summary")!.firstChild;
     for (let n = 0; n < 50; n++) renderRooms(snapshot);
     expect(enrolled.value).toBe("12");
-    expect(add.value).toBe("13");
     expect(enrolled.selectedOptions[0]).toBe(enrolledOption);
-    expect(add.selectedOptions[0]).toBe(candidateOption);
     expect(document.getElementById("room-summary")!.firstChild).toBe(summaryText);
   });
 
-  it("keeps valid selections after changes and removes enrolled add candidates", () => {
+  it("keeps valid selections after changes when the roster changes", () => {
     document.body.innerHTML = settingsMarkup();
     const snapshot = availableSnapshot({
       available: true, rooms: [room(11), room(12)],
@@ -147,19 +142,14 @@ describe("room readiness display", () => {
     });
     renderRooms(snapshot);
     const enrolled = document.getElementById("settings-room-popup") as HTMLSelectElement;
-    const add = document.getElementById("settings-add-room-select") as HTMLSelectElement;
     enrolled.value = "12";
-    add.value = "13";
     snapshot.rooms.reverse();
     snapshot.rooms[0].title = "이름 변경";
     snapshot.availableChats[0].title = "후보 이름 변경";
     renderRooms(snapshot);
     expect(enrolled.value).toBe("12");
     expect(enrolled.selectedOptions[0].textContent).toBe("이름 변경");
-    expect(add.value).toBe("13");
     snapshot.rooms.push(...availableSnapshot({ rooms: [room(13)] }).rooms);
     renderRooms(snapshot);
-    expect(add.value).toBe("");
-    expect(Array.from(add.options).map((option) => option.value)).toEqual(["", "14"]);
   });
 });

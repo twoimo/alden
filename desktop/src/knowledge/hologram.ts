@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { AnimationLoop } from "../core/animation-loop";
 import type { AnimationLoopDiagnostics } from "../core/animation-loop";
 import {
@@ -46,6 +47,9 @@ export class KnowledgeHologram {
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly loop: AnimationLoop;
+  private readonly orbit: OrbitControls;
+  private orbitActive=false;
+  private readonly press=new THREE.Vector2();
   private drilldown: KnowledgeDrilldown;
   private readonly positions = new Map<string, THREE.Vector3>();
   private readonly nodeMeshes = new Map<string, THREE.Mesh>();
@@ -66,12 +70,18 @@ export class KnowledgeHologram {
     private graph: KnowledgeGraph,
     private readonly onFocus: FocusHandler,
     private readonly onDispose: () => void = () => undefined,
+    private readonly layoutMode: 'workspace'|'popover' = 'workspace',
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "low-power" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.camera.position.copy(this.desiredCamera);
+    this.orbit=new OrbitControls(this.camera,canvas);
+    this.orbit.enableDamping=false;this.orbit.minDistance=2.2;this.orbit.maxDistance=12;this.orbit.rotateSpeed=.65;this.orbit.zoomSpeed=.7;
+    this.orbit.addEventListener('start',()=>{this.orbitActive=true;});
+    this.orbit.addEventListener('end',()=>{this.orbitActive=false;});
+    this.orbit.addEventListener('change',()=>{if(this.orbitActive){this.desiredCamera.copy(this.camera.position);this.desiredLookAt.copy(this.orbit.target);this.lookAt.copy(this.orbit.target);}});
     this.scene.add(this.graphRoot);
 
     const ambient = new THREE.AmbientLight(0xffffff, 1.55);
@@ -80,14 +90,14 @@ export class KnowledgeHologram {
     this.scene.add(ambient, key);
     this.addGuidePlane();
 
-    const sorted = [...graph.nodes].sort((left, right) => left.id.localeCompare(right.id));
-    sorted.forEach((node, index) => this.positions.set(node.id, spherePoint(index, sorted.length, 1.42)));
+    this.layoutPositions();
 
     this.drilldown = new KnowledgeDrilldown(graph);
     this.view = this.drilldown.current();
     this.rebuildGraph();
     this.loop = new AnimationLoop((dt) => this.render(dt));
-    this.canvas.addEventListener("pointerdown", this.handlePointerDown);
+    this.canvas.addEventListener("pointerdown", this.rememberPress);
+    this.canvas.addEventListener("pointerup", this.handlePointerDown);
 
     this.resizeObserver = typeof ResizeObserver === "undefined"
       ? null
@@ -111,6 +121,10 @@ export class KnowledgeHologram {
     return this.loop.renderCount;
   }
 
+  setSignals(load:number,_voiceRms:number):void {
+    this.graphRoot.scale.setScalar(1+Math.max(0,Math.min(1,load))*.006);
+  }
+
   get currentView(): KnowledgeView {
     return this.view;
   }
@@ -122,9 +136,7 @@ export class KnowledgeHologram {
     const focus = this.view.focusId;
     this.graph = graph;
     const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
-    sorted.forEach((node, index) => {
-      if (!this.positions.has(node.id)) this.positions.set(node.id, spherePoint(index, sorted.length, 1.42));
-    });
+    this.layoutPositions();
     const ids = new Set(sorted.map(node => node.id));
     for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
     this.view = this.drilldown.replaceGraph(graph);
@@ -195,7 +207,9 @@ export class KnowledgeHologram {
     this.disposed = true;
     this.onDispose();
     this.stop();
-    this.canvas.removeEventListener("pointerdown", this.handlePointerDown);
+    this.canvas.removeEventListener("pointerdown", this.rememberPress);
+    this.canvas.removeEventListener("pointerup", this.handlePointerDown);
+    this.orbit.dispose();
     this.resizeObserver?.disconnect();
     disposeObject(this.graphRoot);
     this.scene.children
@@ -228,6 +242,16 @@ export class KnowledgeHologram {
     ring.rotation.x = Math.PI / 2;
     ring.position.y = -1.55;
     this.scene.add(ring);
+  }
+
+  private layoutPositions():void {
+    const sorted=[...this.graph.nodes].sort((a,b)=>a.id.localeCompare(b.id));
+    const groups=sorted.filter(n=>n.category==='collection');
+    if(!groups.length){sorted.forEach((n,i)=>this.positions.set(n.id,spherePoint(i,sorted.length,1.42)));return;}
+    const root=groups.find(n=>n.label==='카카오톡')??groups[0];this.positions.set(root.id,new THREE.Vector3(0,.1,0));
+    const children=groups.filter(n=>n!==root);children.forEach((n,i)=>{const angle=i*Math.PI*2/Math.max(1,children.length);this.positions.set(n.id,new THREE.Vector3(Math.cos(angle)*1.1,Math.sin(angle)*.75,Math.sin(angle+.7)*.55));});
+    for(const node of sorted){if(node.category==='collection')continue;const parent=this.graph.edges.find(e=>e.target===node.id&&e.relation==='contains')?.source;const center=parent?this.positions.get(parent):undefined;let hash=0;for(const c of node.id)hash=(hash*31+c.charCodeAt(0))>>>0;
+      const point=spherePoint(hash%97,97,.6);if(center)point.add(center);this.positions.set(node.id,point);}
   }
 
   private rebuildGraph(): void {
@@ -264,12 +288,12 @@ export class KnowledgeHologram {
       const position = this.positions.get(node.id);
       if (!position) continue;
       const focused = node.id === focusId;
-      const radius = 0.04 + (node.importance / 100) * 0.025 + (focused ? 0.02 : 0);
+      const radius = (node.category==='collection'?.095:.04) + (node.importance / 100) * 0.025 + (focused ? 0.02 : 0);
       const geometry = new THREE.SphereGeometry(radius, 18, 12);
       const material = new THREE.MeshStandardMaterial({
         color: accent,
-        roughness: 0.74,
-        metalness: focused ? 0.16 : 0.04,
+        roughness: 0.35,
+        metalness: focused ? 0.24 : 0.1,
       });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.copy(position);
@@ -305,7 +329,9 @@ export class KnowledgeHologram {
     this.desiredCamera.set(position.x * 0.58, position.y * 0.58, position.z + 2.55);
   }
 
+  private readonly rememberPress=(event:PointerEvent):void=>{this.press.set(event.clientX,event.clientY);};
   private readonly handlePointerDown = (event: PointerEvent): void => {
+    if(Math.hypot(event.clientX-this.press.x,event.clientY-this.press.y)>5)return;
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return;
     const x = event.clientX - rect.left - this.viewport.x;
@@ -326,8 +352,9 @@ export class KnowledgeHologram {
     const width = Math.max(1, Math.floor(rect.width || 640));
     const height = Math.max(1, Math.floor(rect.height || 320));
     this.renderer.setSize(width, height, false);
-    const top = width < 650 ? 246 : 84;
-    this.viewport = { x: 28, y: Math.min(top, height / 2), width: Math.max(1, width - 56), height: Math.max(1, height - Math.min(top, height / 2) - 80) };
+    const top = this.layoutMode==='popover'?58:width < 650 ? 246 : 84;
+    const bottom=this.layoutMode==='popover'?42:80;
+    this.viewport = { x: 28, y: Math.min(top, height / 2), width: Math.max(1, width - 56), height: Math.max(1, height - Math.min(top, height / 2) - bottom) };
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
@@ -340,6 +367,7 @@ export class KnowledgeHologram {
     this.camera.position.lerp(this.desiredCamera, alpha);
     this.lookAt.lerp(this.desiredLookAt, alpha);
     this.camera.lookAt(this.lookAt);
+    this.orbit.target.copy(this.lookAt);this.orbit.update();
     this.renderer.render(this.scene, this.camera);
     const { x, y, width, height } = this.viewport;
     let index = 0;

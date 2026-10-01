@@ -35,11 +35,9 @@ const REMOVED_TOKENS = [
 ];
 
 const SETTINGS_SECTIONS = [
-  "등록된 채팅방",
-  "AI 답변",
-  "카카오톡 대화",
+  "채팅방 자동화",
+  "답변 방식",
   "음성 대화",
-  "최근 답변",
 ];
 
 const offending = (text: string): string[] =>
@@ -78,13 +76,14 @@ describe("removed UI surfaces stay removed", () => {
   });
 
   it("keeps the settings window to its declared sections in order", () => {
-    const headings = [...SETTINGS.matchAll(/<h2[^>]*>([^<]+)<\/h2>/g)].map((match) => match[1]);
+    document.body.innerHTML = SETTINGS;
+    const headings = [...document.querySelectorAll("#settings-page-settings h2")].map(node => node.textContent);
     expect(headings).toEqual(SETTINGS_SECTIONS);
   });
 
   it("keeps every settings surface inside the one window", () => {
     expect((SETTINGS.match(/<main\b/g) ?? []).length).toBe(1);
-    expect(SETTINGS).toContain('<main class="settings-shell" aria-label="올든 설정"');
+    expect(SETTINGS).toContain('<main class="settings-shell" aria-label="올든"');
     expect(SETTINGS).not.toContain("<iframe");
     expect(PANEL).not.toContain("<iframe");
   });

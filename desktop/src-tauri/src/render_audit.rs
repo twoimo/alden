@@ -1,5 +1,5 @@
-//! One-shot capture of owned WKWebViews. Core mode has no production bridge;
-//! settings mode admits only a fixed read-only persisted graph command.
+//! One-shot capture of owned WKWebViews. Both modes admit only fixed
+//! read-only persisted graph commands; no inference or production writes.
 //! No tray, shortcut, caller-selected script, selector or output filename.
 use block2::RcBlock;
 use objc2::runtime::AnyObject;
@@ -327,14 +327,14 @@ fn fresh_pause(state: &Value, previous: f64) -> bool {
 fn validate_layout(state: &Value) -> Result<(), String> {
     if state["ready"] != true
         || state["canvas"]["contextLost"] != false
-        || state["width"] != 276
-        || state["height"] != 260
-        || state["scrollWidth"] != 276
-        || state["scrollHeight"] != 260
-        || state["canvas"]["cssWidth"] != 236
-        || state["canvas"]["cssHeight"] != 236
-        || state["canvas"]["x"] != 20
-        || state["canvas"]["y"] != 12
+        || state["width"] != 560
+        || state["height"] != 420
+        || state["scrollWidth"] != 560
+        || state["scrollHeight"] != 420
+        || state["canvas"]["cssWidth"] != 558
+        || state["canvas"]["cssHeight"] != 418
+        || state["canvas"]["x"] != 1
+        || state["canvas"]["y"] != 1
     {
         return Err("native panel layout or WebGL context invalid".into());
     }
@@ -347,9 +347,10 @@ fn density_matches(state: &Value) -> bool {
     else {
         return false;
     };
-    let pixels = (236.0 * dpr.min(2.0)).floor() as u64;
-    state["canvas"]["width"].as_u64() == Some(pixels)
-        && state["canvas"]["height"].as_u64() == Some(pixels)
+    let width = (558.0 * dpr.min(2.0)).floor() as u64;
+    let height = (418.0 * dpr.min(2.0)).floor() as u64;
+    state["canvas"]["width"].as_u64() == Some(width)
+        && state["canvas"]["height"].as_u64() == Some(height)
 }
 
 #[tauri::command]
@@ -872,15 +873,13 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let status = Arc::new(AtomicI32::new(1));
     let worker_status = Arc::clone(&status);
     let settings_mode = request.settings;
-    let builder = if settings_mode {
+    let builder = {
         tauri::Builder::default()
             .manage(super::PythonBridge::new())
             .invoke_handler(tauri::generate_handler![
                 super::window_is_visible,
                 fetch_settings_action
             ])
-    } else {
-        tauri::Builder::default().invoke_handler(tauri::generate_handler![super::window_is_visible])
     };
     let app = builder
         .on_window_event(super::handle_window_event)
@@ -892,10 +891,10 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
-                    "mode":if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-own-webview-no-production-bridge"},
+                    "mode":if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"own native WKWebView; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();
@@ -938,11 +937,11 @@ mod tests {
     }
     #[test]
     fn layout_rejects_context_loss_overflow_and_wrong_backing_density() {
-        let mut state = json!({"ready":true,"width":276,"height":260,"scrollWidth":276,"scrollHeight":260,"dpr":2,"canvas":{"contextLost":false,"cssWidth":236,"cssHeight":236,"x":20,"y":12,"width":236,"height":236}});
+        let mut state = json!({"ready":true,"width":560,"height":420,"scrollWidth":560,"scrollHeight":420,"dpr":2,"canvas":{"contextLost":false,"cssWidth":558,"cssHeight":418,"x":1,"y":1,"width":558,"height":418}});
         assert!(validate_layout(&state).is_ok());
         assert!(!density_matches(&state));
-        state["canvas"]["width"] = json!(472);
-        state["canvas"]["height"] = json!(472);
+        state["canvas"]["width"] = json!(1116);
+        state["canvas"]["height"] = json!(836);
         assert!(density_matches(&state));
         state["canvas"]["contextLost"] = json!(true);
         assert!(validate_layout(&state).is_err());
