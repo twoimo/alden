@@ -1,5 +1,7 @@
 # Alden 목표별 현재 근거 — 2026-09-30
 
+2026-10-01 상시 설치본 추가: [실제 메뉴바·기본/최소 설정](alden-primary-ui-20261001.md)을 기존 primary process에서 확인했다. 코어276×260·normal-level 설정960×880/640×680 이미지3개를 직접 검토했고 크기 복원·native 가시 창0을 확인했다. AXPress만으로는 열리지 않아 짧은 실제 CG 마우스 이벤트를 사용했으며 독립 가상 커서로 보고하지 않는다. 제품 소스·운영 작업자·메시지 전송 변경0. 각1회 창 표시 관측은 rendered UI p95와 구분하며 graph navigation·Retina·물리 중단/잠금·음성·production의 남은 목표를 유지한다.
+
 2026-10-01 실패 경로 추가 검증: 설치본의 실제 그래프 탐색·resize 뒤 compact PNG 충돌1회는 exit1·유효한 failure JSON·기존 파일 보존으로 종료했다(3.629초, 전체 자식 실행). [근거](alden-graph-navigation-failure-20261001.json). 이전 foreign-exception2회 원인은 여전히 미해결이며 코드 변경·운영 교체·전체 목표 완료로 계산하지 않는다.
 
 전달: [Alden 그래프 탐색 후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-25ad469edd80663739aa)의 **7개 파일**을 다시 다운로드해 바이트·원격 digest를 대조했다. ZIP30파일은 설치본과 일치하고 overlay30파일도 hash 일치다. 소스`51f71c2`/증거`5cfea2b`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36799335869)4/4 성공·독립 설치/개인정보 검토 통과. [릴리즈 대조](alden-graph-navigation-release-20261001.json). 공개 공증/프로덕션 완료를 뜻하지 않는다.
