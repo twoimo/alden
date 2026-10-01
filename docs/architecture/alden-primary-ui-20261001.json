@@ -15,14 +15,14 @@
         260
       ],
       "imageSha256": "19c645cf487d39fb58c249bd8f4cd56565dd04466cb2c8bab3616a7a1b852cd5",
-      "nativeWindowLevel": 5,
       "showObservationUpperBoundMs": 107.6420545578003,
       "captureExitCode": 0,
       "cursorRestoreApiCode": 0,
       "settingsCloseApiCode": null,
       "requestedMinimumSize": null,
       "resizeApiCode": null,
-      "restoreSizeApiCode": null
+      "restoreSizeApiCode": null,
+      "cgWindowLayer": 5
     },
     {
       "mode": "settings-default",
@@ -32,14 +32,14 @@
         880
       ],
       "imageSha256": "a8d25de0b1b1a6b7e7e6d479b9ee6dd987581336f9f804b72b90e8d8a2fb6093",
-      "nativeWindowLevel": 0,
       "showObservationUpperBoundMs": 129.14395332336426,
       "captureExitCode": 0,
       "cursorRestoreApiCode": 0,
       "settingsCloseApiCode": 0,
       "requestedMinimumSize": null,
       "resizeApiCode": null,
-      "restoreSizeApiCode": null
+      "restoreSizeApiCode": null,
+      "cgWindowLayer": 0
     },
     {
       "mode": "settings-minimum",
@@ -49,7 +49,6 @@
         680
       ],
       "imageSha256": "aab6d427dcd85ca104ea9cb3ea665083970bd2719de1da6dbf5cda0e753a9e42",
-      "nativeWindowLevel": 0,
       "showObservationUpperBoundMs": 131.68799877166748,
       "captureExitCode": 0,
       "cursorRestoreApiCode": 0,
@@ -59,7 +58,8 @@
         680
       ],
       "resizeApiCode": 0,
-      "restoreSizeApiCode": 0
+      "restoreSizeApiCode": 0,
+      "cgWindowLayer": 0
     }
   ],
   "metricScope": "one sample per case from before mouseDown; includes40ms holds, mouseUp, polling and native opening animation; not rendered UI latency, p95, improvement or power savings",
