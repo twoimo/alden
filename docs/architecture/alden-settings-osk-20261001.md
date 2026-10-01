@@ -28,8 +28,18 @@ OSK 규격을 따르는 일반 Markdown 노트는 직접 작성할 수 있다. �
 
 실제 기존 지식 50개를 OSK로 가져오고 `pending=0`, `conflicts=0`을 확인했다. 같은 자료의 다음 확인은 `changed=0`, `stale=false`였다. 이는 날짜가 있는 로컬 readback이며 실제 신규 메시지의 지속적인 검색 품질을 측정한 결과는 아니다.
 
-UI 209개, OSK 실제 엔진 8개, desktop Rust 90개, 기존 메뉴바 회귀 177개가 통과했다. 필수 Python 전체 1,064개 중 기존 설정 제목 기대값 1개가 실패하여 새 제목에 맞췄고, 해당 모듈 33개가 재검사에 통과했다. 나머지 전체 검사는 통과 또는 26개 skip이었다. TypeScript/Vite, native build와 Clippy도 통과했다. 네이티브 감사는 실제 persisted graph의 별도 WKWebView에서 탐색·숨김·복원을 검사하며 다른 설정 backend와 focus 조회는 unavailable이다. 상시 설치본의 실제 자동 갱신은 별도로 확인해야 한다.
+UI 209개, OSK 실제 엔진 8개, desktop Rust 90개, 기존 메뉴바 회귀 177개가 통과했다. 필수 Python 전체 1,064개 중 기존 설정 제목 기대값 1개가 실패하여 새 제목에 맞췄고, 해당 모듈 33개가 재검사에 통과했다. 나머지 전체 검사는 통과 또는 26개 skip이었다. TypeScript/Vite, native build와 Clippy도 통과했다. 네이티브 감사는 실제 persisted graph의 별도 WKWebView에서 탐색·숨김·복원을 검사하며 다른 설정 backend와 focus 조회는 unavailable이다. 설치된 상시 앱의 자동 동기화가 여러 주기에 걸쳐 진행됐고, 설치된 OSK 조회는 50개 노드·pending 0·충돌 0을 반환했다. 설치된 focus helper는 선택한 지식의 사실 5개를 반환했다. 신규 메시지의 검색 품질·지연 개선율은 미측정이다.
 
 [OSK 데이터 흐름](alden-osk-knowledge.html), [Archify 소스](alden-osk-knowledge.dataflow.json), [검증 receipt](alden-osk-knowledge-receipt.json). 다이어그램은 9/9 showcase, 4개 desktop viewport containment와 두 테마 endpoint 이미지 검토를 통과했다. 지식 그래프의 개인 스크린샷은 로컬에만 보관한다.
 
 현재 변경은 설정과 지식 관리의 전달 범위다. 전체 목표의 사람 음성·웨이크워드, 기존 production worker 교체, Apple 서명·공증과 production 릴리즈 제한은 별도로 유지한다.
+
+## 설치와 전달 readback
+
+소스 `51a9cc08e9710667ee609853b2216f21d0e65772`로 빌드한 0.1.7을 `/Applications/Alden.app`에 설치했다. 최종 리소스 전체를 포함한 로컬 ad-hoc 서명의 deep/strict 검증이 통과했고, 설치·빌드·ZIP의 33개 파일이 모두 일치했다. 첫 설치는 linker 서명만 있어 전체 리소스 검증에 실패했으며, 올바르게 재서명한 패키지를 다시 설치하여 해결했다. 이전 앱과 LaunchAgent의 자동 백업을 보존했다.
+
+[소스 CI](https://github.com/twoimo/openkakao-bot/actions/runs/36855790019) 4/4 성공과 PR의 GitGuardian 검사를 확인했다. 기존 모델 서버와 카카오톡 작업자의 process identity, 공유 설정·enrollment·CLI 해시는 유지됐다. 기존 음성 정책의 미완료 편집은 별도 worktree에 보존하고 이번 패키지에서 제외했다.
+
+설치 바이너리의 별도 WKWebView 감사에서도 기본 1200px·최소 640px와 이전 탐색·확장·전체 보기·숨김350ms 렌더0·복원이 통과했다. 이 창은 실제 persisted SQLite 그래프를 읽는 고립된 감사이며 다른 backend/focus는 unavailable이다. 상시 앱의 화면 조작은 컴퓨터 제어 도구에서 시간 초과가 반복되어 미검증이다. 다른 제어 기술로 우회하지 않았다. [설치·자동 갱신·범위 receipt](alden-settings-osk-verification-20261001.json).
+
+후보 ZIP, CPython sidecar, 정확한 소스 overlay, OSK 다이어그램, manifest, 숫자 verification, SHA256SUMS의 7개 파일을 GitHub 초안에 전달한다. private vault와 그래프 화면은 공개 산출물에서 제외한다. 공개 Developer ID 서명·Apple 공증·production 릴리즈는 여전히 차단돼 있다.

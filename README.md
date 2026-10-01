@@ -1,4 +1,4 @@
-2026-10-01 설정 개편: [넓은 설정과 OSK 지식 관리](docs/architecture/alden-settings-osk-20261001.md). 기본 설정은 전체 지식 그래프이며 Style Gallery의 린넨·세이지 디자인을 적용한다. 실제 OSK v4.1.2가 개인 Markdown 지식을 증분 관리한다. 설치본 자동 갱신 검증은 별도 기록한다.
+2026-10-01 설정 개편: [넓은 설정과 OSK 지식 관리](docs/architecture/alden-settings-osk-20261001.md). 기본 설정은 전체 지식 그래프이며 Style Gallery의 린넨·세이지 디자인을 적용한다. 실제 OSK v4.1.2가 개인 Markdown 지식을 증분 관리한다. 올든 0.1.7 설치·33파일 일치·상시 앱 자동 갱신과 설치된 지식 50개 readback을 확인했다. 상시 창의 직접 조작은 도구 시간 초과로 미검증이며 공개 공증/production은 미완료다.
 
 <div align="center">
 
