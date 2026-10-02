@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.5] - 2026-10-02
+
+- 지식 그래프·사이드바·팝업을 같은 우주 팔레트로 정리하고 실제 관계를 별자리처럼 표시합니다. 메뉴·운영 버튼·중앙 버전과 지식 ID는 유지합니다.
+- 배경 별은 한 묶음의 고정 버퍼로 그리며 클릭·검색 데이터에 포함하지 않습니다. 멈춘 장면은 프레임을 중단하고 데이터·크기·실제 조작 변화에 다시 그립니다.
+- 구형 노드 경계에서 아주 작은 카메라 오차로 마우스 선택이 빠지는 문제를 수정했습니다. 앞쪽 노드·레이어·거리와 최신 위치를 보존합니다.
+
 ## [0.3.4] - 2026-10-02
 
 - 제목이 없는 방은 등록 이름을 ID로 복원하거나 고유한 미확인 표식으로 표시합니다. 같은 이름·Unicode·공백 변형을 검색에 반영하되 방·인물 ID를 합치지 않습니다.

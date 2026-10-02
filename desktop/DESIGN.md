@@ -1,5 +1,15 @@
 # Alden desktop design contract
 
+## 2026-10-02 — knowledge observatory
+
+The user requested a universe atmosphere for the graph and sidebar. Both windows use a quiet navy observatory: a static distant star field, thin orbital guides and the actual knowledge relationships as constellations. The sidebar shares the night palette, legible silver labels and a clear selected menu. Its operating control and centered bottom version retain their behavior and location.
+
+Six primary roles: midnight canvas `#080E1C`, blue-black surface `#121D30`, starlight text `#E7EDF5`, silver secondary text `#A5B2C7`, ice-blue people `#A2C3DF`, warm-ivory rooms `#E6C797`. Topic nodes use a quiet lavender auxiliary tint. Georgia remains the Alden wordmark; system Korean text stays readable at the existing sizes. No luminous text, postprocessing, fabricated relationships or animated particle workload is introduced.
+
+Cosmos: canvas `#080E1C`, surface `#121D30`, text `#E7EDF5`, muted `#A5B2C7`, nucleus `#DDE7EF`, people `#A2C3DF`, rooms `#E6C797`, topics `#BCB7D5`, links `#7894B1`, distant cool stars `#CAD8E9`, distant warm stars `#E6CFAC`, orbital guides `#6883A3`.
+
+The backdrop owns at most 1,536 static points in one geometry and two orbital lines. It is outside graph data, keyboard navigation and picking. All retained Points, Line and Mesh resources must be disposed with their owning window. Settled scenes stop drawing; source, resize, load and interaction changes invalidate a frame. Camera travel retains the existing capped loop. The 24-node foreground budget, source identities, interaction controls and native hidden/locked lifecycle remain authoritative. Default, minimum, expanded and popover layouts require real browser rendering and separate installed evidence.
+
 ## 2026-10-01 — wide settings workspace
 
 The user requested a full settings redesign, a wide rectangular window, and explicitly allowed a palette beyond champagne gold. The selected reference is [Fieldwork · A workspace that remembers](https://style.gallery/components/21st-49e34572c05d/), reviewed in its running example on Style Gallery. Its independently authored MIT study supplies the layout direction: a quiet fixed sidebar, an independent scroll area, selected-view feedback, thin separators and a restrained linen/sage surface. The product's existing controls and real backend remain authoritative; example accounts, project metrics and dates are not copied.

@@ -1,0 +1,11 @@
+{
+  "artifact_sha256": "6ff7b1d1488cbb6bc5bd24a5f38f174ea0bcf15fd5de601d864ff61019cf7407",
+  "reviewer": "parent image review",
+  "captures": [
+    "alden-three-render-lifecycle.visual-check.1440x900.light.png",
+    "alden-three-render-lifecycle.visual-check.2048x1320.dark.png"
+  ],
+  "result": "두 화면에서 표시·프레임 요청·제한 루프·그리기·고요한 대기 및 숨김·복원 전이가 읽힌다. 노드·화살표·라벨의 겹침을 발견하지 않았다. 작성 내용은 한국어, 고정 Viewer UI는 영어다.",
+  "deterministic_checks": 9,
+  "browser_viewports": 4
+}

@@ -13,6 +13,7 @@ const STYLES = read("../styles.css");
 const DESIGN = read("../../DESIGN.md");
 const CORE = read("../core/alden-core.ts");
 const HOLOGRAM = read("../knowledge/hologram.ts");
+const COSMOS = read("../knowledge/cosmos.ts");
 const TOKENS_SOURCE = read("../tokens.ts");
 
 const hexCodes = (text: string): string[] =>
@@ -26,7 +27,7 @@ const paletteLine = (label: string): string[] => {
 
 const DESIGN_LIGHT = paletteLine("Light");
 const DESIGN_DARK = paletteLine("Dark");
-const DESIGN_PALETTE = new Set([...DESIGN_LIGHT, ...DESIGN_DARK]);
+const DESIGN_PALETTE = new Set([...DESIGN_LIGHT, ...DESIGN_DARK, ...paletteLine("Cosmos")]);
 
 const linearChannel = (value: number): number => {
   const channel = value / 255;
@@ -95,7 +96,7 @@ describe("design contract", () => {
   });
 
   it("the shell and the 3D core introduce no color outside the DESIGN.md palette", () => {
-    const offenders = [...hexCodes(CORE), ...hexCodes(HOLOGRAM)].filter(
+    const offenders = [...hexCodes(CORE), ...hexCodes(HOLOGRAM), ...hexCodes(COSMOS)].filter(
       (value) => !DESIGN_PALETTE.has(value)
     );
     expect(offenders).toEqual([]);

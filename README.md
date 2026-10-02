@@ -1,3 +1,5 @@
+2026-10-02 우주 스타일: [0.3.5 지식 그래프·사이드바와 정지 렌더 검증](docs/architecture/alden-universe-20261002.md). 실제 관계와 ID를 보존하며, 멈춘 장면은 새 프레임이 필요할 때까지 대기한다.
+
 2026-10-02 지식 개선: [0.3.4 방 제목·정규화·검색 품질과 색인 비교](docs/architecture/alden-graph-quality-20261002.md). 제목이 없는 실제 방을 구별하고, 방·인물·기간을 보존하며 반복 복사와 정렬 비용을 줄였다. 설치·OSK·릴리스 결과는 별도 전달 기록으로 확인한다.
 
 2026-10-02 음성 개선: [0.3.3 디코더 취소와 한국어 발음 검증](docs/architecture/alden-tts-cancellation-20261002.md). 같은 1.7B BF16 모델에서 한국어 원어 화자와 숫자 읽기를 검증하고, 실제 디코더 단계에서 취소를 연결했다. 사람 음성·wake·재생과 전체 응답성 검증은 미완료다.
@@ -6,7 +8,7 @@
 
 2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 파일 생성 성공과 발음·내용 품질 검증은 구분한다.
 
-Alden Desktop 0.3.4 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
+Alden Desktop 0.3.5 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
 
 History reads all messages available in the local Kakao DB through fixed-anchor pages; it does not restore messages absent from that DB. Confirmed voice text is stored locally by session. The local corpus now stores every message in a fixed DB+WAL snapshot with full-text search, scoped numeric identities, resumable batches, and atomic publication. Dense/model-assisted retrieval remains a separate capability and is not inferred from a complete raw corpus. An initial real isolated snapshot contained 2,034,371 messages in 1,181 rooms with messages (1,182 roster entries). It produced a 1,913,323,520-byte published store with a successful quick check; this is a dated data snapshot, not a fixed current total. Existing foreground automation workers and send gates are preserved; catalog changes take effect when automation restarts.
 

@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { AnimationLoop } from "../core/animation-loop";
 import type { AnimationLoopDiagnostics } from "../core/animation-loop";
+import { createCosmosBackdrop } from "./cosmos";
+import { pickKnowledgeSphere } from "./picking";
 import {
   KnowledgeDrilldown,
   type KnowledgeGraph,
@@ -31,7 +33,7 @@ function spherePoint(index: number, count: number, radius: number): THREE.Vector
 
 function disposeObject(object: THREE.Object3D): void {
   object.traverse((child) => {
-    if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Line) {
+    if (child instanceof THREE.Mesh || child instanceof THREE.Points || child instanceof THREE.LineSegments || child instanceof THREE.Line) {
       child.geometry.dispose();
       const materials = Array.isArray(child.material) ? child.material : [child.material];
       materials.forEach((material) => material.dispose());
@@ -42,7 +44,7 @@ function disposeObject(object: THREE.Object3D): void {
 export class KnowledgeHologram {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(38, 2, 0.1, 30);
+  private readonly camera = new THREE.PerspectiveCamera(38, 2, 0.1, 60);
   private readonly graphRoot = new THREE.Group();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
@@ -81,14 +83,14 @@ export class KnowledgeHologram {
     this.orbit.enableDamping=false;this.orbit.minDistance=2.2;this.orbit.maxDistance=12;this.orbit.rotateSpeed=.65;this.orbit.zoomSpeed=.7;
     this.orbit.addEventListener('start',()=>{this.orbitActive=true;});
     this.orbit.addEventListener('end',()=>{this.orbitActive=false;});
-    this.orbit.addEventListener('change',()=>{if(this.orbitActive){this.desiredCamera.copy(this.camera.position);this.desiredLookAt.copy(this.orbit.target);this.lookAt.copy(this.orbit.target);}});
+    this.orbit.addEventListener('change',()=>{if(this.orbitActive){this.desiredCamera.copy(this.camera.position);this.desiredLookAt.copy(this.orbit.target);this.lookAt.copy(this.orbit.target);}this.invalidateFrame();});
     this.scene.add(this.graphRoot);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 1.55);
-    const key = new THREE.DirectionalLight(0xffffff, 1.45);
+    const ambient = new THREE.AmbientLight(0xd7e1f3, 1.75);
+    const key = new THREE.DirectionalLight(0xffedcc, 2.1);
     key.position.set(2.5, 3.5, 5);
     this.scene.add(ambient, key);
-    this.addGuidePlane();
+    this.scene.add(createCosmosBackdrop());
 
     this.layoutPositions();
 
@@ -122,7 +124,14 @@ export class KnowledgeHologram {
   }
 
   setSignals(load:number,_voiceRms:number):void {
-    this.graphRoot.scale.setScalar(1+Math.max(0,Math.min(1,load))*.006);
+    const bounded=Number.isFinite(load)?Math.max(0,Math.min(1,load)):0;
+    this.loop.setLoad(bounded);
+    const scale=1+bounded*.006;
+    if(Math.abs(this.graphRoot.scale.x-scale)>0.0001){this.graphRoot.scale.setScalar(scale);this.invalidateFrame();}
+  }
+
+  private invalidateFrame(): void {
+    if (!this.disposed && this.requestedAnimation && this.view.nodes.length > 0) this.loop.start();
   }
 
   get currentView(): KnowledgeView {
@@ -142,6 +151,7 @@ export class KnowledgeHologram {
     this.view = this.drilldown.replaceGraph(graph);
     if (!focus || !ids.has(focus)) { this.desiredCamera.set(0, 0, 5.2); this.desiredLookAt.set(0, 0, 0); }
     this.rebuildGraph();
+    if (focus && ids.has(focus)) this.focusCamera(focus);
     this.canvas.hidden = graph.nodes.length === 0;
     this.resize();
     if (this.requestedAnimation && graph.nodes.length > 0) this.loop.start();
@@ -180,6 +190,7 @@ export class KnowledgeHologram {
     this.rebuildGraph();
     this.desiredCamera.set(0, 0, 5.2);
     this.desiredLookAt.set(0, 0, 0);
+    this.invalidateFrame();
     this.notifyView();
     return this.view;
   }
@@ -192,6 +203,7 @@ export class KnowledgeHologram {
     else {
       this.desiredCamera.set(0, 0, 5.2);
       this.desiredLookAt.set(0, 0, 0);
+      this.invalidateFrame();
     }
     this.notifyView();
     return this.view;
@@ -222,36 +234,18 @@ export class KnowledgeHologram {
     this.canvas.parentElement?.querySelector("#knowledge-accessible-nodes")?.replaceChildren();
   }
 
-  private addGuidePlane(): void {
-    const accent = cssColor(this.canvas, "--accent", "#B88A45");
-    const muted = cssColor(this.canvas, "--muted", "#6D655B");
-    const grid = new THREE.GridHelper(4.8, 12, accent, muted);
-    const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
-    gridMaterials.forEach((material) => {
-      material.transparent = true;
-      material.opacity = 0.08;
-      material.depthWrite = false;
-    });
-    grid.position.y = -1.6;
-    this.scene.add(grid);
-
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(1.85, 0.008, 4, 96),
-      new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.13 }),
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = -1.55;
-    this.scene.add(ring);
-  }
-
   private layoutPositions():void {
     const sorted=[...this.graph.nodes].sort((a,b)=>a.id.localeCompare(b.id));
     const groups=sorted.filter(n=>n.category==='collection');
     if(!groups.length){sorted.forEach((n,i)=>this.positions.set(n.id,spherePoint(i,sorted.length,1.42)));return;}
     const root=groups.find(n=>n.label==='카카오톡')??groups[0];this.positions.set(root.id,new THREE.Vector3(0,.1,0));
-    const children=groups.filter(n=>n!==root);children.forEach((n,i)=>{const angle=i*Math.PI*2/Math.max(1,children.length);this.positions.set(n.id,new THREE.Vector3(Math.cos(angle)*1.1,Math.sin(angle)*.75,Math.sin(angle+.7)*.55));});
-    for(const node of sorted){if(node.category==='collection')continue;const parent=this.graph.edges.find(e=>e.target===node.id&&e.relation==='contains')?.source;const center=parent?this.positions.get(parent):undefined;let hash=0;for(const c of node.id)hash=(hash*31+c.charCodeAt(0))>>>0;
-      const point=spherePoint(hash%97,97,.6);if(center)point.add(center);this.positions.set(node.id,point);}
+    const children=groups.filter(n=>n!==root);children.forEach((n,i)=>{const angle=i*Math.PI*2/Math.max(1,children.length);this.positions.set(n.id,new THREE.Vector3(Math.cos(angle)*1.16,Math.sin(angle)*.78,Math.sin(angle+.7)*.28));});
+    const parents=new Map(this.graph.edges.filter(e=>e.relation==='contains').map(e=>[e.target,e.source]));
+    const members=new Map<string,KnowledgeNode[]>();
+    for(const node of sorted){if(node.category==='collection')continue;const parent=parents.get(node.id)??root.id;const bucket=members.get(parent)??[];bucket.push(node);members.set(parent,bucket);}
+    for(const [parent,nodes] of members){const center=this.positions.get(parent)??new THREE.Vector3();nodes.forEach((node,index)=>{
+      const point=spherePoint(index,nodes.length,.68);point.y*=.85;point.z*=.65;point.add(center);this.positions.set(node.id,point);
+    });}
   }
 
   private rebuildGraph(): void {
@@ -266,8 +260,8 @@ export class KnowledgeHologram {
     labelLayer?.replaceChildren();
     const accessible = this.canvas.parentElement?.querySelector("#knowledge-accessible-nodes");
     accessible?.replaceChildren();
-    const accent = cssColor(this.canvas, "--accent", "#B88A45");
-    const muted = cssColor(this.canvas, "--muted", "#6D655B");
+    const accent = cssColor(this.canvas, "--accent", "#dde7ef");
+    const muted = cssColor(this.canvas, "--cosmos-link", "#7894b1");
     const focusId = this.view.focusId;
 
     for (const edge of this.view.edges) {
@@ -279,7 +273,8 @@ export class KnowledgeHologram {
       const material = new THREE.LineBasicMaterial({
         color: touchesFocus ? accent : muted,
         transparent: true,
-        opacity: touchesFocus ? 0.58 : 0.22,
+        opacity: touchesFocus ? 0.68 : edge.relation==='contains' ? 0.24 : 0.42,
+        depthWrite: false,
       });
       this.graphRoot.add(new THREE.Line(geometry, material));
     }
@@ -288,12 +283,17 @@ export class KnowledgeHologram {
       const position = this.positions.get(node.id);
       if (!position) continue;
       const focused = node.id === focusId;
+      const kind=node.category==='collection'?node.label:node.category;
+      const token=/인물|사람|대화 상대|화자/.test(kind)?'--cosmos-person':/대화방/.test(kind)?'--cosmos-room':/주제/.test(kind)?'--cosmos-topic':'--accent';
+      const color=cssColor(this.canvas,token,"#dde7ef");
       const radius = (node.category==='collection'?.095:.04) + (node.importance / 100) * 0.025 + (focused ? 0.02 : 0);
       const geometry = new THREE.SphereGeometry(radius, 18, 12);
       const material = new THREE.MeshStandardMaterial({
-        color: accent,
-        roughness: 0.35,
-        metalness: focused ? 0.24 : 0.1,
+        color,
+        emissive: color,
+        emissiveIntensity: focused ? 0.28 : 0.12,
+        roughness: 0.55,
+        metalness: 0.12,
       });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.copy(position);
@@ -314,6 +314,7 @@ export class KnowledgeHologram {
         const label = document.createElement("span");
         label.className = "knowledge-node-label";
         label.textContent = node.label;
+        label.title = node.label;
         label.dataset.focused = String(focused);
         labelLayer.append(label);
         this.labels.set(node.id, label);
@@ -327,6 +328,7 @@ export class KnowledgeHologram {
     if (!position) return;
     this.desiredLookAt.copy(position);
     this.desiredCamera.set(position.x * 0.58, position.y * 0.58, position.z + 2.55);
+    this.invalidateFrame();
   }
 
   private readonly rememberPress=(event:PointerEvent):void=>{this.press.set(event.clientX,event.clientY);};
@@ -339,9 +341,13 @@ export class KnowledgeHologram {
     if (x < 0 || y < 0 || x > this.viewport.width || y > this.viewport.height) return;
     this.pointer.x = (x / this.viewport.width) * 2 - 1;
     this.pointer.y = -(y / this.viewport.height) * 2 + 1;
+    // An idle scene may have changed since its last draw. Picking must use
+    // the current transforms even before the invalidated frame is delivered.
+    this.scene.updateMatrixWorld(true);
+    this.camera.updateMatrixWorld(true);
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const hit = this.raycaster.intersectObjects([...this.nodeMeshes.values()], false)[0];
-    const nodeId = typeof hit?.object.userData.nodeId === "string" ? hit.object.userData.nodeId : "";
+    const hit = pickKnowledgeSphere(this.raycaster, this.nodeMeshes.values());
+    const nodeId = typeof hit?.userData.nodeId === "string" ? hit.userData.nodeId : "";
     if (nodeId) this.clickNode(nodeId);
     else this.reset();
   };
@@ -359,6 +365,7 @@ export class KnowledgeHologram {
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
     for (const box of this.labelBounds) box.width = 0;
+    this.invalidateFrame();
   }
 
   private render(dt: number): void {
@@ -393,5 +400,8 @@ export class KnowledgeHologram {
       box.visible = !label.hidden;
       if (box.visible) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }
+    // Static sky and settled knowledge do not need another GPU frame. Real
+    // navigation, source replacement, resize and load changes invalidate it.
+    if (!this.orbitActive && this.camera.position.distanceToSquared(this.desiredCamera) < 0.000001 && this.lookAt.distanceToSquared(this.desiredLookAt) < 0.000001) this.loop.stop();
   }
 }

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "lifecycle",
   "meta": {
-    "title": "Alden Three.js render lifecycle",
+    "title": "Alden 지식 그래프의 그리기와 대기",
     "quality_profile": "showcase",
     "viewBox": [
       1080,
@@ -12,19 +12,19 @@
   "lanes": [
     {
       "id": "main",
-      "label": "Visible render path"
+      "label": "화면 표시와 필요한 프레임"
     },
     {
       "id": "visibility",
-      "label": "Hidden / resume path"
+      "label": "숨김과 복원"
     }
   ],
   "states": [
     {
       "id": "window_visible",
       "type": "start",
-      "label": "Window visible",
-      "sublabel": "focus / visibilitychange",
+      "label": "화면 표시",
+      "sublabel": "현재 지식 유지",
       "lane": "main",
       "col": 0,
       "width": 118,
@@ -34,8 +34,8 @@
     {
       "id": "lifecycle_active",
       "type": "active",
-      "label": "RenderLifecycle",
-      "sublabel": "transition(visible)",
+      "label": "프레임 요청",
+      "sublabel": "데이터·크기·입력 변화",
       "lane": "main",
       "col": 1,
       "width": 118,
@@ -45,8 +45,8 @@
     {
       "id": "raf_running",
       "type": "active",
-      "label": "AnimationLoop",
-      "sublabel": "RAF running",
+      "label": "제한된 루프",
+      "sublabel": "AnimationLoop",
       "lane": "main",
       "col": 2,
       "width": 118,
@@ -56,8 +56,8 @@
     {
       "id": "runtime_snapshot",
       "type": "active",
-      "label": "Snapshot poller",
-      "sublabel": "RuntimeSnapshotPoller",
+      "label": "지식 그래프 그리기",
+      "sublabel": "KnowledgeHologram.render",
       "lane": "main",
       "col": 3,
       "width": 118,
@@ -66,9 +66,9 @@
     },
     {
       "id": "core_response",
-      "type": "active",
-      "label": "AldenCore.render()",
-      "sublabel": "rings / nucleus / lattice",
+      "type": "waiting",
+      "label": "고요한 화면",
+      "sublabel": "정지하면 루프 중단",
       "lane": "main",
       "col": 4,
       "width": 118,
@@ -78,50 +78,41 @@
     {
       "id": "window_hidden",
       "type": "waiting",
-      "label": "Window hidden",
-      "sublabel": "blur / hidden / closed",
+      "label": "다른 화면·숨김",
+      "sublabel": "네이티브 숨김·잠금",
       "lane": "visibility",
       "col": 0,
       "width": 118,
-      "height": 92,
-      "tag": "pause"
+      "height": 92
     },
     {
       "id": "raf_stopped",
       "type": "waiting",
-      "label": "AnimationLoop.stop()",
-      "sublabel": "pending RAF cancelled",
+      "label": "프레임 취소",
+      "sublabel": "대기 중인 RAF 취소",
       "lane": "visibility",
       "col": 1,
       "width": 118,
-      "height": 92,
-      "tag": "RAF=0"
+      "height": 92
     }
   ],
   "transitions": [
     {
-      "id": "visible_to_lifecycle",
-      "from": "window_visible",
-      "to": "lifecycle_active",
-      "variant": "emphasis"
-    },
-    {
-      "id": "lifecycle_to_raf",
-      "from": "lifecycle_active",
-      "to": "raf_running",
-      "variant": "emphasis"
-    },
-    {
-      "id": "raf_to_snapshot",
-      "from": "raf_running",
-      "to": "runtime_snapshot",
-      "variant": "default"
-    },
-    {
-      "id": "snapshot_to_core",
+      "id": "moving",
       "from": "runtime_snapshot",
-      "to": "core_response",
-      "variant": "default"
+      "to": "raf_running",
+      "label": "카메라 이동 중",
+      "labelAt": [
+        479,
+        232
+      ]
+    },
+    {
+      "id": "new_input",
+      "from": "core_response",
+      "to": "lifecycle_active",
+      "label": "데이터·조작·크기 변화",
+      "route": "top-channel"
     },
     {
       "id": "hide",
@@ -130,7 +121,7 @@
       "variant": "security"
     },
     {
-      "id": "hidden_to_raf_stop",
+      "id": "cancel",
       "from": "window_hidden",
       "to": "raf_stopped",
       "variant": "security"
@@ -139,6 +130,7 @@
       "id": "resume",
       "from": "raf_stopped",
       "to": "window_visible",
+      "label": "다시 표시",
       "variant": "emphasis",
       "route": "bottom-channel"
     }
