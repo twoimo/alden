@@ -74,9 +74,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=4)
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--drain-timeout", type=float, default=1.0, help="Bounded wait for the shared engine to become idle between cases (seconds)")
     args = parser.parse_args()
     if not 1 <= args.repeats <= 20:
         parser.error("--repeats must be 1..20")
+    if not math.isfinite(args.drain_timeout) or not 0 <= args.drain_timeout <= 10:
+        parser.error("--drain-timeout must be finite and in 0..10 seconds")
     if args.out.exists():
         parser.error("receipt already exists; use a distinct path")
     root = resolve_mlx_state_root()
@@ -134,9 +137,9 @@ def main() -> int:
                 observed.clear()
                 load_before = load_snapshot()
                 # The completed SSE response can precede the engine's idle
-                # counter update. Observe that drain for at most one second;
+                # counter update. Observe only the explicitly bounded drain;
                 # never start a second generation while a request is running.
-                drain_deadline = time.monotonic() + 1.0 if rows else time.monotonic()
+                drain_deadline = time.monotonic() + args.drain_timeout if rows else time.monotonic()
                 while load_before["engine"].get("vllm:num_requests_running") != 0 and time.monotonic() < drain_deadline:
                     time.sleep(.1)
                     load_before = load_snapshot()
@@ -181,6 +184,7 @@ def main() -> int:
         "rows": rows,
         "interrupted": interrupted,
         "requested_samples": len(CASES) * args.repeats,
+        "drain_timeout_seconds": args.drain_timeout,
         "limits": ["Public synthetic cases; no natural microphone trial", "Fact-presence checks are not a general language-quality score", "Full-answer and first-visible-token latency include catalog/admission", "First visible content excludes a private reasoning channel", "Small-sample p95 is descriptive only", "Different cache state or concurrent host load can confound before/after speed comparisons"],
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
