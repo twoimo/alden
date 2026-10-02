@@ -16,4 +16,6 @@ UI224, Rust92, Clippy·빌드, 프로젝트 Python3.11.9 필수 **1,148검사/28
 
 ![예시 데이터와 출력 PCM 진폭](alden-playback-amplitude-20261003/output-preview.png)
 
-[정제된 근거](alden-playback-amplitude-20261003.json), [렌더 수명주기](alden-three-render-lifecycle.html), [음성 턴·취소](alden-voice-cancellation.html)를 제공한다. 화면은 예시 데이터의 개발 미리보기이며 primary 설치 화면이 아니다. 도식의 작성 내용은 한국어이고 고정 Viewer UI는 영어다. 설치·원격 CI·릴리즈 대조는 후속 전달 기록으로 구분한다. 원본 카카오 접근 승인·공개 서명·승인된 생산 전환과 전체11항목 완료를 대신하지 않는다.
+[정제된 근거](alden-playback-amplitude-20261003.json), [렌더 수명주기](alden-three-render-lifecycle.html), [음성 턴·취소](alden-voice-cancellation.html)를 제공한다. 화면은 예시 데이터의 개발 미리보기이며 primary 설치 화면이 아니다. 두 도식은 showcase9/9·오류/경고0, 각각 실제 브라우저4크기·두 테마 이미지 검토를 통과했다. 도식의 작성 내용은 한국어이고 고정 Viewer UI는 영어다.
+
+전달: 런타임 소스 `42182f3e3fe1404ed7774c5f7e6292c6469310e0`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/37035907184)는 **4/4 성공**이다. 설치된 Alden0.3.7의 **35개 경로·deep/strict ad-hoc 서명·실제 ABI2 consumer 초기화**를 확인했다. 초기화는 오디오 handle·권한 요청·네트워크 없이 종료했고 RMS0이었다. config·enrollment·stable CLI와 기존27B/E5 PID·시작 시각·명령을 보존했으며 두 정확한 모델의 loaded/ready catalog를 다시 확인했다. [초안 릴리즈](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-2811b9b39f0c40edc71e)의 **6개 파일**을 다시 다운로드해 바이트·SHA256·GitHub digest를 대조했고 ZIP 내부35경로와 태그 소스도 일치한다. [설치·릴리즈 receipt](alden-playback-amplitude-install-20261003.json)는 이 범위를 구분한다. 원본 카카오 접근 승인·공개 서명·승인된 생산 전환과 전체11항목 완료를 대신하지 않는다.

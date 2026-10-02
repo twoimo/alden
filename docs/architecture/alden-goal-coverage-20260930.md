@@ -2,7 +2,7 @@
 
 ## 현재 판본 — 2026-10-03
 
-전체 11항목은 **진행 중**이며 아래 날짜별 기록은 각 당시의 근거다. 설치된 0.3.6은 [우주 그래프·사이드바](alden-universe-20261002.md)를 유지하며 [제한된 입력 진폭](alden-voice-envelope-20261002.md)을 연결했다. [35개 설치 파일과 초안 릴리즈 6개 다운로드 대조](alden-voice-envelope-install-20261003.json), 정확한 소스 SHA의 CI4/4 성공을 확인했다. 원본 DB 접근 승인은 여전히 대기 중이며 기존 게시 corpus만 사용한다.
+전체 11항목은 **진행 중**이며 아래 날짜별 기록은 각 당시의 근거다. 설치된 0.3.7은 [우주 그래프·사이드바](alden-universe-20261002.md)를 유지하며 [실제 재생 PCM과 입력 진폭](alden-playback-amplitude-20261003.md)을 구분한다. [35개 설치 파일·ABI2와 초안 릴리즈6개 다운로드 대조](alden-playback-amplitude-install-20261003.json), 정확한 소스 SHA의 CI4/4 성공을 확인했다. 원본 DB 접근 승인은 여전히 대기 중이며 기존 게시 corpus만 사용한다.
 
 | 범위 | 현재 단계와 근거 | 남은 확인 |
 | --- | --- | --- |
@@ -10,8 +10,8 @@
 | 2 맥락·턴·취소 | 실제 실행 검증: [설치 음성 8턴·문맥 12회](alden-voice-sustained-20261002.md), 통제된 역할·방/시간 범위 회귀 | 자연 발화·에코·물리 끼어들기 |
 | 3 로컬 모델 | 실제 실행 검증: 정확한 상주 27B/E5와 Whisper·MPS/BF16 TTS | Flash-Next 동시 admission, 제품 이미지 경로의 운영 적용 |
 | 4 음성·자동화 | 구현/부분 실행: 8턴 파일 파이프라인; TTS 별도 ASR 7/8 정확 | 첫 파일 청취, 배포된 한국어 wake, 마이크·재생·물리 비상 중단 |
-| 5 디자인 | 전달 완료: 우주 그래프·사이드바·설정·popover 0.3.6 | 현재 primary CUA timeout 때문에 물리 UI·Retina는 미검증 |
-| 6 렌더·효율 | 전달 완료/실제 실행 검증: [0.3.6 입력 envelope](alden-voice-envelope-20261002.md), 개발 fixture idle 1초×3 렌더0·숨김 3초 조회/렌더0, bounded graph·GPU 소유권 | 실제 마이크·출력 PCM 진폭, 앱 전체 전력 |
+| 5 디자인 | 전달 완료: 우주 그래프·사이드바·설정·popover 0.3.7 | 현재 primary CUA timeout 때문에 물리 UI·Retina는 미검증 |
+| 6 렌더·효율 | 전달 완료/실제 실행 검증: [0.3.7 PCM envelope](alden-playback-amplitude-20261003.md), 실제 SDK/기존 Qwen WAV144구간 진폭 일치·취소/시작 전0, 개발 fixture idle 1초×3 렌더0·숨김1초 조회/렌더0 | 실제 마이크·기기/스피커 진폭, 앱 전체 전력 |
 | 7 지식 검색 | 전달 완료: [정규화·single snapshot](alden-graph-quality-20261002.md), [독립 heldout 평가](alden-retrieval-v2-20261002.md), 설치 RRF 범위 회귀 | 권한 의존 원본 최신 수집과 데이터 반영 지연 |
 | 8 평가·학습 | 구현/부분 실제 실행: 독립 validation·실제 27B 오프라인 DPO | 최종 test와 제품 정확성/검색/지연, 승인된 promotion |
 | 9 성능 | 부분 실제 실행: 표본·범위를 밝힌 검색·렌더·음성/LLM 지연 | tokens/s, 실제 UI/재생 p95, 물리 중단과 전력, 목표 미달 개선 |
