@@ -1,3 +1,5 @@
+2026-10-03 · Alden 0.3.9: 정지한 장면을 정상으로 다루도록 네이티브 검사기를 수정하고 실제 WKWebView 기본·최소 설정, 탐색 복원, 합성 가시성 알림의 숨김·복원을 확인했습니다. 별도 검사 인스턴스의 결과이며 상시 primary 조작·물리 잠금·음성·Retina와 구분합니다.
+
 2026-10-03 · Alden 0.3.8: [Thinking Orbs](https://libraries.dev/orbs)의 공식 엔진을 지식 그래프 주요 노드·사이드바·메뉴바에 적용했습니다. 실제 작업 상태에 연결하며 대기·숨김·모션 감소에서는 정지합니다. 노드 선택 시 전체 저장 설명과 채팅방·작성자·날짜가 있는 대표 원문을 보여주고, 네이티브 브리지까지 계정·인물·방 범위를 검증합니다. 같은 검색 화면의 1초 표본 3회에서 라벨 변경 138→0, 대기 렌더 0을 관측했습니다. 이는 소스의 명시적 예시 데이터 측정이며 설치·물리 화면·전체 전력과 구분합니다. [디자인](desktop/DESIGN.md) · [렌더 수명주기](docs/architecture/alden-three-render-lifecycle.html). 원본 DB 최신화·웨이크/물리 음성·공개 서명·프로덕션 전환의 기존 게이트는 유지합니다.
 
 2026-10-03 음성 진폭: [0.3.7의 재생 PCM·실제 SDK 커서·가벼운 상태 읽기](docs/architecture/alden-playback-amplitude-20261003.md)를 검증했다. 물리 스피커·자연 음성 검증과 구분한다.
@@ -12,7 +14,7 @@
 
 2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 파일 생성 성공과 발음·내용 품질 검증은 구분한다.
 
-Alden Desktop 0.3.8 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
+Alden Desktop 0.3.9 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
 
 History reads all messages available in the local Kakao DB through fixed-anchor pages; it does not restore messages absent from that DB. Confirmed voice text is stored locally by session. The local corpus now stores every message in a fixed DB+WAL snapshot with full-text search, scoped numeric identities, resumable batches, and atomic publication. Dense/model-assisted retrieval remains a separate capability and is not inferred from a complete raw corpus. An initial real isolated snapshot contained 2,034,371 messages in 1,181 rooms with messages (1,182 roster entries). It produced a 1,913,323,520-byte published store with a successful quick check; this is a dated data snapshot, not a fixed current total. Existing foreground automation workers and send gates are preserved; catalog changes take effect when automation restarts.
 

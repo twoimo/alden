@@ -316,6 +316,12 @@ fn count(value: &Value) -> u64 {
     value["renderCount"].as_u64().unwrap_or(0)
 }
 
+/// A settled view legitimately stops after one frame. A restore must draw
+/// something new, but it must not be forced into a continuous idle loop.
+fn rendered_since(value: &Value, before: u64) -> bool {
+    value["ready"] == true && count(value) > before && value["canvas"]["contextLost"] == false
+}
+
 fn fresh_pause(state: &Value, previous: f64) -> bool {
     state["loop"]["running"] == false
         && state["loop"]["pendingFrame"] == false
@@ -504,7 +510,7 @@ fn audit_settings(
     graph_step(&window, "memory-page", deadline)?;
     let initial = loop {
         let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
-        if state["ready"] == true && count(&state) >= 3 {
+        if rendered_since(&state, 0) {
             break state;
         }
         live(deadline)?;
@@ -617,19 +623,15 @@ fn audit_settings(
     let counters = app.state::<WorkspaceCounters>();
     let mut hidden_samples = Vec::new();
     let mut last_hidden_count = count(&compact);
+    visibility(&window, false, deadline)?;
     for note in WorkspaceNote::ALL {
         let show_baseline = count(&collect_script(&window, GRAPH_COLLECT.into(), deadline)?);
         visibility(&window, true, deadline)?;
         std::thread::sleep(Duration::from_millis(250));
         let before = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
-        if before["loop"]["running"] != true
-            || before["loop"]["pendingFrame"] != true
-            || count(&before) <= show_baseline
-            || before["canvas"]["contextLost"] != false
-            || window.is_visible().ok() != Some(true)
-        {
+        if !rendered_since(&before, show_baseline) || window.is_visible().ok() != Some(true) {
             return Err(format!(
-                "settings graph not running before notification: {before}"
+                "settings graph did not draw before notification: {before}"
             ));
         }
         let previous = before["pause"]["eventAtMs"].as_f64().unwrap_or(-1.0);
@@ -667,11 +669,7 @@ fn audit_settings(
     visibility(&window, true, deadline)?;
     std::thread::sleep(Duration::from_millis(250));
     let reopened = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
-    if reopened["loop"]["running"] != true
-        || reopened["loop"]["pendingFrame"] != true
-        || count(&reopened) <= last_hidden_count
-        || reopened["canvas"]["contextLost"] != false
-    {
+    if !rendered_since(&reopened, last_hidden_count) {
         return Err("settings graph did not resume".into());
     }
     visibility(&window, false, deadline)?;
@@ -761,7 +759,7 @@ fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<V
         .map_err(|_| "native scale unavailable")?;
     visibility(&window, true, deadline)?;
     let mut before = collect(&window, deadline)?;
-    while before["ready"] != true || count(&before) < 3 {
+    while !rendered_since(&before, 0) {
         if Instant::now() >= deadline {
             return Err("renderer readiness deadline exceeded".into());
         }
@@ -804,7 +802,7 @@ fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<V
         visibility(&window, true, deadline)?;
         std::thread::sleep(Duration::from_millis(250));
         let restored = collect(&window, deadline)?;
-        if count(&restored) <= count(&hidden) || restored["loop"]["running"] != true {
+        if !rendered_since(&restored, count(&hidden)) {
             return Err("renderer did not resume".into());
         }
         cycles.push(
@@ -985,6 +983,18 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
+    #[test]
+    fn static_rendering_is_evidence_without_an_idle_loop() {
+        let mut state = json!({"ready":true,"renderCount":11,"canvas":{"contextLost":false},"loop":{"running":false,"pendingFrame":false}});
+        assert!(rendered_since(&state, 10));
+        assert!(!rendered_since(&state, 11));
+        state["canvas"]["contextLost"] = json!(true);
+        assert!(!rendered_since(&state, 10));
+        state["canvas"]["contextLost"] = json!(false);
+        state["ready"] = json!(false);
+        assert!(!rendered_since(&state, 10));
+    }
+
     #[test]
     fn arguments_preserve_normal_startup_and_reject_ambiguous_audits() {
         assert!(parse_args([OsString::from("-psn_0_123")].into_iter())

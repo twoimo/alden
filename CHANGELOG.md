@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] - 2026-10-03
+
+- 네이티브 화면 검사기가 정지한 장면도 허용하도록 수정했습니다. 첫 실제 프레임·복원 후 새 프레임·컨텍스트·숨김 중 프레임 중단을 확인하며 지속적인 대기 렌더를 요구하지 않습니다.
+
 ## [0.3.8] - 2026-10-03
 
 - 공식 Thinking Orbs 엔진을 지식 그래프 주요 노드·사이드바·메뉴바에 적용합니다. 실제 음성·검색·수집·작업 상태에 연결하고 대기·숨김·중단·모션 감소에서는 정지합니다.
