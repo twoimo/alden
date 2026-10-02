@@ -516,7 +516,7 @@ exit 1
                     stderr,
                 )
             backup_entries = list(backup_dir.iterdir())
-            self.assertEqual(len(backup_entries), 1)
+            self.assertEqual(len(backup_entries), 1, msg=result.stderr[-1800:])
 
             return {
                 "returncode": result.returncode,

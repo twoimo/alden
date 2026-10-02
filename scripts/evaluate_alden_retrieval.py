@@ -18,6 +18,7 @@ import argparse
 import contextlib
 import hashlib
 import inspect
+import itertools
 import json
 import math
 import os
@@ -92,6 +93,15 @@ def _bounded_string(value: Any, field: str, *, allow_empty: bool = False) -> str
     return text
 
 
+def _numeric_id(value: Any, field: str, *, allow_zero: bool = False) -> str:
+    if type(value) not in (int, str):
+        raise FixtureError(f"{field} requires a canonical numeric ID")
+    text = str(value)
+    if len(text)>19 or not text.isascii() or not text.isdigit() or text != str(int(text)) or not (0 if allow_zero else 1) <= int(text) < 2**63:
+        raise FixtureError(f"{field} requires a canonical 64-bit numeric ID")
+    return text
+
+
 def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     corpus_path = fixture_dir / "corpus.json"
     queries_path = fixture_dir / "queries.json"
@@ -116,6 +126,47 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         raise FixtureError("rooms must contain at most 16 items")
 
     entity_ids: set[str] = set()
+    snapshot = corpus.get("snapshot")
+    snapshot_prefix = ""
+    if snapshot is not None:
+        if not isinstance(snapshot, dict) or snapshot.get("account") != "a" * 64:
+            raise FixtureError("snapshot must use the reserved synthetic account")
+        snapshot_prefix = "kakao:" + snapshot["account"] + ":"
+        for key, maximum in (("rooms", 16), ("authors", 64), ("messages", 512)):
+            if not isinstance(snapshot.get(key), list) or len(snapshot[key]) > maximum:
+                raise FixtureError(f"snapshot {key} exceeds its bounded fixture limit")
+        room_ids, author_ids = set(), set()
+        for row in snapshot["rooms"]:
+            if not isinstance(row, dict):
+                raise FixtureError("snapshot room requires a numeric ID")
+            room_id = _numeric_id(row.get("chat_id"), "snapshot chat_id")
+            if room_id in room_ids:raise FixtureError("duplicate snapshot room ID")
+            room_ids.add(room_id)
+            _bounded_string(row.get("label"), "snapshot room label", allow_empty=True)
+            entity_ids.add("chat:" + snapshot_prefix + "room:" + room_id)
+        for row in snapshot["authors"]:
+            if not isinstance(row, dict):
+                raise FixtureError("snapshot author requires a numeric ID")
+            author_id = _numeric_id(row.get("author_id"), "snapshot author_id", allow_zero=True)
+            if author_id in author_ids:raise FixtureError("duplicate snapshot author ID")
+            author_ids.add(author_id)
+            _bounded_string(row.get("label"), "snapshot author label", allow_empty=True)
+            if author_id != "0":entity_ids.add("person:" + snapshot_prefix + "actor:" + author_id)
+        message_ids = set()
+        for row in snapshot["messages"]:
+            if not isinstance(row, dict):raise FixtureError("snapshot message must be an object")
+            room_id = _numeric_id(row.get("chat_id"), "snapshot message chat_id")
+            author_id = _numeric_id(row.get("author_id"), "snapshot message author_id", allow_zero=True)
+            log_id = _numeric_id(row.get("log_id"), "snapshot log_id")
+            if room_id not in room_ids or author_id not in author_ids:
+                raise FixtureError("snapshot message must refer to declared numeric IDs")
+            if (room_id, log_id) in message_ids:raise FixtureError("duplicate snapshot message ID")
+            message_ids.add((room_id, log_id))
+            if "is_self" in row and type(row["is_self"]) is not bool:raise FixtureError("snapshot is_self must be boolean")
+            if "type" in row and (type(row["type"]) is not int or not 0 <= row["type"] <= 255):raise FixtureError("snapshot message type is invalid")
+            _bounded_string(row.get("text"), "snapshot message text")
+            if KG._message_datetime_kst(row.get("date")) is None:
+                raise FixtureError("snapshot message date must be parseable")
     for index, entity in enumerate(entities):
         if not isinstance(entity, dict):
             raise FixtureError(f"entities[{index}] must be an object")
@@ -142,6 +193,9 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             if not value.startswith("synthetic:"):
                 raise FixtureError("all evidence IDs must use the synthetic: namespace")
 
+    # Product seeding happens before fixture upserts, so judgments may forbid
+    # an actually present built-in node even when the fixture doesn't replace it.
+    entity_ids.update(item["entity_id"] for item in KG.DEFAULT_ENTITIES)
     query_ids: set[str] = set()
     splits: Counter[str] = Counter()
     for index, query in enumerate(queries):
@@ -175,7 +229,7 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         expected = query.get("expected_evidence_ids", [])
         if not isinstance(expected, list):
             raise FixtureError(f"query {query_id} expected_evidence_ids must be a list")
-        if any(not str(item).startswith("synthetic:") for item in expected):
+        if any(not (str(item).startswith("synthetic:") or (snapshot_prefix and str(item).startswith(snapshot_prefix))) for item in expected):
             raise FixtureError(f"query {query_id} has a non-synthetic evidence ID")
     if not splits["dev"] or not splits["heldout"]:
         raise FixtureError("fixtures must keep separate non-empty dev and heldout splits")
@@ -197,7 +251,36 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     return corpus, judgments
 
 
+def _write_snapshot_fixture(root: Path, snapshot: dict[str, Any]) -> None:
+    """Publish only declared synthetic rows; no Kakao source or account plist."""
+    account = snapshot["account"]
+    folder = root / "knowledge" / "corpus" / account
+    folder.mkdir(parents=True)
+    with sqlite3.connect(folder / "context.sqlite3") as db:
+        db.executescript("""CREATE TABLE corpus_meta(key TEXT,value TEXT);
+            CREATE TABLE context_message_topics(message_id INTEGER,topic TEXT);
+            CREATE TABLE context_topic_stats(chat TEXT,topic TEXT,message_count INTEGER);
+            CREATE TABLE alden_rooms(chat TEXT,chat_id TEXT,label TEXT);
+            CREATE TABLE alden_authors(author_id TEXT,label TEXT);
+            CREATE TABLE alden_messages(id INTEGER PRIMARY KEY,chat TEXT,chat_id TEXT,log_id TEXT,author_id TEXT,user_name TEXT,message TEXT,date,is_self INTEGER,message_type INTEGER,source TEXT);
+            CREATE VIEW context_messages AS SELECT *,X'' AS vector FROM alden_messages;
+            CREATE VIRTUAL TABLE context_messages_fts USING fts5(message,user_name,chat,content='alden_messages',content_rowid='id');""")
+        db.executemany("INSERT INTO corpus_meta VALUES(?,?)", [("account",account),("snapshot","synthetic-eval")])
+        names = {str(row["author_id"]):row["label"] for row in snapshot["authors"]}
+        db.executemany("INSERT INTO alden_authors VALUES(?,?)", names.items())
+        for room in snapshot["rooms"]:
+            key = f"kakao:{account}:room:{room['chat_id']}"
+            db.execute("INSERT INTO alden_rooms VALUES(?,?,?)", (key,str(room["chat_id"]),room["label"]))
+        for row in snapshot["messages"]:
+            key = f"kakao:{account}:room:{row['chat_id']}"
+            db.execute("INSERT INTO alden_messages(chat,chat_id,log_id,author_id,user_name,message,date,is_self,message_type,source) VALUES(?,?,?,?,?,?,?,?,?,?)",(key,str(row["chat_id"]),str(row["log_id"]),str(row["author_id"]),names[str(row["author_id"])],row["text"],row["date"],int(bool(row.get("is_self"))),1,key))
+        db.execute("INSERT INTO context_messages_fts(context_messages_fts) VALUES('rebuild')")
+    (folder.parent / "current.json").write_text(json.dumps({"schema_version":1,"account":account,"snapshot":"synthetic-eval"}))
+
+
 def _write_synthetic_graph(root: Path, corpus: dict[str, Any]) -> dict[str, int]:
+    if corpus.get("snapshot"):
+        _write_snapshot_fixture(root, corpus["snapshot"])
     catalog = {"rooms": corpus["rooms"]}
     (root / "menubar-room-catalog.json").write_text(
         json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -267,6 +350,10 @@ def _write_synthetic_graph(root: Path, corpus: dict[str, Any]) -> dict[str, int]
                     int(relation["updated_at"]),
                 ),
             )
+        if corpus.get("snapshot"):
+            KG.index_chat_entities(conn, root)
+            KG.index_person_entities(conn, root)
+            KG.index_membership_relations(conn, root)
         KG.write_meta(conn, "last_indexed_at", str(corpus["watermark"]))
         conn.commit()
         entity_count = int(conn.execute("SELECT COUNT(*) FROM kg_entities").fetchone()[0])
@@ -341,6 +428,7 @@ def _evaluate_query(
     *,
     mode: str,
     ks: tuple[int, ...],
+    policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     started = time.perf_counter_ns()
     with contextlib.ExitStack() as stack:
@@ -365,6 +453,8 @@ def _evaluate_query(
                     return_value=(dense_hits, str(corpus["watermark"])),
                 )
             )
+        selected_policy = dict(policy or {})
+        ranked_policy = {key:value for key,value in selected_policy.items() if key in {"rrf_weights","rrf_k","candidate_limit"}}
         ranked = KG._query_knowledge_ranked(
             query["text"],
             state_root=root,
@@ -373,15 +463,20 @@ def _evaluate_query(
             participant_id=query.get("participant_id"),
             time_from=query.get("time_from"),
             time_to=query.get("time_to"),
+            **ranked_policy,
         )
-    with mock.patch.object(KG, "_query_knowledge_ranked", return_value=ranked):
+        public_started = time.perf_counter_ns()
         bundle = KG.retrieve_knowledge_bundle(
             query["text"],
             state_root=root,
             chat_id=query.get("chat_id"),
             also=query.get("also"),
+            participant_id=query.get("participant_id"),
+            time_from=query.get("time_from"),
+            time_to=query.get("time_to"),
+            **selected_policy,
         )
-    elapsed_ms = (time.perf_counter_ns() - started) / 1_000_000
+        elapsed_ms = (time.perf_counter_ns() - public_started) / 1_000_000
 
     candidates = [str(item) for item in ranked.get("candidates") or []]
     relevant = {str(key): int(value) for key, value in query["relevant"].items()}
@@ -479,6 +574,9 @@ def _evaluate_query(
             "fact_provenance": bundle_fact_provenance,
             "evidence_ids": sorted(bundle_evidence),
             "boundary_errors": bundle_boundary_errors,
+            "retrieval_policy": bundle.get("retrieval_policy"),
+            "context_chars": sum(len(fact) for fact in bundle_facts),
+            "context_recall": recall_at_k(sorted(bundle_candidate_ids | bundle_relation_entity_ids), relevant, len(bundle_candidate_ids | bundle_relation_entity_ids)) if relevant else None,
         },
         "returned_evidence_ids": sorted(returned_evidence),
         "expected_evidence_ids": sorted(expected_evidence),
@@ -506,6 +604,7 @@ def _aggregate(results: list[dict[str, Any]], ks: tuple[int, ...]) -> dict[str, 
     return {
         "queries": len(results),
         "positive_queries": len(positive),
+        "context_macro_recall": _mean(result["public_bundle"]["context_recall"] for result in positive),
         "negative_queries": len(results) - len(positive),
         "metrics": {
             str(k): {
@@ -780,11 +879,54 @@ def _production_observations(mode_reports: dict[str, Any]) -> list[dict[str, Any
     return observations
 
 
+def _tune_retrieval_policy(root: Path, corpus: dict[str, Any], judgments: dict[str, Any], ks: tuple[int,...]) -> dict[str,Any]:
+    """Run real public requests; select on dev only, then verify heldout once.
+
+    Exact local encoder outputs are memoized per input within this fixture
+    run. The production ANN/filter/fusion/bundle path still runs for each
+    policy; no fixture ranking replaces a real encoder result.
+    """
+    dev = [q for q in judgments["queries"] if q["split"] == "dev"]
+    heldout = [q for q in judgments["queries"] if q["split"] == "heldout"]
+    original = KG._local_dense_embeddings
+    cache: dict[tuple[Any,...],Any] = {}
+    calls = 0
+    hits = 0
+    def cached(texts, **kwargs):
+        nonlocal calls, hits
+        key = (tuple(texts), kwargs.get("input_type",KG.DENSE_INPUT_TYPE_QUERY), kwargs.get("model_id"))
+        if key not in cache:
+            calls += 1
+            cache[key] = original(texts, **kwargs)
+        else:
+            hits += 1
+        return cache[key]
+    defaults = {"rrf_k":KG.RRF_K,"candidate_limit":KG.RETRIEVAL_CANDIDATE_LIMIT,"max_context_chars":KG.RETRIEVAL_CONTEXT_CHARS,"rrf_weights":(KG.RRF_BM25_WEIGHT,KG.RRF_DENSE_WEIGHT)}
+    policies = [defaults]
+    for k, count, budget, weights in itertools.product((20,60,100),(12,40,80),(512,2048,8000),((1.0,0.5),(1.0,1.0),(0.5,1.0))):
+        p = {"rrf_k":k,"candidate_limit":count,"max_context_chars":budget,"rrf_weights":weights}
+        if p not in policies:policies.append(p)
+    grid = []
+    with mock.patch.object(KG,"_local_dense_embeddings",side_effect=cached):
+        for policy in policies:
+            rows = [_evaluate_query(root,corpus,q,mode="live-rrf",ks=ks,policy=policy) for q in dev]
+            grid.append({"policy":policy,"dev":_aggregate(rows,ks)})
+        def selection_key(row):
+            summary=row["dev"];rank=summary["metrics"]["3" if 3 in ks else str(max(ks))]
+            policy=row["policy"]
+            distance=sum(policy[key]!=defaults[key] for key in defaults)
+            return (-float(summary["whole_context_forbidden_query_rate"] or 0),float(summary["context_macro_recall"] or 0),float(rank["macro_ndcg"] or 0),float(rank["macro_recall"] or 0),-distance)
+        selected=max(grid,key=selection_key)
+        verification=[_evaluate_query(root,corpus,q,mode="live-rrf",ks=ks,policy=selected["policy"]) for q in heldout]
+    return {"tuning_split":"dev","tuning_queries":len(dev),"heldout_split":"heldout","heldout_queries":len(heldout),"selection_order":["whole_context_safety","context_recall","ndcg_at_3","recall_at_3","distance_from_defaults"],"grid":grid,"selected_policy":selected["policy"],"selected_dev":selected["dev"],"selected_heldout":_aggregate(verification,ks),"heldout_results":verification,"encoder_actual_calls":calls,"encoder_memoized_hits":hits,"scope":"real local embeddings memoized by exact input; real production public requests for every policy; heldout never used for selection"}
+
+
 def evaluate_fixture(
     fixture_dir: Path = DEFAULT_FIXTURE_DIR,
     *,
     modes: Iterable[str] = ("bm25", "fixture-rrf"),
     ks: tuple[int, ...] = DEFAULT_KS,
+    tune_policy: bool = False,
 ) -> dict[str, Any]:
     load_average_start = tuple(round(value, 2) for value in os.getloadavg())
     requested_modes = tuple(dict.fromkeys(str(mode) for mode in modes))
@@ -835,6 +977,8 @@ def evaluate_fixture(
                 mode_reports[mode]["weight_tuning"] = _tune_live_rrf_weights(
                     query_results, ks
                 )
+                if tune_policy:
+                    mode_reports[mode]["policy_tuning"] = _tune_retrieval_policy(root,corpus,judgments,ks)
 
     report: dict[str, Any] = {
         "schema_version": 1,
@@ -923,7 +1067,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "markdown", "docs/architecture/alden-retrieval-eval-20260930.md"
     )
     lines = [
-        "# Alden Korean GraphRAG retrieval evaluation — 2026-09-30",
+        "# Alden Korean GraphRAG retrieval evaluation — " + report["evaluated_at_utc"][:10],
         "",
         "## Scope",
         "",
@@ -939,7 +1083,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "```bash",
         "python3 scripts/evaluate_alden_retrieval.py \\",
-        f"  {selected_modes} \\",
+        f"  --fixture-dir {report['fixture']['directory']} {selected_modes} \\",
         f"  --output {json_output} \\",
         f"  --markdown-output {markdown_output}",
         "python3 -m unittest tests.test_alden_retrieval_eval",
@@ -949,8 +1093,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "Recall and nDCG are macro averages over positive queries. Forbidden@3 measures candidate leakage in the top three; Whole-context leak inspects the bounded public bundle's candidate provenance, relation endpoints, and forbidden relation text.",
         "",
-        "| Mode | Split | n | Recall@1 | nDCG@1 | Recall@3 | nDCG@3 | Forbidden@3 | Whole-context leak | p50 ms | p95 ms |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Mode | Split | n | Recall@1 | nDCG@1 | Recall@3 | nDCG@3 | Context recall | Forbidden@3 | Whole-context leak | p50 ms | p95 ms |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for mode, mode_report in report["modes"].items():
         for split in ("overall", "dev", "heldout"):
@@ -960,7 +1104,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             lines.append(
                 f"| {mode} | {split} | {metrics['queries']} | {at1.get('macro_recall')} | "
                 f"{at1.get('macro_ndcg')} | {at3.get('macro_recall')} | {at3.get('macro_ndcg')} | "
-                f"{at3.get('forbidden_query_rate')} | {metrics['whole_context_forbidden_query_rate']} | "
+                f"{metrics['context_macro_recall']} | {at3.get('forbidden_query_rate')} | {metrics['whole_context_forbidden_query_rate']} | "
                 f"{metrics['latency_ms']['p50']} | "
                 f"{metrics['latency_ms']['p95']} |"
             )
@@ -987,6 +1131,12 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "recorded as analysis only and does not by itself promote production defaults.",
             ]
         )
+        policy = report["modes"]["live-rrf"].get("policy_tuning")
+        if policy:
+            lines.extend(["", "## Bounded policy selection", "",
+                f"Only the {policy['tuning_queries']} dev queries selected from {len(policy['grid'])} combinations of weights, RRF k, candidate count and text budget. Selected: `{policy['selected_policy']}`.",
+                f"The {policy['heldout_queries']} held-out queries were evaluated once after selection; context recall: {policy['selected_heldout']['context_macro_recall']}, whole-context leak: {policy['selected_heldout']['whole_context_forbidden_query_rate']}.",
+                "Exact E5 outputs are memoized only during this policy grid. Grid replay timings exclude repeated encoder calls and must not be reported as fresh-query or production percentiles. The results table above uses unmemoized public requests."])
 
     lines.extend(["", "## Observed production gaps", ""])
     for observation in report["production_observations"]:
@@ -1036,6 +1186,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, help="Write the structured JSON report")
     parser.add_argument("--markdown-output", type=Path, help="Write the Markdown summary")
     parser.add_argument("--json", action="store_true", help="Also print the JSON report")
+    parser.add_argument("--tune-policy", action="store_true", help="Select bounded RRF/candidate/context settings on dev with real local embeddings")
     arguments = parser.parse_args(argv)
 
     try:
@@ -1043,6 +1194,7 @@ def main(argv: list[str] | None = None) -> int:
             arguments.fixture_dir.resolve(),
             modes=arguments.modes or ("bm25", "fixture-rrf"),
             ks=arguments.k,
+            tune_policy=arguments.tune_policy,
         )
     except (FixtureError, RuntimeError, ValueError) as error:
         parser.error(str(error))
