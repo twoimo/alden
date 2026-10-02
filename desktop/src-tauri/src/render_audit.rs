@@ -693,7 +693,9 @@ fn workspace_notification_audit(
         .try_state::<WorkspaceCounters>()
         .ok_or("workspace observers not installed")?;
     let mut results = Vec::new();
+    visibility(window, false, deadline)?;
     for note in WorkspaceNote::ALL {
+        let show_baseline = count(&collect(window, deadline)?);
         visibility(window, true, deadline)?;
         visibility(&settings, true, deadline)?;
         std::thread::sleep(Duration::from_millis(250));
@@ -701,8 +703,8 @@ fn workspace_notification_audit(
             return Err("workspace audit windows not visible before injection".into());
         }
         let prior = collect(window, deadline)?;
-        if prior["loop"]["running"] != true || prior["loop"]["pendingFrame"] != true {
-            return Err("workspace audit renderer not running before injection".into());
+        if !rendered_since(&prior, show_baseline) {
+            return Err("workspace audit renderer did not draw before injection".into());
         }
         let previous = prior["pause"]["eventAtMs"].as_f64().unwrap_or(-1.0);
         let seen = counters.count(note);
@@ -741,10 +743,11 @@ fn workspace_notification_audit(
             "hiddenRenderDelta":count(&hidden)-count(&stopped),"pause":hidden["pause"],
             "settingsRenderScope":"native visibility only; backend-free settings renderer unexercised"}));
     }
+    let hidden_count = count(&collect(window, deadline)?);
     visibility(window, true, deadline)?;
     std::thread::sleep(Duration::from_millis(250));
     let resumed = collect(window, deadline)?;
-    if resumed["loop"]["running"] != true {
+    if !rendered_since(&resumed, hidden_count) {
         return Err("renderer failed to reopen after workspace signals".into());
     }
     Ok(results)
