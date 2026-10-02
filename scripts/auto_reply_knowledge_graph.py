@@ -193,13 +193,18 @@ def _normalize_evidence(raw: Any) -> dict[str, Any]:
     ids = raw.get("source_event_ids")
     if not isinstance(ids, list):
         ids = []
-    return {
-        "kind": raw["kind"] if raw.get("kind") in (PROVENANCE_LEDGER,PROVENANCE_SNAPSHOT) else PROVENANCE_SEED,
-        "source_event_ids": [str(item) for item in ids if str(item).strip()][:MAX_EVIDENCE_PER_NODE],
-        "chat_id": str(raw.get("chat_id") or ""),
-        "confirmed_at": raw.get("confirmed_at") or None,
-        "retracted": bool(raw.get("retracted")),
+    kind=raw['kind'] if raw.get('kind') in (PROVENANCE_LEDGER,PROVENANCE_SNAPSHOT) else PROVENANCE_SEED
+    result={
+        'kind':kind,'source_event_ids':[str(item) for item in ids if str(item).strip()][:MAX_EVIDENCE_PER_NODE],
+        'chat_id':str(raw.get('chat_id')or''),'confirmed_at':raw.get('confirmed_at')or None,'retracted':bool(raw.get('retracted')),
     }
+    if kind==PROVENANCE_SNAPSHOT:
+        rooms=raw.get('room_ids',[])
+        result['room_ids']=[r for r in rooms if isinstance(r,str) and re.fullmatch(r'kakao:[0-9a-f]{64}:room:[0-9]+',r)][:2048] if isinstance(rooms,list) else []
+        actor=str(raw.get('author_id')or'')
+        result['author_id']=actor if actor.isascii() and actor.isdigit() else ''
+    return result
+
 
 DEFAULT_ENTITIES = [
     {
@@ -1074,7 +1079,7 @@ def _index_corpus_people(conn,index_conn,*,chat='',limit=60):
         facts=[f'{len(rooms)}개 대화방에 {count:,}건의 메시지가 있습니다.']
         samples=index_conn.execute('SELECT date,message,chat_id,log_id FROM context_messages WHERE author_id=? ORDER BY id DESC LIMIT 3',(actor,)).fetchall()
         facts += [str(row[0])[:10]+' · '+str(row[1])[:90] for row in samples if row[1]]
-        conn.execute('INSERT INTO kg_entities(entity_id,name,category,aliases_json,description,key_facts_json,importance,evidence_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(entity_id)DO UPDATE SET name=excluded.name,category=excluded.category,aliases_json=excluded.aliases_json,description=excluded.description,key_facts_json=excluded.key_facts_json,importance=excluded.importance,evidence_json=excluded.evidence_json,updated_at=excluded.updated_at',(key,name,'대화 상대',json.dumps([name,actor],ensure_ascii=False),name+'의 대화 기록입니다.',json.dumps(facts,ensure_ascii=False),min(94,50+int(count)//4000),json.dumps({'kind':'snapshot','author_id':actor,'room_ids':[str(r[0]) for r in rooms[:16]],'source_event_ids':['kakao:'+str(rooms[0][0]).split(':')[1]+':room:'+str(r[2])+':log:'+str(r[3]) for r in samples]}),now))
+        conn.execute('INSERT INTO kg_entities(entity_id,name,category,aliases_json,description,key_facts_json,importance,evidence_json,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(entity_id)DO UPDATE SET name=excluded.name,category=excluded.category,aliases_json=excluded.aliases_json,description=excluded.description,key_facts_json=excluded.key_facts_json,importance=excluded.importance,evidence_json=excluded.evidence_json,updated_at=excluded.updated_at',(key,name,'대화 상대',json.dumps([name,actor],ensure_ascii=False),name+'의 대화 기록입니다.',json.dumps(facts,ensure_ascii=False),min(94,50+int(count)//4000),json.dumps(_normalize_evidence({'kind':'snapshot','author_id':actor,'room_ids':[str(r[0]) for r in rooms],'source_event_ids':['kakao:'+str(rooms[0][0]).split(':')[1]+':room:'+str(r[2])+':log:'+str(r[3]) for r in samples]})),now))
         written+=1
     conn.commit()
     return {'persons':written,'written':written,'with_lines':written}
@@ -1242,6 +1247,13 @@ def _room_key(state_root: Path, chat: str) -> str:
     raw = (chat or "").strip()
     if not raw:
         return raw
+    if re.fullmatch(r'kakao:[0-9a-f]{64}:room:[0-9]+',raw):return raw
+    pointer=state_root/'knowledge'/'corpus'/'current.json'
+    numeric=raw[3:] if raw.startswith('그룹:') else raw
+    if pointer.is_file() and numeric.isascii() and numeric.isdigit():
+        _index_db_path(state_root)  # Refuse a malformed account pointer.
+        account=json.loads(pointer.read_text())['account']
+        return f'kakao:{account}:room:{int(numeric)}'
     titles = _room_titles(state_root)
     return titles.get(raw) or raw
 
@@ -1379,7 +1391,7 @@ def index_chat_entities(
                 observed=evidence_conn.execute('SELECT chat_id,log_id FROM context_messages WHERE chat=? ORDER BY id DESC LIMIT ?',(key,MAX_EVIDENCE_PER_NODE)).fetchall()
             account=key.split(':')[1]
             evidence={'kind':PROVENANCE_SNAPSHOT,'chat_id':key,'source_event_ids':[f'kakao:{account}:room:{r}:log:{log}' for r,log in observed]}
-            conn.execute('UPDATE kg_entities SET evidence_json=? WHERE entity_id=?',(json.dumps(evidence),'chat:'+key))
+            conn.execute('UPDATE kg_entities SET evidence_json=? WHERE entity_id=?',(json.dumps(_normalize_evidence(evidence)),'chat:'+key))
         stats["written"] += 1
     conn.commit()
     stats["chats"] = len(merged)
@@ -2994,12 +3006,25 @@ class _RejectLoopbackRedirects(urllib.request.HTTPRedirectHandler):
         )
 
 
+_EMBEDDING_ABORT_TOKEN = ContextVar('alden_embedding_abort_token',default=None)
+
+@contextmanager
+def embedding_abort_scope(token):
+    handle=_EMBEDDING_ABORT_TOKEN.set(token)
+    try:yield
+    finally:_EMBEDDING_ABORT_TOKEN.reset(handle)
+
+
 def _open_loopback_embedding_request(
     request: urllib.request.Request,
     *,
     timeout: float,
 ) -> Any:
     """Use an explicit no-proxy opener and refuse every redirect."""
+    token=_EMBEDDING_ABORT_TOKEN.get()
+    if token is not None:
+        from alden_local_http import CancellableLocalResponse
+        return CancellableLocalResponse(request,timeout,token,embedding=True)
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         _RejectLoopbackRedirects(),
@@ -3896,6 +3921,7 @@ def _candidate_provenance(
         "source_kind": str(evidence["kind"]),
         "source_event_ids": list(evidence["source_event_ids"]),
         "room_id": str(evidence["chat_id"] or ""),
+        "room_ids": list(evidence.get("room_ids",[])),
         "confirmed_at": evidence["confirmed_at"],
         "retracted": bool(evidence["retracted"]),
         "updated_at": updated,
@@ -4256,7 +4282,7 @@ def _query_knowledge_ranked(
             norm_key = _room_key(root, chat_str)
             if norm_key:
                 allowed_rooms.add(norm_key)
-                allowed_rooms.add(_chat_label(norm_key))
+                if not norm_key.startswith("kakao:"): allowed_rooms.add(_chat_label(norm_key))
         # 어떤 표기가 들어와도 같은 정규 키로 모은다.
         room_aliases: dict[str, str] = {}
         for room in list(allowed_rooms):
@@ -4273,6 +4299,8 @@ def _query_knowledge_ranked(
 
             person:<room>:<name> 과 chat:<room> 두 모양만 방 스코프를 갖는다.
             """
+            if re.fullmatch(r'chat:kakao:[0-9a-f]{64}:room:[0-9]+',entity_id):return entity_id[5:]
+            if re.fullmatch(r'person:kakao:[0-9a-f]{64}:actor:[0-9]+',entity_id):return ''
             if entity_id.startswith("chat:") or entity_id.startswith("person:"):
                 parts = entity_id.split(":")
                 return parts[1] if len(parts) > 1 else ""
@@ -4367,6 +4395,8 @@ def _query_knowledge_ranked(
                 return False
             if not _source_room_in_scope(provenance["room_id"]):
                 return False
+            if allowed_canonical and provenance['source_kind']==PROVENANCE_SNAPSHOT and entity_id.startswith('person:kakao:'):
+                if not any(_source_room_in_scope(room) for room in provenance.get('room_ids',[])):return False
             time_state = temporal_scope.get(entity_id)
             if time_state and time_state["has_interval"] and not time_state["in_range"]:
                 return False
@@ -4470,6 +4500,7 @@ def _query_knowledge_ranked(
         candidates: list[str] = []
         evidence_ids: list[str] = []
         matched_entity_ids: set[str] = set()
+        raw_scopes=[room for room in allowed_canonical if re.fullmatch(r'kakao:[0-9a-f]{64}:room:[0-9]+',room)]
         matched_entity_names: dict[str, str] = {}
         if ordered_ids:
             marks = ",".join("?" for _ in ordered_ids)
@@ -4492,6 +4523,18 @@ def _query_knowledge_ranked(
                     facts = []
                 if not isinstance(facts, list):
                     facts = []
+                provenance = provenance_by_entity.get(entity_id)
+                if len(raw_scopes)==1 and provenance and provenance['source_kind']==PROVENANCE_SNAPSHOT:
+                    from alden_corpus import search as corpus_search
+                    scope=raw_scopes[0];account=scope.split(':')[1];room_number=scope.rsplit(':',1)[1]
+                    actor_match=re.fullmatch(r'person:kakao:[0-9a-f]{64}:actor:([0-9]+)',entity_id)
+                    abort_token=_EMBEDDING_ABORT_TOKEN.get()
+                    observed=corpus_search(root,'',chat_id=room_number,author_id=actor_match[1] if actor_match else '',expected_account=account,cancelled=abort_token.is_cancelled if abort_token is not None else None)
+                    if not observed.get('ok') or not observed['items']:continue
+                    facts=[str(r['date'])[:10]+' · '+str(r['sender'])+' · '+str(r['content']) for r in observed['items'][:3]]
+                    description='선택한 대화방에서 확인한 과거 기록입니다.'
+                    provenance=dict(provenance,source_event_ids=[r['source_id'] for r in observed['items']],room_id=scope,room_ids=[scope])
+                    provenance_by_entity[entity_id]=provenance
                 candidates.append(entity_id)
                 matched_entity_ids.add(entity_id)
                 matched_entity_names[entity_id] = str(name)
@@ -4549,6 +4592,8 @@ def _query_knowledge_ranked(
                 tgt_name = matched_entity_names.get(tgt, tgt.split(":")[-1])
                 relation_facts.append(f"[관계] {src_name} —({rel})→ {tgt_name}: {ctx}")
                 relation_evidence_ids = list(provenance["source_event_ids"])
+                if len(raw_scopes)==1 and provenance['source_kind']==PROVENANCE_SNAPSHOT:
+                    relation_evidence_ids=[value for value in provenance_by_entity.get(src,{}).get('source_event_ids',[]) if value.startswith(raw_scopes[0]+':log:')]
                 message_id = str(evidence_message_id or "").strip()
                 if message_id and message_id not in relation_evidence_ids:
                     relation_evidence_ids.append(message_id)

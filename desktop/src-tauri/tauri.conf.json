@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -93,7 +93,8 @@
       "bundle-resources/scripts/alden_history.py": "scripts/alden_history.py",
       "bundle-resources/scripts/vendor/osk-v4.1.2.zip": "scripts/vendor/osk-v4.1.2.zip",
       "bundle-resources/scripts/vendor/osk-v4.1.2.json": "scripts/vendor/osk-v4.1.2.json",
-      "bundle-resources/scripts/alden_corpus.py": "scripts/alden_corpus.py"
+      "bundle-resources/scripts/alden_corpus.py": "scripts/alden_corpus.py",
+      "bundle-resources/scripts/alden_local_http.py": "scripts/alden_local_http.py"
     }
   }
 }

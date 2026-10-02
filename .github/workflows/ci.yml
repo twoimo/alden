@@ -213,6 +213,7 @@ jobs:
           tests.test_alden_tool_runtime
           tests.test_alden_voice_runtime
           tests.test_alden_voice_turns
+          tests.test_alden_voice_retrieval
           tests.test_alden_voice_bargein
           tests.test_alden_wake_eval
           tests.test_alden_wake_evidence

@@ -1,6 +1,6 @@
 [package]
 name = "openkakao-alden-desktop"
-version = "0.3.1"
+version = "0.3.2"
 description = "OpenKakao Tauri menubar shell with a local Alden core"
 edition = "2021"
 

@@ -24,12 +24,12 @@
     {
       "id": "worker",
       "type": "backend",
-      "label": "음성 작업"
+      "label": "음성·로컬 검색"
     },
     {
       "id": "mlx",
       "type": "backend",
-      "label": "로컬 MLX"
+      "label": "로컬 모델"
     },
     {
       "id": "tts",
@@ -46,7 +46,7 @@
     {
       "from": 150,
       "to": 300,
-      "label": "확정 맥락에서 추론"
+      "label": "확정 맥락·인용 자료"
     },
     {
       "from": 310,
@@ -85,7 +85,7 @@
       "from": "worker",
       "to": "mlx",
       "y": 260,
-      "label": "맥락·최신 발화",
+      "label": "조회 자료·최신 발화",
       "variant": "emphasis"
     },
     {
@@ -113,7 +113,7 @@
       "from": "worker",
       "to": "mlx",
       "y": 380,
-      "label": "소켓 중단",
+      "label": "모델 소켓 취소",
       "variant": "security"
     },
     {

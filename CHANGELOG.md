@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-02
+
+- 원본 관찰 근거의 필수 필드를 보존해 인물·방 노드가 RRF 검색 필터에서 빠지는 문제를 수정했습니다. 숫자 방 ID를 계정 범위의 방 키로 연결합니다.
+- 특정 방의 검색 결과는 해당 방의 원문과 근거 ID로 다시 구성합니다. 전역 인물 노드가 다른 방의 예문을 섞어 보여주지 않습니다.
+- 음성 지식 요청에 로컬 원문·RRF 검색을 연결하고, 같은 주제의 후속 요청만 이전 검색을 이어갑니다. 다른 주제로 전환한 후에는 오래된 검색을 되살리지 않습니다. 동일한 이름의 방은 임의로 선택하지 않으며, 과거 발신 기록은 새 사용자 발화로 넣지 않습니다.
+- 검색 인용 JSON과 맥락 예산을 제한하고, 임베딩 소켓·SQLite 검색에 취소를 전파합니다. 계산 결과는 숫자와 단위를 분명하게 표기하도록 음성 프롬프트를 정리했습니다.
+
 ## [0.3.1] - 2026-10-02
 
 - 실제 앱 백그라운드 수집이 macOS 접근 확인 단계의 카카오톡 설정 파일 open()에서 멈추는 것을 샘플링으로 확인했습니다.

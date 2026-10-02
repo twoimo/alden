@@ -6,7 +6,24 @@ import sqlite3
 import unicodedata
 from pathlib import Path
 
-def search(root: Path, query: str, *, chat_id: str = '', author_id: str = '', limit: int = 6, expected_account: str = '') -> dict:
+def resolve_room(root: Path, query: str) -> dict:
+    """Resolve exact visible names only; never pick between equal names."""
+    from auto_reply_knowledge_graph import _index_db_path
+    path=_index_db_path(root)
+    if not path.is_file():return {'state':'none','chat_id':''}
+    with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=.2) as db:
+        db.execute('PRAGMA query_only=ON')
+        if not db.execute("SELECT 1 FROM sqlite_master WHERE name='alden_rooms'").fetchone():return {'state':'none','chat_id':''}
+        needle=unicodedata.normalize('NFKC',query)
+        found=[]
+        for key,label in db.execute('SELECT chat_id,label FROM alden_rooms'):
+            name=unicodedata.normalize('NFKC',label or '').strip()
+            if len(name)>=2 and name in needle:found.append((len(name),key))
+        if not found:return {'state':'none','chat_id':''}
+        longest=max(size for size,_ in found);ids={key for size,key in found if size==longest}
+        return {'state':'resolved' if len(ids)==1 else 'ambiguous','chat_id':next(iter(ids)) if len(ids)==1 else '', 'matches':len(ids)}
+
+def search(root: Path, query: str, *, chat_id: str = '', author_id: str = '', limit: int = 6, expected_account: str = '', cancelled=None) -> dict:
     if not isinstance(query,str) or len(query)>2048 or not 1<=limit<=20:
         raise ValueError('corpus_query_invalid')
     for value in (chat_id,author_id):
@@ -19,6 +36,7 @@ def search(root: Path, query: str, *, chat_id: str = '', author_id: str = '', li
     if not terms and not (chat_id or author_id): return {'ok':True,'items':[]}
     with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=.2) as db:
         db.execute('PRAGMA query_only=ON')
+        if cancelled is not None:db.set_progress_handler(lambda:1 if cancelled() else 0,1000)
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name='alden_messages'").fetchone():
             return {'ok':False,'reason':'corpus_not_ready','items':[]}
         account=db.execute("SELECT value FROM corpus_meta WHERE key='account'").fetchone()[0]

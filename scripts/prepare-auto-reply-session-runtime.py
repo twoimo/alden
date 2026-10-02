@@ -71,6 +71,8 @@ RUNTIME_SCRIPT_NAMES = (
     "auto_reply_reference_store.py",
     "auto_reply_transition_journal.py",
     "alden_abort.py",
+    "alden_local_http.py",
+    "alden_corpus.py",
     "alden_file_content.py",
     "local_mlx_gateway.py",
     "auto-reply-apple-watch.py",
