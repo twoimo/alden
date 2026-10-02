@@ -1,13 +1,15 @@
 {
-  "artifact_sha256": "d2dbb0934724ffcb376fc4f241775209f87a6b9252713a6b89cd84e1d472f101",
-  "reviewer": "parent image review",
-  "captures": [
-    "alden-three-render-lifecycle.visual-check.1440x900.light.png",
-    "alden-three-render-lifecycle.visual-check.2048x1320.dark.png"
-  ],
-  "result": "검토한 두 테마에서 실제 재생 티켓·완료 PCM과 입력/출력 진폭, 취소·대기·숨김 전이가 읽힌다. 라벨·노드·전이의 충돌을 발견하지 않았다. 작성 내용은 한국어, 고정 Viewer UI는 영어다.",
-  "deterministic_checks": 9,
-  "browser_viewports": 4,
-  "visual_review": "passed",
-  "correction_rounds": 0
+  "artifactSha256": "621b9af517119b8f3f55da4a8065a93fce1331127c759b6220db6edd10237d9c",
+  "diagramType": "lifecycle",
+  "artifactChecks": 9,
+  "browserContainment": "four viewport sizes passed",
+  "visualReview": {
+    "status": "reviewed",
+    "reviewer": "image-capable assistant",
+    "views": [
+      "1440x900 light",
+      "2048x1320 dark"
+    ],
+    "result": "Labels and routes are visible without overlaps or viewport overflow. Authored labels remain Korean; fixed viewer controls remain English."
+  }
 }

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] - 2026-10-03
+
+- 공식 Thinking Orbs 엔진을 지식 그래프 주요 노드·사이드바·메뉴바에 적용합니다. 실제 음성·검색·수집·작업 상태에 연결하고 대기·숨김·중단·모션 감소에서는 정지합니다.
+- 노드를 선택하면 전체 설명·연결 관계·채팅방과 작성자·날짜가 있는 대표 원문을 보여줍니다. 네이티브 브리지에서 빠지던 설명과 출처를 복원하고 동명이인·다른 계정·다른 방의 근거를 제외합니다.
+- 상태별 프레임과 GPU 버퍼를 재사용하고 정지한 라벨의 반복 갱신을 제거합니다. 메뉴·운영 버튼·사이드바 하단 중앙 버전은 유지합니다.
+
 ## [0.3.7] - 2026-10-03
 
 - 실제 재생 티켓·커서의 완료된 출력 PCM 구간을 그래프에 연결합니다. 입력·출력 값을 분리하고 아직 재생하지 않은 구간·오래된 값·중단된 턴을 표시하지 않습니다.

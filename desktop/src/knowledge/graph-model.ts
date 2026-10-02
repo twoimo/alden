@@ -19,6 +19,8 @@ export interface KnowledgeNode {
   importance: number;
   updatedAt: number;
   evidence: KnowledgeEvidence;
+  description?: string;
+  facts?: string[];
 }
 
 export interface KnowledgeEdge {
@@ -73,7 +75,8 @@ function parseEvidence(value: unknown): KnowledgeEvidence {
     ? item.source_event_ids.filter((entry): entry is string => typeof entry === "string").slice(0, 16)
     : [];
   return {
-    kind: item.kind === "ledger" || item.kind === "snapshot" ? item.kind : "seed",
+    kind: item.kind === 'decision_ledger' ? 'ledger' : item.kind === 'local_db_snapshot' ? 'snapshot'
+      : item.kind === "ledger" || item.kind === "snapshot" ? item.kind : "seed",
     sourceEventIds: ids,
     chatId: stringValue(item.chat_id),
     confirmedAt: typeof item.confirmed_at === "string" ? item.confirmed_at : null,
@@ -96,6 +99,8 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null): Kn
         importance: Math.max(0, Math.min(100, numberValue(item.importance))),
         updatedAt: Math.max(0, numberValue(item.updated_at)),
         evidence: parseEvidence(item.evidence),
+        description: stringValue(item.description).slice(0, 2400),
+        facts: Array.isArray(item.facts) ? item.facts.filter((entry): entry is string => typeof entry === 'string').slice(0, 6).map(entry => entry.slice(0, 600)) : [],
       }];
     })
     : [];

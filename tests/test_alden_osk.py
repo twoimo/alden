@@ -21,6 +21,41 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_clicked_actor_details_keep_exact_room_account_and_original_roles(self):
+        result = self.execute(r'''
+import sqlite3
+account='1'*64
+actor='person:kakao:'+account+':actor:7'
+room42='chat:kakao:'+account+':room:42'
+room84='chat:kakao:'+account+':room:84'
+source['nodes'] += [
+ {'id':actor,'label':'동일 이름','category':'대화 상대','description':'여러 방에서 수집된 화자','facts':['다른 방의 캐시 문장'], 'evidence':{'kind':'local_db_snapshot'}},
+ {'id':room42,'label':'선택한 방','category':'대화방','facts':[],'evidence':{'kind':'local_db_snapshot'}},
+ {'id':room84,'label':'다른 방','category':'대화방','facts':[],'evidence':{'kind':'local_db_snapshot'}}]
+a.synchronize(root,source)
+p=root/'knowledge/corpus'/account/'context.sqlite3';p.parent.mkdir(parents=True)
+with sqlite3.connect(p) as db:
+ db.executescript('CREATE TABLE corpus_meta(key TEXT PRIMARY KEY,value TEXT);CREATE TABLE alden_messages(id INTEGER PRIMARY KEY,chat_id TEXT,log_id TEXT,author_id TEXT,user_name TEXT,message TEXT,date TEXT,is_self INTEGER,message_type INTEGER);')
+ db.execute('INSERT INTO corpus_meta VALUES (?,?)',('account',account))
+ db.executemany('INSERT INTO alden_messages VALUES (?,?,?,?,?,?,?,?,?)',[
+  (1,'42','1','7','동일 이름','금요일 3시 회의','2026-10-01 15:00:00',1,1),
+  (2,'84','2','7','동일 이름','다른 방 영화 내용','2026-10-02 15:00:00',0,1),
+  (3,'42','3','8','동일 이름','동명이인 문장','2026-10-02 16:00:00',0,1)])
+(root/'knowledge/corpus/current.json').write_text(json.dumps({'schema_version':1,'account':account}))
+payload=a.read_focus(root,actor,chat_id='42')
+assert payload['ok'] and len(payload['sources'])==1
+assert payload['sources'][0]['room_title']=='선택한 방'
+assert payload['sources'][0]['source_role']=='outgoing_unclassified'
+assert payload['details']['key_facts']==[] and payload['details']['scope_room_id']=='42'
+assert '다른 방' not in json.dumps(payload,ensure_ascii=False) and '동명이인' not in json.dumps(payload,ensure_ascii=False)
+foreign=a.read_focus(root,actor,chat_id='kakao:'+('2'*64)+':room:42')
+assert not foreign['ok'] and foreign['reason']=='focus_room_scope_invalid'
+mismatch=a.read_focus(root,room42,chat_id='84');assert not mismatch['ok']
+missing=a.read_focus(root,actor,chat_id='99');assert missing['sources']==[] and '찾지 못했습니다' in missing['details']['summary']
+print(json.dumps({'scoped':True,'classified':False}))
+''')
+        self.assertTrue(result['scoped'])
+
     def execute(self, code):
         with tempfile.TemporaryDirectory() as tmp:
             result = subprocess.run([sys.executable, "-B", "-s", "-c", PRELUDE + code, str(SCRIPTS), str(Path(tmp).resolve())], capture_output=True, text=True, timeout=30)

@@ -1,3 +1,5 @@
+2026-10-03 · Alden 0.3.8: [Thinking Orbs](https://libraries.dev/orbs)의 공식 엔진을 지식 그래프 주요 노드·사이드바·메뉴바에 적용했습니다. 실제 작업 상태에 연결하며 대기·숨김·모션 감소에서는 정지합니다. 노드 선택 시 전체 저장 설명과 채팅방·작성자·날짜가 있는 대표 원문을 보여주고, 네이티브 브리지까지 계정·인물·방 범위를 검증합니다. 같은 검색 화면의 1초 표본 3회에서 라벨 변경 138→0, 대기 렌더 0을 관측했습니다. 이는 소스의 명시적 예시 데이터 측정이며 설치·물리 화면·전체 전력과 구분합니다. [디자인](desktop/DESIGN.md) · [렌더 수명주기](docs/architecture/alden-three-render-lifecycle.html). 원본 DB 최신화·웨이크/물리 음성·공개 서명·프로덕션 전환의 기존 게이트는 유지합니다.
+
 2026-10-03 음성 진폭: [0.3.7의 재생 PCM·실제 SDK 커서·가벼운 상태 읽기](docs/architecture/alden-playback-amplitude-20261003.md)를 검증했다. 물리 스피커·자연 음성 검증과 구분한다.
 
 2026-10-02 우주 스타일: [지식 그래프·사이드바](docs/architecture/alden-universe-20261002.md)에 이어 [0.3.6 입력 진폭 연결](docs/architecture/alden-voice-envelope-20261002.md)을 검증했다. 멈춘 장면은 새 프레임이 필요할 때까지 대기한다. [설치본 8턴 음성·12회 문맥 측정](docs/architecture/alden-voice-sustained-20261002.md)은 WAV 생성과 실제 재생의 범위를 구분한다.
@@ -10,7 +12,7 @@
 
 2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 파일 생성 성공과 발음·내용 품질 검증은 구분한다.
 
-Alden Desktop 0.3.7 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
+Alden Desktop 0.3.8 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
 
 History reads all messages available in the local Kakao DB through fixed-anchor pages; it does not restore messages absent from that DB. Confirmed voice text is stored locally by session. The local corpus now stores every message in a fixed DB+WAL snapshot with full-text search, scoped numeric identities, resumable batches, and atomic publication. Dense/model-assisted retrieval remains a separate capability and is not inferred from a complete raw corpus. An initial real isolated snapshot contained 2,034,371 messages in 1,181 rooms with messages (1,182 roster entries). It produced a 1,913,323,520-byte published store with a successful quick check; this is a dated data snapshot, not a fixed current total. Existing foreground automation workers and send gates are preserved; catalog changes take effect when automation restarts.
 
@@ -25,13 +27,13 @@ The [updated data flow](docs/architecture/alden-history-osk-20261002.html) and [
 전달: [Alden 그래프 탐색 후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-25ad469edd80663739aa)의 **7개 파일**을 다시 다운로드해 바이트·원격 digest를 대조했다. ZIP30파일은 설치본과 일치하고 overlay30파일도 hash 일치다. 소스`51f71c2`/증거`5cfea2b`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36799335869)4/4 성공·독립 설치/개인정보 검토 통과. [릴리즈 대조](docs/architecture/alden-graph-navigation-release-20261001.json). 공개 공증/프로덕션 완료를 뜻하지 않는다.
 
 
-2026-10-01 추가: [그래프 탐색 복원·설정 렌더링](docs/architecture/alden-graph-navigation-20261001.md)을 소스`51f71c2`의 설치 바이너리에서 확인했다. 이전32단계·전체 보기·A→B→A epoch/dispose fence, 실제 persisted graph·기본/최소 WKWebView·숨김350ms 렌더0·재개 frame 진행, 설치30/30·resource27/27, UI199/Rust90/Python1056·Clippy/build 통과다. [Archify](docs/architecture/alden-graph-navigation-20261001.html)9/9·4viewport·이미지4개 검토도 통과했다. 감사용 floating 창과 unavailable 다른 backend라는 범위, private native PNG·초기 foreign-exception2회 미해결을 기록한다. 전체 목표·물리UX·음성·worker·signed release/production은 미완료이며 Git/CI/초안 전달은 후속 readback으로 대조한다.
+2026-10-01 추가: [그래프 탐색 복원·설정 렌더링](docs/architecture/alden-graph-navigation-20261001.md)을 소스`51f71c2`의 설치 바이너리에서 확인했다. 이전32단계·전체 보기·A→B→A epoch/dispose fence, 실제 persisted graph·기본/최소 WKWebView·숨김350ms 렌더 0·재개 frame 진행, 설치30/30·resource27/27, UI199/Rust90/Python1056·Clippy/build 통과다. [Archify](docs/architecture/alden-graph-navigation-20261001.html)9/9·4viewport·이미지4개 검토도 통과했다. 감사용 floating 창과 unavailable 다른 backend라는 범위, private native PNG·초기 foreign-exception2회 미해결을 기록한다. 전체 목표·물리UX·음성·worker·signed release/production은 미완료이며 Git/CI/초안 전달은 후속 readback으로 대조한다.
 
 
 전달: [Alden 0.1.6 화면 가시성 후보 초안](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-6730d9c69d5ac88931de)에 7개 파일을 올리고 다시 다운로드하여 모두 바이트 일치를 확인했다. 앱 ZIP 내부30파일·소스/증거 overlay23파일도 대조했다. 소스 `8791ea1`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36793165993)는 4/4 성공이다. 초안 target/overlay는 증거 checkout `b7bdda9`이며 공개 공증/프로덕션 완료를 뜻하지 않는다.
 
 
-2026-10-01 추가: [화면 잠자기·세션 전환 처리](docs/architecture/alden-workspace-20261001.md)를 소스 `8791ea1`의 Alden 0.1.6 설치본에서 검증했다. 별도 설치 바이너리의 두 **프로세스 내부 합성 알림** 모두 두 창 숨김·350ms 추가 렌더0, 일반 숨김·복원10회도 렌더0이다. 네이티브 숨김 뒤 DOM 재개 차단과 종료 구독 정리를 추가했으며 Rust90/UI194/Clippy/build 통과·설치30/30·리소스27/27 일치를 확인했다. 물리 잠자기·세션 전환·잠금과 설정 렌더러는 미검증이며 전체 목표/공개 릴리즈/프로덕션은 미완료다. 새 Archify 도식은 가독성 미통과로 미전달이며 기존 검증 도식을 보존한다. Git·CI·릴리즈의 최종 상태는 후속 readback으로 대조한다.
+2026-10-01 추가: [화면 잠자기·세션 전환 처리](docs/architecture/alden-workspace-20261001.md)를 소스 `8791ea1`의 Alden 0.1.6 설치본에서 검증했다. 별도 설치 바이너리의 두 **프로세스 내부 합성 알림** 모두 두 창 숨김·350ms 추가 렌더 0, 일반 숨김·복원10회도 렌더 0이다. 네이티브 숨김 뒤 DOM 재개 차단과 종료 구독 정리를 추가했으며 Rust90/UI194/Clippy/build 통과·설치30/30·리소스27/27 일치를 확인했다. 물리 잠자기·세션 전환·잠금과 설정 렌더러는 미검증이며 전체 목표/공개 릴리즈/프로덕션은 미완료다. 새 Archify 도식은 가독성 미통과로 미전달이며 기존 검증 도식을 보존한다. Git·CI·릴리즈의 최종 상태는 후속 readback으로 대조한다.
 
 
 네이티브 전달 링크: [Alden 0.1.6 로컬 후보 초안 릴리즈](https://github.com/twoimo/openkakao-bot/releases/tag/untagged-179cb6167afd74a68bd5). 앱 ZIP·Python 동반 실행 환경·소스/증거·체크섬 **7개 산출물**을 다운로드하여 원본과 바이트 일치를 확인했다. 증거 커밋 `60fdb04`의 [CI](https://github.com/twoimo/openkakao-bot/actions/runs/36790224085)도 **4/4 성공**이다. [전달 readback](docs/architecture/alden-native-render-release-20261001.json)에 소스·설치·릴리즈의 범위를 대조했으며 공개 공증/프로덕션 완료를 뜻하지 않는다.
@@ -80,12 +82,14 @@ The 2026-09-27 installed Python browser backend returned `Example Domain` in **2
 
 See the [end-to-end local system map](docs/architecture/alden-system.html) and its [Archify source](docs/architecture/alden-system.architecture.json). The map shows the desktop shell, local tools, model boundary, and read-only conversation index in one view.
 
-### The animated core
+### The knowledge observatory
 
-1. Tauri reports when the small Alden panel is visible.
-2. Three.js draws the warm gold core and updates its rings while the panel is open. The center sphere uses a fixed-light `ShaderMaterial`; a paired local WebGL run measured 3.4% lower median CPU submission at 15 fps and 2.5% lower at 30 fps (about 3–5 μs per frame), with 8 draw calls in both variants. Pixel output matched in 11 of 12 theme, activity, and scale cases; the remaining case differed by one 8-bit channel level. These are CPU submission measurements, not GPU power or battery measurements.
-3. Reply, voice, and sync activity change the rings' rotation and the core's pulse.
-4. Hiding or closing the panel pauses drawing and status updates; reopening it resumes them.
+1. Tauri supplies native visibility; the sidebar also selects which graph surface is visible.
+2. Three.js renders a bounded 24-node view, static sky and projected Thinking Orbs on real node positions. Selecting a node shows its stored description and scoped original evidence.
+3. Fresh voice, reply, retrieval and DB work select the orb state. PCM input/output retain their separate envelope. Quiet, paused and reduced-motion orbs use a static frame.
+4. Hidden windows stop render callbacks and owned timers. Restoring a window reuses the bounded frame cache and existing source identities.
+
+The retained legacy gold-core shader benchmark measured 3.4%/2.5% lower CPU submission at 15/30fps (approximately 3–5μs/frame,8 draw calls), with 11/12 pixel cases identical. It concerns that legacy component, not the current graph or GPU/battery power. The current 0.3.8 source fixture instead measured repeated label mutations 138→0 in three 1-second active samples, with idle graph and canvas-orb draws 0 in three 1-second samples.
 
 See the [render lifecycle](docs/architecture/alden-three-render-lifecycle.html) and [activity-to-motion map](docs/architecture/alden-core-load-mapping.html).
 

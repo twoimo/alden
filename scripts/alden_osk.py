@@ -404,12 +404,12 @@ def read_graph(state_root: Path) -> dict:
                     "conflicts": checkpoint.get("conflicts", 0)}}
 
 
-def read_focus(state_root: Path, node_id: str) -> dict:
+def read_focus(state_root: Path, node_id: str, *, chat_id: str = '') -> dict:
     home = _home(state_root)
     checkpoint = _read_json(home / "sync.json")
     if not checkpoint:
         return {"ok": False, "facts": [], "fact_count": 0}
-    contract, graph, _, _ = _load_engine(state_root)
+    contract, graph, secrets, _ = _load_engine(state_root)
     idx = graph.Index()
     item = checkpoint.get("managed", {}).get(node_id)
     title = item.get("title") if item and item.get("active") else None
@@ -421,16 +421,67 @@ def read_focus(state_root: Path, node_id: str) -> dict:
     note = contract.parse(idx.nodes[title][0])
     if contract.validate(note):
         return {"ok": False, "facts": [], "fact_count": 0}
+    source = item.get('source', {}) if item and item.get('active') else {}
+    evidence = source.get('evidence', {})
+    summary = _clean(source.get('description') if source and not item.get('held') else note.meta.get('summary', ''), secrets, 1200)
+    summary = summary or _clean(note.meta.get('summary', ''), secrets, 1200)
+    details = {
+        'node_id': node_id, 'summary': summary,
+        'kind': str(source.get('category') or ('collection' if graph.is_hub(idx.nodes[title][0]) else 'memory')),
+        'basis': 'structure' if graph.is_hub(idx.nodes[title][0]) else 'snapshot' if evidence.get('kind') in ('local_db_snapshot', 'snapshot') else 'ledger' if evidence.get('kind') in ('decision_ledger', 'ledger') else 'note',
+        'key_facts': [_clean(value, secrets, 600) for value in source.get('facts', [])[:6] if isinstance(value, str)] if not item or not item.get('held') else [],
+        'source_updated_at': source.get('updated_at', 0),
+        'note_updated_at': int(idx.nodes[title][0].stat().st_mtime),
+        'scope_room_id': '',
+    }
     actor=re.fullmatch(r'person:kakao:([0-9a-f]{64}):actor:([0-9]+)',node_id)
     room=re.fullmatch(r'chat:kakao:([0-9a-f]{64}):room:([0-9]+)',node_id)
     if actor or room:
         from alden_corpus import search
         scope=actor or room
-        result=search(state_root,'',author_id=actor[2] if actor else '',chat_id=room[2] if room else '',expected_account=scope[1])
+        selected_room = str(chat_id or '').strip()
+        if selected_room.startswith('kakao:'):
+            parsed = re.fullmatch(r'kakao:([0-9a-f]{64}):room:([0-9]+)', selected_room)
+            if not parsed or parsed[1] != scope[1]:
+                return {'ok': False, 'reason': 'focus_room_scope_invalid', 'facts': [], 'fact_count': 0}
+            selected_room = parsed[2]
+        if selected_room and (not selected_room.isascii() or not selected_room.isdigit() or not 0 < int(selected_room) < 2**63
+                              or room and selected_room != room[2]):
+            return {'ok': False, 'reason': 'focus_room_scope_invalid', 'facts': [], 'fact_count': 0}
+        selected_room = room[2] if room else selected_room
+        details['scope_room_id'] = selected_room
+        details['key_facts'] = []
+        if actor and selected_room:
+            summary = '선택한 채팅방의 원문에서 발화가 확인된 카카오톡 대화 상대입니다.'
+            details['summary'] = summary
+        result=search(state_root,'',author_id=actor[2] if actor else '',chat_id=selected_room,expected_account=scope[1])
         if result.get('ok'):
-            facts=[str(note.meta.get('summary',''))]+[str(row['date'])[:10]+' · '+str(row['sender'])+' · '+str(row['content']) for row in result['items']]
-            return {'ok':True,'facts':facts,'fact_count':len(facts),'focus_node_id':node_id,'sources':result['items'],'search_mode':'bm25'}
-    return {"ok": True, "facts": [str(note.meta.get("summary", "")), note.body[:1200]], "fact_count": 2, "focus_node_id": node_id}
+            # A selected room cannot inherit an actor's multi-room cached samples.
+            details['key_facts'] = []
+            titles = {key.rsplit(':', 1)[-1]: value['source'].get('label', '') for key, value in checkpoint.get('managed', {}).items()
+                      if key.startswith('chat:kakao:' + scope[1] + ':room:') and value.get('active')}
+            sources, seen = [], set()
+            for raw in result['items']:
+                if raw['source_id'] in seen: continue
+                seen.add(raw['source_id'])
+                row = dict(raw)
+                row['content'] = _clean(row['content'], secrets, 1000)
+                row['sender'] = _clean(row['sender'], secrets, 128)
+                row['room_title'] = _clean(titles.get(str(row['chat_id'])) or ('제목 미확인 · #' + digest(str(row['chat_id']).encode())[:8]), secrets, 128)
+                sources.append(row)
+            if actor and selected_room and not sources:
+                summary = '선택한 채팅방에서 이 인물의 원문을 아직 찾지 못했습니다.'
+                details['summary'] = summary
+            facts=[summary]+[str(row['date'])[:10]+' · '+str(row['sender'])+' · '+str(row['content']) for row in sources]
+            details['basis'] = 'snapshot'
+            details['sample_count'] = len(sources)
+            return {'ok':True,'facts':facts,'fact_count':len(facts),'focus_node_id':node_id,'sources':sources,'details':details,'search_mode':'bm25'}
+        details['source_unavailable'] = True
+        if actor and selected_room:
+            summary = '선택한 채팅방의 원문에 접근할 수 없어 이 인물의 세부 내용을 확인하지 못했습니다.'
+            details['summary'] = summary
+        return {'ok': True, 'facts': [summary], 'fact_count': 1, 'focus_node_id': node_id, 'sources': [], 'details': details}
+    return {"ok": True, "facts": [summary, note.body[:1200]], "fact_count": 2, "focus_node_id": node_id, 'details': details}
 
 
 def main() -> int:

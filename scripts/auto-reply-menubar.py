@@ -1006,10 +1006,10 @@ def _knowledge_graph_focus_payload(
     try:
         try:
             from alden_osk import read_focus
-            vault_result = read_focus(state_root, selected_id)
+            vault_result = read_focus(state_root, selected_id, chat_id=room)
         except Exception:
             vault_result = {"ok": False, "facts": []}
-        if selected_id.startswith("osk:") or vault_result.get("sources"):
+        if selected_id.startswith("osk:") or 'sources' in vault_result or vault_result.get('reason') == 'focus_room_scope_invalid':
             return vault_result
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle
 
@@ -1022,6 +1022,7 @@ def _knowledge_graph_focus_payload(
         if vault_result.get("ok"):
             bundle["facts"] = list(dict.fromkeys([*vault_result["facts"], *bundle.get("facts", [])]))[:12]
             bundle["fact_count"] = len(bundle["facts"])
+            if vault_result.get('details'): bundle['details'] = vault_result['details']
         return {"ok": True, **bundle}
     except Exception as exc:  # click drill-down must stay fail-closed
         return {

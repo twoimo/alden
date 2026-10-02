@@ -54,6 +54,7 @@ export class RuntimeSnapshotPoller {
     private readonly makeToken: () => CancellationToken = createCancellationToken,
     private readonly scheduler: PollTimerScheduler = browserPollScheduler,
     private readonly intervalMs = 2500,
+    private readonly observeSnapshot: (snapshot: RuntimeSnapshot | null) => void = () => undefined,
   ) {}
 
   start(): void {
@@ -109,6 +110,7 @@ export class RuntimeSnapshotPoller {
     if (!isCurrent) return;
 
     try {
+      this.observeSnapshot(snapshot);
       const sources = snapshotSources(snapshot);
       const rms = freshInputRms(snapshot);
       if (sources) {

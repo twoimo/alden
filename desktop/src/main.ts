@@ -1,4 +1,7 @@
 import { KnowledgeRefresh } from "./knowledge/refresh";
+import { OrbSurfaces } from './orbs/surfaces';
+import { renderNodeDetails } from './knowledge/node-details';
+import type { VoiceStatus } from './contracts';
 import { wireConversationViews } from './conversations';
 import { wireSettingsPreferences } from './settings-preferences';
 import { invoke } from "@tauri-apps/api/core";
@@ -303,6 +306,7 @@ export function wireEmergencyResume(
   resumeAction: EmergencyResumeAction,
   root: Document = document,
   pauseAction: typeof operatorPause = operatorPause,
+  onChange: (state: EmergencyState) => void = () => undefined,
 ): { update: (state: EmergencyState) => void } {
   const button = root.querySelector<HTMLButtonElement>("#emergency-resume");
   let current: EmergencyState | null = null;
@@ -318,6 +322,7 @@ export function wireEmergencyResume(
       return;
     }
     current = state;
+    onChange(state);
     renderCurrent();
   };
 
@@ -357,14 +362,16 @@ function relationLabel(relation: string): string {
     case "OCCURRED_IN": return "발생";
     case "RELATED_TO":
     case "ABOUT": return "관련";
+    case "CONTAINS": return "모음";
     default: return "연결";
   }
 }
 
 function relationMeta(edge: KnowledgeEdge, snapshot: RuntimeSnapshot): string {
+  if (edge.relation === 'contains') return '그래프의 분류 구조';
   const roomId = edge.roomId || edge.evidence.chatId;
   const room = snapshot.rooms.find((candidate) => String(candidate.chatId) === roomId)?.title;
-  return room ? `대화방 · ${room}` : "대화에서 확인한 관계";
+  return room ? `대화방 · ${room}` : edge.evidence.kind === 'seed' ? '저장된 연결 · 원문 근거 미확인' : '대화 기록에서 확인한 관계';
 }
 
 function renderKnowledgeRelations(
@@ -418,6 +425,7 @@ export async function setupKnowledgeGraph(
   snapshot: RuntimeSnapshot,
   loadAction: typeof fetchSettingsAction = fetchSettingsAction,
   allowEmpty = false,
+  onVoice: (voice: VoiceStatus | null) => void = () => undefined,
 ): Promise<KnowledgeHologram | null> {
   const graph = parseKnowledgeGraph(payload);
   renderKnowledgeSync(payload);
@@ -467,12 +475,12 @@ export async function setupKnowledgeGraph(
       return;
     }
     setText("knowledge-focus-title", node.label);
+    renderNodeDetails(graph, node);
     renderKnowledgeRelations(graph, node, view, snapshot);
     setText("knowledge-retrieve", "관련 대화를 찾고 있습니다…");
 
-    const localRoom = view.edges.find((edge) => edge.source === node.id || edge.target === node.id)?.roomId
-      || node.evidence.chatId
-      || String(snapshot.rooms[0]?.chatId ?? "");
+    const localRoom = node.evidence.chatId
+      || view.edges.find((edge) => edge.source === node.id || edge.target === node.id)?.roomId || '';
     void loadAction("knowledge-graph-focus", {
       query: node.label,
       nodeId: node.id,
@@ -482,28 +490,31 @@ export async function setupKnowledgeGraph(
       // node ID repeats. Earlier retrievals cannot overwrite the current one.
       if (selectionEpoch !== epoch) return;
       if (!focus || focus.ok !== true) {
+        renderNodeDetails(graph, node, focus ?? { ok: false });
         setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
         return;
       }
+      renderNodeDetails(graph, node, focus);
       const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
       const firstFact = facts[0]?.slice(0, 180);
-      setText("knowledge-retrieve", facts.length
+      setText("knowledge-retrieve", focus.details ? '이 기기에 수집된 기록과 저장된 노트를 기준으로 합니다.' : facts.length
         ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
         : "관련 대화를 찾지 못했습니다.");
     }).catch(() => {
-      if (selectionEpoch === epoch) setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
+      if (selectionEpoch === epoch) { renderNodeDetails(graph, node, { ok: false }); setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다."); }
     });
   }, () => {
     disposed = true;
     selectionEpoch += 1;
     controls.abort();
-  });
+  }, 'workspace', undefined, onVoice);
 
   expand.addEventListener("click", () => {
     hologram.expandOneHop();
   }, { signal: controls.signal });
   back?.addEventListener("click", () => hologram.back(), { signal: controls.signal });
   overview?.addEventListener("click", () => hologram.reset(), { signal: controls.signal });
+  document.getElementById('knowledge-focus-close')?.addEventListener('click', () => hologram.reset(), { signal: controls.signal });
 
 
   return hologram;
@@ -542,6 +553,9 @@ export async function bootSettings(
   app.innerHTML = settingsMarkup();
   app.dataset.state = "loading";
   renderSettingsIcons();
+  const orbs = new OrbSurfaces();
+  Object.defineProperty(window, '__orbRenderDiagnostics', { configurable: true, get: () => orbs.diagnostics() });
+  window.addEventListener('pagehide', () => orbs.dispose(), { once: true });
   void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
   const archives=wireConversationViews(dependencies.loadAction);
   const preferences=wireSettingsPreferences(dependencies.loadAction);
@@ -552,13 +566,17 @@ export async function bootSettings(
   const navigation = wireSettingsNavigation(document, (page) => {
     archives.select(page);
     preferences.select(page);
+    orbs.refresh();
     graphLifecycle?.setSurfaceVisible(page === "memory");
     if (page === "memory") window.dispatchEvent(new Event("resize"));
   });
   window.addEventListener("pagehide", navigation.dispose, { once: true });
   let hologram: KnowledgeHologram | null = null;
+  let emergencyState: EmergencyState | null = null;
   try {
-    const emergency = wireEmergencyResume(dependencies.resumeEmergency,document,dependencies.pauseEmergency);
+    const emergency = wireEmergencyResume(dependencies.resumeEmergency,document,dependencies.pauseEmergency, state => {
+      emergencyState = state; orbs.setEmergency(state); hologram?.setEmergency(state);
+    });
     if (dependencies.subscribeEmergency) {
       try {
         const unsubscribe = await dependencies.subscribeEmergency(emergency.update);
@@ -603,12 +621,23 @@ export async function bootSettings(
     }
 
     try {
-      hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction, snapshot.available);
+      hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction, snapshot.available, voice => orbs.setVoice(voice));
     } catch {
       setText("knowledge-summary", "지식 그래프 화면을 준비하지 못했습니다.");
       // A graphics failure must not disable the other already-confirmed settings.
     }
     app.dataset.state = degraded ? "unavailable" : "ready";
+    orbs.setSnapshot(snapshot);
+    hologram?.setActivity(snapshot);
+    if (emergencyState) hologram?.setEmergency(emergencyState);
+    const polling = new RuntimeSnapshotPoller({ setSignals: (load, rms) => hologram?.setSignals(load, rms) },
+      dependencies.loadSnapshot, undefined, undefined, undefined, 2500, current => {
+        orbs.setSnapshot(current); hologram?.setActivity(current);
+      });
+    const orbLifecycle = new RenderLifecycle(orbs, () => polling.stop(), () => polling.start());
+    Object.defineProperty(window, '__orbRenderPause', { configurable: true, get: () => orbLifecycle.lastPauseMeasurement() });
+    wireRenderLifecycle(orbLifecycle, { subscribeVisibility: dependencies.subscribeVisibility,
+      readVisibility: dependencies.readVisibility, onClosed: () => orbs.dispose() });
     if (hologram) {
       const graph = hologram;
       graph.setSignals(snapshot.jobLoad, freshInputRms(snapshot));
@@ -625,10 +654,9 @@ export async function bootSettings(
         graph.replaceGraph(next);
         setText("knowledge-summary", `대화에서 찾은 연결 항목 ${next.nodes.length}개`);
       });
-      const polling = new RuntimeSnapshotPoller(graph, dependencies.loadSnapshot);
       const lifecycle = new RenderLifecycle(graph,
-        () => { try { refresh.stop(); } finally { polling.stop(); } },
-        () => { try { refresh.start(); } finally { polling.start(); } });
+        () => refresh.stop(),
+        () => refresh.start());
       graphLifecycle = lifecycle;
       lifecycle.setSurfaceVisible(navigation.current() === "memory");
       Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({
@@ -658,6 +686,7 @@ export async function bootSettings(
       // Rendering the fixed unavailable state takes precedence over cleanup errors.
     }
     navigation.dispose();
+    orbs.dispose();
     renderSettingsUnavailable();
   }
 }
@@ -675,6 +704,8 @@ interface PanelBootDependencies {
   subscribeVisibility: VisibilitySubscriber | null;
   /** Boot handshake: the shell's current visibility decides the first state. */
   readVisibility: VisibilityReader | null;
+  subscribeEmergency: EmergencyStateSubscriber | null;
+  loadEmergency: typeof fetchEmergencyState;
 }
 
 export async function bootPanel(
@@ -687,9 +718,10 @@ export async function bootPanel(
       const parsed=parseKnowledgeGraph(payload);
       if(!payload||payload.ok!==true)throw new Error('graph_unavailable');
       const {KnowledgeHologram}=await import('./knowledge/hologram');
-      const graph=new KnowledgeHologram(canvas,parsed,({node})=>setText('panel-knowledge-title',node?.label??'카카오톡'),()=>undefined,'popover');
+      const graph=new KnowledgeHologram(canvas,parsed,({node})=>setText('panel-knowledge-title',node?.label??'카카오톡'),()=>undefined,'popover',undefined,voice=>panelOrbs?.setVoice(voice));
       const refresh=new KnowledgeRefresh(()=>dependencies.loadKnowledge('knowledge-graph'),next=>{if(next?.ok===true)graph.replaceGraph(parseKnowledgeGraph(next));});
-      return {get renderCount(){return graph.renderCount;},start:()=>{graph.start();refresh.start();},stop:()=>{refresh.stop();graph.stop();},diagnostics:()=>graph.diagnostics(),setSignals:(load,rms)=>graph.setSignals(load,rms),dispose:()=>{refresh.stop();graph.dispose();}};
+      panelGraph = graph;
+      return {get renderCount(){return graph.renderCount;},start:()=>{graph.start();refresh.start();panelOrbs?.start();},stop:()=>{refresh.stop();graph.stop();panelOrbs?.stop();},diagnostics:()=>graph.diagnostics(),setSignals:(load,rms)=>graph.setSignals(load,rms),dispose:()=>{refresh.stop();graph.dispose();panelOrbs?.dispose();}};
     },
     loadSnapshot: fetchRuntimeSnapshot,
     cancelSnapshot: cancelRuntimeRequest,
@@ -698,12 +730,17 @@ export async function bootPanel(
     invokeCommand: invoke,
     subscribeVisibility: tauriVisibilitySubscriber,
     readVisibility: tauriVisibilityReader,
+    subscribeEmergency: subscribeEmergencyState,
+    loadEmergency: fetchEmergencyState,
     ...overrides,
   };
   app.innerHTML = mainPanelMarkup();
+  const panelOrbs = new OrbSurfaces();
+  let panelGraph: KnowledgeHologram | null = null;
   app.dataset.state = "loading";
   const canvas = document.querySelector<HTMLCanvasElement>(".alden-core");
   if (!canvas) {
+    panelOrbs.dispose();
     renderPanelUnavailable();
     return;
   }
@@ -721,6 +758,8 @@ export async function bootPanel(
       dependencies.cancelSnapshot,
       dependencies.makeToken,
       dependencies.pollScheduler,
+      2500,
+      snapshot => { panelGraph?.setActivity(snapshot); panelOrbs.setSnapshot(snapshot); },
     );
     const lifecycle = new RenderLifecycle(activeCore, () => polling.stop(), () => polling.start());
     Object.defineProperty(window, "__aldenRenderPause", {
@@ -729,11 +768,23 @@ export async function bootPanel(
     });
     let disposed = false;
     let detachLifecycle: (() => void) | null = null;
+    let detachEmergency: (() => void) | null = null;
+    let emergencyEpoch = -1;
+    const applyEmergency = (state: EmergencyState): void => {
+      if (disposed || state.epoch <= emergencyEpoch) return;
+      emergencyEpoch = state.epoch;
+      panelOrbs.setEmergency(state); panelGraph?.setEmergency(state);
+    };
+    if (dependencies.subscribeEmergency) {
+      try { detachEmergency = await dependencies.subscribeEmergency(applyEmergency); } catch { /* Initial read remains available. */ }
+    }
+    void dependencies.loadEmergency().then(state => { if (state) applyEmergency(state); }).catch(() => undefined);
 
     const close = (): void => {
       if (disposed) return;
       disposed = true;
       detachLifecycle?.();
+      detachEmergency?.();
       // Stopping is idempotent, so this also stops the loop and the poller on
       // the teardown path that never reaches the pagehide handler.
       try {
@@ -762,6 +813,7 @@ export async function bootPanel(
 
     app.dataset.state = "ready";
   } catch {
+    panelOrbs.dispose();
     if (closePanel) closePanel();
     else {
       try {
@@ -795,7 +847,7 @@ export async function startDesktopApp(
 if(import.meta.env.DEV&&new URLSearchParams(location.search).has('demo')) {
   void import('./dev-fixture').then(async fixture=>{
     if(isSettings)await bootSettings({loadSnapshot:fixture.snapshot,loadAction:fixture.action,loadEmergency:async()=>fixture.emergency,pauseEmergency:fixture.pause,resumeEmergency:fixture.resume,subscribeEmergency:null,subscribeVisibility:null,readVisibility:null,wireVoice:()=>undefined});
-    else await bootPanel({loadKnowledge:fixture.action,loadSnapshot:fixture.snapshot,subscribeVisibility:null,readVisibility:null});
+    else await bootPanel({loadKnowledge:fixture.action,loadSnapshot:fixture.snapshot,subscribeVisibility:null,readVisibility:null,subscribeEmergency:null,loadEmergency:async()=>fixture.emergency});
     const label=document.createElement('span');label.className='development-preview-label';label.textContent='예시 데이터 · 개발 미리보기';document.body.append(label);
   });
 }else void startDesktopApp().catch(() => undefined);

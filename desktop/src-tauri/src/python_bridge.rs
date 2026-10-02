@@ -660,7 +660,7 @@ impl PythonBridge {
                 "dream-rsi-status" => sanitize_dream_rsi(&value),
                 "knowledge-graph-status" => sanitize_knowledge_status(&value),
                 "knowledge-graph" => sanitize_knowledge_graph(&value),
-                "knowledge-graph-focus" => sanitize_knowledge_focus(&value),
+                "knowledge-graph-focus" => sanitize_knowledge_focus(&value, node_id.unwrap_or("")),
                 "model-owner-status" => sanitize_model_owner_status(&value),
                 MLX_SERVER_STATUS_ACTION => sanitize_mlx_server_status(&value),
                 MLX_SERVER_LAUNCH_ACTION => sanitize_mlx_lifecycle(&value, true),
@@ -3138,6 +3138,8 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
                         "importance": node.get("importance").and_then(Value::as_i64).unwrap_or(0).clamp(0, 100),
                         "updated_at": as_u64(node.get("updated_at")),
                         "evidence": sanitize_knowledge_evidence(node.get("evidence")),
+                        "description": bounded_json_string(node.get("description"), 2400),
+                        "facts": bounded_string_list(node.get("facts"), 6, 600),
                     }))
                 })
                 .collect::<Vec<_>>()
@@ -3193,7 +3195,38 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
     })
 }
 
-fn sanitize_knowledge_focus(value: &Value) -> Value {
+fn bounded_string_list(value: Option<&Value>, count: usize, chars: usize) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .take(count)
+                .map(|item| item.chars().take(chars).collect())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn source_number(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text))
+            if text.bytes().all(|byte| byte.is_ascii_digit())
+                && text.parse::<u64>().is_ok_and(|id| id < i64::MAX as u64) =>
+        {
+            text.clone()
+        }
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .filter(|id| *id < i64::MAX as u64)
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn sanitize_knowledge_focus(value: &Value, expected_node: &str) -> Value {
     let facts = value
         .get("facts")
         .and_then(Value::as_array)
@@ -3206,6 +3239,83 @@ fn sanitize_knowledge_focus(value: &Value) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let details = value.get("details").filter(|details| {
+        !expected_node.is_empty()
+            && details.get("node_id").and_then(Value::as_str) == Some(expected_node)
+    });
+    let scope = source_number(details.and_then(|details| details.get("scope_room_id")));
+    let identity: Vec<_> = expected_node.split(':').collect();
+    let mut sources = Vec::new();
+    let mut seen = HashSet::new();
+    let mut quote_budget = 4800;
+    if details.is_some() && value.get("ok").and_then(Value::as_bool) == Some(true) {
+        for source in value
+            .get("sources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(12)
+        {
+            let id = bounded_json_string(source.get("source_id"), 192);
+            let parts: Vec<_> = id.split(':').collect();
+            let actor = source_number(source.get("author_id"));
+            if parts.len() != 6
+                || parts[0] != "kakao"
+                || parts[1].len() != 64
+                || !parts[1].bytes().all(|byte| byte.is_ascii_hexdigit())
+                || parts[2] != "room"
+                || parts[4] != "log"
+                || !parts[3].bytes().all(|byte| byte.is_ascii_digit())
+                || !parts[5].bytes().all(|byte| byte.is_ascii_digit())
+                || parts[3].parse::<i64>().unwrap_or(0) <= 0
+                || parts[5].parse::<i64>().unwrap_or(0) <= 0
+                || actor.is_empty()
+                || source.get("source_kind").and_then(Value::as_str) != Some("local_db_snapshot")
+                || (!scope.is_empty() && scope != parts[3])
+                || (identity.len() == 5
+                    && matches!(identity[0], "person" | "chat")
+                    && (identity[2] != parts[1]
+                        || (identity[0] == "person" && identity[4] != actor)
+                        || (identity[0] == "chat" && identity[4] != parts[3])))
+                || seen.contains(&id)
+            {
+                continue;
+            }
+            let role = source
+                .get("source_role")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !matches!(
+                role,
+                "peer_history" | "system_history" | "outgoing_unclassified"
+            ) {
+                continue;
+            }
+            let content = bounded_json_string(source.get("content"), quote_budget.min(1000));
+            if content.is_empty() {
+                continue;
+            }
+            quote_budget -= content.chars().count();
+            seen.insert(id.clone());
+            sources.push(json!({"source_id":id,"source_kind":"local_db_snapshot","source_role":role,
+                "chat_id":parts[3],"author_id":actor,"content":content,
+                "sender":bounded_json_string(source.get("sender"),128),
+                "room_title":bounded_json_string(source.get("room_title"),128),
+                "date":bounded_json_string(source.get("date"),64),
+                "truncated":source.get("truncated").and_then(Value::as_bool).unwrap_or(false)
+                    || content.chars().count() < source.get("content").and_then(Value::as_str).map(|value|value.chars().count()).unwrap_or(0)}));
+            if sources.len() == 6 || quote_budget == 0 {
+                break;
+            }
+        }
+    }
+    let safe_details = details.map(|details|json!({
+        "node_id":expected_node,"summary":bounded_json_string(details.get("summary"),1200),
+        "kind":bounded_json_string(details.get("kind"),96),"basis":bounded_json_string(details.get("basis"),32),
+        "key_facts":bounded_string_list(details.get("key_facts"),6,600),"scope_room_id":scope,
+        "source_updated_at":as_u64(details.get("source_updated_at")),"note_updated_at":as_u64(details.get("note_updated_at")),
+        "source_unavailable":details.get("source_unavailable").and_then(Value::as_bool).unwrap_or(false)
+    }));
     json!({
         "ok": value.get("ok").and_then(Value::as_bool).unwrap_or(false),
         "facts": facts,
@@ -3217,6 +3327,8 @@ fn sanitize_knowledge_focus(value: &Value) -> Value {
         "search_mode": bounded_json_string(value.get("search_mode"), 64),
         "index_version": bounded_json_string(value.get("index_version"), 64),
         "watermark": bounded_json_string(value.get("watermark"), 96),
+        "details": safe_details,
+        "sources": sources,
     })
 }
 
@@ -5109,6 +5221,34 @@ mod tests {
         assert_eq!(status.updated_at, 0);
 
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn clicked_node_details_preserve_quotes_and_reject_foreign_evidence() {
+        let account = "1".repeat(64);
+        let node = format!("person:kakao:{account}:actor:7");
+        let valid = json!({"source_id":format!("kakao:{account}:room:42:log:1"),"source_kind":"local_db_snapshot",
+            "source_role":"outgoing_unclassified","author_id":"7","sender":"same name","room_title":"meeting",
+            "date":"2026-10-01T15:00:00+09:00","content":"Friday at 3","private_path":"must drop"});
+        let mut wrong_room = valid.clone();
+        wrong_room["source_id"] = json!(format!("kakao:{account}:room:84:log:2"));
+        let mut wrong_actor = valid.clone();
+        wrong_actor["author_id"] = json!("8");
+        let mut wrong_account = valid.clone();
+        wrong_account["source_id"] = json!(format!("kakao:{}:room:42:log:3", "2".repeat(64)));
+        let safe = sanitize_knowledge_focus(
+            &json!({"ok":true,"details":{"node_id":node,"scope_room_id":"42",
+            "summary":"a recorded participant","token":"drop"},"sources":[valid.clone(), valid, wrong_room, wrong_actor, wrong_account]}),
+            &node,
+        );
+        assert_eq!(safe["sources"].as_array().unwrap().len(), 1);
+        assert_eq!(safe["sources"][0]["source_role"], "outgoing_unclassified");
+        assert_eq!(safe["sources"][0]["content"], "Friday at 3");
+        assert!(safe["sources"][0].get("private_path").is_none());
+        assert!(safe["details"].get("token").is_none());
+        let rejected = sanitize_knowledge_focus(&safe, "another-node");
+        assert!(rejected["details"].is_null());
+        assert!(rejected["sources"].as_array().unwrap().is_empty());
     }
 
     #[test]

@@ -1,5 +1,19 @@
 # Alden desktop design contract
 
+## 0.3.8 — Thinking Orbs and selected-node evidence
+
+[Thinking Orbs](https://libraries.dev/orbs) is the signature material: depth-shaded silver dots, distinct work states, quiet surroundings. Alden uses the official `thinking-orbs/engine` entry point, pinned to 0.3.2 (MIT), with its 20px/64px presets. React is a package peer but is not imported by the renderer or included in Alden's UI bundle. The complete license ships as `thinking-orbs-LICENSE.txt` in the frontend assets. No Studio exports or paid assets are used.
+
+The navy observatory palette and Georgia wordmark remain. The sidebar brand is 48px, inline state orbs 20px, and the popover brand 28px. Collection nodes and the selected item use upstream projected geometry anchored to their real Three.js positions. Other people/rooms/topics retain their existing sphere glyphs. Decorative orb dots have no graph IDs or relationships; only the existing node sphere is a picking target. Labels sit below the larger glyphs.
+
+Actual fresh voice, pipeline, database and job states select the orb. Wake waiting, stale/error/unavailable data and quiet operation freeze it. The emergency latch takes precedence, including in the popover. A short plain-language caption supplies the state without relying on motion. Reduced motion uses a static representative frame. Every window shares one capped canvas-orb loop plus its existing graph loop and status readers; no per-orb timers are added.
+
+The official engine builds a bounded 96-frame sequence when a state is prepared. Packed Float32 frames are cached by state and canonical size; subsequent ticks reuse them and the Three.js buffers. Time advances only while work is visible, at most 30 rendered frames/s, and reverses the 3.17-second sequence at its endpoints to avoid a wrap jump. This adapts the upstream animation clock; it is not an audio spectrum or a measure of task completion. Stop/close/lock removes RAF and owned status timers. Static label bounds are retained; stable and collided labels no longer toggle DOM attributes every frame.
+
+The selected-node card separates kind, full stored description, key facts, connections and up to 6 original excerpts. Each excerpt retains its room, sender, date, source ID and outgoing/system classification. Counts describe representative excerpts, not the complete corpus. Actor identity, account and selected room are checked in the producer, native bridge and renderer; cached samples from another room are not used. A missing original record is stated explicitly. Stored notes and structural group descriptions remain distinguishable from quoted conversation evidence. No model call or reindex is started to author a profile at click time.
+
+Source browser evidence: three 1-second active samples reduced repeated label mutations 138→0 each; graph/canvas-orb idle draws 0/0 in three 1-second samples. Synthetic blur stopped both loops with 0 later draws; five reopens retained one pending callback per loop. These measurements concern the source browser fixture, not whole-app power, physical Retina or the primary Tauri process. See the 0.3.8 delivery evidence for installation and native observations.
+
 ## 0.3.7 — rendered playback PCM
 
 The visible graph reads a small native voice/latch status at 100ms while voice is available, 750ms otherwise. Its own generation fence discards late responses after hide or reopen. Full runtime snapshots retain their 2.5-second cadence and supply job load. Native status reads invoke no Python or model. Only `user_listen` selects input RMS; `speaking` selects output PCM RMS, including zero during synthesis before playback. The five-second wake heartbeat does not animate idle noise.

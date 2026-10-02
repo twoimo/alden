@@ -8,6 +8,10 @@ import { VoiceEnvelope } from "./voice-envelope";
 import { VoiceAmplitudePoller, type VoiceStatusLoader } from "../voice-amplitude-poller";
 import type { VoiceAmplitudeSource } from "../voice-amplitude";
 import { fetchVoiceStatus } from "../runtime";
+import type { EmergencyState, RuntimeSnapshot, VoiceStatus } from '../contracts';
+import { ThinkingOrbMesh } from '../orbs/mesh';
+import { runtimeOrb, QUIET_ORB, PAUSED_ORB, type OrbActivity } from '../orbs/activity';
+import { orbCacheBytes, type OrbState } from '../orbs/frames';
 import {
   KnowledgeDrilldown,
   type KnowledgeGraph,
@@ -62,6 +66,13 @@ export class KnowledgeHologram {
   private drilldown: KnowledgeDrilldown;
   private readonly positions = new Map<string, THREE.Vector3>();
   private readonly nodeMeshes = new Map<string, THREE.Mesh>();
+  private readonly orbMeshes = new Map<string, ThinkingOrbMesh>();
+  private readonly motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  private snapshot: RuntimeSnapshot | null = null;
+  private latestVoice: VoiceStatus | null = null;
+  private paused = false;
+  private activity: OrbActivity = QUIET_ORB;
+  private rootNodeId = '';
   private readonly labels = new Map<string, HTMLSpanElement>();
   private readonly labelBounds: Array<{ width: number; left: number; top: number; visible: boolean }> = [];
   private readonly projected = new THREE.Vector3();
@@ -81,6 +92,7 @@ export class KnowledgeHologram {
     private readonly onDispose: () => void = () => undefined,
     private readonly layoutMode: 'workspace'|'popover' = 'workspace',
     voiceLoader: VoiceStatusLoader | null = fetchVoiceStatus,
+    private readonly onVoice: (voice: VoiceStatus | null) => void = () => undefined,
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "low-power" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -110,10 +122,14 @@ export class KnowledgeHologram {
     this.voicePoller = voiceLoader ? new VoiceAmplitudePoller((rms, source) => {
       if (!this.requestedAnimation || this.disposed) return;
       this.voiceSource = source;
-      this.applyVoiceRms(rms);
-    }, voiceLoader) : null;
+      this.applyVoiceRms(this.paused ? 0 : rms);
+    }, voiceLoader, undefined, voice => {
+      if (!this.requestedAnimation || this.disposed) return;
+      this.latestVoice = voice; this.updateOrbActivity(); this.onVoice(voice);
+    }) : null;
     this.canvas.addEventListener("pointerdown", this.rememberPress);
     this.canvas.addEventListener("pointerup", this.handlePointerDown);
+    this.motion.addEventListener('change', this.updateOrbActivity);
 
     this.resizeObserver = typeof ResizeObserver === "undefined"
       ? null
@@ -125,6 +141,7 @@ export class KnowledgeHologram {
   start(): void {
     if (this.disposed) return;
     this.requestedAnimation = true;
+    this.updateOrbActivity();
     if (this.view.nodes.length > 0) { this.loop.start(); this.voicePoller?.start(); }
   }
 
@@ -135,6 +152,7 @@ export class KnowledgeHologram {
         this.loop.setVoiceActive(false);
         this.voiceEnvelope.clear();
         this.voiceSource = "none";
+        this.latestVoice = null;
       }
     }
   }
@@ -154,9 +172,24 @@ export class KnowledgeHologram {
   }
 
   private applyVoiceRms(rms: number): void {
-    this.loop.setVoiceActive(rms > 0 || this.voiceEnvelope.displayedRms > 0);
+    this.loop.setVoiceActive(rms > 0 || this.voiceEnvelope.displayedRms > 0 || this.orbMeshes.get(this.rootNodeId)?.active === true);
     if (this.voiceEnvelope.setRms(rms)) this.invalidateFrame();
   }
+
+  setActivity(snapshot: RuntimeSnapshot | null): void { this.snapshot = snapshot; this.updateOrbActivity(); }
+  setEmergency(state: EmergencyState): void {
+    if (this.disposed) return;
+    this.paused = state.latched;
+    if (this.paused) { this.voiceEnvelope.clear(); this.voiceSource = 'none'; }
+    this.updateOrbActivity();
+    this.invalidateFrame();
+  }
+  private readonly updateOrbActivity = (): void => {
+    if (this.disposed) return;
+    this.activity = this.paused ? PAUSED_ORB : runtimeOrb(this.snapshot, this.latestVoice ?? this.snapshot?.voice ?? null);
+    const root = this.orbMeshes.get(this.rootNodeId);
+    if (root?.setActivity(this.activity, this.motion.matches)) this.invalidateFrame();
+  };
 
   private invalidateFrame(): void {
     if (!this.disposed && this.requestedAnimation && this.view.nodes.length > 0) this.loop.start();
@@ -187,9 +220,10 @@ export class KnowledgeHologram {
     this.notifyView();
   }
 
-  diagnostics(): AnimationLoopDiagnostics & { voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number } {
+  diagnostics(): AnimationLoopDiagnostics & { voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number } {
     return { ...this.loop.diagnostics(), voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
-      displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count };
+      displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count,
+      orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes() };
   }
   get navigationTargets(): { camera: number[]; lookAt: number[] } {
     return { camera: this.desiredCamera.toArray(), lookAt: this.desiredLookAt.toArray() };
@@ -252,6 +286,7 @@ export class KnowledgeHologram {
     this.stop();
     this.canvas.removeEventListener("pointerdown", this.rememberPress);
     this.canvas.removeEventListener("pointerup", this.handlePointerDown);
+    this.motion?.removeEventListener('change', this.updateOrbActivity);
     this.orbit.dispose();
     this.resizeObserver?.disconnect();
     disposeObject(this.graphRoot);
@@ -285,6 +320,7 @@ export class KnowledgeHologram {
       if (child) disposeObject(child);
     }
     this.nodeMeshes.clear();
+    this.orbMeshes.clear();
     this.labels.clear();
     this.labelBounds.length = 0;
     const labelLayer = this.canvas.parentElement?.querySelector(".knowledge-node-labels");
@@ -294,6 +330,8 @@ export class KnowledgeHologram {
     const accent = cssColor(this.canvas, "--accent", "#dde7ef");
     const muted = cssColor(this.canvas, "--cosmos-link", "#7894b1");
     const focusId = this.view.focusId;
+    this.rootNodeId = this.graph.nodes.find(node => node.category === 'collection' && node.label === '카카오톡')?.id
+      ?? this.graph.nodes.find(node => node.category === 'collection')?.id ?? '';
 
     for (const edge of this.view.edges) {
       const start = this.positions.get(edge.source);
@@ -317,7 +355,9 @@ export class KnowledgeHologram {
       const kind=node.category==='collection'?node.label:node.category;
       const token=/인물|사람|대화 상대|화자/.test(kind)?'--cosmos-person':/대화방/.test(kind)?'--cosmos-room':/주제/.test(kind)?'--cosmos-topic':'--accent';
       const color=cssColor(this.canvas,token,"#dde7ef");
-      const radius = (node.category==='collection'?.095:.04) + (node.importance / 100) * 0.025 + (focused ? 0.02 : 0);
+      const isOrb = node.category === 'collection' || focused;
+      const diameter = node.id === this.rootNodeId ? 0.64 : node.category === 'collection' ? 0.4 : 0.3;
+      const radius = isOrb ? diameter * 0.44 : .04 + (node.importance / 100) * 0.025;
       const geometry = new THREE.SphereGeometry(radius, 18, 12);
       const material = new THREE.MeshStandardMaterial({
         color,
@@ -327,6 +367,16 @@ export class KnowledgeHologram {
         metalness: 0.12,
       });
       const mesh = new THREE.Mesh(geometry, material);
+      if (isOrb) {
+        material.visible = false;
+        const state: OrbState = /인물|사람|대화 상대|화자/.test(kind) ? 'listening' : /대화방/.test(kind) ? 'connecting' : /주제/.test(kind) ? 'composing' : 'solving';
+        const orb = new ThinkingOrbMesh(state, diameter, color);
+        orb.position.copy(position);
+        if (node.id === this.rootNodeId) orb.setActivity(this.activity, this.motion.matches);
+        orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
+        this.orbMeshes.set(node.id, orb);
+        this.graphRoot.add(orb);
+      }
       mesh.position.copy(position);
       mesh.userData.nodeId = node.id;
       this.nodeMeshes.set(node.id, mesh);
@@ -395,6 +445,7 @@ export class KnowledgeHologram {
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
+    for (const orb of this.orbMeshes.values()) orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
     for (const box of this.labelBounds) box.width = 0;
     this.invalidateFrame();
   }
@@ -407,34 +458,43 @@ export class KnowledgeHologram {
     this.camera.lookAt(this.lookAt);
     this.orbit.target.copy(this.lookAt);this.orbit.update();
     if (this.voiceEnvelope.needsFrame) this.voiceEnvelope.advance(dt);
-    this.loop.setVoiceActive(this.voiceEnvelope.displayedRms > 0);
+    if (this.latestVoice && Date.now() / 1000 - this.latestVoice.updatedAt > 3) { this.latestVoice = null; this.updateOrbActivity(); }
+    const orbActive = this.orbMeshes.get(this.rootNodeId)?.active === true;
+    for (const orb of this.orbMeshes.values()) orb.advance(dt);
+    this.loop.setVoiceActive(this.voiceEnvelope.displayedRms > 0 || orbActive);
     this.renderer.render(this.scene, this.camera);
     const { x, y, width, height } = this.viewport;
     let index = 0;
     for (const [id, label] of this.labels) {
       const box = this.labelBounds[index++];
+      const wasVisible = box.visible, previousLeft = box.left, previousTop = box.top;
       box.visible = false;
       const position = this.positions.get(id);
       if (!position) continue;
       this.projected.copy(position).project(this.camera);
-      label.hidden = Math.abs(this.projected.x) > 1 || Math.abs(this.projected.y) > 1 || this.projected.z > 1 || this.projected.z < -1;
-      if (label.hidden) continue;
+      const outside = Math.abs(this.projected.x) > 1 || Math.abs(this.projected.y) > 1 || this.projected.z > 1 || this.projected.z < -1;
+      if (outside) { if (!label.hidden) label.hidden = true; continue; }
       // Measure only after a rebuild/resize. Reuse at most 24 collision boxes.
-      if (!box.width) box.width = label.offsetWidth || Math.min(156, label.textContent!.length * 11 + 12);
+      if (!box.width) { label.hidden = false; box.width = label.offsetWidth || Math.min(156, label.textContent!.length * 11 + 12); }
       box.left = Math.max(x, Math.min(x + width - box.width, x + (this.projected.x + 1) * width / 2 - box.width / 2));
-      box.top = Math.min(y + height - 24, y + (1 - this.projected.y) * height / 2 + 10);
+      const mesh = this.nodeMeshes.get(id);
+      const radius = mesh?.geometry instanceof THREE.SphereGeometry ? mesh.geometry.parameters.radius : 0;
+      const offset = this.orbMeshes.has(id) ? Math.min(54, radius * height / (2 * Math.tan(this.camera.fov * Math.PI / 360) * Math.max(.1, this.camera.position.distanceTo(position))) + 8) : 10;
+      box.top = Math.min(y + height - 24, y + (1 - this.projected.y) * height / 2 + offset);
+      let collision = false;
       for (let previous = 0; previous < index - 1; previous++) {
         const other = this.labelBounds[previous];
         if (other.visible && box.left < other.left + other.width + 5 && box.left + box.width + 5 > other.left && box.top < other.top + 24 && box.top + 24 > other.top) {
-          label.hidden = true;
+          collision = true;
           break;
         }
       }
-      box.visible = !label.hidden;
-      if (box.visible) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
+      box.visible = !collision;
+      if (label.hidden === box.visible) label.hidden = !box.visible;
+      if (box.visible && (!wasVisible || previousLeft !== box.left || previousTop !== box.top)) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }
     // Static sky and settled knowledge do not need another GPU frame. Real
     // navigation, source replacement, resize and load changes invalidate it.
-    if (!this.voiceEnvelope.needsFrame && !this.orbitActive && this.camera.position.distanceToSquared(this.desiredCamera) < 0.000001 && this.lookAt.distanceToSquared(this.desiredLookAt) < 0.000001) this.loop.stop();
+    if (!orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && this.camera.position.distanceToSquared(this.desiredCamera) < 0.000001 && this.lookAt.distanceToSquared(this.desiredLookAt) < 0.000001) this.loop.stop();
   }
 }

@@ -15,6 +15,7 @@ export class VoiceAmplitudePoller {
     private readonly apply: (rms: number, source: VoiceAmplitudeSource) => void,
     private readonly load: VoiceStatusLoader = fetchVoiceStatus,
     private readonly scheduler: PollTimerScheduler = browserPollScheduler,
+    private readonly observeVoice: (voice: VoiceStatus | null) => void = () => undefined,
   ) {}
 
   start(): void {
@@ -36,7 +37,7 @@ export class VoiceAmplitudePoller {
     try { voice = await this.load(); } catch { /* Failed reads have zero amplitude. */ }
     if (!this.active || generation !== this.generation) return;
     const signal = freshVoiceAmplitude(voice);
-    try { this.apply(signal.rms, signal.source); } catch { /* Rendering cannot rearm stale work. */ }
+    try { this.observeVoice(voice); this.apply(signal.rms, signal.source); } catch { /* Rendering cannot rearm stale work. */ }
     if (!this.active || generation !== this.generation) return;
     try {
       this.timer = this.scheduler.setTimeout(() => {
