@@ -5,7 +5,9 @@ mod resource_layout;
 #[cfg(target_os = "macos")]
 mod workspace_visibility;
 
-use python_bridge::{PythonBridge, SafeBrowserToolResult, SafeEmergencyState, SafeRuntimeSnapshot};
+use python_bridge::{
+    PythonBridge, SafeBrowserToolResult, SafeEmergencyState, SafeRuntimeSnapshot, SafeVoiceStatus,
+};
 use serde_json::Value;
 use tauri::image::Image;
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -73,6 +75,16 @@ async fn fetch_runtime_snapshot(
         .await
         .map_err(|_| "snapshot_worker_failed".to_string())?
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn fetch_voice_status(
+    bridge: tauri::State<'_, PythonBridge>,
+) -> Result<SafeVoiceStatus, String> {
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || bridge.voice_status())
+        .await
+        .map_err(|_| "voice_status_worker_failed".to_string())
 }
 
 #[tauri::command]
@@ -295,6 +307,7 @@ fn main() {
         )
         .invoke_handler(tauri::generate_handler![
             fetch_runtime_snapshot,
+            fetch_voice_status,
             fetch_emergency_state,
             operator_resume,
             operator_pause,

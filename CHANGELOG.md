@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] - 2026-10-03
+
+- 실제 재생 티켓·커서의 완료된 출력 PCM 구간을 그래프에 연결합니다. 입력·출력 값을 분리하고 아직 재생하지 않은 구간·오래된 값·중단된 턴을 표시하지 않습니다.
+- 유효하지 않은 초기 SDK 시간을 변환할 때 발생하는 오디오 예외를 방지합니다. 네이티브 ABI2를 명시하고 버전이 맞지 않으면 권한 요청 전에 종료합니다.
+- 작은 네이티브 상태 읽기로 음성 반응을 연결하며 Python·모델 호출을 만들지 않습니다. 상태 게시 시에만 출력 커서를 읽고 숨김·종료·빈 그래프에서는 조회를 정리합니다.
+
 ## [0.3.6] - 2026-10-02
 
 - 우주 그래프와 메뉴바 팝업에 최근 마이크 입력 크기를 제한된 궤도선으로 연결합니다. 오래된 값·오류·중단·재생 중 입력을 제외하며 조용할 때는 표시하지 않습니다.

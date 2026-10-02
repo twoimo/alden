@@ -27,6 +27,7 @@ export class AnimationLoop {
   private lastRenderMs = 0;
   private lastRenderAtMs: number | null = null;
   private busyLoad = 0;
+  private voiceActive = false;
   private readonly maxDtSeconds = 0.25;
   renderCount = 0;
 
@@ -38,6 +39,8 @@ export class AnimationLoop {
   setLoad(load: number): void {
     this.busyLoad = Number.isFinite(load) ? Math.min(1, Math.max(0, load)) : 0;
   }
+
+  setVoiceActive(active: boolean): void { this.voiceActive = active; }
 
   start(): void {
     if (this.running) return;
@@ -82,7 +85,7 @@ export class AnimationLoop {
   }
 
   private frameIntervalMs(): number {
-    return this.busyLoad > 0.08 ? 1000 / 30 : 1000 / 15;
+    return this.voiceActive || this.busyLoad > 0.08 ? 1000 / 30 : 1000 / 15;
   }
 
   private tick(nowMs: number, owner: FrameRequestCallback): void {

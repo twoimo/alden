@@ -9,6 +9,7 @@ trap 'rm -f "$TASK_TEMP"' EXIT HUP INT TERM
   -target arm64-apple-macosx13.0 -module-name AldenVoiceAudio \
   -Xlinker -install_name -Xlinker @rpath/libalden_audio.dylib \
   -framework AVFoundation \
+  "$TASK_ROOT/voice/native/playback_envelope.swift" \
   "$TASK_ROOT/voice/native/alden_audio.swift" -o "$TASK_TEMP"
 /usr/bin/codesign --force --sign - --identifier com.openkakao.alden.voice-audio "$TASK_TEMP"
 chmod 644 "$TASK_TEMP"

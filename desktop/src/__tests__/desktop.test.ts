@@ -150,7 +150,7 @@ describe("safe shared contracts", () => {
     expect(snapshot.terminal).toEqual({ sent: 3, skipped: 2, deliveryUnknown: 1, burstSuperseded: 4 });
     expect(snapshot.contextSync).toEqual({ mode: "async", waited: false });
     expect(snapshot.jobLoad).toBe(0.7);
-    expect(snapshot.voice).toEqual({ available: true, state: "speaking", rms: 0.42, errorCode: null, wakeSource: "stock", updatedAt: 10, wakePhrase: "", threshold: 0.65, customModelSelected: false });
+    expect(snapshot.voice).toEqual({ available: true, state: "speaking", rms: 0.42, outputRms: 0, errorCode: null, wakeSource: "stock", updatedAt: 10, wakePhrase: "", threshold: 0.65, customModelSelected: false });
   });
 
   it("normalizes per-source background state with bounded captions", () => {

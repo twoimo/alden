@@ -83,12 +83,12 @@ describe("bounded amplitude envelope", () => {
     Object.defineProperties(graph, {
       disposed: { value: false, writable: true }, requestedAnimation: { value: false, writable: true },
       graphRoot: { value: new THREE.Group() }, voiceEnvelope: { value: envelope },
-      view: { value: { nodes: [{ id: "a" }] } }, loop: { value: { start, stop: vi.fn(), setLoad: vi.fn() } },
+      view: { value: { nodes: [{ id: "a" }] } }, loop: { value: { start, stop: vi.fn(), setLoad: vi.fn(), setVoiceActive: vi.fn() } },
     });
     graph.setSignals(1, 0.5);expect(start).not.toHaveBeenCalled();
-    graph.stop();expect(envelope.inputRms).toBe(0);expect(envelope.line.visible).toBe(false);
+    graph.stop();expect(envelope.targetRms).toBe(0);expect(envelope.line.visible).toBe(false);
     Object.defineProperty(graph, "disposed", { value: true });
-    graph.setSignals(1, 1);expect(start).not.toHaveBeenCalled();expect(envelope.inputRms).toBe(0);
+    graph.setSignals(1, 1);expect(start).not.toHaveBeenCalled();expect(envelope.targetRms).toBe(0);
     envelope.line.geometry.dispose();envelope.line.material.dispose();
   });
 });

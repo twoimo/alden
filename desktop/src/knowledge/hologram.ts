@@ -5,6 +5,9 @@ import type { AnimationLoopDiagnostics } from "../core/animation-loop";
 import { createCosmosBackdrop } from "./cosmos";
 import { pickKnowledgeSphere } from "./picking";
 import { VoiceEnvelope } from "./voice-envelope";
+import { VoiceAmplitudePoller, type VoiceStatusLoader } from "../voice-amplitude-poller";
+import type { VoiceAmplitudeSource } from "../voice-amplitude";
+import { fetchVoiceStatus } from "../runtime";
 import {
   KnowledgeDrilldown,
   type KnowledgeGraph,
@@ -48,6 +51,8 @@ export class KnowledgeHologram {
   private readonly camera = new THREE.PerspectiveCamera(38, 2, 0.1, 60);
   private readonly graphRoot = new THREE.Group();
   private readonly voiceEnvelope = new VoiceEnvelope();
+  private readonly voicePoller: VoiceAmplitudePoller | null;
+  private voiceSource: VoiceAmplitudeSource = "none";
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly loop: AnimationLoop;
@@ -75,6 +80,7 @@ export class KnowledgeHologram {
     private readonly onFocus: FocusHandler,
     private readonly onDispose: () => void = () => undefined,
     private readonly layoutMode: 'workspace'|'popover' = 'workspace',
+    voiceLoader: VoiceStatusLoader | null = fetchVoiceStatus,
   ) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: "low-power" });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -101,6 +107,11 @@ export class KnowledgeHologram {
     this.view = this.drilldown.current();
     this.rebuildGraph();
     this.loop = new AnimationLoop((dt) => this.render(dt));
+    this.voicePoller = voiceLoader ? new VoiceAmplitudePoller((rms, source) => {
+      if (!this.requestedAnimation || this.disposed) return;
+      this.voiceSource = source;
+      this.applyVoiceRms(rms);
+    }, voiceLoader) : null;
     this.canvas.addEventListener("pointerdown", this.rememberPress);
     this.canvas.addEventListener("pointerup", this.handlePointerDown);
 
@@ -114,13 +125,18 @@ export class KnowledgeHologram {
   start(): void {
     if (this.disposed) return;
     this.requestedAnimation = true;
-    if (this.view.nodes.length > 0) this.loop.start();
+    if (this.view.nodes.length > 0) { this.loop.start(); this.voicePoller?.start(); }
   }
 
   stop(): void {
     this.requestedAnimation = false;
-    this.loop.stop();
-    this.voiceEnvelope.clear();
+    try { this.voicePoller?.stop(); } finally {
+      try { this.loop.stop(); } finally {
+        this.loop.setVoiceActive(false);
+        this.voiceEnvelope.clear();
+        this.voiceSource = "none";
+      }
+    }
   }
 
   get renderCount(): number {
@@ -133,7 +149,13 @@ export class KnowledgeHologram {
     this.loop.setLoad(bounded);
     const scale=1+bounded*.006;
     if(Math.abs(this.graphRoot.scale.x-scale)>0.0001){this.graphRoot.scale.setScalar(scale);this.invalidateFrame();}
-    if (this.voiceEnvelope.setRms(voiceRms)) this.invalidateFrame();
+    // The narrow poller owns current input/output; the slow snapshot supplies load.
+    if (!this.voicePoller) this.applyVoiceRms(voiceRms);
+  }
+
+  private applyVoiceRms(rms: number): void {
+    this.loop.setVoiceActive(rms > 0 || this.voiceEnvelope.displayedRms > 0);
+    if (this.voiceEnvelope.setRms(rms)) this.invalidateFrame();
   }
 
   private invalidateFrame(): void {
@@ -160,13 +182,13 @@ export class KnowledgeHologram {
     if (focus && ids.has(focus)) this.focusCamera(focus);
     this.canvas.hidden = graph.nodes.length === 0;
     this.resize();
-    if (this.requestedAnimation && graph.nodes.length > 0) this.loop.start();
-    else this.loop.stop();
+    if (this.requestedAnimation && graph.nodes.length > 0) { this.loop.start(); this.voicePoller?.start(); }
+    else { this.loop.stop(); this.voicePoller?.stop(); this.voiceEnvelope.clear(); this.voiceSource = "none"; }
     this.notifyView();
   }
 
-  diagnostics(): AnimationLoopDiagnostics & { inputRms: number; displayedRms: number; audioVertices: number } {
-    return { ...this.loop.diagnostics(), inputRms: this.voiceEnvelope.inputRms,
+  diagnostics(): AnimationLoopDiagnostics & { voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number } {
+    return { ...this.loop.diagnostics(), voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
       displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count };
   }
   get navigationTargets(): { camera: number[]; lookAt: number[] } {
@@ -385,6 +407,7 @@ export class KnowledgeHologram {
     this.camera.lookAt(this.lookAt);
     this.orbit.target.copy(this.lookAt);this.orbit.update();
     if (this.voiceEnvelope.needsFrame) this.voiceEnvelope.advance(dt);
+    this.loop.setVoiceActive(this.voiceEnvelope.displayedRms > 0);
     this.renderer.render(this.scene, this.camera);
     const { x, y, width, height } = this.viewport;
     let index = 0;

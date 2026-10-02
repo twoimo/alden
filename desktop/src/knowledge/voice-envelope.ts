@@ -4,7 +4,7 @@ const VERTICES = 128;
 const TAU_SECONDS = 0.12;
 const EPSILON = 0.0001;
 
-/** A sampled input amplitude envelope, not a fabricated audio spectrum. */
+/** A measured input/playback amplitude envelope, not an audio spectrum. */
 export class VoiceEnvelope {
   readonly line: THREE.LineLoop<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private readonly positions = new Float32Array(VERTICES * 3);
@@ -24,7 +24,7 @@ export class VoiceEnvelope {
     this.line = new THREE.LineLoop(geometry, new THREE.LineBasicMaterial({
       color: "#a2b9d0", transparent: true, opacity: 0, depthWrite: false,
     }));
-    this.line.name = "voice-input-envelope";
+    this.line.name = "voice-amplitude-envelope";
     this.line.rotation.x = 0.35;
     this.line.rotation.z = -0.2;
     this.line.position.z = -0.5;
@@ -40,7 +40,7 @@ export class VoiceEnvelope {
     return true;
   }
 
-  get inputRms(): number { return this.target; }
+  get targetRms(): number { return this.target; }
   get displayedRms(): number { return this.level; }
   get needsFrame(): boolean { return Math.abs(this.target - this.level) > EPSILON; }
 

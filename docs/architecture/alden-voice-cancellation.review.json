@@ -1,34 +1,13 @@
 {
-  "schema": "alden-archify-visual-review-v1",
-  "reviewed_at": "2026-09-30T12:57:52.659049+00:00",
-  "artifact": {
-    "path": "/Users/twoimo/.codex/worktrees/ef78/openkakao-bot/docs/architecture/alden-voice-cancellation.html",
-    "sha256": "db27af1c3a35fc5fe728447a7a66a17a43e2afadcdf9cada0915a98ef634003f",
-    "bytes": 808939
-  },
-  "validation": {
-    "checksPassed": 9,
-    "checkCount": 9,
-    "compositionProfile": "showcase",
-    "compositionStatus": "pass",
-    "errors": 0,
-    "warnings": 0
-  },
-  "browser_evidence": "pass",
-  "visual_review": "passed",
-  "correction_rounds": 1,
-  "language": "Korean content; fixed Viewer UI falls back to English",
-  "viewed_screenshots": [
+  "artifact_sha256": "ee1bcc155c1da703c78eeec189d656398a7aeddea97c89457ac0f0dd118f1946",
+  "reviewer": "parent image review",
+  "captures": [
     "alden-voice-cancellation.visual-check.1440x900.light.png",
     "alden-voice-cancellation.visual-check.2048x1320.dark.png"
   ],
-  "observations": [
-    "Main sequence, continuous input during playback, cancellation and emergency latch remain distinct.",
-    "Labels and cards fit at inspected desktop endpoints with no visible clipping.",
-    "Hardware capture and recorded playback remain separate from unverified human speech and full voice turns."
-  ],
-  "source_scope": [
-    "scripts/alden_voice.py",
-    "voice/native/alden_audio.swift"
-  ]
+  "result": "검토한 두 테마에서 실제 재생 티켓·완료 PCM과 입력/출력 진폭, 취소·대기·숨김 전이가 읽힌다. 라벨·노드·전이의 충돌을 발견하지 않았다. 작성 내용은 한국어, 고정 Viewer UI는 영어다.",
+  "deterministic_checks": 9,
+  "browser_viewports": 4,
+  "visual_review": "passed",
+  "correction_rounds": 0
 }

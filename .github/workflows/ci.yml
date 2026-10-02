@@ -215,6 +215,8 @@ jobs:
           tests.test_alden_voice_turns
           tests.test_alden_voice_retrieval
           tests.test_alden_voice_bargein
+          tests.test_alden_playback_envelope
+          tests.test_alden_voice_amplitude
           tests.test_alden_wake_eval
           tests.test_alden_wake_evidence
           tests.test_alden_wake_disjoint

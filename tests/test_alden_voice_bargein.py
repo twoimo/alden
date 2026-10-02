@@ -132,13 +132,42 @@ class BargeInTests(unittest.TestCase):
 
 
 def native_library():
-    values = {"abi": 1, "permission": 3, "create": 7, "start": 0, "processed": 1,
+    values = {"abi": 2, "permission": 3, "create": 7, "start": 0, "processed": 1,
               "available": 640, "dropped": 0, "read": 640, "play": 17, "playing": 0,
-              "cancel": None, "destroy": None, "request_permission": None}
+              "cancel": None, "destroy": None, "request_permission": None, "output_rms": 0.0}
     return SimpleNamespace(**{"alden_audio_" + name: Mock(return_value=value) for name, value in values.items()})
 
 
 class NativeAudioOwnershipTests(unittest.TestCase):
+    def test_old_abi_is_rejected_before_any_audio_or_permission_action(self):
+        lib = native_library();lib.alden_audio_abi.return_value = 1
+        del lib.alden_audio_output_rms
+        with patch("alden_voice._load_voice_audio_library", return_value=lib):
+            with self.assertRaisesRegex(RuntimeError, "voice_audio_abi_unsupported"):
+                MacVoiceAudio()
+        lib.alden_audio_create.assert_not_called();lib.alden_audio_request_permission.assert_not_called()
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "numpy unavailable")
+    def test_output_level_is_owned_by_the_current_playback_ticket_and_clears_on_close(self):
+        import numpy as np
+        lib = native_library();entered = threading.Event()
+        lib.alden_audio_playing.side_effect = lambda *_args: (entered.set(), 1)[1]
+        lib.alden_audio_output_rms.return_value = .25
+        errors = []
+        with TemporaryDirectory() as temp, patch("alden_voice._load_voice_audio_library", return_value=lib):
+            token = AbortController(Path(temp)).token();audio = MacVoiceAudio().__enter__()
+            self.assertEqual(audio.output_rms, 0);lib.alden_audio_output_rms.assert_not_called()
+            def play():
+                try: audio.play(np.zeros(960), 24_000, token)
+                except Exception as error: errors.append(error)
+            worker = threading.Thread(target=play);worker.start();self.assertTrue(entered.wait(1))
+            self.assertEqual(audio.output_rms, .25);lib.alden_audio_output_rms.assert_called_with(7, 17)
+            lib.alden_audio_output_rms.return_value = float("nan");self.assertEqual(audio.output_rms, 0)
+            token.cancel();worker.join(1);self.assertFalse(worker.is_alive())
+            self.assertEqual(audio.output_rms, 0);self.assertEqual(len(errors), 1)
+            lib.alden_audio_cancel.assert_called_once_with(7, 17)
+            audio.close();self.assertEqual(audio.output_rms, 0)
+
     def test_foreground_permission_grant_and_denial_do_not_start_audio(self):
         for permissions, allowed in [([0, 3], True), ([2], False)]:
             with self.subTest(permissions=permissions), TemporaryDirectory() as temp:

@@ -1,5 +1,13 @@
 # Alden desktop design contract
 
+## 0.3.7 — rendered playback PCM
+
+The visible graph reads a small native voice/latch status at 100ms while voice is available, 750ms otherwise. Its own generation fence discards late responses after hide or reopen. Full runtime snapshots retain their 2.5-second cadence and supply job load. Native status reads invoke no Python or model. Only `user_listen` selects input RMS; `speaking` selects output PCM RMS, including zero during synthesis before playback. The five-second wake heartbeat does not animate idle noise.
+
+Output PCM uses clipped source samples and the actual AVAudioPlayerNode cursor: only completed 20ms windows can be displayed. This is PCM before mixer/device volume, not perceived loudness. Ticket/generation, valid render time and a 200ms host-age fence exclude stale playback; the emergency latch masks both channels. The producer reads its native cursor only when its 10Hz status publication is due. It never manufactures a phase from an inference timer.
+
+The retained 128-point envelope keeps the 0.12s damper, 0.0001 settling tolerance, 0.12 radius displacement cap and 0.36 opacity cap. Measured speech/fade frames cap at30fps; load/camera frames retain the existing policy. Settled state submits no frames even at positive RMS. Hide/close clears source, amplitude, polling and RAF; empty source graphs stop amplitude polling. The historical 0.3.6 input-only contract below describes that earlier release.
+
 ## 0.3.6 — sampled voice amplitude
 
 The current graph and popover project recent microphone RMS into one 128-vertex orbital envelope. RMS is unitless in [0,1]; only available, error-free `wake_listen`/`user_listen` status at most 3 seconds old is accepted. Stored input during `speaking` is not output amplitude. Runtime status is sampled every 2.5 seconds while the graph surface is visible, so this is a sampled envelope rather than a real-time spectrum. Actual output PCM amplitude remains an unverified follow-up.

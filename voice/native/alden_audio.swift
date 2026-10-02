@@ -2,6 +2,7 @@
 // The C ABI is loaded by the existing Python voice process; no audio service is added.
 import AVFoundation
 import Foundation
+import Darwin
 
 private final class VoiceAudio {
     let engine = AVAudioEngine()
@@ -17,6 +18,7 @@ private final class VoiceAudio {
     var tapped = false
     var generation: UInt64 = 0
     var playing: UInt64 = 0
+    var playbackEnvelope: PlaybackEnvelope?
 
     func start() -> Int32 {
         // Do not request permission or show an OS dialog from a background probe.
@@ -128,6 +130,7 @@ private final class VoiceAudio {
         commands.lock(); defer { commands.unlock() }
         guard echoProcessed() else { return 0 }
         player.stop()
+        playbackEnvelope = PlaybackEnvelope(samples: destination, frames: frames)
         state.lock()
         generation += 1
         let ticket = generation
@@ -142,12 +145,28 @@ private final class VoiceAudio {
         return ticket
     }
 
+    func outputRms(_ ticket: UInt64) -> Float {
+        commands.lock(); defer { commands.unlock() }
+        state.lock()
+        let valid = ticket > 0 && playing == ticket && !closed && !failed
+        state.unlock()
+        guard valid, echoProcessed(), let envelope = playbackEnvelope,
+              let nodeTime = player.lastRenderTime, nodeTime.isHostTimeValid else { return 0 }
+        // A stalled device must not keep publishing an old rendered window.
+        let age = AVAudioTime.seconds(forHostTime: mach_absolute_time())
+            - AVAudioTime.seconds(forHostTime: nodeTime.hostTime)
+        guard age >= -0.05, age <= 0.2 else { return 0 }
+        return envelope.rms(for: player)
+    }
+
     func cancel(_ ticket: UInt64) {
         commands.lock(); defer { commands.unlock() }
         state.lock()
         let matches = ticket > 0 && playing == ticket
+        let ownsEnvelope = ticket > 0 && generation == ticket
         if matches { playing = 0 }
         state.unlock()
+        if ownsEnvelope { playbackEnvelope = nil }
         if matches { player.stop() }
     }
 
@@ -158,6 +177,7 @@ private final class VoiceAudio {
         closed = true; playing = 0; count = 0
         state.unlock()
         if wasClosed { return }
+        playbackEnvelope = nil
         player.stop()
         engine.stop()
         if tapped { engine.inputNode.removeTap(onBus: 0); tapped = false }
@@ -168,7 +188,7 @@ private func audio(_ pointer: UnsafeMutableRawPointer) -> VoiceAudio {
     Unmanaged<VoiceAudio>.fromOpaque(pointer).takeUnretainedValue()
 }
 
-@_cdecl("alden_audio_abi") public func audioABI() -> Int32 { 1 }
+@_cdecl("alden_audio_abi") public func audioABI() -> Int32 { 2 }
 @_cdecl("alden_audio_permission") public func audioPermission() -> Int32 {
     Int32(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)
 }
@@ -220,6 +240,8 @@ private func audio(_ pointer: UnsafeMutableRawPointer) -> VoiceAudio {
 @_cdecl("alden_audio_cancel") public func audioCancel(_ pointer: UnsafeMutableRawPointer, _ ticket: UInt64) {
     audio(pointer).cancel(ticket)
 }
+@_cdecl("alden_audio_output_rms") public func audioOutputRms(_ pointer: UnsafeMutableRawPointer,
+    _ ticket: UInt64) -> Float { audio(pointer).outputRms(ticket) }
 @_cdecl("alden_audio_destroy") public func audioDestroy(_ pointer: UnsafeMutableRawPointer) {
     let a = Unmanaged<VoiceAudio>.fromOpaque(pointer).takeRetainedValue()
     a.close()

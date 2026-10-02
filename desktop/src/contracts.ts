@@ -147,6 +147,7 @@ export interface VoiceStatus {
   available: boolean;
   state: string;
   rms: number;
+  outputRms: number;
   errorCode: string | null;
   wakeSource: "stock" | "custom" | "none";
   updatedAt: number;
@@ -420,7 +421,7 @@ export function unavailableSnapshot(errorCode: string | null = "snapshot_unavail
     terminal: { sent: 0, skipped: 0, deliveryUnknown: 0, burstSuperseded: 0 },
     contextSync: { mode: "async", waited: false },
     replyModelId: null,
-    voice: { available: false, state: "unavailable", rms: 0, errorCode: null, wakeSource: "none", updatedAt: 0, wakePhrase: "", threshold: 0.65, customModelSelected: false },
+    voice: { available: false, state: "unavailable", rms: 0, outputRms: 0, errorCode: null, wakeSource: "none", updatedAt: 0, wakePhrase: "", threshold: 0.65, customModelSelected: false },
     errorCode,
   };
 }
@@ -538,25 +539,7 @@ export function parseRuntimeSnapshot(value: unknown): RuntimeSnapshot {
       : typeof input.replyModelId === "string"
         ? input.replyModelId
         : null,
-    voice: {
-      available: voice?.available === true,
-      state: text(voice?.state, "unavailable"),
-      rms: Math.min(1, Math.max(0, finiteNumber(voice?.rms, 0))),
-      errorCode: typeof voice?.error_code === "string"
-        ? voice.error_code
-        : typeof voice?.errorCode === "string"
-          ? voice.errorCode
-          : null,
-      wakeSource: voice?.wake_source === "stock" || voice?.wakeSource === "stock"
-        ? "stock"
-        : voice?.wake_source === "custom" || voice?.wakeSource === "custom"
-          ? "custom"
-          : "none",
-      updatedAt: nonNegativeInt(voice?.updated_at ?? voice?.updatedAt),
-      wakePhrase: text(voice?.wake_phrase ?? voice?.wakePhrase, ""),
-      threshold: Math.min(0.95, Math.max(0.65, finiteNumber(voice?.threshold, 0.65))),
-      customModelSelected: voice?.custom_model_selected === true || voice?.customModelSelected === true,
-    },
+    voice: parseVoiceStatus(voice),
     errorCode: contextValid ? (typeof input.error_code === "string" ? input.error_code : null) : "context_sync_invalid",
   };
 }
@@ -571,4 +554,28 @@ export function parseRuntimeSnapshotJson(json: string): RuntimeSnapshot {
 
 export function createCancellationToken(): CancellationToken {
   return { id: crypto.randomUUID(), cancelled: false };
+}
+
+export function parseVoiceStatus(value: unknown): VoiceStatus {
+  const voice = record(value);
+  return {
+      available: voice?.available === true,
+      state: text(voice?.state, "unavailable"),
+      rms: Math.min(1, Math.max(0, finiteNumber(voice?.rms, 0))),
+      outputRms: Math.min(1, Math.max(0, finiteNumber(voice?.output_rms ?? voice?.outputRms, 0))),
+      errorCode: typeof voice?.error_code === "string"
+        ? voice.error_code
+        : typeof voice?.errorCode === "string"
+          ? voice.errorCode
+          : null,
+      wakeSource: voice?.wake_source === "stock" || voice?.wakeSource === "stock"
+        ? "stock"
+        : voice?.wake_source === "custom" || voice?.wakeSource === "custom"
+          ? "custom"
+          : "none",
+      updatedAt: nonNegativeInt(voice?.updated_at ?? voice?.updatedAt),
+      wakePhrase: text(voice?.wake_phrase ?? voice?.wakePhrase, ""),
+      threshold: Math.min(0.95, Math.max(0.65, finiteNumber(voice?.threshold, 0.65))),
+      customModelSelected: voice?.custom_model_selected === true || voice?.customModelSelected === true,
+  };
 }

@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from auto_reply_ondevice import (
     FLASH_NEXT_MODEL_ID,
@@ -443,6 +443,10 @@ class MacVoiceAudio:
 
     def __init__(self) -> None:
         self._library = _load_voice_audio_library()
+        abi = self._library.alden_audio_abi
+        abi.argtypes, abi.restype = [], ctypes.c_int32
+        if abi() != 2:
+            raise RuntimeError("voice_audio_abi_unsupported")
         signatures = {
             "abi": ([], ctypes.c_int32), "permission": ([], ctypes.c_int32),
             "request_permission": ([], None),
@@ -454,18 +458,18 @@ class MacVoiceAudio:
             "play": ([ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32, ctypes.c_double], ctypes.c_uint64),
             "playing": ([ctypes.c_void_p, ctypes.c_uint64], ctypes.c_int32),
             "cancel": ([ctypes.c_void_p, ctypes.c_uint64], None),
+            "output_rms": ([ctypes.c_void_p, ctypes.c_uint64], ctypes.c_float),
             "destroy": ([ctypes.c_void_p], None),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self._library, "alden_audio_" + name)
             function.argtypes, function.restype = arguments, result
-        if self._library.alden_audio_abi() != 1:
-            raise RuntimeError("voice_audio_abi_unsupported")
         self._lock = threading.RLock()
         self._handle: int | None = None
         self._disposed = False
         self._frame = ctypes.create_string_buffer(640)
         self._dropped = 0
+        self._play_ticket = 0
 
     def __enter__(self) -> "MacVoiceAudio":
         with self._lock:
@@ -510,6 +514,7 @@ class MacVoiceAudio:
         with self._lock:
             handle, self._handle = self._handle, None
             self._disposed = True
+            self._play_ticket = 0
             if handle is not None:
                 self._library.alden_audio_destroy(handle)
 
@@ -562,6 +567,7 @@ class MacVoiceAudio:
                 self._handle, samples.ctypes.data, int(samples.size), float(sample_rate))
             if ticket == 0:
                 raise RuntimeError("voice_playback_unavailable")
+            self._play_ticket = ticket
         try:
             while True:
                 token.raise_if_cancelled()
@@ -575,8 +581,18 @@ class MacVoiceAudio:
                 time.sleep(VOICE_MIC_POLL_SECONDS)
         finally:
             with self._lock:
+                if self._play_ticket == ticket:
+                    self._play_ticket = 0
                 if self._handle is not None:
                     self._library.alden_audio_cancel(self._handle, ticket)
+
+    @property
+    def output_rms(self) -> float:
+        with self._lock:
+            if self._handle is None or not self._play_ticket:
+                return 0.0
+            value = float(self._library.alden_audio_output_rms(self._handle, self._play_ticket))
+            return max(0.0, min(1.0, value)) if math.isfinite(value) else 0.0
 
 
 class BoundedAudioRing:
@@ -820,6 +836,8 @@ class VoiceStatusStore:
         *,
         state: VoiceState,
         rms: float,
+        output_rms: float = 0.0,
+        output_rms_source: Callable[[], float] | None = None,
         error_code: str = "",
         wake_source: str = "stock",
         custom_model_selected: bool = False,
@@ -846,10 +864,17 @@ class VoiceStatusStore:
         interval = VOICE_STATUS_HEARTBEAT_SECONDS if state == VoiceState.WAKE_LISTEN else .1
         if signature == self._last_signature and now - self._last_write_monotonic < interval:
             return
+        if state == VoiceState.SPEAKING and output_rms_source is not None:
+            try:
+                output_rms = float(output_rms_source())
+            except Exception:
+                output_rms = 0.0
         payload = {
             "schema_version": VOICE_STATUS_SCHEMA_VERSION,
             "state": state.value,
             "rms": round(max(0.0, min(float(rms), 1.0)), 4),
+            "output_rms": round(max(0.0, min(float(output_rms), 1.0)), 4)
+            if state == VoiceState.SPEAKING and math.isfinite(output_rms) else 0.0,
             "error_code": normalized_error,
             "wake_phrase": WAKE_PHRASE,
             "wake_source": normalized_wake_source,
@@ -959,6 +984,7 @@ class AldenVoicePipeline:
                 self.status.write(
                     state=self.state,
                     rms=self.last_rms,
+                    output_rms_source=self._output_rms,
                     error_code=error_code,
                     wake_source=self._wake_source,
                     custom_model_selected=self._custom_model_selected,
@@ -967,6 +993,14 @@ class AldenVoicePipeline:
                     context_version=self.context_version,
                     cancelled=self.state == VoiceState.ABORTED or bool(self._active_turn and self._active_turn.token.is_cancelled()),
                 )
+
+    def _output_rms(self) -> float:
+        # Read the native cursor only when the status writer is due (10 Hz),
+        # not for every 20ms microphone packet. Never query a superseded turn.
+        if (self.state == VoiceState.SPEAKING and self._active_turn is not None
+                and not self._active_turn.token.is_cancelled() and not self.token.is_cancelled()):
+            return float(getattr(self.tts, "output_rms", 0.0))
+        return 0.0
 
     def _end(self, state: VoiceState, error_code: str) -> VoiceResult:
         with self._lock:
@@ -1720,6 +1754,10 @@ class Qwen3TtsAdapter:
         self.audio_backend = audio_backend
         self._synthesis_lock = threading.RLock()
 
+    @property
+    def output_rms(self) -> float:
+        return self.audio_backend.output_rms if self.audio_backend is not None else 0.0
+
     def close(self) -> None:
         with self._synthesis_lock:
             if self._engine is None:
@@ -2023,7 +2061,7 @@ def run_microphone_session(
                     except _MicrophoneDisconnected:
                         return pipeline.mic_disconnected()
                     if polled is None:
-                        if pipeline.state == VoiceState.WAKE_LISTEN:
+                        if pipeline.state in {VoiceState.WAKE_LISTEN, VoiceState.SPEAKING}:
                             pipeline._publish()
                         time.sleep(VOICE_MIC_POLL_SECONDS)
                         continue

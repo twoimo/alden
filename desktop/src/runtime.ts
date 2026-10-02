@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { CancellationToken, EmergencyState, RuntimeSnapshot } from "./contracts";
-import { parseEmergencyState, parseRuntimeSnapshot, unavailableSnapshot } from "./contracts";
+import type { CancellationToken, EmergencyState, RuntimeSnapshot, VoiceStatus } from "./contracts";
+import { parseEmergencyState, parseRuntimeSnapshot, parseVoiceStatus, unavailableSnapshot } from "./contracts";
 import { LEGACY_RESIDENT_MODEL_ID, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 
 type SettingsAction =
@@ -425,4 +425,9 @@ export async function cancelModelSwap(
   } catch {
     // Leave the request retryable; keep waiting for the authoritative outcome.
   }
+}
+
+export async function fetchVoiceStatus(): Promise<VoiceStatus> {
+  try { return parseVoiceStatus(await invoke<unknown>("fetch_voice_status")); }
+  catch { return parseVoiceStatus(null); }
 }

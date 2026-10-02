@@ -276,6 +276,7 @@ pub struct SafeVoiceStatus {
     available: bool,
     state: String,
     rms: f64,
+    output_rms: f64,
     error_code: Option<String>,
     wake_source: String,
     updated_at: u64,
@@ -290,6 +291,7 @@ impl Default for SafeVoiceStatus {
             available: false,
             state: "unavailable".to_string(),
             rms: 0.0,
+            output_rms: 0.0,
             error_code: None,
             wake_source: "none".to_string(),
             updated_at: 0,
@@ -584,9 +586,28 @@ impl PythonBridge {
         let bytes = self.run_python(&[], SNAPSHOT_TIMEOUT, token_id, false)?;
         let value = parse_json_output(&bytes)?;
         let mut snapshot = sanitize_snapshot(&value);
-        snapshot.voice = read_voice_status(&self.config.state_root, &self.config.resources()?.root);
+        snapshot.voice = self.voice_status();
         self.merge_jobs(&mut snapshot);
         Ok(snapshot)
+    }
+
+    /// Read only the app's bounded status/latch files; no Python or models.
+    pub fn voice_status(&self) -> SafeVoiceStatus {
+        let mut status = read_voice_status(&self.config.state_root);
+        match global_abort_is_latched(&self.config.state_root) {
+            Ok(false) => {}
+            latch => {
+                status.rms = 0.0;
+                status.output_rms = 0.0;
+                status.state = "aborted".to_string();
+                status.error_code = Some(if matches!(latch, Ok(true)) {
+                    "global_abort".to_string()
+                } else {
+                    "voice_status_latch_invalid".to_string()
+                });
+            }
+        }
+        status
     }
 
     // Every argument is a settings-action payload field the frontend sends, so
@@ -2157,22 +2178,22 @@ fn global_abort_is_latched(state_root: &Path) -> Result<bool, BridgeError> {
     read_global_abort_state(state_root).map(|state| state.latched)
 }
 
-fn default_voice_status(_repo_root: &Path) -> SafeVoiceStatus {
+fn default_voice_status() -> SafeVoiceStatus {
     SafeVoiceStatus {
         custom_model_selected: false,
         ..SafeVoiceStatus::default()
     }
 }
 
-fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
+fn read_voice_status(state_root: &Path) -> SafeVoiceStatus {
     let Some(value) = safe_small_json(&state_root.join(VOICE_STATUS_NAME)) else {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     };
     let Some(root) = value.as_object() else {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     };
     if root.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     }
     let state = root
         .get("state")
@@ -2197,12 +2218,17 @@ fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
         || updated_at > now.saturating_add(5)
         || now.saturating_sub(updated_at) > VOICE_STATUS_MAX_AGE_SECS
     {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     }
     SafeVoiceStatus {
         available: true,
         state,
         rms: clamp01(root.get("rms").and_then(Value::as_f64).unwrap_or(0.0)),
+        output_rms: clamp01(
+            root.get("output_rms")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+        ),
         error_code,
         wake_source: wake_source.to_string(),
         updated_at,
@@ -4990,7 +5016,7 @@ mod tests {
         fs::create_dir_all(bundled_model.parent().unwrap()).unwrap();
         fs::write(&bundled_model, b"onnx").unwrap();
 
-        let status = read_voice_status(&state_root, &repo_root);
+        let status = read_voice_status(&state_root);
         assert!(!status.available);
         assert_eq!(status.wake_phrase, WAKE_PHRASE);
         assert_eq!(status.threshold, WAKE_THRESHOLD);
@@ -5009,13 +5035,13 @@ mod tests {
         let state_root = temp.join("state");
         let repo_root = temp.join("repo");
 
-        let missing = read_voice_status(&state_root, &repo_root);
+        let missing = read_voice_status(&state_root);
         assert!(!missing.custom_model_selected);
 
         let bundled_model = repo_root.join("voice/models/alden_ko_ridge.onnx");
         fs::create_dir_all(bundled_model.parent().unwrap()).unwrap();
         fs::write(&bundled_model, b"").unwrap();
-        let invalid = read_voice_status(&state_root, &repo_root);
+        let invalid = read_voice_status(&state_root);
         assert!(!invalid.custom_model_selected);
 
         let _ = fs::remove_dir_all(&temp);
@@ -5043,7 +5069,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let status = read_voice_status(&temp, &temp.join("repo-without-bundle"));
+        let status = read_voice_status(&temp);
         assert!(status.available);
         assert_eq!(status.state, "speaking");
         assert_eq!(status.rms, 1.0);
@@ -5077,7 +5103,7 @@ mod tests {
         )
         .unwrap();
 
-        let status = read_voice_status(&temp, &temp.join("repo-without-bundle"));
+        let status = read_voice_status(&temp);
         assert!(!status.available);
         assert_eq!(status.state, "unavailable");
         assert_eq!(status.updated_at, 0);
@@ -5159,6 +5185,52 @@ mod tests {
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             jobs: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    #[test]
+    fn lightweight_voice_status_reads_pcm_without_python_and_masks_the_emergency_latch() {
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("alden-voice-level-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut bridge = bridge_with_state_root(root.clone());
+        Arc::get_mut(&mut bridge.config).unwrap().python = root.join("python-must-not-run");
+        fs::write(
+            root.join(VOICE_STATUS_NAME),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1, "state": "speaking", "rms": 0.9, "output_rms": 0.25,
+                "updated_at": epoch_seconds() as u64, "custom_model_selected": true
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let status = bridge.voice_status();
+        assert!(status.available);
+        assert_eq!(status.output_rms, 0.25);
+        assert!(!status.custom_model_selected);
+        assert!(bridge.jobs.lock().unwrap().is_empty());
+        assert!(bridge.cancellations.lock().unwrap().is_empty());
+        write_global_abort_state(
+            &root,
+            &SafeEmergencyState {
+                schema_version: 1,
+                epoch: 1,
+                latched: true,
+                reason: "operator_pause".into(),
+            },
+        )
+        .unwrap();
+        let paused = bridge.voice_status();
+        assert_eq!(paused.state, "aborted");
+        assert_eq!(paused.rms, 0.0);
+        assert_eq!(paused.output_rms, 0.0);
+        assert_eq!(paused.custom_model_selected, status.custom_model_selected);
+        fs::write(root.join(ABORT_STATE_NAME), b"invalid").unwrap();
+        assert_eq!(bridge.voice_status().output_rms, 0.0);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

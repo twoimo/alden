@@ -1,11 +1,11 @@
 {
-  "artifact_sha256": "ba3580cff770bc438b624e51d60090c119424e9623b376796fd61a80d52b374d",
+  "artifact_sha256": "d2dbb0934724ffcb376fc4f241775209f87a6b9252713a6b89cd84e1d472f101",
   "reviewer": "parent image review",
   "captures": [
     "alden-three-render-lifecycle.visual-check.1440x900.light.png",
     "alden-three-render-lifecycle.visual-check.2048x1320.dark.png"
   ],
-  "result": "검토한 두 테마에서 입력 진폭·카메라 평활화와 안정된 대기, 숨김·조회 중단·복원 흐름이 읽힌다. 노드·라벨·전이의 충돌을 발견하지 않았다. 작성 내용은 한국어, 고정 Viewer UI는 영어다.",
+  "result": "검토한 두 테마에서 실제 재생 티켓·완료 PCM과 입력/출력 진폭, 취소·대기·숨김 전이가 읽힌다. 라벨·노드·전이의 충돌을 발견하지 않았다. 작성 내용은 한국어, 고정 Viewer UI는 영어다.",
   "deterministic_checks": 9,
   "browser_viewports": 4,
   "visual_review": "passed",
