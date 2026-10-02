@@ -11,7 +11,7 @@
 | 3 로컬 모델 | 실제 실행 검증: 정확한 상주 27B/E5와 Whisper·MPS/BF16 TTS | Flash-Next 동시 admission, 제품 이미지 경로의 운영 적용 |
 | 4 음성·자동화 | 구현/부분 실행: 8턴 파일 파이프라인; TTS 별도 ASR 7/8 정확 | 첫 파일 청취, 배포된 한국어 wake, 마이크·재생·물리 비상 중단 |
 | 5 디자인 | 전달 완료: 우주 그래프·사이드바·설정·popover 0.3.5 | 현재 primary CUA timeout 때문에 물리 UI·Retina는 미검증 |
-| 6 렌더·효율 | 실제 실행 검증: 개발 fixture의 idle/hidden 추가 렌더 0, bounded graph·GPU 소유권 | 새 그래프가 RMS를 무시하는 연결 누락 보완, 앱 전체 전력 |
+| 6 렌더·효율 | 구현/실제 실행 검증: [0.3.6 입력 envelope](alden-voice-envelope-20261002.md), 개발 fixture idle 1초×3 렌더0·숨김 3초 조회/렌더0, bounded graph·GPU 소유권 | 설치 전달 대조, 실제 마이크·출력 PCM 진폭, 앱 전체 전력 |
 | 7 지식 검색 | 전달 완료: [정규화·single snapshot](alden-graph-quality-20261002.md), [독립 heldout 평가](alden-retrieval-v2-20261002.md), 설치 RRF 범위 회귀 | 권한 의존 원본 최신 수집과 데이터 반영 지연 |
 | 8 평가·학습 | 구현/부분 실제 실행: 독립 validation·실제 27B 오프라인 DPO | 최종 test와 제품 정확성/검색/지연, 승인된 promotion |
 | 9 성능 | 부분 실제 실행: 표본·범위를 밝힌 검색·렌더·음성/LLM 지연 | tokens/s, 실제 UI/재생 p95, 물리 중단과 전력, 목표 미달 개선 |

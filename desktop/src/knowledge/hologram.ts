@@ -4,6 +4,7 @@ import { AnimationLoop } from "../core/animation-loop";
 import type { AnimationLoopDiagnostics } from "../core/animation-loop";
 import { createCosmosBackdrop } from "./cosmos";
 import { pickKnowledgeSphere } from "./picking";
+import { VoiceEnvelope } from "./voice-envelope";
 import {
   KnowledgeDrilldown,
   type KnowledgeGraph,
@@ -46,6 +47,7 @@ export class KnowledgeHologram {
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(38, 2, 0.1, 60);
   private readonly graphRoot = new THREE.Group();
+  private readonly voiceEnvelope = new VoiceEnvelope();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly loop: AnimationLoop;
@@ -91,6 +93,7 @@ export class KnowledgeHologram {
     key.position.set(2.5, 3.5, 5);
     this.scene.add(ambient, key);
     this.scene.add(createCosmosBackdrop());
+    this.scene.add(this.voiceEnvelope.line);
 
     this.layoutPositions();
 
@@ -117,17 +120,20 @@ export class KnowledgeHologram {
   stop(): void {
     this.requestedAnimation = false;
     this.loop.stop();
+    this.voiceEnvelope.clear();
   }
 
   get renderCount(): number {
     return this.loop.renderCount;
   }
 
-  setSignals(load:number,_voiceRms:number):void {
+  setSignals(load:number,voiceRms:number):void {
+    if (this.disposed) return;
     const bounded=Number.isFinite(load)?Math.max(0,Math.min(1,load)):0;
     this.loop.setLoad(bounded);
     const scale=1+bounded*.006;
     if(Math.abs(this.graphRoot.scale.x-scale)>0.0001){this.graphRoot.scale.setScalar(scale);this.invalidateFrame();}
+    if (this.voiceEnvelope.setRms(voiceRms)) this.invalidateFrame();
   }
 
   private invalidateFrame(): void {
@@ -159,7 +165,10 @@ export class KnowledgeHologram {
     this.notifyView();
   }
 
-  diagnostics(): AnimationLoopDiagnostics { return this.loop.diagnostics(); }
+  diagnostics(): AnimationLoopDiagnostics & { inputRms: number; displayedRms: number; audioVertices: number } {
+    return { ...this.loop.diagnostics(), inputRms: this.voiceEnvelope.inputRms,
+      displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count };
+  }
   get navigationTargets(): { camera: number[]; lookAt: number[] } {
     return { camera: this.desiredCamera.toArray(), lookAt: this.desiredLookAt.toArray() };
   }
@@ -375,6 +384,7 @@ export class KnowledgeHologram {
     this.lookAt.lerp(this.desiredLookAt, alpha);
     this.camera.lookAt(this.lookAt);
     this.orbit.target.copy(this.lookAt);this.orbit.update();
+    if (this.voiceEnvelope.needsFrame) this.voiceEnvelope.advance(dt);
     this.renderer.render(this.scene, this.camera);
     const { x, y, width, height } = this.viewport;
     let index = 0;
@@ -402,6 +412,6 @@ export class KnowledgeHologram {
     }
     // Static sky and settled knowledge do not need another GPU frame. Real
     // navigation, source replacement, resize and load changes invalidate it.
-    if (!this.orbitActive && this.camera.position.distanceToSquared(this.desiredCamera) < 0.000001 && this.lookAt.distanceToSquared(this.desiredLookAt) < 0.000001) this.loop.stop();
+    if (!this.voiceEnvelope.needsFrame && !this.orbitActive && this.camera.position.distanceToSquared(this.desiredCamera) < 0.000001 && this.lookAt.distanceToSquared(this.desiredLookAt) < 0.000001) this.loop.stop();
   }
 }

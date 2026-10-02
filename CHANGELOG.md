@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] - 2026-10-02
+
+- 우주 그래프와 메뉴바 팝업에 최근 마이크 입력 크기를 제한된 궤도선으로 연결합니다. 오래된 값·오류·중단·재생 중 입력을 제외하며 조용할 때는 표시하지 않습니다.
+- 진폭 평활화는 128점 버퍼를 재사용하고 안정되면 렌더링을 멈춥니다. 설정 그래프도 보이는 동안만 신호를 읽고, 숨김·복원은 기존 수명주기에 따릅니다.
+- 설치본 연속 음성 8턴과 문맥 질의 12회 근거를 보존합니다. WAV 생성·실제 재생과 ASR 7/8·사람의 청취를 구분하며 측정용 엔진 drain 대기는 명시적인 상한으로 설정합니다.
+
 ## [0.3.5] - 2026-10-02
 
 - 지식 그래프·사이드바·팝업을 같은 우주 팔레트로 정리하고 실제 관계를 별자리처럼 표시합니다. 메뉴·운영 버튼·중앙 버전과 지식 ID는 유지합니다.

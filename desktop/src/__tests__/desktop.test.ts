@@ -477,7 +477,7 @@ describe("background signal polling", () => {
       jobs: [],
       job_load: 0.9,
       context_sync: { mode: "async", waited: false },
-      voice: { available: true, rms: 0.2 },
+      voice: { available: true, state: "user_listen", updated_at: Math.floor(Date.now() / 1000), rms: 0.2 },
       background: {
         activity: 0.8,
         replyLoad: 0.25,

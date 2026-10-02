@@ -1,11 +1,13 @@
 {
-  "artifact_sha256": "6ff7b1d1488cbb6bc5bd24a5f38f174ea0bcf15fd5de601d864ff61019cf7407",
+  "artifact_sha256": "ba3580cff770bc438b624e51d60090c119424e9623b376796fd61a80d52b374d",
   "reviewer": "parent image review",
   "captures": [
     "alden-three-render-lifecycle.visual-check.1440x900.light.png",
     "alden-three-render-lifecycle.visual-check.2048x1320.dark.png"
   ],
-  "result": "두 화면에서 표시·프레임 요청·제한 루프·그리기·고요한 대기 및 숨김·복원 전이가 읽힌다. 노드·화살표·라벨의 겹침을 발견하지 않았다. 작성 내용은 한국어, 고정 Viewer UI는 영어다.",
+  "result": "검토한 두 테마에서 입력 진폭·카메라 평활화와 안정된 대기, 숨김·조회 중단·복원 흐름이 읽힌다. 노드·라벨·전이의 충돌을 발견하지 않았다. 작성 내용은 한국어, 고정 Viewer UI는 영어다.",
   "deterministic_checks": 9,
-  "browser_viewports": 4
+  "browser_viewports": 4,
+  "visual_review": "passed",
+  "correction_rounds": 0
 }

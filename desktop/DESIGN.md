@@ -1,5 +1,11 @@
 # Alden desktop design contract
 
+## 0.3.6 — sampled voice amplitude
+
+The current graph and popover project recent microphone RMS into one 128-vertex orbital envelope. RMS is unitless in [0,1]; only available, error-free `wake_listen`/`user_listen` status at most 3 seconds old is accepted. Stored input during `speaking` is not output amplitude. Runtime status is sampled every 2.5 seconds while the graph surface is visible, so this is a sampled envelope rather than a real-time spectrum. Actual output PCM amplitude remains an unverified follow-up.
+
+The displayed level follows `s += (1-exp(-dt/0.12))* (RMS-s)`, with `dt` in seconds and a 0.0001 settling tolerance. Strength is `sqrt(s)`, radial displacement is at most 0.12 scene units around radius 1.95, and opacity is at most 0.36. There is no autonomous phase or pulse. The same Float32Array, geometry and material are updated in place. Once camera and amplitude settle, the loop stops even at a positive level. Silence hides the envelope; hide/close/lock clears it, cancels polling and prevents late signals from restarting rendering. The decorative envelope has no graph ID or picking target. The previous core motion formulas below belong to the retained legacy component, not this graph.
+
 ## 2026-10-02 — knowledge observatory
 
 The user requested a universe atmosphere for the graph and sidebar. Both windows use a quiet navy observatory: a static distant star field, thin orbital guides and the actual knowledge relationships as constellations. The sidebar shares the night palette, legible silver labels and a clear selected menu. Its operating control and centered bottom version retain their behavior and location.

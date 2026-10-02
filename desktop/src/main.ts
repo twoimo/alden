@@ -58,6 +58,7 @@ import {
 import { mainPanelMarkup, renderBackground, renderEmergencyState,  renderRooms, settingsMarkup, voiceErrorMessage } from "./ui";
 import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 import { wireVoiceStart } from "./voice-controls";
+import { freshInputRms } from "./voice-amplitude";
 
 export { RuntimeSnapshotPoller, type PollTimerScheduler } from "./runtime-poller";
 
@@ -610,6 +611,7 @@ export async function bootSettings(
     app.dataset.state = degraded ? "unavailable" : "ready";
     if (hologram) {
       const graph = hologram;
+      graph.setSignals(snapshot.jobLoad, freshInputRms(snapshot));
       const focusSlots = new Map(parseKnowledgeGraph(graphPayload).nodes.map((node, index) => [node.id, index]));
       Object.defineProperty(window, "__knowledgeRenderCount", { configurable: true, get: () => graph.renderCount });
       let graphVersion = JSON.stringify(parseKnowledgeGraph(graphPayload));
@@ -623,7 +625,10 @@ export async function bootSettings(
         graph.replaceGraph(next);
         setText("knowledge-summary", `대화에서 찾은 연결 항목 ${next.nodes.length}개`);
       });
-      const lifecycle = new RenderLifecycle(graph, () => refresh.stop(), () => refresh.start());
+      const polling = new RuntimeSnapshotPoller(graph, dependencies.loadSnapshot);
+      const lifecycle = new RenderLifecycle(graph,
+        () => { try { refresh.stop(); } finally { polling.stop(); } },
+        () => { try { refresh.start(); } finally { polling.start(); } });
       graphLifecycle = lifecycle;
       lifecycle.setSurfaceVisible(navigation.current() === "memory");
       Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({

@@ -35,7 +35,7 @@
       "id": "lifecycle_active",
       "type": "active",
       "label": "프레임 요청",
-      "sublabel": "데이터·크기·입력 변화",
+      "sublabel": "데이터·입력 진폭·크기",
       "lane": "main",
       "col": 1,
       "width": 118,
@@ -57,7 +57,7 @@
       "id": "runtime_snapshot",
       "type": "active",
       "label": "지식 그래프 그리기",
-      "sublabel": "KnowledgeHologram.render",
+      "sublabel": "128점 진폭 평활화",
       "lane": "main",
       "col": 3,
       "width": 118,
@@ -89,7 +89,7 @@
       "id": "raf_stopped",
       "type": "waiting",
       "label": "프레임 취소",
-      "sublabel": "대기 중인 RAF 취소",
+      "sublabel": "RAF·신호 조회 정리",
       "lane": "visibility",
       "col": 1,
       "width": 118,
@@ -101,7 +101,7 @@
       "id": "moving",
       "from": "runtime_snapshot",
       "to": "raf_running",
-      "label": "카메라 이동 중",
+      "label": "카메라·진폭 변화",
       "labelAt": [
         479,
         232
@@ -111,7 +111,7 @@
       "id": "new_input",
       "from": "core_response",
       "to": "lifecycle_active",
-      "label": "데이터·조작·크기 변화",
+      "label": "입력 진폭·데이터 변화",
       "route": "top-channel"
     },
     {

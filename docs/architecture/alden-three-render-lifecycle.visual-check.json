@@ -7,8 +7,8 @@
   "visualReview": "pending",
   "artifact": {
     "path": "docs/architecture/alden-three-render-lifecycle.html",
-    "sha256": "6ff7b1d1488cbb6bc5bd24a5f38f174ea0bcf15fd5de601d864ff61019cf7407",
-    "bytes": 804156
+    "sha256": "ba3580cff770bc438b624e51d60090c119424e9623b376796fd61a80d52b374d",
+    "bytes": 804152
   },
   "state": {
     "detail": "read",
