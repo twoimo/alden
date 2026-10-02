@@ -57,8 +57,8 @@ VOICE_STATUS_SCHEMA_VERSION = 1
 WHISPER_MODEL_ID = "mlx-community/whisper-large-v3-turbo"
 QWEN3_TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
 QWEN3_TTS_PRECISION = "bf16"
-QWEN3_TTS_SPEAKER = "ryan"
-QWEN3_TTS_INSTRUCTION = "차분하고 절제된 집사 말투로, 낮고 또렷한 남성 음성으로 한국어를 읽으세요. 감정을 과장하지 마세요."
+QWEN3_TTS_SPEAKER = "sohee"
+QWEN3_TTS_INSTRUCTION = "차분하고 절제된 집사 말투로, 또렷한 한국어를 읽으세요. 감정을 과장하지 마세요."
 LOCAL_LLM_BASE_URL = "http://127.0.0.1:11234/v1"
 LOCAL_LLM_MAX_RESPONSE_BYTES = 64 * 1024
 LOCAL_LLM_ALLOWED_MODEL_IDS = frozenset((QWEN38_27B_MODEL_ID, FLASH_NEXT_MODEL_ID))
@@ -1657,10 +1657,11 @@ class MlxWhisperAdapter:
 
 
 def _tts_spoken_text(text: str) -> str:
-    """Expand a standalone integer answer for Korean pronunciation only.
+    """Expand a standalone integer answer for unambiguous Korean speech.
 
     Leave identifiers, dates, decimals, negatives and surrounding prose intact.
-    The conversation and visible answer always retain the original text.
+    Mark the answer as a number so short homophones aren't heard as unrelated
+    words. The conversation and visible answer retain the original text.
     """
     match = re.fullmatch(r"(0|[1-9][0-9]{0,3})입니다([.!]?)", text.strip())
     if match is None:
@@ -1671,7 +1672,44 @@ def _tts_spoken_text(text: str) -> str:
         digit, value = divmod(value, place)
         if digit:
             parts.append(("" if digit == 1 and unit else "일이삼사오육칠팔구"[digit - 1]) + unit)
-    return ("".join(parts) or "영") + "입니다" + match[2]
+    return "숫자는 " + ("".join(parts) or "영") + "입니다" + match[2]
+
+
+@contextmanager
+def _tts_decoder_cancellation(engine: Any, token: AbortToken):
+    """Attach cancellation at the real Transformers decoder boundary.
+
+    qwen-tts 0.1.1 drops arbitrary generation kwargs in its outer model's
+    forwarding dictionary. This instance-only hook reaches the talker itself,
+    preserving its existing stopping criteria and restoring its method even
+    when cancellation interrupts generation. The adapter serializes use.
+    """
+    talker = getattr(getattr(engine, "model", None), "talker", None)
+    original = getattr(talker, "generate", None)
+    if not callable(original):
+        raise RuntimeError("qwen3_tts_decoder_cancellation_unavailable")
+    had_override = "generate" in vars(talker)
+    previous_override = vars(talker).get("generate")
+
+    def stop_if_cancelled(_input_ids, _scores, **_kwargs):
+        token.raise_if_cancelled()
+        return False
+
+    def generate(*args, **kwargs):
+        token.raise_if_cancelled()
+        criteria = list(kwargs.get("stopping_criteria") or ())
+        criteria.append(stop_if_cancelled)
+        kwargs["stopping_criteria"] = criteria
+        return original(*args, **kwargs)
+
+    talker.generate = generate
+    try:
+        yield
+    finally:
+        if had_override:
+            talker.generate = previous_override
+        else:
+            delattr(talker, "generate")
 
 
 class Qwen3TtsAdapter:
@@ -1680,19 +1718,21 @@ class Qwen3TtsAdapter:
         self._engine: Any | None = None
         self._device = "cpu"
         self.audio_backend = audio_backend
+        self._synthesis_lock = threading.RLock()
 
     def close(self) -> None:
-        if self._engine is None:
-            return
-        import gc
-        import torch
-        if self._device == "mps":
-            torch.mps.synchronize()
-        self._engine = None
-        gc.collect()
-        if self._device == "mps":
-            torch.mps.empty_cache()
-            torch.mps.synchronize()
+        with self._synthesis_lock:
+            if self._engine is None:
+                return
+            import gc
+            import torch
+            if self._device == "mps":
+                torch.mps.synchronize()
+            self._engine = None
+            gc.collect()
+            if self._device == "mps":
+                torch.mps.empty_cache()
+                torch.mps.synchronize()
 
     def _load(self) -> Any:
         # Cached engines still allocate inference buffers on the next utterance.
@@ -1724,25 +1764,27 @@ class Qwen3TtsAdapter:
         return self._engine
 
     def synthesize(self, text: str, token: AbortToken) -> tuple[Any, int]:
-        token.raise_if_cancelled()
-        engine = self._load()
-        speakers = engine.get_supported_speakers() or []
-        if QWEN3_TTS_SPEAKER not in {str(speaker).casefold() for speaker in speakers}:
-            raise RuntimeError("qwen3_tts_speaker_unavailable")
-        try:
-            wavs, sample_rate = engine.generate_custom_voice(
-                text=_tts_spoken_text(text),
-                speaker=QWEN3_TTS_SPEAKER,
-                language="Korean",
-                instruct=QWEN3_TTS_INSTRUCTION,
-            )
-        finally:
-            if self._device == "mps":
-                import torch
-                torch.mps.empty_cache()  # The SDK returns CPU audio, not a GPU view.
-        audio = wavs[0] if isinstance(wavs, list) else wavs
-        token.raise_if_cancelled()
-        return audio, int(sample_rate)
+        with self._synthesis_lock:
+            token.raise_if_cancelled()
+            engine = self._load()
+            speakers = engine.get_supported_speakers() or []
+            if QWEN3_TTS_SPEAKER not in {str(speaker).casefold() for speaker in speakers}:
+                raise RuntimeError("qwen3_tts_speaker_unavailable")
+            try:
+                with _tts_decoder_cancellation(engine, token):
+                    wavs, sample_rate = engine.generate_custom_voice(
+                        text=_tts_spoken_text(text),
+                        speaker=QWEN3_TTS_SPEAKER,
+                        language="Korean",
+                        instruct=QWEN3_TTS_INSTRUCTION,
+                    )
+            finally:
+                if self._device == "mps":
+                    import torch
+                    torch.mps.empty_cache()  # The SDK returns CPU audio, not a GPU view.
+            audio = wavs[0] if isinstance(wavs, list) else wavs
+            token.raise_if_cancelled()
+            return audio, int(sample_rate)
 
     def write_wav(self, text: str, path: Path, token: AbortToken) -> dict[str, Any]:
         import wave

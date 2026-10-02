@@ -1,8 +1,8 @@
 {
   "artifact": {
     "path": "alden-voice-cancellation.html",
-    "sha256": "69aa8b0caeb2ad2ca6f86268b508ee98b903568ffe2bfeec1ffdd7dbe667cb3f",
-    "bytes": 808987
+    "sha256": "1f366d80c9091bf1f453a66514f01d535e01c6155c90ed9b1434e4897a4b72a8",
+    "bytes": 808989
   },
   "deterministic": {
     "quality": "showcase",

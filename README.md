@@ -1,8 +1,10 @@
-2026-10-02 설치·검색: [0.3.2 전달 검증](docs/architecture/alden-voice-retrieval-delivery-20261002.json). 설치본 35개 경로와 CI 4개 작업을 확인했고, 로컬 실모델의 방별 검색·주제 전환 5개 턴을 검증했다. 음성 파일 2개 중 첫 파일은 독립 STT 내용 검사를 통과하지 못했으며, 음성 품질·응답성과 사람 음성·wake·재생 검증은 미완료다.
+2026-10-02 음성 개선: [0.3.3 디코더 취소와 한국어 발음 검증](docs/architecture/alden-tts-cancellation-20261002.md). 같은 1.7B BF16 모델에서 한국어 원어 화자와 숫자 읽기를 검증하고, 실제 디코더 단계에서 취소를 연결했다. 사람 음성·wake·재생과 전체 응답성 검증은 미완료다.
+
+2026-10-02 설치·검색: [0.3.2 전달 검증](docs/architecture/alden-voice-retrieval-delivery-20261002.json). 설치본 35개 경로와 CI 4개 작업을 확인했고, 로컬 실모델의 방별 검색·주제 전환 5개 턴을 검증했다. 0.3.2 첫 음성 파일의 내용 검사 실패를 위 음성 개선의 기준 사례로 사용했다.
 
 2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 파일 생성 성공과 발음·내용 품질 검증은 구분한다.
 
-Alden Desktop 0.3.2 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
+Alden Desktop 0.3.3 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
 
 History reads all messages available in the local Kakao DB through fixed-anchor pages; it does not restore messages absent from that DB. Confirmed voice text is stored locally by session. The local corpus now stores every message in a fixed DB+WAL snapshot with full-text search, scoped numeric identities, resumable batches, and atomic publication. Dense/model-assisted retrieval remains a separate capability and is not inferred from a complete raw corpus. An initial real isolated snapshot contained 2,034,371 messages in 1,181 rooms with messages (1,182 roster entries). It produced a 1,913,323,520-byte published store with a successful quick check; this is a dated data snapshot, not a fixed current total. Existing foreground automation workers and send gates are preserved; catalog changes take effect when automation restarts.
 

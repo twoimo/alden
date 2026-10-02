@@ -579,16 +579,19 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
     def test_korean_integer_pronunciation_preserves_other_meanings(self):
         from alden_voice import _tts_spoken_text
         for original, spoken in (("0입니다.","영입니다."),("4입니다.","사입니다."),("12입니다.","십이입니다."),("100입니다!","백입니다!"),("1234입니다.","천이백삼십사입니다.")):
-            self.assertEqual(_tts_spoken_text(original),spoken)
+            self.assertEqual(_tts_spoken_text(original),"숫자는 " + spoken)
         for original in ("0012입니다.","-12입니다.","1.2입니다.","2026-10-01입니다.","답은 12입니다.","https://example.com/12", "10000입니다."):
             self.assertEqual(_tts_spoken_text(original),original)
 
-    def test_local_backend_keeps_bf16_and_ryan_without_loading_twice(self):
+    def test_local_backend_keeps_bf16_and_korean_speaker_without_loading_twice(self):
         import types
         for platform, available, expected in (("darwin", True, "mps"), ("darwin", False, "cpu"), ("linux", True, "cpu")):
             with self.subTest(platform=platform, available=available), TemporaryDirectory() as temporary:
                 engine = mock.Mock()
-                engine.get_supported_speakers.return_value = ["aiden", "Ryan", "vivian"]
+                engine.get_supported_speakers.return_value = ["aiden", "Ryan", "Sohee", "vivian"]
+                class Talker:
+                    def generate(self, **_kwargs): return None
+                engine.model = types.SimpleNamespace(talker=Talker())
                 engine.generate_custom_voice.return_value = ([[0.0, 0.25]], 24000)
                 factory = mock.Mock(return_value=engine)
                 mps_available = mock.Mock(return_value=available)
@@ -609,7 +612,7 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
                     self.assertEqual(admission.call_count, 2)
                     self.assertEqual(engine.generate_custom_voice.call_count, 2)
                     args = engine.generate_custom_voice.call_args.kwargs
-                    self.assertEqual((args["speaker"], args["language"]), ("ryan", "Korean"))
+                    self.assertEqual((args["speaker"], args["language"]), ("sohee", "Korean"))
                     self.assertIn("절제", args["instruct"])
                     self.assertEqual(mps_available.call_count, int(platform == "darwin"))
                     self.assertEqual(clear_cache.call_count, 2 if expected == "mps" else 0)
@@ -618,7 +621,7 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
                     else:
                         set_fraction.assert_not_called()
 
-    def test_missing_ryan_does_not_silently_change_product_voice(self):
+    def test_missing_korean_speaker_does_not_silently_change_product_voice(self):
         engine = mock.Mock()
         engine.get_supported_speakers.return_value = ["vivian"]
         adapter = Qwen3TtsAdapter()
@@ -635,14 +638,21 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
         fake_mod = types.ModuleType("qwen_tts")
 
         class FakeModel:
+            def __init__(self):
+                class Talker:
+                    def generate(self, **kwargs):
+                        for criterion in kwargs.get("stopping_criteria", []): criterion(None, None)
+                self.model = types.SimpleNamespace(talker=Talker())
+
             @classmethod
             def from_pretrained(cls, _model, **_kwargs):
                 return cls()
 
             def get_supported_speakers(self):
-                return ["ryan"]
+                return ["sohee"]
 
             def generate_custom_voice(self, **_kwargs):
+                self.model.talker.generate()
                 return [[0.0, 0.25, -0.25, 0.0]], 24000
 
         fake_mod.Qwen3TTSModel = FakeModel
@@ -684,6 +694,11 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
         fake_mod = types.ModuleType("qwen_tts")
 
         class FakeModel:
+            def __init__(self):
+                class Talker:
+                    def generate(self, **_kwargs): return None
+                self.model = types.SimpleNamespace(talker=Talker())
+
             @classmethod
             def from_pretrained(cls, model, **kwargs):
                 inst = cls()
@@ -692,7 +707,7 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
                 return inst
 
             def get_supported_speakers(self):
-                return ["ryan"]
+                return ["sohee"]
 
             def generate_custom_voice(self, **kwargs):
                 self.generated = kwargs
@@ -714,7 +729,7 @@ class Qwen3TtsAdapterApiTests(unittest.TestCase):
         self.assertEqual(adapter._engine.loaded_model, QWEN3_TTS_MODEL_ID)
         self.assertTrue(adapter._engine.kwargs["local_files_only"])
         self.assertEqual(adapter._engine.generated["language"], "Korean")
-        self.assertEqual(adapter._engine.generated["speaker"], "ryan")
+        self.assertEqual(adapter._engine.generated["speaker"], "sohee")
 
     def test_load_refuses_before_importing_tts_when_memory_is_low(self):
         from unittest import mock
@@ -888,7 +903,11 @@ class VoiceMemoryBudgetTests(unittest.TestCase):
 
     def test_cached_tts_rechecks_pressure_before_next_generation(self):
         engine = mock.Mock()
-        engine.get_supported_speakers.return_value = ["ryan"]
+        engine.get_supported_speakers.return_value = ["sohee"]
+        import types
+        class Talker:
+            def generate(self, **_kwargs): return None
+        engine.model = types.SimpleNamespace(talker=Talker())
         engine.generate_custom_voice.return_value = ([[0.0, 0.25]], 24000)
         adapter = Qwen3TtsAdapter()
         adapter._engine = engine

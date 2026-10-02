@@ -148,7 +148,7 @@
       "from": "turn",
       "to": "tts",
       "y": 530,
-      "label": "이전 재생 중단·새 발화 보존",
+      "label": "합성·재생 중단·새 발화 보존",
       "variant": "security"
     },
     {

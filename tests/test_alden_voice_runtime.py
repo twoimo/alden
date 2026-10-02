@@ -30,6 +30,115 @@ from alden_voice import (  # noqa: E402
 from alden_abort import AbortController, AldenCancelled  # noqa: E402
 
 
+class VoiceTtsDecoderCancellationTests(unittest.TestCase):
+    def engine(self, decode):
+        class Talker:
+            def generate(self, **kwargs):
+                return decode(kwargs)
+        talker = Talker()
+        # Reproduce qwen-tts 0.1.1: the public wrapper doesn't forward the
+        # caller's arbitrary kwargs; only the real talker sees its criteria.
+        class Engine:
+            model = types.SimpleNamespace(talker=talker)
+            def get_supported_speakers(self):
+                return ["ryan", "sohee"]
+            def generate_custom_voice(self, **_kwargs):
+                existing = lambda *_a, **_k: False
+                self.model.talker.generate(stopping_criteria=[existing])
+                return [[0.1, -0.1]], 24000
+        return Engine(), talker
+
+    def test_cancellation_during_decode_preserves_previous_wav_and_method(self):
+        with TemporaryDirectory() as td:
+            root = Path(td); output = root / "speech.wav"; output.write_bytes(b"previous")
+            token = AbortController(root).token(); visited = []
+            def decode(kwargs):
+                self.assertEqual(len(kwargs["stopping_criteria"]), 2)
+                for step in range(3):
+                    for criterion in kwargs["stopping_criteria"]:
+                        criterion(None, None)
+                    visited.append(step)
+                    token.cancel()
+            engine, talker = self.engine(decode); adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "_load", return_value=engine):
+                with self.assertRaises(AldenCancelled):
+                    adapter.write_wav("4입니다.", output, token)
+            self.assertEqual(visited, [0]); self.assertEqual(output.read_bytes(), b"previous")
+            self.assertNotIn("generate", vars(talker))
+            self.assertEqual(list(root.glob(".alden-tts-*")), [])
+
+    def test_decoder_failure_restores_method_and_next_turn_uses_new_token(self):
+        with TemporaryDirectory() as td:
+            controller = AbortController(Path(td)); first = controller.token()
+            fail = True
+            def decode(kwargs):
+                for criterion in kwargs["stopping_criteria"]:
+                    criterion(None, None)
+                if fail:
+                    raise RuntimeError("codec_failure")
+            engine, talker = self.engine(decode); adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "_load", return_value=engine):
+                with self.assertRaisesRegex(RuntimeError, "codec_failure"):
+                    adapter.synthesize("4입니다.", first)
+                self.assertNotIn("generate", vars(talker))
+                first.cancel(); fail = False
+                audio, rate = adapter.synthesize("12입니다.", controller.token())
+            self.assertEqual(rate, 24000); self.assertEqual(audio, [0.1, -0.1])
+            self.assertNotIn("generate", vars(talker))
+
+    def test_unsupported_decoder_does_not_generate_uncancellable_audio(self):
+        with TemporaryDirectory() as td:
+            engine = types.SimpleNamespace(get_supported_speakers=lambda: ["ryan", "sohee"], generate_custom_voice=mock.Mock())
+            adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "_load", return_value=engine):
+                with self.assertRaisesRegex(RuntimeError, "qwen3_tts_decoder_cancellation_unavailable"):
+                    adapter.synthesize("4입니다.", AbortController(Path(td)).token())
+            engine.generate_custom_voice.assert_not_called()
+
+    def test_global_stop_latches_during_decode_and_requires_fresh_resumed_token(self):
+        with TemporaryDirectory() as td:
+            controller = AbortController(Path(td)); old = controller.token(); stop = True
+            def decode(kwargs):
+                if stop: controller.abort("test_global_stop")
+                for criterion in kwargs["stopping_criteria"]:
+                    criterion(None, None)
+            engine, talker = self.engine(decode); adapter = Qwen3TtsAdapter()
+            with mock.patch.object(adapter, "_load", return_value=engine):
+                with self.assertRaises(AldenCancelled):
+                    adapter.synthesize("4입니다.", old)
+                self.assertTrue(controller.token().is_cancelled())
+                controller.resume_after_human_action(); self.assertTrue(old.is_cancelled())
+                stop = False
+                self.assertEqual(adapter.synthesize("12입니다.", controller.token())[1], 24000)
+            self.assertNotIn("generate", vars(talker))
+
+    def test_overlapping_turns_do_not_share_a_cancelled_decoder_hook(self):
+        with TemporaryDirectory() as td:
+            controller = AbortController(Path(td)); old = controller.token(); fresh = controller.token()
+            entered = threading.Event(); release = threading.Event(); second_started = threading.Event()
+            results = []; calls = []
+            def decode(kwargs):
+                calls.append(threading.current_thread().name)
+                if len(calls) == 1:
+                    entered.set(); self.assertTrue(release.wait(1))
+                for criterion in kwargs["stopping_criteria"]:
+                    criterion(None, None)
+            engine, talker = self.engine(decode); adapter = Qwen3TtsAdapter()
+            def run(token, started=None):
+                if started is not None: started.set()
+                try: results.append(adapter.synthesize("4입니다.", token))
+                except AldenCancelled: results.append("cancelled")
+            with mock.patch.object(adapter, "_load", return_value=engine):
+                one = threading.Thread(target=run, args=(old,), name="old")
+                two = threading.Thread(target=run, args=(fresh,second_started), name="new")
+                one.start(); self.assertTrue(entered.wait(1)); two.start(); self.assertTrue(second_started.wait(1))
+                old.cancel(); release.set(); one.join(1); two.join(1)
+                self.assertFalse(one.is_alive()); self.assertFalse(two.is_alive())
+            self.assertEqual(calls, ["old", "new"])
+            self.assertEqual(results, ["cancelled", ([0.1,-0.1],24000)])
+            self.assertNotIn("generate", vars(talker))
+
+
 class VoiceWavCommitTests(unittest.TestCase):
     def test_conversion_cancellation_preserves_existing_wav_without_numpy(self):
         with TemporaryDirectory() as temporary:

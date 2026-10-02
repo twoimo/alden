@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-10-02
+
+- 취소 신호를 실제 Qwen 음성 디코더의 토큰 생성 단계에 연결합니다. 원래 중단 조건과 메서드는 유지·복원하고, 합성과 해제를 직렬화해 이전 턴의 취소가 다음 턴에 섞이지 않게 합니다.
+- 같은 Qwen3-TTS 1.7B BF16 가중치에서 기본 화자를 한국어 원어 화자 Sohee로 명시하고, 성별 지시 없이 차분한 집사 말투를 유지합니다.
+- 단독 정수 답변은 숫자임을 분명하게 읽으며 화면·대화 기록의 원문은 유지합니다. 날짜·식별자·음수·소수·문장 속 숫자는 기존 의미를 보존합니다.
+
 ## [0.3.2] - 2026-10-02
 
 - 원본 관찰 근거의 필수 필드를 보존해 인물·방 노드가 RRF 검색 필터에서 빠지는 문제를 수정했습니다. 숫자 방 ID를 계정 범위의 방 키로 연결합니다.
