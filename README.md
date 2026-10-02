@@ -1,4 +1,6 @@
-2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 실제 Whisper와 Qwen1.7B BF16 CPU/MPS, 두 턴의 STT→27B→TTS파일을 검증했다. 사람 음성·wake·재생·숫자 발음 품질은 미완료다.
+2026-10-02 설치·검색: [0.3.2 전달 검증](docs/architecture/alden-voice-retrieval-delivery-20261002.json). 설치본 35개 경로와 CI 4개 작업을 확인했고, 로컬 실모델의 방별 검색·주제 전환 5개 턴을 검증했다. 음성 파일 2개 중 첫 파일은 독립 STT 내용 검사를 통과하지 못했으며, 음성 품질·응답성과 사람 음성·wake·재생 검증은 미완료다.
+
+2026-10-01 음성 추가: [MPS·메모리 진입 수정과 실제 합성 실행](docs/architecture/alden-voice-mps-20261001.md). 파일 생성 성공과 발음·내용 품질 검증은 구분한다.
 
 Alden Desktop 0.3.2 includes the redesigned workspaces and reorganizes the wide window around a 3D knowledge graph and four companion pages: KakaoTalk history, voice history, DB updates, and Settings. Settings opens with room automation CRUD, a contextual editor, answer choices, and voice controls. The sidebar footer contains one operating control and a centered version. Left-click opens the 560×420 graph; right-click opens the wide window.
 
