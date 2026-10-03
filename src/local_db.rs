@@ -27,6 +27,27 @@ pub struct LocalChat {
     pub display_name: String,
 }
 
+/// Browser histories use decimal strings so JavaScript never rounds IDs.
+/// System rows with nonpositive IDs cannot be passed to `history_page`.
+pub fn history_room_items(mut chats: Vec<LocalChat>) -> Result<Vec<serde_json::Value>> {
+    chats.retain(|chat| chat.chat_id > 0);
+    chats.sort_by(|left, right| {
+        right
+            .last_updated_at
+            .cmp(&left.last_updated_at)
+            .then_with(|| left.chat_id.cmp(&right.chat_id))
+    });
+    chats
+        .into_iter()
+        .map(|chat| {
+            let mut value = serde_json::to_value(&chat)?;
+            value["chat_id"] = json!(chat.chat_id.to_string());
+            value["last_log_id"] = json!(chat.last_log_id.to_string());
+            Ok(value)
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalGroupChat {
     pub chat_id: i64,
@@ -52,6 +73,33 @@ const MAX_CHAT_INDEX_ROWS: usize = 10_000;
 #[cfg(test)]
 mod history_tests {
     use super::*;
+
+    #[test]
+    fn history_room_wire_ids_are_exact_and_readable_rooms_are_recent_first() {
+        let room = |chat_id, last_updated_at| LocalChat {
+            chat_id,
+            last_updated_at,
+            chat_type: 1,
+            chat_name: String::new(),
+            database_chat_name: None,
+            active_members_count: 2,
+            last_log_id: 9_007_199_254_740_999,
+            unread_count: 0,
+            display_name: String::new(),
+        };
+        let rows = history_room_items(vec![
+            room(-1, 100),
+            room(42, 5),
+            room(9_007_199_254_740_997, 10),
+            room(0, 200),
+        ])
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["chat_id"], "9007199254740997");
+        assert_eq!(rows[0]["last_log_id"], "9007199254740999");
+        assert_eq!(rows[1]["chat_id"], "42");
+        assert_eq!(rows[0]["last_updated_at"], 10);
+    }
     fn fixture() -> Connection {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE NTChatMessage(logId INTEGER PRIMARY KEY,chatId INTEGER,authorId INTEGER,message TEXT,attachment TEXT,type INTEGER,sentAt INTEGER); CREATE TABLE NTUser(userId INTEGER,linkId INTEGER,displayName TEXT,friendNickName TEXT,nickName TEXT);").unwrap();

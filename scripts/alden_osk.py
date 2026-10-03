@@ -257,6 +257,16 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         managed = checkpoint["managed"]
         nodes = {str(n["id"]): n for n in source.get("nodes", []) if not str(n["id"]).startswith(("message:", "msg:"))}
         titles = {key: managed.get(key, {}).get("title") or _title(node, secrets) for key, node in nodes.items()}
+        # Build incident lists once, retaining input order and one copy of a
+        # self-edge. This is local to this tick; edits are re-read on every tick.
+        incident = {key: [] for key in nodes}
+        for edge in source.get("edges", []):
+            left, right = edge.get("source"), edge.get("target")
+            if isinstance(left, str) and left in incident:
+                incident[left].append(edge)
+            if right != left and isinstance(right, str) and right in incident:
+                incident[right].append(edge)
+        revisions = {}
         hub = home / "vault/00_Scope/Alden/Alden.md"
         if not hub.exists():
             write.create_node("Alden", "올든의 대화에서 얻은 지식과 그 출처", "올든이 관리하는 로컬 대화 지식입니다.", "agent", space="00_Scope/Alden")
@@ -268,9 +278,9 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             old = managed.get(key)
             title = old["title"] if old else titles[key]
             titles[key] = title
-            relations = [e for e in source.get("edges", []) if e.get("source") == key or e.get("target") == key]
-            body = _body(node, relations, titles, secrets)
+            body = _body(node, incident[key], titles, secrets)
             revision = _revision(node, body)
+            revisions[key] = revision
             space=old.get('space','00_Scope/Alden') if old else '00_Scope/Alden'
             path = home / 'vault' / space / f"{title}.md"
             if old is None and not path.exists():
@@ -332,7 +342,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         checkpoint.update({"engine": VERSION, "commit": COMMIT, "generation": checkpoint.get("generation", 0) + 1,
                            "synced_at": int(time.time()), "source_indexed_at": source.get("indexed_at", 0),"layout_pending":layout_pending,
                            "stale": bool(source.get("stale")), "changed": changed, "moved": moved, "conflicts": conflicts,
-                           "pending": sum(managed.get(k, {}).get("revision") != _revision(n, _body(n, [e for e in source.get("edges", []) if k in (e.get("source"), e.get("target"))], titles, secrets)) for k, n in nodes.items()),
+                           "pending": sum(managed.get(k, {}).get("revision") != (revisions[k] if k in revisions else _revision(n, _body(n, incident[k], titles, secrets))) for k, n in nodes.items()),
                            "edges": [e for e in source.get("edges", []) if e.get("source") in active and e.get("target") in active]})
         _save(checkpoint_path, checkpoint)
         return {"ok": True, **{k: checkpoint[k] for k in ("engine", "synced_at", "changed", "pending", "conflicts", "stale")}}

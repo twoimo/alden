@@ -4,6 +4,7 @@ import { AnimationLoop } from "../core/animation-loop";
 import type { AnimationLoopDiagnostics } from "../core/animation-loop";
 import { createCosmosBackdrop } from "./cosmos";
 import { pickKnowledgeSphere } from "./picking";
+import { overviewCameraDistance } from './camera-fit';
 import { VoiceEnvelope } from "./voice-envelope";
 import { VoiceAmplitudePoller, type VoiceStatusLoader } from "../voice-amplitude-poller";
 import type { VoiceAmplitudeSource } from "../voice-amplitude";
@@ -75,6 +76,8 @@ export class KnowledgeHologram {
   private rootNodeId = '';
   private readonly labels = new Map<string, HTMLSpanElement>();
   private readonly labelBounds: Array<{ width: number; left: number; top: number; visible: boolean }> = [];
+  private readonly labelOverlays: HTMLElement[] = [];
+  private readonly excludedLabelBounds: Array<{ left:number; top:number; right:number; bottom:number }> = [];
   private readonly projected = new THREE.Vector3();
   private readonly desiredCamera = new THREE.Vector3(0, 0, 5.2);
   private readonly desiredLookAt = new THREE.Vector3();
@@ -135,6 +138,11 @@ export class KnowledgeHologram {
       ? null
       : new ResizeObserver(() => this.resize());
     this.resizeObserver?.observe(canvas);
+    const workspace = canvas.closest('.knowledge-section, .alden-panel');
+    for (const selector of ['.knowledge-heading, .mini-graph-heading', '.knowledge-focus-card', '.knowledge-hologram-toolbar, .mini-graph-title']) {
+      const overlay = workspace?.querySelector<HTMLElement>(selector);
+      if (overlay) { this.labelOverlays.push(overlay); this.excludedLabelBounds.push({left:0,top:0,right:0,bottom:0}); this.resizeObserver?.observe(overlay); }
+    }
     this.resize();
   }
 
@@ -210,7 +218,7 @@ export class KnowledgeHologram {
     const ids = new Set(sorted.map(node => node.id));
     for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
     this.view = this.drilldown.replaceGraph(graph);
-    if (!focus || !ids.has(focus)) { this.desiredCamera.set(0, 0, 5.2); this.desiredLookAt.set(0, 0, 0); }
+    if (!focus || !ids.has(focus)) this.resetOverviewCamera();
     this.rebuildGraph();
     if (focus && ids.has(focus)) this.focusCamera(focus);
     this.canvas.hidden = graph.nodes.length === 0;
@@ -253,8 +261,7 @@ export class KnowledgeHologram {
     if (this.disposed) return this.view;
     this.view = this.drilldown.reset();
     this.rebuildGraph();
-    this.desiredCamera.set(0, 0, 5.2);
-    this.desiredLookAt.set(0, 0, 0);
+    this.resetOverviewCamera();
     this.invalidateFrame();
     this.notifyView();
     return this.view;
@@ -266,8 +273,7 @@ export class KnowledgeHologram {
     this.rebuildGraph();
     if (this.view.focusId) this.focusCamera(this.view.focusId);
     else {
-      this.desiredCamera.set(0, 0, 5.2);
-      this.desiredLookAt.set(0, 0, 0);
+      this.resetOverviewCamera();
       this.invalidateFrame();
     }
     this.notifyView();
@@ -433,20 +439,40 @@ export class KnowledgeHologram {
     else this.reset();
   };
 
+  private resetOverviewCamera(): void {
+    const points = this.view.nodes.flatMap(node => {
+      const point = this.positions.get(node.id);
+      return point ? [point] : [];
+    });
+    this.desiredCamera.set(0, 0, overviewCameraDistance(points, this.viewport.width, this.viewport.height, this.camera.fov));
+    this.desiredLookAt.set(0, 0, 0);
+  }
+
   private resize(): void {
     if (this.disposed) return;
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width || 640));
     const height = Math.max(1, Math.floor(rect.height || 320));
     this.renderer.setSize(width, height, false);
-    const top = this.layoutMode==='popover'?58:width < 650 ? 246 : 84;
+    const top = this.layoutMode==='popover'?58:width < 650 ? 130 : 48;
     const bottom=this.layoutMode==='popover'?42:80;
     this.viewport = { x: 28, y: Math.min(top, height / 2), width: Math.max(1, width - 56), height: Math.max(1, height - Math.min(top, height / 2) - bottom) };
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
+    if (!this.view.focusId) this.resetOverviewCamera();
     for (const orb of this.orbMeshes.values()) orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
     for (const box of this.labelBounds) box.width = 0;
+    // Overlay geometry is read only on resize/selection layout changes.
+    // Labels remain available through the keyboard list when visually covered.
+    const parent = this.canvas.parentElement?.getBoundingClientRect();
+    if (parent) for (let overlay = 0; overlay < this.labelOverlays.length; overlay++) {
+      const element = this.labelOverlays[overlay], bounds = this.excludedLabelBounds[overlay];
+      if (element.hidden) { bounds.right = bounds.left = 0; continue; }
+      const rect = element.getBoundingClientRect();
+      bounds.left = rect.left - parent.left - 6; bounds.top = rect.top - parent.top - 6;
+      bounds.right = rect.right - parent.left + 6; bounds.bottom = rect.bottom - parent.top + 6;
+    }
     this.invalidateFrame();
   }
 
@@ -482,6 +508,9 @@ export class KnowledgeHologram {
       const offset = this.orbMeshes.has(id) ? Math.min(54, radius * height / (2 * Math.tan(this.camera.fov * Math.PI / 360) * Math.max(.1, this.camera.position.distanceTo(position))) + 8) : 10;
       box.top = Math.min(y + height - 24, y + (1 - this.projected.y) * height / 2 + offset);
       let collision = false;
+      for (const overlay of this.excludedLabelBounds) {
+        if (overlay.right > overlay.left && box.left < overlay.right && box.left + box.width > overlay.left && box.top < overlay.bottom && box.top + 24 > overlay.top) { collision = true; break; }
+      }
       for (let previous = 0; previous < index - 1; previous++) {
         const other = this.labelBounds[previous];
         if (other.visible && box.left < other.left + other.width + 5 && box.left + box.width + 5 > other.left && box.top < other.top + 24 && box.top + 24 > other.top) {

@@ -61,6 +61,27 @@ def percentile(values: list[float], fraction: float) -> float | None:
     return round(sorted(values)[max(0, math.ceil(len(values) * fraction) - 1)], 6)
 
 
+def observed_decode_rate(metrics: dict[str, object]) -> float | None:
+    """Reported completion tokens after the first / observed model decode time.
+
+    Includes the model's reasoning tokens when they are in completion usage;
+    this is not visible Korean characters/s or speaker throughput.
+    """
+    usage = metrics.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    tokens = usage.get("completion_tokens")
+    first = metrics.get("first_model_token_seconds")
+    elapsed = metrics.get("elapsed_seconds")
+    if type(tokens) is not int or tokens < 2:
+        return None
+    if any(type(value) not in (int, float) or not math.isfinite(value) for value in (first, elapsed)):
+        return None
+    if first < 0 or elapsed <= first:
+        return None
+    return round((tokens - 1) / (elapsed - first), 6)
+
+
 def load_snapshot() -> dict[str, object]:
     """Read concurrent host load and engine allocator scope, without inference."""
     with urllib.request.urlopen("http://127.0.0.1:11234/metrics", timeout=2) as response:
@@ -156,6 +177,7 @@ def main() -> int:
                 normalized = reply.replace(",", "").replace(" ", "")
                 ok = bool(reply) and all(word in normalized for word in case["expected"])
                 row = {"repeat": repeat, "case": case["id"], "elapsed_seconds": round(time.perf_counter() - started, 6), "reply": reply, "error": error, "expected_fact_present": ok, "adapter_metrics": getattr(adapter, "last_metrics", {}), **observed}
+                row["observed_decode_tokens_per_second"] = observed_decode_rate(row["adapter_metrics"]) if not error else None
                 row["load_before"] = load_before
                 row["load_after"] = load_snapshot()
                 rows.append(row)
@@ -165,6 +187,7 @@ def main() -> int:
 
     elapsed = [row["elapsed_seconds"] for row in rows]
     first_visible = [row["adapter_metrics"]["first_visible_token_seconds"] for row in rows if "first_visible_token_seconds" in row["adapter_metrics"]]
+    decode_rates = [row["observed_decode_tokens_per_second"] for row in rows if row["observed_decode_tokens_per_second"] is not None]
     receipt = {
         "schema_version": 1,
         "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -180,6 +203,7 @@ def main() -> int:
         "adapter_error_count": sum(bool(row["error"]) for row in rows),
         "full_answer_seconds": {"p50": round(statistics.median(elapsed), 6) if elapsed else None, "p95_nearest_rank": percentile(elapsed, .95)},
         "first_visible_token_seconds": {"samples": len(first_visible), "p50": percentile(first_visible, .5), "p95_nearest_rank": percentile(first_visible, .95)},
+        "observed_decode_tokens_per_second": {"samples": len(decode_rates), "p50": round(statistics.median(decode_rates), 6) if decode_rates else None, "p95_nearest_rank": percentile(decode_rates, .95), "scope": "reported completion tokens minus first over adapter-observed decode window; includes reported reasoning; excludes prompt tokens"},
         "socket_connections": sockets,
         "rows": rows,
         "interrupted": interrupted,

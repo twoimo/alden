@@ -8,6 +8,54 @@ beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('complete local histories', () => {
+  it('collapses system metadata while preserving its original and a user JSON message', async () => {
+    const text='{"feedType":2,"member":{"nickName":"예시"}}';
+    const load=vi.fn<typeof fetchSettingsAction>(async action=>action==='history-rooms'
+      ? {ok:true,rooms:[{chat_id:'1',chat_name:'기록'}]}
+      : {ok:true,anchor_log_id:'2',total:2,next_before:null,messages:[{id:'1',type:0,text},{id:'2',type:1,text}]});
+    const views=wireConversationViews(load);views.select('conversation');await settle();
+    const rows=document.querySelectorAll('.message-row');
+    expect(rows[0].querySelector('details')?.open).toBe(false);
+    expect(rows[0].querySelector('.message-text')?.textContent).toBe(text);
+    expect(rows[0].querySelector('.message-author')?.textContent).toBe('대화방');
+    expect(rows[1].querySelector('details')).toBeNull();
+    expect(rows[1].querySelector('.message-text')?.textContent).toBe(text);views.dispose();
+  });
+  it('opens the latest room and keeps the last message visible when pagination appears', async () => {
+    const load=vi.fn<typeof fetchSettingsAction>(async(action)=>action==='history-rooms'
+      ? {ok:true,rooms:[{chat_id:'1',chat_name:'최근 대화'}]}
+      : {ok:true,anchor_log_id:'9',next_before:'8',total:9,messages:[{id:'9',text:'최신 원문'}]});
+    const views=wireConversationViews(load);views.select('conversation');await settle();
+    expect(load.mock.calls.some(([action,args])=>action==='history-messages'&&args?.chatId==='1')).toBe(true);
+    expect(document.getElementById('conversation-placeholder')!.hidden).toBe(true);
+    expect(document.getElementById('chat-message-list')!.textContent).toContain('최신 원문');
+    expect(document.getElementById('conversation-history-older')!.hidden).toBe(false);views.dispose();
+  });
+  it('shows a failed empty reader and retries once instead of retaining a loading screen', async () => {
+    let available=false;
+    const load=vi.fn<typeof fetchSettingsAction>(async(action)=>action==='history-rooms'
+      ? available?{ok:true,rooms:[{chat_id:'1',chat_name:'방'}]}:{ok:false}
+      : {ok:true,anchor_log_id:'1',next_before:null,total:1,messages:[{id:'1',text:'복구한 기록'}]});
+    const views=wireConversationViews(load);views.select('conversation');await settle();
+    expect(document.getElementById('conversation-placeholder')!.textContent).toContain('불러오지 못했습니다');
+    expect(document.getElementById('conversation-retry')!.hidden).toBe(false);
+    available=true;document.getElementById('conversation-retry')!.click();await settle();
+    expect(load.mock.calls.filter(([action])=>action==='history-rooms')).toHaveLength(2);
+    expect(document.getElementById('conversation-placeholder')!.hidden).toBe(true);views.dispose();
+  });
+  it('refreshes a revisited voice session without duplicating old turns or losing the older cursor', async () => {
+    let revision=1;
+    const load=vi.fn<typeof fetchSettingsAction>(async(action)=>action==='voice-history-sessions'
+      ? {ok:true,items:[{id:'session',title:'음성 기록'}]}
+      : {ok:true,next:revision===1?5:10,items:[{turn_id:1,role:'user',content:'첫 발화'},...(revision===2?[{turn_id:2,role:'assistant',content:'새 답변'}]:[])]});
+    const views=wireConversationViews(load);views.select('voice');await settle();
+    revision=2;views.select('settings');views.select('voice');await settle();
+    expect(document.getElementById('voice-message-list')!.textContent?.match(/첫 발화/g)).toHaveLength(1);
+    expect(document.getElementById('voice-message-list')!.textContent).toContain('새 답변');
+    document.getElementById('voice-history-older')!.click();await settle();
+    const calls=load.mock.calls.filter(([action])=>action==='voice-history-messages');
+    expect(JSON.parse(calls.at(-1)![1]!.query!).before).toBe(5);views.dispose();
+  });
   it('discards a late room response and reads the new room with string IDs', async () => {
     let release!: (data: Record<string, unknown>) => void;
     const load = vi.fn<typeof fetchSettingsAction>(async (action, input = {}) => {

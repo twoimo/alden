@@ -67,20 +67,20 @@ export function settingsMarkup(): string {
 <button id="settings-tab-memory" class="settings-nav-item" type="button" role="tab" data-settings-view="memory" aria-controls="settings-page-memory" aria-selected="true" tabindex="0"><canvas data-orb-role="graph" data-orb-size="20" aria-hidden="true"></canvas><span>지식 그래프</span></button>
 <button id="settings-tab-conversation" class="settings-nav-item" type="button" role="tab" data-settings-view="conversation" aria-controls="settings-page-conversation" aria-selected="false" tabindex="-1"><i data-lucide="MessagesSquare" aria-hidden="true"></i><span>카카오톡 대화</span></button>
 <button id="settings-tab-voice" class="settings-nav-item" type="button" role="tab" data-settings-view="voice" aria-controls="settings-page-voice" aria-selected="false" tabindex="-1"><canvas data-orb-role="voice" data-orb-size="20" aria-hidden="true"></canvas><span>음성 대화</span></button>
-<button id="settings-tab-history" class="settings-nav-item" type="button" role="tab" data-settings-view="history" aria-controls="settings-page-history" aria-selected="false" tabindex="-1"><canvas data-orb-role="database" data-orb-size="20" aria-hidden="true"></canvas><span>DB 갱신</span></button>
+<button id="settings-tab-history" class="settings-nav-item" type="button" role="tab" data-settings-view="history" aria-controls="settings-page-history" aria-selected="false" tabindex="-1"><canvas data-orb-role="database" data-orb-size="20" aria-hidden="true"></canvas><span>기억 정리</span></button>
 <button id="settings-tab-settings" class="settings-nav-item" type="button" role="tab" data-settings-view="settings" aria-controls="settings-page-settings" aria-selected="false" tabindex="-1"><i data-lucide="Settings" aria-hidden="true"></i><span>설정</span></button>
 </nav>
-      <div id="emergency-controls" class="settings-sidebar-footer"><button id="emergency-resume" class="operation-button" type="button" disabled aria-label="운영 상태 확인 중"><canvas data-orb-role="operation" data-orb-size="20" aria-hidden="true"></canvas><span id="emergency-status">운영 중</span><span class="operation-action" aria-hidden="true">일시 중지</span></button></div><span id="app-version" class="settings-version">v${__ALDEN_VERSION__}</span>
+      <div id="emergency-controls" class="settings-sidebar-footer"><button id="emergency-resume" class="operation-button" type="button" disabled aria-label="운영 상태 확인 중"><canvas data-orb-role="operation" data-orb-size="20" aria-hidden="true"></canvas><span id="emergency-status">일시 중지</span><span class="operation-action" aria-hidden="true">일시 중지</span></button></div><span id="app-version" class="settings-version">v${__ALDEN_VERSION__}</span>
     </aside>
     <div class="settings-main"><header class="settings-topbar"><p>Alden <span aria-hidden="true">/</span><strong id="settings-current-view">지식 그래프</strong></p></header>
       <div class="settings-content">
 <section id="settings-page-conversation" class="settings-page conversation-workspace" role="tabpanel" aria-labelledby="settings-tab-conversation" hidden>
  <aside class="history-rail"><header><h1>카카오톡 대화</h1><input id="conversation-search" type="search" placeholder="채팅방 찾기" aria-label="카카오톡 대화 찾기"></header><div id="chat-room-list" role="list" class="history-room-list"></div></aside>
- <div class="history-reader"><header class="history-reader-heading"><h2 id="conversation-history-title">채팅방을 선택하세요</h2><p id="conversation-history-status" role="status">이 기기에 남아 있는 모든 대화를 날짜순으로 읽습니다.</p></header><div id="chat-message-list" class="message-scroll" role="log" aria-label="카카오톡 대화 기록"><div class="history-empty">채팅방별 대화 기록을 불러옵니다.</div></div><button id="conversation-history-older" class="history-older" type="button" hidden>이전 대화 더 보기</button></div>
+ <div class="history-reader"><header class="history-reader-heading"><h2 id="conversation-history-title">채팅방을 선택하세요</h2><p id="conversation-history-status" role="status">이 기기에 수집된 대화 기록입니다.</p></header><div id="conversation-placeholder" class="history-placeholder" role="status"><strong>대화를 불러옵니다</strong><span>잠시만 기다려 주세요.</span><button id="conversation-retry" type="button" hidden>다시 불러오기</button></div><div id="chat-message-list" class="message-scroll" role="log" aria-label="카카오톡 대화 기록"><div class="history-empty">채팅방별 대화 기록을 불러옵니다.</div></div><button id="conversation-history-older" class="history-older" type="button" hidden>이전 대화 더 보기</button></div>
  </section>
 <section id="settings-page-voice" class="settings-page conversation-workspace" role="tabpanel" aria-labelledby="settings-tab-voice" hidden>
  <aside class="history-rail"><header><h1>음성 대화</h1><input id="voice-search" type="search" placeholder="대화 찾기" aria-label="음성 대화 찾기"></header><div id="voice-session-list" role="list" class="history-room-list"></div></aside>
- <div class="history-reader"><header class="history-reader-heading"><h2 id="voice-history-title">대화를 선택하세요</h2><p id="voice-history-status" role="status">확인된 말씀과 올든의 답변을 읽습니다.</p></header><div id="voice-message-list" class="message-scroll" role="log" aria-label="음성 대화 기록"><div class="history-empty">음성으로 나눈 대화가 여기에 남습니다.</div></div><button id="voice-history-older" class="history-older" type="button" hidden>이전 대화 더 보기</button></div>
+ <div class="history-reader"><header class="history-reader-heading"><h2 id="voice-history-title">대화를 선택하세요</h2><p id="voice-history-status" role="status">확인된 말씀과 올든의 답변을 읽습니다.</p></header><div class="voice-reader-controls"><p id="voice-status" role="status">호출어가 준비되지 않아 마이크가 꺼져 있습니다.</p><button id="voice-start" type="button" disabled>마이크 켜기</button></div><div id="voice-placeholder" class="history-placeholder" role="status"><strong>지난 음성 대화를 불러옵니다</strong><span></span><button id="voice-retry" type="button" hidden>다시 불러오기</button></div><div id="voice-message-list" class="message-scroll" role="log" aria-label="음성 대화 기록"><div class="history-empty">음성으로 나눈 대화가 여기에 남습니다.</div></div><button id="voice-history-older" class="history-older" type="button" hidden>이전 대화 더 보기</button></div>
  </section>
 <section id="settings-page-memory" class="settings-page" role="tabpanel" aria-labelledby="settings-tab-memory">
           <section id="settings-knowledge-card" class="knowledge-section" aria-labelledby="knowledge-title">
@@ -90,25 +90,25 @@ export function settingsMarkup(): string {
             <aside class="knowledge-focus-card" aria-label="선택한 지식" aria-live="polite" hidden><header class="knowledge-detail-heading"><div><span id="knowledge-node-kind">저장된 기억</span><strong id="knowledge-focus-title">선택한 지식</strong></div><button id="knowledge-focus-close" type="button" aria-label="선택한 지식 닫기"><i data-lucide="X" aria-hidden="true"></i></button></header><p id="knowledge-node-summary" class="knowledge-node-summary"></p><p id="knowledge-node-basis" class="knowledge-node-basis"></p><ul id="knowledge-node-facts" class="knowledge-node-facts" hidden></ul><div id="knowledge-relations" class="knowledge-relations"></div><h2 id="knowledge-evidence-heading" hidden>원문 근거</h2><div id="knowledge-node-evidence"></div><p id="knowledge-retrieve">항목을 선택하면 관련 대화를 찾아 보여드립니다.</p></aside>
           </section>
         </section>
-        <section id="settings-page-history" class="settings-page db-history-page" role="tabpanel" aria-labelledby="settings-tab-history" hidden><header class="settings-page-heading"><h1>DB 갱신</h1><p>대화를 가져오고 지식으로 정리한 흐름입니다.</p></header><section class="db-current" aria-live="polite"><span id="db-current-dot" class="operation-dot" aria-hidden="true"></span><div><strong id="db-current-title">갱신 상태 확인 중</strong><p id="db-current-detail"></p></div></section><div id="db-cycle-list" class="db-cycle-list" role="list" aria-label="DB 자동 갱신 기록"></div><button id="db-history-older" type="button" class="history-older" hidden>이전 갱신 더 보기</button></section>
+        <section id="settings-page-history" class="settings-page db-history-page" role="tabpanel" aria-labelledby="settings-tab-history" hidden><header class="settings-page-heading"><h1>기억 정리</h1><p>수집된 대화를 검색할 수 있게 정리합니다.</p></header><section class="db-current" aria-live="polite"><span id="db-current-dot" class="operation-dot" aria-hidden="true"></span><div><strong id="db-current-title">갱신 상태 확인 중</strong><p id="db-current-detail"></p></div></section><div id="db-cycle-list" class="db-cycle-list" role="list" aria-label="기억 정리 기록"></div><button id="db-history-older" type="button" class="history-older" hidden>이전 갱신 더 보기</button></section>
         <section id="settings-page-settings" class="settings-page preferences-page" role="tabpanel" aria-labelledby="settings-tab-settings" hidden>
-          <header class="preferences-heading"><div><h1>설정</h1><p>올든의 답변과 대화 공간을 관리합니다.</p></div><span class="preferences-local"><i data-lucide="Laptop" aria-hidden="true"></i>이 기기에서 실행</span></header>
+          <header class="preferences-heading"><div><h1>설정</h1><p>답변 방식과 채팅방 자동화.</p></div><span class="preferences-local"><i data-lucide="Laptop" aria-hidden="true"></i>이 기기에서 실행</span></header>
           <section class="automation-board" aria-labelledby="automation-title">
-            <header class="preferences-section-heading"><div><h2 id="automation-title">채팅방 자동화</h2><p>자동 답변과 긱뉴스를 필요한 방에만 켜세요.</p></div><button id="automation-new" type="button" class="preferences-add"><i data-lucide="Plus" aria-hidden="true"></i>새 등록</button></header>
-            <div class="automation-workspace"><div class="automation-registry"><div class="automation-list-heading"><span>등록된 채팅방</span><span id="automation-count">확인 중</span></div><div id="automation-list"></div><p class="automation-footnote">변경 사항은 자동화를 다시 시작하면 적용됩니다.</p></div>
-              <form id="automation-form" class="automation-editor"><h3 id="automation-editor-title">새 자동화 등록</h3><p class="automation-editor-intro">채팅방과 사용할 기능을 선택하세요.</p><label class="preference-field">채팅방<select id="automation-room" required></select></label><label class="preference-field">표시 이름<input id="automation-title-input" maxlength="128" placeholder="채팅방 이름"></label>
+            <header class="preferences-section-heading"><div><h2 id="automation-title">채팅방 자동화</h2><p>등록한 방에서만 동작합니다.</p></div><button id="automation-new" type="button" class="preferences-add"><i data-lucide="Plus" aria-hidden="true"></i>새 등록</button></header>
+            <div class="automation-workspace"><div class="automation-registry"><div class="automation-list-heading"><span>등록된 채팅방</span><span id="automation-count">확인 중</span></div><div id="automation-list"></div><p class="automation-footnote">재시작 후 적용됩니다.</p></div>
+              <form id="automation-form" class="automation-editor"><h3 id="automation-editor-title">새 자동화 등록</h3><label class="preference-field">채팅방<select id="automation-room" required></select></label><label class="preference-field">표시 이름<input id="automation-title-input" maxlength="128" placeholder="채팅방 이름"></label>
                 <label class="automation-toggle"><span><strong>자동 답변</strong><small>채팅방의 질문에 올든이 답합니다.</small></span><input id="automation-reply" type="checkbox" role="switch"><span class="preference-switch" aria-hidden="true"></span></label>
                 <label class="automation-toggle"><span><strong>긱뉴스 자동 전송</strong><small>정해진 시간에 새 소식을 전합니다.</small></span><input id="automation-geeknews" type="checkbox" role="switch"><span class="preference-switch" aria-hidden="true"></span></label>
-                <div class="automation-editor-footer"><p id="automation-status" role="status" aria-live="polite"></p><button id="automation-cancel" type="button" class="preferences-cancel">취소</button><button type="submit" class="preferences-save">변경 저장</button></div>
+                <div class="automation-editor-footer"><button id="automation-cancel" type="button" class="preferences-cancel">취소</button><button type="submit" class="preferences-save">변경 저장</button></div>
               </form>
-            </div>
+            </div><p id="automation-status" role="status" aria-live="polite" hidden></p>
           </section>
           <div class="preferences-options">
             <section class="preferences-option" aria-labelledby="model-title"><header class="preferences-section-heading"><div><h2 id="model-title">답변 방식</h2><p>질문에 맞는 답변을 선택하세요.</p></div><i data-lucide="Sparkles" aria-hidden="true"></i></header>
               <div class="model-options"><button class="model-row selection" type="button" data-model-choice="fast" aria-pressed="true" disabled><span class="model-symbol"><i data-lucide="Zap" aria-hidden="true"></i></span><span class="model-copy"><strong>빠른 대화</strong><span class="model-desc">일상적인 질문</span></span><span class="model-selection-mark" aria-hidden="true"></span></button><button class="model-row" type="button" data-model-choice="deep" aria-pressed="false" disabled><span class="model-symbol"><i data-lucide="Waypoints" aria-hidden="true"></i></span><span class="model-copy"><strong>깊은 분석</strong><span class="model-desc">차분하게 살펴볼 질문</span></span><span class="model-selection-mark" aria-hidden="true"></span></button></div>
               <p id="model-status" class="model-status-highlight" role="status" aria-live="polite">AI 답변 상태를 확인하고 있습니다.</p>
             </section>
-            <section class="preferences-option preferences-voice" aria-labelledby="voice-title"><header class="preferences-section-heading"><div><h2 id="voice-title">음성 대화</h2><p>말씀으로 올든을 만나세요.</p></div><i data-lucide="AudioLines" aria-hidden="true"></i></header><p id="voice-status">‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력이 꺼져 있습니다.</p><div class="voice-wake-line"><span><span class="operation-dot" aria-hidden="true"></span>호출어: 올든</span><button id="voice-start" type="button" disabled>마이크 켜기</button></div></section>
+            <section class="preferences-option preferences-voice" aria-labelledby="voice-title"><header class="preferences-section-heading"><div><h2 id="voice-title">음성 대화</h2><p>말씀으로 올든을 만나세요.</p></div><i data-lucide="AudioLines" aria-hidden="true"></i></header><div class="voice-wake-line"><span>호출어: 올든</span><button id="open-voice-page" type="button">음성 대화 열기</button></div></section>
           </div>
           <details class="preferences-runtime"><summary><i data-lucide="ShieldCheck" aria-hidden="true"></i><span>현재 운영 상태</span><i data-lucide="ChevronDown" aria-hidden="true"></i></summary><div class="preferences-runtime-content"><div class="setting-control"><label for="settings-room-popup">현재 운영 대상</label><select id="settings-room-popup" aria-label="대상 채팅방"><option value="">확인 중</option></select><p id="room-summary" class="settings-field-note" role="status" aria-live="polite">운영 중인 채팅방을 불러오는 중입니다.</p></div><div id="settings-sync-card"><p id="settings-sync-source" role="status" aria-live="polite">대화 준비 상태를 확인하고 있습니다.</p><p id="settings-activity-source" class="settings-field-note">앱의 작업 상태를 확인하고 있습니다.</p></div></div></details>
         </section>
@@ -123,17 +123,17 @@ export function renderEmergencyState(state: EmergencyState, root: Document = doc
   if (!controls || !status || !button) return;
   if (!state.latched) {
     controls.hidden = false;
-    status.textContent = "운영 중";
+    status.textContent = "일시 중지";
     button.dataset.paused="false";
     button.setAttribute('aria-label','올든 일시 중지');
     const action=button.querySelector('.operation-action');if(action)action.textContent='일시 중지';
     button.disabled = false;
     return;
   }
-  status.textContent = "일시 중지됨";
+  status.textContent = "다시 시작";
   button.dataset.paused="true";
   button.setAttribute('aria-label','올든 운영 재개');
-  const action=button.querySelector('.operation-action');if(action)action.textContent='운영 재개';
+  const action=button.querySelector('.operation-action');if(action)action.textContent='다시 시작';
   button.disabled = false;
   controls.hidden = false;
 }

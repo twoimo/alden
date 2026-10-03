@@ -26,9 +26,14 @@ use tauri::Manager;
 
 const FLAG: &str = "--audit-own-webview";
 const SETTINGS_FLAG: &str = "--audit-own-settings";
+const WORKSPACES_FLAG: &str = "--audit-own-workspaces";
 pub struct Request {
     pub directory: PathBuf,
     pub settings: bool,
+    pub workspaces: bool,
+}
+struct AuditPolicy {
+    workspaces: bool,
 }
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const COLLECT: &str = r#"JSON.stringify((() => {
@@ -55,16 +60,23 @@ const COLLECT: &str = r#"JSON.stringify((() => {
 pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request>, String> {
     let args: Vec<_> = args.collect();
     if !args.iter().any(|arg| {
-        arg.to_string_lossy().starts_with(FLAG) || arg.to_string_lossy().starts_with(SETTINGS_FLAG)
+        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG]
+            .iter()
+            .any(|flag| arg.to_string_lossy().starts_with(flag))
     }) {
         return Ok(None);
     }
-    if args.len() != 2 || (args[0] != FLAG && args[0] != SETTINGS_FLAG) {
+    if args.len() != 2
+        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG]
+            .iter()
+            .any(|flag| args[0] == *flag)
+    {
         return Err("expected --audit-own-webview /absolute/private/directory".into());
     }
     Ok(Some(Request {
         directory: PathBuf::from(&args[1]),
-        settings: args[0] == SETTINGS_FLAG,
+        settings: args[0] == SETTINGS_FLAG || args[0] == WORKSPACES_FLAG,
+        workspaces: args[0] == WORKSPACES_FLAG,
     }))
 }
 
@@ -125,6 +137,16 @@ impl Output {
                 | "alden-core-retina.png"
                 | "alden-settings-default.png"
                 | "alden-settings-compact.png"
+                | "workspace-memory-default.png"
+                | "workspace-conversation-default.png"
+                | "workspace-voice-default.png"
+                | "workspace-history-default.png"
+                | "workspace-settings-default.png"
+                | "workspace-memory-compact.png"
+                | "workspace-conversation-compact.png"
+                | "workspace-voice-compact.png"
+                | "workspace-history-compact.png"
+                | "workspace-settings-compact.png"
                 | "settings-layout.json"
                 | "render-audit.json"
         ) || bytes.len() > MAX_BYTES
@@ -377,19 +399,109 @@ fn density_matches(state: &Value) -> bool {
 #[tauri::command]
 async fn fetch_settings_action(
     bridge: tauri::State<'_, super::PythonBridge>,
+    policy: tauri::State<'_, AuditPolicy>,
     action: String,
+    query: Option<String>,
+    node_id: Option<String>,
+    chat_id: Option<String>,
 ) -> Result<Value, String> {
-    if !matches!(
-        action.as_str(),
-        "knowledge-graph" | "knowledge-graph-status"
-    ) {
-        return Err("settings audit admits persisted graph reads only".into());
+    let workspace = policy.workspaces;
+    if !audit_read_action(&action, workspace) {
+        return Err("audit admits explicit read actions only".into());
     }
     let bridge = bridge.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || bridge.fetch_persisted_graph())
-        .await
-        .map_err(|_| "graph read worker failed".to_string())?
-        .map_err(|error| error.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        if workspace {
+            bridge.fetch_settings_action(
+                &action,
+                query.as_deref(),
+                node_id.as_deref(),
+                chat_id.as_deref(),
+                None,
+                None,
+                None,
+            )
+        } else {
+            bridge.fetch_persisted_graph()
+        }
+    })
+    .await
+    .map_err(|_| "graph read worker failed".to_string())?
+    .map_err(|error| error.to_string())
+}
+fn audit_read_action(action: &str, workspace: bool) -> bool {
+    matches!(action, "knowledge-graph" | "knowledge-graph-status")
+        || workspace
+            && matches!(
+                action,
+                "knowledge-graph-focus"
+                    | "history-rooms"
+                    | "history-messages"
+                    | "voice-history-sessions"
+                    | "voice-history-messages"
+                    | "db-sync-history"
+                    | "room-catalog"
+            )
+}
+
+fn capture_workspaces(
+    window: &tauri::WebviewWindow,
+    output: &Output,
+    size: &str,
+    deadline: Instant,
+) -> Result<Vec<Value>, String> {
+    let mut states = Vec::new();
+    for page in ["memory", "conversation", "voice", "history", "settings"] {
+        collect_script(window,format!("JSON.stringify((()=>{{const clickedAtMs=performance.now();document.querySelector('#settings-tab-{page}').click();const paint=window.__aldenAuditWorkspacePaint={{page:'{page}',ready:false,clickedAtMs,firstFrameAtMs:null}};requestAnimationFrame(()=>{{paint.firstFrameAtMs=performance.now();requestAnimationFrame(()=>{{paint.ready=true;}});}});return {{selected:true}};}})())"),deadline)?;
+        let mut paint_after_data = false;
+        let state = loop {
+            let state=collect_script(window,r#"JSON.stringify((()=>{
+              const p=document.querySelector('.settings-shell')?.dataset.settingsPage;
+              const prompt=(p==='voice'||p==='conversation')?document.querySelector(`#${p}-placeholder`):null;
+              const pending=(p==='voice'||p==='conversation')&&prompt&&!prompt.hidden&&prompt.querySelector('strong')?.textContent.includes('불러옵니다');
+              const loadingSettings=p==='settings'&&document.querySelector('#automation-count')?.textContent==='확인 중'&&!document.querySelector('#automation-status')?.textContent;
+              const loadingHistory=p==='history'&&document.querySelector('#db-current-title')?.textContent==='갱신 상태 확인 중';
+              const panel=document.querySelector(`#settings-page-${p}`);
+              const list=panel?.querySelector('.message-scroll');const r=list?.getBoundingClientRect();
+              const rows=[...(list?.querySelectorAll('.message-row')??[])].map(n=>n.getBoundingClientRect());
+              const listPending=!!r&&r.height>0&&rows.length===0&&prompt?.hidden===true;
+              const statusId={memory:'knowledge-summary',conversation:'conversation-history-status',voice:'voice-history-status',history:'db-current-title',settings:'automation-status'}[p];
+              const status=panel?.querySelector('#'+statusId)?.textContent??'';
+              const paint=window.__aldenAuditWorkspacePaint;
+              return {page:p,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,
+                settled:!pending&&!loadingSettings&&!loadingHistory&&!listPending&&paint?.page===p&&paint?.ready===true,
+                navigationFirstFrameMs:typeof paint?.firstFrameAtMs==='number'?paint.firstFrameAtMs-paint.clickedAtMs:null,
+                transcriptViewportHeight:r?.height??0,
+                fullyVisibleMessages:r?rows.filter(n=>n.top>=r.top-.5&&n.bottom<=r.bottom+.5).length:0,
+                errorVisible:/불러오지 못|접근 확인 필요|확인하지 못/.test(status),
+                placeholderVisible:!!prompt&&!prompt.hidden,
+                graphRenders:window.__knowledgeRenderCount??0};
+            })())"#.into(),deadline)?;
+            if state["page"] == page && state["settled"] == true {
+                if !paint_after_data {
+                    collect_script(window,"JSON.stringify((()=>{const paint=window.__aldenAuditWorkspacePaint;paint.ready=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{paint.ready=true;}));return {armed:true};})())".into(),deadline)?;
+                    paint_after_data = true;
+                    continue;
+                }
+                break state;
+            }
+            live(deadline)?;
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        if state["scrollWidth"].as_u64().unwrap_or(u64::MAX) > state["width"].as_u64().unwrap_or(0)
+        {
+            return Err(format!("workspace overflow: {page}"));
+        }
+        publish(
+            output,
+            &format!("workspace-{page}-{size}.png"),
+            &snapshot(window, deadline)?,
+            deadline,
+        )?;
+        states.push(state);
+    }
+    collect_script(window,"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();return {selected:true};})())".into(),deadline)?;
+    Ok(states)
 }
 
 const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
@@ -468,6 +580,7 @@ fn audit_settings(
     app: &tauri::AppHandle,
     output: &Output,
     deadline: Instant,
+    workspaces: bool,
 ) -> Result<Value, String> {
     use super::workspace_visibility::{WorkspaceCounters, WorkspaceNote};
     let window = app
@@ -534,20 +647,34 @@ fn audit_settings(
     let back_expanded = graph_step(&window, "back", deadline)?;
     let back_first = graph_step(&window, "back", deadline)?;
     let back_overview = graph_step(&window, "back", deadline)?;
-    if first["navigation"]["focusSlot"] != 0
+    if first["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
         || first["navigation"]["hops"] != 2
         || expanded["navigation"]["hops"] != 3
-        || second["navigation"]["focusSlot"] != 1
+        || second["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
+        || second["navigation"]["focusSlot"] == first["navigation"]["focusSlot"]
         || back_expanded["navigation"] != expanded["navigation"]
         || back_first["navigation"] != first["navigation"]
         || back_overview["navigation"] != initial["navigation"]
         || back_overview["backDisabled"] != true
         || back_overview["clearedDetail"] != true
     {
-        return Err("native graph back navigation did not restore view and targets".into());
+        return Err(format!(
+            "native graph back navigation did not restore view and targets: {}",
+            json!({
+                "initial":initial["navigation"],"first":first["navigation"],"expanded":expanded["navigation"],
+                "second":second["navigation"],"backExpanded":back_expanded["navigation"],
+                "backFirst":back_first["navigation"],"backOverview":back_overview["navigation"],
+                "backDisabled":back_overview["backDisabled"],"clearedDetail":back_overview["clearedDetail"]
+            })
+        ));
     }
     graph_step(&window, "first", deadline)?;
     let reset = graph_step(&window, "overview", deadline)?;
+    let workspace_default = if workspaces {
+        capture_workspaces(&window, output, "default", deadline)?
+    } else {
+        Vec::new()
+    };
     if reset["navigation"]["focused"] != false
         || reset["clearedDetail"] != true
         || reset["overviewDisabled"] != true
@@ -620,6 +747,11 @@ fn audit_settings(
         &snapshot(&window, deadline)?,
         deadline,
     )?;
+    let workspace_compact = if workspaces {
+        capture_workspaces(&window, output, "compact", deadline)?
+    } else {
+        Vec::new()
+    };
     let counters = app.state::<WorkspaceCounters>();
     let mut hidden_samples = Vec::new();
     let mut last_hidden_count = count(&compact);
@@ -676,6 +808,7 @@ fn audit_settings(
     Ok(
         json!({"initial":initial,"first":first,"expanded":expanded,"second":second,"backExpanded":back_expanded,
         "backFirst":back_first,"backOverview":back_overview,"reset":reset,"compact":compact,"nativeCompact":native_compact,"workspaceSignals":hidden_samples,"reopened":reopened,
+        "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
         "scope":"real persisted graph and renderer/navigation in owned floating audit window without key-window activation; runtime snapshot/GraphRAG focus lookup intentionally unavailable; captures private"}),
     )
 }
@@ -889,28 +1022,42 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let status = Arc::new(AtomicI32::new(1));
     let worker_status = Arc::clone(&status);
     let settings_mode = request.settings;
+    let workspaces_mode = request.workspaces;
     let builder = {
-        tauri::Builder::default()
+        let builder = tauri::Builder::default()
             .manage(super::PythonBridge::new())
-            .invoke_handler(tauri::generate_handler![
+            .manage(AuditPolicy {
+                workspaces: workspaces_mode,
+            });
+        if workspaces_mode {
+            builder.invoke_handler(tauri::generate_handler![
+                super::window_is_visible,
+                super::fetch_runtime_snapshot,
+                super::fetch_voice_status,
+                super::fetch_emergency_state,
+                fetch_settings_action
+            ])
+        } else {
+            builder.invoke_handler(tauri::generate_handler![
                 super::window_is_visible,
                 fetch_settings_action
             ])
+        }
     };
     let app = builder
         .on_window_event(super::handle_window_event)
         .setup(move |app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(40);
-                let result = if settings_mode { audit_settings(&handle, &output, deadline) } else { audit(&handle, &output, deadline) };
+                let deadline = Instant::now() + Duration::from_secs(if workspaces_mode {96}else{40});
+                let result = if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
-                    "mode":if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
+                    "mode":if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if workspaces_mode {"owned five-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();
@@ -938,6 +1085,33 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn workspace_capture_admits_reads_but_never_commands() {
+        for action in [
+            "room-upsert",
+            "room-delete",
+            "model-set",
+            "model-swap",
+            "model-prepare",
+            "start_voice_session",
+            "send",
+            "stop",
+        ] {
+            assert!(!audit_read_action(action, true));
+        }
+        assert!(audit_read_action("history-rooms", true));
+        assert!(!audit_read_action("history-rooms", false));
+        let request = parse_args(
+            [
+                OsString::from(WORKSPACES_FLAG),
+                OsString::from("/private/tmp/test"),
+            ]
+            .into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(request.workspaces && request.settings);
+    }
     use std::os::unix::fs::{symlink, PermissionsExt};
     #[test]
     fn expired_callbacks_and_stale_pause_records_are_rejected() {

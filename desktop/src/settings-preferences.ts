@@ -20,7 +20,7 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
   const events = new AbortController();
   let dead = false, busy = false, reading = false, visible = true, page: SettingsPage = 'memory';
   let catalog: Row[] = [];
-  const message = (text: string) => { if (!dead) status.textContent = text; };
+  const message = (text: string) => { if (!dead) { status.textContent = text; status.hidden = !text; } };
   const setBusy = (flag: boolean) => {
     busy = flag;
     if (dead) return;
@@ -110,8 +110,9 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
       try {
         await load('room-upsert', { chatId: id, query: JSON.stringify(payload) });
         const verified = await refresh(), saved = catalog.find(row => String(row.chat_id) === id);
-        message(verified && saved?.title === payload.title && saved.auto_reply === payload.auto_reply && saved.geeknews === payload.geeknews
-          ? '자동화 설정을 저장했습니다.' : '저장 상태를 확인하지 못했습니다. 설정을 다시 열어 확인해 주세요.');
+        const confirmed = verified && saved?.title === payload.title && saved.auto_reply === payload.auto_reply && saved.geeknews === payload.geeknews;
+        if (confirmed) { showEditor(false); delete form.dataset.editingId; render(); }
+        message(confirmed ? '저장했습니다.' : '저장 상태를 확인하지 못했습니다. 설정을 다시 열어 확인해 주세요.');
       } catch { message('저장 상태를 확인하지 못했습니다. 설정을 다시 열어 확인해 주세요.'); }
       finally { setBusy(false); }
     })();

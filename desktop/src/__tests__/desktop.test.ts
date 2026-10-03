@@ -569,7 +569,7 @@ describe("layout and settings contract", () => {
     ]) expect(markup).toContain(`id="${id}"`);
     expect(markup).toContain('id="voice-status"');
     expect(markup).toContain('호출어: 올든');
-    expect(markup).toContain('‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력이 꺼져 있습니다.');
+    expect(markup).toContain('호출어가 준비되지 않아 마이크가 꺼져 있습니다.');
     expect(markup).not.toContain("긴급 중단은 ⌘⌥⇧Esc를 누르세요.");
     expect(markup).toContain('id="settings-tab-settings"');
     expect(markup).not.toContain('id="settings-gear"');

@@ -1,5 +1,12 @@
 2026-10-03 · [Alden 0.3.10 로컬 임베딩·설치 근거](docs/architecture/alden-embedding-memory-20261003.md): 같은 가중치·44개 입력·변형별 새 프로세스 3회에서 E5 메모리 중앙값 14.453→1.517GB(−89.50%)를 재현했고 출력이 일치했습니다. 44개 요청 시간은 0.521→0.726초로 늘었습니다. 35개 설치 파일·별도 네이티브 숨김/설정 검사를 대조했습니다. [메모리 순서도](docs/architecture/alden-embedding-memory-20261003.html) · [현재 이어받기 상태](docs/ALDEN_CONTINUATION.md). 상시 앱 직접 조작·자연 음성·권한·공증·프로덕션 적용은 미완료입니다.
 
+## Alden 0.3.11 — 설정 밀도·실제 기록·읽기 전용 MCP
+
+설정5페이지를통일하고중복여백을줄였다. 같은1200×760예시에서본문면적+19.14%, 완전히보이는메시지4→6(n1). 실제history ID는문자열·유효방/최신순으로전달하며시스템알림의원문은접어읽을수있다. OSK151/512노드의합성warm p50은35.79%/56.84%감소했다. MCP0.2.0은취소와1.5초deadline을지원하고외부상태조회에만쓴다. 같은collector의API→MCP비용은1.415→1.653ms(+16.82%,9000요청/variant)다.
+
+로컬0.3.11설치36경로·기존설정/5프로세스보존, UI237·desktop95·CLI1151/1ignored·Python1207/28skip을확인했다. 공유MCP등록과설치STDIO는확인했으며실제Dot호출·물리음성·전체native notification검사·서명/최종운영적용은미완료다. [5페이지검토](docs/architecture/alden-sidebar-audit-20261003.md), [OSK/MCP수치와범위](docs/architecture/alden-mcp-performance-20261003.md), [이어가기](docs/ALDEN_CONTINUATION.md).
+
+
 2026-10-03 · [Alden 0.3.9 전달·근거](docs/architecture/alden-orbs-20261003.md): 정지한 장면을 정상으로 다루도록 네이티브 검사기를 수정하고 실제 WKWebView 기본·최소 설정, 탐색 복원, 합성 가시성 알림의 숨김·복원을 확인했습니다. 별도 검사 인스턴스의 결과이며 상시 primary 조작·물리 잠금·음성·Retina와 구분합니다.
 
 2026-10-03 · Alden 0.3.8: [Thinking Orbs](https://libraries.dev/orbs)의 공식 엔진을 지식 그래프 주요 노드·사이드바·메뉴바에 적용했습니다. 실제 작업 상태에 연결하며 대기·숨김·모션 감소에서는 정지합니다. 노드 선택 시 전체 저장 설명과 채팅방·작성자·날짜가 있는 대표 원문을 보여주고, 네이티브 브리지까지 계정·인물·방 범위를 검증합니다. 같은 검색 화면의 1초 표본 3회에서 라벨 변경 138→0, 대기 렌더 0을 관측했습니다. 이는 소스의 명시적 예시 데이터 측정이며 설치·물리 화면·전체 전력과 구분합니다. [디자인](desktop/DESIGN.md) · [렌더 수명주기](docs/architecture/alden-three-render-lifecycle.html). 원본 DB 최신화·웨이크/물리 음성·공개 서명·프로덕션 전환의 기존 게이트는 유지합니다.

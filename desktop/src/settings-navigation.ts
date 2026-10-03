@@ -47,7 +47,7 @@ SOFTWARE.
 import { createIcons, Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X } from "lucide";
 
 export type SettingsPage = "conversation" | "voice" | "memory" | "history" | "settings";
-const labels: Record<SettingsPage, string> = { conversation: "카카오톡 대화", voice: "음성 대화", memory: "지식 그래프", history: "DB 갱신", settings: "설정" };
+const labels: Record<SettingsPage, string> = { conversation: "카카오톡 대화", voice: "음성 대화", memory: "지식 그래프", history: "기억 정리", settings: "설정" };
 
 export function renderSettingsIcons(): void {
   createIcons({ icons: { Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X }, attrs: { "stroke-width": 1.6, "aria-hidden": "true" } });
@@ -93,6 +93,7 @@ export function wireSettingsNavigation(root: Document = document, changed: (page
       if (target) { target.focus(); select(target.dataset.settingsView as SettingsPage); }
     }, { signal: listeners.signal });
   }
+  root.getElementById("open-voice-page")?.addEventListener("click", () => select("voice"), { signal: listeners.signal });
   select(current);
   return { current: () => current, dispose: () => listeners.abort() };
 }

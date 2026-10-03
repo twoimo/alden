@@ -24,6 +24,8 @@ describe('settings menu catalog', () => {
     (document.getElementById('automation-reply') as HTMLInputElement).checked = true;
     document.getElementById('automation-form')!.dispatchEvent(new Event('submit', { cancelable: true }));
     await settle(); expect(catalog[0].auto_reply).toBe(true); expect(document.getElementById('automation-status')!.textContent).toContain('저장했습니다');
+    expect(document.getElementById('automation-form')!.hidden).toBe(true);
+    expect(document.getElementById('automation-status')!.hidden).toBe(false);
     document.querySelector<HTMLButtonElement>('[aria-label="방 자동화 수정"]')!.click();
     (document.getElementById('automation-geeknews') as HTMLInputElement).checked = true;
     document.getElementById('automation-form')!.dispatchEvent(new Event('submit', { cancelable: true })); await settle();
@@ -45,6 +47,7 @@ describe('settings menu catalog', () => {
     expect(document.querySelector('#automation-list img')).toBeNull();
     document.querySelector<HTMLButtonElement>('#automation-list button:last-child')!.click(); await settle();
     expect(document.getElementById('automation-status')!.textContent).toContain('확인하지 못했습니다');
+    expect(document.getElementById('automation-status')!.hidden).toBe(false);
     expect(load.mock.calls.filter(([name]) => name === 'room-delete')).toHaveLength(1); control.dispose();
   });
 });

@@ -6871,7 +6871,7 @@ fn run() -> Result<()> {
             println!(
                 "{}",
                 serde_json::to_string(
-                    &serde_json::json!({"ok":true,"account":reader.account_fingerprint(),"rooms":reader.list_all_chats()?})
+                    &serde_json::json!({"ok":true,"account":reader.account_fingerprint(),"rooms":local_db::history_room_items(reader.list_all_chats()?)?})
                 )?
             );
         }

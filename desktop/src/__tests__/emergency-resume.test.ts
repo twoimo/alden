@@ -45,7 +45,7 @@ describe("explicit emergency resume", () => {
     controls.update(paused);
     expect(area.hidden).toBe(false);
     expect(button.getAttribute("aria-label")).toBe("올든 운영 재개");
-    expect(document.querySelector("#emergency-status")?.textContent).toBe("일시 중지됨");
+    expect(document.querySelector("#emergency-status")?.textContent).toBe("다시 시작");
     expect(action).not.toHaveBeenCalled();
     controls.update(resumed);
     expect(area.hidden).toBe(false);

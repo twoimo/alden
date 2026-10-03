@@ -82,7 +82,10 @@ interface AldenCoreControl {
 
 function setText(id: string, value: string): void {
   const element = document.getElementById(id);
-  if (element) element.textContent = value;
+  if (element) {
+    if (element.textContent !== value) element.textContent = value;
+    if (id === 'knowledge-mode') element.hidden = value === '연결된 주제';
+  }
 }
 
 function showPanelUnavailable(message: string): void {
@@ -256,9 +259,13 @@ function wireModelSelection(invokeFn: SettingsInvoke): void {
 function renderVoice(snapshot: RuntimeSnapshot): void {
   const voice = snapshot.voice;
   const startButton = document.getElementById("voice-start") as HTMLButtonElement | null;
-  if (startButton) startButton.disabled = true;
+  if (startButton) {
+    const active = voice.available && ['wake_listen','user_listen','transcribing','generating','speaking'].includes(voice.state);
+    startButton.disabled = !voice.customModelSelected || active;
+    startButton.textContent = active ? '마이크 켜짐' : '마이크 켜기';
+  }
   if (!voice.customModelSelected) {
-    setText("voice-status", "‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력이 꺼져 있습니다.");
+    setText("voice-status", "호출어가 준비되지 않아 마이크가 꺼져 있습니다.");
     return;
   }
   if (!voice.available) {
@@ -417,7 +424,7 @@ function renderKnowledgeSync(payload: Record<string, unknown> | null): void {
     return;
   }
   const at = typeof state.synced_at === "number" ? new Date(state.synced_at * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "";
-  setText("knowledge-sync", Number(state.conflicts) > 0 ? "직접 편집한 기억을 보존했습니다." : Number(state.pending) > 0 ? "새로운 기억을 정리하고 있습니다." : `자동으로 기억을 정리합니다.${at ? ` 마지막 갱신 ${at}` : ""}`);
+  setText("knowledge-sync", Number(state.conflicts) > 0 ? "직접 편집한 기억을 보존했습니다." : Number(state.pending) > 0 ? "새로운 기억을 정리하고 있습니다." : at ? `마지막 정리 ${at}` : "기억을 자동으로 정리합니다.");
 }
 
 export async function setupKnowledgeGraph(
@@ -633,6 +640,7 @@ export async function bootSettings(
     const polling = new RuntimeSnapshotPoller({ setSignals: (load, rms) => hologram?.setSignals(load, rms) },
       dependencies.loadSnapshot, undefined, undefined, undefined, 2500, current => {
         orbs.setSnapshot(current); hologram?.setActivity(current);
+        if (current && !document.getElementById("voice-start")?.hasAttribute("aria-busy")) renderVoice(current);
       });
     const orbLifecycle = new RenderLifecycle(orbs, () => polling.stop(), () => polling.start());
     Object.defineProperty(window, '__orbRenderPause', { configurable: true, get: () => orbLifecycle.lastPauseMeasurement() });

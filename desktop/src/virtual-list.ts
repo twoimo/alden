@@ -9,12 +9,23 @@ export class VirtualList<T> {
   private disposed = false;
   private endPinned = false;
   private visible = true;
+  private viewportWidth = 0;
+  private viewportHeight = 0;
+  get followsLatest():boolean { return this.endPinned; }
   constructor(private host: HTMLElement, private key: (item:T)=>string, private render: (item:T)=>HTMLElement, private estimate=78) {
     this.surface.style.position="relative"; host.replaceChildren(this.surface);
     this.observer=typeof ResizeObserver==='undefined'?null:new ResizeObserver(entries=>{
       let changed=false;
       const anchor=this.anchor();
-      for(const entry of entries){const id=(entry.target as HTMLElement).dataset.virtualKey!;const height=entry.borderBoxSize?.[0]?.blockSize || entry.contentRect.height;
+      for(const entry of entries){
+        if(entry.target===this.host){
+          const {width,height}=entry.contentRect;
+          if(width>0&&height>0&&(Math.abs(width-this.viewportWidth)>1||Math.abs(height-this.viewportHeight)>1)){
+            this.viewportWidth=width;this.viewportHeight=height;changed=true;
+          }
+          continue;
+        }
+        const id=(entry.target as HTMLElement).dataset.virtualKey!;const height=entry.borderBoxSize?.[0]?.blockSize || entry.contentRect.height;
         if(height>0 && Math.abs((this.heights.get(id)??this.estimate)-height)>1){this.heights.set(id,height);changed=true;}}
       if(changed){this.measure();if(this.endPinned)this.host.scrollTop=this.offsets.at(-1)!;else this.restore(anchor);this.schedule();}
     });
@@ -48,6 +59,7 @@ export class VirtualList<T> {
   private schedule():void {if(this.frame!==null||this.disposed||!this.visible)return;this.frame=requestAnimationFrame(()=>{this.frame=null;this.draw();});}
   private draw():void {
     if(this.disposed||!this.visible)return;this.observer?.disconnect();this.surface.replaceChildren();
+    this.observer?.observe(this.host);
     let low=0,high=this.items.length;const top=this.host.scrollTop;
     while(low<high){const mid=(low+high)>>>1;if(this.offsets[mid]<top)low=mid+1;else high=mid;}
     const start=Math.max(0,low-5);const bottom=top+Math.max(this.host.clientHeight,400)+500;

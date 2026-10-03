@@ -1,5 +1,13 @@
 # Alden desktop design contract
 
+## 0.3.11 — Compact workspaces
+
+All five sidebar pages share the existing navy observatory palette and restrained silver/gold orbs. The sidebar is 180px, 145px at the narrow breakpoint; navigation remains 40px high. Redundant topbar space is removed. Conversation and voice history open their most recent readable records, with explicit loading, empty and retry states. The latest message stays fully visible when pagination controls or the viewport change. Historical collection steps use nouns; only the current status claims ongoing work. Voice controls live beside voice history. Automation drafts survive navigation; only verified saves close the editor, with the result shown outside it.
+
+Overview camera distance is fitted to the current perspective viewport and enclosing node boxes on resize. Label exclusion rectangles are cached on resize/selection; no new geometry reads run per frame. Keyboard node navigation remains available. Diagnostics, model IDs and benchmark text stay outside product settings. Actual voice readiness is displayed honestly.
+
+Current tokens: canvas `#0b1322`, surface `#121e30`, text `#e7edf5`, muted `#a5b2c7`, border `#2d3b50`, selection `#20334c`. [Five-page audit and measurement](../docs/architecture/alden-sidebar-audit-20261003.md) document fixture and native scope separately. Earlier sections record prior versions.
+
 ## 0.3.8 — Thinking Orbs and selected-node evidence
 
 [Thinking Orbs](https://libraries.dev/orbs) is the signature material: depth-shaded silver dots, distinct work states, quiet surroundings. Alden uses the official `thinking-orbs/engine` entry point, pinned to 0.3.2 (MIT), with its 20px/64px presets. React is a package peer but is not imported by the renderer or included in Alden's UI bundle. The complete license ships as `thinking-orbs-LICENSE.txt` in the frontend assets. No Studio exports or paid assets are used.
