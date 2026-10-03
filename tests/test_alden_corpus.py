@@ -72,7 +72,12 @@ class CorpusTests(unittest.TestCase):
                 self.assertEqual(copy.call_count,1)
                 rows=dict(graph.execute("SELECT entity_id,name FROM kg_entities WHERE category='대화방'"))
                 self.assertEqual(rows[f'chat:kakao:{account}:room:42'],'AI 연구방')
-                self.assertTrue(rows[f'chat:kakao:{account}:room:84'].startswith('제목 미확인 · #'))
+                self.assertTrue(rows[f'chat:kakao:{account}:room:84'].startswith('같은 이름 대화 · #'))
+                self.assertNotEqual(rows[f'chat:kakao:{account}:room:84'],rows[f'chat:kakao:{account}:room:42'])
+                # Display aliases are grounded in the roster, not written back
+                # into the raw room title or used to merge numeric identities.
+                with sqlite3.connect(path) as raw:
+                    self.assertEqual(raw.execute("SELECT label FROM alden_rooms WHERE chat_id='84'").fetchone()[0],chr(8203))
                 self.assertEqual(alden_corpus.resolve_room(root,'카카오톡 ai연구방 내용')['chat_id'],'42')
                 KG.index_chat_entities(graph,root)
                 self.assertEqual(rows,dict(graph.execute("SELECT entity_id,name FROM kg_entities WHERE category='대화방'")))

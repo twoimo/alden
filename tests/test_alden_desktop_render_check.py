@@ -59,7 +59,7 @@ class SharedExpectations(unittest.TestCase):
         self.assertIn("permission", self.contract["banned_tokens"])
         self.assertEqual(
             self.contract["settings_sections"],
-            ["채팅방 자동화", "답변 방식", "음성 대화"],
+            ["채팅방 자동화", "대화 모델", "음성 대화"],
         )
 
     def test_contract_hash_is_recorded_from_the_file_it_read(self) -> None:
@@ -174,6 +174,7 @@ class BridgeStub(unittest.TestCase):
                 "knowledge-graph-focus",
                 "room-upsert", "room-delete", "room-catalog",
                 "history-rooms", "history-messages", "voice-history-sessions", "voice-history-messages", "db-sync-history",
+                "reply-history", "geeknews-history",
             },
         )
         extra = {"model-set", "model-prepare", "model-swap"}
