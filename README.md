@@ -1,10 +1,16 @@
+## Alden 0.3.13 — Raw 출처와 자동화 히스토리
+
+사이드바에 **카카오톡 답변**과 **긱뉴스 전송**을 분리했습니다. 채팅방·맥락·내용·전송 결과를 검색하고 이전 기록을 읽습니다. 채팅방 선택도 검색할 수 있으며 로컬 모델 두 개를 명확한 이름으로 표시합니다.
+
+205만 Raw 기록을 보존하고 OSK API로 활성 지식 115개를 실제 출처 좌표에 연결했습니다. 기존 공유 ID 111개 유지, 중복·충돌 0건, 길이 이상치 후보 2,298건 보존, 참여자 기반 방 별칭 89개를 확인했습니다. 설치본 0.3.13의 40개 파일을 대조했고 기본·최소 창 7개 페이지씩에서 오류·가로 넘침 0건, 탐색 첫 프레임 p95 16ms(n=14)를 관측했습니다. [방법·검증·범위](docs/architecture/alden-raw-history-20261004.md) · [현재 이어받기 상태](docs/ALDEN_CONTINUATION.md). 로컬 ad-hoc 서명 설치이며 공증·Dot 실제 호출·물리 음성 및 기존 전체 목표의 남은 검증은 계속 진행합니다.
+
 2026-10-03 · [Alden 0.3.10 로컬 임베딩·설치 근거](docs/architecture/alden-embedding-memory-20261003.md): 같은 가중치·44개 입력·변형별 새 프로세스 3회에서 E5 메모리 중앙값 14.453→1.517GB(−89.50%)를 재현했고 출력이 일치했습니다. 44개 요청 시간은 0.521→0.726초로 늘었습니다. 35개 설치 파일·별도 네이티브 숨김/설정 검사를 대조했습니다. [메모리 순서도](docs/architecture/alden-embedding-memory-20261003.html) · [현재 이어받기 상태](docs/ALDEN_CONTINUATION.md). 상시 앱 직접 조작·자연 음성·권한·공증·프로덕션 적용은 미완료입니다.
 
 ## Alden 0.3.12 — 동적 지식 그래프
 
 확인된 관계가 시냅스 다리로 성장·수축하고, 노드 배치가 실시간으로 재조정됩니다. 화면에서는 은은한 흐름을 유지하며, 숨김·동작 줄이기·일시 중지에서는 멈춥니다. 상단 정보는 한 줄입니다. 같은 1200×760 예시의 5초 관측에서 프레임 타이밍 수정 전후 23.0→30.2fps, 프레임 간격 p95 50.1→35.2ms를 확인했습니다(변형별 1회; 추론·전력 개선 수치가 아닙니다).
 
-[연구·수학·측정 근거](docs/architecture/alden-neural-plasticity-20261003.md) · [변경 감지와 렌더 순서도](docs/architecture/alden-neural-plasticity-20261003.sequence.html) · [예시 화면](docs/architecture/alden-neural-plasticity-20261003/graph-default-fixture.png). 로컬 설치본은 0.3.12입니다. 공개 서명·공증, 실제 Dot 호출과 사람의 음성 검증은 별도로 남아 있습니다.
+[연구·수학·측정 근거](docs/architecture/alden-neural-plasticity-20261003.md) · [변경 감지와 렌더 순서도](docs/architecture/alden-neural-plasticity-20261003.sequence.html) · [예시 화면](docs/architecture/alden-neural-plasticity-20261003/graph-default-fixture.png). 해당 검증 당시의 로컬 설치본은 0.3.12였습니다. 공개 서명·공증, 실제 Dot 호출과 사람의 음성 검증은 별도로 남아 있습니다.
 
 ## Alden 0.3.11 — 설정 밀도·실제 기록·읽기 전용 MCP
 

@@ -1045,6 +1045,14 @@ def k_hop_neighborhood(
             conn.close()
 
 
+def _raw_source_mode(state_root: Path) -> bool:
+    path=state_root/'knowledge/osk/raw-sources.json'
+    if not path.exists(): return False
+    if path.is_symlink() or path.stat().st_size>8192: raise RuntimeError('raw_source_configuration_unsafe')
+    value=json.loads(path.read_text())
+    return isinstance(value,dict) and value.get('schema_version')==1 and value.get('enabled') is True
+
+
 def _index_db_path(state_root: Path) -> Path:
     """Prefer only a completely published, account-scoped Alden corpus."""
     root=state_root/'knowledge'/'corpus'
@@ -1077,7 +1085,7 @@ def _short_identity(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
-def _corpus_room_displays(labels: dict[str, str], titles: dict[str, str]) -> dict[str, dict[str, Any]]:
+def _corpus_room_displays(labels: dict[str, str], titles: dict[str, str], activity_aliases: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
     """Known titles stay searchable; equal/missing titles stay distinct."""
     resolved: dict[str, tuple[str, str]] = {}
     for key, raw in labels.items():
@@ -1086,17 +1094,38 @@ def _corpus_room_displays(labels: dict[str, str], titles: dict[str, str]) -> dic
         if not title or title == "이름 없는 채팅방":
             title = _identity_label(titles.get(key.rsplit(":", 1)[-1]))
             source = "catalog" if title else "unresolved"
+            if not title and activity_aliases and activity_aliases.get(key):
+                title = _identity_label(activity_aliases[key]); source = "activity_alias"
         resolved[key] = (title, source)
     counts = Counter(title.casefold().replace(" ", "") for title, _ in resolved.values() if title)
     result: dict[str, dict[str, Any]] = {}
     for key, (title, source) in resolved.items():
         duplicate = bool(title and counts[title.casefold().replace(" ", "")] > 1)
         display = title or "제목 미확인"
-        if not title or duplicate:
+        if not title or duplicate or source == "activity_alias":
             display += " · #" + _short_identity(key)
         result[key] = {"label": display, "aliases": list(dict.fromkeys(x for x in (title, display, key) if x)),
                        "label_source": source, "label_ambiguous": duplicate}
     return result
+
+
+def _corpus_activity_aliases(index_conn: sqlite3.Connection, labels: dict[str, str], authors: dict[str, str]) -> dict[str, str]:
+    """Ground unnamed display aliases in recorded participants, preserving IDs.
+
+    One aggregate pass over the published corpus replaces a scan per room.
+    This is a local display alias, never a Kakao room rename or inferred topic.
+    """
+    unknown = {key for key, value in labels.items() if not _identity_label(value) or _identity_label(value) == '이름 없는 채팅방'}
+    if not unknown: return {}
+    if not index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='alden_messages'").fetchone(): return {}
+    names: dict[str, list[str]] = {}
+    for room, actor, count in index_conn.execute('SELECT chat,author_id,COUNT(*) FROM alden_messages WHERE is_self=0 AND CAST(author_id AS INTEGER)>0 GROUP BY chat,author_id ORDER BY COUNT(*) DESC'):
+        if room not in unknown or len(names.get(room, [])) >= 2: continue
+        name = _identity_label(authors.get(str(actor)), limit=36)
+        if not name or name in ('(알 수 없음)', '알 수 없음', 'Unknown') or name.isdigit(): continue
+        bucket = names.setdefault(room, [])
+        if name not in bucket: bucket.append(name)
+    return {room: ' · '.join(values) + ' 대화' for room, values in names.items()}
 
 
 def _corpus_person_id(room:str,actor:str)->str:
@@ -1382,8 +1411,8 @@ def index_chat_entities(
             sql += " GROUP BY chat HAVING COUNT(*) >= ? ORDER BY COUNT(*) DESC LIMIT ?"
             params.extend([INDEX_CHAT_MIN_MESSAGES, max(int(limit), 1)])
             rows = index_conn.execute(sql, params).fetchall()
-            room_labels, _ = _corpus_labels(index_conn)
-            displays = _corpus_room_displays(room_labels, _room_titles(state_root))
+            room_labels, author_labels = _corpus_labels(index_conn)
+            displays = _corpus_room_displays(room_labels, _room_titles(state_root), _corpus_activity_aliases(index_conn, room_labels, author_labels))
             # All metadata and bounded evidence are read from this same
             # snapshot. Standalone calls previously copied the whole corpus
             # again for the label table and once for every selected room.
@@ -1652,6 +1681,12 @@ def index_topic_entities(
         return stats
     try:
         with _open_isolated_ro_conn(index_path) as index_conn:
+            has_topics = index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='context_message_topics'").fetchone()
+            raw_rebuild = _raw_source_mode(state_root)
+            if (index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='alden_messages'").fetchone()
+                and (raw_rebuild or not has_topics or not index_conn.execute('SELECT 1 FROM context_message_topics LIMIT 1').fetchone())):
+                from alden_corpus_topics import index as index_raw_topics
+                return index_raw_topics(conn, index_conn, chat=chat, minimum=INDEX_TOPIC_MIN_MESSAGES)
             topics = _index_topic_rows(index_conn, chat=chat)[: max(int(limit), 1)]
             stats["topics"] = len(topics)
             now = int(time.time())
@@ -1717,6 +1752,7 @@ def index_topic_relations(
     rather than a list of separate circles (2026-09-16).
     """
     stats = {"pairs": 0, "written": 0}
+    if _raw_source_mode(state_root): return stats  # Raw topic pass already wrote grounded pairs.
     index_path = _index_db_path(state_root)
     if not index_path.exists():
         return stats
@@ -1828,6 +1864,8 @@ def index_membership_relations(
                     stats["person_chat"] += 1
             except sqlite3.Error:
                 pass
+            if _raw_source_mode(state_root):
+                conn.commit();return stats  # Topic edges came from the same Raw pass.
             # 방 → 주제. 방마다 그 주제가 얼마나 나왔는지가 곧 연결 강도다.
             sql = (
                 "SELECT m.chat, t.topic, COUNT(*) FROM context_message_topics t"
@@ -2334,7 +2372,7 @@ def _reindex_all(
             except Exception as error:
                 _note("rooms", error)
             try:
-                attach_ledger_evidence(writer, state_root)
+                if not _raw_source_mode(state_root): attach_ledger_evidence(writer, state_root)
             except Exception as error:
                 _note("evidence", error)
             failures.extend(cycle["errors"])

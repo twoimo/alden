@@ -703,6 +703,8 @@ impl PythonBridge {
                 | "voice-history-sessions"
                 | "voice-history-messages"
                 | "db-sync-history"
+                | "reply-history"
+                | "geeknews-history"
                 | "room-catalog"
                 | "room-delete" => value,
                 _ => return Err(BridgeError::ActionNotAllowed),
@@ -1652,7 +1654,10 @@ fn settings_action_args(
         | "history-messages"
         | "voice-history-sessions"
         | "voice-history-messages"
-        | "db-sync-history" => {
+        | "db-sync-history"
+        | "reply-history"
+        | "geeknews-history" => {
+            // Read-only history requests; no worker or send action is exposed.
             if let Some(value) = bounded_arg(query, 4096) {
                 let parsed: Value =
                     serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;

@@ -139,11 +139,15 @@ impl Output {
                 | "alden-settings-compact.png"
                 | "workspace-memory-default.png"
                 | "workspace-conversation-default.png"
+                | "workspace-reply-default.png"
+                | "workspace-geeknews-default.png"
                 | "workspace-voice-default.png"
                 | "workspace-history-default.png"
                 | "workspace-settings-default.png"
                 | "workspace-memory-compact.png"
                 | "workspace-conversation-compact.png"
+                | "workspace-reply-compact.png"
+                | "workspace-geeknews-compact.png"
                 | "workspace-voice-compact.png"
                 | "workspace-history-compact.png"
                 | "workspace-settings-compact.png"
@@ -440,6 +444,8 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
                     | "voice-history-sessions"
                     | "voice-history-messages"
                     | "db-sync-history"
+                    | "reply-history"
+                    | "geeknews-history"
                     | "room-catalog"
             )
 }
@@ -451,7 +457,15 @@ fn capture_workspaces(
     deadline: Instant,
 ) -> Result<Vec<Value>, String> {
     let mut states = Vec::new();
-    for page in ["memory", "conversation", "voice", "history", "settings"] {
+    for page in [
+        "memory",
+        "conversation",
+        "reply",
+        "geeknews",
+        "voice",
+        "history",
+        "settings",
+    ] {
         collect_script(window,format!("JSON.stringify((()=>{{const clickedAtMs=performance.now();document.querySelector('#settings-tab-{page}').click();const paint=window.__aldenAuditWorkspacePaint={{page:'{page}',ready:false,clickedAtMs,firstFrameAtMs:null}};requestAnimationFrame(()=>{{paint.firstFrameAtMs=performance.now();requestAnimationFrame(()=>{{paint.ready=true;}});}});return {{selected:true}};}})())"),deadline)?;
         let mut paint_after_data = false;
         let state = loop {
@@ -461,15 +475,16 @@ fn capture_workspaces(
               const pending=(p==='voice'||p==='conversation')&&prompt&&!prompt.hidden&&prompt.querySelector('strong')?.textContent.includes('불러옵니다');
               const loadingSettings=p==='settings'&&document.querySelector('#automation-count')?.textContent==='확인 중'&&!document.querySelector('#automation-status')?.textContent;
               const loadingHistory=p==='history'&&document.querySelector('#db-current-title')?.textContent==='갱신 상태 확인 중';
+              const loadingAutomation=(p==='reply'||p==='geeknews')&&document.querySelector(`#${p}-status`)?.textContent==='기록을 불러옵니다.';
               const panel=document.querySelector(`#settings-page-${p}`);
               const list=panel?.querySelector('.message-scroll');const r=list?.getBoundingClientRect();
               const rows=[...(list?.querySelectorAll('.message-row')??[])].map(n=>n.getBoundingClientRect());
               const listPending=!!r&&r.height>0&&rows.length===0&&prompt?.hidden===true;
-              const statusId={memory:'knowledge-summary',conversation:'conversation-history-status',voice:'voice-history-status',history:'db-current-title',settings:'automation-status'}[p];
+              const statusId={memory:'knowledge-summary',conversation:'conversation-history-status',reply:'reply-status',geeknews:'geeknews-status',voice:'voice-history-status',history:'db-current-title',settings:'automation-status'}[p];
               const status=panel?.querySelector('#'+statusId)?.textContent??'';
               const paint=window.__aldenAuditWorkspacePaint;
               return {page:p,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,
-                settled:!pending&&!loadingSettings&&!loadingHistory&&!listPending&&paint?.page===p&&paint?.ready===true,
+                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
                 navigationFirstFrameMs:typeof paint?.firstFrameAtMs==='number'?paint.firstFrameAtMs-paint.clickedAtMs:null,
                 transcriptViewportHeight:r?.height??0,
                 fullyVisibleMessages:r?rows.filter(n=>n.top>=r.top-.5&&n.bottom<=r.bottom+.5).length:0,
@@ -1065,7 +1080,7 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
                     "mode":if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if workspaces_mode {"owned five-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();

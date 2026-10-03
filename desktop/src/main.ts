@@ -3,6 +3,7 @@ import { OrbSurfaces } from './orbs/surfaces';
 import { renderNodeDetails } from './knowledge/node-details';
 import type { VoiceStatus } from './contracts';
 import { wireConversationViews } from './conversations';
+import { wireAutomationHistory } from './automation-history';
 import { wireSettingsPreferences } from './settings-preferences';
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from '@tauri-apps/api/app';
@@ -536,7 +537,7 @@ interface SettingsBootDependencies {
   pauseEmergency: typeof operatorPause;
   subscribeEmergency: EmergencyStateSubscriber | null;
   wireVoice: typeof wireVoiceStart;
-  invokeCommand: typeof invoke;
+  invokeCommand: SettingsInvoke;
   subscribeVisibility: VisibilitySubscriber | null;
   /** Boot handshake: the shell's current visibility decides the first state. */
   readVisibility: VisibilityReader | null;
@@ -566,13 +567,15 @@ export async function bootSettings(
   window.addEventListener('pagehide', () => orbs.dispose(), { once: true });
   void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
   const archives=wireConversationViews(dependencies.loadAction);
+  const automationHistory=wireAutomationHistory(dependencies.loadAction);
   const preferences=wireSettingsPreferences(dependencies.loadAction);
-  window.addEventListener('pagehide',()=>{archives.dispose();preferences.dispose();},{once:true});
+  window.addEventListener('pagehide',()=>{archives.dispose();automationHistory.dispose();preferences.dispose();},{once:true});
   let graphLifecycle: RenderLifecycle | null = null;
-  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility});
+  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility});
   window.addEventListener('pagehide',detachArchiveVisibility,{once:true});
   const navigation = wireSettingsNavigation(document, (page) => {
     archives.select(page);
+    automationHistory.select(page);
     preferences.select(page);
     orbs.refresh();
     graphLifecycle?.setSurfaceVisible(page === "memory");
@@ -856,7 +859,7 @@ export async function startDesktopApp(
 
 if(import.meta.env.DEV&&new URLSearchParams(location.search).has('demo')) {
   void import('./dev-fixture').then(async fixture=>{
-    if(isSettings)await bootSettings({loadSnapshot:fixture.snapshot,loadAction:fixture.action,loadEmergency:async()=>fixture.emergency,pauseEmergency:fixture.pause,resumeEmergency:fixture.resume,subscribeEmergency:null,subscribeVisibility:null,readVisibility:null,wireVoice:()=>undefined});
+    if(isSettings)await bootSettings({loadSnapshot:fixture.snapshot,loadAction:fixture.action,loadEmergency:async()=>fixture.emergency,pauseEmergency:fixture.pause,resumeEmergency:fixture.resume,subscribeEmergency:null,subscribeVisibility:null,readVisibility:null,wireVoice:()=>undefined,invokeCommand:fixture.invokeCommand});
     else await bootPanel({loadKnowledge:fixture.action,loadSnapshot:fixture.snapshot,subscribeVisibility:null,readVisibility:null,subscribeEmergency:null,loadEmergency:async()=>fixture.emergency});
     const label=document.createElement('span');label.className='development-preview-label';label.textContent='예시 데이터 · 개발 미리보기';document.body.append(label);
   });

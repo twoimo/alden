@@ -10,6 +10,7 @@ type SettingsAction =
   | "knowledge-graph-focus"
   | "room-upsert" | "room-delete" | "room-catalog"
   | "history-rooms" | "history-messages"
+  | "reply-history" | "geeknews-history"
   | "voice-history-sessions" | "voice-history-messages" | "db-sync-history";
 
 export async function operatorPause(): Promise<EmergencyState | null> {

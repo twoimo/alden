@@ -416,6 +416,45 @@ body.settings-view {
 [data-orb-role] { display:block; flex:none; width:20px; height:20px; pointer-events:none; }
 .settings-brand [data-orb-role] { width:48px; height:48px; }
 .settings-brand { gap:9px; margin-inline:4px; }
+.room-picker { position:relative; }
+.room-picker-options { position:absolute; top:100%; left:0; right:0; z-index:30; max-height:240px; overflow:auto; margin-top:4px; padding:4px; background:var(--surface); border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 24px #0004; }
+.room-picker-options button { display:block; width:100%; padding:9px 10px; border:0; border-radius:5px; text-align:left; background:transparent; color:var(--text); font-size:12px; }
+.room-picker-options button[aria-selected=true],.room-picker-options button:hover { background:var(--selected-surface,#20334c); }
+.room-picker-options p { margin:8px; color:var(--muted); font-size:12px; }
+
+.settings-shell[data-settings-page="reply"] .settings-content,
+.settings-shell[data-settings-page="geeknews"] .settings-content { padding:0; overflow:hidden; }
+.settings-view .automation-history { grid-template-columns:280px minmax(0,1fr); }
+.automation-history .history-rail header { padding:16px 14px 12px; }
+.automation-history .history-rail h1 { margin-bottom:10px; }
+.automation-history .history-rail select { width:100%; margin-top:6px; min-height:32px; padding:6px 9px; font-size:12px; background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:6px; }
+.automation-history-row { border-radius:5px; padding:10px; }
+.automation-history-row .automation-row-preview { font-size:12px; color:var(--text); white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+.automation-history-row .automation-row-meta { font-size:10px; }
+.automation-history-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 22px; }
+.automation-history-heading > div { min-width:0; }
+.automation-history-heading h2 { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.history-refresh { flex:none; padding:6px 9px; font-size:11px; border:1px solid var(--border); border-radius:6px; background:transparent; color:var(--muted); }
+.automation-history-detail { flex:1; min-height:0; overflow:auto; padding:18px 22px; }
+.automation-record-meta { display:flex; flex-wrap:wrap; align-items:center; gap:10px; font-size:11px; color:var(--muted); }
+.automation-outcome { padding:3px 7px; border-radius:4px; background:var(--surface); color:var(--text); }
+.automation-outcome[data-outcome="confirmed"] { color:#b7d7c6; background:#243b36; }
+.automation-outcome[data-outcome="unknown"], .automation-outcome[data-outcome="failed"] { color:#dfc297; background:#3e3427; }
+.automation-record-block { margin:18px 0 0; }
+.automation-record-block h3, .automation-context summary { font-size:12px; font-weight:600; margin:0 0 7px; color:var(--muted); }
+.automation-record-text { font-size:13px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+.automation-preview-note, .automation-slot { color:var(--muted); font-size:11px; line-height:1.6; margin:10px 0 0; }
+.automation-context { border-top:1px solid var(--border); margin-top:18px; padding-top:14px; }
+.automation-context summary, .automation-record-block summary { cursor:pointer; font-size:12px; }
+.automation-context blockquote { margin:10px 0 0; padding:0 0 0 10px; border-left:2px solid var(--border); }
+.automation-context-author { color:var(--muted); font-size:10px; }
+.automation-context p { font-size:12px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; margin:4px 0 0; }
+.automation-articles { padding-left:20px; font-size:13px; line-height:1.8; margin:12px 0 0; }
+.automation-articles li { padding:4px 0; }
+.automation-articles a { color:var(--text); text-underline-offset:3px; }
+@media(max-width:900px) { .settings-view .automation-history { grid-template-columns:220px minmax(0,1fr); } .automation-history-detail { padding:16px; } }
+@media(max-width:720px) { .settings-view .automation-history { grid-template-columns:165px minmax(0,1fr); } .automation-history .history-rail header { padding:14px 10px 10px; } .automation-history-heading { padding:14px 12px; gap:6px; } .automation-history-heading h2 { font-size:14px; } .automation-history-detail { padding:12px; } .history-refresh { padding:5px; font-size:10px; } }
+@media(max-width:600px) { .settings-view .automation-history { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(180px,34%) minmax(0,1fr); } .automation-history .history-rail { border-right:0; border-bottom:1px solid var(--border); } .automation-history .history-rail header { padding:10px; } .automation-history .history-rail h1 { margin-bottom:7px; } }
 .mini-graph-brand { display:flex; align-items:center; gap:8px; }
 .mini-graph-brand [data-orb-role] { width:28px; height:28px; }
 .settings-nav-item [data-orb-role] { margin-left:-1px; margin-right:-1px; }

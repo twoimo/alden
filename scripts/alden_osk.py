@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Alden's local OSK adapter. No hooks, MCP registration, Git sync or LLM calls.
 
-OSK v4.1.2 is bundled unchanged. Its public write API validates every imported
-node; its graph/contract APIs read the vault back. The SQLite ERE index remains
-the evidence source. Source relationships keep their meaning in the projection
-and body links, rather than being mislabeled OSK `derived-from` authority.
+OSK v4.1.2 is pinned with a documented adjacency performance patch. Its public
+write API validates ordinary notes; graph/contract APIs read them back. Imported
+Kakao records live in private non-node _sources with their original roles.
+Ordinary notes use genuine derived-from source coordinates, separate from ERE
+semantic relationships and from the human approval ledger.
 """
 from __future__ import annotations
 
@@ -251,6 +252,8 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             source = collect_knowledge_graph(state_root / "context.sqlite3", state_root=state_root,wait_for_reindex=True)
         if source.get("ok") is not True:
             raise RuntimeError("osk_source_unavailable")
+        from alden_osk_sources import ground_graph
+        source = ground_graph(state_root, source, secrets.filter_text)
         source = json.loads(secrets.filter_text(json.dumps(source, ensure_ascii=False))[0])
         checkpoint_path = home / "sync.json"
         checkpoint = _read_json(checkpoint_path, {"managed": {}, "generation": 0})
@@ -305,13 +308,19 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             summary = _clean(node.get("description") or node.get("label"), secrets, 78).replace("\n", " ").replace("［［", "") or "대화에서 찾은 지식"
             try:
                 if current is None:
-                    result = write.create_node(title, summary, body, "agent", space=space)
+                    refs = node.get('raw_sources') or []
+                    result = write.create_node(title, summary, body, "agent", space=space, edges={'derived-from':refs} if refs else None)
                 elif old:
                     history = _safe_directory(home / "history" / digest(key.encode())[:16])
                     backup = history / f"{current_hash}.md"
                     if not backup.exists():
                         backup.write_bytes(current)
-                    result = write.update_node(title, body=body, expect_hash=current_hash, summary=summary)
+                    refs = node.get('raw_sources') or []
+                    previous_refs = contract.parse(path).meta.get('derived-from') or []
+                    edge_changes = {'add_edges':{'derived-from':[ref for ref in refs if ref not in previous_refs]},
+                                    'remove_edges':{'derived-from':[ref for ref in previous_refs if ref not in refs]}} if refs else {}
+                    result = write.update_node(title, body=body, expect_hash=current_hash, summary=summary,
+                                               **edge_changes)
                 else:
                     # Recover an interrupted create only after exact persisted readback.
                     recovered = contract.parse(path)

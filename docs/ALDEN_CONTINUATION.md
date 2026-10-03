@@ -134,3 +134,36 @@ UI 250·desktop Rust 96·Clippy·TypeScript/Vite build가 통과했다. 최신 0
 연구·수식·범위는 `docs/architecture/alden-neural-plasticity-20261003.md`, 예시 원시 관측은 같은 이름의 디렉터리에 있다. Archify 순서도는 showcase 9/9, composition 오류/경고 0, 네 크기 브라우저 검사 통과, 밝은/어두운 테마 판독 완료다. Viewer 고정 제어는 영어다. UI 미리보기 포트1420은 이 작업이 만든 session22737이며, Cua browser ID2/tab1을 결과로 남겼고 viewport/media override를 복구했다.
 
 다음은 이 판본의 정상 commit/push·정확 SHA CI·unsigned 초안 asset manifest/download 대조다. 전체 11항 목표는 active다. 실제 Dot client 호출, 자연 음성/wake, 공개 Developer ID 공증과 기존 운영 worker 전환 등의 남은 항목을 완료로 표시하지 않는다. OSK 세션 착지 미정과 검토 대기·계수도 유지한다.
+
+
+## 독립 최종 평가와 Raw 재정리 요청 — 2026-10-03
+
+이전 goal 턴은 progress다. code de5cdf53e83f44efc2a8ffd34b7e8379e093a633과 원격 branch/tag가 일치하고 CI37124654188의 4개 작업이 성공했다. 0.3.12의 초안 릴리즈402518340에서 6개 파일을 다시 내려받아 SHA/ZIP CRC 및 설치 bundle 37파일을 대조했다. URL은 https://github.com/twoimo/openkakao-bot/releases/tag/untagged-c8580978538ef83a6d78 이다. 실제 alden_readonly MCP 호출이 이 Codex 세션에서 성공했으며 별도 Dot client는 아직 미확인이다. 새 네이티브 app inventory 요청은 30초 timeout/kernel reset이었다. 변함없는 CUA native 요청을 반복하거나 self-app 안전 차단을 우회하지 않는다.
+
+고정 DPO 후보의 아직 사용하지 않은 최종 합성 test 3쌍을 실제로 채점했고, 기준/후보 각 3개의 greedy 답변도 생성했다. 평균 loss0.693542887은 동일 policy/reference의 이론 ln(2)보다 0.05709% 높고 2/3의 선호 마진이 악화됐다. 실제 사실은 3/3→3/3, 출력3/3 동일하므로 후보를 승격하지 않는다. 상세 근거는 alden-dpo-final-test-20261003.md/.json이다. 원시 성공 기록은 /private/tmp/alden-dpo-final-test-20261003-ljm5t3ff/report.json 및 /private/tmp/alden-dpo-final-generation-20261003-6ptmt08c/report.json 이다. 두 실패 시도도 보존했으며 성공 표본에 합치지 않았다. 기존 임시 평가 환경의 패키지 부재와 생성 wrapper의 오래된 후보 경로를 수정했다. 운영 환경을 바꾸지 않고 별도 /Users/twoimo/Library/Application Support/openkakao/evaluation/runtime-cp31116-mlx0322 환경에 Python3.11.16/MLX0.32.2/MLX-LM0.31.3/Transformers5.17.0을 준비했다. 해당 환경의 모든 transitive pin은 /private/tmp/alden-dpo-runtime-20261003-pins.txt 에 있다. 학습·제품 모델 변경·cloud inference0, network-deny/negative probe·메모리 guard·공유 command 보존·swap 증가0을 확인했다. 이 test를 이후 후보의 독립 test로 재사용하지 않는다.
+
+사용자는 서명 준비 질문에 ‘기존 계정으로 준비 가능’이라고 답했다. 실제 인증서/Secrets가 설정됐다는 증거나 새 보안 자격 증명 발급 승인을 뜻하지 않는다. 현재 keychain에는 Apple Development만 있고 GitHub Secrets는 비어 있다. 정식 workflow는 Developer ID Application과 ALDEN_APPLE_* 6개를 요구한다. 계정의 기존 준비 경로를 이어 확인하되 private key를 채팅/로그로 받지 않는다.
+
+최신 사용자 요청은 ‘지식 그래프를 Raw 레벨부터, 참조 OSK 저장소 방식으로 다시 정리’다. 원래 전체 11항 목표에 대한 추가 지시로 보존한다. 현재 scripts/alden_osk.py는 OSK v4.1.2/commit9bbf08febc5a1fb2af068006735ed79cbdb71178을 실제 포함하지만 집계된 ERE를 노트로 복사하며, 원문 좌표와 derived-from 근거 배선이 부족하다. 공식 GitHub commit은 API로 확인했다. Raw의 upstream 규약은 _governance/Bylaws.md §2 및 Mechanism.md §8/9다. 에이전트 세션은 Scope/_raw/.records append-only 라운드, 외부 원자료는 _sources 비노드로 구분한다. 카카오 peer/outgoing_unclassified를 가짜 user/agent 라운드로 만들지 않는다. 원문·직접 편집 노트·승인 대장을 보존한다. 다음은 실제 published corpus 원본 행/ledger와 계정 scope를 확인하고, private 원자료 보존·정확한 근거 좌표·SDK의 create_node(edges)/update_node(add_edges)로 재생성하는 stage→검증→반영 경로를 구현한다. Raw/개인 원문은 public Git/릴리즈에 넣지 않는다.
+
+OSK user turn9 통합 검토는 본 작업 호출과 함께 수행했다. 새 Raw 요청은 명시 지시, 자동 goal 계속은 새 인간 발화가 아니다. capture 착지 미정과 검토 대기/계수는 유지하며 완료 raw 라운드가 없었다. 전역 OSK session scope를 추측해 결속하지 않는다. Alden 제품 vault는 그 별도 데이터다. 전체 goal은 active다.
+
+
+## Raw 계층 재구축 착수 — 2026-10-04
+
+새 scripts/alden_osk_sources.py와 tests/test_alden_osk_sources.py를 구현했다. 실제 OSK v4.1.2의 _sources 비노드 규약을 사용해 private의 외부 Kakao 원자료를 전체 보존하며, agent user/assistant 라운드로 재라벨하지 않는다. 원문을 12,000자 note 한도로 잘라 저장하지 않는다. Snapshot은 published corpus의 SQLite Online Backup API/읽기 전용으로 복제했으며 original Kakao DB에 접촉하지 않았다. private stage는 /Users/twoimo/Library/Application Support/openkakao/bujamentor/knowledge/alden-raw-rebuild-20261004-_kqn4fev 이다. snapshot 2,050,483 rows/quick_check ok/7.228초. Source 원래 corpus는 자연 writer에 의해 계속 증가하므로 이 값은 캡처 시점 기준이다.
+
+현재 첫 전체 Raw export도 완료됐다: 2,050,483 records, 4,031 immutable text chunks, 235.106초, generation7fdb19becdd047eeaf722a58e211f879. /private/tmp/alden-raw-rebuild-20261004-stage.json 과 stage/raw-export-receipt.json 에 묶인다. vault는 stage/knowledge/osk/vault 이고 각 source heading은 message-rowid-recordsha, source-index.sqlite3는 exact source ID의 모든 좌표를 저장한다. source code SHA48b513cd8b7f3bdc7e2ce6ff3ca3c1c211c856df5e0944ca8fd9c0140c224817로 실행했다. OSK 원본 secret filter를 적용했으며 raw/개인 원문은 Git/릴리즈에 넣지 않는다. 실제 모델/GUI active corpus/기존 노트는 아직 바꾸지 않았다.
+
+집중5개 통과: 긴 원문/큰 ID/역할/원본 bytes 보존, chunk completeness/기존 generation 불변, cancel stage 미사용, 중복 source ID 무병합, symlink 거부. 같은 녹색 검사를 변화 없이 반복하지 않는다. 실행 session3205는 exit0 완료다.
+
+미완료/다음: corpus의 rooms/meta와 결정 ledger도 정확한 원자료 좌표로 연결 → raw-backed 새 ERE를 stage에서 재생성(기존 요약 graph JSON을 Raw로 대체하지 않는다) → SDK write.create_node(edges={derived-from:refs}) / update_node(add_edges=...)로 source-grounded notes 갱신 → 직접 편집/보호/승인 대장과 stable IDs를 보존하며 live overlay/CAS → 실제 repo validator/좌표/데이터 해시/노트 coverage/누락/새 데이터 catch-up 검증 → bundle/설치/CI/릴리즈. 카카오 외부 수집 자료는 _sources, Alden이 참여한 실제 agent 세션만 _raw/.records 원형을 사용한다. _raw append_rounds로 peer/outgoing_unclassified를 가짜 agent 사용자 발화로 만들지 않는다.
+
+Root 실제 state는 bujamentor이며 published corpus _index_db_path는 knowledge/corpus/current.json의 account별 context.sqlite3다. 캡처 전 live alden_messages/context_messages 2,050,469, alden_rooms1181, managed151/active118/held0/groups4였고, 복제 시 14건 자연 증가가 있었다. 행별 source ID는 kakao:account:room:chat_id:log:log_id로 기존 evidence.source_event_ids와 일치한다. source rooms/meta에는 message가 아닌 metadata 원자료 좌표를 추가해야 한다. deprecated sourceEvent IDs의 ledger mapping은 producer helper를 읽고 정확히 연결한다.
+
+
+### 2026-10-04 Raw/history delivery checkpoint
+
+Latest requested changes: separate 카카오톡 답변 / 긱뉴스 전송 histories, searchable room chooser, explicit fixed local model names and removal of the sidebar subtitle. App 0.3.13 installed, 40-file SHA parity, deep/strict ad-hoc signature; three configuration/CLI files and five long-lived processes preserved. Raw baseline 2,050,483 rows retained; 115 active SDK notes with real derived-from source coordinates, 111 shared IDs retained, pending/conflicts 0. Duplicate identity/conflicts 0; 2,298 statistical length flags retained; six display label normalizations; 89 of 213 unnamed rooms receive participant-based display aliases. See `architecture/alden-raw-history-20261004.md` and its sanitized aggregate JSON. Original encrypted Kakao DB access, real sends, model promotion and signing credentials were not changed. Broader 11-part goal remains active with the previously documented voice/model/primary/Dot/production work pending.
+
+Private live receipt: `~/Library/Application Support/openkakao/bujamentor/knowledge/raw-rebuild-receipt-20261004.json`. Private reversible backup: `knowledge/raw-rebuild-backups/20261004-source-before`. Initial full Raw archive is an as-of snapshot; current referenced new/corrected records append immutable versions. Full-delta archive catch-up remains a distinct follow-up if needed; do not claim the frozen snapshot contains later unreferenced rows.

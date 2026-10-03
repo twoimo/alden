@@ -7,6 +7,22 @@ beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('settings menu catalog', () => {
+  it('searches normalized room names, disambiguates them and submits only a picked exact ID', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>(async action => action === 'history-rooms'
+      ? {ok:true, rooms:[{chat_id:'9007199254740997',chat_name:'ＡＢＣ 방'},{chat_id:'9007199254740998',chat_name:'ABC 방'}]}
+      : {ok:true, rooms:[]});
+    const control=wireSettingsPreferences(load);control.select('settings');await settle();
+    const search=document.getElementById('automation-room-search') as HTMLInputElement;
+    search.value='abc방';search.dispatchEvent(new Event('input'));
+    expect(document.querySelectorAll('#automation-room-options [role=option]')).toHaveLength(2);
+    expect(document.getElementById('automation-room-options')!.textContent).toContain('740997');
+    document.getElementById('automation-form')!.dispatchEvent(new Event('submit',{cancelable:true}));await settle();
+    expect(load.mock.calls.some(([name])=>name==='room-upsert')).toBe(false);
+    search.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',cancelable:true}));
+    search.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',cancelable:true}));
+    expect((document.getElementById('automation-room') as HTMLSelectElement).value).toBe('9007199254740998');
+    expect(search.getAttribute('aria-expanded')).toBe('false');control.dispose();
+  });
   it('reads on entry and confirms create, update and delete without a send', async () => {
     let catalog: Record<string, unknown>[] = [];
     const load = vi.fn<typeof fetchSettingsAction>(async (action, input = {}) => {

@@ -8,6 +8,15 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import alden_history as h
 
 class HistoryTests(unittest.TestCase):
+    def test_unnamed_display_alias_keeps_original_names_ids_and_account_scope(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory);(root/'knowledge').mkdir()
+            (root/'knowledge/room-aliases.json').write_text(json.dumps({'schema_version':1,'account':'account','rooms':{'9007199254740997':{'label':'민준 · 서연 대화 · #a1b2c3d4'}}}))
+            data={'account':'account','rooms':[{'chat_id':'9007199254740997','chat_name':'이름 없는 채팅방'},{'chat_id':'42','chat_name':'내가 정한 이름'}]}
+            value=h.room_display_aliases(root,data)
+            self.assertTrue(value['rooms'][0]['display_alias']);self.assertEqual(value['rooms'][0]['original_chat_name'],'이름 없는 채팅방')
+            self.assertEqual(value['rooms'][0]['chat_id'],'9007199254740997');self.assertEqual(value['rooms'][1]['chat_name'],'내가 정한 이름')
+            self.assertEqual(h.room_display_aliases(root,{**data,'account':'other'})['rooms'][0]['chat_name'],'이름 없는 채팅방')
     def test_all_confirmed_turns_survive_paging_without_cutting_a_pair(self):
         with TemporaryDirectory() as directory:
             root=Path(directory)

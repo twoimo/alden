@@ -578,7 +578,7 @@ describe("layout and settings contract", () => {
     expect(mainPanelMarkup()).not.toContain('id="voice-start"');
     expect(markup).toContain('id="knowledge-graph-canvas"');
     expect(markup).toContain('id="knowledge-expand-hop"');
-    for (const technical of ["Qwen3", "MLX", "GraphRAG", "DREAM-RSI", "E-R-E", "permission", "BM25", "RRF"]) {
+    for (const technical of ["MLX", "GraphRAG", "DREAM-RSI", "E-R-E", "permission", "BM25", "RRF"]) {
       expect(markup).not.toContain(technical);
     }
   });

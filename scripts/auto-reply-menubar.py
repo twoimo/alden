@@ -2697,7 +2697,7 @@ def main():
         )
         return 0
     action = _argv_flag_value("--action")
-    if action in {"history-rooms","history-messages","voice-history-sessions","voice-history-messages","db-sync-history"}:
+    if action in {"history-rooms","history-messages","voice-history-sessions","voice-history-messages","db-sync-history","reply-history","geeknews-history"}:
         from alden_history import read
         state_raw=_argv_flag_value("--state-root")
         state_root=Path(state_raw).expanduser() if state_raw else _DEFAULT_STATE_ROOT

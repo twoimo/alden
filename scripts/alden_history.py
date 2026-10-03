@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import time
 import uuid
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -100,12 +101,15 @@ def _local_cli(binary: Path, args: list[str]) -> dict:
     return data
 
 def read(state_root: Path, binary: Path, action: str, query: str | None = None, chat_id: str | None = None) -> dict:
+    if action in ('reply-history', 'geeknews-history'):
+        from alden_automation_history import read as automation_history
+        return automation_history(state_root, 'reply' if action == 'reply-history' else 'geeknews', query)
     options=json.loads(query) if query else {}
     if not isinstance(options,dict): raise ValueError('history_cursor_invalid')
     limit=options.get('limit',100)
     if type(limit) is not int or not 1<=limit<=200: raise ValueError('history_limit_invalid')
     if action=='history-rooms':
-        return _local_cli(binary,['local-history-rooms'])
+        return room_display_aliases(state_root, _local_cli(binary,['local-history-rooms']))
     if action=='history-messages':
         if not chat_id or not chat_id.isascii() or not chat_id.isdigit() or not 0<int(chat_id)<2**63:
             raise ValueError('history_chat_invalid')
@@ -148,3 +152,23 @@ def read(state_root: Path, binary: Path, action: str, query: str | None = None, 
                     if live.returncode or not current['pid_start'] or live.stdout.strip()!=current['pid_start']:current['phase']='interrupted'
             return {'ok':True,'items':items,'current':current,'next':items[-1]['id'] if len(rows)>limit else None}
     raise ValueError('history_action_invalid')
+
+
+def room_display_aliases(state_root: Path, data: dict) -> dict:
+    """Use grounded aliases for unnamed rooms without renaming Kakao data."""
+    path=state_root/'knowledge/room-aliases.json'
+    if not path.is_file() or path.is_symlink() or path.parent.is_symlink() or path.stat().st_size>1024*1024:return data
+    try: aliases=json.loads(path.read_text())
+    except (OSError,ValueError):return data
+    if aliases.get('schema_version')!=1 or aliases.get('account')!=data.get('account'):return data
+    names=aliases.get('rooms')
+    if not isinstance(names,dict):return data
+    rows=[]
+    for row in data.get('rooms',[]):
+        if not isinstance(row,dict):continue
+        title=''.join(unicodedata.normalize('NFKC',str(row.get('chat_name') or '')).split())
+        display=names.get(str(row.get('chat_id')),{}).get('label')
+        if title in ('','이름없는채팅방','이름없는대화방','(알수없음)','제목미확인') and isinstance(display,str) and display:
+            row={**row,'original_chat_name':row.get('chat_name'),'chat_name':display,'display_alias':True}
+        rows.append(row)
+    return {**data,'rooms':rows}

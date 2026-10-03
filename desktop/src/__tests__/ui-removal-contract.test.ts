@@ -36,7 +36,7 @@ const REMOVED_TOKENS = [
 
 const SETTINGS_SECTIONS = [
   "채팅방 자동화",
-  "답변 방식",
+  "대화 모델",
   "음성 대화",
 ];
 
@@ -66,9 +66,12 @@ describe("removed UI surfaces stay removed", () => {
 
   it("reintroduces no removed control in the settings markup", () => {
     expect(offending(SETTINGS)).toEqual([]);
-    for (const technical of ["Qwen3", "MLX", "GraphRAG", "DREAM-RSI", "E-R-E", "BM25", "RRF", "threshold", "RMS"]) {
+    // Model names are now an explicit user request; diagnostic jargon remains absent.
+    for (const technical of ["MLX", "GraphRAG", "DREAM-RSI", "E-R-E", "BM25", "RRF", "threshold", "RMS"]) {
       expect(SETTINGS).not.toContain(technical);
     }
+    expect(SETTINGS).toContain('Qwen3.8 Flash Next');
+    expect(SETTINGS).toContain('Qwen3.8 27B');
   });
 
   it("reintroduces no removed control in the stylesheet", () => {

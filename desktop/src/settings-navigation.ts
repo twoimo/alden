@@ -44,13 +44,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 */
-import { createIcons, Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X } from "lucide";
+import { createIcons, Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, Rss, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X } from "lucide";
 
-export type SettingsPage = "conversation" | "voice" | "memory" | "history" | "settings";
-const labels: Record<SettingsPage, string> = { conversation: "카카오톡 대화", voice: "음성 대화", memory: "지식 그래프", history: "기억 정리", settings: "설정" };
+export type SettingsPage = "conversation" | "reply" | "geeknews" | "voice" | "memory" | "history" | "settings";
+const labels: Record<SettingsPage, string> = { conversation: "카카오톡 대화", reply: "카카오톡 답변", geeknews: "긱뉴스 전송", voice: "음성 대화", memory: "지식 그래프", history: "기억 정리", settings: "설정" };
 
 export function renderSettingsIcons(): void {
-  createIcons({ icons: { Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X }, attrs: { "stroke-width": 1.6, "aria-hidden": "true" } });
+  createIcons({ icons: { Aperture, AudioLines, ChevronDown, History, Laptop, MessageCircle, MessagesSquare, Mic, Network, Plus, Rss, ShieldCheck, Sparkles, Waypoints, Zap, Database, Settings, X }, attrs: { "stroke-width": 1.6, "aria-hidden": "true" } });
 }
 
 export function wireSettingsNavigation(root: Document = document, changed: (page: SettingsPage) => void = () => undefined): { current: () => SettingsPage; dispose: () => void } {

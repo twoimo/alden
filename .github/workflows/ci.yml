@@ -170,6 +170,9 @@ jobs:
           tests.test_alden_osk
           tests.test_alden_status_mcp
           tests.test_alden_history
+          tests.test_alden_automation_history
+          tests.test_alden_osk_sources
+          tests.test_alden_corpus_topics
           tests.test_alden_corpus
           tests.test_alden_desktop_launchers
           tests.test_alden_menubar_runtime_payload

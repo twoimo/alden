@@ -9,6 +9,8 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
   const get = <T extends HTMLElement>(id: string) => root.getElementById(id) as T;
   const form = get<HTMLFormElement>('automation-form');
   const select = get<HTMLSelectElement>('automation-room');
+  const search = get<HTMLInputElement>('automation-room-search');
+  const options = get<HTMLElement>('automation-room-options');
   const title = get<HTMLInputElement>('automation-title-input');
   const reply = get<HTMLInputElement>('automation-reply');
   const news = get<HTMLInputElement>('automation-geeknews');
@@ -20,6 +22,28 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
   const events = new AbortController();
   let dead = false, busy = false, reading = false, visible = true, page: SettingsPage = 'memory';
   let catalog: Row[] = [];
+  let roomOptions: Array<{id:string;label:string}> = [], matches: Array<{id:string;label:string}> = [], cursor = 0;
+  const normalize = (text:string) => text.normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/\s+/g,'');
+  const closePicker = () => { options.hidden = true; search.setAttribute('aria-expanded','false'); search.removeAttribute('aria-activedescendant'); };
+  const syncPicker = () => { search.value = roomOptions.find(room=>room.id===select.value)?.label ?? ''; closePicker(); };
+  const pick = (room:{id:string;label:string}) => { search.focus(); select.value = room.id; search.value = room.label; closePicker(); select.dispatchEvent(new Event('change')); };
+  const showPicker = () => {
+    if (busy || dead) return;
+    const query = normalize(search.value); matches = roomOptions.filter(room=>normalize(room.label).includes(query)||room.id.includes(query)).slice(0,60); cursor = Math.min(cursor,Math.max(0,matches.length-1));
+    options.replaceChildren();
+    matches.forEach((room,index)=>{ const button=root.createElement('button'); button.type='button'; button.id='automation-room-option-'+index; button.setAttribute('role','option'); button.setAttribute('aria-selected',String(index===cursor)); button.textContent=room.label; button.title=room.label+' · '+room.id; button.onpointerdown=event=>event.preventDefault(); button.onclick=()=>pick(room); options.append(button); });
+    if (!matches.length) { const empty=root.createElement('p'); empty.textContent='검색 결과 없음'; options.append(empty); }
+    options.hidden=false;search.setAttribute('aria-expanded','true');
+    if(matches[cursor])search.setAttribute('aria-activedescendant','automation-room-option-'+cursor);else search.removeAttribute('aria-activedescendant');
+  };
+  search.addEventListener('input',()=>{select.value='';cursor=0;showPicker();},{signal:events.signal});
+  search.addEventListener('focus',showPicker,{signal:events.signal});
+  search.addEventListener('blur',closePicker,{signal:events.signal});
+  search.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){closePicker();return;}
+    if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();if(options.hidden){cursor=0;showPicker();}else{cursor=Math.max(0,Math.min(matches.length-1,cursor+(event.key==='ArrowDown'?1:-1)));showPicker();}options.querySelector('[aria-selected="true"]')?.scrollIntoView?.({block:'nearest'});}
+    else if(event.key==='Enter'&&!options.hidden){event.preventDefault();if(matches[cursor])pick(matches[cursor]);}
+  },{signal:events.signal});
   const message = (text: string) => { if (!dead) { status.textContent = text; status.hidden = !text; } };
   const setBusy = (flag: boolean) => {
     busy = flag;
@@ -30,6 +54,7 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
   const edit = (row: Row) => {
     showEditor(true);
     select.value = String(row.chat_id);
+    syncPicker();
     title.value = String(row.title ?? '');
     reply.checked = row.auto_reply === true;
     news.checked = row.geeknews === true;
@@ -83,8 +108,11 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
         select.replaceChildren(option('채팅방 선택', ''));
         const all = new Map((rooms.rooms as Row[]).map(room => [String(room.chat_id), String(room.chat_name || '이름 없는 대화방')]));
         for (const row of catalog) if (!all.has(String(row.chat_id))) all.set(String(row.chat_id), String(row.title || '이름 없는 대화방'));
-        for (const [id, label] of all) select.append(option(label, id));
+        const counts = new Map<string,number>();for(const label of all.values()){const key=normalize(label);counts.set(key,(counts.get(key)??0)+1);}
+        roomOptions = [...all].map(([id,label])=>({id,label:(counts.get(normalize(label))??0)>1?`${label} · ${id}`:label}));
+        for (const {id, label} of roomOptions) select.append(option(label, id));
         select.value = previous;
+        if (!search.value || select.value) syncPicker();
       }
       return true;
     } catch { message('자동화 등록 정보를 불러오지 못했습니다.'); return false; }
@@ -103,7 +131,8 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
     finally { setBusy(false); }
   }
   form.addEventListener('submit', event => {
-    event.preventDefault(); if (busy || reading || dead || !select.value) return;
+    event.preventDefault(); if (busy || reading || dead) return;
+    if (!select.value) { message('검색 결과에서 채팅방을 선택하세요.'); search.focus(); return; }
     const id = select.value, payload = { title: title.value.trim() || select.selectedOptions[0]?.textContent || '', auto_reply: reply.checked, geeknews: news.checked };
     setBusy(true); message('자동화 설정을 저장하는 중입니다.');
     void (async () => {
@@ -118,12 +147,13 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
     })();
   }, { signal: events.signal });
   get<HTMLElement>('automation-new').addEventListener('click', () => {
-    if (busy) return; showEditor(true); select.value = ''; title.value = ''; reply.checked = news.checked = false; delete form.dataset.editingId; get<HTMLElement>('automation-editor-title').textContent = '새 자동화 등록'; message(''); render(); select.focus();
+    if (busy) return; showEditor(true); select.value = ''; search.value = ''; title.value = ''; reply.checked = news.checked = false; delete form.dataset.editingId; get<HTMLElement>('automation-editor-title').textContent = '새 자동화 등록'; message(''); render(); search.focus();
   }, { signal: events.signal });
   get<HTMLElement>('automation-cancel').addEventListener('click', () => {
     if (busy) return; showEditor(false); delete form.dataset.editingId; message(''); render(); get<HTMLElement>('automation-new').focus();
   }, { signal: events.signal });
   select.addEventListener('change', () => {
+    syncPicker();
     const row = catalog.find(item => String(item.chat_id) === select.value);
     if (row) edit(row); else { title.value = select.value ? select.selectedOptions[0]?.textContent ?? '' : ''; reply.checked = news.checked = false; delete form.dataset.editingId; get<HTMLElement>('automation-editor-title').textContent = '새 자동화 등록'; render(); }
   }, { signal: events.signal });
