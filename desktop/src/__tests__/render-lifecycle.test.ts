@@ -32,6 +32,15 @@ class FakeScheduler implements FrameScheduler {
 }
 
 describe("render loop lifecycle races", () => {
+  it('keeps the 30 fps cadence under display timestamp rounding without a hidden backlog', () => {
+    const scheduler=new FakeScheduler(),loop=new AnimationLoop(()=>undefined,scheduler);
+    loop.setInteractive(true);loop.start();
+    for(let frame=1;frame<=300;frame++)scheduler.step(frame*1000/60 + (frame%3-1)*.15);
+    expect(loop.renderCount).toBeGreaterThanOrEqual(149);
+    expect(loop.renderCount).toBeLessThanOrEqual(151);
+    loop.stop();scheduler.step(10000);
+    expect(scheduler.callbacks.size).toBe(0);
+  });
   it("does not requeue a RAF when hidden during the current frame", () => {
     const scheduler = new FakeScheduler();
     let lifecycle: RenderLifecycle;

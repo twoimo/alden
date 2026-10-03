@@ -16,7 +16,7 @@ describe('graph overview camera', () => {
     expect(distance).toBeLessThan(12);
   });
   it('preserves the normal camera distance when the graph already fits', () => {
-    expect(overviewCameraDistance([{ x: 0, y: 0, z: 0 }], 1200, 632)).toBe(5.2);
-    expect(overviewCameraDistance([], 640, 470)).toBe(5.2);
+    expect(overviewCameraDistance([{ x: 0, y: 0, z: 0 }], 1200, 632)).toBe(3.6);
+    expect(overviewCameraDistance([], 640, 470)).toBe(3.6);
   });
 });

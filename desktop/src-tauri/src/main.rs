@@ -88,6 +88,11 @@ async fn fetch_voice_status(
 }
 
 #[tauri::command]
+fn fetch_knowledge_revision(bridge: tauri::State<'_, PythonBridge>) -> Option<String> {
+    bridge.knowledge_revision()
+}
+
+#[tauri::command]
 async fn fetch_emergency_state(
     bridge: tauri::State<'_, PythonBridge>,
 ) -> Result<SafeEmergencyState, String> {
@@ -308,6 +313,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             fetch_runtime_snapshot,
             fetch_voice_status,
+            fetch_knowledge_revision,
             fetch_emergency_state,
             operator_resume,
             operator_pause,

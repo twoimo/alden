@@ -28,6 +28,7 @@ export class AnimationLoop {
   private lastRenderAtMs: number | null = null;
   private busyLoad = 0;
   private voiceActive = false;
+  private interactive = false;
   private readonly maxDtSeconds = 0.25;
   renderCount = 0;
 
@@ -41,6 +42,7 @@ export class AnimationLoop {
   }
 
   setVoiceActive(active: boolean): void { this.voiceActive = active; }
+  setInteractive(active: boolean): void { this.interactive = active; }
 
   start(): void {
     if (this.running) return;
@@ -85,7 +87,7 @@ export class AnimationLoop {
   }
 
   private frameIntervalMs(): number {
-    return this.voiceActive || this.busyLoad > 0.08 ? 1000 / 30 : 1000 / 15;
+    return this.interactive || this.voiceActive || this.busyLoad > 0.08 ? 1000 / 30 : 1000 / 15;
   }
 
   private tick(nowMs: number, owner: FrameRequestCallback): void {
@@ -94,11 +96,14 @@ export class AnimationLoop {
     // this method explicitly schedules one below.
     this.rafId = null;
     const elapsedRender = nowMs - this.lastRenderMs;
-    if (elapsedRender >= this.frameIntervalMs()) {
+    const interval = this.frameIntervalMs();
+    if (elapsedRender + 0.5 >= interval) {
       const rawDt = Number.isFinite(nowMs) ? Math.max(0, nowMs - this.lastTickMs) / 1000 : 0;
       const dt = Math.min(this.maxDtSeconds, rawDt);
       this.lastTickMs = nowMs;
-      this.lastRenderMs = nowMs;
+      // Keep the cadence phase: rounding around 33.33 ms must not repeatedly
+      // skip to a third 60 Hz display refresh and turn a 30 fps cap into 23 fps.
+      this.lastRenderMs += Math.max(1, Math.floor((elapsedRender + 0.5) / interval)) * interval;
       this.renderFrame(dt, nowMs);
       this.renderCount += 1;
       this.lastRenderAtMs = Number.isFinite(nowMs) ? nowMs : this.scheduler.now();

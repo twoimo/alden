@@ -84,7 +84,7 @@ function parseEvidence(value: unknown): KnowledgeEvidence {
   };
 }
 
-export function parseKnowledgeGraph(payload: Record<string, unknown> | null): KnowledgeGraph {
+export function parseKnowledgeGraph(payload: Record<string, unknown> | null, nowMs = Date.now()): KnowledgeGraph {
   const nodes = Array.isArray(payload?.nodes)
     ? payload.nodes.flatMap((raw): KnowledgeNode[] => {
       const item = objectValue(raw);
@@ -92,13 +92,15 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null): Kn
       const id = stringValue(item.id);
       const label = stringValue(item.label);
       if (!id || !label || id.startsWith("message:") || id.startsWith("msg:")) return [];
+      const evidence = parseEvidence(item.evidence);
+      if (evidence.retracted) return [];
       return [{
         id,
         label,
         category: stringValue(item.category),
         importance: Math.max(0, Math.min(100, numberValue(item.importance))),
         updatedAt: Math.max(0, numberValue(item.updated_at)),
-        evidence: parseEvidence(item.evidence),
+        evidence,
         description: stringValue(item.description).slice(0, 2400),
         facts: Array.isArray(item.facts) ? item.facts.filter((entry): entry is string => typeof entry === 'string').slice(0, 6).map(entry => entry.slice(0, 600)) : [],
       }];
@@ -112,6 +114,9 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null): Kn
       const source = stringValue(item.source);
       const target = stringValue(item.target);
       if (!nodeIds.has(source) || !nodeIds.has(target)) return [];
+      const evidence = parseEvidence(item.evidence), validTo = stringValue(item.valid_to);
+      const until = Date.parse(validTo);
+      if (evidence.retracted || (Number.isFinite(until) && until <= nowMs)) return [];
       return [{
         source,
         relation: stringValue(item.relation),
@@ -120,9 +125,9 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null): Kn
         weight: Math.max(0, numberValue(item.weight)),
         roomId: stringValue(item.room_id),
         validFrom: stringValue(item.valid_from),
-        validTo: stringValue(item.valid_to),
+        validTo,
         evidenceMessageId: stringValue(item.evidence_message_id),
-        evidence: parseEvidence(item.evidence),
+        evidence,
       }];
     })
     : [];

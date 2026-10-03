@@ -95,7 +95,7 @@ ChatGPT 자체 UI조작 차단은 우회하지 않는다. 필요시 실제 준�
 필수Python목록 추출시23개 지정메서드를 모듈 전체로 축약·중복 실행한 명령 오류를 발견했다. 제품 regression으로 오해하지 않는다. `.github/workflows/ci.yml`의77개 full selector를 보존한 재실행은 exit0이다. 이전 불완전/범위가다른 로그는 통과근거로 사용하지 않는다.
 최신 source build·ad-hoc deep/strict 완료,0.3.11 설치를 진행한다. private snapshots·비공개 대화원문은git에 넣지 않는다. source commit/push/CI/릴리즈·설치filematch·postinstall native가남았다.
 
-## 更新목표·0.3.11 설치·MCP등록 —2026-10-03
+## 갱신 목표·0.3.11 설치·MCP등록 —2026-10-03
 
 사용자가 목표원문을0eef40c0…로 교체했다. 원문 전체를 다시 읽었고 기존11범위에 신경가소성·시냅스·실시간물리리모델링·원논문/정량검증이 추가됐다. 화면상단은 제목/항목수/갱신시각 한 줄을 요청했다. 전체목표는 진행중이며 완료/차단으로 바꾸지 않는다.
 현재 설치0.3.11, build/install36경로일치·deep/strict·config/enrollment/stableCLI inode와SHA·기존5프로세스보존을 확인했다. pinnedPython의정확CI77selector1207/28skip 통과. UI237·desktop95·CLI1151/1ignored·각Clippy통과.
@@ -103,3 +103,34 @@ ChatGPT 자체 UI조작 차단은 우회하지 않는다. 필요시 실제 준�
 설치STDIO init/list/call/EOF를 실제persisted command/args로확인했다: server0.2.0·app0.3.11·OSKready/pending0/conflicts0, E5reachable. 생성metadata0.5s제한은unavailable1회였으나별도GET11234는200/7rows이고둘다loaded boolean필드를제공했다. 서비스/모델변경0. 실제Dotclient호출은미확인.
 최종read-only native캡처10장은확보됐다. 데이터조회/가로넘침은확인했으나후반notification-before-draw의고정250ms기다림조건1건은실패하여전체native검사완료라고하지않는다. 결과null을wrapper가 .get한오류는검사실패와분리한다. 이전state가성공한것을이번source완료증거로대체하지않는다.
 다음: 이소스를0.3.11기준선commit/push·정확SHA CI로보존하면서, 상단한줄과source변화에반응하는신경형그래프를0.3.12에서진행한다. 추가프로세스/모델/실전발신을만들지않는다. OSKsessioncapture미결속·검토대기/계수는기존처럼남아있다.
+
+0.3.11 기준선31e97e6을정상commit/push해PR27의원격CI를시작했다. 모델/서비스/설정변경은없다. 사용자상단한줄요청은ui.ts/main.ts/settings.css/hologram.ts에수정했으며UI237·tsc/Vite build통과. 아직새한줄앱설치/렌더검증은남았다.
+신경형새구현을진행한다. Trachtenberg2002 fullauthorlabPDF(7p), Matsuzaki2004 publisherabstract, Turrigiano1998 publisherabstract를확인했고Holtmaat2009는publisher본문접근실패/검색초록범위를구분한다. 논문근거는생성/제거·strength/size·stabilization의시각적영감이며Alden학습/생물학적재현성공주장이아니다.
+새knowledge/plasticity.ts: 24노드/144pair cap,source트리플불변,pairbundling,deletion/retraction필터,degree-normalizedspring+softrepulsion+anchor,damping11/s,h1/120,max8steps/frame,typedbuffers,settle/quiet종료를구현했다. 아직renderer에연결하지않았고집중검사·측정은남았다. 다음은strength/lifecycle를gpuinstancebridge로보내고node좌표의지속성을지키며cortical형상·nativecheaprevision(기존PythonBridge stateRootfixedmetadata)으로실시간갱신을연결한다. 반복 fullPython/process polling을늘리지않는다.
+
+## 신경형 그래프 통합 — 현재 상태
+
+0.3.11 commit31e97e6의 원격 CI37114137368은 success다. 기존 자산 링크와 0.3.10 초안은 보존했다. 새 헤더는 `지식 그래프 · 항목 수 · HH:mm 갱신` 한 줄로 구현했고, IAB1280×720의 실제 header height20px·nowrap·오류 overlay없음·console error0을 확인했다. `/private/tmp/alden-neural-20261003/header-one-line-fixture.png`는 예시 화면이다.
+0.3.12를 build/install했고 config/enrollment/stableCLI와 기존5프로세스 보존을 재확인했다. 이 설치는 상단 한 줄과 기존 renderer이며, 그 뒤 개발 중인 신경형 renderer의 설치 증거로 사용하지 않는다.
+`plasticity.ts`는 정적 검토의 경계 잔류력·NaN 전파·elapsed time 손실·빈 진단 문제를 수정했다. 활성 endpoint와 validTo를 확인하며 fixed arrays로 source 기반 힘을 적용한다. 집중6개 통과. 느린10fps에서도 같은 elapsed time을 처리하고 정상30/60fps 좌표가 일치한다. 단위/시간은 UI 기계 모델이며 생물학적 실험 재현 주장이 아니다.
+`synapses.ts`는 하나의 GPU instanced ribbon batch·144active/288transient cap·성장/수축·강도 평활·퇴역 좌표 보존·reduced motion을 구현했다. GPU별 슬롯 제거 뒤 위치 섞임과 GLSL length 이름 충돌을 수정했다. Header-only 설치에는 아직 연결되지 않았었다.
+현재 개발 renderer는 Hologram에 physics와synapsebatch를 연결했고 stable ID hash anchors·source별질량·접촉력·기존cameraanchor·정적folded cortex를 사용한다. 기존per-edgeLine을제거하고재구성때도bridgeMesh를보존한다. 실제jobLoad와 별개인interactive frame flag를 추가했다. IAB의 첫 신경형 화면과console error0을 확인했으나, 수렴 뒤의 다리·드릴다운·숨김/복원·지속 자원·실제 수정 감지·전후프레임 측정은 아직 남았다.
+Cua 세션이 중단 후 reset되어 예전 sidebarAuditTab은 사라졌다. 새 neuralBrowser ID2·neuralTab1·neuralFs·neuralCdp가 현재 binding이다. 검증용 tab1은 새로 만들었으며 user tab을 닫지 않았다. owned devserver1420 session98050, `/private/tmp/alden-neural-dev-20261003.log`. transient viewport는 아직 새 override가 없다.
+다음: 현재 GPU/수렴 상태의 실제 진단 → 생성/철회 case와리소스검사 → PythonBridge stateRoot의고정sync.json metadata만읽는revision경로(추가Python프로세스없는1s감지·15s복구) → native앞화면/restore timing의250ms가정수정 →0.3.12 전체neurobuild/install36파일·checks·정확SHA CI·릴리즈. 현재prototype모듈이생긴것을전체goal완료로계산하지않는다.
+
+
+## 동적 그래프 0.3.12 전달 — 2026-10-03
+
+사용자는 정적인 그래프를 세련되고 빠르며 역동적으로 고도화하도록 요청했다. 이전의 가시 상태 수렴 후 렌더 중지 정책을 갱신했다. 물리 계산은 수렴 후 멈추고, 보이는 동안에는 작은 노드 움직임과 다리의 표현 흐름을 30fps 상한으로 유지한다. 숨김·닫힘·잠김, 동작 줄이기와 비상 중지의 연산 중지 원칙은 유지한다. 실제 학습·추론 신호를 만들어내지 않는다.
+
+카메라 감쇠 12/s, 다리 전이 상수 0.16s, 24노드/144활성 다리, persistent instance batch와 안정적인 ID 위치를 통합했다. 원본 관계·근거는 바꾸지 않는다. 현재 evidence의 철회/기한을 표시에서 제외한다. 기존 PythonBridge의 고정 checkpoint metadata를 1초마다 확인하며, 변경 시 전체 read/15초 fallback을 사용한다. 숨김 epoch의 늦은 응답을 버리고 추가 Python 프로세스로 metadata를 읽지 않는다.
+
+동일 1200×760 예시의 5초 표본 각 1회에서 cadence 수정 전후 22.99→30.17fps(+31.22%), 프레임 간격 p95 50.1→35.2ms(−29.74%)다. 이 간격은 CPU/GPU 렌더 시간이나 추론 속도가 아니다. 33.33ms 목표 간격보다 p95가 1.87ms 길다. 물리·다리 배열은 18,960바이트이며 전체 앱 메모리와 구분한다. 숨김 2초·모션 감소 3초·예시 일시 중지 1.5초에서 추가 렌더 0회를 확인했다.
+
+UI 250·desktop Rust 96·Clippy·TypeScript/Vite build가 통과했다. 최신 0.3.12를 ad-hoc build/install하고 전체 bundle 37파일 SHA/deep strict, 기존 config/enrollment/stable CLI의 inode·mtime·SHA와 5프로세스 보존을 확인했다. 마지막 설치 로그는 `/private/tmp/alden-dynamic-0312-install-latest-20261003.log`, receipt는 `/private/tmp/alden-dynamic-20261003/installed-final.json`이다.
+
+설치본의 독립 read-only workspace/popover 검사가 모두 통과했다. 기본/최소 다섯 페이지·탐색 복원·합성 숨김/복원을 확인했고, native 전환 첫 프레임 n=10 p95/최대 13ms다. 실제 primary 메뉴바 입력·물리 잠금·사람 음성과 혼동하지 않는다. private 결과는 `/private/tmp/alden-dynamic-native-delivered-0312-20261003` 및 `/private/tmp/alden-dynamic-popover-delivered-0312-20261003`이며, 공개 파일에는 안전한 집계와 예시 데이터만 넣었다.
+
+연구·수식·범위는 `docs/architecture/alden-neural-plasticity-20261003.md`, 예시 원시 관측은 같은 이름의 디렉터리에 있다. Archify 순서도는 showcase 9/9, composition 오류/경고 0, 네 크기 브라우저 검사 통과, 밝은/어두운 테마 판독 완료다. Viewer 고정 제어는 영어다. UI 미리보기 포트1420은 이 작업이 만든 session22737이며, Cua browser ID2/tab1을 결과로 남겼고 viewport/media override를 복구했다.
+
+다음은 이 판본의 정상 commit/push·정확 SHA CI·unsigned 초안 asset manifest/download 대조다. 전체 11항 목표는 active다. 실제 Dot client 호출, 자연 음성/wake, 공개 Developer ID 공증과 기존 운영 worker 전환 등의 남은 항목을 완료로 표시하지 않는다. OSK 세션 착지 미정과 검토 대기·계수도 유지한다.

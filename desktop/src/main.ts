@@ -39,6 +39,7 @@ import {
   cancelRuntimeRequest,
   cancelModelSwap,
   fetchEmergencyState,
+  fetchKnowledgeRevision,
   fetchRuntimeSnapshot,
   fetchSettingsAction,
   normalizeLocalModelId,
@@ -420,11 +421,11 @@ function renderKnowledgeSync(payload: Record<string, unknown> | null): void {
   const raw = payload?.osk;
   const state = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
   if (!state || state.state !== "ready") {
-    setText("knowledge-sync", state?.state === "paused" ? "기억 갱신이 일시 중지되었습니다." : state?.state === "preparing" ? "대화에서 첫 기억을 정리하고 있습니다." : "기억의 갱신 상태를 확인할 수 없습니다.");
+    setText("knowledge-sync", state?.state === "paused" ? "갱신 중지" : state?.state === "preparing" ? "첫 기억 정리 중" : "갱신 확인 필요");
     return;
   }
-  const at = typeof state.synced_at === "number" ? new Date(state.synced_at * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }) : "";
-  setText("knowledge-sync", Number(state.conflicts) > 0 ? "직접 편집한 기억을 보존했습니다." : Number(state.pending) > 0 ? "새로운 기억을 정리하고 있습니다." : at ? `마지막 정리 ${at}` : "기억을 자동으로 정리합니다.");
+  const at = typeof state.synced_at === "number" ? new Date(state.synced_at * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12:false }) : "";
+  setText("knowledge-sync", Number(state.conflicts) > 0 ? "직접 편집 보존" : Number(state.pending) > 0 ? "기억 정리 중" : at ? `${at} 갱신` : "자동 갱신");
 }
 
 export async function setupKnowledgeGraph(
@@ -455,7 +456,7 @@ export async function setupKnowledgeGraph(
 
   setText(
     "knowledge-summary",
-    `대화에서 찾은 연결 항목 ${graph.nodes.length}개`,
+    `${graph.nodes.length}개`,
   );
   setText("knowledge-mode", payload?.stale === true ? "자료 확인 필요" : "연결된 주제");
   renderKnowledgeSync(payload);
@@ -660,8 +661,8 @@ export async function bootSettings(
         if (version === graphVersion) return;
         graphVersion = version;
         graph.replaceGraph(next);
-        setText("knowledge-summary", `대화에서 찾은 연결 항목 ${next.nodes.length}개`);
-      });
+        setText("knowledge-summary", `${next.nodes.length}개`);
+      }, 15000, fetchKnowledgeRevision);
       const lifecycle = new RenderLifecycle(graph,
         () => refresh.stop(),
         () => refresh.start());
@@ -727,7 +728,8 @@ export async function bootPanel(
       if(!payload||payload.ok!==true)throw new Error('graph_unavailable');
       const {KnowledgeHologram}=await import('./knowledge/hologram');
       const graph=new KnowledgeHologram(canvas,parsed,({node})=>setText('panel-knowledge-title',node?.label??'카카오톡'),()=>undefined,'popover',undefined,voice=>panelOrbs?.setVoice(voice));
-      const refresh=new KnowledgeRefresh(()=>dependencies.loadKnowledge('knowledge-graph'),next=>{if(next?.ok===true)graph.replaceGraph(parseKnowledgeGraph(next));});
+      let graphVersion=JSON.stringify(parsed);
+      const refresh=new KnowledgeRefresh(()=>dependencies.loadKnowledge('knowledge-graph'),next=>{if(next?.ok===true){const updated=parseKnowledgeGraph(next),version=JSON.stringify(updated);if(version!==graphVersion){graphVersion=version;graph.replaceGraph(updated);}}},15000,fetchKnowledgeRevision);
       panelGraph = graph;
       return {get renderCount(){return graph.renderCount;},start:()=>{graph.start();refresh.start();panelOrbs?.start();},stop:()=>{refresh.stop();graph.stop();panelOrbs?.stop();},diagnostics:()=>graph.diagnostics(),setSignals:(load,rms)=>graph.setSignals(load,rms),dispose:()=>{refresh.stop();graph.dispose();panelOrbs?.dispose();}};
     },

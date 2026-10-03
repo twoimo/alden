@@ -2,6 +2,38 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeRefresh } from "../knowledge/refresh";
 afterEach(() => vi.useRealTimers());
 describe("local knowledge refresh", () => {
+  it('probes metadata once per second and reads only on revision changes or fallback', async () => {
+    vi.useFakeTimers();
+    let revision = 'first';
+    const probe = vi.fn(async () => revision), read = vi.fn(async () => ({ok:true})), apply = vi.fn();
+    const refresh = new KnowledgeRefresh(read, apply, 15000, probe);
+    refresh.start(); await vi.advanceTimersByTimeAsync(5000);
+    expect(probe).toHaveBeenCalledTimes(6); expect(read).toHaveBeenCalledTimes(1);
+    revision = 'replacement'; await vi.advanceTimersByTimeAsync(1000);
+    expect(read).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(15000); expect(read).toHaveBeenCalledTimes(3);
+    refresh.stop(); const probes=probe.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(20000); expect(probe).toHaveBeenCalledTimes(probes);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+  it('discards a hidden metadata response before starting a full graph read', async () => {
+    vi.useFakeTimers();
+    let resolve!: (revision:string) => void;
+    const probe=vi.fn(()=>new Promise<string>(done=>{resolve=done;})),read=vi.fn(async()=>({ok:true}));
+    const refresh=new KnowledgeRefresh(read,vi.fn(),15000,probe);
+    refresh.start(); await vi.advanceTimersByTimeAsync(0); refresh.stop();
+    resolve('late'); await Promise.resolve(); await Promise.resolve();
+    expect(read).not.toHaveBeenCalled(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('backs off failed changed revisions and recovers from unavailable metadata', async () => {
+    vi.useFakeTimers();
+    const probe=vi.fn().mockRejectedValueOnce(new Error('missing')).mockResolvedValue('first');
+    const read=vi.fn().mockResolvedValueOnce(null).mockResolvedValue({ok:true}),apply=vi.fn();
+    const refresh=new KnowledgeRefresh(read,apply,15000,probe);
+    refresh.start(); await vi.advanceTimersByTimeAsync(1000); expect(read).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1000); expect(read).toHaveBeenCalledTimes(2); expect(apply).toHaveBeenCalledTimes(1);
+    refresh.stop();
+  });
   it("has one timer and stops all future reads when hidden", async () => {
     vi.useFakeTimers();
     const read = vi.fn(async () => ({ ok: true })), apply = vi.fn();

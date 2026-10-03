@@ -1,5 +1,13 @@
 # Alden desktop design contract
 
+## 0.3.12 — Dynamic neural graph
+
+The knowledge graph keeps the navy palette and silver/gold materials, with a quiet folded cortical backdrop. Confirmed relationships form curved synaptic bridges: new bridges grow from their endpoints, withdrawn ones retract, and strength controls width and spring rest length. Stable IDs preserve positions through source updates. These are display mechanics, not a biological simulation or a learning-status indicator.
+
+Visible knowledge maintains small node motion and restrained bridge flow at a 30 fps cap. The selected node and root stay steady for reading. Physics stops after convergence while the presentation remains alive. Hidden, closed and locked surfaces stop rendering and revision probes. Reduced motion and the emergency latch use a static frame. Runtime/voice orbs continue to depend on actual activity. Earlier idle-zero measurements describe prior versions.
+
+The title, count and last update occupy one 20px row. Camera transitions use time-based damping at 12/s; bridge growth uses a 0.16s time constant. Overview targets use stable anchors so Back restores the same view while positions remodel. One instanced bridge geometry replaces per-edge lines, with 24 visible nodes and 144 active bundles. [Research, equations and measurements](../docs/architecture/alden-neural-plasticity-20261003.md) distinguish browser fixtures, installed native windows and remaining physical checks.
+
 ## 0.3.11 — Compact workspaces
 
 All five sidebar pages share the existing navy observatory palette and restrained silver/gold orbs. The sidebar is 180px, 145px at the narrow breakpoint; navigation remains 40px high. Redundant topbar space is removed. Conversation and voice history open their most recent readable records, with explicit loading, empty and retry states. The latest message stays fully visible when pagination controls or the viewport change. Historical collection steps use nouns; only the current status claims ongoing work. Voice controls live beside voice history. Automation drafts survive navigation; only verified saves close the editor, with the result shown outside it.

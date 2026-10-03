@@ -1,8 +1,14 @@
 2026-10-03 · [Alden 0.3.10 로컬 임베딩·설치 근거](docs/architecture/alden-embedding-memory-20261003.md): 같은 가중치·44개 입력·변형별 새 프로세스 3회에서 E5 메모리 중앙값 14.453→1.517GB(−89.50%)를 재현했고 출력이 일치했습니다. 44개 요청 시간은 0.521→0.726초로 늘었습니다. 35개 설치 파일·별도 네이티브 숨김/설정 검사를 대조했습니다. [메모리 순서도](docs/architecture/alden-embedding-memory-20261003.html) · [현재 이어받기 상태](docs/ALDEN_CONTINUATION.md). 상시 앱 직접 조작·자연 음성·권한·공증·프로덕션 적용은 미완료입니다.
 
+## Alden 0.3.12 — 동적 지식 그래프
+
+확인된 관계가 시냅스 다리로 성장·수축하고, 노드 배치가 실시간으로 재조정됩니다. 화면에서는 은은한 흐름을 유지하며, 숨김·동작 줄이기·일시 중지에서는 멈춥니다. 상단 정보는 한 줄입니다. 같은 1200×760 예시의 5초 관측에서 프레임 타이밍 수정 전후 23.0→30.2fps, 프레임 간격 p95 50.1→35.2ms를 확인했습니다(변형별 1회; 추론·전력 개선 수치가 아닙니다).
+
+[연구·수학·측정 근거](docs/architecture/alden-neural-plasticity-20261003.md) · [변경 감지와 렌더 순서도](docs/architecture/alden-neural-plasticity-20261003.sequence.html) · [예시 화면](docs/architecture/alden-neural-plasticity-20261003/graph-default-fixture.png). 로컬 설치본은 0.3.12입니다. 공개 서명·공증, 실제 Dot 호출과 사람의 음성 검증은 별도로 남아 있습니다.
+
 ## Alden 0.3.11 — 설정 밀도·실제 기록·읽기 전용 MCP
 
-설정5페이지를통일하고중복여백을줄였다. 같은1200×760예시에서본문면적+19.14%, 완전히보이는메시지4→6(n1). 실제history ID는문자열·유효방/최신순으로전달하며시스템알림의원문은접어읽을수있다. OSK151/512노드의합성warm p50은35.79%/56.84%감소했다. MCP0.2.0은취소와1.5초deadline을지원하고외부상태조회에만쓴다. 같은collector의API→MCP비용은1.415→1.653ms(+16.82%,9000요청/variant)다.
+설정 5페이지를 통일하고 중복 여백을 줄였다. 같은 1200×760 예시에서 본문 면적 +19.14%, 완전히 보이는 메시지 4→6(n=1). 실제 history ID는 문자열·유효 방·최신 순서로 전달하며 시스템 알림의 원문은 접어 읽을 수 있다. OSK 151/512노드의 합성 warm p50은 35.79%/56.84% 감소했다. MCP 0.2.0은 취소와 1.5초 deadline을 지원하고 외부 상태 조회에만 쓴다. 같은 collector의 API→MCP 비용은 1.415→1.653ms(+16.82%, 변형별 9000요청)다.
 
 로컬0.3.11설치36경로·기존설정/5프로세스보존, UI237·desktop95·CLI1151/1ignored·Python1207/28skip을확인했다. 공유MCP등록과설치STDIO는확인했으며실제Dot호출·물리음성·전체native notification검사·서명/최종운영적용은미완료다. [5페이지검토](docs/architecture/alden-sidebar-audit-20261003.md), [OSK/MCP수치와범위](docs/architecture/alden-mcp-performance-20261003.md), [이어가기](docs/ALDEN_CONTINUATION.md).
 

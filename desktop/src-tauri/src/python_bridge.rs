@@ -461,6 +461,31 @@ impl PythonBridge {
         }
     }
 
+    /// Fixed app-owned checkpoint metadata, with no graph read or subprocess.
+    pub fn knowledge_revision(&self) -> Option<String> {
+        let path = self.config.state_root.join("knowledge/osk/sync.json");
+        validate_path(&path, Kind::Data).ok()?;
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .ok()?;
+        let meta = file.metadata().ok()?;
+        if !meta.is_file() {
+            return None;
+        }
+        Some(format!(
+            "{}:{}:{}:{}:{}:{}:{}",
+            meta.dev(),
+            meta.ino(),
+            meta.mtime(),
+            meta.mtime_nsec(),
+            meta.ctime(),
+            meta.ctime_nsec(),
+            meta.len()
+        ))
+    }
+
     /// App-owned, local, bounded background tick. It shares the emergency latch
     /// and never registers hooks, creates a service or adopts another worker.
     pub fn synchronize_knowledge(&self) -> Result<(), BridgeError> {
@@ -5325,6 +5350,32 @@ mod tests {
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             jobs: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    #[test]
+    fn knowledge_revision_tracks_atomic_replacements_and_rejects_links() {
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("alden-revision-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bridge = bridge_with_state_root(root.clone());
+        assert_eq!(bridge.knowledge_revision(), None);
+        let home = root.join("knowledge/osk");
+        fs::create_dir_all(&home).unwrap();
+        let checkpoint = home.join("sync.json");
+        fs::write(&checkpoint, b"{}").unwrap();
+        let first = bridge.knowledge_revision().unwrap();
+        assert_eq!(bridge.knowledge_revision().as_deref(), Some(first.as_str()));
+        let replacement = home.join("replacement.json");
+        fs::write(&replacement, b"{}").unwrap();
+        fs::rename(&replacement, &checkpoint).unwrap();
+        assert_ne!(bridge.knowledge_revision().unwrap(), first);
+        fs::remove_file(&checkpoint).unwrap();
+        std::os::unix::fs::symlink("replacement.json", &checkpoint).unwrap();
+        fs::write(&replacement, b"{}").unwrap();
+        assert_eq!(bridge.knowledge_revision(), None);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

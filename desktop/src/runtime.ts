@@ -44,6 +44,12 @@ export async function fetchEmergencyState(): Promise<EmergencyState | null> {
   }
 }
 
+/** Opaque local checkpoint metadata; no Python process or graph contents. */
+export async function fetchKnowledgeRevision(): Promise<string | null> {
+  try { return await invoke<string | null>('fetch_knowledge_revision'); }
+  catch { return null; }
+}
+
 export async function operatorResume(explicitOptIn: boolean): Promise<EmergencyState | null> {
   try {
     return parseEmergencyState(await invoke<unknown>("operator_resume", { explicitOptIn }));

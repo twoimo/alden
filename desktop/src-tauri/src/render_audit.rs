@@ -759,8 +759,14 @@ fn audit_settings(
     for note in WorkspaceNote::ALL {
         let show_baseline = count(&collect_script(&window, GRAPH_COLLECT.into(), deadline)?);
         visibility(&window, true, deadline)?;
-        std::thread::sleep(Duration::from_millis(250));
-        let before = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+        let resume_deadline = Instant::now() + Duration::from_secs(2);
+        let before = loop {
+            let sample = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+            if rendered_since(&sample, show_baseline) || Instant::now() >= resume_deadline {
+                break sample;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
         if !rendered_since(&before, show_baseline) || window.is_visible().ok() != Some(true) {
             return Err(format!(
                 "settings graph did not draw before notification: {before}"
@@ -1034,12 +1040,14 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
                 super::window_is_visible,
                 super::fetch_runtime_snapshot,
                 super::fetch_voice_status,
+                super::fetch_knowledge_revision,
                 super::fetch_emergency_state,
                 fetch_settings_action
             ])
         } else {
             builder.invoke_handler(tauri::generate_handler![
                 super::window_is_visible,
+                super::fetch_knowledge_revision,
                 fetch_settings_action
             ])
         }
