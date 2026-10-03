@@ -40,6 +40,7 @@ MAX_BATCH_SIZE = 8
 MAX_INPUT_CHARS = 8_192
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 512 * 1024
+MAX_ALLOCATOR_CACHE_BYTES = 512 * 1024 * 1024
 INPUT_TYPES = frozenset({"query", "passage"})
 
 
@@ -291,6 +292,10 @@ class LocalE5Engine:
 
         self.mx = mx
         self.np = np
+        # This process serves only the pinned E5 model. The default cache can
+        # retain many gigabytes across batch/sequence shapes, competing with
+        # voice and the generation service without representing live tensors.
+        mx.set_cache_limit(MAX_ALLOCATOR_CACHE_BYTES)
         try:
             self.tokenizer = Tokenizer.from_file(str(self.model_path / TOKENIZER_JSON))
         except Exception as exc:
@@ -347,35 +352,37 @@ class LocalE5Engine:
             normalized.append(f"{role}: {text}")
 
         with self._lock:
-            encoded = self.tokenizer.encode_batch(normalized, add_special_tokens=True)
-            input_ids_np = self.np.asarray(
-                [row.ids for row in encoded],
-                dtype=self.np.int32,
-            )
-            attention_np = self.np.asarray(
-                [row.attention_mask for row in encoded],
-                dtype=self.np.int32,
-            )
-            token_counts = attention_np.sum(axis=1)
-            for index, count in enumerate(token_counts.tolist()):
-                if int(count) > MODEL_MAX_TOKENS:
-                    raise EmbeddingRequestError(
-                        "embedding_input_too_long",
-                        f"input {index} has {int(count)} tokens; maximum is {MODEL_MAX_TOKENS}",
-                    )
+            try:
+                return self._embed_normalized(normalized)
+            finally:
+                # The helper's tensor locals are released before trimming.
+                # MLX's soft limit evicts on allocation; the final release can
+                # overshoot it until the next request, so trim that idle excess.
+                if self.mx.get_cache_memory() > MAX_ALLOCATOR_CACHE_BYTES:
+                    self.mx.clear_cache()
 
-            mx = self.mx
-            input_ids = mx.array(input_ids_np, dtype=mx.int32)
-            attention = mx.array(attention_np, dtype=mx.float32)
-            hidden = self.model(input_ids, attention)
-            mask = attention[:, :, None]
-            pooled = mx.sum(hidden * mask, axis=1) / mx.maximum(
-                mx.sum(mask, axis=1), 1e-9
-            )
-            norms = mx.sqrt(mx.sum(pooled * pooled, axis=1, keepdims=True))
-            vectors = pooled / mx.maximum(norms, 1e-12)
-            mx.eval(vectors)
-            rows = self.np.asarray(vectors).astype(self.np.float32, copy=False).tolist()
+    def _embed_normalized(self, normalized: list[str]) -> EmbeddingBatch:
+        encoded = self.tokenizer.encode_batch(normalized, add_special_tokens=True)
+        input_ids_np = self.np.asarray([row.ids for row in encoded], dtype=self.np.int32)
+        attention_np = self.np.asarray([row.attention_mask for row in encoded], dtype=self.np.int32)
+        token_counts = attention_np.sum(axis=1)
+        for index, count in enumerate(token_counts.tolist()):
+            if int(count) > MODEL_MAX_TOKENS:
+                raise EmbeddingRequestError(
+                    "embedding_input_too_long",
+                    f"input {index} has {int(count)} tokens; maximum is {MODEL_MAX_TOKENS}",
+                )
+
+        mx = self.mx
+        input_ids = mx.array(input_ids_np, dtype=mx.int32)
+        attention = mx.array(attention_np, dtype=mx.float32)
+        hidden = self.model(input_ids, attention)
+        mask = attention[:, :, None]
+        pooled = mx.sum(hidden * mask, axis=1) / mx.maximum(mx.sum(mask, axis=1), 1e-9)
+        norms = mx.sqrt(mx.sum(pooled * pooled, axis=1, keepdims=True))
+        vectors = pooled / mx.maximum(norms, 1e-12)
+        mx.eval(vectors)
+        rows = self.np.asarray(vectors).astype(self.np.float32, copy=False).tolist()
 
         if len(rows) != len(normalized):
             raise RuntimeError("local embedding output row count mismatch")
@@ -394,7 +401,21 @@ class LocalEmbeddingHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], engine: Any) -> None:
         self.engine = engine
+        self._request_lock = threading.Lock()
+        self._in_flight = 0
         super().__init__(address, LocalEmbeddingHandler)
+
+    def runtime_status(self) -> dict[str, Any]:
+        with self._request_lock:
+            in_flight = self._in_flight
+        mx = getattr(self.engine, "mx", None)
+        status: dict[str, Any] = {"in_flight": in_flight}
+        if mx is not None:
+            status.update({"cache_limit_bytes": MAX_ALLOCATOR_CACHE_BYTES,
+                           "active_bytes": int(mx.get_active_memory()),
+                           "cache_bytes": int(mx.get_cache_memory()),
+                           "peak_active_bytes": int(mx.get_peak_memory())})
+        return status
 
 
 class LocalEmbeddingHandler(BaseHTTPRequestHandler):
@@ -444,6 +465,7 @@ class LocalEmbeddingHandler(BaseHTTPRequestHandler):
             200,
             {
                 "object": "list",
+                "runtime": self.server.runtime_status(),
                 "data": [
                     {
                         "id": engine.model_id,
@@ -462,6 +484,15 @@ class LocalEmbeddingHandler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler contract
+        with self.server._request_lock:
+            self.server._in_flight += 1
+        try:
+            self._do_embeddings()
+        finally:
+            with self.server._request_lock:
+                self.server._in_flight -= 1
+
+    def _do_embeddings(self) -> None:
         if self.path != "/v1/embeddings":
             self._send_json(404, {"error": {"code": "not_found", "message": "not found"}})
             return

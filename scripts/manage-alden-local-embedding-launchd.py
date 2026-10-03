@@ -44,7 +44,7 @@ EXPECTED_WEIGHT_BYTES = 235_330_776
 # Deployment pin for the currently installed Alden bundle. After a future
 # reviewed rebuild, verify that the repository adapter and installed app
 # resource have the same SHA-256, then update this one pin deliberately.
-DEPLOYMENT_APP_SCRIPT_SHA256 = "437ea03c34ac05fcd5f67b58358532412da7a3527048510eccea2a21abfa7820"
+DEPLOYMENT_APP_SCRIPT_SHA256 = "7d94fccfb9a62c006182a5234d854a623fdc5cf699b7771c13036696c3b97112"
 MODEL_SNAPSHOT_RELATIVE = (
     Path(".cache")
     / "huggingface"

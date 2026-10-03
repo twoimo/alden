@@ -84,6 +84,41 @@ def request_json(url: str, *, method: str = "GET", payload=None):
 
 
 class LocalEmbeddingServerTests(unittest.TestCase):
+    def test_idle_cache_cleanup_preserves_result_and_releases_serialized_work(self):
+        engine = SERVER.LocalE5Engine.__new__(SERVER.LocalE5Engine)
+        engine._lock = threading.Lock()
+        engine.mx = mock.Mock()
+        engine.mx.get_cache_memory.side_effect = [SERVER.MAX_ALLOCATOR_CACHE_BYTES + 1, 0]
+        result = SERVER.EmbeddingBatch([[1.0]], 1)
+        engine._embed_normalized = mock.Mock(side_effect=[result, RuntimeError("failure")])
+        self.assertIs(engine.embed(["first"], "query"), result)
+        engine.mx.clear_cache.assert_called_once()
+        with self.assertRaisesRegex(RuntimeError,"failure"):
+            engine.embed(["second"],"passage")
+        self.assertFalse(engine._lock.locked())
+        self.assertEqual(engine._embed_normalized.call_args_list,
+                         [mock.call(["query: first"]),mock.call(["passage: second"])])
+
+    def test_discovery_observes_an_actual_in_flight_request_and_clears_failure(self):
+        entered, release = threading.Event(), threading.Event()
+        engine = FakeEngine()
+        def blocked(*_args):
+            entered.set()
+            release.wait(2)
+            raise RuntimeError("probe failure")
+        engine.embed = blocked
+        with running_server(engine) as (base_url, _engine):
+            def invoke():
+                try:request_json(base_url+"/v1/embeddings",method="POST",payload={"model":SERVER.MODEL_ID,"input":["probe"],"input_type":"query"})
+                except urllib.error.HTTPError as error:error.close()
+            worker=threading.Thread(target=invoke);worker.start()
+            self.assertTrue(entered.wait(1))
+            _,body=request_json(base_url+"/v1/models")
+            self.assertEqual(body["runtime"]["in_flight"],1)
+            release.set();worker.join(2)
+            _,body=request_json(base_url+"/v1/models")
+            self.assertEqual(body["runtime"]["in_flight"],0)
+
     def test_runtime_uses_lightweight_tokenizers_backend_without_transformers(self):
         source = (ROOT / "scripts/alden_local_embedding_server.py").read_text(
             encoding="utf-8"
