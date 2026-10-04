@@ -18551,8 +18551,13 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             os.umask(previous_umask)
 
     def test_proactive_topic_uses_vector_tokens_and_skips_when_conversation_advanced(self):
-        os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
+        self.enterContext(mock.patch.dict(os.environ, {
+            "OPENKAKAO_TARGET_CHAT_ID": "42", "OPENKAKAO_GEEKNEWS_ENABLED": "1",
+        }))
         module = self._load_auto_reply_module("auto_reply_proactive_topic_test")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
         module._geeknews_slot_open = lambda now: True
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
@@ -18567,7 +18572,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
         def search(query):
             self.assertIn("긱뉴스", query)
-            return [{"title": "세금 일정 업데이트", "url": "https://example.test/tax"}]
+            return [{"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}]
 
         style = {"common_tokens_json": json.dumps({"세금": 40, "ㅋㅋ": 99, "ㅇㅇ": 80}, ensure_ascii=False)}
         now = 1_000_000.0
@@ -18646,7 +18651,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertNotEqual(queued[0]["event_id"], f"db:42:{queued[0]['log_id']}")
         self.assertEqual(queued[0]["author_id"], 7)
         self.assertEqual(queued[0]["author_nickname"], "문승현")
-        self.assertEqual(queued[0]["urls"], ["https://example.test/tax"])
+        self.assertEqual(queued[0]["urls"], ["https://news.hada.io/topic?id=10"])
         self.assertEqual(queued[0]["proactive_source_log_id"], 99)
         self.assertTrue(module.canonical_db_event(queued[0]))
         recent_room = dict(source)
@@ -18897,14 +18902,20 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertEqual(first["ids"], [10, 11])
         self.assertEqual(
             first["message"],
-            "GeekNews TOP5 · 2026-08-17 16:20 KST\n\n1. 새 글 A https://news.hada.io/topic?id=10\n\n2. 새 글 B https://news.hada.io/topic?id=11",
+            "GeekNews TOP5 · 2026-08-17 16:20 KST\n\n"
+            "1. 새 글 A\n첫번째 요약입니다\nhttps://news.hada.io/topic?id=10\n\n"
+            "2. 새 글 B\n두번째 요약입니다\nhttps://news.hada.io/topic?id=11",
         )
         self.assertEqual(first["message"].splitlines(keepends=False), [
             "GeekNews TOP5 · 2026-08-17 16:20 KST",
             "",
-            "1. 새 글 A https://news.hada.io/topic?id=10",
+            "1. 새 글 A",
+            "첫번째 요약입니다",
+            "https://news.hada.io/topic?id=10",
             "",
-            "2. 새 글 B https://news.hada.io/topic?id=11",
+            "2. 새 글 B",
+            "두번째 요약입니다",
+            "https://news.hada.io/topic?id=11",
         ])
         self.assertIsNone(second)
     def test_geeknews_enqueue_does_not_persist_seen_until_confirmed(self):
@@ -20507,6 +20518,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_geeknews_skipped_attempt_occupies_current_slot(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_skip_occupies")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
+        self.enterContext(mock.patch.dict(os.environ, {"OPENKAKAO_GEEKNEWS_ENABLED": "1"}))
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
         connection.execute(
@@ -20562,7 +20577,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNone(again)
@@ -20580,7 +20595,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNotNone(later)
@@ -20588,6 +20603,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_geeknews_stale_backlog_skip_does_not_occupy_current_slot(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_stale_skip_free")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
+        self.enterContext(mock.patch.dict(os.environ, {"OPENKAKAO_GEEKNEWS_ENABLED": "1"}))
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
         connection.execute(
@@ -20643,7 +20662,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNotNone(again)
@@ -20706,6 +20725,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_operator_forced_geeknews_enqueues_outside_slot(self):
         module = self._load_auto_reply_module("auto_reply_operator_forced_geeknews")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
+        self.enterContext(mock.patch.dict(os.environ, {"OPENKAKAO_GEEKNEWS_ENABLED": "1"}))
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
         connection.execute(
@@ -20736,7 +20759,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNone(refused)
@@ -20750,7 +20773,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
             operator_forced=True,
         )

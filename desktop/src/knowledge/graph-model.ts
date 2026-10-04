@@ -2,12 +2,14 @@ export const DEFAULT_FOCUS_HOPS = 2;
 export const MAX_FOCUS_HOPS = 3;
 export const FOCUS_NEIGHBOR_LIMIT = 10;
 export const ON_SCREEN_NODE_CAP = 24;
+export const OVERVIEW_NODE_CAP = 120;
 export const NAVIGATION_HISTORY_LIMIT = 32;
 
 export interface KnowledgeEvidence {
   kind: "seed" | "ledger" | "snapshot";
   sourceEventIds: string[];
   chatId: string;
+  roomIds?: string[];
   confirmedAt: string | null;
   retracted: boolean;
 }
@@ -47,6 +49,9 @@ export interface KnowledgeGraph {
 export interface KnowledgeView extends KnowledgeGraph {
   focusId: string | null;
   hops: number;
+  overviewLimit?: number;
+  overviewOffset?: number;
+  hasMoreContexts?: boolean;
 }
 
 const EMPTY_EVIDENCE: KnowledgeEvidence = Object.freeze({
@@ -82,6 +87,7 @@ function parseEvidence(value: unknown): KnowledgeEvidence {
       : item.kind === "ledger" || item.kind === "snapshot" ? item.kind : "seed",
     sourceEventIds: ids,
     chatId: stringValue(item.chat_id),
+    roomIds: Array.isArray(item.room_ids) ? [...new Set(item.room_ids.filter((entry): entry is string => typeof entry === 'string' && /^(?:\d+|kakao:[0-9a-f]{64}:room:\d+)$/.test(entry)))].slice(0, 256) : [],
     confirmedAt: typeof item.confirmed_at === "string" ? item.confirmed_at : null,
     retracted: item.retracted === true,
   };
@@ -142,7 +148,7 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
 }
 
 function subgraph(graph: KnowledgeGraph, ids: string[], focusId: string | null, hops: number): KnowledgeView {
-  const keep = new Set(ids.slice(0, ON_SCREEN_NODE_CAP));
+  const keep = new Set(ids.slice(0, focusId === null ? OVERVIEW_NODE_CAP : ON_SCREEN_NODE_CAP));
   return {
     nodes: graph.nodes.filter((node) => keep.has(node.id)),
     edges: graph.edges.filter((edge) => keep.has(edge.source) && keep.has(edge.target)),
@@ -151,13 +157,26 @@ function subgraph(graph: KnowledgeGraph, ids: string[], focusId: string | null, 
   };
 }
 
-export function overviewGraph(graph: KnowledgeGraph): KnowledgeView {
-  const memories = graph.nodes.filter(node => !node.isHub);
-  const ids = [...(memories.length ? memories : graph.nodes)]
-    .sort((left, right) => right.importance - left.importance || left.id.localeCompare(right.id))
-    .slice(0, ON_SCREEN_NODE_CAP)
-    .map((node) => node.id);
-  return subgraph(graph, ids, null, 0);
+/** Cosmic global view: every displayed dot is a real stored memory. Pages
+ * bound the scene independently of the smaller local-neighbourhood budget.
+ * Space/category does not choose global positions or hide disconnected notes.
+ */
+export function overviewGraph(graph: KnowledgeGraph, nodeLimit=OVERVIEW_NODE_CAP, nodeOffset=0, nowMs=Date.now()): KnowledgeView {
+  const memories=graph.nodes.filter(node=>!node.isHub&&!node.evidence.retracted);
+  const candidates=memories.length?memories:graph.nodes.filter(node=>!node.evidence.retracted);
+  const degree=new Map<string,Set<string>>();
+  for(const edge of graph.edges) {
+    const from=Date.parse(edge.validFrom),until=Date.parse(edge.validTo);
+    if(edge.purpose==='navigation'||edge.evidence.retracted||edge.source===edge.target
+      ||Number.isFinite(from)&&from>nowMs||Number.isFinite(until)&&until<=nowMs)continue;
+    for(const [id,other] of [[edge.source,edge.target],[edge.target,edge.source]]) {
+      const neighbours=degree.get(id)??new Set<string>();neighbours.add(other);degree.set(id,neighbours);
+    }
+  }
+  const ordered=[...candidates].sort((a,b)=>(degree.get(b.id)?.size??0)-(degree.get(a.id)?.size??0)||b.importance-a.importance||a.id.localeCompare(b.id));
+  const limit=Number.isFinite(nodeLimit)?Math.min(OVERVIEW_NODE_CAP,Math.max(1,Math.floor(nodeLimit))):OVERVIEW_NODE_CAP;
+  const offset=Number.isFinite(nodeOffset)?Math.min(Math.max(0,Math.floor(nodeOffset)),Math.max(0,Math.floor((ordered.length-1)/limit)*limit)):0;
+  return {...subgraph(graph,ordered.slice(offset,offset+limit).map(n=>n.id),null,0),overviewLimit:limit,overviewOffset:offset,hasMoreContexts:offset+limit<ordered.length};
 }
 
 export function kHopNodeIds(
@@ -201,7 +220,9 @@ export function kHopNodeIds(
 export class KnowledgeDrilldown {
   private focusId: string | null = null;
   private hops = 0;
-  private readonly history: Array<{ focusId: string | null; hops: number }> = [];
+  private contextLimit=OVERVIEW_NODE_CAP;
+  private contextOffset=0;
+  private readonly history: Array<{ focusId: string | null; hops: number; contextLimit:number; contextOffset:number }> = [];
 
   constructor(private graph: KnowledgeGraph) {}
 
@@ -214,7 +235,15 @@ export class KnowledgeDrilldown {
   }
 
   current(): KnowledgeView {
-    if (!this.focusId) return overviewGraph(this.graph);
+    if (!this.focusId) return overviewGraph(this.graph,this.contextLimit,this.contextOffset);
+    if(this.hops===0){
+      const overview=overviewGraph(this.graph,this.contextLimit,this.contextOffset);
+      if(!overview.nodes.some(n=>n.id===this.focusId)){
+        const ids=overview.nodes.slice(0,OVERVIEW_NODE_CAP-1).map(n=>n.id);ids.push(this.focusId);
+        return {...subgraph(this.graph,ids,null,0),focusId:this.focusId,overviewLimit:overview.overviewLimit,overviewOffset:overview.overviewOffset,hasMoreContexts:overview.hasMoreContexts};
+      }
+      return {...overview,focusId:this.focusId};
+    }
     return subgraph(
       this.graph,
       kHopNodeIds(this.graph, this.focusId, this.hops),
@@ -231,19 +260,29 @@ export class KnowledgeDrilldown {
     return this.current();
   }
 
+  openNote(nodeId:string):KnowledgeView {
+    if(!this.graph.nodes.some(n=>n.id===nodeId))return this.current();
+    this.remember(nodeId,0);this.focusId=nodeId;this.hops=0;return this.current();
+  }
+
   expandOneHop(): KnowledgeView {
     if (this.focusId) {
       const next = Math.min(MAX_FOCUS_HOPS, Math.max(DEFAULT_FOCUS_HOPS, this.hops + 1));
       this.remember(this.focusId, next);
       this.hops = next;
+    } else if(this.current().hasMoreContexts) {
+      const nextLimit=OVERVIEW_NODE_CAP;
+      const nextOffset=this.contextOffset+OVERVIEW_NODE_CAP;
+      this.remember(null,0,nextLimit,nextOffset);this.contextLimit=nextLimit;this.contextOffset=nextOffset;
     }
     return this.current();
   }
 
   reset(): KnowledgeView {
-    this.remember(null, 0);
+    this.remember(null, 0,OVERVIEW_NODE_CAP,0);
     this.focusId = null;
     this.hops = 0;
+    this.contextLimit=OVERVIEW_NODE_CAP;this.contextOffset=0;
     return this.current();
   }
 
@@ -254,13 +293,14 @@ export class KnowledgeDrilldown {
     if (previous) {
       this.focusId = previous.focusId;
       this.hops = previous.hops;
+      this.contextLimit=previous.contextLimit;this.contextOffset=previous.contextOffset;
     }
     return this.current();
   }
 
-  private remember(focusId: string | null, hops: number): void {
-    if (this.focusId === focusId && this.hops === hops) return;
-    this.history.push({ focusId: this.focusId, hops: this.hops });
+  private remember(focusId: string | null, hops: number,contextLimit=this.contextLimit,contextOffset=this.contextOffset): void {
+    if (this.focusId === focusId && this.hops === hops && this.contextLimit===contextLimit && this.contextOffset===contextOffset) return;
+    this.history.push({ focusId: this.focusId, hops: this.hops,contextLimit:this.contextLimit,contextOffset:this.contextOffset });
     if (this.history.length > NAVIGATION_HISTORY_LIMIT) this.history.shift();
   }
 }

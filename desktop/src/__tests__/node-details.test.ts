@@ -28,4 +28,32 @@ describe('selected-node explanations',()=>{
     const collection=parseKnowledgeGraph({nodes:[{id:'group',label:'대화 맥락',category:'collection',is_hub:true},...graph.nodes],edges:[{source:'group',target:id,relation:'linked',purpose:'navigation'}]});
     expect(nodeSummary(collection,collection.nodes[0])).toContain('입구 1개');
   });
+  it('keeps a room node scoped to its own account and room even without an explicit detail scope',()=>{
+    const roomId=`chat:kakao:${account}:room:42`;
+    const roomGraph=parseKnowledgeGraph({nodes:[{id:roomId,label:'회의',category:'채팅방'}],edges:[]});
+    renderNodeDetails(roomGraph,roomGraph.nodes[0],{details:{node_id:roomId},sources:[
+      source,
+      {...source,source_id:`kakao:${account}:room:84:log:2`,content:'다른 방'},
+      {...source,source_id:`kakao:${other}:room:42:log:3`,content:'다른 계정'},
+      {...source,source_id:`kakao:${account}:room:42:log:4`,source_kind:'other',content:'다른 자료'},
+      {...source,source_id:'invalid',content:'잘못된 출처'},
+    ]});
+    expect([...document.querySelectorAll('.knowledge-source')].map(entry=>(entry as HTMLElement).dataset.sourceId)).toEqual([source.source_id]);
+    expect(document.getElementById('knowledge-evidence-heading')!.textContent).toBe('원문 근거 · 1건');
+  });
+  it('renders stored multiline notes and facts as inert text, preserving the distinction from original evidence',()=>{
+    const summary='저장된 문단\n\n<img src="https://invalid.test/note" onerror="alert(1)">';
+    renderNodeDetails(graph,graph.nodes[0],{details:{node_id:id,summary,basis:'note',key_facts:['첫 번째 사실','첫 번째 사실','<script>unsafe()</script>',9,null]},sources:[]});
+    expect(document.getElementById('knowledge-node-summary')!.textContent).toBe(summary);
+    const facts=document.getElementById('knowledge-node-facts')!;
+    expect([...facts.children].map(item=>item.textContent)).toEqual(['첫 번째 사실','<script>unsafe()</script>']);
+    expect(facts.hidden).toBe(false);
+    expect(document.querySelector('script, img')).toBeNull();
+    expect(document.getElementById('knowledge-node-basis')!.textContent).toContain('저장된 노트');
+    expect(document.querySelector('.knowledge-source')).toBeNull();
+    expect(document.getElementById('knowledge-evidence-heading')!.hidden).toBe(false);
+    renderNodeDetails(graph,graph.nodes[0],{details:{node_id:id},sources:[]});
+    expect(facts.children).toHaveLength(0);
+    expect(facts.hidden).toBe(true);
+  });
 });

@@ -17430,7 +17430,9 @@ GEEKNEWS_FEED_URL = "https://news.hada.io/rss/news"
 GEEKNEWS_TOPIC_RE = re.compile(r"^https://news\.hada\.io/topic\?id=([1-9][0-9]{0,9})\Z")
 GEEKNEWS_CURSOR_NAME = "geeknews-rss-cursor.json"
 GEEKNEWS_MAX_ITEMS = 5
+GEEKNEWS_MAX_TITLE_CHARS = 140
 GEEKNEWS_MAX_SUMMARY_CHARS = 90
+GEEKNEWS_MAX_MESSAGE_CHARS = 1500
 GEEKNEWS_FEED_MAX_BYTES = 400_000
 GEEKNEWS_FEED_TIMEOUT_SECONDS = 8.0
 GEEKNEWS_CONFIRMATION_READ_COUNT = 100
@@ -17661,34 +17663,72 @@ def _html_to_plain(value: str) -> str:
     return " ".join(text.split())
 
 
+def _geeknews_excerpt(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _geeknews_digest_item(item: dict) -> dict | None:
+    """Normalize feed and direct formatter inputs under the same topic policy."""
+    if not isinstance(item, dict):
+        return None
+    url = item.get("url")
+    topic = GEEKNEWS_TOPIC_RE.fullmatch(url) if isinstance(url, str) else None
+    title = item.get("title")
+    if topic is None or not isinstance(title, str):
+        return None
+    title = " ".join(title.split())
+    if not title:
+        return None
+    summary = item.get("summary")
+    summary = " ".join(summary.split()) if isinstance(summary, str) else ""
+    if summary.casefold().rstrip(".!?…") == title.casefold().rstrip(".!?…"):
+        summary = ""
+    topic_id = int(topic.group(1))
+    return {
+        "id": topic_id,
+        "title": _geeknews_excerpt(title, GEEKNEWS_MAX_TITLE_CHARS),
+        "url": f"https://news.hada.io/topic?id={topic_id}",
+        "summary": _geeknews_excerpt(summary, GEEKNEWS_MAX_SUMMARY_CHARS),
+    }
+
+
 def _parse_geeknews_entries(feed_xml: str) -> list[dict]:
+    import xml.etree.ElementTree as ET
+
+    try:
+        feed = ET.fromstring(feed_xml)
+    except ET.ParseError:
+        return []
+
+    def text(element) -> str:
+        if element is None:
+            return ""
+        if element.get("type") == "xhtml":
+            return _html_to_plain(ET.tostring(element, encoding="unicode"))
+        value = "".join(element.itertext())
+        if element.get("type") == "html":
+            return _html_to_plain(value)
+        return " ".join(value.split())
+
     items: list[dict] = []
-    for raw in re.findall(r"<entry>(.*?)</entry>", feed_xml, re.S):
-        title_match = re.search(
-            r"<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>", raw, re.S
-        )
-        link_match = re.search(r"<link[^>]+href='([^']+)'", raw) or re.search(
-            r'<link[^>]+href="([^"]+)"', raw
-        )
-        content_match = re.search(
-            r"<content[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</content>", raw, re.S
-        )
-        url = str(link_match.group(1) if link_match else "").strip()
-        topic = GEEKNEWS_TOPIC_RE.fullmatch(url)
-        title = _html_to_plain(title_match.group(1) if title_match else "")
-        summary = _html_to_plain(content_match.group(1) if content_match else "")
-        if topic is None or not title:
-            continue
-        if len(summary) > GEEKNEWS_MAX_SUMMARY_CHARS:
-            summary = summary[:GEEKNEWS_MAX_SUMMARY_CHARS].rstrip() + "…"
-        items.append(
-            {
-                "id": int(topic.group(1)),
-                "title": title,
-                "url": url,
-                "summary": summary,
-            }
-        )
+    seen: set[int] = set()
+    for entry in feed.findall("{*}entry"):
+        title = text(entry.find("{*}title"))
+        summary = text(entry.find("{*}summary")) or text(entry.find("{*}content"))
+        for link in entry.findall("{*}link"):
+            if link.get("rel", "alternate") != "alternate":
+                continue
+            item = _geeknews_digest_item(
+                {"title": title, "summary": summary, "url": link.get("href")}
+            )
+            if item is None:
+                continue
+            if item["id"] not in seen:
+                seen.add(item["id"])
+                items.append(item)
+            break
     return items
 
 
@@ -17734,21 +17774,24 @@ def _format_geeknews_top3_line(
     except (OSError, OverflowError, ValueError):
         return ""
     parts: list[str] = []
-    for item in items[:GEEKNEWS_MAX_ITEMS]:
-        if not isinstance(item, dict):
+    seen: set[int] = set()
+    for raw in items:
+        item = _geeknews_digest_item(raw)
+        if item is None or item["id"] in seen:
             continue
-        title = str(item.get("title") or "").strip()
-        url = str(item.get("url") or "").strip()
-        if not title:
-            continue
-        if url.startswith("https://"):
-            parts.append(f"{title} {url}")
-        else:
-            parts.append(title)
+        seen.add(item["id"])
+        lines = [f"{len(parts) + 1}. {item['title']}"]
+        if item["summary"]:
+            lines.append(item["summary"])
+        lines.append(item["url"])
+        parts.append("\n".join(lines))
+        if len(parts) == GEEKNEWS_MAX_ITEMS:
+            break
     if not parts:
         return ""
-    numbered = [f"{index}. {part}" for index, part in enumerate(parts, start=1)]
-    return f"GeekNews TOP5 · {when}\n\n" + "\n\n".join(numbered)
+    message = f"GeekNews TOP5 · {when}\n\n" + "\n\n".join(parts)
+    # The field limits fit all five blocks, including full URLs, under this cap.
+    return message if len(message) <= GEEKNEWS_MAX_MESSAGE_CHARS else ""
 
 
 def _next_geeknews_digest(

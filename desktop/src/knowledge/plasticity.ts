@@ -1,11 +1,13 @@
 import { ON_SCREEN_NODE_CAP, type KnowledgeEdge, type KnowledgeView } from './graph-model';
 
 export const SYNAPSE_CAP = 144;
+const MAX_NODE_CAP = 120;
+const MAX_SYNAPSE_CAP = 512;
 export interface Point3 { x: number; y: number; z: number }
 export interface Synapse { key: string; source: string; target: string; strength: number; purpose?: KnowledgeEdge['purpose'] }
 
 /** Visual bundles only: source triples and their evidence remain unchanged. */
-export function selectSynapses(edges: readonly KnowledgeEdge[], activeIds?: ReadonlySet<string>, nowMs = Date.now()): Synapse[] {
+export function selectSynapses(edges: readonly KnowledgeEdge[], activeIds?: ReadonlySet<string>, nowMs = Date.now(), cap = SYNAPSE_CAP): Synapse[] {
   const pairs = new Map<string, Synapse>();
   for (const edge of edges) {
     if (edge.source === edge.target || edge.evidence.retracted) continue;
@@ -23,34 +25,35 @@ export function selectSynapses(edges: readonly KnowledgeEdge[], activeIds?: Read
     if (!old || rank(edge.purpose) > rank(old.purpose) || rank(edge.purpose) === rank(old.purpose) && strength > old.strength)
       pairs.set(key, { key, source, target, strength, purpose: edge.purpose });
   }
-  return [...pairs.values()].sort((a, b) => Number(a.purpose === 'navigation') - Number(b.purpose === 'navigation') || b.strength - a.strength || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, SYNAPSE_CAP);
+  return [...pairs.values()].sort((a, b) => Number(a.purpose === 'navigation') - Number(b.purpose === 'navigation') || b.strength - a.strength || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, boundedCapacity(cap, SYNAPSE_CAP, MAX_SYNAPSE_CAP));
 }
 
 export function synapseRestLength(strength: number): number { return .3 + .45 * (1 - strength); }
 
-export function connectedComponents(ids: readonly string[], synapses: readonly Synapse[]): Uint16Array {
+export function connectedComponents(ids: readonly string[], synapses: readonly Pick<Synapse, 'source' | 'target'>[]): Uint16Array {
   const groups = Uint16Array.from(ids, (_, i) => i), index = new Map(ids.map((id, i) => [id, i]));
-  const root = (i: number): number => { while (groups[i] !== i) i = groups[i]; return i; };
   for (const edge of synapses) {
     const a = index.get(edge.source), b = index.get(edge.target);
-    if (a !== undefined && b !== undefined) groups[root(b)] = root(a);
+    if (a !== undefined && b !== undefined) groups[componentRoot(groups, b)] = componentRoot(groups, a);
   }
-  return Uint16Array.from(groups, (_, i) => root(i));
+  return Uint16Array.from(groups, (_, i) => componentRoot(groups, i));
 }
 
 /** Bounded damped mechanics in display units; never trains or rewrites memory. */
 export class PlasticityLayout {
-  readonly coordinates = new Float64Array(ON_SCREEN_NODE_CAP * 3);
-  private readonly velocity = new Float64Array(ON_SCREEN_NODE_CAP * 3);
-  private readonly forces = new Float64Array(ON_SCREEN_NODE_CAP * 3);
-  private readonly anchors = new Float64Array(ON_SCREEN_NODE_CAP * 3);
-  private readonly inverseMass = new Float64Array(ON_SCREEN_NODE_CAP);
-  private readonly degree = new Uint16Array(ON_SCREEN_NODE_CAP);
-  private readonly components = new Uint16Array(ON_SCREEN_NODE_CAP);
-  private readonly edgeA = new Uint8Array(SYNAPSE_CAP);
-  private readonly edgeB = new Uint8Array(SYNAPSE_CAP);
-  private readonly edgeStrength = new Float64Array(SYNAPSE_CAP);
-  private readonly restLength = new Float64Array(SYNAPSE_CAP);
+  readonly nodeCap: number;
+  readonly synapseCap: number;
+  readonly coordinates: Float64Array;
+  private readonly velocity: Float64Array;
+  private readonly forces: Float64Array;
+  private readonly anchors: Float64Array;
+  private readonly inverseMass: Float64Array;
+  private readonly degree: Uint16Array;
+  private readonly components: Uint16Array;
+  private readonly edgeA: Uint8Array;
+  private readonly edgeB: Uint8Array;
+  private readonly edgeStrength: Float64Array;
+  private readonly restLength: Float64Array;
   private ids: string[] = [];
   private edgeCount = 0;
   private targetSignature = '';
@@ -60,10 +63,27 @@ export class PlasticityLayout {
   private maxForce = 0;
   private simulatedSeconds = 0;
 
+  /** Capacities are floored and clamped to [0, maximum]; non-finite values use the defaults. */
+  constructor(nodeCap = ON_SCREEN_NODE_CAP, synapseCap = SYNAPSE_CAP) {
+    this.nodeCap = boundedCapacity(nodeCap, ON_SCREEN_NODE_CAP, MAX_NODE_CAP);
+    this.synapseCap = boundedCapacity(synapseCap, SYNAPSE_CAP, MAX_SYNAPSE_CAP);
+    this.coordinates = new Float64Array(this.nodeCap * 3);
+    this.velocity = new Float64Array(this.nodeCap * 3);
+    this.forces = new Float64Array(this.nodeCap * 3);
+    this.anchors = new Float64Array(this.nodeCap * 3);
+    this.inverseMass = new Float64Array(this.nodeCap);
+    this.degree = new Uint16Array(this.nodeCap);
+    this.components = new Uint16Array(this.nodeCap);
+    this.edgeA = new Uint8Array(this.synapseCap);
+    this.edgeB = new Uint8Array(this.synapseCap);
+    this.edgeStrength = new Float64Array(this.synapseCap);
+    this.restLength = new Float64Array(this.synapseCap);
+  }
+
   setGraph(view: KnowledgeView, anchors: ReadonlyMap<string, Point3>, initial: ReadonlyMap<string, Point3>): void {
-    const nodes = view.nodes.filter(node => !node.evidence.retracted).slice(0, ON_SCREEN_NODE_CAP);
+    const nodes = view.nodes.filter(node => !node.evidence.retracted).slice(0, this.nodeCap);
     const targets = nodes.map(node => boundedPoint(anchors.get(node.id)));
-    const synapses = selectSynapses(view.edges, new Set(nodes.map(node => node.id)));
+    const synapses = selectSynapses(view.edges, new Set(nodes.map(node => node.id)), Date.now(), this.synapseCap);
     const signature = JSON.stringify([nodes.map((node, i) => [node.id, node.importance, targets[i]]), synapses]);
     if (signature === this.targetSignature) return;
     this.targetSignature = signature;
@@ -73,9 +93,9 @@ export class PlasticityLayout {
     }]));
     this.ids = nodes.map(node => node.id);
     const index = new Map(this.ids.map((id, i) => [id, i]));
-    this.components.set(connectedComponents(this.ids, synapses));
     this.degree.fill(0);
     for (let i = 0; i < nodes.length; i++) {
+      this.components[i] = i;
       const node = nodes[i], anchor = targets[i];
       const previous = old.get(node.id), start = boundedPoint(previous ?? initial.get(node.id), anchor);
       this.anchors[i * 3] = anchor.x; this.anchors[i * 3 + 1] = anchor.y; this.anchors[i * 3 + 2] = anchor.z;
@@ -90,9 +110,11 @@ export class PlasticityLayout {
       if (a === undefined || b === undefined) continue;
       const i = this.edgeCount++;
       this.edgeA[i] = a; this.edgeB[i] = b; this.edgeStrength[i] = edge.strength;
+      this.components[componentRoot(this.components, b)] = componentRoot(this.components, a);
       this.degree[a]++; this.degree[b]++;
       this.restLength[i] = synapseRestLength(edge.strength);
     }
+    for (let i = 0; i < nodes.length; i++) this.components[i] = componentRoot(this.components, i);
     this.quietSteps = 0; this.maxSpeed = this.maxForce = this.simulatedSeconds = 0; this.moving = this.ids.length > 0;
   }
 
@@ -171,6 +193,15 @@ export class PlasticityLayout {
     if (this.maxSpeed < 0.0015 && this.maxForce < 0.025) this.quietSteps++; else this.quietSteps = 0;
     if (this.quietSteps >= 12) { this.velocity.fill(0); this.moving = false; }
   }
+}
+
+function boundedCapacity(value: number, fallback: number, maximum: number): number {
+  return Number.isFinite(value) ? Math.min(maximum, Math.max(0, Math.floor(value))) : fallback;
+}
+
+function componentRoot(groups: Uint16Array, i: number): number {
+  while (groups[i] !== i) i = groups[i];
+  return i;
 }
 
 function boundedPoint(point?: Point3, fallback: Point3 = { x: 0, y: 0, z: 0 }): Point3 {

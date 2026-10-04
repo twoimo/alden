@@ -1,5 +1,6 @@
-import { ON_SCREEN_NODE_CAP, type KnowledgeView } from './graph-model';
+import { ON_SCREEN_NODE_CAP, type KnowledgeGraph, type KnowledgeView } from './graph-model';
 import { connectedComponents, selectSynapses, synapseRestLength, type Point3 } from './plasticity';
+import { contextRegions } from './context-regions';
 
 function seedPoint(id: string): Point3 {
   let seed = 2166136261;
@@ -18,18 +19,35 @@ function seedPoint(id: string): Point3 {
  * spring; real ERE links determine proximity. Only the current 24-node view is
  * solved, once on graph/navigation changes, never on each animation frame.
  */
-export function relationAnchors(view: KnowledgeView): Map<string, Point3> {
+export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = view, nodeCap=ON_SCREEN_NODE_CAP): Map<string, Point3> {
   const nodes = [...view.nodes].filter(n => !n.evidence.retracted)
-    .sort((a, b) => a.id.localeCompare(b.id)).slice(0, ON_SCREEN_NODE_CAP);
+    .sort((a, b) => a.id.localeCompare(b.id)).slice(0, Math.min(120,Math.max(1,nodeCap)));
   const points = nodes.map(n => seedPoint(n.id));
   const index = new Map(nodes.map((n, i) => [n.id, i]));
-  const edges = selectSynapses(view.edges, new Set(index.keys()));
+  const edges = selectSynapses(view.edges, new Set(index.keys()),Date.now(),nodeCap>ON_SCREEN_NODE_CAP?512:144);
   const components = connectedComponents(nodes.map(n => n.id), edges);
   const members = new Map<number, string[]>();
   nodes.forEach((n, i) => { const ids = members.get(components[i]) ?? []; ids.push(n.id); members.set(components[i], ids); });
   const centers = new Map([...members].map(([group, ids]) => [group, seedPoint(ids.join('\0'))]));
+  const regions = nodeCap>ON_SCREEN_NODE_CAP?[]:contextRegions(view, graph);
+  const regionalOrigins = new Map<string, Point3>();
+  for (const [group, ids] of members) {
+    const contexts = regions.filter(region => region.id.startsWith('space:') && region.nodeIds.some(id => ids.includes(id))).sort((a, b) => a.id.localeCompare(b.id));
+    if (contexts.length < 2) continue;
+    const center = centers.get(group)!;
+    const phase = Math.atan2(center.y, center.x);
+    for (const id of ids) {
+      let x = 0, y = 0, z = 0, count = 0;
+      contexts.forEach((region, i) => {
+        if (!region.nodeIds.includes(id)) return;
+        const angle = phase + Math.PI * 2 * i / contexts.length;
+        x += .95 * Math.cos(angle); y += .78 * Math.sin(angle); z += .18 * Math.sin(angle * 2); count++;
+      });
+      if (count) regionalOrigins.set(id, { x: center.x * .2 + x / count, y: center.y * .2 + y / count, z: center.z * .2 + z / count });
+    }
+  }
   for (let i = 0; i < points.length; i++) {
-    const p = points[i], center = centers.get(components[i])!;
+    const p = points[i], center = regionalOrigins.get(nodes[i].id) ?? centers.get(components[i])!;
     p.x = center.x + p.x * .32; p.y = center.y + p.y * .32; p.z = center.z + p.z * .32;
   }
   const initial = points.map(p => ({ ...p }));
@@ -39,9 +57,10 @@ export function relationAnchors(view: KnowledgeView): Map<string, Point3> {
     forces.fill(0);
     for (let a = 0; a < nodes.length; a++) {
       const p = points[a], origin = initial[a];
-      forces[a * 3] += .06 * (origin.x - p.x);
-      forces[a * 3 + 1] += .06 * (origin.y - p.y);
-      forces[a * 3 + 2] += .06 * (origin.z - p.z);
+      const affinity = regionalOrigins.has(nodes[a].id) ? .3 : .06;
+      forces[a * 3] += affinity * (origin.x - p.x);
+      forces[a * 3 + 1] += affinity * (origin.y - p.y);
+      forces[a * 3 + 2] += affinity * (origin.z - p.z);
       for (let b = a + 1; b < nodes.length; b++) {
         if (components[a] !== components[b]) continue;
         const q = points[b];

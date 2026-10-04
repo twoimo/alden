@@ -31,11 +31,11 @@ import {
 import type { KnowledgeHologram } from "./knowledge/hologram";
 import {
   MAX_FOCUS_HOPS,
+  OVERVIEW_NODE_CAP,
   parseKnowledgeGraph,
   type KnowledgeEdge,
   type KnowledgeGraph,
   type KnowledgeNode,
-  type KnowledgeView,
 } from "./knowledge/graph-model";
 import {
   cancelRuntimeRequest,
@@ -380,25 +380,25 @@ function relationMeta(edge: KnowledgeEdge, snapshot: RuntimeSnapshot): string {
   if (edge.relation === 'contains') return '그래프의 분류 구조';
   const roomId = edge.roomId || edge.evidence.chatId;
   const room = snapshot.rooms.find((candidate) => String(candidate.chatId) === roomId)?.title;
-  return room ? `대화방 · ${room}` : edge.evidence.kind === 'seed' ? '저장된 연결 · 원문 근거 미확인' : '대화 기록에서 확인한 관계';
+  return room ? `대화방 · ${room}` : edge.evidence.kind === 'seed' ? '저장된 연결' : '대화 기록 기반';
 }
 
 function renderKnowledgeRelations(
   graph: KnowledgeGraph,
   node: KnowledgeNode,
-  view: KnowledgeView,
   snapshot: RuntimeSnapshot,
 ): void {
   const container = document.getElementById("knowledge-relations");
   if (!container) return;
   container.replaceChildren();
   const labels = new Map(graph.nodes.map((candidate) => [candidate.id, candidate.label]));
-  const related = view.edges
+  const related = graph.edges
     .filter((edge) => edge.source === node.id || edge.target === node.id)
-    .sort((left, right) => right.weight - left.weight)
-    .slice(0, 6);
+    .sort((left, right) => right.weight - left.weight);
+  const seen=new Set<string>();
+  const unique=related.filter(edge=>{const other=edge.source===node.id?edge.target:edge.source;if(seen.has(other)||!labels.has(other))return false;seen.add(other);return true;}).slice(0,120);
 
-  if (related.length === 0) {
+  if (unique.length === 0) {
     const empty = document.createElement("p");
     empty.className = "knowledge-empty";
     empty.textContent = "아직 연결된 항목이 없습니다.";
@@ -406,11 +406,15 @@ function renderKnowledgeRelations(
     return;
   }
 
-  related.forEach((edge) => {
-    const row = document.createElement("div");
+  unique.forEach((edge) => {
+    const other=edge.source===node.id?edge.target:edge.source;
+    const row = document.createElement("button");
+    row.type='button';row.dataset.knowledgeNode=other;
+    row.setAttribute('aria-label',`${labels.get(other)} 노트 열기`);
     row.className = "knowledge-relation-row";
     const triple = document.createElement("strong");
-    triple.textContent = `${labels.get(edge.source) ?? "항목"} —${relationLabel(edge.relation)}→ ${labels.get(edge.target) ?? "항목"}`;
+    triple.textContent = labels.get(other)??'노트';
+    row.title=`${node.label} · ${relationLabel(edge.relation)} · ${labels.get(other)}`;
     const meta = document.createElement("span");
     meta.textContent = relationMeta(edge, snapshot);
     row.append(triple, meta);
@@ -444,6 +448,7 @@ export async function setupKnowledgeGraph(
   const overview = document.querySelector<HTMLButtonElement>("#knowledge-overview");
   if (!canvas || !expand) return null;
   if (graph.nodes.length === 0) {
+    document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open','false');
     const empty = payload?.ok !== false && Array.isArray(payload?.nodes) && payload.nodes.length === 0;
     setText("knowledge-summary", empty ? "아직 연결된 대화가 없습니다." : "대화의 연결 정보를 확인할 수 없습니다.");
     setText("knowledge-mode", empty ? "준비 중" : "확인 필요");
@@ -457,7 +462,7 @@ export async function setupKnowledgeGraph(
 
   setText(
     "knowledge-summary",
-    `${graph.nodes.length}개`,
+    `${graph.nodes.filter(node=>!node.isHub).length||graph.nodes.length}개`,
   );
   setText("knowledge-mode", payload?.stale === true ? "자료 확인 필요" : "연결된 주제");
   renderKnowledgeSync(payload);
@@ -474,9 +479,11 @@ export async function setupKnowledgeGraph(
     if (disposed) return;
     const epoch = ++selectionEpoch;
     if (detailPanel) detailPanel.hidden = node === null;
+    document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open',String(node!==null));
     if (back) back.disabled = !hologram.canGoBack;
-    if (overview) overview.disabled = view.focusId === null;
-    expand.disabled = view.focusId === null || view.hops >= MAX_FOCUS_HOPS;
+    if (overview) overview.disabled = view.focusId === null && (view.overviewOffset??0)===0;
+    expand.disabled = view.focusId === null ? !view.hasMoreContexts : view.hops >= MAX_FOCUS_HOPS;
+    expand.textContent=view.focusId===null?'다음 보기':view.hops===0?'연결 보기':'더 보기';
     if (!node) {
       setText("knowledge-focus-title", "항목을 선택하면 관련 정보를 보여드립니다.");
       document.getElementById("knowledge-relations")?.replaceChildren();
@@ -486,7 +493,7 @@ export async function setupKnowledgeGraph(
     setText("knowledge-focus-title", node.label);
     const currentGraph = hologram.currentGraph;
     renderNodeDetails(currentGraph, node);
-    renderKnowledgeRelations(currentGraph, node, view, snapshot);
+    renderKnowledgeRelations(currentGraph, node, snapshot);
     setText("knowledge-retrieve", "관련 대화를 찾고 있습니다…");
 
     const localRoom = node.evidence.chatId
@@ -522,10 +529,14 @@ export async function setupKnowledgeGraph(
   expand.addEventListener("click", () => {
     hologram.expandOneHop();
   }, { signal: controls.signal });
+  document.getElementById('knowledge-relations')?.addEventListener('click',event=>{
+    const target=event.target instanceof Element?event.target.closest<HTMLButtonElement>('button[data-knowledge-node]'):null;
+    if(target?.dataset.knowledgeNode)hologram.clickNode(target.dataset.knowledgeNode);
+  },{signal:controls.signal});
   back?.addEventListener("click", () => hologram.back(), { signal: controls.signal });
   overview?.addEventListener("click", () => hologram.reset(), { signal: controls.signal });
   document.getElementById('knowledge-focus-close')?.addEventListener('click', () => hologram.reset(), { signal: controls.signal });
-
+  expand.disabled=!hologram.currentView.hasMoreContexts;
 
   return hologram;
 }
@@ -668,7 +679,7 @@ export async function bootSettings(
         const change = knowledgeChangeSummary(lastGraph, next);
         lastGraph = next;
         graph.replaceGraph(next);
-        setText("knowledge-summary", `${next.nodes.length}개`);
+        setText("knowledge-summary", `${next.nodes.filter(node=>!node.isHub).length||next.nodes.length}개`);
         if (change) setText('knowledge-sync', change);
       }, 15000, fetchKnowledgeRevision);
       const lifecycle = new RenderLifecycle(graph,
@@ -679,6 +690,8 @@ export async function bootSettings(
       Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({
         ...graph.diagnostics(), nodeCount: graph.currentView.nodes.length, edgeCount: graph.currentView.edges.length,
         hops: graph.currentView.hops, focused: graph.currentView.focusId !== null,
+        overviewLimit:graph.currentView.overviewLimit??OVERVIEW_NODE_CAP,overviewOffset:graph.currentView.overviewOffset??0,
+        hasMoreContexts:!!graph.currentView.hasMoreContexts,
         focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? -1,
         canGoBack: graph.canGoBack,
         targets: graph.navigationTargets,

@@ -137,6 +137,8 @@ impl Output {
                 | "alden-core-retina.png"
                 | "alden-settings-default.png"
                 | "alden-settings-compact.png"
+                | "alden-note-default.png"
+                | "alden-note-compact.png"
                 | "workspace-memory-default.png"
                 | "workspace-conversation-default.png"
                 | "workspace-reply-default.png"
@@ -527,8 +529,10 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
     settingsState:document.getElementById('app')?.dataset.state,settingsPage:document.querySelector('.settings-shell')?.dataset.settingsPage,
     renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
-    navigation:d?{focused:d.focused,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount}:null,
+    navigation:d?{focused:d.focused,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
+    regions:d?.regions??null,synapses:d?.synapses??null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
+    notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth}:null;})(),
     backDisabled:document.querySelector('#knowledge-back')?.disabled,
     overviewDisabled:document.querySelector('#knowledge-overview')?.disabled,
     expandDisabled:document.querySelector('#knowledge-expand-hop')?.disabled,
@@ -656,15 +660,47 @@ fn audit_settings(
         &snapshot(&window, deadline)?,
         deadline,
     )?;
+    let overview_more = if initial["expandDisabled"] == false {
+        let more = graph_step(&window, "expand", deadline)?;
+        if more["navigation"]["focused"] != false
+            || more["navigation"]["overviewLimit"] != 120
+            || more["navigation"]["overviewOffset"].as_u64().unwrap_or(0)
+                <= initial["navigation"]["overviewOffset"]
+                    .as_u64()
+                    .unwrap_or(0)
+            || more["navigation"]["nodeCount"].as_u64().unwrap_or(u64::MAX) > 120
+        {
+            return Err("native overview expansion did not expose bounded extra contexts".into());
+        }
+        let restored = graph_step(&window, "back", deadline)?;
+        if restored["navigation"] != initial["navigation"] {
+            return Err("native overview expansion did not restore prior context selection".into());
+        }
+        more
+    } else {
+        Value::Null
+    };
     let first = graph_step(&window, "first", deadline)?;
+    if first["notePane"]["hidden"] != false
+        || first["notePane"]["width"].as_f64().unwrap_or(0.0) <= 0.0
+        || first["navigation"]["nodeCount"] != initial["navigation"]["nodeCount"]
+    {
+        return Err("native note reader lost its graph or did not open".into());
+    }
+    publish(
+        output,
+        "alden-note-default.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
     let expanded = graph_step(&window, "expand", deadline)?;
     let second = graph_step(&window, "second", deadline)?;
     let back_expanded = graph_step(&window, "back", deadline)?;
     let back_first = graph_step(&window, "back", deadline)?;
     let back_overview = graph_step(&window, "back", deadline)?;
     if first["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
-        || first["navigation"]["hops"] != 2
-        || expanded["navigation"]["hops"] != 3
+        || first["navigation"]["hops"] != 0
+        || expanded["navigation"]["hops"] != 2
         || second["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
         || second["navigation"]["focusSlot"] == first["navigation"]["focusSlot"]
         || back_expanded["navigation"] != expanded["navigation"]
@@ -762,6 +798,19 @@ fn audit_settings(
         &snapshot(&window, deadline)?,
         deadline,
     )?;
+    let compact_note = graph_step(&window, "first", deadline)?;
+    if compact_note["notePane"]["hidden"] != false
+        || compact_note["scrollWidth"].as_u64().unwrap_or(u64::MAX) > 640
+    {
+        return Err("native compact note reader is hidden or overflows".into());
+    }
+    publish(
+        output,
+        "alden-note-compact.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    graph_step(&window, "overview", deadline)?;
     let workspace_compact = if workspaces {
         capture_workspaces(&window, output, "compact", deadline)?
     } else {
@@ -830,6 +879,7 @@ fn audit_settings(
         json!({"initial":initial,"first":first,"expanded":expanded,"second":second,"backExpanded":back_expanded,
         "backFirst":back_first,"backOverview":back_overview,"reset":reset,"compact":compact,"nativeCompact":native_compact,"workspaceSignals":hidden_samples,"reopened":reopened,
         "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
+        "overviewMore":overview_more,"compactNote":compact_note,
         "scope":"real persisted graph and renderer/navigation in owned floating audit window without key-window activation; runtime snapshot/GraphRAG focus lookup intentionally unavailable; captures private"}),
     )
 }

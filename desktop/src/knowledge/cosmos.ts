@@ -1,13 +1,20 @@
 import * as THREE from "three";
 
-/** Decorative, static sky. These points never enter graph data or hit tests. */
+/**
+ * A deterministic, static sky, independent of graph data and hit tests.
+ * Owns one geometry and one material: ordinary traversal/disposal releases both.
+ * No textures, shared GPU resources, update callbacks or external assets.
+ */
 export function createCosmosBackdrop(): THREE.Group {
   const sky = new THREE.Group();
   sky.name = "cosmos-backdrop";
+  sky.renderOrder = -1000;
   const count = 1536;
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
+  const sizes = new Float32Array(count);
   const cold = new THREE.Color("#cad8e9");
+  const silver = new THREE.Color("#e7edf5");
   const warm = new THREE.Color("#e6cfac");
   let seed = 0x41d3c0de;
   const random = () => {
@@ -17,34 +24,56 @@ export function createCosmosBackdrop(): THREE.Group {
   for (let i = 0; i < count; i++) {
     const z = random() * 2 - 1;
     const angle = random() * Math.PI * 2;
-    const radius = 15 + random() * 8;
+    const depth = random();
+    const radius = 18 + depth * 12;
     const ring = Math.sqrt(1 - z * z);
     positions.set([Math.cos(angle) * ring * radius, z * radius, Math.sin(angle) * ring * radius], i * 3);
-    const color = i % 13 === 0 ? warm : cold;
-    const brightness = 0.55 + random() * 0.45;
+    const color = i % 19 === 0 ? warm : i % 3 === 0 ? silver : cold;
+    const brightness = 0.4 + random() * 0.6;
     colors.set([color.r * brightness, color.g * brightness, color.b * brightness], i * 3);
+    // Small, bounded pixel sizes keep zooming from turning stars into graph nodes.
+    sizes[i] = 1.5 + (1 - depth) * 1.1 + random() * 0.5;
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  sky.add(new THREE.Points(geometry, new THREE.PointsMaterial({
-    vertexColors: true, size: 0.035, sizeAttenuation: true,
-    transparent: true, opacity: 0.65, depthWrite: false,
-  })));
-  for (const [radius, tilt, opacity] of [[1.85, 0.38, 0.11], [2.15, -0.35, 0.055]]) {
-    const points: THREE.Vector3[] = [];
-    for (let i = 0; i < 128; i++) {
-      const angle = i * Math.PI * 2 / 128;
-      points.push(new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius * 0.52, 0));
-    }
-    const orbit = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints(points),
-      new THREE.LineBasicMaterial({ color: "#6883a3", transparent: true, opacity, depthWrite: false }),
-    );
-    orbit.rotation.x = tilt;
-    orbit.rotation.z = -0.2;
-    orbit.position.z = -0.45;
-    sky.add(orbit);
-  }
+  geometry.setAttribute("size", new THREE.BufferAttribute(sizes, 1));
+  const material = new THREE.ShaderMaterial({
+    name: "AldenStaticStars",
+    vertexColors: true,
+    transparent: true,
+    blending: THREE.NormalBlending,
+    depthWrite: false,
+    depthTest: true,
+    toneMapped: false,
+    vertexShader: `
+      attribute float size;
+      varying vec3 starColor;
+      void main() {
+        starColor = color;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        // Always behind foreground geometry, including while the camera travels.
+        gl_Position.z = gl_Position.w * 0.99999;
+        gl_PointSize = size;
+      }
+    `,
+    fragmentShader: `
+      varying vec3 starColor;
+      void main() {
+        float radius = length(gl_PointCoord * 2.0 - 1.0);
+        if (radius >= 1.0) discard;
+        float alpha = (1.0 - smoothstep(0.0, 1.0, radius)) * 0.58;
+        gl_FragColor = vec4(starColor, alpha);
+        #include <colorspace_fragment>
+      }
+    `,
+  });
+  const stars = new THREE.Points(geometry, material);
+  stars.name = "cosmos-stars";
+  stars.renderOrder = sky.renderOrder;
+  // The shader controls depth; CPU bounds cannot represent that clip-space sky.
+  stars.frustumCulled = false;
+  stars.raycast = () => undefined;
+  sky.add(stars);
   return sky;
 }

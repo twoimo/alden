@@ -14,6 +14,34 @@ function date(value: unknown): string {
   return Number.isFinite(epoch) && epoch > 0 ? new Date(epoch).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '시점 미확인';
 }
 
+const boundPanes = new WeakSet<HTMLElement>();
+
+function prepareNotePane(root: Document, nodeId: string, initial: boolean): void {
+  const pane = root.getElementById('knowledge-note-pane');
+  if (!pane) return;
+  if (!boundPanes.has(pane)) {
+    // Use the controller's existing close action, including its retrieval fence.
+    pane.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || event.isComposing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      root.getElementById('knowledge-focus-close')?.click();
+    });
+    root.getElementById('knowledge-focus-close')?.addEventListener('click', () => {
+      delete pane.dataset.nodeId;
+      root.getElementById('knowledge-graph-canvas')?.focus({ preventScroll: true });
+    }, { capture: true });
+    boundPanes.add(pane);
+  }
+  if (initial || pane.dataset.nodeId !== nodeId) {
+    pane.dataset.nodeId = nodeId;
+    pane.scrollTop = 0;
+    const disclosure = pane.querySelector<HTMLDetailsElement>('.knowledge-evidence-disclosure');
+    if (disclosure) disclosure.open = false;
+    if (!pane.hidden) pane.focus({ preventScroll: true });
+  }
+}
+
 export function nodeKind(node: KnowledgeNode): string {
   if (node.category === 'collection') return '지식 모음';
   if (/대화 상대|인물|화자|person/.test(node.category)) return '대화 상대';
@@ -69,10 +97,15 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     evidence?.append(entry);
     if (seen.size === 6) break;
   }
-  const heading = root.getElementById('knowledge-evidence-heading'); if (heading) heading.hidden = seen.size === 0;
+  const heading = root.getElementById('knowledge-evidence-heading');
+  if (heading) {
+    heading.hidden = false;
+    heading.textContent = seen.size ? `원문 근거 · ${seen.size}건` : '원문 근거';
+  }
   const basis = root.getElementById('knowledge-node-basis');
   if (basis) basis.textContent = seen.size ? `원문 ${seen.size}건 · 최근 기록의 일부입니다.`
     : node.category === 'collection' ? '그래프에 실제 등록된 구조를 기준으로 설명합니다.'
     : selected?.basis === 'note' ? '저장된 노트의 설명입니다. 대화 원문으로 확인된 사실과 구분합니다.'
     : payload ? '원문을 확인하지 못했습니다. 저장된 설명만 표시합니다.' : '저장된 설명 · 원문을 확인하고 있습니다.';
+  prepareNotePane(root, node.id, payload === null);
 }

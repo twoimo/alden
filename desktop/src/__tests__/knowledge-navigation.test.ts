@@ -15,7 +15,7 @@ vi.mock("../knowledge/hologram", () => ({ KnowledgeHologram: class {
   get currentView() { return this.model.current(); }
   get currentGraph() { return this.graph; }
   private publish(view: KnowledgeView) { this.notify({node:this.graph.nodes.find(n=>n.id===view.focusId)??null,view}); return view; }
-  clickNode(id: string) { return this.publish(this.model.clickNode(id)); }
+  clickNode(id: string) { return this.publish(this.model.openNote(id)); }
   expandOneHop() { return this.publish(this.model.expandOneHop()); }
   back() { return this.publish(this.model.back()); }
   reset() { return this.publish(this.model.reset()); }
@@ -38,12 +38,21 @@ function pending() {
 const settle=async()=>{await Promise.resolve();await Promise.resolve();};
 const text=()=>document.getElementById("knowledge-retrieve")!.textContent;
 describe("knowledge navigation UI and retrieval epochs",()=>{
+  it('opens linked notes by exact ID and returns to the previous note without losing the graph',async()=>{
+    const {load}=pending();const graph=(await setup({nodes:[{id:'a',label:'동일한 제목'},{id:'b',label:'동일한 제목'}],edges:[{source:'a',target:'b',weight:2}]},unavailableSnapshot(),load))!;
+    graph.clickNode('a');expect(document.getElementById('settings-knowledge-card')!.dataset.noteOpen).toBe('true');
+    document.querySelector<HTMLButtonElement>('button[data-knowledge-node="b"]')!.click();
+    expect(graph.currentView.focusId).toBe('b');expect(graph.currentView.hops).toBe(0);expect(graph.currentView.nodes).toHaveLength(2);
+    document.querySelector<HTMLButtonElement>('#knowledge-back')!.click();expect(graph.currentView.focusId).toBe('a');
+    document.querySelector<HTMLButtonElement>('#knowledge-focus-close')!.click();expect(graph.currentView.focusId).toBe(null);
+    expect(document.getElementById('settings-knowledge-card')!.dataset.noteOpen).toBe('false');
+  });
   it("restores expansion and clears overview details through visible controls",async()=>{
     const {load}=pending();const graph=(await setup(payload,unavailableSnapshot(),load))!;
     expect(document.querySelector<HTMLButtonElement>("#knowledge-back")!.disabled).toBe(true);
     graph.clickNode("a");document.querySelector<HTMLButtonElement>("#knowledge-expand-hop")!.click();
     graph.clickNode("b");document.querySelector<HTMLButtonElement>("#knowledge-back")!.click();
-    expect(graph.currentView.focusId).toBe("a");expect(graph.currentView.hops).toBe(3);
+    expect(graph.currentView.focusId).toBe("a");expect(graph.currentView.hops).toBe(2);
     expect(document.getElementById("knowledge-focus-title")!.textContent).toBe("서울");
     document.querySelector<HTMLButtonElement>("#knowledge-overview")!.click();
     expect(document.getElementById("knowledge-relations")!.children.length).toBe(0);

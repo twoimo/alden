@@ -10,10 +10,10 @@ const overview = overviewGraph(graph);
 const cases = [6, 12, 24].map(cap => {
   const nodes = overview.nodes.slice(0, cap), ids = new Set(nodes.map(n => n.id));
   const view = { ...overview, nodes, edges: overview.edges.filter(e => ids.has(e.source) && ids.has(e.target)) };
-  for (let i = 0; i < 30; i++) relationAnchors(view);
+  for (let i = 0; i < 30; i++) relationAnchors(view, graph);
   const elapsed: number[] = [];
   for (let i = 0; i < 200; i++) {
-    const start = performance.now(); relationAnchors(view); elapsed.push(performance.now() - start);
+    const start = performance.now(); relationAnchors(view, graph); elapsed.push(performance.now() - start);
   }
   elapsed.sort((a, b) => a - b);
   return { nodes: nodes.length, sourceEdges: view.edges.length, samples: elapsed.length,

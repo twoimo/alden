@@ -3,7 +3,7 @@ import { unavailableSnapshot, type EmergencyState } from './contracts';
 import type { fetchSettingsAction, SettingsInvoke } from './runtime';
 import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from './tokens';
 const at=Date.now()/1000;
-const rooms=[{chat_id:'101',chat_name:'예시 · 디자인 이야기',last_updated_at:at},{chat_id:'202',chat_name:'예시 · 책을 읽는 사람들',last_updated_at:at-3600}];
+const rooms=[{chat_id:'101',chat_name:'예시 · 디자인 이야기',last_updated_at:at},{chat_id:'202',chat_name:'예시 · 책을 읽는 사람들',last_updated_at:at-3600},{chat_id:'303',chat_name:'예시 · AI 연구 모임',last_updated_at:at-7200}];
 let catalog=[{chat_id:101,title:rooms[0].chat_name,auto_reply:true,geeknews:false}];
 export let emergency:EmergencyState={schemaVersion:1,epoch:0,latched:false,reason:'initial'};
 let selectedModel: string = RESIDENT_MODEL_ID;
@@ -13,17 +13,20 @@ export const invokeCommand: SettingsInvoke = async <T>(command: string, args: Re
   }
   throw new Error('development_fixture_command_unavailable');
 };
+const contexts=['design','books','research'];
+const contextName=(id:string)=>id==='design'?'디자인 이야기':id==='books'?'책을 읽는 사람들':'AI 연구 모임';
+const contextFor=(i:number)=>contexts[i<5?0:i<10?1:2];
 const nodes=[{id:'root',label:'카카오톡',category:'collection',is_hub:true,importance:55},
-  ...['design','books'].map(id=>({id:'context-'+id,label:'맥락 · '+(id==='design'?'디자인 이야기':'책을 읽는 사람들'),category:'collection',is_hub:true,importance:55})),
-  ...Array.from({length:14},(_,i)=>({id:'person-'+i,label:['예시 민준','예시 서연','예시 윤서','예시 지우'][i%4]+(i>3?' '+i:''),category:'대화 상대',importance:70-i})),
-  {id:'design',label:'디자인 이야기',category:'대화방',importance:88},{id:'books',label:'책을 읽는 사람들',category:'대화방',importance:83},
+  ...contexts.map(id=>({id:'context-'+id,label:contextName(id),space:'example/'+id,category:'collection',is_hub:true,importance:55})),
+  ...Array.from({length:14},(_,i)=>({id:'person-'+i,label:['예시 민준','예시 서연','예시 윤서','예시 지우'][i%4]+(i>3?' '+i:''),space:'example/'+contextFor(i),category:'대화 상대',importance:70-i})),
+  ...contexts.map((id,i)=>({id,label:contextName(id),space:'example/'+id,category:'대화방',importance:88-i*3})),
   {id:'writing',label:'글쓰기',category:'대화 주제',importance:81},{id:'ai',label:'AI와 일상',category:'대화 주제',importance:76}];
-const edges=[...['design','books'].flatMap(id=>[
+const edges=[...contexts.flatMap(id=>[
   {source:'root',target:'context-'+id,relation:'linked',weight:1,purpose:'navigation'},
   {source:'context-'+id,target:id,relation:'linked',weight:1,purpose:'navigation'},
   {source:id,target:'writing',relation:'discusses',weight:id==='books'?8:3,purpose:'semantic'},
   {source:id,target:'ai',relation:'discusses',weight:id==='design'?8:2,purpose:'semantic'}]),
-  ...Array.from({length:14},(_,i)=>({source:'person-'+i,target:i<7?'design':'books',relation:'TALKED_IN',weight:3+i%5,purpose:'semantic'})),
+  ...Array.from({length:14},(_,i)=>({source:'person-'+i,target:contextFor(i),relation:'TALKED_IN',weight:3+i%5,purpose:'semantic'})),
   ...Array.from({length:8},(_,i)=>({source:'person-'+i,target:i<4?'ai':'writing',relation:'TALKS_ABOUT',weight:2+i%4,purpose:'semantic'})),
   ...['writing','ai'].map(target=>({source:'root',target,relation:'linked',weight:1,purpose:'navigation'}))];
 export const action:typeof fetchSettingsAction=async(kind,input={})=>{
@@ -31,7 +34,7 @@ export const action:typeof fetchSettingsAction=async(kind,input={})=>{
   if(kind==='knowledge-graph')return {ok:true,nodes,edges,stale:false,node_count:nodes.length,osk:{state:'ready',engine:'example',synced_at:at,pending:0,conflicts:0}};
   if(kind==='knowledge-graph-status')return {ok:true,stale:false};
   if(kind==='knowledge-graph-focus')return {ok:true,facts:['개발 화면의 예시 지식입니다. 실제 대화가 아닙니다.'],
-    details:{node_id:input.nodeId,summary:'개발 화면의 예시입니다. 디자인 이야기에서 대화 기록과 탐색 화면에 관한 의견을 나눈 참여자입니다.',basis:'snapshot',scope_room_id:'101',key_facts:[]},
+    details:{node_id:input.nodeId,summary:input.nodeId?.startsWith('person-')?'디자인 이야기에서 대화 기록과 탐색 화면에 관한 의견을 나눈 예시 참여자입니다.':input.nodeId==='ai'?'AI를 일상에서 사용하는 방법에 관한 예시 노트입니다. 대화 기록과 자동화의 활용 사례를 함께 살펴봅니다.':input.nodeId==='writing'?'글쓰기와 기록의 연결을 담은 예시 노트입니다. 대화에서 나온 생각을 읽을 수 있는 기록으로 정리합니다.':'이 채팅방의 대화 기록과 연결된 주제를 모은 예시 노트입니다.',basis:'snapshot',scope_room_id:'101',key_facts:[]},
     sources:['채팅방마다 지난 대화를 날짜순으로 읽을 수 있으면 좋겠습니다.','이름을 선택하면 어떤 사람인지 원문과 함께 살펴보고 싶습니다.','설정은 한곳에서 관리하고 그래프는 넓게 보여 주세요.'].map((content,i)=>({source_id:`kakao:${'1'.repeat(64)}:room:101:log:${i+1}`,source_kind:'local_db_snapshot',chat_id:'101',author_id:'3',sender:'예시 서연',room_title:'예시 · 디자인 이야기',date:new Date(at*1000-i*600000).toISOString(),content,source_role:'peer_history'}))};
   if(kind==='history-rooms')return {ok:true,account:'synthetic-preview',rooms};
   if(kind==='history-messages'){const high=q.before?Number(q.before)-1:1000;const low=Math.max(1,high-99);return {ok:true,anchor_log_id:'1000',total:1000,next_before:low>1?String(low):null,messages:Array.from({length:high-low+1},(_,i)=>({id:String(low+i),chat_id:input.chatId,author_id:'fixture',is_self:(low+i)%3===0,sender:(low+i)%3===0?'나':'예시 서연',text:(low+i)%4===0?'말씀하신 방향으로 자료를 정리했습니다.\n필요한 맥락부터 이어서 살펴보겠습니다.':'지난 대화의 내용도 날짜순으로 읽을 수 있으면 좋겠습니다. · 예시 '+(low+i),type:1,sent_at:at-(1000-low-i)*600}))};}

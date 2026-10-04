@@ -1,5 +1,12 @@
 # Alden desktop design contract
 
+## 0.3.18 — Cosmic notes
+
+The default graph is a quiet Obsidian-inspired constellation: real memories are small round stars, real references are thin lines, and unique neighbour degree controls size. No type-based or fixed three-circle grouping chooses the global view. The sky remains static and has no knowledge IDs. Hover emphasizes actual neighbours; dragging pans, and wheel input zooms.
+
+Click opens an adjacent readable note while keeping global context. Exact-ID links, Back and close preserve navigation; narrower workspaces stack graph and note. Original excerpts are a disclosure. Local expansion is explicit. A further close zoom reveals the neuronal glyphs and branches; bridges dock to real tip vertices and one growth state drives extension, terminal, contact and retraction. These are display mechanics, never proof of biological or model learning. Global budgets are 120/512; local budgets remain 24/144. Settled scenes submit no frames; retained buffers and instanced-mesh disposal are required.
+
+
 ## 0.3.12 — Dynamic neural graph
 
 The knowledge graph keeps the navy palette and silver/gold materials, with a quiet folded cortical backdrop. Confirmed relationships form curved synaptic bridges: new bridges grow from their endpoints, withdrawn ones retract, and strength controls width and spring rest length. Stable IDs preserve positions through source updates. These are display mechanics, not a biological simulation or a learning-status indicator.

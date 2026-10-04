@@ -98,11 +98,24 @@ export function settingsMarkup(): string {
 ${automationHistoryMarkup('reply', '카카오톡 답변')}
 ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
 <section id="settings-page-memory" class="settings-page" role="tabpanel" aria-labelledby="settings-tab-memory">
-          <section id="settings-knowledge-card" class="knowledge-section" aria-labelledby="knowledge-title">
-            <div class="knowledge-workspace"><div class="knowledge-hologram-shell"><canvas id="knowledge-graph-canvas" width="1600" height="1200" aria-label="대화 속 이름과 주제의 연결 그림"></canvas><div class="knowledge-node-labels" aria-hidden="true"></div><div id="knowledge-accessible-nodes" class="sr-only" role="region" aria-label="대화 검색 항목 목록"></div></div></div>
-            <header class="knowledge-heading"><h1 id="knowledge-title">지식 그래프</h1><p id="knowledge-summary" role="status" aria-live="polite">불러오는 중</p><span id="knowledge-mode" class="tag" hidden>확인 중</span><p id="knowledge-sync" class="knowledge-sync" role="status" aria-live="polite">갱신 확인 중</p></header>
-            <div class="knowledge-hologram-toolbar"><button id="knowledge-back" type="button" disabled>이전</button><button id="knowledge-overview" type="button" disabled>전체 보기</button><button id="knowledge-expand-hop" type="button" disabled>더 보기</button></div>
-            <aside class="knowledge-focus-card" aria-label="선택한 지식" aria-live="polite" hidden><header class="knowledge-detail-heading"><div><span id="knowledge-node-kind">저장된 기억</span><strong id="knowledge-focus-title">선택한 지식</strong></div><button id="knowledge-focus-close" type="button" aria-label="선택한 지식 닫기"><i data-lucide="X" aria-hidden="true"></i></button></header><p id="knowledge-node-summary" class="knowledge-node-summary"></p><p id="knowledge-node-basis" class="knowledge-node-basis"></p><ul id="knowledge-node-facts" class="knowledge-node-facts" hidden></ul><div id="knowledge-relations" class="knowledge-relations"></div><h2 id="knowledge-evidence-heading" hidden>원문 근거</h2><div id="knowledge-node-evidence"></div><p id="knowledge-retrieve">항목을 선택하면 관련 대화를 찾아 보여드립니다.</p></aside>
+          <section id="settings-knowledge-card" class="knowledge-section" aria-labelledby="knowledge-title" data-note-open="false">
+            <div class="knowledge-workspace">
+              <div class="knowledge-graph-pane">
+                <header class="knowledge-heading"><h1 id="knowledge-title">지식 그래프</h1><p id="knowledge-summary" role="status" aria-live="polite">불러오는 중</p><span id="knowledge-mode" class="tag" hidden>확인 중</span><p id="knowledge-sync" class="knowledge-sync" role="status" aria-live="polite">갱신 확인 중</p></header>
+                <div class="knowledge-hologram-shell"><canvas id="knowledge-graph-canvas" width="1600" height="1200" tabindex="0" aria-label="대화 속 이름과 주제의 연결 그림" aria-controls="knowledge-note-pane"></canvas><div class="knowledge-node-labels" aria-hidden="true"></div><div id="knowledge-accessible-nodes" class="sr-only" role="region" aria-label="대화 검색 항목 목록"></div></div>
+                <div class="knowledge-hologram-toolbar"><button id="knowledge-back" type="button" disabled>이전</button><button id="knowledge-overview" type="button" disabled>전체 보기</button><button id="knowledge-expand-hop" type="button" disabled>더 보기</button></div>
+              </div>
+              <aside id="knowledge-note-pane" class="knowledge-focus-card" aria-labelledby="knowledge-focus-title" tabindex="0" hidden>
+                <header class="knowledge-detail-heading"><div><span id="knowledge-node-kind" hidden>저장된 기억</span><h2 id="knowledge-focus-title">선택한 지식</h2></div><button id="knowledge-focus-close" type="button" aria-label="노트 닫기"><i data-lucide="X" aria-hidden="true"></i></button></header>
+                <div class="knowledge-note-body">
+                  <p id="knowledge-node-summary" class="knowledge-node-summary"></p>
+                  <ul id="knowledge-node-facts" class="knowledge-node-facts" hidden></ul>
+                  <h3 id="knowledge-links-heading" class="knowledge-note-subheading">연결된 노트</h3>
+                  <div id="knowledge-relations" class="knowledge-relations" role="group" aria-labelledby="knowledge-links-heading"></div>
+                  <details class="knowledge-evidence-disclosure"><summary id="knowledge-evidence-heading">원문 근거</summary><p id="knowledge-node-basis" class="knowledge-node-basis"></p><div id="knowledge-node-evidence"></div><p id="knowledge-retrieve" role="status">항목을 선택하면 관련 대화를 찾아 보여드립니다.</p></details>
+                </div>
+              </aside>
+            </div>
           </section>
         </section>
         <section id="settings-page-history" class="settings-page db-history-page" role="tabpanel" aria-labelledby="settings-tab-history" hidden><header class="settings-page-heading"><h1>기억 정리</h1><p>수집된 대화를 검색할 수 있게 정리합니다.</p></header><section class="db-current" aria-live="polite"><span id="db-current-dot" class="operation-dot" aria-hidden="true"></span><div><strong id="db-current-title">갱신 상태 확인 중</strong><p id="db-current-detail"></p></div></section><div id="db-cycle-list" class="db-cycle-list" role="list" aria-label="기억 정리 기록"></div><button id="db-history-older" type="button" class="history-older" hidden>이전 갱신 더 보기</button></section>

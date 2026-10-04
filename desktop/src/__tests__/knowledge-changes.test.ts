@@ -21,4 +21,10 @@ describe('meaningful source changes', () => {
     expect(knowledgeSignature(a)).toBe(knowledgeSignature(b));
     expect(knowledgeSignature(a)).not.toBe(knowledgeSignature({ ...a, edges: a.edges.slice(0, 1) }));
   });
+  it('invalidates real room membership changes while ignoring source room order', () => {
+    const a=source(), b=source(); a.nodes[0].evidence.roomIds=['101','202']; b.nodes[0].evidence.roomIds=['202','101'];
+    expect(knowledgeSignature(a)).toBe(knowledgeSignature(b));
+    b.nodes[0].evidence.roomIds=['101','303'];
+    expect(knowledgeSignature(a)).not.toBe(knowledgeSignature(b));
+  });
 });

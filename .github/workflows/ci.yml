@@ -150,6 +150,7 @@ jobs:
       - name: Run focused local AI tests
         run: >-
           python3 -m unittest
+          tests.test_auto_reply_geeknews_digest
           tests.test_auto_reply_ondevice
           tests.test_auto_reply_reference_search
           tests.test_auto_reply_knowledge_graph

@@ -4,12 +4,12 @@ export function overviewCameraDistance(
   width: number,
   height: number,
   verticalFov = 38,
+  radius = .32,
 ): number {
   const tanY = Math.tan(verticalFov * Math.PI / 360);
   const tanX = tanY * Math.max(1, width) / Math.max(1, height);
   const safeX = tanX * Math.max(0.3, 1 - 96 / Math.max(1, width));
   const safeY = tanY * Math.max(0.3, 1 - 40 / Math.max(1, height));
-  const radius = 0.32; // Largest overview orb; also leaves room for small labels.
   let distance = 3.6;
   for (const point of points) {
     distance = Math.max(distance, point.z + radius + Math.max(
