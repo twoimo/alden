@@ -34,7 +34,7 @@ COMMIT = "9bbf08febc5a1fb2af068006735ed79cbdb71178"
 ARCHIVE_HASH = "74feda64efb68c819a45746359de4158e426f87d74f682602f23fb6d46c9d4e3"
 MAX_MUTATIONS = 32  # Source writes, cluster creation and moves share one budget.
 MAX_HUB_WRITES = 16
-ORGANIZATION_VERSION = 3
+ORGANIZATION_VERSION = 4
 MAX_BODY = 12000
 _ENGINE = None
 _ROOT = None
@@ -152,6 +152,8 @@ def _layout_pending(checkpoint: dict, home: Path, contract, graph) -> int:
         if item.get('active'):
             _reconcile_note(home, item, idx, contract)
     for hub in hubs.values():
+        if hub.get('retired'):
+            continue
         resolved = _resolve_note(hub, idx, contract)
         if not hub.get('held') and _same_note(home, hub, resolved):
             pending += resolved[1].body.strip() != _hub_body(hub, placements).strip()
@@ -168,6 +170,8 @@ def _organize_vault(home: Path, checkpoint: dict, contract, graph, write, budget
         hubs.setdefault('legacy:' + key, {**old, 'legacy': key != 'kakao'})
     idx = graph.Index()
     for hub in hubs.values():
+        if hub.get('retired'):
+            continue
         _reconcile_note(home, hub, idx, contract)
     for key, title, space in [('root', 'Alden', '00_Scope/Alden'), ('legacy:kakao', 'Alden 카카오톡', SOURCE_SPACE)]:
         if key in hubs:
@@ -188,6 +192,8 @@ def _organize_vault(home: Path, checkpoint: dict, contract, graph, write, budget
     repaired = 0
     placements = _placements(home, graph)
     for hub in hubs.values():
+        if hub.get('retired'):
+            continue
         if repaired >= MAX_HUB_WRITES or _aborted(home.parent.parent):
             break
         resolved = _reconcile_note(home, hub, graph.Index(), contract)
@@ -652,6 +658,11 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         checkpoint_path = home / "sync.json"
         checkpoint = _read_json(checkpoint_path, {"managed": {}, "generation": 0})
         _withdraw_preclassification(home, checkpoint, contract, graph, secrets, write)
+        if checkpoint.get('bootstrap_retired_version') != 1:
+            from auto_reply_knowledge_graph import retire_unbacked_bootstrap
+            checkpoint['bootstrap_retired'] = retire_unbacked_bootstrap(state_root)
+            checkpoint['bootstrap_retired_version'] = 1
+            _save(checkpoint_path, checkpoint)
         if checkpoint.get('indexes_retired_version') != 1:
             from auto_reply_knowledge_graph import retire_preclassification_indexes
             checkpoint['indexes_retired'] = retire_preclassification_indexes(state_root)
@@ -782,7 +793,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             moved = _organize_vault(home,checkpoint,contract,graph,write,MAX_MUTATIONS-changed)
         layout_pending = _layout_pending(checkpoint, home, contract, graph)
         conflicts = max(conflicts, sum(bool(m.get('held')) for m in managed.values() if m.get('active')))
-        conflicts += sum(bool(h.get('held')) for h in checkpoint.get('organization', {}).get('hubs', {}).values())
+        conflicts += sum(bool(h.get('held')) for h in checkpoint.get('organization', {}).get('hubs', {}).values() if not h.get('retired'))
         checkpoint.update({"engine": VERSION, "commit": COMMIT, "generation": checkpoint.get("generation", 0) + 1,
                            "synced_at": int(time.time()), "source_indexed_at": source.get("indexed_at", 0),"layout_pending":layout_pending,
                            "stale": bool(source.get("stale")), "changed": changed, "moved": moved, "conflicts": conflicts,
@@ -819,7 +830,7 @@ def reorganize(state_root: Path) -> dict:
         moved = _organize_vault(home, checkpoint, contract, graph, write, MAX_MUTATIONS)
         pending = _layout_pending(checkpoint, home, contract, graph)
         conflicts = sum(bool(m.get('held')) for m in checkpoint['managed'].values() if m.get('active'))
-        conflicts += sum(bool(h.get('held')) for h in checkpoint.get('organization', {}).get('hubs', {}).values())
+        conflicts += sum(bool(h.get('held')) for h in checkpoint.get('organization', {}).get('hubs', {}).values() if not h.get('retired'))
         checkpoint.update(layout_pending=pending, conflicts=conflicts, placement_signature=_placement_signature(home, graph))
         _save(home / 'sync.json', checkpoint)
         return {'ok': True, 'moved': moved, 'layout_pending': pending, 'conflicts': conflicts}

@@ -8,6 +8,8 @@ Python and Rust no longer classify messages into topics, promote topic entities,
 
 The graph now reads parsed canonical notes through OSK's resolver. Body Links are directed dependencies; `derived-from` and `conflicts` remain separate predicates. Raw and other non-node coordinates are provenance only. Membership uses stored paths and directly authored links to real hubs. Room IDs, neighboring directories and connected components cannot synthesize a cluster. Raw re-import cannot overwrite notes whose automatic claims the user expressly withdrew.
 
+Version 0.3.21 also removes all prewritten bootstrap facts and relations from product defaults. Historical records are explicit test fixtures, not a cold-start graph. Only known bootstrap IDs lacking evidence can be retired; real ledger/snapshot evidence and records referenced by supported relationships are preserved. Organizational review may retire adapter-created hubs and move their members through the SDK. Retired hubs remain checkpoint tombstones and are excluded from automatic repair and pending counts; this does not infer new semantic clusters. An external speaker record is not a facet of the user's Person Space.
+
 ## Measured private migration
 
 | Store | Archived topic notes | Rewritten notes | Classification projection rows removed | Topic entities removed | Related ERE rows removed | Dense/ANN rows removed | Pack tags cleared |

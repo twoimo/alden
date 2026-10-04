@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+from contextlib import closing
 import heapq
 import json
 import math
@@ -214,106 +215,12 @@ def _normalize_evidence(raw: Any) -> dict[str, Any]:
     return result
 
 
-DEFAULT_ENTITIES = [
-    {
-        "entity_id": "ent:tech:alizonku",
-        "name": "알쫀쿠 (알리바바 클라우드 구독)",
-        "category": "클라우드/인프라",
-        "aliases": ["알쫀쿠", "알리바바", "알리바바 클라우드", "alibaba cloud", "알리 클라우드"],
-        "description": "알리바바 클라우드(Alibaba Cloud) 1년 구독 및 할인 프로모션. AWS 대비 가성비 인프라로 과거 방에서 '이게 훨씬 낫죠'라며 추천 및 비교했던 핵심 주제.",
-        "key_facts": [
-            "알쫀쿠는 알리바바 클라우드 국내 프로모션/할인 구독을 지칭함",
-            "과거 최연우가 '이게 훨씬 낫죠'라고 평가하며 비용 효율성과 스펙 장점을 강조함",
-            "서버 비용 절감 및 스타트업/사이드 프로젝트 인프라로 강력 추천한 맥락 보유",
-        ],
-        "importance": 95,
-    },
-    {
-        "entity_id": "ent:person:moon_seunghyun",
-        "name": "문승현",
-        "category": "대화 상대",
-        "aliases": ["문승현", "승현", "승현님"],
-        "description": "부자멘토멘티 채팅방의 핵심 대화 상대. 러닝/운동을 즐기며 인증 사진을 자주 공유함.",
-        "key_facts": [
-            "취미로 야외 러닝/마라톤 훈련을 진행함",
-            "운동 기록(NRC/가민 등) 및 러닝 후기 사진을 공유함 (음식 사진과 혼동 금지)",
-            "최연우의 알쫀쿠 추천 및 테크/스타트업 논의에 호응함",
-        ],
-        "importance": 90,
-    },
-    {
-        "entity_id": "ent:person:choi_yeonwoo",
-        "name": "최연우 (페르소나/본인)",
-        "category": "화자",
-        "aliases": ["최연우", "연우"],
-        "description": "오픈카카오 봇의 사용자 페르소나. 솔직하고 현실적인 말투로 스타트업, 클라우드, 자동화에 대해 실용적 조언을 제공함.",
-        "key_facts": [
-            "자신감 넘치고 담백한 어투 (과도한 존대나 AI스러운 문체 지양)",
-            "클라우드 비용과 인프라 효율성을 매우 중요하게 평가함",
-            "친구들과의 일상 공유(운동, 식사)에 자연스럽고 따뜻하게 반응함",
-        ],
-        "importance": 98,
-    },
-    {
-        "entity_id": "ent:activity:running",
-        "name": "러닝 / 마라톤 훈련",
-        "category": "활동/취미",
-        "aliases": ["러닝", "달리기", "런", "마라톤", "조깅", "운동 인증"],
-        "description": "대화방 멤버들이 공유하는 러닝 및 유산소 운동 활동. 거리, 페이스, 주로 사진이 함께 올라옴.",
-        "key_facts": [
-            "러닝 후 인증 사진(운동화, 트랙, 주로, 거리 측정 앱)이 공유됨",
-            "사진에 러닝 주로/신발/트랙이 보이면 식사/음식 질문을 하지 않고 러닝 거리/페이스에 맞게 반응해야 함",
-        ],
-        "importance": 85,
-    },
-    {
-        "entity_id": "ent:channel:bujamentor",
-        "name": "부자멘토멘티",
-        "category": "채팅방",
-        "aliases": ["부자멘토멘티", "부자방", "멘토멘티"],
-        "description": "문승현, 송우섭, 주원, 현준, 최연우가 참여하는 핵심 카카오톡 그룹 채팅방 (ID: 417780809780519).",
-        "key_facts": [
-            "스타트업 인프라, 클라우드 비용 절감, 일상 라이프스타일 논의",
-            "과거 합의된 맥락(알쫀쿠 가성비 추천)을 일관되게 유지해야 함",
-        ],
-        "importance": 100,
-    },
-]
-
-DEFAULT_RELATIONS = [
-    {
-        "source_id": "ent:person:choi_yeonwoo",
-        "relation": "RECOMMENDED",
-        "target_id": "ent:tech:alizonku",
-        "context": "최연우가 '이게 훨씬 낫죠'라며 알리바바 클라우드(알쫀쿠) 비용 효율성을 강조하고 추천함",
-        "weight": 95,
-    },
-    {
-        "source_id": "ent:channel:bujamentor",
-        "relation": "DISCUSSED",
-        "target_id": "ent:tech:alizonku",
-        "context": "부자멘토멘티 채팅방에서 클라우드 구독 비용 비교 주제로 깊이 논의됨",
-        "weight": 90,
-    },
-    {
-        "source_id": "ent:person:moon_seunghyun",
-        "relation": "PARTICIPATES_IN",
-        "target_id": "ent:activity:running",
-        "context": "문승현이 러닝 사진 및 운동 기록을 채팅방에 공유함",
-        "weight": 88,
-    },
-    {
-        "source_id": "ent:person:moon_seunghyun",
-        "relation": "ACTIVE_MEMBER_OF",
-        "target_id": "ent:channel:bujamentor",
-        "context": "부자멘토멘티 채팅방의 활발한 대화 참여자",
-        "weight": 90,
-    },
-]
-
-_BUILTIN_SEED_IDS = frozenset(item['entity_id'] for item in DEFAULT_ENTITIES) | frozenset(
-    item['source_id'] + '|' + item['target_id'] for item in DEFAULT_RELATIONS
-)
+# Compatibility names remain empty. Knowledge starts from actual source evidence;
+# historical hand-written defaults live only in migration tests.
+DEFAULT_ENTITIES: list[dict] = []
+DEFAULT_RELATIONS: list[dict] = []
+# IDs alone identify old unsupported bootstrap records for retirement/readback.
+_BUILTIN_SEED_IDS = frozenset(['ent:tech:alizonku', 'ent:person:moon_seunghyun', 'ent:person:choi_yeonwoo', 'ent:activity:running', 'ent:channel:bujamentor', 'ent:person:choi_yeonwoo|ent:tech:alizonku', 'ent:channel:bujamentor|ent:tech:alizonku', 'ent:person:moon_seunghyun|ent:activity:running', 'ent:person:moon_seunghyun|ent:channel:bujamentor'])
 
 
 def _connect_kg(db_path: Path) -> sqlite3.Connection:
@@ -549,47 +456,42 @@ def collect_knowledge_graph_status(
 
 
 def ensure_seeded(conn: sqlite3.Connection) -> None:
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM kg_entities")
-    if cur.fetchone()[0] > 0:
-        return
-    now = int(time.time())
-    for e in DEFAULT_ENTITIES:
-        conn.execute(
-            """
-            INSERT INTO kg_entities (entity_id, name, category, aliases_json, description, key_facts_json, importance, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(entity_id) DO UPDATE SET
-                name=excluded.name,
-                category=excluded.category,
-                aliases_json=excluded.aliases_json,
-                description=excluded.description,
-                key_facts_json=excluded.key_facts_json,
-                importance=excluded.importance,
-                updated_at=excluded.updated_at
-            """,
-            (
-                e["entity_id"],
-                e["name"],
-                e["category"],
-                json.dumps(e["aliases"], ensure_ascii=False),
-                e["description"],
-                json.dumps(e["key_facts"], ensure_ascii=False),
-                e["importance"],
-                now,
-            ),
-        )
-    for r in DEFAULT_RELATIONS:
-        _upsert_relation(
-            conn,
-            source_id=r["source_id"],
-            relation=r["relation"],
-            target_id=r["target_id"],
-            context=r["context"],
-            weight=int(r["weight"]),
-            updated_at=now,
-        )
-    conn.commit()
+    """Compatibility hook: never inject prewritten claims into an empty graph."""
+    return None
+
+
+def retire_unbacked_bootstrap(state_root: Path) -> dict:
+    """Retire only known bootstrap IDs without source evidence, never observations."""
+    path = Path(state_root) / KNOWLEDGE_GRAPH_DB_NAME
+    result = {'entities': 0, 'relations': 0, 'held': 0}
+    if not path.exists():
+        return result
+    if any(p.is_symlink() for p in [path, *path.parents]):
+        raise RuntimeError('bootstrap_index_symlink')
+    with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=rw', uri=True, timeout=.2)) as conn, conn:
+        if not conn.execute("SELECT 1 FROM sqlite_master WHERE name='kg_entities'").fetchone():
+            return result
+        for identity in sorted(i for i in _BUILTIN_SEED_IDS if '|' not in i):
+            row = conn.execute('SELECT evidence_json FROM kg_entities WHERE entity_id=?', (identity,)).fetchone()
+            if not row:
+                continue
+            def unsupported(text):
+                try:
+                    evidence = json.loads(text or '{}')
+                except (ValueError, TypeError):
+                    return False
+                return isinstance(evidence, dict) and (not evidence or (
+                    evidence.get('kind') == PROVENANCE_SEED and not evidence.get('source_event_ids')
+                    and evidence.get('confirmed_at') is None))
+            if not unsupported(row[0]):
+                continue
+            related = conn.execute('SELECT id,evidence_json FROM kg_relations WHERE source_id=? OR target_id=?', (identity, identity)).fetchall()
+            if any(not unsupported(evidence) for _, evidence in related):
+                result['held'] += 1
+                continue
+            result['relations'] += conn.execute('DELETE FROM kg_relations WHERE source_id=? OR target_id=?', (identity, identity)).rowcount
+            result['entities'] += conn.execute('DELETE FROM kg_entities WHERE entity_id=?', (identity,)).rowcount
+    return result
 
 
 def _room_ledgers(state_root: Path) -> list[Path]:

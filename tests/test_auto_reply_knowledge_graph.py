@@ -91,15 +91,45 @@ def make_state_root(tmp: str) -> Path:
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
         encoding="utf-8",
     )
+    conn=KG._connect_kg(root/KG.KNOWLEDGE_GRAPH_DB_NAME)
+    seed_historical_fixture(conn)
+    conn.close()
     return root
 
 
+def seed_historical_fixture(conn):
+    """Explicit old database fixture, independent of the product's empty defaults."""
+    data=json.loads((ROOT/'tests/fixtures/legacy-knowledge-bootstrap.json').read_text())
+    for e in data['DEFAULT_ENTITIES']:
+        conn.execute('INSERT OR REPLACE INTO kg_entities(entity_id,name,category,aliases_json,description,key_facts_json,importance,updated_at) VALUES(?,?,?,?,?,?,?,?)',
+            (e['entity_id'],e['name'],e['category'],json.dumps(e['aliases'],ensure_ascii=False),e['description'],json.dumps(e['key_facts'],ensure_ascii=False),e['importance'],1))
+    for r in data['DEFAULT_RELATIONS']:
+        KG._upsert_relation(conn,source_id=r['source_id'],relation=r['relation'],target_id=r['target_id'],context=r['context'],weight=r['weight'],updated_at=1)
+    conn.commit()
+
+
 class PersistedReadOnlyViewTests(unittest.TestCase):
+    def test_empty_graph_never_receives_predefined_claims_and_retirement_keeps_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve();conn=KG._connect_kg(root/KG.KNOWLEDGE_GRAPH_DB_NAME)
+            KG.ensure_seeded(conn)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM kg_entities').fetchone()[0],0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM kg_relations').fetchone()[0],0)
+            seed_historical_fixture(conn)
+            evidence=json.dumps({'kind':'ledger','source_event_ids':['actual:1'],'chat_id':'42','confirmed_at':1})
+            conn.execute("UPDATE kg_entities SET evidence_json=? WHERE entity_id='ent:tech:alizonku'",(evidence,))
+            conn.commit();conn.close()
+            result=KG.retire_unbacked_bootstrap(root)
+            self.assertEqual(result['entities'],4)
+            with sqlite3.connect(root/KG.KNOWLEDGE_GRAPH_DB_NAME) as db:
+                self.assertEqual(db.execute('SELECT entity_id FROM kg_entities').fetchall(),[('ent:tech:alizonku',)])
+            self.assertEqual(KG.retire_unbacked_bootstrap(root)['entities'],0)
+
     def test_waited_refresh_reports_retained_graph_as_stale_after_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = make_state_root(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
-            KG.ensure_seeded(conn)
+            seed_historical_fixture(conn)
             KG.write_meta(conn, "last_indexed_at", "100")
             conn.commit()
             conn.close()
@@ -123,7 +153,7 @@ class PersistedReadOnlyViewTests(unittest.TestCase):
             root = Path(tmp)
             path = root / KG.KNOWLEDGE_GRAPH_DB_NAME
             conn = KG._connect_kg(path)
-            KG.ensure_seeded(conn)
+            seed_historical_fixture(conn)
             KG.write_meta(conn, "last_indexed_at", "1")
             conn.commit()
             conn.close()
@@ -186,15 +216,15 @@ class GraphShapeTests(unittest.TestCase):
                 self.assertIn("evidence_message_id", edge)
                 self.assertIn("evidence", edge)
 
-    def test_a_broken_state_root_still_returns_the_seeded_graph(self):
-        """A missing ledger must not blank the window."""
+    def test_a_broken_state_root_does_not_invent_a_graph(self):
+        """Absent history has no prewritten facts to display."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report = KG.collect_knowledge_graph(
                 root / "context.sqlite3", state_root=root / "nowhere", wait_for_reindex=True
             )
         self.assertTrue(report["ok"])
-        self.assertGreater(report["node_count"], 0)
+        self.assertEqual(report["node_count"], 0)
         self.assertEqual(report["grounded_nodes"], 0)
 
 
@@ -339,6 +369,8 @@ class EvidenceTests(unittest.TestCase):
     def test_evidence_is_capped_per_node(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            conn=KG._connect_kg(root/KG.KNOWLEDGE_GRAPH_DB_NAME)
+            seed_historical_fixture(conn);conn.close()
             room = root / "rooms" / CHAT_ID
             room.mkdir(parents=True, exist_ok=True)
             rows = [
@@ -372,8 +404,8 @@ class EvidenceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             report = KG.collect_knowledge_graph(root / "context.sqlite3", state_root=root, wait_for_reindex=True)
-        alizonku = next(node for node in report["nodes"] if "알쫀쿠" in node["label"])
-        self.assertEqual(alizonku["evidence"]["kind"], "seed")
+        self.assertEqual(report['grounded_nodes'],0)
+        self.assertEqual(report['node_count'],0)
 
     def test_malformed_ledger_lines_do_not_raise(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -586,7 +618,7 @@ class RealIndexPathTests(unittest.TestCase):
             root = self._state_root(base)
             kg = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(kg)
+                seed_historical_fixture(kg)
                 KG.index_chat_entities(kg, root)
                 KG.index_person_entities(kg, root)
                 chats = [
@@ -642,7 +674,7 @@ class RealIndexPathTests(unittest.TestCase):
                 holder.execute("BEGIN EXCLUSIVE")
                 kg = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
                 try:
-                    KG.ensure_seeded(kg)
+                    seed_historical_fixture(kg)
                     KG.index_person_entities(kg, root)
                     people = [
                         row[0]
@@ -672,7 +704,7 @@ class RealIndexPathTests(unittest.TestCase):
             try:
                 conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
                 try:
-                    KG.ensure_seeded(conn)
+                    seed_historical_fixture(conn)
                     KG._reindex_all(conn, root, cycle_started_at=int(time.time()))
                     recorded = KG.read_meta(conn, "last_index_error")
                     stamped = KG.read_meta(conn, "last_indexed_at")
@@ -690,7 +722,7 @@ class RealIndexPathTests(unittest.TestCase):
             root = self._state_root(Path(tmp))
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
                 with mock.patch.multiple(
                     KG,
                     index_topic_entities=mock.DEFAULT,
@@ -1101,7 +1133,7 @@ class DeduplicationTests(unittest.TestCase):
             conn.close()
             kg = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(kg)
+                seed_historical_fixture(kg)
                 KG.index_chat_entities(kg, root)
                 KG.index_person_entities(kg, root)
                 people = [
@@ -1140,7 +1172,7 @@ class PruneTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
                 self._seed(conn)
                 result = KG.prune_indexed_entities(conn, cycle_started_at=1000)
                 left = {
@@ -1163,7 +1195,7 @@ class PruneTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
                 for i in range(10):
                     conn.execute(
                         "INSERT INTO kg_entities (entity_id, name, category, aliases_json,"
@@ -1186,7 +1218,7 @@ class PruneTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
                 result = KG.prune_indexed_entities(conn, cycle_started_at=1000)
             finally:
                 conn.close()
@@ -1942,7 +1974,7 @@ class KnowledgeGraphRagAndNormalizationTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
             finally:
                 conn.close()
             # 오타 표기는 정규화를 거쳐야 "러닝" 노드와 만난다.
@@ -1959,7 +1991,7 @@ class KnowledgeGraphRagAndNormalizationTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
                 conn.execute(
                     "INSERT INTO kg_entities (entity_id, name, category, aliases_json,"
                     " description, key_facts_json, importance, updated_at)"
@@ -2000,7 +2032,7 @@ class KnowledgeGraphRagAndNormalizationTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
             finally:
                 conn.close()
             hits = KG.query_knowledge_context('최연우', state_root=root, include_relations=True)
@@ -2012,7 +2044,7 @@ class KnowledgeGraphRagAndNormalizationTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
             finally:
                 conn.close()
             bundle = KG.retrieve_knowledge_bundle('코인 시세', state_root=root, chat_id=417780809780519)
@@ -2034,7 +2066,7 @@ class KnowledgeGraphRagAndNormalizationTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn)
                 rows = [
                     (
                         'test:coin-exact',
@@ -2230,7 +2262,7 @@ class RoomIsolationTests(unittest.TestCase):
 
     def _graph(self, root: Path):
         conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
-        KG.ensure_seeded(conn)
+        seed_historical_fixture(conn)
         return conn
 
     def _add_entity(self, conn, entity_id, name, aliases=None, facts=None):

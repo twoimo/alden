@@ -21,6 +21,20 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_review_retired_generated_hub_is_not_recreated_or_marked_pending(self):
+        result=self.execute(r'''
+a.synchronize(root,source);c,g,_,w=a._load_engine(root);home=a._home(root)
+receipt=w.create_node('과거 분류','과거 자동 입구','올든이 관리하는 로컬 대화 지식입니다.','agent',space=a.SOURCE_SPACE+'/과거 분류')
+p=g.Index().by_id[receipt['id']][0]
+old={'title':p.stem,'space':str(p.parent.relative_to(home/'vault')),'osk_id':receipt['id'],'written_hash':a.digest(p.read_bytes()),'retired':True}
+state=a._read_json(home/'sync.json');state.setdefault('groups',{})['old']=dict(old,retired=False)
+state['organization']['hubs']['legacy:old']=old;p.unlink();a._save(home/'sync.json',state)
+status=a.synchronize(root,source)
+assert status['conflicts']==0 and not p.exists() and a._read_json(home/'sync.json')['layout_pending']==0
+print(json.dumps({'retiredPreserved':True}))
+''')
+        self.assertTrue(result['retiredPreserved'])
+
     def test_observed_titles_require_same_capture_account_and_preserve_good_cache_on_failure(self):
         result = self.execute('''
 import sqlite3

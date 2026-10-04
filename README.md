@@ -1,8 +1,10 @@
-## Alden 0.3.20 — OSK 정본 관계
+## Alden 0.3.21 — OSK 정본 관계
 
 사전 주제 분류와 주제 확정·승격을 제거했습니다. 그래프는 OSK v4.1.2의 실제 디렉터리, 본문 링크, `derived-from`과 `conflicts`를 읽습니다. Raw 좌표는 출처로 보존하며 노드나 군집으로 승격하지 않습니다.
 
 기존 자동 주제와 관계는 원문을 보존한 채 백업·이행 기록과 함께 철회합니다. 구버전 수집기의 분류 재삽입도 파생 DB에서 차단합니다. 의미 관계는 검토한 OSK 노트에 직접 작성해야 합니다.
+
+빈 그래프에 미리 작성된 사실을 주입하지 않습니다. 근거 없는 옛 bootstrap은 실제 출처가 있는 관측과 구분해 철회하며, 검토로 퇴역시킨 자동 분류 입구는 다시 만들지 않습니다. 과거 릴리즈 기록과 도식은 해당 판본의 이력이며 현재 정본 경로의 완료 증거가 아닙니다.
 
 [변경·실행 근거와 제한](docs/architecture/alden-canonical-osk-20261004.md)
 
@@ -149,9 +151,9 @@ Built 0.1.6 rendered in Chromium/WebGL2 with an empty public fixture; all three 
 1. The app copies KakaoTalk's database and its side files to a temporary snapshot, then checks that the copy is stable.
 2. It opens only the snapshot in read-only mode. A failed or unstable copy never falls back to the live database.
 3. It normalizes shortened names and searches by both words and meaning. When both searches are available, reciprocal-rank fusion (RRF) combines their results; otherwise it keeps the working word-search results.
-4. It stores people, topics, and their relationships as three-part facts (person — relationship — topic). Selecting a person or topic smoothly focuses nearby items, with at most 24 visible at once. This reads the existing index and does not start a new database copy or reindex.
+4. The knowledge view reads canonical OSK notes and their actual directed Links and predicates. Selecting a note opens its content and source evidence beside the graph. The global view has a 120-node/512-edge budget; local expansion has a 24-node/144-edge budget. Reading does not copy the original database or start a reindex.
 
-The requested [Threads reference](https://www.threads.com/share/BBIeDkkHei/) was inaccessible during the 2026-09-30 check, so this delivery does not claim a verified interpretation of that post. The implementation retains message source evidence, canonical entities and unique subject–relation–object triples with bounded evidence IDs. Room, person, and topic nodes provide navigable neighborhoods. Drill-down starts at two relationship steps, limits each step to ten neighbors, and caps the view at 24 nodes (up to three steps when expanded). BM25 remains available when local embeddings are unavailable; RRF is used when both ranked candidate lists are ready.
+The requested [Threads reference](https://www.threads.com/share/BBIeDkkHei/) was inaccessible during the 2026-09-30 check, so this delivery does not claim a verified interpretation of that post. Raw source records retain their identity and original role. Source metadata and cached ERE rows do not establish semantic groups or knowledge dependencies. Meaningful notes and organization require source-grounded OSK review. BM25 remains available when local embeddings are unavailable; RRF is used when both ranked candidate lists are ready.
 
 GraphRAG defaults to the dedicated loopback embedding adapter at `http://127.0.0.1:11236/v1/embeddings`; `OPENKAKAO_LOCAL_EMBEDDING_URL` can explicitly override that URL. Dense retrieval fails closed: if the adapter is absent, not ready, advertises the wrong model, returns invalid vectors, or is configured off loopback, GraphRAG keeps BM25 and does not fall back to the `11234` generation gateway, the `11235` Flash-Next server, or external inference. See [Alden local embeddings](docs/architecture/alden-local-embeddings.md) for the pinned model and bounded HTTP contract.
 
@@ -278,7 +280,7 @@ The detailed implementation notes and dated verification records are kept in [en
 
 - **Private processing**: Conversation search and AI replies run on this Mac.
 - **Safe conversation reading**: The app reads a temporary, read-only copy of KakaoTalk's local data.
-- **Conversation map**: Select a person or topic to see nearby names and related messages.
+- **Knowledge graph**: Select a canonical note to read its content, saved links and original evidence.
 - **KakaoTalk integration**: Replies are entered in the KakaoTalk app.
 - **Protected sending**: The app pauses when it cannot confirm which reply or destination is safe.
 
