@@ -132,7 +132,14 @@ class MetadataTests(unittest.TestCase):
         result = subprocess.run(args, capture_output=True, timeout=3)
         self.assertEqual(result.returncode, 0, result.stderr)
         direct = self.collector.collect()
-        self.assertEqual(json.loads(result.stdout), direct)
+        observed = json.loads(result.stdout)
+        # The subprocess and direct call can straddle a wall-clock second.
+        # Verify the live age independently, then compare all other metadata.
+        observed_age = observed['osk'].pop('age_seconds')
+        direct_age = direct['osk'].pop('age_seconds')
+        self.assertGreaterEqual(direct_age, observed_age)
+        self.assertLessEqual(direct_age - observed_age, 3)
+        self.assertEqual(observed, direct)
         self.assertEqual(self.file.read_bytes(), before)
 
 

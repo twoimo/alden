@@ -39,6 +39,7 @@ class SessionRuntimePackagerTests(unittest.TestCase):
         source.mkdir(mode=0o700)
         for name in (*module.RUNTIME_SCRIPT_NAMES, *module.RUNTIME_DATA_NAMES):
             path = source / name
+            path.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
             if name == "auto-reply-schema.json":
                 path.write_text("{}\n", encoding="utf-8")
                 path.chmod(0o600)
@@ -193,6 +194,11 @@ class SessionRuntimePackagerTests(unittest.TestCase):
                 Path(alden_asset["path"]).read_bytes(),
                 alden_source.read_bytes(),
             )
+            for name in ('vendor/osk-v4.1.2.zip','vendor/osk-v4.1.2.json'):
+                source = ROOT / 'scripts' / name
+                asset = manifest['assets'][name]
+                self.assertEqual(Path(asset['path']).read_bytes(), source.read_bytes())
+                self.assertEqual(asset['sha256'], hashlib.sha256(source.read_bytes()).hexdigest())
 
     def test_runtime_copy_list_covers_repository_import_closure(self):
         module = load("session_packager_import_closure_test")

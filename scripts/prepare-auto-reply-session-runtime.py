@@ -77,6 +77,12 @@ RUNTIME_SCRIPT_NAMES = (
     "alden_local_http.py",
     "alden_corpus.py",
     "alden_corpus_topics.py",
+    "alden_osk.py",
+    "alden_osk_retrieval.py",
+    "alden_osk_sources.py",
+    "alden_osk_delta.py",
+    "alden_history.py",
+    "alden_automation_history.py",
     "alden_file_content.py",
     "local_mlx_gateway.py",
     "auto-reply-apple-watch.py",
@@ -84,7 +90,8 @@ RUNTIME_SCRIPT_NAMES = (
     "auto_reply_metrics.py",
     "auto-reply-tui.py",
 )
-RUNTIME_DATA_NAMES = ("auto-reply-schema.json", "alden-vision-core-manifest.json")
+RUNTIME_DATA_NAMES = ("auto-reply-schema.json", "alden-vision-core-manifest.json",
+                      "vendor/osk-v4.1.2.zip", "vendor/osk-v4.1.2.json")
 
 
 class PackagingError(RuntimeError):
@@ -609,6 +616,7 @@ def stage_runtime(
     if runtime.exists() or runtime.is_symlink():
         raise PackagingError(f"runtime release already exists: {runtime}")
     created: list[Path] = []
+    created_directories: list[Path] = []
     try:
         runtime.mkdir(mode=0o700)
         os.chmod(runtime, 0o700)
@@ -628,6 +636,11 @@ def stage_runtime(
                 if name in {"openkakao-cli", "config.toml"}
                 else scripts_runtime / name
             )
+            if destination.parent != scripts_runtime and name not in {"openkakao-cli", "config.toml"}:
+                fresh_directory = not destination.parent.exists()
+                _private_directory(destination.parent, create=True)
+                if fresh_directory:
+                    created_directories.append(destination.parent)
             created.append(destination)
             assets[name] = _copy_exclusive(source, destination, mode)
         if assets["config.toml"]["sha256"] != validated_config_sha256:
@@ -837,6 +850,11 @@ def stage_runtime(
             try:
                 path.unlink()
             except FileNotFoundError:
+                pass
+        for directory in reversed(created_directories):
+            try:
+                directory.rmdir()
+            except OSError:
                 pass
         try:
             (runtime / "scripts").rmdir()
