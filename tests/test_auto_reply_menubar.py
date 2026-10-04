@@ -5780,7 +5780,9 @@ class AldenMlxServerActionTests(unittest.TestCase):
         )
         self.assertTrue(payload["ok"])
         spec = captured["spec"]
-        self.assertEqual(spec.executable, module._MLX_APP_OWNED_BINARY)
+        self.assertEqual(spec.executable, module.resolve_app_executable(
+            module._MLX_APP_OWNED_BINARY, module._MLX_RENAMED_APP_BINARY
+        ))
         self.assertEqual(spec.resident_model_dir.name, "Qwen3.8-27B-MLX-Serve-4bit")
         self.assertEqual(spec.models_dir, module._MLX_APP_OWNED_MODELS_DIR)
         self.assertEqual(

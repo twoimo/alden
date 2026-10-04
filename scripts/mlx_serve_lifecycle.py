@@ -320,6 +320,20 @@ def _default_codesign(bundle: Path) -> str:
     return "" if result.returncode == 0 else "launch_executable_unverified"
 
 
+def resolve_app_executable(legacy: Path, renamed: Path) -> Path:
+    """Recognize the renamed installed bundle without searching PATH.
+
+    Preserve the legacy candidate when present, including unsafe symlinks:
+    the existing launch validator must reject it rather than bypass it.
+    Executable and signature validation still happens before any launch.
+    """
+    if legacy.exists() or legacy.is_symlink():
+        return legacy
+    if renamed.exists() or renamed.is_symlink():
+        return renamed
+    return legacy
+
+
 def validate_executable(
     executable: Path,
     *,

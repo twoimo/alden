@@ -35,6 +35,7 @@ from scripts.mlx_serve_lifecycle import (
     launch_app_owned_server,
     ownership_status,
     read_app_owned_state,
+    resolve_app_executable,
     stop_app_owned_server,
     validate_executable,
     write_app_owned_state,
@@ -1162,6 +1163,42 @@ class ExecutableValidationTests(unittest.TestCase):
         binary.write_text("#!/bin/sh\n", encoding="utf-8")
         binary.chmod(0o755)
         return binary
+
+    def test_renamed_bundle_is_found_when_legacy_bundle_is_absent(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            legacy = root / "MLX Core.app/Contents/MacOS/mlx-serve"
+            renamed = root / "MLX-Serve.app/Contents/MacOS/mlx-serve"
+            renamed.parent.mkdir(parents=True)
+            renamed.write_text("#!/bin/sh\n", encoding="utf-8")
+            renamed.chmod(0o755)
+            selected = resolve_app_executable(legacy, renamed)
+            self.assertEqual(selected, renamed)
+            self.assertEqual(validate_executable(
+                selected, home=root, codesign=lambda bundle: "launch_executable_unverified"
+            ), "launch_executable_unverified")
+
+    def test_existing_legacy_bundle_and_unsafe_alias_are_not_bypassed(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            legacy = self._bundle_binary(root)
+            renamed = root / "MLX-Serve.app/Contents/MacOS/mlx-serve"
+            renamed.parent.mkdir(parents=True)
+            renamed.write_text("#!/bin/sh\n", encoding="utf-8")
+            self.assertEqual(resolve_app_executable(legacy, renamed), legacy)
+            legacy.unlink()
+            legacy.symlink_to(root / "missing")
+            selected = resolve_app_executable(legacy, renamed)
+            self.assertEqual(selected, legacy)
+            self.assertEqual(validate_executable(selected, home=root), "launch_executable_unsafe")
+
+    def test_missing_both_bundles_preserves_fail_closed_validation(self) -> None:
+        with TemporaryDirectory() as raw:
+            root = Path(raw)
+            legacy = root / "MLX Core.app/Contents/MacOS/mlx-serve"
+            renamed = root / "MLX-Serve.app/Contents/MacOS/mlx-serve"
+            selected = resolve_app_executable(legacy, renamed)
+            self.assertEqual(validate_executable(selected, home=root), "launch_executable_unsafe")
 
     def test_rejects_relative_or_misnamed_paths(self) -> None:
         with TemporaryDirectory() as raw:

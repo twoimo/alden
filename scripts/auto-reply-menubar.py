@@ -63,6 +63,7 @@ from mlx_serve_lifecycle import (
     MlxLaunchSpec,
     launch_app_owned_server,
     ownership_status,
+    resolve_app_executable,
     stop_app_owned_server,
 )
 from local_mlx_gateway import (
@@ -2524,6 +2525,7 @@ _MLX_LIFECYCLE_ACTIONS = frozenset({"mlx-server-launch", "mlx-server-stop"})
 # The app-owned server may only be started from the signed MLX Core bundle that
 # already ships on this machine, serving one of the fixed local models.
 _MLX_APP_OWNED_BINARY = Path("/Applications/MLX Core.app/Contents/MacOS/mlx-serve")
+_MLX_RENAMED_APP_BINARY = Path("/Applications/MLX-Serve.app/Contents/MacOS/mlx-serve")
 _MLX_APP_OWNED_MODELS_DIR = Path.home() / ".mlx-serve" / "models"
 
 
@@ -2562,7 +2564,7 @@ def _mlx_app_owned_spec(state_root: Path, model_id: str | None) -> MlxLaunchSpec
         kwargs["port"] = MLX_SERVE_FLASH_NEXT_IQ_PORT
         log_path = state_root / "mlx-app-owned-server-11235.log"
     return MlxLaunchSpec(
-        executable=_MLX_APP_OWNED_BINARY,
+        executable=resolve_app_executable(_MLX_APP_OWNED_BINARY, _MLX_RENAMED_APP_BINARY),
         resident_model_dir=resident,
         models_dir=_MLX_APP_OWNED_MODELS_DIR,
         log_path=log_path,
