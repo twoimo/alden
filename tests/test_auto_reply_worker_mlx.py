@@ -1,4 +1,5 @@
 import importlib.util
+from contextlib import contextmanager
 import json
 import sys
 import tempfile
@@ -474,6 +475,8 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
                     side_effect=fake_urlopen,
                 ),
                 mock.patch("urllib.request.urlopen") as direct_urlopen,
+                mock.patch.object(module.alden_local_vision, "owned_vision_endpoint", side_effect=module.alden_local_vision.VisionUnavailable("local_vision_memory_insufficient")),
+                mock.patch.object(module.alden_local_vision, "check_input_budget"),
             ):
                 result = module._run_opencodex_generation(
                     module.QWEN38_27B_MODEL_ID,
@@ -483,7 +486,7 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
                     timeout=90.0,
                 )
 
-        self.assertEqual(result, (1, b"", b"mlx_serve_vision_model_not_resident"))
+        self.assertEqual(result, (1, b"", b"local_vision_memory_insufficient"))
         self.assertTrue(calls)
         self.assertTrue(
             all(url == "http://127.0.0.1:11234/v1/models" for url, _data, _timeout in calls)
@@ -521,6 +524,60 @@ class AutoReplyWorkerMlxTests(unittest.TestCase):
                         payload = json.loads(request.call_args.args[0].data)
                         content = payload["messages"][1]["content"]
                         self.assertTrue(any(part.get("image_url", {}).get("url", "").startswith("data:image/png;") for part in content))
+
+    def test_owned_vision_fallback_keeps_pixels_auth_identity_and_lease(self):
+        module = self.module
+        owned_calls = []
+        payloads = []
+        @contextmanager
+        def endpoint(*args, **kwargs):
+            with self.assertRaises(Exception):
+                with mlx_model_swap_lease(Path(self.state_dir.name)):
+                    pass
+            owned_calls.append(kwargs)
+            yield module.alden_local_vision.BASE_URL, self.QWEN_27B.removeprefix("mlx/"), ["chat", "vision"], "fixture-key", 3.0, respond
+        def respond(request, timeout=None):
+            self.assertEqual(request.full_url, "http://127.0.0.1:11237/v1/chat/completions")
+            self.assertEqual(request.get_header("Authorization"), "Bearer fixture-key")
+            payloads.append(json.loads(request.data))
+            return _Response({"model": self.QWEN_27B.removeprefix("mlx/"), "choices": [{"message": {"content": "seen"}}]})
+        catalog = [{"id": self.QWEN_27B, "loaded": True, "state": "ready", "capabilities": ["chat"]}]
+        image = Path(self.state_dir.name) / "photo.png"
+        image.write_bytes(b"image-fixture")
+        with (
+            mock.patch.object(module.alden_local_vision, "check_input_budget"),
+            mock.patch.object(module, "discover_mlx_gateway", return_value=(self.LEGACY_GATEWAY, catalog)),
+            mock.patch.object(module, "detect_mlx_gateway_models", return_value=catalog),
+            mock.patch.object(module.alden_local_vision, "owned_vision_endpoint", side_effect=endpoint),
+            mock.patch("auto_reply_ondevice._local_only_urlopen", side_effect=respond),
+            mock.patch("urllib.request.urlopen", side_effect=AssertionError("cloud")),
+        ):
+            result = module._run_opencodex_generation(self.QWEN_27B, "system", b"what is shown", image_paths=[image], timeout=5)
+        self.assertEqual(result, (0, b"seen", b""))
+        self.assertEqual(len(owned_calls), 1)
+        self.assertEqual(payloads[0]["max_tokens"], 1024)
+        self.assertEqual(payloads[0]["temperature"], 0)
+        self.assertEqual(len(payloads[0]["messages"][1]["content"]), 2)
+        self.assertTrue(payloads[0]["messages"][1]["content"][1]["image_url"]["url"].startswith("data:"))
+
+    def test_unreadable_image_never_launches_owned_vision(self):
+        module = self.module
+        catalog = [{"id": self.QWEN_27B, "loaded": True, "state": "ready", "capabilities": ["chat"]}]
+        with (
+            mock.patch.object(module, "discover_mlx_gateway", return_value=(self.LEGACY_GATEWAY, catalog)),
+            mock.patch.object(module, "detect_mlx_gateway_models", return_value=catalog),
+            mock.patch.object(module.alden_local_vision, "owned_vision_endpoint") as launch,
+        ):
+            result = module._run_opencodex_generation(self.QWEN_27B, "system", b"photo", image_paths=[Path(self.state_dir.name)/"missing.png"])
+        self.assertEqual(result, (1, b"", b"image_input_unavailable"))
+        launch.assert_not_called()
+
+    def test_owned_vision_missing_or_wrong_response_identity_is_rejected(self):
+        module = self.module
+        for identity in (None, self.IQ_FLASH, "other/Qwen3.8-27B-MLX-Serve-4bit"):
+            with self.subTest(identity=identity), mock.patch("auto_reply_ondevice._local_only_urlopen", return_value=_Response({"model": identity, "choices": [{"message": {"content": "untrusted"}}]})):
+                result = module._run_opencodex_generation_unleased(self.QWEN_27B, "system", b"photo", _owned_vision=(module.alden_local_vision.BASE_URL,self.QWEN_27B, ["vision"], "fixture-key", module.auto_reply_ondevice._local_only_urlopen))
+            self.assertEqual(result, (1, b"", b"mlx_serve_response_model_mismatch"))
 
     def test_image_candidate_never_falls_back_to_flash_next(self):
         module = self.module

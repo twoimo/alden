@@ -67,6 +67,9 @@ RUNTIME_SCRIPT_NAMES = (
     "auto-reply-rerank.py",
     "auto_reply_knowledge_graph.py",
     "auto_reply_ondevice.py",
+    "alden_local_vision.py",
+    "mlx_serve_lifecycle.py",
+    "verify_model_provenance.py",
     "auto_reply_reference_search.py",
     "auto_reply_reference_store.py",
     "auto_reply_transition_journal.py",
@@ -81,7 +84,7 @@ RUNTIME_SCRIPT_NAMES = (
     "auto_reply_metrics.py",
     "auto-reply-tui.py",
 )
-RUNTIME_DATA_NAMES = ("auto-reply-schema.json",)
+RUNTIME_DATA_NAMES = ("auto-reply-schema.json", "alden-vision-core-manifest.json")
 
 
 class PackagingError(RuntimeError):

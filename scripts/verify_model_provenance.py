@@ -51,7 +51,7 @@ def fingerprint(info: os.stat_result) -> tuple:
     return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_mode)
 
 
-def verify_file(directory: int, row: dict) -> dict:
+def verify_file(directory: int, row: dict, *, check_cancelled=lambda: None) -> dict:
     result = {'path': row['path'], 'expected_bytes': row['bytes'], 'algorithm': row['algorithm'], 'match': False}
     descriptor = None
     try:
@@ -69,6 +69,7 @@ def verify_file(directory: int, row: dict) -> dict:
             digest.update(f'blob {before.st_size}\0'.encode('ascii'))
         read = 0
         while read <= before.st_size:
+            check_cancelled()
             chunk = os.read(descriptor, min(CHUNK_BYTES, before.st_size - read + 1))
             if not chunk:
                 break
@@ -90,12 +91,12 @@ def verify_file(directory: int, row: dict) -> dict:
     return result
 
 
-def verify_model(model_dir: Path, manifest: dict) -> dict:
+def verify_model(model_dir: Path, manifest: dict, *, check_cancelled=lambda: None) -> dict:
     started = time.monotonic()
     directory = os.open(model_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         before = os.fstat(directory)
-        rows = [verify_file(directory, row) for row in manifest['files']]
+        rows = [verify_file(directory, row, check_cancelled=check_cancelled) for row in manifest['files']]
         current = model_dir.stat(follow_symlinks=False)
         same_directory = (before.st_dev, before.st_ino) == (current.st_dev, current.st_ino)
     finally:

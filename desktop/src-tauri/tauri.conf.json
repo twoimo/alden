@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.18",
+  "version": "0.3.19",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -79,6 +79,9 @@
       "bundle-resources/scripts/auto_reply_knowledge_graph.py": "scripts/auto_reply_knowledge_graph.py",
       "bundle-resources/scripts/alden_local_embedding_server.py": "scripts/alden_local_embedding_server.py",
       "bundle-resources/scripts/auto_reply_ondevice.py": "scripts/auto_reply_ondevice.py",
+      "bundle-resources/scripts/alden_local_vision.py": "scripts/alden_local_vision.py",
+      "bundle-resources/scripts/alden-vision-core-manifest.json": "scripts/alden-vision-core-manifest.json",
+      "bundle-resources/scripts/verify_model_provenance.py": "scripts/verify_model_provenance.py",
       "bundle-resources/scripts/local_mlx_gateway.py": "scripts/local_mlx_gateway.py",
       "bundle-resources/scripts/mlx_serve_lifecycle.py": "scripts/mlx_serve_lifecycle.py",
       "bundle-resources/scripts/auto_reply_metrics.py": "scripts/auto_reply_metrics.py",

@@ -74,6 +74,10 @@ QUEUE_FILE_MODE = 0o600
 SEND_PREFLIGHT_ALLOWLIST_MARKER = "is not in the local-send allowlist"
 _SEND_PREFLIGHT_DIAGNOSTIC_ROOMS: set[tuple[str, str]] = set()
 import auto_reply_ondevice
+import alden_local_vision
+LOCAL_IMAGE_EVIDENCE_FAILURES = LOCAL_IMAGE_EVIDENCE_FAILURES | frozenset(
+    code.encode("ascii") for code in alden_local_vision.ADMISSION_CODES
+)
 import auto_reply_metrics as perf
 import auto_reply_transition_journal as transition_journal
 from alden_abort import (
@@ -12386,6 +12390,7 @@ def _run_opencodex_generation_unleased(
     image_paths: list[Path] | None = None,
     timeout: float = 30.0,
     base_url: str = "http://127.0.0.1:11234/v1",
+    _owned_vision: tuple | None = None,
 ) -> tuple[int, bytes, bytes]:
     _raise_if_job_aborted()
     try:
@@ -12397,7 +12402,9 @@ def _run_opencodex_generation_unleased(
     target_base_url = base_url
     target_model = model
     model_capabilities: list[str] = []
-    if local_mlx:
+    if local_mlx and _owned_vision is not None:
+        target_base_url, target_model, model_capabilities, vision_key, vision_transport = _owned_vision
+    elif local_mlx:
         mlx_gateway_base_url = _mlx_serve_gateway_base_url(target_model)
         if mlx_gateway_base_url == "http://127.0.0.1:11235/v1":
             advertised = _detect_fixed_iq_mlx_gateway_models()
@@ -12454,6 +12461,11 @@ def _run_opencodex_generation_unleased(
             {"role": "user", "content": user_content},
         ],
     }
+    if _owned_vision is not None:
+        payload["max_tokens"] = 1024
+        # Grounded photo decisions need repeatable extraction, rather than the
+        # serving app's default temperature1 creative sampling.
+        payload["temperature"] = 0
     if local_mlx and "json_schema" in model_capabilities:
         try:
             payload["response_format"] = _mlx_json_schema_response_format()
@@ -12505,14 +12517,15 @@ def _run_opencodex_generation_unleased(
         data=data,
         headers={
             "Content-Type": "application/json",
-            "Authorization": "Bearer not-needed",
+            "Authorization": "Bearer " + (vision_key if _owned_vision is not None else "not-needed"),
             "x-opencode-session": f"ocx_{session_digest}",
         },
     )
     try:
         _raise_if_job_aborted()
         if local_mlx:
-            with auto_reply_ondevice._local_only_urlopen(req, timeout=timeout) as resp:
+            transport = vision_transport if _owned_vision is not None else auto_reply_ondevice._local_only_urlopen
+            with transport(req, timeout=timeout) as resp:
                 raw = resp.read(auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES + 1)
             if len(raw) > auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES:
                 raise ValueError("mlx_gateway_response_too_large")
@@ -12523,7 +12536,13 @@ def _run_opencodex_generation_unleased(
         body = json.loads(raw.decode("utf-8"))
         if local_mlx:
             response_model = body.get("model")
+            if _owned_vision is not None and response_model not in (
+                target_model, alden_local_vision.MODEL_ID, "mlx/" + alden_local_vision.MODEL_ID,
+                alden_local_vision.MODEL_ID.rsplit("/", 1)[1],
+            ):
+                return 1, b"", b"mlx_serve_response_model_mismatch"
             if isinstance(response_model, str) and response_model.strip() and (
+                _owned_vision is None and
                 auto_reply_ondevice._canonical_managed_model_id(response_model)
                 != auto_reply_ondevice._canonical_managed_model_id(target_model)
             ):
@@ -12536,6 +12555,7 @@ def _run_opencodex_generation_unleased(
     except urllib.error.HTTPError as exc:
         if local_mlx:
             err_bytes = exc.read(auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES + 1)
+            exc.close()
             if len(err_bytes) > auto_reply_ondevice.MLX_GATEWAY_MAX_RESPONSE_BYTES:
                 return 1, b"", b"mlx_gateway_response_too_large"
         else:
@@ -12640,7 +12660,8 @@ def _run_opencodex_generation(
             )
         try:
             with auto_reply_ondevice.mlx_model_request_lease(_operator_state_root()):
-                return _run_opencodex_generation_unleased(
+                started = time.monotonic()
+                result = _run_opencodex_generation_unleased(
                     model,
                     system_prompt,
                     prompt_bytes,
@@ -12648,6 +12669,33 @@ def _run_opencodex_generation(
                     timeout=timeout,
                     base_url=base_url,
                 )
+                if (not image_paths or not _is_mlx_serve_27b_model(model) or result[2] not in {
+                    b"mlx_serve_vision_capability_unavailable", b"mlx_serve_vision_model_not_resident",
+                    b"mlx_serve_gateway_unavailable",
+                }):
+                    return result
+                # Validate the complete evidence set before allocating a model.
+                try:
+                    sizes = [p.stat().st_size for p in image_paths if isinstance(p, Path) and p.is_file()]
+                    if (len(sizes) != len(image_paths) or len(sizes) > MAX_IMAGE_INPUTS
+                            or any(size <= 0 or size > MAX_IMAGE_BYTES for size in sizes)
+                            or sum(sizes) > MAX_IMAGE_BATCH_BYTES):
+                        return 1, b"", b"image_input_unavailable"
+                except OSError:
+                    return 1, b"", b"image_input_unavailable"
+                try:
+                    alden_local_vision.check_input_budget(system_prompt, prompt_bytes, image_paths)
+                    abort_token = _active_abort_token()
+                    with alden_local_vision.owned_vision_endpoint(
+                        _operator_state_root(), timeout=max(0.01, timeout - (time.monotonic() - started)),
+                        check_cancelled=(abort_token.raise_if_cancelled if abort_token is not None else _raise_if_job_aborted),
+                    ) as endpoint:
+                        return _run_opencodex_generation_unleased(
+                            model, system_prompt, prompt_bytes, image_paths=image_paths,
+                            timeout=endpoint[4], _owned_vision=endpoint[:4] + (endpoint[5],),
+                        )
+                except alden_local_vision.VisionUnavailable as exc:
+                    return 1, b"", exc.code.encode("ascii")
         except auto_reply_ondevice.MlxRequestAdmissionClosed as exc:
             return 1, b"", exc.code.encode("ascii", "replace")
 
@@ -13036,6 +13084,11 @@ def generate_reply(
         + "\n"
     ).encode("utf-8")
     prompt_budget = MAX_MODEL_PROMPT_BYTES
+    if normalized_image_paths and _is_mlx_serve_27b_model(_generation_reply_model(True)):
+        try:
+            prompt_budget = min(prompt_budget, alden_local_vision.input_byte_budget(system_prompt, normalized_image_paths))
+        except (alden_local_vision.VisionUnavailable, OSError, subprocess.SubprocessError):
+            return {**empty, "reason": "image_unavailable", "model_invoked": False, "evidence_ids": []}
     if REPLY_RUNNER_KIND == "codex":
         prompt_budget -= len(codex_stdin_prefix) + 1
     else:

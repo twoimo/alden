@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {"title": "올든의 요청별 로컬 이미지 처리", "quality_profile": "showcase", "column_fit": "spread", "viewBox": [1400, 780]},
+  "participants": [
+    {"id": "replyJob", "type": "backend", "label": "답변 작업"},
+    {"id": "visionGuard", "type": "security", "label": "입력·메모리·가중치 확인"},
+    {"id": "childOwner", "type": "backend", "label": "임시 프로세스 감독"},
+    {"id": "visionEngine", "type": "backend", "label": "로컬27B 이미지 추론"}
+  ],
+  "messages": [
+    {"id": "requestAdmission", "from": "replyJob", "to": "visionGuard", "y": 220, "label": "전체 사진·맥락과 요청 잠금", "variant": "security"},
+    {"id": "guardAdmission", "from": "visionGuard", "to": "childOwner", "y": 270, "label": "40GiB·리비전·입력 예산 통과", "variant": "security"},
+    {"id": "ownedStart", "from": "childOwner", "to": "visionEngine", "y": 320, "label": "인증된 임시 로컬 서버 실행"},
+    {"id": "ownedInference", "from": "replyJob", "to": "visionEngine", "y": 380, "label": "연결 소유권 확인 후 사진 전달", "variant": "security"},
+    {"id": "groundedReply", "from": "visionEngine", "to": "replyJob", "y": 440, "label": "모델 신원·마감 확인 후 답변", "variant": "return"},
+    {"id": "requestStop", "from": "replyJob", "to": "childOwner", "y": 500, "label": "완료·취소·호출자 종료"},
+    {"id": "ownedReap", "from": "childOwner", "to": "visionEngine", "y": 550, "label": "소유한 자식 종료·회수"}
+  ],
+  "cards": [{"dot": "slate", "title": "운영 경계", "items": ["공유 서버와 모델 설정 보존", "외부 추론 연결 차단", "불확실한 정리는 다음 로딩 차단"]}]
+}
