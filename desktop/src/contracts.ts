@@ -144,6 +144,7 @@ export interface RecentReceipt {
 }
 
 export interface VoiceStatus {
+  manualRunning?: boolean;
   available: boolean;
   state: string;
   rms: number;
@@ -577,5 +578,6 @@ export function parseVoiceStatus(value: unknown): VoiceStatus {
       wakePhrase: text(voice?.wake_phrase ?? voice?.wakePhrase, ""),
       threshold: Math.min(0.95, Math.max(0.65, finiteNumber(voice?.threshold, 0.65))),
       customModelSelected: voice?.custom_model_selected === true || voice?.customModelSelected === true,
+      manualRunning: voice?.manual_running === true || voice?.manualRunning === true,
   };
 }

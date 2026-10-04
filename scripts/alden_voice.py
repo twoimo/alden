@@ -15,6 +15,7 @@ import math
 import os
 import re
 import socket
+import signal
 import stat
 import subprocess
 import sys
@@ -913,6 +914,7 @@ class AldenVoicePipeline:
         sample_rate: int = 16_000,
         ring_seconds: float = 12.0,
         echo_processed_microphone: bool = False,
+        manual_listen: bool = False,
     ) -> None:
         self.stt = stt
         self.llm = llm
@@ -923,7 +925,8 @@ class AldenVoicePipeline:
         self.sample_rate = sample_rate
         self.ring = BoundedAudioRing(sample_rate=sample_rate, seconds=ring_seconds)
         self.wake_gate = WakePhraseGate()
-        self.state = VoiceState.WAKE_LISTEN
+        self.manual_listen = bool(manual_listen)
+        self.state = VoiceState.IDLE if self.manual_listen else VoiceState.WAKE_LISTEN
         self.last_rms = 0.0
         self._wake_source = "none"
         self._custom_model_selected = False
@@ -934,6 +937,7 @@ class AldenVoicePipeline:
         self._noise_frames = 0
         self._echo_processed_microphone = echo_processed_microphone
         self._barge_frames: deque[bytes] = deque(maxlen=VOICE_BARGE_IN_SPEECH_FRAMES)
+        self._manual_preroll: deque[bytes] = deque(maxlen=10)
         self._conversation: deque[dict[str, str]] = deque(maxlen=VOICE_CONTEXT_TURNS * 2)
         self._last_conversation_turn = 0.0
         self._lock = threading.RLock()
@@ -970,12 +974,38 @@ class AldenVoicePipeline:
         self._last_conversation_turn = time.monotonic()
 
     def _rearm_after_reply(self, *, publish: bool = True) -> None:
-        self.state = VoiceState.WAKE_LISTEN
+        self.state = VoiceState.USER_LISTEN if self.manual_listen else VoiceState.WAKE_LISTEN
         self.ring.clear()
         self._speech_frames = self._silence_frames = self._noise_frames = 0
         self._wake_source = "none"
         self._barge_frames.clear()
+        self._manual_preroll.clear()
         if publish:
+            self._publish()
+
+    def begin_manual_listening(self) -> None:
+        """Enter listening only after the explicitly requested mic is active."""
+        with self._lock:
+            self.token.raise_if_cancelled()
+            if not self.manual_listen or self._closed:
+                raise RuntimeError("manual_voice_not_available")
+            self._rearm_after_reply()
+
+    def restore_selected_conversation(self, conversation_id: str) -> None:
+        """Resume only the user's explicitly selected local conversation."""
+        if not self.manual_listen or self.history_root is None or not re.fullmatch(r"[0-9a-f]{32}", conversation_id):
+            raise RuntimeError("voice_conversation_unavailable")
+        from alden_history import database
+        with database(self.history_root) as db:
+            if db is None or db.execute("SELECT 1 FROM voice_sessions WHERE id=?", (conversation_id,)).fetchone() is None:
+                raise RuntimeError("voice_conversation_unavailable")
+            rows = db.execute("SELECT role,content FROM voice_messages WHERE session_id=? AND state='confirmed' AND role IN ('user','assistant') ORDER BY turn_id DESC, CASE role WHEN 'assistant' THEN 1 ELSE 0 END DESC LIMIT ?", (conversation_id, VOICE_CONTEXT_TURNS * 2)).fetchall()
+            counters = db.execute("SELECT COALESCE(MAX(turn_id),0),COALESCE(MAX(context_version),0) FROM voice_messages WHERE session_id=?", (conversation_id,)).fetchone()
+        with self._lock:
+            self.conversation_id = conversation_id
+            self.turn_id, self.context_version = map(int, counters)
+            self._conversation = deque(({'role':row['role'],'content':row['content'][:VOICE_CONTEXT_ITEM_MAX_CHARS]} for row in reversed(rows)), maxlen=VOICE_CONTEXT_TURNS*2)
+            self._last_conversation_turn = time.monotonic()
             self._publish()
 
     def _publish(self, error_code: str = "") -> None:
@@ -1057,6 +1087,20 @@ class AldenVoicePipeline:
                     self._barge_frames.clear()
                 self._publish()
                 return None
+            if self.manual_listen and self.state in {VoiceState.TRANSCRIBING, VoiceState.GENERATING}:
+                if speech and math.isfinite(self.last_rms) and self.last_rms > 0:
+                    self._barge_frames.append(bytes(pcm16))
+                    if len(self._barge_frames) >= VOICE_BARGE_IN_SPEECH_FRAMES:
+                        leading = tuple(self._barge_frames)
+                        self.interrupt()
+                        self._rearm_after_reply(publish=False)
+                        for frame in leading:
+                            self.ring.append(frame)
+                        self._speech_frames = len(leading)
+                else:
+                    self._barge_frames.clear()
+                self._publish()
+                return None
             if self.state in {VoiceState.WAKE_LISTEN, VoiceState.TRANSCRIBING, VoiceState.GENERATING}:
                 accepted = self.wake_gate.accepts(stock_wake_score, custom_wake_score)
                 if not accepted:
@@ -1076,20 +1120,33 @@ class AldenVoicePipeline:
                 return None
 
             if speech:
+                if self.manual_listen and self._speech_frames == 0:
+                    for frame in self._manual_preroll:
+                        self.ring.append(frame)
+                    self._manual_preroll.clear()
+                if self.manual_listen and self.ring.size + len(pcm16) > self.ring.max_bytes:
+                    return self._end(VoiceState.ERROR, "voice_utterance_too_long")
                 self.ring.append(pcm16)
                 self._speech_frames += 1
                 self._silence_frames = 0
                 self._noise_frames = 0
             else:
+                if self.manual_listen:
+                    if self._speech_frames > 0:
+                        if self.ring.size + len(pcm16) > self.ring.max_bytes:
+                            return self._end(VoiceState.ERROR, "voice_utterance_too_long")
+                        self.ring.append(pcm16)
+                    else:
+                        self._manual_preroll.append(bytes(pcm16))
                 self._silence_frames += 1
                 if self.last_rms > 0.35:
                     self._noise_frames += 1
 
             if self._noise_frames >= 25 and self._speech_frames == 0:
                 return self._end(VoiceState.ERROR, "noise_rejected")
-            if self._silence_frames >= 50 and self._speech_frames == 0:
+            if self._silence_frames >= (750 if self.manual_listen else 50) and self._speech_frames == 0:
                 return self._end(VoiceState.ENDED, "silence_timeout")
-            if self._speech_frames > 0 and self._silence_frames >= 12:
+            if self._speech_frames > 0 and self._silence_frames >= (30 if self.manual_listen else 12):
                 audio = self.ring.bytes()
             else:
                 self._publish()
@@ -1112,7 +1169,11 @@ class AldenVoicePipeline:
                 return None
             if self.token.is_cancelled():
                 return self._end(VoiceState.ABORTED, "global_abort")
-            if self.state == VoiceState.SPEAKING:
+            if self.manual_listen:
+                if self.state == VoiceState.SPEAKING and not self._echo_processed_microphone:
+                    return None
+                analysis = frontend.analyze_speech(pcm16)
+            elif self.state == VoiceState.SPEAKING:
                 self._frontend_needs_reset = True
                 if not self._echo_processed_microphone:
                     return None
@@ -1157,6 +1218,7 @@ class AldenVoicePipeline:
             self._active_turn = turn
             self._transcript = self._reply = ""
             self.ring.clear()
+            self._manual_preroll.clear()
             self._barge_frames.clear()
             return turn
 
@@ -1174,6 +1236,7 @@ class AldenVoicePipeline:
                 self._pending_turn = None
             self.ring.clear()
             self._barge_frames.clear()
+            self._manual_preroll.clear()
 
     def close(self) -> None:
         with self._work_ready:
@@ -2009,6 +2072,9 @@ def run_microphone_session(
     *,
     state_root: Path,
     custom_wake_model: Path | None = None,
+    manual_listen: bool = False,
+    parent_pid: int | None = None,
+    conversation_id: str | None = None,
 ) -> VoiceResult:
     """Run a continuous wake -> reply loop from a dedicated 16 kHz microphone stream."""
 
@@ -2024,13 +2090,20 @@ def run_microphone_session(
         tts=Qwen3TtsAdapter(),
         token=token,
         status=status,
+        manual_listen=manual_listen,
     )
+    previous_sigterm = None
     if token.is_cancelled():
         return pipeline._end(VoiceState.ABORTED, "global_abort")
 
     try:
-        selected = resolve_live_wake_model()
-        if selected is None or (custom_wake_model is not None and custom_wake_model != selected):
+        if conversation_id is not None:
+            pipeline.restore_selected_conversation(conversation_id)
+        if manual_listen and threading.current_thread() is threading.main_thread():
+            previous_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, lambda *_args: token.cancel())
+        selected = None if manual_listen else resolve_live_wake_model()
+        if (not manual_listen and (selected is None or (custom_wake_model is not None and custom_wake_model != selected))) or (manual_listen and custom_wake_model is not None):
             return pipeline._end(VoiceState.ERROR, "alden_wake_model_unavailable")
         pipeline._custom_model_selected = selected is not None
         pipeline._publish()
@@ -2046,13 +2119,18 @@ def run_microphone_session(
                 stream_entered = True
                 pipeline.tts.audio_backend = stream
                 pipeline._echo_processed_microphone = stream.echo_processed
+                if manual_listen:
+                    pipeline.begin_manual_listening()
                 poller = _MicrophoneFramePoller(stream)
                 while True:
+                    if parent_pid is not None and os.getppid() != parent_pid:
+                        token.cancel()
+                        return pipeline._end(VoiceState.ABORTED, "voice_parent_ended")
                     if token.is_cancelled():
                         return pipeline._end(VoiceState.ABORTED, "global_abort")
                     completed = pipeline.poll_result()
                     if completed is not None:
-                        if completed.state == VoiceState.ENDED and pipeline.state == VoiceState.WAKE_LISTEN:
+                        if completed.state == VoiceState.ENDED and pipeline.state in {VoiceState.WAKE_LISTEN, VoiceState.USER_LISTEN}:
                             wake_suppressed_until = time.monotonic() + VOICE_WAKE_RESUME_DELAY_SECONDS
                         else:
                             return completed
@@ -2074,7 +2152,7 @@ def run_microphone_session(
                     result = pipeline.feed_frontend_frame(frontend, raw, asynchronous=True)
                     if result is None:
                         continue
-                    if result.state == VoiceState.ENDED and pipeline.state == VoiceState.WAKE_LISTEN:
+                    if result.state == VoiceState.ENDED and pipeline.state in {VoiceState.WAKE_LISTEN, VoiceState.USER_LISTEN}:
                         wake_suppressed_until = time.monotonic() + VOICE_WAKE_RESUME_DELAY_SECONDS
                         continue
                     return result
@@ -2094,10 +2172,16 @@ def run_microphone_session(
             return pipeline.mic_disconnected()
     except AldenCancelled:
         return pipeline._end(VoiceState.ABORTED, "global_abort")
+    except RuntimeError as error:
+        if str(error) == "voice_conversation_unavailable":
+            return pipeline._end(VoiceState.ERROR, str(error))
+        return pipeline.mic_disconnected()
     except Exception:
         return pipeline.mic_disconnected()
     finally:
         pipeline.close()
+        if previous_sigterm is not None:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def _default_state_root() -> Path:
@@ -2236,12 +2320,21 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one local Alden voice session.")
     parser.add_argument("--state-root", type=Path, default=None)
     parser.add_argument("--custom-wake-model", type=Path, default=None)
+    parser.add_argument("--manual-listen", action="store_true")
+    parser.add_argument("--parent-pid", type=int, default=None)
+    parser.add_argument("--conversation-id", default=None)
     parser.add_argument("--file-wake", type=Path, default=None)
     parser.add_argument("--file-utterance", type=Path, default=None)
     parser.add_argument("--tts-out", type=Path, default=None)
     args = parser.parse_args(argv)
     state_root = (args.state_root or _default_state_root()).expanduser()
     custom = args.custom_wake_model.expanduser() if args.custom_wake_model else None
+    if args.parent_pid is not None and (not args.manual_listen or args.parent_pid < 2):
+        parser.error("manual_voice_parent_invalid")
+    if args.conversation_id is not None and (not args.manual_listen or not re.fullmatch(r"[0-9a-f]{32}", args.conversation_id)):
+        parser.error("manual_voice_conversation_invalid")
+    if args.manual_listen and (custom is not None or args.file_wake is not None or args.file_utterance is not None or args.tts_out is not None):
+        parser.error("manual_voice_args_incompatible")
     if args.file_wake is not None or args.file_utterance is not None or args.tts_out is not None:
         if args.file_wake is None or args.file_utterance is None or args.tts_out is None:
             raise SystemExit("file_pipeline_args_incomplete")
@@ -2254,7 +2347,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report.get("accepted") and report.get("state") == "ended" else 1
-    result = run_microphone_session(state_root=state_root, custom_wake_model=custom)
+    result = run_microphone_session(state_root=state_root, custom_wake_model=custom, manual_listen=args.manual_listen, parent_pid=args.parent_pid, conversation_id=args.conversation_id)
     print(json.dumps({"state": result.state.value, "error_code": result.error_code}, ensure_ascii=False))
     return 0 if result.state in {VoiceState.ENDED, VoiceState.ABORTED} else 1
 

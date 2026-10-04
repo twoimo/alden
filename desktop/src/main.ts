@@ -260,18 +260,17 @@ function wireModelSelection(invokeFn: SettingsInvoke): void {
 
 function renderVoice(snapshot: RuntimeSnapshot): void {
   const voice = snapshot.voice;
+  const previewOnly = document.getElementById("voice-status")?.dataset.previewOnly === "true";
   const startButton = document.getElementById("voice-start") as HTMLButtonElement | null;
   if (startButton) {
-    const active = voice.available && ['wake_listen','user_listen','transcribing','generating','speaking'].includes(voice.state);
-    startButton.disabled = !voice.customModelSelected || active;
-    startButton.textContent = active ? '마이크 켜짐' : '마이크 켜기';
+    const active = voice.manualRunning === true || (voice.available && ['wake_listen','user_listen','transcribing','generating','speaking'].includes(voice.state));
+    if (!startButton.hasAttribute("aria-busy")) startButton.disabled = false;
+    startButton.dataset.voiceActive = String(active);
+    startButton.textContent = active ? '마이크 끄기' : '마이크 켜기';
   }
-  if (!voice.customModelSelected) {
-    setText("voice-status", "호출어가 준비되지 않아 마이크가 꺼져 있습니다.");
-    return;
-  }
+  if (previewOnly) return;
   if (!voice.available) {
-    setText("voice-status", "음성 상태를 확인할 수 없습니다.");
+    setText("voice-status", "마이크가 꺼져 있습니다.");
     return;
   }
   const labels: Record<string, string> = {
@@ -859,7 +858,7 @@ export async function startDesktopApp(
 
 if(import.meta.env.DEV&&new URLSearchParams(location.search).has('demo')) {
   void import('./dev-fixture').then(async fixture=>{
-    if(isSettings)await bootSettings({loadSnapshot:fixture.snapshot,loadAction:fixture.action,loadEmergency:async()=>fixture.emergency,pauseEmergency:fixture.pause,resumeEmergency:fixture.resume,subscribeEmergency:null,subscribeVisibility:null,readVisibility:null,wireVoice:()=>undefined,invokeCommand:fixture.invokeCommand});
+    if(isSettings)await bootSettings({loadSnapshot:fixture.snapshot,loadAction:fixture.action,loadEmergency:async()=>fixture.emergency,pauseEmergency:fixture.pause,resumeEmergency:fixture.resume,subscribeEmergency:null,subscribeVisibility:null,readVisibility:null,wireVoice:(root)=>wireVoiceStart(root,async()=>{throw new Error("voice_preview_only");}),invokeCommand:fixture.invokeCommand});
     else await bootPanel({loadKnowledge:fixture.action,loadSnapshot:fixture.snapshot,subscribeVisibility:null,readVisibility:null,subscribeEmergency:null,loadEmergency:async()=>fixture.emergency});
     const label=document.createElement('span');label.className='development-preview-label';label.textContent='예시 데이터 · 개발 미리보기';document.body.append(label);
   });

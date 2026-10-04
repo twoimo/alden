@@ -42,7 +42,7 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
   }
   function pickRoom(row:Row, voice:boolean):void {
     const id=String(voice?row.id:row.chat_id);
-    if(voice){if(sessionId===id)return;sessionId=id;voiceEpoch++;voiceBefore=null;voiceItems=[];voiceList.set([]);status('voice-history-title',String(row.title??'음성 대화'));void readVoice(true);}
+    if(voice){if(sessionId===id)return;sessionId=id;get('voice-start').dataset.conversationId=id;voiceEpoch++;voiceBefore=null;voiceItems=[];voiceList.set([]);status('voice-history-title',String(row.title??'음성 대화'));void readVoice(true);}
     else{if(chatId===id)return;chatId=id;chatEpoch++;before=anchor=null;chatItems=[];chatList.set([]);status('conversation-history-title',String(row.chat_name||'이름 없는 대화방'));void readChat(true);}
     filterRails();
   }

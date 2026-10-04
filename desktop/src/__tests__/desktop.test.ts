@@ -150,7 +150,7 @@ describe("safe shared contracts", () => {
     expect(snapshot.terminal).toEqual({ sent: 3, skipped: 2, deliveryUnknown: 1, burstSuperseded: 4 });
     expect(snapshot.contextSync).toEqual({ mode: "async", waited: false });
     expect(snapshot.jobLoad).toBe(0.7);
-    expect(snapshot.voice).toEqual({ available: true, state: "speaking", rms: 0.42, outputRms: 0, errorCode: null, wakeSource: "stock", updatedAt: 10, wakePhrase: "", threshold: 0.65, customModelSelected: false });
+    expect(snapshot.voice).toEqual({ available: true, state: "speaking", rms: 0.42, outputRms: 0, errorCode: null, wakeSource: "stock", updatedAt: 10, wakePhrase: "", threshold: 0.65, customModelSelected: false, manualRunning: false });
   });
 
   it("normalizes per-source background state with bounded captions", () => {
@@ -568,13 +568,15 @@ describe("layout and settings contract", () => {
       "settings-sync-card", "settings-knowledge-card",
     ]) expect(markup).toContain(`id="${id}"`);
     expect(markup).toContain('id="voice-status"');
-    expect(markup).toContain('호출어: 올든');
-    expect(markup).toContain('호출어가 준비되지 않아 마이크가 꺼져 있습니다.');
+    expect(markup).toContain('마이크를 켜고 말씀하세요.');
+    expect(markup).not.toContain('호출어: 올든');
+    expect(markup).toContain('마이크가 꺼져 있습니다.');
     expect(markup).not.toContain("긴급 중단은 ⌘⌥⇧Esc를 누르세요.");
     expect(markup).toContain('id="settings-tab-settings"');
     expect(markup).not.toContain('id="settings-gear"');
     expect(markup).toContain('id="voice-start"');
-    expect(markup).toContain('id="voice-start" type="button" disabled');
+    expect(markup).toContain('id="voice-start" type="button"');
+    expect(markup).not.toContain('id="voice-start" type="button" disabled');
     expect(mainPanelMarkup()).not.toContain('id="voice-start"');
     expect(markup).toContain('id="knowledge-graph-canvas"');
     expect(markup).toContain('id="knowledge-expand-hop"');

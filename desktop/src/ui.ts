@@ -6,6 +6,10 @@ export const MAIN_PANEL_CONTROLS = Object.freeze([] as const);
 
 export function voiceErrorMessage(errorCode: string | null): string | null {
   switch (errorCode) {
+    case "voice_utterance_too_long":
+      return "말씀을 짧게 나눠서 다시 들려주세요.";
+    case "voice_conversation_unavailable":
+      return "이전 음성 대화를 불러오지 못했습니다. 대화를 다시 선택해 주세요.";
     case "voice_memory_budget_low":
       return "기기 메모리 여유가 부족해 음성 처리를 멈췄습니다.";
     case "voice_memory_budget_unavailable":
@@ -89,7 +93,7 @@ export function settingsMarkup(): string {
  </section>
 <section id="settings-page-voice" class="settings-page conversation-workspace" role="tabpanel" aria-labelledby="settings-tab-voice" hidden>
  <aside class="history-rail"><header><h1>음성 대화</h1><input id="voice-search" type="search" placeholder="대화 찾기" aria-label="음성 대화 찾기"></header><div id="voice-session-list" role="list" class="history-room-list"></div></aside>
- <div class="history-reader"><header class="history-reader-heading"><h2 id="voice-history-title">대화를 선택하세요</h2><p id="voice-history-status" role="status">확인된 말씀과 올든의 답변을 읽습니다.</p></header><div class="voice-reader-controls"><p id="voice-status" role="status">호출어가 준비되지 않아 마이크가 꺼져 있습니다.</p><button id="voice-start" type="button" disabled>마이크 켜기</button></div><div id="voice-placeholder" class="history-placeholder" role="status"><strong>지난 음성 대화를 불러옵니다</strong><span></span><button id="voice-retry" type="button" hidden>다시 불러오기</button></div><div id="voice-message-list" class="message-scroll" role="log" aria-label="음성 대화 기록"><div class="history-empty">음성으로 나눈 대화가 여기에 남습니다.</div></div><button id="voice-history-older" class="history-older" type="button" hidden>이전 대화 더 보기</button></div>
+ <div class="history-reader"><header class="history-reader-heading"><h2 id="voice-history-title">대화를 선택하세요</h2><p id="voice-history-status" role="status">확인된 말씀과 올든의 답변을 읽습니다.</p></header><div class="voice-reader-controls"><p id="voice-status" role="status">마이크가 꺼져 있습니다.</p><button id="voice-start" type="button">마이크 켜기</button></div><div id="voice-placeholder" class="history-placeholder" role="status"><strong>지난 음성 대화를 불러옵니다</strong><span></span><button id="voice-retry" type="button" hidden>다시 불러오기</button></div><div id="voice-message-list" class="message-scroll" role="log" aria-label="음성 대화 기록"><div class="history-empty">음성으로 나눈 대화가 여기에 남습니다.</div></div><button id="voice-history-older" class="history-older" type="button" hidden>이전 대화 더 보기</button></div>
  </section>
 ${automationHistoryMarkup('reply', '카카오톡 답변')}
 ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
@@ -119,7 +123,7 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
               <div class="model-options"><button class="model-row selection" type="button" data-model-choice="fast" aria-pressed="true" disabled><span class="model-symbol"><i data-lucide="Zap" aria-hidden="true"></i></span><span class="model-copy"><strong>Qwen3.8 Flash Next</strong><span class="model-desc">빠른 대화</span></span><span class="model-selection-mark" aria-hidden="true"></span></button><button class="model-row" type="button" data-model-choice="deep" aria-pressed="false" disabled><span class="model-symbol"><i data-lucide="Waypoints" aria-hidden="true"></i></span><span class="model-copy"><strong>Qwen3.8 27B</strong><span class="model-desc">깊은 분석</span></span><span class="model-selection-mark" aria-hidden="true"></span></button></div>
               <p id="model-status" class="model-status-highlight" role="status" aria-live="polite">AI 답변 상태를 확인하고 있습니다.</p>
             </section>
-            <section class="preferences-option preferences-voice" aria-labelledby="voice-title"><header class="preferences-section-heading"><div><h2 id="voice-title">음성 대화</h2><p>말씀으로 올든을 만나세요.</p></div><i data-lucide="AudioLines" aria-hidden="true"></i></header><div class="voice-wake-line"><span>호출어: 올든</span><button id="open-voice-page" type="button">음성 대화 열기</button></div></section>
+            <section class="preferences-option preferences-voice" aria-labelledby="voice-title"><header class="preferences-section-heading"><div><h2 id="voice-title">음성 대화</h2><p>마이크를 켜고 말씀하세요.</p></div><i data-lucide="AudioLines" aria-hidden="true"></i></header><div class="voice-wake-line"><button id="open-voice-page" type="button">음성 대화 열기</button></div></section>
           </div>
           <details class="preferences-runtime"><summary><i data-lucide="ShieldCheck" aria-hidden="true"></i><span>현재 운영 상태</span><i data-lucide="ChevronDown" aria-hidden="true"></i></summary><div class="preferences-runtime-content"><div class="setting-control"><label for="settings-room-popup">현재 운영 대상</label><select id="settings-room-popup" aria-label="대상 채팅방"><option value="">확인 중</option></select><p id="room-summary" class="settings-field-note" role="status" aria-live="polite">운영 중인 채팅방을 불러오는 중입니다.</p></div><div id="settings-sync-card"><p id="settings-sync-source" role="status" aria-live="polite">대화 준비 상태를 확인하고 있습니다.</p><p id="settings-activity-source" class="settings-field-note">앱의 작업 상태를 확인하고 있습니다.</p></div></div></details>
         </section>

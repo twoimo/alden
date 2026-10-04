@@ -199,6 +199,28 @@ async fn start_voice_session(bridge: tauri::State<'_, PythonBridge>) -> Result<(
 }
 
 #[tauri::command]
+async fn start_manual_voice_session(
+    bridge: tauri::State<'_, PythonBridge>,
+    conversation_id: Option<String>,
+) -> Result<(), String> {
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        bridge.start_manual_voice_session(conversation_id.as_deref())
+    })
+    .await
+    .map_err(|_| "voice_session_start_failed".to_string())?
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn stop_manual_voice_session(bridge: tauri::State<'_, PythonBridge>) -> Result<bool, String> {
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || bridge.stop_manual_voice_session())
+        .await
+        .map_err(|_| "voice_session_stop_failed".to_string())
+}
+
+#[tauri::command]
 fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("settings")
@@ -323,6 +345,8 @@ fn main() {
             cancel_model_swap,
             open_settings,
             start_voice_session,
+            start_manual_voice_session,
+            stop_manual_voice_session,
             window_is_visible
         ])
         .setup(move |app| {

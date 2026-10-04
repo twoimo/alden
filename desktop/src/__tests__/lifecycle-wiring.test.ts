@@ -303,7 +303,7 @@ describe("render lifecycle wiring", () => {
     // ask what the shell's current state is. Both languages must agree on the
     // command name and the shell must expose it.
     expect(RUST_MAIN).toMatch(/fn window_is_visible\(window: tauri::WebviewWindow\) -> bool/);
-    expect(RUST_MAIN).toMatch(/start_voice_session,\s*window_is_visible\s*\]\)/);
+    expect(RUST_MAIN).toMatch(/start_voice_session,\s*start_manual_voice_session,\s*stop_manual_voice_session,\s*window_is_visible\s*\]\)/);
     expect(wiringSource()).toContain("window_is_visible");
   });
 

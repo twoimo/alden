@@ -11,7 +11,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -78,7 +78,6 @@ fn is_snapshot_model_id(candidate: &str) -> bool {
     is_local_model_id(candidate.strip_prefix("mlx/").unwrap_or(candidate))
 }
 
-#[cfg(test)]
 const VOICE_TTS_OUT_NAME: &str = "alden-voice-out.wav";
 static VOICE_SESSION_START_LOCK: Mutex<()> = Mutex::new(());
 
@@ -189,7 +188,6 @@ struct BridgeConfig {
     logs_dir: PathBuf,
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 struct VoiceSessionPlan {
     python: PathBuf,
@@ -273,6 +271,7 @@ pub struct ContextSync {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct SafeVoiceStatus {
+    manual_running: bool,
     available: bool,
     state: String,
     rms: f64,
@@ -288,6 +287,7 @@ pub struct SafeVoiceStatus {
 impl Default for SafeVoiceStatus {
     fn default() -> Self {
         Self {
+            manual_running: false,
             available: false,
             state: "unavailable".to_string(),
             rms: 0.0,
@@ -619,6 +619,14 @@ impl PythonBridge {
     /// Read only the app's bounded status/latch files; no Python or models.
     pub fn voice_status(&self) -> SafeVoiceStatus {
         let mut status = read_voice_status(&self.config.state_root);
+        status.manual_running = self
+            .cancellations
+            .lock()
+            .is_ok_and(|map| map.contains_key("voice-session"));
+        if status.manual_running && !status.available {
+            status.available = true;
+            status.state = "idle".to_string();
+        }
         match global_abort_is_latched(&self.config.state_root) {
             Ok(false) => {}
             latch => {
@@ -958,6 +966,96 @@ impl PythonBridge {
         start_voice_session_if_absent(&self.config.state_root, voice_session_is_running, || {
             Err(BridgeError::WakeModelUnavailable)
         })
+    }
+
+    pub fn start_manual_voice_session(
+        &self,
+        conversation_id: Option<&str>,
+    ) -> Result<(), BridgeError> {
+        start_voice_session_if_absent(&self.config.state_root, voice_session_is_running, || {
+            if global_abort_is_latched(&self.config.state_root)? {
+                return Err(BridgeError::Cancelled);
+            }
+            let resources = self.config.resources()?;
+            resources.validate()?;
+            let support = dirs::home_dir()
+                .ok_or(BridgeError::VoiceEnv)?
+                .join("Library/Application Support/openkakao");
+            let plan = plan_voice_session(
+                &resources.root,
+                &self.config.state_root,
+                &support.join("runtimes/voice/bin/python3.11"),
+            )?;
+            validate_path(
+                &resources.root.join(resource_layout::VOICE_AUDIO_LIBRARY),
+                Kind::Data,
+            )
+            .map_err(|_| BridgeError::VoiceScript)?;
+            let mut command = voice_session_command(&plan, &self.config.state_root)?;
+            command.args([
+                "--manual-listen",
+                "--parent-pid",
+                &std::process::id().to_string(),
+            ]);
+            if let Some(id) = conversation_id {
+                if id.len() != 32
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                {
+                    return Err(BridgeError::ActionNotAllowed);
+                }
+                command.args(["--conversation-id", id]);
+            }
+            let mut map = self
+                .cancellations
+                .lock()
+                .map_err(|_| BridgeError::StateIo)?;
+            if map.contains_key("voice-session") {
+                return Err(BridgeError::VoiceSessionAlreadyRunning);
+            }
+            let child = command.spawn().map_err(|_| BridgeError::Spawn)?;
+            let hard = Arc::new(AtomicBool::new(false));
+            map.insert(
+                "voice-session".into(),
+                CancellationHandle {
+                    flag: hard.clone(),
+                    cooperative_marker: None,
+                    global_abort_flag: None,
+                },
+            );
+            let bridge = self.clone();
+            thread::spawn(move || {
+                supervise_manual_voice(child, &hard, Duration::from_secs(300), || {
+                    global_abort_is_latched(&bridge.config.state_root).unwrap_or(true)
+                });
+                if let Ok(mut map) = bridge.cancellations.lock() {
+                    map.remove("voice-session");
+                }
+            });
+            Ok(())
+        })
+    }
+
+    pub fn stop_manual_voice_session(&self) -> bool {
+        let Ok(_guard) = VOICE_SESSION_START_LOCK.lock() else {
+            return false;
+        };
+        if !self.cancel("voice-session") {
+            return false;
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if self
+                .cancellations
+                .lock()
+                .is_ok_and(|map| !map.contains_key("voice-session"))
+            {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        false
     }
 
     fn run_python(
@@ -1806,6 +1904,45 @@ fn start_voice_session_if_absent(
     spawn()
 }
 
+fn supervise_manual_voice(
+    mut child: Child,
+    hard: &AtomicBool,
+    timeout: Duration,
+    global_stop: impl Fn() -> bool,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if hard.load(Ordering::SeqCst) || Instant::now() >= deadline || global_stop() {
+            // This unreaped Child is the only permitted signal target.
+            let _ = Command::new("/bin/kill")
+                .args(["-TERM", &child.id().to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let grace = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < grace {
+                if child.try_wait().is_ok_and(|status| status.is_some()) {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
+}
+
 type VoiceProcessArgs = (PathBuf, Vec<OsString>);
 
 fn is_python_executable(path: &Path) -> bool {
@@ -2027,7 +2164,6 @@ fn parse_voice_process_args(bytes: &[u8]) -> Result<VoiceProcessArgs, BridgeErro
     Ok((executable, argv))
 }
 
-#[cfg(test)]
 fn plan_voice_session(
     resource_root: &Path,
     state_root: &Path,
@@ -2043,7 +2179,6 @@ fn plan_voice_session(
     })
 }
 
-#[cfg(test)]
 fn voice_session_command(
     plan: &VoiceSessionPlan,
     state_root: &Path,
@@ -2251,6 +2386,7 @@ fn read_voice_status(state_root: &Path) -> SafeVoiceStatus {
         return default_voice_status();
     }
     SafeVoiceStatus {
+        manual_running: false,
         available: true,
         state,
         rms: clamp01(root.get("rms").and_then(Value::as_f64).unwrap_or(0.0)),
@@ -3364,6 +3500,70 @@ fn sanitize_knowledge_focus(value: &Value, expected_node: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manual_voice_stop_signals_only_its_child_and_preserves_cleanup() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "alden-owned-voice-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let ready = root.join("ready");
+        let ended = root.join("ended");
+        let script = format!("import signal,time,sys\nfrom pathlib import Path\ndef end(*args):\n Path({:?}).write_text('closed')\n sys.exit(0)\nsignal.signal(signal.SIGTERM,end)\nPath({:?}).write_text('ready')\ntime.sleep(10)", ended.to_str().unwrap(), ready.to_str().unwrap());
+        let mut other = Command::new("python3")
+            .args(["-E", "-B", "-s", "-c", "import time; time.sleep(10)"])
+            .spawn()
+            .unwrap();
+        let child = Command::new("python3")
+            .args(["-E", "-B", "-s", "-c", &script])
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.is_file() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.is_file());
+        let hard = AtomicBool::new(true);
+        supervise_manual_voice(child, &hard, Duration::from_secs(5), || false);
+        assert_eq!(fs::read_to_string(ended).unwrap(), "closed");
+        assert!(other.try_wait().unwrap().is_none());
+        other.kill().unwrap();
+        other.wait().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manual_voice_timeout_bounds_an_uncooperative_owned_child() {
+        use std::io::BufRead;
+        let mut child = Command::new("python3")
+            .args([
+                "-E",
+                "-B",
+                "-s",
+                "-c",
+                "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(10)",
+            ])
+            .stdout(Stdio::piped()).spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let started = Instant::now();
+        supervise_manual_voice(
+            child,
+            &AtomicBool::new(false),
+            Duration::from_millis(150),
+            || false,
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};
 
