@@ -27,6 +27,17 @@ Each original node byte is copied under private `_archive/alden-preclassificatio
 
 Private recovery includes SQLite Online Backup snapshots of affected Alden indexes plus the complete pre-migration notes and checkpoint. Old topic IDs remain tombstoned in the checkpoint, while ordinary topic files are removed from the live node space. Direct topic and OSK ID lookup is rejected. Database triggers prevent already-running legacy writers from restoring lexical projections; source messages and operational queues remain intact.
 
-Focused regression covers the real bundled OSK writer/resolver, explicit direction, Raw non-node references, backup integrity, replay, ID lookup, manual insertion and preservation, source deletion, ambiguous IDs, and database/FTS/dense retirement. Python tests: 34 OSK integration, 102 graph/retrieval, 27 reference-store. Additional affected checks passed: 69 corpus/source/reference-search tests, 63 Rust context tests, 6 Rust corpus tests, and 355 frontend tests. Mandatory CI and installed-bundle readback are independent delivery checks. UI rendering, installed version and production signing are independent evidence states.
+Focused regression covers the real bundled OSK writer/resolver, explicit direction, Raw non-node references, backup integrity, replay, ID lookup, manual insertion and preservation, source deletion, ambiguous IDs, and database/FTS/dense retirement. Python tests: 35 OSK integration, 102 graph/retrieval, 27 reference-store. Additional affected checks passed: 69 corpus/source/reference-search tests, 63 Rust context tests, 6 Rust corpus tests, and 355 frontend tests. Mandatory CI and installed-bundle readback are independent delivery checks. UI rendering, installed version and production signing are independent evidence states.
 
 Private chat contents, source paths and screenshots are excluded from this public document. Developer ID signing/notarization, physical voice/shortcut/lock verification, Flash-Next memory admission, Dot's blocked network environment, whole-app performance comparison and full semantic distillation remain open goal requirements.
+
+## Graph read performance
+
+Profiling found repeated parsing of the same frontmatter within a single graph read. The adapter now reuses the SDK's per-call identity snapshot. Each graph read constructs a fresh Index, and mutation/focus paths still read bytes for CAS; no cross-read cache masks edits. Whole graph JSON was identical to commit `8867e282c708ec71736c1920b7464f0bc6ddc207` on the same current vault (142 nodes, 141 edges).
+
+| Python graph read | Before | After | Reduction |
+|---|---:|---:|---:|
+| Median, process warm | 451.911 ms | 304.329 ms | 32.66% |
+| Nearest-rank p95, process warm | 541.113 ms | 328.103 ms | 39.37% |
+
+Each arm had 20 reads, with the first engine-validation read reported separately and excluded from the 19 warm samples. Measurements were sequential on the same Mac and canonical graph, with the same existing background workers; they were not randomized, and background load was not controlled. The percentages use `(before-after)/before*100`. This describes graph parsing only, not input-to-UI latency, whole-app CPU/power, model inference, voice latency or general p95 performance. Independent edit/retraction regressions verify that the next read sees changed notes.

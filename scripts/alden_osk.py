@@ -41,7 +41,7 @@ _ROOT = None
 SOURCE_SPACE = '00_Scope/Alden/Alden 카카오톡'
 
 
-def _resolve_note(item: dict, idx, contract):
+def _resolve_note(item: dict, idx, contract, *, snapshot: bool = False):
     """Resolve one unambiguous stable ID; a reused title is never identity proof."""
     identity = item.get('osk_id')
     if not identity or identity in idx.dup_ids:
@@ -52,11 +52,13 @@ def _resolve_note(item: dict, idx, contract):
     path = found[0]
     if any(p.is_symlink() for p in [path, *path.parents]):
         raise RuntimeError('osk_symlink_note')
-    data = path.read_bytes()
-    note = contract.parse_bytes(path, data)
+    # A graph read already built the SDK's identity snapshot. Reuse that
+    # snapshot within this read only; mutations and focus/CAS still re-read bytes.
+    data = None if snapshot else path.read_bytes()
+    note = idx.node(path) if snapshot else contract.parse_bytes(path, data)
     if contract.validate(note) or note.id != identity:
         return None
-    return path, note, digest(data)
+    return path, note, '' if snapshot else digest(data)
 
 
 def _same_note(home: Path, item: dict, resolved) -> bool:
@@ -816,7 +818,7 @@ def read_graph(state_root: Path, *, read_only: bool = False) -> dict:
     for key, item in checkpoint.get("managed", {}).items():
         if not item.get("active") or key.startswith('topic:'):
             continue
-        resolved = _resolve_note(item, idx, contract)
+        resolved = _resolve_note(item, idx, contract, snapshot=True)
         if not resolved:
             continue
         path, note, _ = resolved
@@ -829,7 +831,7 @@ def read_graph(state_root: Path, *, read_only: bool = False) -> dict:
     for title, (path, kind) in idx.nodes.items():
         if title in identities or kind[0] in ("governance", "workbench", "archive") or graph.is_hub(path):
             continue
-        note = contract.parse(path)
+        note = idx.node(path)
         if contract.validate(note) or note.id in idx.dup_ids:
             continue
         if note.id in managed_by_id:
@@ -849,7 +851,7 @@ def read_graph(state_root: Path, *, read_only: bool = False) -> dict:
         space = str(path.parent.relative_to(home / 'vault'))
         if not any(p == space or p.startswith(space + '/') for p in occupied):
             continue  # Preserve retired empty hubs on disk, without a fake UI cluster.
-        note = contract.parse(path)
+        note = idx.node(path)
         if contract.validate(note) or note.id in idx.dup_ids:
             continue
         key = 'osk:' + note.id

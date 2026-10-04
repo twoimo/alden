@@ -649,5 +649,23 @@ print(json.dumps({'held':True,'humanBytesPreserved':True}))
         self.assertEqual(result, {'held':True,'humanBytesPreserved':True})
 
 
+
+    def test_graph_snapshot_refreshes_authoritative_body_links_after_each_edit(self):
+        result = self.execute(r'''a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
+p=a._home(root)/'sync.json';state=json.loads(p.read_text());one=state['managed']['memory:one'];room=state['managed']['chat:1']
+note=graph.Index().by_id[one['osk_id']][0]
+assert not [e for e in a.read_graph(root,read_only=True)['edges'] if e.get('purpose')=='reference']
+write.update_node(one['osk_id'],body='현재 노트 [['+room['osk_id']+']]',summary='첫 수정',expect_hash=a.digest(note.read_bytes()))
+before=note.read_bytes();view=a.read_graph(root,read_only=True)
+assert note.read_bytes()==before and any(e['source']=='memory:one' and e['target']=='chat:1' and e['relation']=='linked' for e in view['edges'])
+write.update_node(one['osk_id'],body='참조를 철회한 현재 노트',summary='둘째 수정',expect_hash=a.digest(note.read_bytes()))
+view=a.read_graph(root,read_only=True)
+assert not [e for e in view['edges'] if e.get('purpose')=='reference']
+assert next(n for n in view['nodes'] if n['id']=='memory:one')['description']=='둘째 수정'
+print(json.dumps({'freshAfterEdit':True,'freshAfterRetraction':True}))
+''')
+        self.assertEqual(result, {'freshAfterEdit':True,'freshAfterRetraction':True})
+
+
 if __name__ == "__main__":
     unittest.main()
