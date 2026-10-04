@@ -605,12 +605,13 @@ write.update_node(item['osk_id'],add_edges={'derived-from':['[[_sources/raw-proo
 item['written_hash']=a.digest(note_path.read_bytes());a._save(p,state)
 source['nodes'].append(old);a.synchronize(root,source)
 state=json.loads(p.read_text());assert state['managed']['topic:stocks']['withdrawn'] and not path.exists()
-assert (home/'vault/_archive/alden-preclassification-v1'/(sha+'.md')).read_bytes()==original
+assert (home/'vault/_archive/alden-preclassification-v1'/(sha+'.bin')).read_bytes()==original
 assert raw.read_bytes()==b'## source-proof\n\nIMMUTABLE RAW'
 assert '사용자 문장 분류 이름 보존.' in contract.parse(note_path).body
 assert not a.read_focus(root,'topic:stocks')['ok'] and not a.read_focus(root,'osk:'+receipt['id'])['ok']
 assert 'topic:stocks' not in {n['id'] for n in a.read_graph(root)['nodes']}
 assert json.loads((home/'canonical-migration.json').read_text())['state']=='complete'
+assert graph.layout_violations()==[]
 ledger=list((home/'vault/00_Scope/Workbench/_ledger/migration').glob('events.jsonl'))[0]
 assert any(json.loads(line)['kind']=='archive' for line in ledger.read_text().splitlines())
 counts=len(ledger.read_text().splitlines());a.synchronize(root,source)
@@ -618,6 +619,27 @@ assert not path.exists() and len(ledger.read_text().splitlines())==counts
 print(json.dumps({'withdrawn':True,'rawPreserved':True,'idempotent':True}))
 ''')
         self.assertEqual(result, {'withdrawn':True,'rawPreserved':True,'idempotent':True})
+
+    def test_legacy_markdown_backups_recover_as_opaque_bytes_before_early_return(self):
+        result = self.execute(r'''
+a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
+home=a._home(root);state=json.loads((home/'sync.json').read_text())
+item=state['managed']['memory:one'];path=graph.Index().by_id[item['osk_id']][0]
+original=path.read_bytes();sha=a.digest(original)
+archive=home/'vault/_archive/alden-preclassification-v1';archive.mkdir(parents=True,exist_ok=True)
+old=archive/(sha+'.md');old.write_bytes(original)
+assert graph.layout_violations()
+a.synchronize(root,source)
+assert not old.exists() and (archive/(sha+'.bin')).read_bytes()==original
+assert path.read_bytes()==original and graph.layout_violations()==[]
+receipt=json.loads((home/'canonical-archive-format-migration.json').read_text())
+assert receipt['state']=='complete' and len(receipt['moves'])==1
+ledger=home/'vault/00_Scope/Workbench/_ledger/migration/events.jsonl'
+before=ledger.read_bytes();a.synchronize(root,source)
+assert ledger.read_bytes()==before
+print(json.dumps({'opaque':True,'bytePreserved':True,'idempotent':True}))
+''')
+        self.assertEqual(result, {'opaque':True,'bytePreserved':True,'idempotent':True})
 
     def test_only_explicit_osk_dependencies_enter_graph_with_direction(self):
         result = self.execute(r'''

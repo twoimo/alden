@@ -479,14 +479,38 @@ def _withdraw_preclassification(home: Path, checkpoint: dict, contract, graph, s
     """
     from osk import approvals, core
     managed = checkpoint.get('managed', {})
+    archive = home / 'vault/_archive/alden-preclassification-v1'
+    ledger = core.LEDGER / 'migration/events.jsonl'
+    # OSK forbids frontmatter-bearing .md files in a non-node compartment.
+    # Recover earlier byte backups as opaque .bin data, preserving every byte.
+    old_backups = sorted(archive.glob('*.md')) if archive.exists() else []
+    if old_backups:
+        moves = []
+        for path in old_backups:
+            if path.is_symlink() or not re.fullmatch('[0-9a-f]{64}', path.stem) or digest(path.read_bytes()) != path.stem:
+                raise RuntimeError('osk_canonical_backup_integrity')
+            moves.append({'source': str(path.relative_to(home / 'vault')), 'dest': str(path.with_suffix('.bin').relative_to(home / 'vault')), 'before': path.stem})
+        receipt = home / 'canonical-archive-format-migration.json'
+        _save(receipt, {'version': 1, 'state': 'prepared', 'moves': moves})
+        for path in old_backups:
+            with core.mutation_lock():
+                if digest(path.read_bytes()) != path.stem:
+                    raise RuntimeError('osk_canonical_backup_integrity')
+                target = path.with_suffix('.bin')
+                if target.exists() and (target.is_symlink() or digest(target.read_bytes()) != path.stem):
+                    raise RuntimeError('osk_canonical_backup_integrity')
+                core.ledger_append(ledger, {'kind': 'move', 'source': str(path.relative_to(home / 'vault')),
+                                           'dest': str(target.relative_to(home / 'vault')), 'before': 'sha256:' + path.stem,
+                                           'after': 'sha256:' + path.stem, 'rule': 'OSK non-node opaque backup format'})
+                os.replace(path, target)
+                core.fsync_dir(path.parent)
+        _save(receipt, {'version': 1, 'state': 'complete', 'moves': moves})
     previous = checkpoint.get('canonical_migration', {})
     if (previous.get('version') == 1 and not previous.get('held') and not checkpoint.get('edges')
             and all(v.get('withdrawn') and not (home / 'vault' / v['space'] / (v['title'] + '.md')).exists()
                     for k, v in managed.items() if k.startswith('topic:'))
             and all(not v.get('automatic_relation_block') for k, v in managed.items() if not k.startswith('topic:'))):
         return previous
-    archive = home / 'vault/_archive/alden-preclassification-v1'
-    ledger = core.LEDGER / 'migration/events.jsonl'
     manifest_path = home / 'canonical-migration.json'
     result = {'version': 1, 'archived': 0, 'rewritten': 0, 'held': []}
     idx = graph.Index()
@@ -496,7 +520,7 @@ def _withdraw_preclassification(home: Path, checkpoint: dict, contract, graph, s
             continue
         resolved = _resolve_note(item, idx, contract)
         if not resolved:
-            backup = archive / (str(item.get('written_hash', '')) + '.md')
+            backup = archive / (str(item.get('written_hash', '')) + '.bin')
             if backup.is_file() and not backup.is_symlink() and digest(backup.read_bytes()) == item.get('written_hash') and item.get('osk_id') not in idx.dup_ids:
                 item.update(active=False, withdrawn=True)
             else:
@@ -554,7 +578,7 @@ def _withdraw_preclassification(home: Path, checkpoint: dict, contract, graph, s
                 'edits': [{'id': note.id, 'path': str(path.relative_to(home / 'vault')), 'before': sha}
                           for path, note, sha, *_ in plans]}
     for path, note, sha in [*topics.values(), *[(p, n, h) for p, n, h, *_ in plans]]:
-        backup = archive / (sha + '.md')
+        backup = archive / (sha + '.bin')
         if backup.exists():
             if backup.is_symlink() or digest(backup.read_bytes()) != sha:
                 raise RuntimeError('osk_canonical_backup_integrity')
@@ -598,7 +622,7 @@ def _withdraw_preclassification(home: Path, checkpoint: dict, contract, graph, s
             if digest(path.read_bytes()) != sha or approvals.containing_regions(path):
                 raise RuntimeError('osk_canonical_cas_changed')
             core.ledger_append(ledger, {'kind': 'archive', 'source': str(path.relative_to(home / 'vault')),
-                                       'dest': str((archive / (sha + '.md')).relative_to(home / 'vault')),
+                                       'dest': str((archive / (sha + '.bin')).relative_to(home / 'vault')),
                                        'before': 'sha256:' + sha, 'after': 'sha256:' + sha, 'rule': manifest['rule']})
             path.unlink()
             core.fsync_dir(path.parent)
