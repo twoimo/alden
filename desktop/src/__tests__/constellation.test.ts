@@ -5,7 +5,7 @@ import type { KnowledgeEdge, KnowledgeEvidence, KnowledgeNode } from '../knowled
 import type { Point3 } from '../knowledge/plasticity';
 import { pickKnowledgeSphere } from '../knowledge/picking';
 
-type Stars = THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+type Stars = THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
 const owned: ConstellationNodes[] = [];
 const evidence = (): KnowledgeEvidence => ({
   kind: 'snapshot', sourceEventIds: [], chatId: '', confirmedAt: null, retracted: false,
@@ -56,7 +56,7 @@ describe('constellation overview stars', () => {
     expect(mesh.geometry).toBeInstanceOf(THREE.SphereGeometry);
     expect(mesh.geometry.index!.count/3).toBeLessThanOrEqual(256);
     expect(mesh.geometry.groups).toEqual([]);
-    expect(mesh.material).toBeInstanceOf(THREE.MeshBasicMaterial);
+    expect(mesh.material).toBeInstanceOf(THREE.MeshStandardMaterial);
     expect(mesh.material.map).toBeNull();
     expect(mesh.material.alphaMap).toBeNull();
     expect(mesh.material.envMap).toBeNull();

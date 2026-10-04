@@ -16,7 +16,7 @@ const SELECTED = new THREE.Color('#d8c19d');
  * Dispose by traversing normally: mesh.dispose(), geometry.dispose(), material.dispose().
  */
 export class ConstellationNodes extends THREE.Group {
-  private readonly stars: THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  private readonly stars: THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
   private readonly slotIds: (string | null)[] = new Array(CAPACITY).fill(null);
   private readonly slots = new Map<string, number>();
   private readonly adjacency = new Map<string, Set<string>>();
@@ -31,7 +31,7 @@ export class ConstellationNodes extends THREE.Group {
     super();
     this.stars = new THREE.InstancedMesh(
       new THREE.SphereGeometry(1,12,8),
-      new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: .12, roughness: .56, toneMapped: false }),
       CAPACITY,
     );
     this.stars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);

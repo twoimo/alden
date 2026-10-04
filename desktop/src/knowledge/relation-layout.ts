@@ -23,12 +23,17 @@ export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = vie
   const nodes = [...view.nodes].filter(n => !n.evidence.retracted)
     .sort((a, b) => a.id.localeCompare(b.id)).slice(0, Math.min(120,Math.max(1,nodeCap)));
   const points = nodes.map(n => seedPoint(n.id));
+  // The global volume is deeper; z is a layout coordinate, never a confidence,
+  // category or user-importance tier. Springs still follow only actual links.
+  const depth = nodeCap > ON_SCREEN_NODE_CAP ? 1.8 : 1;
+  for (const point of points) point.z *= depth;
   const index = new Map(nodes.map((n, i) => [n.id, i]));
   const edges = selectSynapses(view.edges, new Set(index.keys()),Date.now(),nodeCap>ON_SCREEN_NODE_CAP?512:144);
   const components = connectedComponents(nodes.map(n => n.id), edges);
   const members = new Map<number, string[]>();
   nodes.forEach((n, i) => { const ids = members.get(components[i]) ?? []; ids.push(n.id); members.set(components[i], ids); });
   const centers = new Map([...members].map(([group, ids]) => [group, seedPoint(ids.join('\0'))]));
+  for (const point of centers.values()) point.z *= depth;
   const regions = nodeCap>ON_SCREEN_NODE_CAP?[]:contextRegions(view, graph);
   const regionalOrigins = new Map<string, Point3>();
   for (const [group, ids] of members) {
@@ -82,7 +87,7 @@ export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = vie
       const p = points[i], at = i * 3;
       const gain = .045 / Math.max(1, Math.hypot(forces[at], forces[at + 1], forces[at + 2]));
       p.x += gain * forces[at]; p.y += gain * forces[at + 1]; p.z += gain * forces[at + 2];
-      const envelope = Math.max(1, Math.hypot(p.x / 2.15, p.y / 1.4, p.z / 1));
+      const envelope = Math.max(1, Math.hypot(p.x / 2.15, p.y / 1.4, p.z / (nodeCap > ON_SCREEN_NODE_CAP ? 1.35 : 1)));
       p.x /= envelope; p.y /= envelope; p.z /= envelope;
     }
   }

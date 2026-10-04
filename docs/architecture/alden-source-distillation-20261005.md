@@ -19,3 +19,9 @@ The prior API returned a note body in the compatibility `facts` array while the 
 Owned workspace audits can target one canonical note with `--focus-node osk:<id>`. They wait for the actual focus lookup to settle and require a returned body. The fixed audit selectors, private output directory and command allowlist remain; arbitrary caller scripts and production writes are not registered. This verifies an owned WKWebView, not physical primary/tray/voice/shortcut/OS-lock behavior.
 
 Full goal work remains active: complete OSK semantic/organization review, canonical retrieval integration, whole-app measurements, physical interaction/voice, Flash-Next admission, Dot invocation, signing/notarization and final production verification.
+
+## Volumetric graph
+
+Version 0.3.23 deepens the global layout and uses a lit standard material on the existing low-poly instanced spheres. The same 120 slots, matrix/color buffers, geometry and single node draw remain. No texture, shadow pass, ambient rotation or additional object is introduced. Local 24-node bounds remain unchanged. Actual references drive springs and growth/retraction; user orbit gestures drive camera movement. Isolated IDs receive stable layout coordinates, without implied category or confidence tiers. Hidden/settled-loop policy remains unchanged.
+
+On a fixed actual 104-node graph, the global z span changed from 1.678564 to 2.663115 world units. This is a geometric depth measurement, not a speed or quality ranking. Single layout timings were taken only to confirm bounded execution and are not a performance comparison. Constellation, relation-layout and camera-fit checks passed 19 tests, including retained slots/buffers, identity invariance, expired links, bounds and picking.
