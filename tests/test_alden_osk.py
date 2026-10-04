@@ -21,6 +21,31 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_focus_uses_canonical_summary_after_managed_hash_is_reconciled(self):
+        result=self.execute(r'''
+a.synchronize(root,source);c,g,_,w=a._load_engine(root);home=a._home(root);cp=a._read_json(home/'sync.json');item=cp['managed']['memory:one'];p=g.Index().by_id[item['osk_id']][0]
+w.update_node(item['osk_id'],summary='현재 정본의 적용 조건',body='현재 정본 본문',expect_hash=a.digest(p.read_bytes()))
+item.update(written_hash=a.digest(p.read_bytes()),canonical_only=True);a._save(home/'sync.json',cp)
+focus=a.read_focus(root,'memory:one');assert focus['details']['summary']=='현재 정본의 적용 조건' and focus['details']['key_facts']==[]
+assert '최신 턴을 보존합니다.' not in json.dumps(focus,ensure_ascii=False)
+print(json.dumps({'canonicalSummary':True,'oldCacheFactsExcluded':True}))
+''')
+        self.assertTrue(result['canonicalSummary'])
+
+    def test_scoped_actor_with_only_feed_records_is_not_described_as_speech(self):
+        result=self.execute(r'''
+account='a'*64;actor='person:kakao:'+account+':actor:7'
+source['nodes'].append({'id':actor,'label':'원문 식별자','category':'대화 상대','description':'포착한 관측','facts':[],'evidence':{'kind':'snapshot'}})
+a.synchronize(root,source)
+from unittest.mock import patch
+rows={'ok':True,'items':[{'source_id':'fixed','chat_id':'42','date':'2026-10-04','sender':'기록','content':'{"feedType":2}','source_role':'system_history'}]}
+with patch('alden_corpus.search',return_value=rows),patch('alden_corpus.room_displays',return_value={}):focus=a.read_focus(root,actor,chat_id='42')
+assert focus['details']['summary']=='선택한 채팅방에서 연결된 기록은 시스템 알림입니다.'
+assert focus['sources'][0]['source_role']=='system_history' and '발화가 확인' not in json.dumps(focus,ensure_ascii=False)
+print(json.dumps({'systemOnly':True}))
+''')
+        self.assertTrue(result['systemOnly'])
+
     def test_canonical_snapshot_parses_exact_bytes_once_and_fences_mid_read_edits(self):
         result=self.execute(r'''
 a.synchronize(root,source);c,g,_,w=a._load_engine(root)

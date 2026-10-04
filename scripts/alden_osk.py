@@ -976,14 +976,13 @@ def read_focus(state_root: Path, node_id: str, *, chat_id: str = '') -> dict:
     source = item.get('source', {}) if item and item.get('active') else {}
     evidence = source.get('evidence', {})
     human_changed = bool(item and (item.get('held') or not _same_note(home, item, resolved)))
-    summary = _clean(source.get('description') if source and not human_changed else note.meta.get('summary', ''), secrets, 1200)
-    summary = summary or _clean(note.meta.get('summary', ''), secrets, 1200)
+    summary = _clean(note.meta.get('summary', ''), secrets, 1200)
     details = {
         'node_id': node_id, 'summary': summary, 'title': title,
         'space': str(path.parent.relative_to(home / 'vault')), 'osk_id': note.id,
         'kind': str(source.get('category') or ('collection' if graph.is_hub(idx.nodes[title][0]) else 'memory')),
         'basis': 'structure' if graph.is_hub(idx.nodes[title][0]) else 'snapshot' if evidence.get('kind') in ('local_db_snapshot', 'snapshot') else 'ledger' if evidence.get('kind') in ('decision_ledger', 'ledger') else 'note',
-        'key_facts': [_clean(value, secrets, 600) for value in source.get('facts', [])[:6] if isinstance(value, str)] if not human_changed else [],
+        'key_facts': [],  # Imported cache facts cannot override the canonical body.
         'source_updated_at': source.get('updated_at', 0),
         'note_updated_at': int(idx.nodes[title][0].stat().st_mtime),
         'scope_room_id': '',
@@ -1011,7 +1010,7 @@ def read_focus(state_root: Path, node_id: str, *, chat_id: str = '') -> dict:
         details['scope_room_id'] = selected_room
         details['key_facts'] = []
         if actor and selected_room and not human_changed:
-            summary = '선택한 채팅방의 원문에서 발화가 확인된 카카오톡 대화 상대입니다.'
+            summary = '선택한 채팅방의 관련 원문을 확인합니다.'
             details['summary'] = summary
         result=search(state_root,'',author_id=actor[2] if actor else '',chat_id=selected_room,expected_account=scope[1])
         if result.get('ok'):
@@ -1039,6 +1038,11 @@ def read_focus(state_root: Path, node_id: str, *, chat_id: str = '') -> dict:
                 sources.append(row)
             if actor and selected_room and not sources and not human_changed:
                 summary = '선택한 채팅방에서 이 인물의 원문을 아직 찾지 못했습니다.'
+                details['summary'] = summary
+            elif actor and selected_room and not human_changed:
+                summary = ('선택한 채팅방에서 연결된 기록은 시스템 알림입니다.'
+                           if all(row.get('source_role') == 'system_history' for row in sources)
+                           else '선택한 채팅방의 관련 원문 기록입니다.')
                 details['summary'] = summary
             facts=[summary]+[str(row['date'])[:10]+' · '+str(row['sender'])+' · '+str(row['content']) for row in sources]
             details['basis'] = 'note' if human_changed else 'snapshot'
