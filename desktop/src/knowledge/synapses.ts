@@ -38,11 +38,10 @@ export class SynapticBridges {
     this.geometry.instanceCount = 0;
     this.mesh = new THREE.Mesh(this.geometry, new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, side: THREE.DoubleSide, forceSinglePass:true,
-      uniforms:{uVisibleTime:{value:0},uAmbientFlow:{value:0}},
       vertexShader: `
         attribute vec3 aStart, aEnd, aColor;
         attribute float aStrength, aGrowth, aOpacity;
-        varying float vAcross, vAlong, vGrowth, vOpacity, vPhase;
+        varying float vAcross, vAlong, vGrowth, vOpacity;
         varying vec3 vColor;
         void main() {
           float t = position.y;
@@ -61,19 +60,17 @@ export class SynapticBridges {
           float radius = (.004+.007*aStrength)*(1.+.60*terminal);
           eye.xy += normal*position.x*radius;
           gl_Position = projectionMatrix*eye;
-          vAcross=position.x; vAlong=t; vGrowth=aGrowth; vOpacity=aOpacity; vColor=aColor; vPhase=dot(aStart,vec3(2.1,3.7,1.9));
+          vAcross=position.x; vAlong=t; vGrowth=aGrowth; vOpacity=aOpacity; vColor=aColor;
         }`,
       fragmentShader: `
-        uniform float uVisibleTime,uAmbientFlow;
-        varying float vAcross, vAlong, vGrowth, vOpacity, vPhase;
+        varying float vAcross, vAlong, vGrowth, vOpacity;
         varying vec3 vColor;
         void main() {
           if(vAlong>vGrowth*.5 && vAlong<1.-vGrowth*.5) discard;
           if(abs(vAlong-.5)<.003) discard;
           float rounded=sqrt(max(0.,1.-vAcross*vAcross));
-          float flow=exp(-100.*pow(fract(vAlong-uVisibleTime*.32+vPhase)-.5,2.))*uAmbientFlow;
-          float alpha=vOpacity*smoothstep(0.,.25,rounded)*(1.+flow*.24);
-          gl_FragColor=vec4(vColor*(.58+.42*rounded)*(1.+flow*.35),alpha);
+          float alpha=vOpacity*smoothstep(0.,.25,rounded);
+          gl_FragColor=vec4(vColor*(.58+.42*rounded),alpha);
           #include <tonemapping_fragment>
           #include <colorspace_fragment>
         }`,
@@ -94,7 +91,7 @@ export class SynapticBridges {
         record = { ...edge, goal: edge.strength, growth: reducedMotion ? 1 : 0, active: true, color: this.neutral.clone(), ax:0,ay:0,az:0,bx:0,by:0,bz:0 };
         this.records.push(record); this.index.set(edge.key, record);
       }
-      record.goal = edge.strength; record.active = true;
+      record.goal = edge.strength; record.purpose = edge.purpose; record.active = true;
       record.color.copy(edge.source === focus || edge.target === focus ? this.selected : this.neutral);
       if (reducedMotion) { record.strength = record.goal; record.growth = 1; }
     }
@@ -130,7 +127,7 @@ export class SynapticBridges {
       this.ends[at]=record.bx; this.ends[at+1]=record.by; this.ends[at+2]=record.bz;
       if (this.growths[i] !== Math.fround(record.growth) || this.strengths[i] !== Math.fround(record.strength)) changed = true;
       this.strengths[i] = record.strength; this.growths[i] = record.growth;
-      this.opacities[i] = (record.active ? .22 + .16 * record.strength : .20) * record.growth;
+      this.opacities[i] = (record.purpose === 'navigation' ? .12 : record.active ? .22 + .16 * record.strength : .20) * record.growth;
       this.colors[at] = record.color.r; this.colors[at + 1] = record.color.g; this.colors[at + 2] = record.color.b;
     }
     if (changed) for (let i=0;i<this.attributes.length;i++) this.attributes[i].needsUpdate = true;
@@ -142,12 +139,6 @@ export class SynapticBridges {
     const active = this.records.filter(record => record.active).length;
     return { active, retiring: this.records.length - active, capacity: CAPACITY, moving: this.moving,
       bufferBytes: this.starts.byteLength + this.ends.byteLength + this.strengths.byteLength + this.growths.byteLength + this.opacities.byteLength + this.colors.byteLength };
-  }
-
-  setVisualMotion(visibleTime:number,enabled:boolean):void {
-    const material=this.mesh.material as THREE.ShaderMaterial;
-    material.uniforms.uVisibleTime.value=Number.isFinite(visibleTime)?visibleTime:0;
-    material.uniforms.uAmbientFlow.value=enabled?1:0;
   }
 
   private remove(at: number): void {

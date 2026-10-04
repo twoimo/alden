@@ -13,8 +13,19 @@ export const invokeCommand: SettingsInvoke = async <T>(command: string, args: Re
   }
   throw new Error('development_fixture_command_unavailable');
 };
-const nodes=[{id:'root',label:'카카오톡',category:'collection',importance:100},{id:'people',label:'인물',category:'collection',importance:98},{id:'rooms',label:'대화방',category:'collection',importance:98},{id:'topics',label:'주제',category:'collection',importance:98},...Array.from({length:14},(_,i)=>({id:'person-'+i,label:['예시 민준','예시 서연','예시 윤서','예시 지우'][i%4]+(i>3?' '+i:''),category:'대화 상대',importance:70-i})),{id:'design',label:'디자인 이야기',category:'대화방',importance:88},{id:'books',label:'책을 읽는 사람들',category:'대화방',importance:83},{id:'writing',label:'글쓰기',category:'대화 주제',importance:81},{id:'ai',label:'AI와 일상',category:'대화 주제',importance:76}];
-const edges=[...['people','rooms','topics'].map(target=>({source:'root',target,relation:'contains',weight:2})),...nodes.filter(n=>n.category!=='collection').map(n=>({source:n.category==='대화 상대'?'people':n.category==='대화방'?'rooms':'topics',target:n.id,relation:'contains',weight:1})),{source:'design',target:'person-0',relation:'participates_in',weight:1}];
+const nodes=[{id:'root',label:'카카오톡',category:'collection',is_hub:true,importance:55},
+  ...['design','books'].map(id=>({id:'context-'+id,label:'맥락 · '+(id==='design'?'디자인 이야기':'책을 읽는 사람들'),category:'collection',is_hub:true,importance:55})),
+  ...Array.from({length:14},(_,i)=>({id:'person-'+i,label:['예시 민준','예시 서연','예시 윤서','예시 지우'][i%4]+(i>3?' '+i:''),category:'대화 상대',importance:70-i})),
+  {id:'design',label:'디자인 이야기',category:'대화방',importance:88},{id:'books',label:'책을 읽는 사람들',category:'대화방',importance:83},
+  {id:'writing',label:'글쓰기',category:'대화 주제',importance:81},{id:'ai',label:'AI와 일상',category:'대화 주제',importance:76}];
+const edges=[...['design','books'].flatMap(id=>[
+  {source:'root',target:'context-'+id,relation:'linked',weight:1,purpose:'navigation'},
+  {source:'context-'+id,target:id,relation:'linked',weight:1,purpose:'navigation'},
+  {source:id,target:'writing',relation:'discusses',weight:id==='books'?8:3,purpose:'semantic'},
+  {source:id,target:'ai',relation:'discusses',weight:id==='design'?8:2,purpose:'semantic'}]),
+  ...Array.from({length:14},(_,i)=>({source:'person-'+i,target:i<7?'design':'books',relation:'TALKED_IN',weight:3+i%5,purpose:'semantic'})),
+  ...Array.from({length:8},(_,i)=>({source:'person-'+i,target:i<4?'ai':'writing',relation:'TALKS_ABOUT',weight:2+i%4,purpose:'semantic'})),
+  ...['writing','ai'].map(target=>({source:'root',target,relation:'linked',weight:1,purpose:'navigation'}))];
 export const action:typeof fetchSettingsAction=async(kind,input={})=>{
   const q=input.query?.startsWith('{')?JSON.parse(input.query):{};
   if(kind==='knowledge-graph')return {ok:true,nodes,edges,stale:false,node_count:nodes.length,osk:{state:'ready',engine:'example',synced_at:at,pending:0,conflicts:0}};

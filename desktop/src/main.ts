@@ -1,4 +1,5 @@
 import { KnowledgeRefresh } from "./knowledge/refresh";
+import { knowledgeSignature, knowledgeChangeSummary } from './knowledge/changes';
 import { OrbSurfaces } from './orbs/surfaces';
 import { renderNodeDetails } from './knowledge/node-details';
 import type { VoiceStatus } from './contracts';
@@ -483,8 +484,9 @@ export async function setupKnowledgeGraph(
       return;
     }
     setText("knowledge-focus-title", node.label);
-    renderNodeDetails(graph, node);
-    renderKnowledgeRelations(graph, node, view, snapshot);
+    const currentGraph = hologram.currentGraph;
+    renderNodeDetails(currentGraph, node);
+    renderKnowledgeRelations(currentGraph, node, view, snapshot);
     setText("knowledge-retrieve", "관련 대화를 찾고 있습니다…");
 
     const localRoom = node.evidence.chatId
@@ -498,18 +500,18 @@ export async function setupKnowledgeGraph(
       // node ID repeats. Earlier retrievals cannot overwrite the current one.
       if (selectionEpoch !== epoch) return;
       if (!focus || focus.ok !== true) {
-        renderNodeDetails(graph, node, focus ?? { ok: false });
+        renderNodeDetails(currentGraph, node, focus ?? { ok: false });
         setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
         return;
       }
-      renderNodeDetails(graph, node, focus);
+      renderNodeDetails(currentGraph, node, focus);
       const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
       const firstFact = facts[0]?.slice(0, 180);
       setText("knowledge-retrieve", focus.details ? '이 기기에 수집된 기록과 저장된 노트를 기준으로 합니다.' : facts.length
         ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
         : "관련 대화를 찾지 못했습니다.");
     }).catch(() => {
-      if (selectionEpoch === epoch) { renderNodeDetails(graph, node, { ok: false }); setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다."); }
+      if (selectionEpoch === epoch) { renderNodeDetails(currentGraph, node, { ok: false }); setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다."); }
     });
   }, () => {
     disposed = true;
@@ -654,16 +656,20 @@ export async function bootSettings(
       graph.setSignals(snapshot.jobLoad, freshInputRms(snapshot));
       const focusSlots = new Map(parseKnowledgeGraph(graphPayload).nodes.map((node, index) => [node.id, index]));
       Object.defineProperty(window, "__knowledgeRenderCount", { configurable: true, get: () => graph.renderCount });
-      let graphVersion = JSON.stringify(parseKnowledgeGraph(graphPayload));
+      let lastGraph = parseKnowledgeGraph(graphPayload);
+      let graphVersion = knowledgeSignature(lastGraph);
       const refresh = new KnowledgeRefresh(() => dependencies.loadAction("knowledge-graph"), payload => {
         renderKnowledgeSync(payload);
         if (payload.ok !== true) return;
         const next = parseKnowledgeGraph(payload);
-        const version = JSON.stringify(next);
+        const version = knowledgeSignature(next);
         if (version === graphVersion) return;
         graphVersion = version;
+        const change = knowledgeChangeSummary(lastGraph, next);
+        lastGraph = next;
         graph.replaceGraph(next);
         setText("knowledge-summary", `${next.nodes.length}개`);
+        if (change) setText('knowledge-sync', change);
       }, 15000, fetchKnowledgeRevision);
       const lifecycle = new RenderLifecycle(graph,
         () => refresh.stop(),
@@ -730,8 +736,8 @@ export async function bootPanel(
       if(!payload||payload.ok!==true)throw new Error('graph_unavailable');
       const {KnowledgeHologram}=await import('./knowledge/hologram');
       const graph=new KnowledgeHologram(canvas,parsed,({node})=>setText('panel-knowledge-title',node?.label??'카카오톡'),()=>undefined,'popover',undefined,voice=>panelOrbs?.setVoice(voice));
-      let graphVersion=JSON.stringify(parsed);
-      const refresh=new KnowledgeRefresh(()=>dependencies.loadKnowledge('knowledge-graph'),next=>{if(next?.ok===true){const updated=parseKnowledgeGraph(next),version=JSON.stringify(updated);if(version!==graphVersion){graphVersion=version;graph.replaceGraph(updated);}}},15000,fetchKnowledgeRevision);
+      let graphVersion=knowledgeSignature(parsed);
+      const refresh=new KnowledgeRefresh(()=>dependencies.loadKnowledge('knowledge-graph'),next=>{if(next?.ok===true){const updated=parseKnowledgeGraph(next),version=knowledgeSignature(updated);if(version!==graphVersion){graphVersion=version;graph.replaceGraph(updated);}}},15000,fetchKnowledgeRevision);
       panelGraph = graph;
       return {get renderCount(){return graph.renderCount;},start:()=>{graph.start();refresh.start();panelOrbs?.start();},stop:()=>{refresh.stop();graph.stop();panelOrbs?.stop();},diagnostics:()=>graph.diagnostics(),setSignals:(load,rms)=>graph.setSignals(load,rms),dispose:()=>{refresh.stop();graph.dispose();panelOrbs?.dispose();}};
     },

@@ -21,6 +21,8 @@ export interface KnowledgeNode {
   evidence: KnowledgeEvidence;
   description?: string;
   facts?: string[];
+  space?: string;
+  isHub?: boolean;
 }
 
 export interface KnowledgeEdge {
@@ -34,6 +36,7 @@ export interface KnowledgeEdge {
   validTo: string;
   evidenceMessageId: string;
   evidence: KnowledgeEvidence;
+  purpose?: 'semantic' | 'navigation' | 'reference';
 }
 
 export interface KnowledgeGraph {
@@ -103,6 +106,8 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         evidence,
         description: stringValue(item.description).slice(0, 2400),
         facts: Array.isArray(item.facts) ? item.facts.filter((entry): entry is string => typeof entry === 'string').slice(0, 6).map(entry => entry.slice(0, 600)) : [],
+        space: stringValue(item.space),
+        isHub: item.is_hub === true,
       }];
     })
     : [];
@@ -114,9 +119,10 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
       const source = stringValue(item.source);
       const target = stringValue(item.target);
       if (!nodeIds.has(source) || !nodeIds.has(target)) return [];
-      const evidence = parseEvidence(item.evidence), validTo = stringValue(item.valid_to);
+      const evidence = parseEvidence(item.evidence), validTo = stringValue(item.valid_to), validFrom = stringValue(item.valid_from);
       const until = Date.parse(validTo);
-      if (evidence.retracted || (Number.isFinite(until) && until <= nowMs)) return [];
+      const from = Date.parse(validFrom);
+      if (evidence.retracted || (Number.isFinite(until) && until <= nowMs) || Number.isFinite(from) && from > nowMs) return [];
       return [{
         source,
         relation: stringValue(item.relation),
@@ -124,10 +130,11 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         context: stringValue(item.context),
         weight: Math.max(0, numberValue(item.weight)),
         roomId: stringValue(item.room_id),
-        validFrom: stringValue(item.valid_from),
+        validFrom,
         validTo,
         evidenceMessageId: stringValue(item.evidence_message_id),
         evidence,
+        purpose: item.purpose === 'navigation' || item.purpose === 'reference' ? item.purpose : 'semantic',
       }];
     })
     : [];
@@ -145,7 +152,8 @@ function subgraph(graph: KnowledgeGraph, ids: string[], focusId: string | null, 
 }
 
 export function overviewGraph(graph: KnowledgeGraph): KnowledgeView {
-  const ids = [...graph.nodes]
+  const memories = graph.nodes.filter(node => !node.isHub);
+  const ids = [...(memories.length ? memories : graph.nodes)]
     .sort((left, right) => right.importance - left.importance || left.id.localeCompare(right.id))
     .slice(0, ON_SCREEN_NODE_CAP)
     .map((node) => node.id);

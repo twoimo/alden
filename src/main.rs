@@ -845,6 +845,13 @@ enum Commands {
         limit: usize,
         #[arg(long, help = "List KakaoTalk group chat titles only")]
         groups: bool,
+        #[arg(
+            long,
+            requires = "json",
+            conflicts_with = "groups",
+            help = "Include this DB reader's account fingerprint, observation time and name provenance"
+        )]
+        with_source: bool,
     },
     /// Read messages from local KakaoTalk database (no server contact, safe)
     LocalRead {
@@ -6805,8 +6812,12 @@ fn run() -> Result<()> {
             eprintln!("[deprecated] 'loco-probe' is now hidden. Prefer 'probe'.");
             commands::probe::cmd_loco_probe(&method, body.as_deref(), json, false)?
         }
-        Commands::LocalChats { limit, groups } => {
-            let reader = local_db::LocalDbReader::open()?;
+        Commands::LocalChats {
+            limit,
+            groups,
+            with_source,
+        } => {
+            let reader = local_db::LocalDbReader::open_no_mutation()?;
             if groups {
                 let chats = reader.list_group_chats(limit)?;
                 if json {
@@ -6827,10 +6838,14 @@ fn run() -> Result<()> {
                 }
                 return Ok(());
             }
-            let chats = reader.list_chats(limit)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&chats)?);
+                let capture = reader.list_chats_with_source(limit)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&capture.into_json(with_source)?)?
+                );
             } else {
+                let chats = reader.list_chats(limit)?;
                 if chats.is_empty() {
                     println!("No chats found in local database.");
                 } else {
@@ -9630,12 +9645,47 @@ mod tests {
         let cli = Cli::try_parse_from(["openkakao-cli", "local-chats", "-n", "10"])
             .expect("local-chats should parse");
         match cli.command {
-            Commands::LocalChats { limit, groups } => {
+            Commands::LocalChats {
+                limit,
+                groups,
+                with_source,
+            } => {
                 assert_eq!(limit, 10);
                 assert!(!groups);
+                assert!(!with_source);
             }
             other => panic!("expected local-chats, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn local_chats_source_observation_is_explicit_and_requires_json() {
+        let cli = Cli::try_parse_from([
+            "openkakao-cli",
+            "local-chats",
+            "-n",
+            "2000",
+            "--json",
+            "--with-source",
+        ])
+        .expect("source observation option should parse");
+        assert!(matches!(
+            cli.command,
+            Commands::LocalChats {
+                limit: 2000,
+                groups: false,
+                with_source: true
+            }
+        ));
+        assert!(Cli::try_parse_from(["openkakao-cli", "local-chats", "--with-source"]).is_err());
+        assert!(Cli::try_parse_from([
+            "openkakao-cli",
+            "local-chats",
+            "--json",
+            "--groups",
+            "--with-source"
+        ])
+        .is_err());
     }
 
     #[test]

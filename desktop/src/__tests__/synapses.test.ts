@@ -1,4 +1,3 @@
-import * as THREE from 'three';
 import {describe,expect,it} from 'vitest';
 import {parseKnowledgeGraph} from '../knowledge/graph-model';
 import {SynapticBridges} from '../knowledge/synapses';
@@ -18,14 +17,21 @@ describe('source synaptic bridges',()=>{
     expect(bridges.mesh.geometry).toBe(geometry);expect(bridges.mesh.visible).toBe(false);
     expect(bridges.diagnostics().retiring).toBe(0);bridges.dispose();
   });
-  it('snaps reduced motion and disables ambient flow without changing source weights',()=>{
+  it('settles real links and has no perpetual flow without a new source change',()=>{
     const bridges=new SynapticBridges();
     const edge={key:'a-b',source:'a',target:'b',strength:.8};
     bridges.set([edge],'a',true);bridges.update(0,new Map(),true);
     expect(bridges.mesh.geometry.getAttribute('aGrowth').getX(0)).toBe(1);
-    bridges.setVisualMotion(1,true);bridges.setVisualMotion(1,false);
-    expect((bridges.mesh.material as THREE.ShaderMaterial).uniforms.uAmbientFlow.value).toBe(0);
+    expect(bridges.update(3600,new Map(),true)).toBe(false);
     expect(edge.strength).toBe(.8);expect(bridges.moving).toBe(false);bridges.dispose();
+  });
+  it('keeps source-navigation quieter than semantic bridges',()=>{
+    const bridges=new SynapticBridges();
+    bridges.set([{key:'a-b',source:'a',target:'b',strength:.8,purpose:'semantic'},
+      {key:'b-c',source:'b',target:'c',strength:.08,purpose:'navigation'}],null,true);
+    bridges.update(0,new Map(),true);
+    expect(bridges.mesh.geometry.getAttribute('aOpacity').getX(1)).toBeLessThan(bridges.mesh.geometry.getAttribute('aOpacity').getX(0));
+    bridges.dispose();
   });
   it('projects only current evidence and keeps the original payload intact',()=>{
     const payload={nodes:[{id:'a',label:'A'},{id:'b',label:'B'},{id:'retired',label:'Retired',evidence:{retracted:true}}],

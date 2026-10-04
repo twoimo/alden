@@ -452,6 +452,505 @@ impl SafeBrowserToolResult {
     }
 }
 
+// OSK v4.1.2 (vendor commit 9bbf08f): epoch.py fingerprints engine code;
+// core.mutation_lock opens/truncates its lock BEFORE a write, even a failed one.
+// Neither is a persisted-note commit counter. core.atomic_write replaces notes,
+// and human edits need not use that function, so fingerprint metadata instead.
+mod knowledge_revision_probe {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::ffi::{CStr, CString};
+    use std::hash::{Hash, Hasher};
+    use std::path::Component;
+
+    const MAX_ENTRIES: usize = 8192;
+    const MAX_DEPTH: usize = 32;
+    const MAX_TIME: Duration = Duration::from_millis(100);
+
+    struct Budget {
+        remaining: usize,
+        deadline: Instant,
+    }
+
+    impl Budget {
+        fn check(&self) -> Option<()> {
+            (Instant::now() < self.deadline).then_some(())
+        }
+
+        fn entry(&mut self) -> Option<()> {
+            self.check()?;
+            self.remaining = self.remaining.checked_sub(1)?;
+            Some(())
+        }
+    }
+
+    // Descriptor-relative traversal keeps every ancestor pinned. A concurrent
+    // directory/symlink replacement cannot redirect the probe outside its vault.
+    // No regular file is opened, so FIFOs/devices cannot block a content read.
+    struct Directory(*mut libc::DIR);
+
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            unsafe { libc::closedir(self.0) };
+        }
+    }
+
+    impl Directory {
+        fn open_at(parent: i32, name: &CStr) -> Option<Self> {
+            let fd = unsafe {
+                libc::openat(
+                    parent,
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return None;
+            }
+            let stream = unsafe { libc::fdopendir(fd) };
+            if stream.is_null() {
+                unsafe { libc::close(fd) };
+                return None;
+            }
+            Some(Self(stream))
+        }
+
+        fn fd(&self) -> i32 {
+            unsafe { libc::dirfd(self.0) }
+        }
+
+        fn child(&self, name: &CStr) -> Option<Self> {
+            Self::open_at(self.fd(), name)
+        }
+
+        fn stat(&self, name: &CStr) -> std::io::Result<libc::stat> {
+            let mut meta = std::mem::MaybeUninit::uninit();
+            if unsafe {
+                libc::fstatat(
+                    self.fd(),
+                    name.as_ptr(),
+                    meta.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(unsafe { meta.assume_init() })
+        }
+
+        fn names(&self, budget: &mut Budget) -> Option<Vec<CString>> {
+            let mut names = Vec::new();
+            loop {
+                budget.check()?;
+                // readdir uses NULL for both EOF and error. Never accept a
+                // truncated directory as a complete, unchanged fingerprint.
+                #[cfg(target_os = "macos")]
+                let errno = unsafe { libc::__error() };
+                #[cfg(not(target_os = "macos"))]
+                let errno = unsafe { libc::__errno_location() };
+                unsafe { *errno = 0 };
+                let entry = unsafe { libc::readdir(self.0) };
+                if entry.is_null() {
+                    return (unsafe { *errno } == 0).then_some(names);
+                }
+                let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+                if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                    continue;
+                }
+                budget.entry()?;
+                names.push(name.to_owned());
+            }
+        }
+    }
+
+    fn hash_metadata(meta: &libc::stat, hash: &mut DefaultHasher) {
+        // Inode detects atomic replacement even with restored size/mtime;
+        // ctime also detects ordinary in-place edits whose mtime is restored.
+        (
+            meta.st_dev,
+            meta.st_ino,
+            meta.st_mode,
+            meta.st_size,
+            meta.st_mtime,
+            meta.st_mtime_nsec,
+            meta.st_ctime,
+            meta.st_ctime_nsec,
+        )
+            .hash(hash);
+    }
+
+    fn scan(
+        dir: &Directory,
+        relative: &Path,
+        depth: usize,
+        workbench: bool,
+        transit: bool,
+        budget: &mut Budget,
+        hash: &mut DefaultHasher,
+    ) -> Option<()> {
+        budget.check()?;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let mut names = dir.names(budget)?;
+        names.sort_unstable();
+        for name in names {
+            budget.check()?;
+            let bytes = name.to_bytes();
+            let markdown =
+                bytes.len() >= 3 && bytes[bytes.len() - 3..].eq_ignore_ascii_case(b".md");
+            // SDK graph._off_node: dot-prefixed files and dot/underscore
+            // directories are not notes. In particular never descend into Raw.
+            if bytes.starts_with(b".") || (bytes.starts_with(b"_") && !markdown) {
+                continue;
+            }
+            let meta = dir.stat(&name).ok()?;
+            let kind = meta.st_mode & libc::S_IFMT;
+            let path = relative.join(OsStr::from_bytes(bytes));
+            if kind == libc::S_IFDIR {
+                if bytes.starts_with(b"_") {
+                    continue;
+                }
+                let child = dir.child(&name)?;
+                scan(
+                    &child,
+                    &path,
+                    depth + 1,
+                    workbench
+                        || (depth == 0
+                            && relative == Path::new("00_Scope")
+                            && bytes == b"Workbench"),
+                    transit || bytes == b"transit",
+                    budget,
+                    hash,
+                )?;
+            } else if kind == libc::S_IFLNK || (markdown && kind != libc::S_IFREG) {
+                return None;
+            } else if markdown && depth > 0 && (!workbench || transit) {
+                path.hash(hash);
+                hash_metadata(&meta, hash);
+            }
+        }
+        Some(())
+    }
+
+    pub(super) fn probe(state_root: &Path) -> Option<String> {
+        probe_with_budget(state_root, MAX_ENTRIES, MAX_TIME)
+    }
+
+    fn probe_with_budget(state_root: &Path, entries: usize, timeout: Duration) -> Option<String> {
+        let mut budget = Budget {
+            remaining: entries,
+            deadline: Instant::now() + timeout,
+        };
+        if !state_root.is_absolute() {
+            return None;
+        }
+        let mut home = Directory::open_at(libc::AT_FDCWD, c"/")?;
+        for part in state_root.join("knowledge/osk").components() {
+            budget.check()?;
+            match part {
+                Component::RootDir => (),
+                Component::Normal(name) => {
+                    home = home.child(&CString::new(name.as_bytes()).ok()?)?
+                }
+                _ => return None,
+            }
+        }
+        let checkpoint = home.stat(c"sync.json").ok()?;
+        if checkpoint.st_mode & libc::S_IFMT != libc::S_IFREG
+            || checkpoint.st_size <= 0
+            || checkpoint.st_mode & 0o444 == 0
+        {
+            return None;
+        }
+        let mut hash = DefaultHasher::new();
+        hash_metadata(&checkpoint, &mut hash);
+        match home.stat(c"vault") {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "no-vault".hash(&mut hash),
+            Err(_) => return None,
+            Ok(_) => {
+                let vault = home.child(c"vault")?;
+                // Alden _load_engine creates these three 00_ roots. SDK
+                // layout.py also accepts legacy aliases: defer to the normal
+                // graph read on such layouts rather than guess which is active.
+                for alias in [
+                    c"= Scope",
+                    c"Scope",
+                    c"= Domain",
+                    c"Domain",
+                    c"= Person",
+                    c"Person",
+                ] {
+                    match vault.stat(alias) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                        _ => return None,
+                    }
+                }
+                for space in [c"00_Scope", c"00_Domain", c"00_Person"] {
+                    budget.check()?;
+                    match vault.stat(space) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(_) => return None,
+                        Ok(_) => scan(
+                            &vault.child(space)?,
+                            Path::new(OsStr::from_bytes(space.to_bytes())),
+                            0,
+                            false,
+                            false,
+                            &mut budget,
+                            &mut hash,
+                        )?,
+                    }
+                }
+            }
+        }
+        budget.check()?;
+        // A hint, not a content digest or transaction fence. None on incomplete
+        // scans preserves KnowledgeRefresh's existing 15-second read fallback.
+        // Coarse/unchanged stat timestamps and multi-file writes still need it.
+        Some(format!("osk-stat-v1:{:016x}", hash.finish()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        struct Fixture(PathBuf);
+
+        impl Fixture {
+            fn new() -> Self {
+                static NEXT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+                    "alden-osk-revision-{}-{}-{}",
+                    std::process::id(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos(),
+                    NEXT.fetch_add(1, Ordering::Relaxed),
+                ));
+                fs::create_dir_all(root.join("knowledge/osk/vault")).unwrap();
+                fs::write(root.join("knowledge/osk/sync.json"), b"{}").unwrap();
+                Self(root)
+            }
+
+            fn path(&self, relative: &str) -> PathBuf {
+                self.0.join("knowledge/osk/vault").join(relative)
+            }
+
+            fn write(&self, relative: &str, text: &[u8]) -> PathBuf {
+                let path = self.path(relative);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, text).unwrap();
+                path
+            }
+
+            fn revision(&self) -> String {
+                probe(&self.0).expect("complete temp vault metadata")
+            }
+        }
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+
+        #[test]
+        fn knowledge_revision_detects_note_lifecycle_without_checkpoint_changes() {
+            let f = Fixture::new();
+            let checkpoint = fs::metadata(f.0.join("knowledge/osk/sync.json")).unwrap();
+            let empty = f.revision();
+            let note = f.write("00_Scope/Alden/nested/Note.MD", b"first");
+            let created = f.revision();
+            assert_ne!(created, empty);
+            assert_eq!(created, f.revision());
+
+            // The SDK's atomic_write is temp + replace. Restore mtime and keep
+            // length identical so the test specifically exercises inode/ctime.
+            let before = fs::metadata(&note).unwrap();
+            let stage = f.write("00_Scope/Alden/nested/.stage", b"other");
+            File::open(&stage)
+                .unwrap()
+                .set_modified(before.modified().unwrap())
+                .unwrap();
+            fs::rename(stage, &note).unwrap();
+            assert_ne!(before.ino(), fs::metadata(&note).unwrap().ino());
+            let replaced = f.revision();
+            assert_ne!(replaced, created);
+
+            // Manual in-place correction with size AND mtime preserved.
+            thread::sleep(Duration::from_millis(20));
+            fs::write(&note, b"third").unwrap();
+            File::open(&note)
+                .unwrap()
+                .set_modified(before.modified().unwrap())
+                .unwrap();
+            let edited = f.revision();
+            assert_ne!(edited, replaced);
+            let destination = f.path("00_Person/Test/renamed.md");
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::rename(&note, &destination).unwrap();
+            let moved = f.revision();
+            assert_ne!(moved, edited);
+            fs::remove_file(destination).unwrap();
+            assert_ne!(f.revision(), moved);
+            let after = fs::metadata(f.0.join("knowledge/osk/sync.json")).unwrap();
+            assert_eq!(
+                (
+                    checkpoint.ino(),
+                    checkpoint.mtime(),
+                    checkpoint.mtime_nsec()
+                ),
+                (after.ino(), after.mtime(), after.mtime_nsec())
+            );
+        }
+
+        #[test]
+        fn knowledge_revision_tracks_hubs_domains_and_workbench_transit() {
+            let f = Fixture::new();
+            let mut previous = f.revision();
+            for path in [
+                "00_Scope/Alden/Alden.md",
+                "00_Domain/Concept/Concept.md",
+                "00_Person/Person/Person.md",
+                "00_Scope/Workbench/transit/Note.md",
+                "00_Scope/Alden/_ordinary-note.md",
+            ] {
+                f.write(path, b"note");
+                let next = f.revision();
+                assert_ne!(next, previous, "{path}");
+                previous = next;
+            }
+        }
+
+        #[test]
+        fn knowledge_revision_ignores_raw_bodies_and_unrelated_scopes() {
+            let f = Fixture::new();
+            let other = Fixture::new();
+            let note = f.write("00_Scope/Alden/Note.md", b"note");
+            fs::set_permissions(&note, fs::Permissions::from_mode(0o000)).unwrap();
+            // Even a huge unreadable note is metadata-only; no SDK or body I/O.
+            let huge = f.write("00_Domain/Test/Huge.md", b"");
+            File::options()
+                .write(true)
+                .open(&huge)
+                .unwrap()
+                .set_len(2 * 1024 * 1024 * 1024)
+                .unwrap();
+            let initial = f.revision();
+            for path in [
+                "00_Scope/Alden/_raw/day.jsonl",
+                "00_Scope/Alden/_raw/fake.md",
+                "00_Scope/Alden/.hidden/note.md",
+                "00_Scope/Alden/_archive/note.md",
+                "00_Scope/Workbench/Workbench.md",
+                "00_Scope/Alden/.hidden.md",
+                "00_Scope/loose.md",
+                "_governance/Constitution.md",
+                "_sources/Raw.md",
+                "unrelated/Note.md",
+            ] {
+                let path = f.write(path, b"ignored");
+                fs::write(path, b"ignored again").unwrap();
+            }
+            let raw = f.path("00_Scope/Alden/_raw");
+            fs::set_permissions(&raw, fs::Permissions::from_mode(0o000)).unwrap();
+            other.write("00_Scope/Alden/Note.md", b"other state root");
+            assert_eq!(initial, f.revision());
+            fs::set_permissions(raw, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        #[test]
+        fn knowledge_revision_rejects_symlinks_at_every_boundary() {
+            for relative in [
+                "knowledge",
+                "knowledge/osk",
+                "knowledge/osk/vault",
+                "knowledge/osk/vault/00_Scope",
+                "knowledge/osk/vault/00_Scope/Alden",
+            ] {
+                let f = Fixture::new();
+                f.write("00_Scope/Alden/Note.md", b"inside");
+                let original = f.0.join(relative);
+                let moved = f.0.join("displaced");
+                fs::rename(&original, &moved).unwrap();
+                symlink(&moved, &original).unwrap();
+                assert_eq!(probe(&f.0), None, "{relative}");
+            }
+            let f = Fixture::new();
+            let note = f.write("00_Scope/Alden/Note.md", b"inside");
+            fs::remove_file(&note).unwrap();
+            symlink(f.path("missing.md"), &note).unwrap();
+            assert_eq!(probe(&f.0), None);
+            let alias = f.0.with_extension("link");
+            symlink(&f.0, &alias).unwrap();
+            assert_eq!(probe(&alias), None);
+            fs::remove_file(alias).unwrap();
+        }
+
+        #[test]
+        fn knowledge_revision_rejects_special_files_without_opening_them() {
+            let f = Fixture::new();
+            let note = f.write("00_Scope/Alden/Note.md", b"inside");
+            fs::remove_file(&note).unwrap();
+            let name = CString::new(note.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            assert_eq!(probe(&f.0), None);
+            fs::remove_file(note).unwrap();
+            let checkpoint = f.0.join("knowledge/osk/sync.json");
+            fs::remove_file(&checkpoint).unwrap();
+            let name = CString::new(checkpoint.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            assert_eq!(probe(&f.0), None);
+            fs::remove_file(&checkpoint).unwrap();
+            fs::create_dir(checkpoint).unwrap();
+            assert_eq!(probe(&f.0), None);
+        }
+
+        #[test]
+        fn knowledge_revision_directory_replacement_stays_pinned() {
+            let f = Fixture::new();
+            let other = Fixture::new();
+            f.write("00_Scope/Alden/Note.md", b"inside");
+            other.write("00_Scope/Alden/Foreign.md", b"outside");
+            let name = CString::new(f.path("00_Scope/Alden").as_os_str().as_bytes()).unwrap();
+            let pinned = Directory::open_at(libc::AT_FDCWD, &name).unwrap();
+            fs::rename(f.path("00_Scope/Alden"), f.path("00_Scope/old")).unwrap();
+            symlink(other.path("00_Scope/Alden"), f.path("00_Scope/Alden")).unwrap();
+            let mut budget = Budget {
+                remaining: 10,
+                deadline: Instant::now() + Duration::from_secs(1),
+            };
+            assert_eq!(
+                pinned.names(&mut budget).unwrap(),
+                vec![CString::new("Note.md").unwrap()]
+            );
+            assert_eq!(probe(&f.0), None);
+        }
+
+        #[test]
+        fn knowledge_revision_falls_back_on_limits_and_unsupported_layouts() {
+            let f = Fixture::new();
+            f.write("00_Scope/Alden/A.md", b"a");
+            f.write("00_Scope/Alden/B.md", b"b");
+            assert!(probe_with_budget(&f.0, 3, Duration::from_secs(1)).is_some());
+            assert_eq!(probe_with_budget(&f.0, 2, Duration::from_secs(1)), None);
+            assert_eq!(probe_with_budget(&f.0, 3, Duration::ZERO), None);
+            fs::create_dir(f.path("Scope")).unwrap();
+            assert_eq!(probe(&f.0), None);
+            fs::remove_dir(f.path("Scope")).unwrap();
+            let deep = format!("00_Scope/{}Note.md", "nested/".repeat(MAX_DEPTH + 1));
+            f.write(&deep, b"deep");
+            assert_eq!(probe(&f.0), None);
+        }
+    }
+}
+
 impl PythonBridge {
     pub fn new() -> Self {
         Self {
@@ -461,29 +960,9 @@ impl PythonBridge {
         }
     }
 
-    /// Fixed app-owned checkpoint metadata, with no graph read or subprocess.
+    /// Read-only, bounded metadata probe of the checkpoint and persisted notes.
     pub fn knowledge_revision(&self) -> Option<String> {
-        let path = self.config.state_root.join("knowledge/osk/sync.json");
-        validate_path(&path, Kind::Data).ok()?;
-        let file = OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-            .ok()?;
-        let meta = file.metadata().ok()?;
-        if !meta.is_file() {
-            return None;
-        }
-        Some(format!(
-            "{}:{}:{}:{}:{}:{}:{}",
-            meta.dev(),
-            meta.ino(),
-            meta.mtime(),
-            meta.mtime_nsec(),
-            meta.ctime(),
-            meta.ctime_nsec(),
-            meta.len()
-        ))
+        knowledge_revision_probe::probe(&self.config.state_root)
     }
 
     /// App-owned, local, bounded background tick. It shares the emergency latch
@@ -562,7 +1041,7 @@ impl PythonBridge {
     }
 
     /// Native settings audit only: bypass the general dispatcher and read the
-    /// persisted graph with mode=ro/query_only, no seeds, indexing or inference.
+    /// existing OSK graph without bootstrap, source indexing or inference.
     #[cfg(target_os = "macos")]
     pub fn fetch_persisted_graph(&self) -> Result<Value, BridgeError> {
         let resources = self.config.resources()?;
@@ -574,18 +1053,19 @@ impl PythonBridge {
             resources.installed,
             false,
         )?;
-        let script = resources.root.join("scripts/auto_reply_knowledge_graph.py");
+        let script = resources.root.join("scripts/alden_osk.py");
         let args = vec![
             "-E".into(),
             "-B".into(),
             "-s".into(),
             script.to_str().ok_or(BridgeError::ResourceUnsafe)?.into(),
-            "--read-persisted-view".into(),
+            "--state-root".into(),
             self.config
                 .state_root
                 .to_str()
                 .ok_or(BridgeError::StateIo)?
                 .into(),
+            "--read-only".into(),
         ];
         let bytes = run_process_with_recovery_env(
             &runtime.executable,
@@ -3283,6 +3763,21 @@ fn sanitize_knowledge_evidence(value: Option<&Value>) -> Value {
     })
 }
 
+fn knowledge_space(value: Option<&Value>) -> String {
+    let space = bounded_json_string(value, 320);
+    let parts = space.split('/').collect::<Vec<_>>();
+    if parts.len() < 2
+        || !matches!(parts[0], "00_Scope" | "00_Domain" | "00_Person")
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == ".." || part.contains('\\'))
+    {
+        String::new()
+    } else {
+        space
+    }
+}
+
 fn sanitize_knowledge_graph(value: &Value) -> Value {
     let mut node_ids = HashSet::new();
     let nodes = value
@@ -3301,6 +3796,9 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
                         "id": id,
                         "label": bounded_json_string(node.get("label"), 160),
                         "category": bounded_json_string(node.get("category"), 96),
+                        "space": knowledge_space(node.get("space")),
+                        "osk_id": bounded_json_string(node.get("osk_id"), 96),
+                        "is_hub": node.get("is_hub").and_then(Value::as_bool).unwrap_or(false),
                         "importance": node.get("importance").and_then(Value::as_i64).unwrap_or(0).clamp(0, 100),
                         "updated_at": as_u64(node.get("updated_at")),
                         "evidence": sanitize_knowledge_evidence(node.get("evidence")),
@@ -3327,6 +3825,11 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
                     Some(json!({
                         "source": source,
                         "relation": bounded_json_string(edge.get("relation"), 128),
+                        "purpose": match edge.get("purpose").and_then(Value::as_str) {
+                            Some("navigation") => "navigation",
+                            Some("reference") => "reference",
+                            _ => "semantic",
+                        },
                         "target": target,
                         "context": bounded_json_string(edge.get("context"), 320),
                         "weight": edge.get("weight").and_then(Value::as_i64).unwrap_or(0).clamp(0, 1000),
@@ -3347,6 +3850,8 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
         "edges": edges,
         "node_count": node_ids.len(),
         "edge_count": edges.len(),
+        "next_transition_at": value.get("next_transition_at").and_then(Value::as_f64)
+            .filter(|at| at.is_finite() && *at > 0.0 && *at < 253_402_300_800.0).unwrap_or(0.0),
         "grounded_nodes": as_u64(value.get("grounded_nodes")),
         "indexed_at": as_u64(value.get("indexed_at")),
         "indexed_count": as_u64(value.get("indexed_count")),
@@ -3357,6 +3862,8 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
             "synced_at": as_u64(value.get("osk").and_then(|v| v.get("synced_at"))),
             "pending": as_u64(value.get("osk").and_then(|v| v.get("pending"))),
             "conflicts": as_u64(value.get("osk").and_then(|v| v.get("conflicts"))),
+            "layout_pending": as_u64(value.get("osk").and_then(|v| v.get("layout_pending"))),
+            "organization_version": as_u64(value.get("osk").and_then(|v| v.get("organization_version"))),
         },
     })
 }
@@ -3467,6 +3974,10 @@ fn sanitize_knowledge_focus(value: &Value, expected_node: &str) -> Value {
                 "chat_id":parts[3],"author_id":actor,"content":content,
                 "sender":bounded_json_string(source.get("sender"),128),
                 "room_title":bounded_json_string(source.get("room_title"),128),
+                "room_title_source":source.get("room_title_source").and_then(Value::as_str)
+                    .filter(|kind| matches!(*kind,"observed_title" | "observed_display" | "snapshot" | "catalog" | "catalog_history"
+                        | "activity_alias" | "topic_alias" | "unresolved" | "saved_graph" | "unavailable"))
+                    .unwrap_or("unavailable"),
                 "date":bounded_json_string(source.get("date"),64),
                 "truncated":source.get("truncated").and_then(Value::as_bool).unwrap_or(false)
                     || content.chars().count() < source.get("content").and_then(Value::as_str).map(|value|value.chars().count()).unwrap_or(0)}));
@@ -5502,6 +6013,33 @@ mod tests {
         assert_eq!(safe["edges"][0]["target"], "ent:b");
         assert_eq!(safe["edges"][0]["room_id"], "room-1");
         assert_eq!(safe["edges"][0]["evidence_message_id"], "db:1");
+    }
+
+    #[test]
+    fn knowledge_bridge_preserves_real_hub_membership_and_reference_purpose() {
+        let safe = sanitize_knowledge_graph(&json!({
+            "ok":true,
+            "nodes":[
+                {"id":"hub","label":"入口","is_hub":true,"space":"00_Scope/Alden/맥락","osk_id":"stable-hub"},
+                {"id":"leaf","label":"기억","is_hub":"true","space":"/Users/private"},
+                {"id":"other","label":"다른 기억","space":"00_Scope/Alden/../other"}],
+            "edges":[
+                {"source":"hub","target":"leaf","relation":"linked","purpose":"navigation"},
+                {"source":"leaf","target":"other","relation":"USES","purpose":"invented"}],
+            "osk":{"organization_version":2,"layout_pending":3},
+            "next_transition_at":1791072000.125
+        }));
+        assert_eq!(safe["nodes"][0]["is_hub"], true);
+        assert_eq!(safe["nodes"][0]["space"], "00_Scope/Alden/맥락");
+        assert_eq!(safe["nodes"][0]["osk_id"], "stable-hub");
+        assert_eq!(safe["nodes"][1]["is_hub"], false);
+        assert_eq!(safe["nodes"][1]["space"], "");
+        assert_eq!(safe["nodes"][2]["space"], "");
+        assert_eq!(safe["edges"][0]["purpose"], "navigation");
+        assert_eq!(safe["edges"][1]["purpose"], "semantic");
+        assert_eq!(safe["osk"]["organization_version"], 2);
+        assert_eq!(safe["osk"]["layout_pending"], 3);
+        assert_eq!(safe["next_transition_at"], 1791072000.125);
     }
 
     #[test]

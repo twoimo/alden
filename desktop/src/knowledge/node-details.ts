@@ -24,8 +24,8 @@ export function nodeKind(node: KnowledgeNode): string {
 
 export function nodeSummary(graph: KnowledgeGraph, node: KnowledgeNode): string {
   if (node.category === 'collection') {
-    const children = graph.edges.filter(edge => edge.source === node.id && edge.relation === 'contains').map(edge => edge.target);
-    return `${node.label}에 속한 ${children.length}개 항목을 묶은 모음입니다. 항목을 선택하면 대화 기록과 연결된 내용을 확인할 수 있습니다.`;
+    const children = new Set(graph.edges.filter(edge => edge.source === node.id && edge.purpose === 'navigation').map(edge => edge.target));
+    return text(node.description) || `${node.label}의 출처 맥락입니다. 저장된 입구 ${children.size}개를 따라 탐색할 수 있습니다.`;
   }
   return text(node.description) || `${nodeKind(node)}로 분류된 항목입니다. 원문을 확인해 설명할 수 있는 내용을 찾고 있습니다.`;
 }
@@ -59,7 +59,13 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     entry.dataset.sourceId = id;
     const author = source.source_role === 'outgoing_unclassified' ? '발신자 구분 미확인' : source.source_role === 'system_history' ? '시스템 기록' : text(source.sender, 128) || '이름 미확인';
     entry.append(element('p', 'knowledge-source-text', quote));
-    entry.append(element('cite', '', `${text(source.room_title, 128) || '제목 미확인'} · ${author} · ${date(source.date)}${source.truncated === true ? ' · 일부 발췌' : ''}`));
+    const room = text(source.room_title, 128);
+    const citation = element('cite', '', `${room ? room + ' · ' : ''}${author} · ${date(source.date)}${source.truncated === true ? ' · 일부 발췌' : ''}`);
+    const titleBasis: Record<string, string> = {catalog_history:'저장된 과거 이름',activity_alias:'원문 참여자로 붙인 표시 이름',
+      topic_alias:'반복된 주제로 붙인 표시 이름',unresolved:'보관 기록의 식별 이름',observed_title:'원본에서 확인한 방 제목',
+      observed_display:'원본에서 확인한 표시 이름',snapshot:'수집된 이름',catalog:'등록한 표시 이름',saved_graph:'저장된 기억의 이름'};
+    citation.title = titleBasis[text(source.room_title_source)] ?? '';
+    entry.append(citation);
     evidence?.append(entry);
     if (seen.size === 6) break;
   }

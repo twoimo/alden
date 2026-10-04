@@ -60,4 +60,12 @@ describe('source-driven plastic remodeling', () => {
     const model = new PlasticityLayout(); model.setGraph(graph, anchors, anchors);
     expect(model.diagnostics().synapses).toBe(0);
   });
+  it('uses the same weak navigation purpose in both projection and physical remodeling', () => {
+    const graph = view(1); graph.edges[0].purpose = 'navigation';
+    const original = JSON.stringify(graph);
+    expect(selectSynapses(graph.edges)[0].strength).toBeCloseTo(.08 / 1.08);
+    graph.edges[0].purpose = 'semantic';
+    expect(selectSynapses(graph.edges)[0].strength).toBe(.5);
+    graph.edges[0].purpose = 'navigation'; expect(JSON.stringify(graph)).toBe(original);
+  });
 });

@@ -208,6 +208,9 @@ def _normalize_evidence(raw: Any) -> dict[str, Any]:
         result['room_ids']=[r for r in rooms if isinstance(r,str) and re.fullmatch(r'kakao:[0-9a-f]{64}:room:[0-9]+',r)][:2048] if isinstance(rooms,list) else []
         actor=str(raw.get('author_id')or'')
         result['author_id']=actor if actor.isascii() and actor.isdigit() else ''
+        label_source = raw.get('label_source')
+        if label_source in ('observed_title', 'observed_display', 'snapshot', 'catalog', 'catalog_history', 'activity_alias', 'topic_alias', 'unresolved'):
+            result['label_source'] = label_source
     return result
 
 
@@ -1085,47 +1088,292 @@ def _short_identity(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
 
 
-def _corpus_room_displays(labels: dict[str, str], titles: dict[str, str], activity_aliases: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
+ROOM_PARTICIPANT_SAMPLE_LIMIT = 256
+ROOM_TOPIC_SAMPLE_LIMIT = 512
+ROOM_TOPIC_ASSIGNMENT_LIMIT = ROOM_TOPIC_SAMPLE_LIMIT * 16
+ROOM_TOPIC_MIN_MESSAGES = 20
+# Count distinct message IDs, not repeated topic rows. Topic assignments can
+# overlap; dominance is measured against tagged messages and the runner-up.
+ROOM_TOPIC_MIN_TAGGED_PERCENT = 60
+ROOM_TOPIC_MIN_SAMPLE_PERCENT = 20
+ROOM_TOPIC_RUNNER_UP_RATIO = 2
+# Neutral subject labels only. Unknown topics still count in the denominator
+# and compete for first place; personal identity/contact tags cannot name rooms.
+ROOM_TOPIC_LABELS = {key: value for key, value in INDEX_TOPIC_LABELS.items()
+                     if key not in ('identity', 'contact')}
+ROOM_TOPIC_LABELS.update({'a11y': '접근성', 'computer': '컴퓨터', 'tools': '도구/모델', 'kakao': '카카오 자동화'})
+ROOM_CATALOG_MAX_BYTES = 64 * 1024
+ROOM_CATALOG_HISTORY_LIMIT = 32
+ROOM_OBSERVATIONS_MAX_BYTES = 2 * 1024 * 1024
+ROOM_OBSERVATIONS_MAX_ROOMS = 10000
+ROOM_OBSERVATIONS_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def _room_title(raw: Any, key: str) -> str:
+    """Exclude placeholders and our generated aliases from title evidence."""
+    if not isinstance(raw, str):
+        return ""
+    title = _identity_label(raw)
+    number = key.rsplit(":", 1)[-1]
+    if title in ("", "이름 없는 채팅방", "제목 미확인", number, f"그룹:{number}", f"그룹방 {number}"):
+        return ""
+    if re.fullmatch(r"(?:제목 미확인|보관 대화) · #[0-9a-f]{8}", title):
+        return ""
+    if title.endswith(" 대화 · #" + _short_identity(key)):
+        return ""
+    return title
+
+
+def _corpus_room_displays(labels: dict[str, str], titles: dict[str, Any], activity_aliases: dict[str, str] | None = None,
+                          topic_aliases: dict[str, str] | None = None, *, observations: dict[str, dict[str, str]] | None = None) -> dict[str, dict[str, Any]]:
     """Known titles stay searchable; equal/missing titles stay distinct."""
     resolved: dict[str, tuple[str, str]] = {}
     for key, raw in labels.items():
-        title = _identity_label(raw)
-        source = "snapshot"
-        if not title or title == "이름 없는 채팅방":
-            title = _identity_label(titles.get(key.rsplit(":", 1)[-1]))
+        observed = (observations or {}).get(key.rsplit(':', 1)[-1], {})
+        title = _room_title(observed.get('label'), key)
+        source = observed.get('label_source', '') if title else 'snapshot'
+        if not title:
+            title = _room_title(raw, key)
+        if not title:
+            catalog = titles.get(key.rsplit(":", 1)[-1], "")
+            title = _room_title(catalog.get("label") if isinstance(catalog, dict) else catalog, key)
             source = "catalog" if title else "unresolved"
+            if title and isinstance(catalog, dict):
+                source = catalog.get("label_source", "catalog")
             if not title and activity_aliases and activity_aliases.get(key):
                 title = _identity_label(activity_aliases[key]); source = "activity_alias"
+            if not title and topic_aliases and topic_aliases.get(key):
+                title = _identity_label(topic_aliases[key]); source = "topic_alias"
         resolved[key] = (title, source)
-    counts = Counter(title.casefold().replace(" ", "") for title, _ in resolved.values() if title)
+    # Generated aliases already carry an ID suffix. They must not force a
+    # previously known title to gain a suffix merely by sharing its wording.
+    counts = Counter(title.casefold().replace(" ", "") for title, source in resolved.values()
+                     if title and source not in ("activity_alias", "topic_alias"))
     result: dict[str, dict[str, Any]] = {}
     for key, (title, source) in resolved.items():
         duplicate = bool(title and counts[title.casefold().replace(" ", "")] > 1)
-        display = title or "제목 미확인"
-        if not title or duplicate or source == "activity_alias":
+        display = title or "보관 대화"
+        if not title or duplicate or source in ("activity_alias", "topic_alias"):
             display += " · #" + _short_identity(key)
         result[key] = {"label": display, "aliases": list(dict.fromkeys(x for x in (title, display, key) if x)),
                        "label_source": source, "label_ambiguous": duplicate}
     return result
 
 
-def _corpus_activity_aliases(index_conn: sqlite3.Connection, labels: dict[str, str], authors: dict[str, str]) -> dict[str, str]:
+def _corpus_activity_aliases(index_conn: sqlite3.Connection, labels: dict[str, str], authors: dict[str, str] | None = None) -> dict[str, str]:
     """Ground unnamed display aliases in recorded participants, preserving IDs.
 
-    One aggregate pass over the published corpus replaces a scan per room.
-    This is a local display alias, never a Kakao room rename or inferred topic.
+    Read at most 256 recent rows per requested unnamed room via corpus_by_room.
+    Filter *after* LIMIT so self/system-only rooms cannot trigger a full scan.
+    Names come from that room's recorded rows, not a global author-name table.
+    These are local aliases, not official titles or a complete member roster.
     """
-    unknown = {key for key, value in labels.items() if not _identity_label(value) or _identity_label(value) == '이름 없는 채팅방'}
+    unknown = sorted(key for key, value in labels.items() if not _room_title(value, key))
     if not unknown: return {}
     if not index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='alden_messages'").fetchone(): return {}
-    names: dict[str, list[str]] = {}
-    for room, actor, count in index_conn.execute('SELECT chat,author_id,COUNT(*) FROM alden_messages WHERE is_self=0 AND CAST(author_id AS INTEGER)>0 GROUP BY chat,author_id ORDER BY COUNT(*) DESC'):
-        if room not in unknown or len(names.get(room, [])) >= 2: continue
-        name = _identity_label(authors.get(str(actor)), limit=36)
-        if not name or name in ('(알 수 없음)', '알 수 없음', 'Unknown') or name.isdigit(): continue
-        bucket = names.setdefault(room, [])
-        if name not in bucket: bucket.append(name)
-    return {room: ' · '.join(values) + ' 대화' for room, values in names.items()}
+    result = {}
+    for room in unknown:
+        names: dict[str, str] = {}
+        counts: Counter = Counter()
+        rows = index_conn.execute(
+            'SELECT author_id,user_name,is_self FROM alden_messages INDEXED BY corpus_by_room '
+            'WHERE chat=? ORDER BY id DESC LIMIT ?', (room, ROOM_PARTICIPANT_SAMPLE_LIMIT))
+        for actor, raw, is_self in rows:
+            actor = str(actor)
+            if is_self or not actor.isascii() or not actor.isdigit() or not 0 < int(actor) < 2**63:
+                continue
+            name = _identity_label(raw, limit=36)
+            if not name or name.casefold() in ('(알 수 없음)', '알 수 없음', 'unknown') or name.isdigit():
+                continue
+            names.setdefault(actor, name)
+            counts[actor] += 1
+        values = list(dict.fromkeys(names[actor] for actor, _ in counts.most_common()))[:2]
+        if values:
+            result[room] = ' · '.join(values) + ' 대화'
+    return result
+
+
+def _corpus_topic_aliases(index_conn: sqlite3.Connection, room_keys) -> dict[str, str]:
+    """Use existing topic metadata, never classify text or execute the stats view.
+
+    The published context_topic_stats is a GROUP BY view, not a materialized
+    summary: even WHERE chat=? walks the room's entire history. Instead read
+    at most 512 recent IDs per requested room and their indexed, persisted topic
+    assignments (8192 plus one overflow probe). Filter self/system/non-text
+    rows after LIMIT.
+
+    Require 20 distinct peer messages, >=20% of eligible sampled messages,
+    >=60% of tagged messages and >=2x the runner-up. Ties, near ties, unknown
+    winning topics, unavailable indexes and excessive assignments yield no
+    alias. This describes a repeated subject in a bounded sample, not the
+    room's official title, membership, purpose or whole-history main topic.
+    """
+    rooms = sorted(set(room_keys))
+    if not rooms or not index_conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_message_topics'"
+    ).fetchone():
+        return {}
+    # Refuse a fallback table scan if an older corpus lacks the message index.
+    topic_index = ''
+    for row in index_conn.execute("PRAGMA index_list('context_message_topics')"):
+        if row[4]:  # Partial indexes cannot cover arbitrary message IDs.
+            continue
+        quoted = '"' + row[1].replace('"', '""') + '"'
+        columns = index_conn.execute('PRAGMA index_info(' + quoted + ')').fetchall()
+        if columns and columns[0][2] == 'message_id':
+            topic_index = quoted
+            break
+    if not topic_index:
+        return {}
+    aliases = {}
+    for room in rooms:
+        rows = index_conn.execute(
+            'SELECT id,author_id,is_self,message_type FROM alden_messages INDEXED BY corpus_by_room '
+            'WHERE chat=? ORDER BY id DESC LIMIT ?', (room, ROOM_TOPIC_SAMPLE_LIMIT)).fetchall()
+        ids = [row[0] for row in rows if row[2] == 0 and row[3] == 1
+               and str(row[1]).isascii() and str(row[1]).isdigit() and 0 < int(row[1]) < 2**63]
+        if len(ids) < ROOM_TOPIC_MIN_MESSAGES:
+            continue
+        placeholders = ','.join('?' for _ in ids)
+        assignments = index_conn.execute(
+            f'SELECT message_id,topic FROM context_message_topics INDEXED BY {topic_index} '
+            f'WHERE message_id IN ({placeholders}) LIMIT ?', [*ids, ROOM_TOPIC_ASSIGNMENT_LIMIT + 1]).fetchall()
+        if len(assignments) > ROOM_TOPIC_ASSIGNMENT_LIMIT:
+            continue
+        assignments = set(assignments)
+        if not assignments or any(not isinstance(topic, str) or not topic or len(topic) > 64 for _, topic in assignments):
+            continue
+        counts = Counter(topic for _, topic in assignments)
+        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        topic, support = ranked[0]
+        tagged = len({message_id for message_id, _ in assignments})
+        runner_up = ranked[1][1] if len(ranked) > 1 else 0
+        if (topic not in ROOM_TOPIC_LABELS or support < ROOM_TOPIC_MIN_MESSAGES
+                or support * 100 < ROOM_TOPIC_MIN_SAMPLE_PERCENT * len(ids)
+                or support * 100 < ROOM_TOPIC_MIN_TAGGED_PERCENT * tagged
+                or support < ROOM_TOPIC_RUNNER_UP_RATIO * runner_up):
+            continue
+        aliases[room] = ROOM_TOPIC_LABELS[topic] + ' 관련 대화'
+    return aliases
+
+
+def _corpus_display_policy(index_conn: sqlite3.Connection, state_root: Path, labels: dict[str, str],
+                           *, expected_account: str, sample_rooms=None) -> dict[str, dict[str, Any]]:
+    """One title/participant/topic/archive policy for producer and focus reads."""
+    observed = _room_observation_displays(index_conn, state_root, labels, expected_account=expected_account)
+    catalog = _room_catalog_displays(state_root, labels, expected_account=expected_account)
+    displays = _corpus_room_displays(labels, catalog, observations=observed)
+    requested = set(labels if sample_rooms is None else sample_rooms)
+    unnamed = {key: '' for key, info in displays.items()
+               if key in requested and info['label_source'] == 'unresolved'}
+    participants = _corpus_activity_aliases(index_conn, unnamed)
+    topics = _corpus_topic_aliases(index_conn, unnamed.keys() - participants.keys())
+    return _corpus_room_displays(labels, catalog, participants, topics, observations=observed)
+
+
+def _room_observation_displays(index_conn: sqlite3.Connection, state_root: Path, room_keys,
+                               *, expected_account: str) -> dict[str, dict[str, str]]:
+    """Consume a verified observation cache; this reader never collects/writes it.
+
+    Path: knowledge/corpus/<account>/room-observations.json
+    Schema: {schema_version: 1, account: <source fingerprint>,
+      corpus_snapshot: <published snapshot>, observed_at: <Unix seconds>,
+      rooms: [{chat_id: <decimal string>, label: <observed text>,
+               label_kind: "room_title"|"display_name",
+               source: "local_history_rooms"|"local_chats"|"ax",
+               observed_at: <optional original per-row Unix seconds>}]}
+
+    The producer must independently attest account and numeric room identity
+    from the same source capture (including an ID binding for AX). Copying the
+    corpus account or matching titles is not attestation. Legacy local-chats
+    arrays alone cannot satisfy this contract; chat_name may be a peer-name
+    fallback, so its field name does not establish label_kind=room_title.
+    For local-chats --with-source, use the packet's account_fingerprint and
+    observed_at. Validate room_title/name_basis for room_title rows; default
+    display names and participant aliases both map to display_name here. Never
+    promote unavailable rows or infer a name from another numeric room ID.
+
+    Check the cache against the pinned corpus metadata AND current pointer.
+    Cross-account data raises; stale (>24h), unbound, conflicting, malformed or
+    old-snapshot observations are ignored. This reader does not mutate names or
+    keep a second last-good cache: the producer must retain/merge valid rows on
+    partial failures before atomic replacement. Preserve original per-row times
+    when merging; omission is supported only for a single-capture legacy cache
+    and inherits the envelope timestamp. Retained rows cannot renew their TTL
+    from a newer envelope. Only requested corpus IDs are returned; this cannot
+    add/merge rooms. Extra audit fields such as name_basis are left uninterpreted.
+    """
+    if not room_keys or not re.fullmatch(r'[0-9a-f]{64}', expected_account):
+        return {}
+    folder = state_root / 'knowledge/corpus' / expected_account
+    path = folder / 'room-observations.json'
+    try:
+        if folder.is_symlink() or path.is_symlink() or not path.is_file() or path.stat().st_size > ROOM_OBSERVATIONS_MAX_BYTES:
+            return {}
+        with path.open('rb') as handle:
+            data = handle.read(ROOM_OBSERVATIONS_MAX_BYTES + 1)
+        if len(data) > ROOM_OBSERVATIONS_MAX_BYTES:
+            return {}
+        payload = json.loads(data)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict) or payload.get('schema_version') != 1:
+        return {}
+    if payload.get('account') != expected_account:
+        raise RuntimeError('corpus_observation_account_mismatch')
+    meta = dict(index_conn.execute("SELECT key,value FROM corpus_meta WHERE key IN ('account','snapshot','complete')"))
+    if meta.get('account') != expected_account:
+        raise RuntimeError('corpus_account_mismatch')
+    if meta.get('complete') != '1' or not meta.get('snapshot') or payload.get('corpus_snapshot') != meta['snapshot']:
+        return {}
+    pointer = state_root / 'knowledge/corpus/current.json'
+    try:
+        if pointer.is_symlink() or not pointer.is_file() or pointer.stat().st_size > 8192:
+            return {}
+        with pointer.open('rb') as handle:
+            data = handle.read(8193)
+        manifest = json.loads(data) if len(data) <= 8192 else None
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(manifest, dict) or manifest.get('schema_version') != 1:
+        return {}
+    if manifest.get('account') != expected_account:
+        raise RuntimeError('corpus_account_mismatch')
+    if manifest.get('snapshot') != meta['snapshot']:
+        return {}
+    now = time.time()
+
+    def fresh(value):
+        return (not isinstance(value, bool) and isinstance(value, (int, float))
+                and 0 < value < 2**53 and -60 <= now - value <= ROOM_OBSERVATIONS_MAX_AGE_SECONDS)
+
+    observed_at = payload.get('observed_at')
+    if not fresh(observed_at):
+        return {}
+    rooms = payload.get('rooms')
+    if not isinstance(rooms, list) or len(rooms) > ROOM_OBSERVATIONS_MAX_ROOMS:
+        return {}
+    wanted = {key.rsplit(':', 1)[-1]: key for key in room_keys if key.startswith(f'kakao:{expected_account}:room:')}
+    result, conflicts = {}, set()
+    for row in rooms:
+        if not isinstance(row, dict):
+            continue
+        number = row.get('chat_id')
+        if not isinstance(number, str) or not re.fullmatch(r'[1-9][0-9]{0,18}', number) or not 0 < int(number) < 2**63 or number not in wanted:
+            continue
+        if row.get('source') not in ('local_history_rooms', 'local_chats', 'ax') or row.get('label_kind') not in ('room_title', 'display_name'):
+            continue
+        row_observed_at = row.get('observed_at', observed_at)
+        if not fresh(row_observed_at) or row_observed_at > observed_at + 60:
+            continue
+        label = _room_title(row.get('label'), wanted[number])
+        if not label:
+            continue
+        value = {'label': label, 'label_source': 'observed_title' if row['label_kind'] == 'room_title' else 'observed_display'}
+        if number in result and result[number] != value:
+            conflicts.add(number)
+        result[number] = value
+    return {number: value for number, value in result.items() if number not in conflicts}
 
 
 def _corpus_person_id(room:str,actor:str)->str:
@@ -1285,6 +1533,81 @@ def _chat_label(chat: str) -> str:
     return raw
 
 
+def _room_catalog_displays(state_root: Path, room_keys, *, expected_account: str = "") -> dict[str, dict[str, str]]:
+    """Read saved titles for exact corpus IDs, including bounded catalog history.
+
+    Old user catalogs have no account field. Their entries are accepted only
+    for IDs the caller has already found in this account's published corpus.
+    An explicitly different account is rejected. A historical title is marked
+    separately; it is not proof of the current Kakao window title.
+    """
+    wanted = {key.rsplit(":", 1)[-1]: key for key in room_keys}
+    if not wanted:
+        return {}
+
+    def read(path, *, historical=False):
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > ROOM_CATALOG_MAX_BYTES:
+                return {}
+            with path.open("rb") as handle:
+                data = handle.read(ROOM_CATALOG_MAX_BYTES + 1)
+            if len(data) > ROOM_CATALOG_MAX_BYTES:
+                return {}
+            payload = json.loads(data)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(payload, dict) or not isinstance(payload.get("rooms"), list):
+            return {}
+        if expected_account and payload.get("account") not in (None, "", expected_account):
+            if historical:
+                return {}
+            raise RuntimeError("corpus_catalog_account_mismatch")
+        found, conflicts = {}, set()
+        for item in payload["rooms"]:
+            if not isinstance(item, dict):
+                continue
+            number = str(item.get("chat_id", ""))
+            if number not in wanted:
+                continue
+            if expected_account and item.get("account") not in (None, "", expected_account):
+                if historical:
+                    continue
+                raise RuntimeError("corpus_catalog_account_mismatch")
+            title = _room_title(item.get("title"), wanted[number])
+            # Provenance from a newer writer must not promote a local alias.
+            if item.get("label_source") in ("activity_alias", "topic_alias", "unresolved") or not title:
+                continue
+            if number in found and found[number] != title:
+                conflicts.add(number)
+            found[number] = title
+        return {number: title for number, title in found.items() if number not in conflicts}
+
+    result = {number: {"label": title, "label_source": "catalog"}
+              for number, title in read(state_root / "menubar-room-catalog.json").items()}
+    if len(result) == len(wanted):
+        return result
+    history = state_root / "catalog-history"
+    try:
+        if history.is_symlink() or not history.is_dir():
+            return result
+        paths = []
+        # Bound directory enumeration as well as file bytes and JSON parsing.
+        with os.scandir(history) as entries:
+            for index, entry in enumerate(entries):
+                if index >= ROOM_CATALOG_HISTORY_LIMIT:
+                    return result
+                if entry.name.endswith(".json") and entry.is_file(follow_symlinks=False):
+                    paths.append((entry.stat(follow_symlinks=False).st_mtime_ns, entry.name))
+        for _, name in sorted(paths, reverse=True):
+            for number, title in read(history / name, historical=True).items():
+                result.setdefault(number, {"label": title, "label_source": "catalog_history"})
+            if len(result) == len(wanted):
+                break
+    except OSError:
+        pass
+    return result
+
+
 def _room_titles(state_root: Path) -> dict[str, str]:
     """방 번호를 사람이 읽는 이름으로 바꾸는 표.
 
@@ -1411,8 +1734,10 @@ def index_chat_entities(
             sql += " GROUP BY chat HAVING COUNT(*) >= ? ORDER BY COUNT(*) DESC LIMIT ?"
             params.extend([INDEX_CHAT_MIN_MESSAGES, max(int(limit), 1)])
             rows = index_conn.execute(sql, params).fetchall()
-            room_labels, author_labels = _corpus_labels(index_conn)
-            displays = _corpus_room_displays(room_labels, _room_titles(state_root), _corpus_activity_aliases(index_conn, room_labels, author_labels))
+            room_labels, _author_labels = _corpus_labels(index_conn)
+            account = index_conn.execute("SELECT value FROM corpus_meta WHERE key='account'").fetchone()[0] if room_labels else ""
+            displays = _corpus_display_policy(index_conn, state_root, room_labels, expected_account=account,
+                                              sample_rooms=[room for room, *_ in rows])
             # All metadata and bounded evidence are read from this same
             # snapshot. Standalone calls previously copied the whole corpus
             # again for the label table and once for every selected room.
@@ -1467,7 +1792,12 @@ def index_chat_entities(
                 name,
                 "대화방",
                 json.dumps(display["aliases"] if display else [name, key], ensure_ascii=False),
-                ("카카오톡에서 제목을 확인하지 못한 별도 채팅방입니다." if display and display["label_source"] == "unresolved"
+                ("검증된 계정과 방 ID에 연결된 원본 관측 제목입니다." if display and display["label_source"] == "observed_title"
+                 else "원본에서 관측한 표시 이름이며 공식 방 제목과 구분됩니다." if display and display["label_source"] == "observed_display"
+                 else "원문에서 확인된 참여자로 만든 로컬 표시 별칭입니다." if display and display["label_source"] == "activity_alias"
+                 else "최근 메시지의 저장된 주제 통계에 근거한 로컬 표시 별칭이며 공식 제목은 확인되지 않았습니다." if display and display["label_source"] == "topic_alias"
+                 else "저장된 채팅방 목록의 과거 제목입니다." if display and display["label_source"] == "catalog_history"
+                 else "표시 이름의 근거가 부족한 보관 대화입니다. 공식 제목은 확인되지 않았습니다." if display and display["label_source"] == "unresolved"
                  else f"{name} 방입니다. 여기서 나눈 주제는 이 방의 맥락으로 남습니다."),
                 json.dumps(facts, ensure_ascii=False),
                 min(99, 45 + total // 4000),
@@ -1478,6 +1808,8 @@ def index_chat_entities(
             observed = observed_by_room.get(key, [])
             account=key.split(':')[1]
             evidence={'kind':PROVENANCE_SNAPSHOT,'chat_id':key,'source_event_ids':[f'kakao:{account}:room:{r}:log:{log}' for r,log in observed]}
+            if display:
+                evidence['label_source'] = display['label_source']
             conn.execute('UPDATE kg_entities SET evidence_json=? WHERE entity_id=?',(json.dumps(_normalize_evidence(evidence)),'chat:'+key))
         stats["written"] += 1
     conn.commit()
@@ -2568,6 +2900,7 @@ def collect_knowledge_graph(
                 {
                     "id": entity_id,
                     "label": name,
+                    **({"label_source": evidence["label_source"]} if "label_source" in evidence else {}),
                     "category": category,
                     "description": description,
                     "facts": facts if isinstance(facts, list) else [],

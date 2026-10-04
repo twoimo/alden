@@ -13,6 +13,7 @@ vi.mock("../knowledge/hologram", () => ({ KnowledgeHologram: class {
     private readonly disposed: () => void) { this.model = new KnowledgeDrilldown(graph); }
   get canGoBack() { return this.model.canGoBack; }
   get currentView() { return this.model.current(); }
+  get currentGraph() { return this.graph; }
   private publish(view: KnowledgeView) { this.notify({node:this.graph.nodes.find(n=>n.id===view.focusId)??null,view}); return view; }
   clickNode(id: string) { return this.publish(this.model.clickNode(id)); }
   expandOneHop() { return this.publish(this.model.expandOneHop()); }

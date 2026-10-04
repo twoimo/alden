@@ -6,6 +6,7 @@ import { createCorticalBackdrop } from './cortex';
 import { pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
 import { PlasticityLayout, selectSynapses } from './plasticity';
+import { relationAnchors, relationCenterId } from './relation-layout';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
 import { VoiceAmplitudePoller, type VoiceStatusLoader } from "../voice-amplitude-poller";
@@ -32,15 +33,6 @@ type FocusHandler = (event: KnowledgeFocusEvent) => void;
 function cssColor(surface: Element, name: string, fallback: string): THREE.Color {
   const value = getComputedStyle(surface).getPropertyValue(name).trim();
   return new THREE.Color(value || fallback);
-}
-
-function stablePoint(id: string, radius: number): THREE.Vector3 {
-  let seed=2166136261;
-  for(let i=0;i<id.length;i++)seed=Math.imul(seed^id.charCodeAt(i),16777619);
-  const y = ((seed>>>0)+.5)/4294967296*2-1;
-  const ring = Math.sqrt(Math.max(0, 1 - y * y));
-  const phi = (Math.imul(seed^0x9e3779b9,1664525)>>>0)/4294967296*Math.PI*2;
-  return new THREE.Vector3(Math.cos(phi) * ring * radius, y * radius, Math.sin(phi) * ring * radius);
 }
 
 function disposeObject(object: THREE.Object3D): void {
@@ -71,9 +63,6 @@ export class KnowledgeHologram {
   private drilldown: KnowledgeDrilldown;
   private readonly positions = new Map<string, THREE.Vector3>();
   private readonly displayedPositions = new Map<string, THREE.Vector3>();
-  private readonly phases = new Map<string, number>();
-  private visibleTime = 0;
-  private ambientMotion = false;
   private readonly cortex = createCorticalBackdrop();
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly plasticity = new PlasticityLayout();
@@ -129,8 +118,6 @@ export class KnowledgeHologram {
     this.scene.add(this.cortex);
     this.scene.add(this.voiceEnvelope.line);
 
-    this.layoutPositions();
-
     this.drilldown = new KnowledgeDrilldown(graph);
     this.view = this.drilldown.current();
     this.rebuildGraph();
@@ -168,8 +155,6 @@ export class KnowledgeHologram {
 
   stop(): void {
     this.requestedAnimation = false;
-    this.ambientMotion = false;
-    this.synapses.setVisualMotion(this.visibleTime, false);
     try { this.voicePoller?.stop(); } finally {
       try { this.loop.stop(); } finally {
         this.loop.setVoiceActive(false);
@@ -188,8 +173,6 @@ export class KnowledgeHologram {
     if (this.disposed) return;
     const bounded=Number.isFinite(load)?Math.max(0,Math.min(1,load)):0;
     this.loop.setLoad(bounded);
-    const scale=1+bounded*.006;
-    if(Math.abs(this.graphRoot.scale.x-scale)>0.0001){this.graphRoot.scale.setScalar(scale);this.invalidateFrame();}
     // The narrow poller owns current input/output; the slow snapshot supplies load.
     if (!this.voicePoller) this.applyVoiceRms(voiceRms);
   }
@@ -210,8 +193,8 @@ export class KnowledgeHologram {
   private readonly updateOrbActivity = (): void => {
     if (this.disposed) return;
     this.activity = this.paused ? PAUSED_ORB : runtimeOrb(this.snapshot, this.latestVoice ?? this.snapshot?.voice ?? null);
-    const root = this.orbMeshes.get(this.rootNodeId);
-    if (root?.setActivity(this.activity, this.motion.matches)) this.invalidateFrame();
+    // Runtime work belongs to Alden's sidebar orb, not an arbitrary memory.
+    // Graph-node motion comes only from its real references and user navigation.
   };
   private readonly handleMotionChange = (): void => { this.updateOrbActivity(); this.invalidateFrame(); };
 
@@ -222,6 +205,7 @@ export class KnowledgeHologram {
   get currentView(): KnowledgeView {
     return this.view;
   }
+  get currentGraph(): KnowledgeGraph { return this.graph; }
 
   get canGoBack(): boolean { return this.drilldown.canGoBack; }
 
@@ -230,11 +214,9 @@ export class KnowledgeHologram {
     const focus = this.view.focusId;
     this.graph = graph;
     const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
-    this.layoutPositions();
     const ids = new Set(sorted.map(node => node.id));
     for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
     for (const id of this.displayedPositions.keys()) if (!ids.has(id)) this.displayedPositions.delete(id);
-    for (const id of this.phases.keys()) if (!ids.has(id)) this.phases.delete(id);
     this.view = this.drilldown.replaceGraph(graph);
     if (!focus || !ids.has(focus)) this.resetOverviewCamera();
     this.rebuildGraph();
@@ -249,7 +231,7 @@ export class KnowledgeHologram {
   diagnostics(): AnimationLoopDiagnostics & { ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number } {
     return { ...this.loop.diagnostics(), voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
       displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count,
-      orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes(), physics:this.plasticity.diagnostics(), synapses:this.synapses.diagnostics(), drawCalls:this.renderer.info.render.calls, geometries:this.renderer.info.memory.geometries, ambientMotion:this.ambientMotion, visibleTime:this.visibleTime };
+      orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes(), physics:this.plasticity.diagnostics(), synapses:this.synapses.diagnostics(), drawCalls:this.renderer.info.render.calls, geometries:this.renderer.info.memory.geometries, ambientMotion:false, visibleTime:0 };
   }
   get navigationTargets(): { camera: number[]; lookAt: number[] } {
     return { camera: this.desiredCamera.toArray(), lookAt: this.desiredLookAt.toArray() };
@@ -327,25 +309,16 @@ export class KnowledgeHologram {
   }
 
   private layoutPositions():void {
-    const sorted=[...this.graph.nodes].sort((a,b)=>a.id.localeCompare(b.id));
     this.anchors.clear();
-    const place=(id:string,point:THREE.Vector3):void=>{this.anchors.set(id,point);if(!this.positions.has(id))this.positions.set(id,point.clone());};
-    const groups=sorted.filter(n=>n.category==='collection');
-    if(!groups.length){sorted.forEach(n=>{const p=stablePoint(n.id,1.3);p.y*=.85;p.z*=.60;place(n.id,p);});return;}
-    const root=groups.find(n=>n.label==='카카오톡')??groups[0];place(root.id,new THREE.Vector3(0,.1,0));
-    for(const node of groups.filter(n=>n!==root)){
-      const point=/인물|사람/.test(node.label)?new THREE.Vector3(-.82,.22,-.12):/대화방/.test(node.label)?new THREE.Vector3(.85,.15,.02):/주제/.test(node.label)?new THREE.Vector3(0,-.66,.12):stablePoint(node.id,1.05);
-      place(node.id,point);
+    for (const [id, p] of relationAnchors(this.view)) {
+      const point = new THREE.Vector3(p.x, p.y, p.z);
+      this.anchors.set(id, point);
+      if (!this.positions.has(id)) this.positions.set(id, point.clone());
     }
-    const parents=new Map(this.graph.edges.filter(e=>e.relation==='contains').map(e=>[e.target,e.source]));
-    const members=new Map<string,KnowledgeNode[]>();
-    for(const node of sorted){if(node.category==='collection')continue;const parent=parents.get(node.id)??root.id;const bucket=members.get(parent)??[];bucket.push(node);members.set(parent,bucket);}
-    for(const [parent,nodes] of members){const center=this.anchors.get(parent)??new THREE.Vector3();nodes.forEach(node=>{
-      const point=stablePoint(node.id,.65);point.y*=.8;point.z*=.6;point.add(center);place(node.id,point);
-    });}
   }
 
   private rebuildGraph(): void {
+    this.layoutPositions();
     for (const child of [...this.graphRoot.children]) {
       if (child === this.synapses.mesh) continue;
       this.graphRoot.remove(child);
@@ -360,8 +333,7 @@ export class KnowledgeHologram {
     const accessible = this.canvas.parentElement?.querySelector("#knowledge-accessible-nodes");
     accessible?.replaceChildren();
     const focusId = this.view.focusId;
-    this.rootNodeId = this.graph.nodes.find(node => node.category === 'collection' && node.label === '카카오톡')?.id
-      ?? this.graph.nodes.find(node => node.category === 'collection')?.id ?? '';
+    this.rootNodeId = relationCenterId(this.view);
 
     this.plasticity.setGraph(this.view, this.anchors, this.positions);
     if (this.motion.matches) this.plasticity.settle();
@@ -373,12 +345,11 @@ export class KnowledgeHologram {
       const position = this.positions.get(node.id);
       if (!position) continue;
       if(!this.displayedPositions.has(node.id))this.displayedPositions.set(node.id,position.clone());
-      if(!this.phases.has(node.id)){let hash=0;for(let i=0;i<node.id.length;i++)hash=Math.imul(hash,31)+node.id.charCodeAt(i);this.phases.set(node.id,(hash>>>0)/4294967296*Math.PI*2);}
       const focused = node.id === focusId;
       const kind=node.category==='collection'?node.label:node.category;
       const token=/인물|사람|대화 상대|화자/.test(kind)?'--cosmos-person':/대화방/.test(kind)?'--cosmos-room':/주제/.test(kind)?'--cosmos-topic':'--accent';
       const color=cssColor(this.canvas,token,"#dde7ef");
-      const isOrb = node.category === 'collection' || focused;
+      const isOrb = node.isHub || node.category === 'collection' || focused || node.id === this.rootNodeId;
       const diameter = node.id === this.rootNodeId ? 0.64 : node.category === 'collection' ? 0.4 : 0.3;
       const radius = isOrb ? diameter * 0.44 : .04 + (node.importance / 100) * 0.025;
       const geometry = new THREE.SphereGeometry(radius, 18, 12);
@@ -395,7 +366,6 @@ export class KnowledgeHologram {
         const state: OrbState = /인물|사람|대화 상대|화자/.test(kind) ? 'listening' : /대화방/.test(kind) ? 'connecting' : /주제/.test(kind) ? 'composing' : 'solving';
         const orb = new ThinkingOrbMesh(state, diameter, color);
         orb.position.copy(position);
-        if (node.id === this.rootNodeId) orb.setActivity(this.activity, this.motion.matches);
         orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
         this.orbMeshes.set(node.id, orb);
         this.graphRoot.add(orb);
@@ -496,23 +466,19 @@ export class KnowledgeHologram {
   private render(dt: number): void {
     if (this.disposed) return;
     const elapsed = Math.min(.25, Math.max(0, dt));
-    this.ambientMotion=!this.motion.matches&&!this.paused&&this.requestedAnimation&&this.view.nodes.length>0;
-    if(this.ambientMotion)this.visibleTime+=elapsed;
     if (this.motion.matches && this.plasticity.moving) this.plasticity.settle();
     else if (!this.paused) this.plasticity.advance(elapsed);
     this.plasticity.forEachPoint(this.syncPoint);
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
-      if(base&&position){const phase=this.phases.get(id)??0;const sway=this.ambientMotion&&id!==this.view.focusId&&id!==this.rootNodeId?0.035:0;
-        position.set(base.x+Math.sin(this.visibleTime*.80+phase)*sway,base.y+Math.cos(this.visibleTime*.67+phase)*sway,base.z+Math.sin(this.visibleTime*.58+phase)*sway*.6);
+      if(base&&position){
+        position.copy(base);
         mesh.position.copy(position);this.orbMeshes.get(id)?.position.copy(position);
       }
     }
-    this.cortex.scale.setScalar(this.ambientMotion?1+Math.sin(this.visibleTime*.80)*.008:1);
-    this.synapses.setVisualMotion(this.visibleTime,this.ambientMotion);
     this.synapses.update(elapsed,this.displayedPositions,this.motion.matches||this.paused);
     const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
-    this.loop.setInteractive(this.ambientMotion||this.plasticity.moving||this.synapses.moving||this.orbitActive||cameraMoving);
+    this.loop.setInteractive(this.plasticity.moving||this.synapses.moving||this.orbitActive||cameraMoving);
     const alpha = this.motion.matches||this.paused ? 1 : 1 - Math.exp(-12 * elapsed);
     this.camera.position.lerp(this.desiredCamera, alpha);
     this.lookAt.lerp(this.desiredLookAt, alpha);
@@ -557,8 +523,7 @@ export class KnowledgeHologram {
       if (label.hidden === box.visible) label.hidden = !box.visible;
       if (box.visible && (!wasVisible || previousLeft !== box.left || previousTop !== box.top)) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }
-    // Ambient motion is a visible presentation style, never a runtime load signal.
-    if (this.paused || this.motion.matches || (!this.ambientMotion && !this.plasticity.moving && !this.synapses.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
+    if (this.paused || this.motion.matches || (!this.plasticity.moving && !this.synapses.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
   }
   private readonly syncPoint = (id:string,x:number,y:number,z:number):void => {this.positions.get(id)?.set(x,y,z);};
 }

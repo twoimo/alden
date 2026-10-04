@@ -1,7 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KnowledgeRefresh } from "../knowledge/refresh";
+import { parseKnowledgeGraph } from '../knowledge/graph-model';
 afterEach(() => vi.useRealTimers());
 describe("local knowledge refresh", () => {
+  it('expires a saved relationship at its clock boundary even if storage reads fail', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:00:00Z'));
+    const end = new Date(Date.now() + 500).toISOString();
+    const payload = {ok:true,nodes:[{id:'a',label:'A'},{id:'b',label:'B'}],edges:[{source:'a',target:'b',valid_to:end}]};
+    const read = vi.fn().mockResolvedValueOnce(payload).mockRejectedValue(new Error('offline'));
+    const counts: number[] = [], refresh = new KnowledgeRefresh(read, p => counts.push(parseKnowledgeGraph(p).edges.length),15000,async()=> 'same');
+    refresh.start(); await vi.advanceTimersByTimeAsync(0); expect(counts.at(-1)).toBe(1);
+    await vi.advanceTimersByTimeAsync(500); expect(counts.at(-1)).toBe(0);
+    refresh.stop(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it('does not display a future relationship before its validity begins', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:00:00Z'));
+    const from = new Date(Date.now() + 500).toISOString();
+    const payload = {ok:true,nodes:[{id:'a',label:'A'},{id:'b',label:'B'}],edges:[{source:'a',target:'b',valid_from:from}]};
+    const counts: number[] = [], refresh = new KnowledgeRefresh(async()=>payload, p=>counts.push(parseKnowledgeGraph(p).edges.length),15000,async()=> 'same');
+    refresh.start(); await vi.advanceTimersByTimeAsync(0); expect(counts.at(-1)).toBe(0);
+    await vi.advanceTimersByTimeAsync(500); expect(counts.at(-1)).toBe(1);
+    refresh.stop(); expect(vi.getTimerCount()).toBe(0);
+  });
   it('probes metadata once per second and reads only on revision changes or fallback', async () => {
     vi.useFakeTimers();
     let revision = 'first';

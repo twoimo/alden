@@ -25,7 +25,7 @@ describe('selected-node explanations',()=>{
     renderNodeDetails(graph,graph.nodes[0],{details:{node_id:'another',summary:'잘못된 설명'},sources:[source]});
     expect(document.body.textContent).not.toContain('잘못된 설명');expect(document.querySelector('.knowledge-source')).toBeNull();
     expect(document.body.textContent).toContain('원문을 확인하지 못했습니다');
-    const collection=parseKnowledgeGraph({nodes:[{id:'group',label:'인물',category:'collection'},...graph.nodes],edges:[{source:'group',target:id,relation:'contains'}]});
-    expect(nodeSummary(collection,collection.nodes[0])).toContain('1개 항목');
+    const collection=parseKnowledgeGraph({nodes:[{id:'group',label:'대화 맥락',category:'collection',is_hub:true},...graph.nodes],edges:[{source:'group',target:id,relation:'linked',purpose:'navigation'}]});
+    expect(nodeSummary(collection,collection.nodes[0])).toContain('입구 1개');
   });
 });
