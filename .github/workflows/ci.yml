@@ -180,6 +180,7 @@ jobs:
           tests.test_alden_menubar_runtime_payload
           tests.test_local_mlx_model_readiness
           tests.test_verify_local_models
+          tests.test_verify_model_provenance
           tests.test_mlx_serve_lifecycle
           tests.test_auto_reply_dream_rsi
           tests.test_dream_rsi_alphaxiv
