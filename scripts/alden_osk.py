@@ -988,9 +988,14 @@ def read_focus(state_root: Path, node_id: str, *, chat_id: str = '') -> dict:
         'note_updated_at': int(idx.nodes[title][0].stat().st_mtime),
         'scope_room_id': '',
     }
-    actor=re.fullmatch(r'person:kakao:([0-9a-f]{64}):actor:([0-9]+)',node_id)
-    room=re.fullmatch(r'chat:kakao:([0-9a-f]{64}):room:([0-9]+)',node_id)
+    # Canonical body is distinct from summary and message samples. Scoped actor
+    # and room lookups below intentionally exclude it to avoid cross-room leaks.
+    details['body'] = secrets.filter_text(_reference_body(note, item, checkpoint, secrets))[0][:MAX_BODY]
+    source_identity = str(source.get('id') or node_id)
+    actor=re.fullmatch(r'person:kakao:([0-9a-f]{64}):actor:([0-9]+)',source_identity)
+    room=re.fullmatch(r'chat:kakao:([0-9a-f]{64}):room:([0-9]+)',source_identity)
     if actor or room:
+        details.pop('body', None)
         from alden_corpus import search, room_displays
         scope=actor or room
         selected_room = str(chat_id or '').strip()

@@ -471,6 +471,9 @@ body.settings-view {
 .knowledge-detail-heading svg { width:16px; height:16px; }
 .knowledge-note-body { min-width:0; padding:20px; }
 .knowledge-node-summary { font-size:14px; line-height:1.85; margin:0 0 18px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.knowledge-node-body { font-size:14px; line-height:1.8; margin:0 0 14px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.knowledge-note-link { display:inline; padding:0; border:0; background:none; color:inherit; text-decoration:underline; text-underline-offset:3px; cursor:pointer; font:inherit; }
+.knowledge-node-body a { color:inherit; text-underline-offset:3px; }
 .knowledge-node-facts { padding-left:20px; margin:0 0 22px; font-size:14px; line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; }
 .knowledge-node-facts li + li { margin-top:8px; }
 .knowledge-note-subheading { font-size:12px; font-weight:600; color:var(--muted); margin:24px 0 8px; }

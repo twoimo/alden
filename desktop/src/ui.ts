@@ -109,6 +109,7 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
                 <header class="knowledge-detail-heading"><div><span id="knowledge-node-kind" hidden>저장된 기억</span><h2 id="knowledge-focus-title">선택한 지식</h2></div><button id="knowledge-focus-close" type="button" aria-label="노트 닫기"><i data-lucide="X" aria-hidden="true"></i></button></header>
                 <div class="knowledge-note-body">
                   <p id="knowledge-node-summary" class="knowledge-node-summary"></p>
+                  <div id="knowledge-node-body" class="knowledge-node-body" hidden></div>
                   <ul id="knowledge-node-facts" class="knowledge-node-facts" hidden></ul>
                   <h3 id="knowledge-links-heading" class="knowledge-note-subheading">연결된 노트</h3>
                   <div id="knowledge-relations" class="knowledge-relations" role="group" aria-labelledby="knowledge-links-heading"></div>

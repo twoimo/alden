@@ -485,12 +485,14 @@ export async function setupKnowledgeGraph(
     expand.disabled = view.focusId === null ? !view.hasMoreContexts : view.hops >= MAX_FOCUS_HOPS;
     expand.textContent=view.focusId===null?'다음 보기':view.hops===0?'연결 보기':'더 보기';
     if (!node) {
+      if (detailPanel) delete detailPanel.dataset.focusState;
       setText("knowledge-focus-title", "항목을 선택하면 관련 정보를 보여드립니다.");
       document.getElementById("knowledge-relations")?.replaceChildren();
       setText("knowledge-retrieve", "항목을 선택하면 관련 대화를 찾아 보여드립니다.");
       return;
     }
     setText("knowledge-focus-title", node.label);
+    if (detailPanel) detailPanel.dataset.focusState = 'loading';
     const currentGraph = hologram.currentGraph;
     renderNodeDetails(currentGraph, node);
     renderKnowledgeRelations(currentGraph, node, snapshot);
@@ -507,18 +509,20 @@ export async function setupKnowledgeGraph(
       // node ID repeats. Earlier retrievals cannot overwrite the current one.
       if (selectionEpoch !== epoch) return;
       if (!focus || focus.ok !== true) {
+        if (detailPanel) detailPanel.dataset.focusState = 'unavailable';
         renderNodeDetails(currentGraph, node, focus ?? { ok: false });
         setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
         return;
       }
       renderNodeDetails(currentGraph, node, focus);
+      if (detailPanel) detailPanel.dataset.focusState = 'ready';
       const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
       const firstFact = facts[0]?.slice(0, 180);
       setText("knowledge-retrieve", focus.details ? '이 기기에 수집된 기록과 저장된 노트를 기준으로 합니다.' : facts.length
         ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
         : "관련 대화를 찾지 못했습니다.");
     }).catch(() => {
-      if (selectionEpoch === epoch) { renderNodeDetails(currentGraph, node, { ok: false }); setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다."); }
+      if (selectionEpoch === epoch) { if (detailPanel) detailPanel.dataset.focusState = 'unavailable'; renderNodeDetails(currentGraph, node, { ok: false }); setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다."); }
     });
   }, () => {
     disposed = true;
@@ -529,7 +533,7 @@ export async function setupKnowledgeGraph(
   expand.addEventListener("click", () => {
     hologram.expandOneHop();
   }, { signal: controls.signal });
-  document.getElementById('knowledge-relations')?.addEventListener('click',event=>{
+  document.getElementById('knowledge-note-pane')?.addEventListener('click',event=>{
     const target=event.target instanceof Element?event.target.closest<HTMLButtonElement>('button[data-knowledge-node]'):null;
     if(target?.dataset.knowledgeNode)hologram.clickNode(target.dataset.knowledgeNode);
   },{signal:controls.signal});

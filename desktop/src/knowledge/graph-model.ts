@@ -25,6 +25,7 @@ export interface KnowledgeNode {
   facts?: string[];
   space?: string;
   isHub?: boolean;
+  oskId?: string;
 }
 
 export interface KnowledgeEdge {
@@ -114,6 +115,7 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         facts: Array.isArray(item.facts) ? item.facts.filter((entry): entry is string => typeof entry === 'string').slice(0, 6).map(entry => entry.slice(0, 600)) : [],
         space: stringValue(item.space),
         isHub: item.is_hub === true,
+        oskId: stringValue(item.osk_id),
       }];
     })
     : [];

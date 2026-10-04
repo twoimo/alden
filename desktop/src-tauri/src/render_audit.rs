@@ -31,9 +31,11 @@ pub struct Request {
     pub directory: PathBuf,
     pub settings: bool,
     pub workspaces: bool,
+    pub focus_node: Option<String>,
 }
 struct AuditPolicy {
     workspaces: bool,
+    focus_node: Option<String>,
 }
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const COLLECT: &str = r#"JSON.stringify((() => {
@@ -66,7 +68,32 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     }) {
         return Ok(None);
     }
-    if args.len() != 2
+    let focus_node = if args.len() == 4 && args[0] == WORKSPACES_FLAG && args[2] == "--focus-node" {
+        let value = args[3].to_str().ok_or("focus node must be UTF-8")?;
+        let parts: Vec<_> = value
+            .strip_prefix("osk:")
+            .unwrap_or("")
+            .split('-')
+            .collect();
+        let alnum = |s: &str| {
+            s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        };
+        if parts.len() != 3
+            || parts[0].len() != 6
+            || !parts[0].bytes().all(|b| b.is_ascii_digit())
+            || parts[1].len() != 4
+            || !alnum(parts[1])
+            || ![4, 8].contains(&parts[2].len())
+            || !alnum(parts[2])
+        {
+            return Err("focus node must be one canonical OSK ID".into());
+        }
+        Some(value.to_string())
+    } else {
+        None
+    };
+    if (args.len() != 2 && focus_node.is_none())
         || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG]
             .iter()
             .any(|flag| args[0] == *flag)
@@ -77,6 +104,7 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
         directory: PathBuf::from(&args[1]),
         settings: args[0] == SETTINGS_FLAG || args[0] == WORKSPACES_FLAG,
         workspaces: args[0] == WORKSPACES_FLAG,
+        focus_node,
     }))
 }
 
@@ -532,7 +560,7 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     navigation:d?{focused:d.focused,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
     regions:d?.regions??null,synapses:d?.synapses??null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
-    notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth}:null;})(),
+    notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth,focusState:n.dataset.focusState,nodeId:n.dataset.nodeId,bodyChars:document.querySelector('#knowledge-node-body')?.textContent?.length??0}:null;})(),
     backDisabled:document.querySelector('#knowledge-back')?.disabled,
     overviewDisabled:document.querySelector('#knowledge-overview')?.disabled,
     expandDisabled:document.querySelector('#knowledge-expand-hop')?.disabled,
@@ -548,7 +576,14 @@ fn graph_step(
     deadline: Instant,
 ) -> Result<Value, String> {
     // Internal fixed actions only; no caller-selected script or selector.
-    let script = match action {
+    let focus = window.state::<AuditPolicy>().focus_node.clone();
+    let targeted = focus
+        .as_deref()
+        .map(|id| serde_json::to_string(id).expect("string serializes"));
+    let script = match (action, targeted) {
+        ("first", Some(id)) => format!("(()=>{{const b=[...document.querySelectorAll('.knowledge-a11y-node')].find(n=>n.dataset.nodeId==={id});if(!b)throw Error('requested canonical note is not visible');b.click();}})()"),
+        ("second", Some(id)) => format!("[...document.querySelectorAll('.knowledge-a11y-node')].find(n=>n.dataset.nodeId!=={id})?.click()"),
+        (action, _) => match action {
         "memory-page" => "document.querySelector('#settings-tab-memory')?.click()",
         "first" => "document.querySelectorAll('.knowledge-a11y-node')[0]?.click()",
         "second" => "document.querySelectorAll('.knowledge-a11y-node')[1]?.click()",
@@ -559,10 +594,22 @@ fn graph_step(
             "document.querySelector('#settings-knowledge-card')?.scrollIntoView({block:'center'})"
         }
         _ => return Err("unknown internal graph action".into()),
+        }.to_string(),
     };
     collect_script(window, format!("{script};{GRAPH_COLLECT}"), deadline)?;
     std::thread::sleep(Duration::from_millis(250));
-    collect_script(window, GRAPH_COLLECT.into(), deadline)
+    let settle = Instant::now() + Duration::from_secs(5);
+    loop {
+        let state = collect_script(window, GRAPH_COLLECT.into(), deadline)?;
+        if state["notePane"]["hidden"] != false || state["notePane"]["focusState"] != "loading" {
+            return Ok(state);
+        }
+        if Instant::now() >= settle {
+            return Err("note lookup did not settle".into());
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
@@ -681,6 +728,12 @@ fn audit_settings(
         Value::Null
     };
     let first = graph_step(&window, "first", deadline)?;
+    if window.state::<AuditPolicy>().focus_node.is_some()
+        && (first["notePane"]["focusState"] != "ready"
+            || first["notePane"]["bodyChars"].as_u64().unwrap_or(0) == 0)
+    {
+        return Err("requested canonical note did not return its saved body".into());
+    }
     if first["notePane"]["hidden"] != false
         || first["notePane"]["width"].as_f64().unwrap_or(0.0) <= 0.0
         || first["navigation"]["nodeCount"] != initial["navigation"]["nodeCount"]
@@ -1099,6 +1152,7 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
             .manage(super::PythonBridge::new())
             .manage(AuditPolicy {
                 workspaces: workspaces_mode,
+                focus_node: request.focus_node.clone(),
             });
         if workspaces_mode {
             builder.invoke_handler(tauri::generate_handler![
@@ -1184,6 +1238,28 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(request.workspaces && request.settings);
+    }
+    #[test]
+    fn focused_capture_requires_a_canonical_id_and_workspace_mode() {
+        let args = |mode: &str, id: &str| {
+            [
+                OsString::from(mode),
+                OsString::from("/private/tmp/test"),
+                OsString::from("--focus-node"),
+                OsString::from(id),
+            ]
+            .into_iter()
+        };
+        let request = parse_args(args(WORKSPACES_FLAG, "osk:261005-012a-abcdefgh"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            request.focus_node.as_deref(),
+            Some("osk:261005-012a-abcdefgh")
+        );
+        assert!(parse_args(args(SETTINGS_FLAG, "osk:261005-012a-abcdefgh")).is_err());
+        assert!(parse_args(args(WORKSPACES_FLAG, "osk:261005-012a-a');alert(1)//")).is_err());
+        assert!(parse_args(args(WORKSPACES_FLAG, "../node")).is_err());
     }
     use std::os::unix::fs::{symlink, PermissionsExt};
     #[test]

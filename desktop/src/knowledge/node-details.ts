@@ -55,7 +55,35 @@ export function nodeSummary(graph: KnowledgeGraph, node: KnowledgeNode): string 
     const children = new Set(graph.edges.filter(edge => edge.source === node.id && edge.purpose === 'navigation').map(edge => edge.target));
     return text(node.description) || `${node.label}의 출처 맥락입니다. 저장된 입구 ${children.size}개를 따라 탐색할 수 있습니다.`;
   }
-  return text(node.description) || `${nodeKind(node)}로 분류된 항목입니다. 원문을 확인해 설명할 수 있는 내용을 찾고 있습니다.`;
+  return text(node.description) || '저장된 항목입니다. 원문을 확인하고 있습니다.';
+}
+
+function renderBody(container: HTMLElement, body: string, graph: KnowledgeGraph): void {
+  container.replaceChildren();
+  // Parse only saved node links and explicit HTTP(S) URLs. Everything else is
+  // literal text, including HTML and unsupported Markdown schemes.
+  const pattern = /\[\[([^\]\n]+)\]\]|\[([^\]\n]+)\]\((https?:\/\/[^\s<>"']+)\)|(https?:\/\/[^\s<>\[\]"'`)]+)/g;
+  let offset = 0;
+  for (const match of body.matchAll(pattern)) {
+    const at = match.index ?? 0;
+    container.append(document.createTextNode(body.slice(offset, at)));
+    if (match[1]) {
+      const [target, alias] = match[1].split('|', 2);
+      const identities = graph.nodes.filter(item => item.id === target || item.id === `osk:${target}` || item.oskId === target);
+      const labels = graph.nodes.filter(item => item.label === target);
+      const node = identities.length === 1 ? identities[0] : identities.length === 0 && labels.length === 1 ? labels[0] : null;
+      if (node) {
+        const button = document.createElement('button'); button.type = 'button';
+        button.className = 'knowledge-note-link'; button.dataset.knowledgeNode = node.id;
+        button.textContent = alias || node.label; container.append(button);
+      } else container.append(document.createTextNode(match[0]));
+    } else {
+      const link = document.createElement('a'); link.href = match[3] || match[4];
+      link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = match[2] || match[4]; container.append(link);
+    }
+    offset = at + match[0].length;
+  }
+  container.append(document.createTextNode(body.slice(offset)));
 }
 
 export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, payload: Record<string, unknown> | null = null, root: Document = document): void {
@@ -63,6 +91,10 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const selected = details && details.node_id === node.id ? details : null;
   const summary = root.getElementById('knowledge-node-summary');
   if (summary) summary.textContent = text(selected?.summary) || nodeSummary(graph, node);
+  const body = root.getElementById('knowledge-node-body');
+  const copy = selected?.basis === 'note' && node.category !== 'collection' ? text(selected.body, 12000) : '';
+  if (body) { renderBody(body, copy, graph); body.hidden = !copy; }
+  if (summary) summary.hidden = Boolean(body && copy);
   const kind = root.getElementById('knowledge-node-kind'); if (kind) kind.textContent = nodeKind(node);
   const facts = root.getElementById('knowledge-node-facts'); facts?.replaceChildren();
   const values = selected?.key_facts;
@@ -98,6 +130,8 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     if (seen.size === 6) break;
   }
   const heading = root.getElementById('knowledge-evidence-heading');
+  const disclosure = root.querySelector<HTMLElement>('.knowledge-evidence-disclosure');
+  if (disclosure) disclosure.hidden = Boolean(copy && seen.size === 0);
   if (heading) {
     heading.hidden = false;
     heading.textContent = seen.size ? `원문 근거 · ${seen.size}건` : '원문 근거';

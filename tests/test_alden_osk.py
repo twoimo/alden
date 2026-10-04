@@ -21,6 +21,21 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_canonical_focus_returns_body_and_scoped_alias_does_not_leak(self):
+        result=self.execute(r'''
+a.synchronize(root,source);c,g,_,w=a._load_engine(root)
+r=w.create_node('실제 결론','한 줄 요약','결론의 본문과 적용 조건입니다.','agent',space=a.SOURCE_SPACE)
+focus=a.read_focus(root,'osk:'+r['id'])
+assert focus['details']['body'].strip()=='결론의 본문과 적용 조건입니다.' and focus['details']['summary']=='한 줄 요약'
+account='1'*64;actor='person:kakao:'+account+':actor:7'
+source['nodes'].append({'id':actor,'label':'확인할 인물','category':'대화 상대','facts':['다른 방의 내용'],'evidence':{'kind':'local_db_snapshot'}})
+a.synchronize(root,source);item=a._read_json(a._home(root)/'sync.json')['managed'][actor]
+alias=a.read_focus(root,'osk:'+item['osk_id'],chat_id='42')
+assert 'body' not in alias['details'] and '다른 방의 내용' not in json.dumps(alias,ensure_ascii=False)
+print(json.dumps({'canonicalBody':True,'aliasScoped':True}))
+''')
+        self.assertTrue(result['canonicalBody'])
+
     def test_note_body_keeps_meaning_without_truncated_machine_metadata(self):
         result=self.execute(r'''
 a.synchronize(root,source);c,g,secrets,_=a._load_engine(root)
