@@ -218,6 +218,22 @@ class StatusCollector:
                 osk = {"state": "stale" if value["stale"] or age > 180 else "ready",
                        "pending": pending, "conflicts": conflicts,
                        "generation": generation, "age_seconds": min(age, 1_000_000_000)}
+                try:
+                    producer=_read_object(self.state_root/'knowledge/osk/producer.json',control)
+                    checked=_counter(producer.get('checked_at'),9_999_999_999)
+                    checked_age=int(time.time())-checked if checked is not None else None
+                    pointer=_read_object(self.state_root/'knowledge/corpus/current.json',control)
+                    signature=value.get('source_signature')
+                    verified=(isinstance(signature,str) and re.fullmatch('[0-9a-f]{64}',signature)
+                              and producer.get('source_signature')==signature and producer.get('saved_corpus_ready') is True
+                              and producer.get('archive_snapshot')==pointer.get('snapshot') and pending==0 and conflicts==0 and not value['stale']
+                              and checked_age is not None and 0<=checked_age<=180)
+                    if verified:
+                        osk.update(state='ready',checked_age_seconds=checked_age,
+                                   collection_state=producer.get('collection') if producer.get('collection') in ('complete','pending','waiting','not_requested') else 'unavailable',
+                                   freshness_scope='current_published_corpus')
+                except (OSError,ValueError,RecursionError,MetadataUnavailable):
+                    pass
         except (OSError, ValueError, RecursionError, MetadataUnavailable):
             pass
         endpoint = {"state": "not_probed", "listed_count": None, "loaded_count": None}

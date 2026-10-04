@@ -84,6 +84,28 @@ def make_state_root(tmp: str) -> Path:
 
 
 class PersistedReadOnlyViewTests(unittest.TestCase):
+    def test_waited_refresh_reports_retained_graph_as_stale_after_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_state_root(tmp)
+            conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
+            KG.ensure_seeded(conn)
+            KG.write_meta(conn, "last_indexed_at", "100")
+            conn.commit()
+            conn.close()
+
+            def fail_refresh(conn, *args, **kwargs):
+                KG.write_meta(conn, "last_index_error", "rooms: source unavailable")
+                conn.commit()
+
+            with mock.patch.object(KG, "_reindex_all", side_effect=fail_refresh):
+                result = KG.collect_knowledge_graph(
+                    root / "context.sqlite3", state_root=root,
+                    force_reindex=True, wait_for_reindex=True,
+                )
+            self.assertTrue(result["stale"])
+            self.assertEqual(result["indexed_at"], 100)
+            self.assertTrue(result["nodes"])
+
     def test_read_only_view_never_seeds_migrates_reindexes_or_embeds(self):
         import hashlib
         with tempfile.TemporaryDirectory() as tmp:

@@ -357,6 +357,27 @@ list_matching_pids() {
     fi
   fi
 
+  # A full-command match can be a diagnostic process, or a process that exited
+  # between pgrep and readback. Only an executable identity proves an app PID.
+  # An unresolved live process still blocks the cutover; it is never ignored.
+  verified_pids=""
+  for candidate_pid in $candidate_pids; do
+    if candidate_path=$(process_executable_path "$candidate_pid"); then
+      if [ "${candidate_path##*/}" = "$match_executable" ]; then
+        verified_pids="$verified_pids $candidate_pid"
+      fi
+      continue
+    fi
+    candidate_status=0
+    candidate_readback=$("$PS" -p "$candidate_pid" -o pid= 2>/dev/null) || \
+      candidate_status=$?
+    if [ "$candidate_status" -eq 1 ] && [ -z "$candidate_readback" ]; then
+      continue
+    fi
+    return 2
+  done
+  candidate_pids=$(printf '%s\n' "$verified_pids" |
+    /usr/bin/awk '{ for (i = 1; i <= NF; i++) if (!seen[$i]++) print $i }')
   printf '%s\n' "$candidate_pids"
 }
 

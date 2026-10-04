@@ -56,6 +56,7 @@ class AldenDesktopLauncherTests(unittest.TestCase):
         stray: bool = False,
         stray_after_first_guard: bool = False,
         stray_reported_path: str | None = None,
+        stray_identity: str = "app",
         kickstart_output: str = "4242",
         pid_never: bool = False,
         launchd_pid_absent: bool = False,
@@ -373,6 +374,20 @@ if [ "$1" = "-axo" ]; then
   esac
 fi
 if [ "$1" = "-p" ]; then
+  if [ "$2" = "7777" ]; then
+    case "$OPENKAKAO_FAKE_STRAY_IDENTITY" in
+      exited)
+        exit 1
+        ;;
+      unresolved)
+        if [ "${4:-}" = "pid=" ]; then
+          printf '7777\n'
+          exit 0
+        fi
+        exit 1
+        ;;
+    esac
+  fi
   if [ "${3:-}" = "-o" ] && [ "${4:-}" = "lstart=" ] && [ "$2" = "4242" ]; then
     count=0
     if [ -f "$OPENKAKAO_FAKE_PS_MARKER_COUNT" ]; then
@@ -468,6 +483,7 @@ exit 1
                     "OPENKAKAO_FAKE_STRAY_REPORTED_PATH": (
                         stray_reported_path or str(target_bin)
                     ),
+                    "OPENKAKAO_FAKE_STRAY_IDENTITY": stray_identity,
                     "OPENKAKAO_FAKE_JARVIS_STRAY": "1" if jarvis_stray else "0",
                     "OPENKAKAO_FAKE_JARVIS_REPORTED_PATH": (
                         jarvis_reported_path or str(jarvis_bin)
@@ -988,7 +1004,7 @@ exit 99
         self.assertIn('"$LSOF" -p "$process_pid" -a -d txt -Fn', source)
         self.assertIn('process_executable_path "$reported_pid"', source)
         self.assertIn('printf \'%s\\n\' "$candidate_pids"', source)
-        self.assertNotIn('case "$candidate_path" in', source)
+        self.assertIn('${candidate_path##*/}', source)
         self.assertIn("wait_for_pid() {", source)
         self.assertIn('while [ "$wait_attempt" -le 10 ]; do', source)
         self.assertIn(
@@ -1131,6 +1147,10 @@ fi
 if [ "$1" = "-p" ] && [ "$2" = "4242" ] && \
   [ "${3:-}" = "-o" ] && [ "${4:-}" = "lstart=" ]; then
   printf 'Tue Sep 22 02:00:00 2026\n'
+  exit 0
+fi
+if [ "$1" = "-p" ] && [ "$2" = "4242" ]; then
+  printf '%s\n' "$OPENKAKAO_FAKE_INSTALLED_BIN"
   exit 0
 fi
 if [ "$1" = "-axo" ]; then
@@ -1301,6 +1321,10 @@ if [ "$1" = "-p" ] && [ "$2" = "4242" ] && \
   printf 'Tue Sep 22 02:00:00 2026\n'
   exit 0
 fi
+if [ "$1" = "-p" ] && [ "$2" = "4242" ]; then
+  printf '%s\n' "$OPENKAKAO_FAKE_INSTALLED_BIN"
+  exit 0
+fi
 exit 1
 """,
             )
@@ -1325,6 +1349,7 @@ exit 1
                     "OPENKAKAO_FAKE_LAUNCHCTL_STATE": str(state_file),
                     "OPENKAKAO_FAKE_PRINT_COUNT": str(count_file),
                     "OPENKAKAO_FAKE_PID_AFTER": "3",
+                    "OPENKAKAO_FAKE_INSTALLED_BIN": str(target_bin),
                 }
             )
 
@@ -1528,7 +1553,7 @@ printf '4242\n'
             ({"jarvis_service_pid": "missing"}, "service pid could not be verified"),
             ({"jarvis_service_pid": "9999"}, "is not a live Jarvis process"),
             (
-                {"jarvis_reported_path": "/tmp/unowned-openkakao-jarvis-desktop"},
+                {"jarvis_reported_path": "/tmp/openkakao-jarvis-desktop"},
                 "service path mismatch",
             ),
         )
@@ -1773,6 +1798,24 @@ printf '4242\n'
         self.assertEqual(case["returncode"], 3)
         self.assertIn("stray pid 7777", case["stderr"])
         self.assertIn(f"reported path: {outside_path}", case["stderr"])
+        self.assertEqual(case["target_marker"], "old")
+
+    def test_installer_ignores_command_matches_that_are_not_app_processes(self) -> None:
+        case = self._run_installer_fixture(
+            stray=True, stray_reported_path="/usr/bin/python3"
+        )
+        self.assertEqual(case["returncode"], 0, msg=case["stderr"])
+        self.assertEqual(case["target_marker"], "new")
+
+    def test_installer_ignores_candidates_that_exited_before_readback(self) -> None:
+        case = self._run_installer_fixture(stray=True, stray_identity="exited")
+        self.assertEqual(case["returncode"], 0, msg=case["stderr"])
+        self.assertEqual(case["target_marker"], "new")
+
+    def test_installer_unresolved_live_candidate_still_blocks_cutover(self) -> None:
+        case = self._run_installer_fixture(stray=True, stray_identity="unresolved")
+        self.assertEqual(case["returncode"], 3)
+        self.assertIn("process enumeration is unknown", case["stderr"])
         self.assertEqual(case["target_marker"], "old")
 
     def test_installer_launchd_pid_marker_change_rolls_back(self) -> None:

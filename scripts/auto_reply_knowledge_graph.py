@@ -2530,7 +2530,11 @@ def collect_knowledge_graph(
                 # 동기 경로: 재색인이 끝난 뒤의 그래프를 이 응답에 담는다.
                 _reindex_all(conn, state_root, chat=chat, cycle_started_at=now)
                 result_meta["reindex"] = {"started": True, "chat": chat, "mode": "inline"}
-                result_meta["stale"] = False
+                # A rolled-back index cycle preserves prior data; its failure
+                # must not stamp that retained graph as current.
+                result_meta["stale"] = bool(read_meta(conn,'last_index_error'))
+                result_meta['indexed_at'] = int(read_meta(conn,'last_indexed_at') or 0)
+                result_meta['indexed_count'] = int(conn.execute("SELECT COUNT(*) FROM kg_entities WHERE entity_id LIKE 'chat:%' OR entity_id LIKE 'topic:%'").fetchone()[0])
             else:
                 started = _start_background_reindex(
                     conn,

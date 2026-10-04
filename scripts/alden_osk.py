@@ -235,6 +235,15 @@ def _body(node: dict, links: list[dict], titles: dict[str, str], secrets) -> str
     return secrets.filter_text("\n".join(lines))[0][:MAX_BODY]
 
 
+def _source_signature(state_root: Path) -> str:
+    pointer=_read_json(state_root/'knowledge/corpus/current.json')
+    if pointer.get('schema_version')!=1:return ''
+    # Source and derivation version both invalidate the materialized graph.
+    files=['alden_osk.py','alden_osk_sources.py','alden_corpus_topics.py','auto_reply_reference_store.py','auto_reply_knowledge_graph.py']
+    code=b''.join(digest(Path(__file__).with_name(name).read_bytes()).encode() for name in files)
+    return digest(json.dumps(pointer,sort_keys=True).encode()+code)
+
+
 def synchronize(state_root: Path, source: dict | None = None) -> dict:
     """One bounded, replayable tick. Source deletion retracts, never purges notes."""
     home = _safe_directory(_home(state_root))
@@ -247,16 +256,25 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         if _aborted(state_root):
             return {"ok": False, "state": "paused", "engine": VERSION}
         contract, graph, secrets, write = _load_engine(state_root)
+        checkpoint_path = home / "sync.json"
+        checkpoint = _read_json(checkpoint_path, {"managed": {}, "generation": 0})
+        signature = _source_signature(state_root) if source is None else ''
+        if (signature and checkpoint.get('source_signature')==signature and checkpoint.get('pending')==0
+            and checkpoint.get('layout_pending',0)==0 and checkpoint.get('conflicts')==0 and not checkpoint.get('stale')):
+            unchanged=all(not (home/'vault'/item.get('space','00_Scope/Alden')/(item['title']+'.md')).is_symlink()
+                          and (home/'vault'/item.get('space','00_Scope/Alden')/(item['title']+'.md')).is_file()
+                          and digest((home/'vault'/item.get('space','00_Scope/Alden')/(item['title']+'.md')).read_bytes())==item.get('written_hash')
+                          for item in checkpoint.get('managed',{}).values() if item.get('active'))
+            if unchanged:return {'ok':True,'state':'unchanged','changed':0,'pending':0,'conflicts':0,'stale':False,'source_signature':signature}
         if source is None:
             from auto_reply_knowledge_graph import collect_knowledge_graph
-            source = collect_knowledge_graph(state_root / "context.sqlite3", state_root=state_root,wait_for_reindex=True)
+            source = collect_knowledge_graph(state_root / "context.sqlite3", state_root=state_root,wait_for_reindex=True,
+                                             force_reindex=bool(signature and checkpoint.get('source_signature')!=signature))
         if source.get("ok") is not True:
             raise RuntimeError("osk_source_unavailable")
         from alden_osk_sources import ground_graph
         source = ground_graph(state_root, source, secrets.filter_text)
         source = json.loads(secrets.filter_text(json.dumps(source, ensure_ascii=False))[0])
-        checkpoint_path = home / "sync.json"
-        checkpoint = _read_json(checkpoint_path, {"managed": {}, "generation": 0})
         managed = checkpoint["managed"]
         nodes = {str(n["id"]): n for n in source.get("nodes", []) if not str(n["id"]).startswith(("message:", "msg:"))}
         titles = {key: managed.get(key, {}).get("title") or _title(node, secrets) for key, node in nodes.items()}
@@ -353,8 +371,9 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
                            "stale": bool(source.get("stale")), "changed": changed, "moved": moved, "conflicts": conflicts,
                            "pending": sum(managed.get(k, {}).get("revision") != (revisions[k] if k in revisions else _revision(n, _body(n, incident[k], titles, secrets))) for k, n in nodes.items()),
                            "edges": [e for e in source.get("edges", []) if e.get("source") in active and e.get("target") in active]})
+        if signature:checkpoint['source_signature']=signature
         _save(checkpoint_path, checkpoint)
-        return {"ok": True, **{k: checkpoint[k] for k in ("engine", "synced_at", "changed", "pending", "conflicts", "stale")}}
+        return {"ok": True, 'source_signature':signature, **{k: checkpoint[k] for k in ("engine", "synced_at", "changed", "pending", "conflicts", "stale")}}
     finally:
         os.close(lock_fd)
 
@@ -503,6 +522,52 @@ def read_focus(state_root: Path, node_id: str, *, chat_id: str = '') -> dict:
     return {"ok": True, "facts": [summary, note.body[:1200]], "fact_count": 2, "focus_node_id": node_id, 'details': details}
 
 
+def sync_cycle(state_root: Path, binary: Path | None = None, *, collect=None, sync=None, record=None, now=None, cycle=None) -> dict:
+    """Collection readiness does not prevent updating a valid saved corpus.
+
+    A waiting original-data permission is reported independently. Retry only
+    after the bounded backoff; no send/worker/model action is part of this cycle.
+    """
+    from alden_history import cycle_step, _local_cli, LocalDataAccessWaiting
+    from auto_reply_knowledge_graph import _index_db_path
+    collect = collect or _local_cli; sync = sync or synchronize; record = record or cycle_step
+    now = time.time() if now is None else now
+    cycle = cycle or uuid.uuid4().hex; status_path = _home(state_root)/'producer.json'
+    previous = _read_json(status_path); collection = 'not_requested'; corpus = {}
+    _safe_directory(_home(state_root))
+    if _aborted(state_root):
+        record(state_root,cycle,'paused');return {'ok':False,'state':'paused'}
+    waiting = binary is not None and previous.get('collection')=='waiting' and now < previous.get('collection_retry_at',0)
+    if binary and not waiting:
+        record(state_root,cycle,'collecting')
+        try:
+            collected=collect(binary,['local-db-collect','--index-dir',str(state_root/'knowledge/corpus'),'--max-rows','500000','--abort-state',str(state_root/'alden-abort.json')])
+            corpus=collected.get('index',{});collection='complete' if corpus.get('complete') else 'pending'
+        except LocalDataAccessWaiting:
+            collection='waiting'
+    elif waiting: collection='waiting'
+    # Fail closed if no valid saved account corpus exists. This does not probe
+    # the original Kakao database or change its permission policy.
+    source_path = _index_db_path(state_root)
+    if not source_path.is_file():raise RuntimeError('saved_corpus_unavailable')
+    record(state_root,cycle,'graphing',reason='LocalDataAccessWaiting' if collection=='waiting' else '')
+    if ( _home(state_root)/'raw-sources.json').is_file():
+        from alden_osk_delta import capture
+        _contract,_graph,secrets,_write=_load_engine(state_root)
+        archive=capture(state_root,secrets.filter_text,cancelled=lambda:_aborted(state_root))
+    else: archive={}
+    result=sync(state_root)
+    checkpoint=_read_json(_home(state_root)/'sync.json')
+    pending=int(corpus.get('pending_messages',0))+int(result.get('pending',0))+int(checkpoint.get('layout_pending',0))+int(result.get('conflicts',0))
+    phase='paused' if _aborted(state_root) else 'complete' if collection!='waiting' and result.get('ok') and result.get('state')!='busy' and not result.get('stale') and pending==0 else 'pending'
+    record(state_root,cycle,phase,nodes=sum(bool(m.get('active')) for m in checkpoint.get('managed',{}).values()),pending=pending,changed=result.get('changed',0),reason='LocalDataAccessWaiting' if collection=='waiting' else '')
+    status={'schema_version':1,'checked_at':int(now),'collection':collection,'collection_retry_at':int(now+300) if collection=='waiting' and not waiting else previous.get('collection_retry_at',0) if waiting else 0,
+            'saved_corpus_ready':bool(result.get('ok') and not result.get('stale') and pending==0),'source_signature':result.get('source_signature'),
+            'archive_snapshot':archive.get('snapshot'),'archive_rows':archive.get('rows')}
+    _save(status_path,status)
+    return {**result,'collection':collection,'archive':archive}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--state-root", type=Path, required=True)
@@ -511,24 +576,11 @@ def main() -> int:
     args = parser.parse_args()
     cycle=uuid.uuid4().hex
     try:
-        if args.sync and args.bin:
-            from alden_history import cycle_step,_local_cli,context_coverage
-            if _aborted(args.state_root):
-                cycle_step(args.state_root,cycle,'paused');print(json.dumps({'ok':False,'state':'paused'}));return 1
-            cycle_step(args.state_root,cycle,'collecting')
-            collected=_local_cli(args.bin,['local-db-collect','--index-dir',str(args.state_root/'knowledge'/'corpus'),'--max-rows','500000','--abort-state',str(args.state_root/'alden-abort.json')])
-            corpus=collected.get('index',{})
-            coverage=context_coverage(args.state_root)
-            cycle_step(args.state_root,cycle,'graphing',rooms=collected['rooms'],messages=collected['messages'],corpus_messages=corpus.get('indexed_messages',0),corpus_pending=corpus.get('pending_messages',0),**coverage)
-        result = synchronize(args.state_root) if args.sync else read_graph(args.state_root)
-        if args.sync and args.bin:
-            checkpoint=_read_json(_home(args.state_root)/'sync.json')
-            pending=int(corpus.get('pending_messages',0))+int(result.get('pending',0))+int(checkpoint.get('layout_pending',0))+int(result.get('conflicts',0))
-            phase='paused' if _aborted(args.state_root) else 'complete' if result.get('ok') and result.get('state')!='busy' and not result.get('stale') and pending==0 else 'pending'
-            cycle_step(args.state_root,cycle,phase,rooms=collected['rooms'],messages=collected['messages'],nodes=sum(1 for m in checkpoint.get('managed',{}).values() if m.get('active')),pending=pending,changed=result.get('changed',0),corpus_messages=corpus.get('indexed_messages',0),corpus_pending=corpus.get('pending_messages',0),**coverage)
+        result = sync_cycle(args.state_root,args.bin,cycle=cycle) if args.sync else read_graph(args.state_root)
     except Exception as error:
         result = {"ok": False, "state": "unavailable", "error": type(error).__name__}
         if args.sync and args.bin:
+            from alden_history import cycle_step
             cycle_step(args.state_root,cycle,'failed',reason=type(error).__name__)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result.get("ok") else 1

@@ -58,6 +58,18 @@ class MetadataTests(unittest.TestCase):
         self.file.write_text(json.dumps(self.value))
         self.assertEqual(self.collect()["osk"]["state"], "unavailable")
 
+    def test_verified_saved_corpus_is_distinct_from_waiting_original_collection(self):
+        self.value.update(pending=0,conflicts=0,source_signature='a'*64,synced_at=1699999000)
+        self.file.write_text(json.dumps(self.value))
+        producer=self.file.with_name('producer.json')
+        data={'checked_at':1700000005,'source_signature':'a'*64,'saved_corpus_ready':True,'archive_snapshot':'v1','collection':'waiting'}
+        producer.write_text(json.dumps(data));pointer=self.root/'state/knowledge/corpus/current.json';pointer.parent.mkdir()
+        pointer.write_text(json.dumps({'snapshot':'v1'}))
+        result=self.collect()['osk'];self.assertEqual(result['state'],'ready');self.assertEqual(result['age_seconds'],1010)
+        self.assertEqual(result['checked_age_seconds'],5);self.assertEqual(result['collection_state'],'waiting')
+        self.assertEqual(result['freshness_scope'],'current_published_corpus')
+        pointer.write_text(json.dumps({'snapshot':'v2'}));self.assertEqual(self.collect()['osk']['state'],'stale')
+
     def test_invalid_numeric_counts_fail_closed(self):
         for invalid in (True, -1, "private-conversation-canary", 10**20, 1.5):
             with self.subTest(invalid=invalid):
