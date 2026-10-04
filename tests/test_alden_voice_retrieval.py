@@ -13,6 +13,22 @@ class VoiceRetrievalTests(unittest.TestCase):
     def root(self,path):
         root=Path(path);folder=root/'knowledge/corpus';folder.mkdir(parents=True);(folder/'current.json').write_text('{}');return root
 
+    def test_canonical_knowledge_keeps_note_provenance_without_reading_unrelated_chats(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td);folder=root/'knowledge/osk';folder.mkdir();(folder/'sync.json').write_text('{}')
+            graph={'facts':['검증 자료: '+('가'*700)],'search_mode':'rrf',
+                   'fact_provenance':[{'note_id':'stable','note_hash':'exact-sha','space':'00_Scope/Alden',
+                                       'source_kind':'canonical_osk_note','derived_from':['source#quote'],'updated_at':123}]}
+            with mock.patch('alden_corpus.resolve_room') as rooms,mock.patch('alden_corpus.search') as search,mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=graph):
+                reference,metrics=voice._voice_knowledge_reference('저장된 기억 자료의 한계를 알려줘',[],root,AbortController(root).token())
+            rooms.assert_not_called();search.assert_not_called()
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(context['quoted_history'],[]);self.assertEqual(len(context['graph_facts'][0]),600)
+            source=context['graph_provenance'][0]
+            self.assertEqual(source['note_hash'],'exact-sha');self.assertEqual(source['derived_from'],['source#quote'])
+            self.assertTrue(source['fact_truncated']);self.assertEqual(metrics['sources'],1)
+            self.assertEqual(metrics['note_sources'],1);self.assertEqual(metrics['history_sources'],0)
+
     def test_reference_stays_quoted_and_unclassified_outgoing_is_not_user_input(self):
         with TemporaryDirectory() as td:
             root=self.root(td);token=AbortController(root).token()

@@ -486,6 +486,8 @@ class LocalStreamTests(unittest.TestCase):
             self.generate([{"choices": [{"delta": {"content": "부분 응답"}}]}], done=False)
         with self.assertRaisesRegex(RuntimeError, "reply_empty"):
             self.generate([{"choices": [{"delta": {"reasoning_content": "내부 추론"}}]}])
+        with self.assertRaisesRegex(RuntimeError, "reply_truncated"):
+            self.generate([{"choices": [{"delta": {"content": "요점은 다음과"}, "finish_reason": "length"}]}])
 
     def test_stream_model_mismatch_and_nonstring_content_fail_closed(self):
         with self.assertRaisesRegex(RuntimeError, "model_mismatch"):

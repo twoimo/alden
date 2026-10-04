@@ -18,7 +18,7 @@ The prior API returned a note body in the compatibility `facts` array while the 
 
 Owned workspace audits can target one canonical note with `--focus-node osk:<id>`. They wait for the actual focus lookup to settle and require a returned body. The fixed audit selectors, private output directory and command allowlist remain; arbitrary caller scripts and production writes are not registered. This verifies an owned WKWebView, not physical primary/tray/voice/shortcut/OS-lock behavior.
 
-Full goal work remains active: complete OSK semantic/organization review, canonical retrieval integration, whole-app measurements, physical interaction/voice, Flash-Next admission, Dot invocation, signing/notarization and final production verification.
+Full goal work remains active: complete OSK semantic/organization review, whole-app measurements, physical interaction/voice, Flash-Next admission, Dot invocation, signing/notarization and final production verification. Version 0.3.24 connects canonical notes to retrieval; its measurements and boundaries are recorded in [canonical retrieval](alden-canonical-retrieval-20261005.md).
 
 ## Volumetric graph
 

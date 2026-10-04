@@ -21,6 +21,42 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_canonical_retrieval_rrf_freshness_deletion_and_room_boundaries(self):
+        result=self.execute(r'''
+a.synchronize(root,source);c,g,_,w=a._load_engine(root)
+from unittest.mock import patch
+import alden_osk_retrieval as r
+import auto_reply_knowledge_graph as kg
+one=w.create_node('주장 반증','검증 원리','핵심 주장 반증은 근거와 반례를 확인한다.','agent',space=a.SOURCE_SPACE)
+try:w.create_node('부적격 충돌','잘못된 관계','일반 노드를 사건으로 만들지 않는다.','agent',space=a.SOURCE_SPACE,edges={'conflicts':[one['id']]})
+except Exception:pass
+else:raise AssertionError('ordinary node became a conflict case')
+two=w.create_node('검증 설계','설계 가설','주장 반증을 전제로 한 검증 설계 [['+one['id']+']].','agent',space=a.SOURCE_SPACE,edges={'derived-from':[one['id']]})
+identity='osk:'+one['id'];other='osk:'+two['id']
+with patch.object(kg,'_active_dense_embedding_model',return_value='fixture-encoder'),patch.object(kg,'_dense_endpoint_identity',return_value='http://127.0.0.1/fixture'):
+ first=r.retrieve(root,'주장 반증',query_embed=lambda _: [1.,0.]);assert first['search_mode']=='bm25_only'
+ before={str(p):p.read_bytes() for p in (a._home(root)/'vault').rglob('*') if p.is_file()}
+ status=r.index_dense(root,embed=lambda texts:[[1.,0.] for _ in texts]);assert status['embedded_changed']>0
+ hybrid=r.retrieve(root,'주장 반증',max_entities=8,query_embed=lambda _:[1.,0.]);assert hybrid['search_mode']=='rrf'
+ assert identity in {p['entity_id'] for p in hybrid['candidate_provenance']}
+ assert any(p['relation']=='derived-from' for p in hybrid['relation_provenance'])
+ assert before=={str(p):p.read_bytes() for p in (a._home(root)/'vault').rglob('*') if p.is_file()}
+ assert r.index_dense(root,embed=lambda _:1/0)['embedded_changed']==0
+ assert not r.retrieve(root,'주장 반증',chat_id='42',query_embed=lambda _:[1.,0.])['facts']
+ path=g.Index().by_id[one['id']][0];w.update_node(one['id'],body='수정된 반증 근거',expect_hash=a.digest(path.read_bytes()))
+ fresh=r.retrieve(root,'수정된 반증',query_embed=lambda _:[1.,0.]);assert fresh['search_mode']=='bm25_only' and any('수정된 반증' in x for x in fresh['facts'])
+ path.unlink();gone=r.retrieve(root,'주장 반증',query_embed=lambda _:[1.,0.]);assert identity not in {p['entity_id'] for p in gone['candidate_provenance']}
+ import sqlite3
+ with sqlite3.connect(a._home(root)/'retrieval.sqlite3') as db:
+  assert not db.execute('SELECT 1 FROM vectors WHERE id=?',(identity,)).fetchone()
+ bounded=r.retrieve(root,'검증 설계',max_entities=8,max_context_chars=256,query_embed=lambda _:[1.,0.]);assert sum(map(len,bounded['facts']))<=256 and len(bounded['facts'])==len(bounded['fact_provenance'])
+ try:r.retrieve(root,'검증',cancelled=lambda:True)
+ except RuntimeError as e:assert 'cancelled' in str(e)
+ else:raise AssertionError('cancel ignored')
+print(json.dumps({'rrf':True,'fresh':True,'deleted':True,'scoped':True,'canonicalUnchanged':True}))
+''')
+        self.assertTrue(result['rrf'])
+
     def test_canonical_focus_returns_body_and_scoped_alias_does_not_leak(self):
         result=self.execute(r'''
 a.synchronize(root,source);c,g,_,w=a._load_engine(root)

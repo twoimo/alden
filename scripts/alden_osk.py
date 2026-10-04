@@ -1174,6 +1174,19 @@ def sync_cycle(state_root: Path, binary: Path | None = None, *, collect=None, sy
         archive=capture(state_root,secrets.filter_text,cancelled=lambda:_aborted(state_root))
     else: archive={}
     result=sync(state_root)
+    # Existing producer owns disposable retrieval maintenance. Query paths never
+    # embed documents or turn search results into canonical knowledge.
+    retrieval = {'state': 'unavailable'}
+    if result.get('ok') and result.get('state') != 'busy' and not _aborted(state_root):
+        try:
+            from alden_osk_retrieval import index_dense
+            from alden_abort import AbortController
+            from auto_reply_knowledge_graph import embedding_abort_scope
+            token = AbortController(state_root).token()
+            with embedding_abort_scope(token):
+                retrieval = index_dense(state_root, cancelled=token.is_cancelled)
+        except Exception as error:
+            retrieval = {'state': 'pending', 'reason': type(error).__name__}
     checkpoint=_read_json(_home(state_root)/'sync.json')
     pending=int(corpus.get('pending_messages',0))+int(result.get('pending',0))+int(checkpoint.get('layout_pending',0))+int(result.get('conflicts',0))
     phase='paused' if _aborted(state_root) else 'complete' if collection!='waiting' and result.get('ok') and result.get('state')!='busy' and not result.get('stale') and pending==0 else 'pending'
@@ -1181,9 +1194,10 @@ def sync_cycle(state_root: Path, binary: Path | None = None, *, collect=None, sy
     status={'schema_version':1,'checked_at':int(now),'collection':collection,'collection_retry_at':int(now+300) if collection=='waiting' and not waiting else previous.get('collection_retry_at',0) if waiting else 0,
             'saved_corpus_ready':bool(result.get('ok') and not result.get('stale') and pending==0),'source_signature':result.get('source_signature'),
             'room_name_observation':names,
+            'canonical_retrieval':retrieval,
             'archive_snapshot':archive.get('snapshot'),'archive_rows':archive.get('rows')}
     _save(status_path,status)
-    return {**result,'collection':collection,'archive':archive,'room_name_observation':names}
+    return {**result,'collection':collection,'archive':archive,'room_name_observation':names,'canonical_retrieval':retrieval}
 
 
 def main() -> int:

@@ -3107,6 +3107,10 @@ class _RejectLoopbackRedirects(urllib.request.HTTPRedirectHandler):
 
 _EMBEDDING_ABORT_TOKEN = ContextVar('alden_embedding_abort_token',default=None)
 
+def _embedding_cancelled() -> bool:
+    token = _EMBEDDING_ABORT_TOKEN.get()
+    return bool(token and token.is_cancelled())
+
 @contextmanager
 def embedding_abort_scope(token):
     handle=_EMBEDDING_ABORT_TOKEN.set(token)
@@ -4206,6 +4210,14 @@ def retrieve_knowledge_bundle(
     """
     if type(max_context_chars) is not int or not 256 <= max_context_chars <= 16000:
         raise ValueError("retrieval context budget must be an integer in 256..16000")
+    root = state_root or Path.home() / "Library/Application Support/openkakao/bujamentor"
+    if (root / 'knowledge/osk/sync.json').is_file():
+        from alden_osk_retrieval import retrieve
+        return retrieve(root, query_text, chat_id=chat_id, participant_id=participant_id,
+                        time_from=time_from, time_to=time_to, also=also,
+                        max_entities=max_entities, max_relations=max_relations,
+                        candidate_limit=candidate_limit, max_context_chars=max_context_chars,
+                        rrf_k=rrf_k, rrf_weights=rrf_weights, cancelled=_embedding_cancelled)
     ranked = _query_knowledge_ranked(
         query_text,
         state_root=state_root,
