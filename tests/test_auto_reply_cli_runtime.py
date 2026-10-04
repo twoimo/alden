@@ -21175,6 +21175,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             (Path(temporary) / "disappeared.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
             with (
                 mock.patch.object(module, "_operator_state_root", return_value=Path(temporary)),
+                mock.patch.object(module.alden_local_vision, "input_byte_budget", return_value=module.MAX_MODEL_PROMPT_BYTES),
                 mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
                 mock.patch.object(module, "runner_is_trusted", return_value=True),
                 mock.patch.object(module, "_image_path_within_cap", return_value=True),
@@ -21213,6 +21214,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             second = "opencode-go-session/vision-second"
             with (
                 mock.patch.object(module, "_operator_state_root", return_value=Path(temporary)),
+                mock.patch.object(module.alden_local_vision, "input_byte_budget", return_value=module.MAX_MODEL_PROMPT_BYTES),
                 mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
                 mock.patch.object(module, "runner_is_trusted", return_value=True),
                 mock.patch.object(module, "_image_path_within_cap", return_value=True),
