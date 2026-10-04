@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { contextRegions, regionBounds } from '../knowledge/context-regions';
+import { CONTEXT_REGION_CAP, contextRegions, regionBounds } from '../knowledge/context-regions';
 import { ContextNebulae } from '../knowledge/cortex';
 import { KnowledgeDrilldown, overviewGraph, parseKnowledgeGraph, type KnowledgeView } from '../knowledge/graph-model';
 import { relationAnchors } from '../knowledge/relation-layout';
@@ -13,12 +13,31 @@ const view = (): KnowledgeView => ({ ...parseKnowledgeGraph({
   edges: ['a', 'b', 'c'].map(source => ({ source, target: 'shared', weight: 5, purpose: 'semantic' })),
 }), focusId: null, hops: 0 });
 
-describe('source context envelopes', () => {
-  it('shows three actual spaces and places a shared memory in its three real contexts without mutating evidence', () => {
+const hubGraph = () => parseKnowledgeGraph({
+  nodes: [
+    { id: 'osk:hub-a', label: 'Saved hub', is_hub: true, space: '00_Scope/Index' },
+    { id: 'osk:hub-b', label: 'Saved hub', is_hub: true, space: '00_Scope/Index' },
+    { id: 'source:original', label: 'Original', space: '00_Scope/Notes' },
+    { id: 'osk:unplaced', label: 'Unplaced' },
+    { id: 'osk:second-hop', label: 'Second hop' },
+    { id: 'osk:ordinary', label: 'Saved hub', category: 'collection', space: '00_Scope/Index' },
+  ],
+  edges: [
+    { source: 'osk:hub-a', target: 'source:original', relation: 'linked', purpose: 'navigation' },
+    { source: 'source:original', target: 'osk:hub-b', relation: 'derived-from', purpose: 'reference' },
+    { source: 'osk:hub-a', target: 'osk:unplaced', relation: 'linked', purpose: 'navigation' },
+    { source: 'osk:unplaced', target: 'osk:second-hop', relation: 'linked', purpose: 'reference' },
+    { source: 'osk:ordinary', target: 'osk:second-hop', relation: 'linked', purpose: 'navigation' },
+    { source: 'osk:hub-b', target: 'osk:second-hop', relation: 'discusses', purpose: 'semantic' },
+  ],
+});
+
+describe('canonical OSK context envelopes', () => {
+  it('uses only each note’s stored directory, never its neighbours’ directories', () => {
     const graph = view(), before = JSON.stringify(graph);
-    const regions = contextRegions(graph);
-    expect(regions).toHaveLength(3);
-    for (const region of regions) expect(region.nodeIds).toContain('shared');
+    expect(contextRegions(graph)).toEqual(['a', 'b', 'c'].map(id => ({
+      id: 'space:source/' + id, label: id, nodeIds: [id],
+    })));
     expect(JSON.stringify(graph)).toBe(before);
   });
   it('adds and removes contexts with their actual members, rather than fixing three or deriving types', () => {
@@ -29,20 +48,31 @@ describe('source context envelopes', () => {
     graph.nodes.forEach(n => { n.category = '인물'; n.label = '같은 제목'; });
     expect(contextRegions(graph)).toHaveLength(3);
   });
-  it('does not propagate through navigation, retracted links, expired links or a second shared hop', () => {
-    const graph = view(); graph.edges[1].purpose = 'navigation'; graph.edges[2].validTo = '2000-01-01';
+  it('does not turn ordinary Links or derived-from into transitive directory membership', () => {
+    const graph = view();
+    graph.edges[0].relation = 'linked'; graph.edges[0].purpose = 'navigation';
+    graph.edges[1].relation = 'derived-from'; graph.edges[1].purpose = 'reference';
     graph.nodes.push({ ...graph.nodes[3], id: 'second' });
     graph.edges.push({ ...graph.edges[0], source: 'shared', target: 'second' });
-    expect(contextRegions(graph).find(r => r.id === 'space:source/a')!.nodeIds).toEqual(['a', 'shared']);
-    expect(contextRegions(graph).find(r => r.id === 'space:source/b')!.nodeIds).toEqual(['b']);
-    graph.edges[0].evidence.retracted = true;
-    expect(contextRegions(graph).find(r => r.id === 'space:source/a')!.nodeIds).toEqual(['a']);
+    expect(contextRegions(graph).flatMap(region => region.nodeIds)).toEqual(['a', 'b', 'c']);
   });
-  it('uses actual semantic components when no space exists, and keeps the visible budget', () => {
+  it('leaves unplaced notes ungrouped even when they share types, titles and connected components', () => {
     const graph = view(); graph.nodes.forEach(n => { n.space = ''; });
-    expect(contextRegions(graph)).toHaveLength(1);
-    graph.edges = []; graph.nodes = Array.from({length:80}, (_,i) => ({...graph.nodes[0],id:String(i)}));
-    expect(contextRegions(graph)).toHaveLength(24);
+    graph.nodes.forEach(n => { n.category = 'collection'; n.label = 'Confirmed topic'; });
+    expect(contextRegions(graph)).toEqual([]);
+    graph.edges = [];
+    expect(contextRegions(graph)).toEqual([]);
+    expect(graph.nodes.map(n => n.id)).toEqual(['a', 'b', 'c', 'shared']);
+  });
+  it('keeps canonical memberships deterministic and inside the existing node and region budgets', () => {
+    const graph = view();
+    graph.nodes = Array.from({ length: 80 }, (_, i) => ({ ...graph.nodes[0], id: String(i), space: 'source/' + i, isHub: true }));
+    graph.edges = [];
+    const regions = contextRegions(graph);
+    expect(regions).toHaveLength(CONTEXT_REGION_CAP);
+    expect(regions.every(region => region.id.startsWith('space:'))).toBe(true);
+    expect(new Set(regions.flatMap(region => region.nodeIds)).size).toBe(24);
+    expect(contextRegions({ ...graph, nodes: [...graph.nodes].reverse() })).toEqual(regions);
   });
   it('keeps existing component anchors unchanged when an unrelated context appears', () => {
     const graph = view(), before = relationAnchors(graph);
@@ -55,29 +85,33 @@ describe('source context envelopes', () => {
     const bounds = regionBounds(region,new Map([['a',{x:-1,y:0,z:0}],['b',{x:1,y:0,z:0}],['bad',{x:NaN,y:0,z:0}]]));
     expect(bounds).toEqual({x:0,y:0,z:0,radius:1.2});
   });
-  it('preserves attested multi-room memberships while refusing ambiguous room-space mappings', () => {
+  it('ignores both unambiguous and ambiguous room lists and preserves the source directory', () => {
     const graph = view(); graph.nodes[0].evidence.chatId = '101'; graph.nodes[1].evidence.chatId = '202';
-    graph.nodes[3].space = 'source/shared'; graph.nodes[3].evidence.roomIds = ['101','202'];
+    graph.nodes[3].space = 'source'; graph.nodes[3].evidence.roomIds = ['101','202'];
     const regions = contextRegions(graph);
-    expect(regions.find(r=>r.id==='space:source/a')!.nodeIds).toContain('shared');
-    expect(regions.find(r=>r.id==='space:source/b')!.nodeIds).toContain('shared');
+    expect(regions.filter(region => region.nodeIds.includes('shared'))).toEqual([
+      { id: 'space:source', label: 'source', nodeIds: ['shared'] },
+    ]);
     graph.nodes.push({...graph.nodes[2],id:'ambiguous',space:'other/room',evidence:{...graph.nodes[2].evidence,chatId:'101'}});
-    expect(contextRegions(graph).find(r=>r.id==='space:source/a')!.nodeIds).not.toContain('shared');
-    expect(graph.nodes[3].space).toBe('source/shared');
+    expect(contextRegions(graph).filter(region => region.nodeIds.includes('shared'))).toEqual([
+      { id: 'space:source', label: 'source', nodeIds: ['shared'] },
+    ]);
+    graph.nodes[3].space = '';
+    expect(contextRegions(graph).some(region => region.nodeIds.includes('shared'))).toBe(false);
   });
   it('keeps producer room IDs as strings and does not accept guessed or malformed identities', () => {
     const scoped='kakao:'+('a'.repeat(64))+':room:101';
     const graph = parseKnowledgeGraph({nodes:[{id:'a',label:'a',evidence:{room_ids:['101','202','101',scoped,'name:room',202,null]}}]});
     expect(graph.nodes[0].evidence.roomIds).toEqual(['101','202',scoped]);
   });
-  it('matches complete account-scoped room identities without mixing equal numbers across accounts', () => {
+  it('does not use account-scoped room identities as display membership', () => {
     const graph=view(), room='kakao:'+('a'.repeat(64))+':room:101', other='kakao:'+('b'.repeat(64))+':room:101';
     graph.nodes[0].evidence.chatId=room;graph.nodes[1].evidence.chatId=other;
     graph.nodes[3].space='source/shared';graph.nodes[3].evidence.roomIds=[room,'kakao:'+('a'.repeat(64))+':room:202'];
-    expect(contextRegions(graph).find(r=>r.id==='space:source/a')!.nodeIds).toContain('shared');
+    expect(contextRegions(graph).find(r=>r.id==='space:source/a')!.nodeIds).not.toContain('shared');
     expect(contextRegions(graph).find(r=>r.id==='space:source/b')!.nodeIds).not.toContain('shared');
   });
-  it('does not lose semantic membership when unrelated edges exceed the bridge drawing budget', () => {
+  it('does not change stored directory membership when unrelated edges exceed the bridge drawing budget', () => {
     const graph=view(), before=contextRegions(graph);
     const extra = parseKnowledgeGraph({nodes:Array.from({length:290},(_,i)=>({id:'hidden-'+i,label:'hidden'})),edges:Array.from({length:145},(_,i)=>({source:'hidden-'+(i*2),target:'hidden-'+(i*2+1),weight:100}))});
     expect(contextRegions(graph,{nodes:[...graph.nodes,...extra.nodes],edges:[...graph.edges,...extra.edges]})).toEqual(before);
@@ -106,12 +140,14 @@ describe('source context envelopes', () => {
     const before=overviewGraph(graph);graph.edges.push({...graph.edges[0],source:'d',target:'shared',weight:100,validTo:'2000-01-01'}, {...graph.edges[0],source:'d',target:'shared',weight:100,validFrom:'2999-01-01'});
     expect(overviewGraph(graph).nodes.map(n=>n.id)).toEqual(before.nodes.map(n=>n.id));
   });
-  it('keeps a direct hidden-neighbour membership when another unrelated space becomes visible', () => {
+  it('cannot infer membership from a hidden neighbour or a newly visible unrelated space', () => {
     const graph=view(),memory={...graph.nodes[3],id:'memory'},hidden=graph.nodes[0],unrelated=graph.nodes[1];
     const full={nodes:[memory,hidden,unrelated],edges:[{...graph.edges[0],source:'memory',target:hidden.id}]};
     const initial={...graph,nodes:[memory],edges:[]};
-    expect(contextRegions(initial,full).find(r=>r.id==='space:source/a')!.nodeIds).toContain('memory');
-    expect(contextRegions({...initial,nodes:[memory,unrelated]},full).find(r=>r.id==='space:source/a')!.nodeIds).toContain('memory');
+    expect(contextRegions(initial,full)).toEqual([]);
+    expect(contextRegions({...initial,nodes:[memory,unrelated]},full)).toEqual([
+      { id: 'space:source/b', label: 'b', nodeIds: ['b'] },
+    ]);
   });
   it('makes all disconnected spaces reachable through bounded More pages and restores prior overviews', () => {
     const graph=parseKnowledgeGraph({nodes:Array.from({length:245},(_,i)=>({id:String(i),label:String(i),space:'source/'+String(i).padStart(3,'0')}))});
@@ -130,6 +166,94 @@ describe('source context envelopes', () => {
     model.expandOneHop();expect(model.current().hops).toBe(2);expect(model.current().nodes.length).toBeLessThanOrEqual(24);
     model.back();expect(model.current().hops).toBe(0);expect(model.current().nodes.map(n=>n.id)).toEqual(ids);
     model.back();expect(model.current().focusId).toBe(null);
+  });
+});
+
+describe('stored hub membership readback', () => {
+  it('uses only direct explicit hub links, preserving IDs, directories and same-title hubs', () => {
+    const graph = hubGraph(), before = JSON.stringify(graph);
+    const regions = contextRegions({ ...graph, focusId: null, hops: 0 });
+    expect(regions.find(region => region.id === 'space:00_Scope/Index')).toEqual({
+      id: 'space:00_Scope/Index', label: 'Index', nodeIds: ['osk:hub-a', 'osk:hub-b', 'osk:ordinary'],
+    });
+    expect(regions.filter(region => region.id.startsWith('hub:'))).toEqual([
+      { id: 'hub:osk:hub-a', label: 'Saved hub', nodeIds: ['osk:hub-a', 'osk:unplaced', 'source:original'] },
+      { id: 'hub:osk:hub-b', label: 'Saved hub', nodeIds: ['osk:hub-b', 'source:original'] },
+    ]);
+    expect(regions.find(region => region.id === 'space:00_Scope/Notes')!.nodeIds).toEqual(['source:original']);
+    expect(regions.some(region => region.nodeIds.includes('osk:second-hop'))).toBe(false);
+    expect(JSON.stringify(graph)).toBe(before);
+  });
+
+  it('reads links to hidden actual hubs from the full graph without inheriting their directories', () => {
+    const graph = hubGraph();
+    const visible = { ...graph, nodes: graph.nodes.filter(node => node.id === 'osk:unplaced'), edges: [], focusId: null, hops: 0 };
+    const expected = [{ id: 'hub:osk:hub-a', label: 'Saved hub', nodeIds: ['osk:unplaced'] }];
+    expect(contextRegions(visible, graph)).toEqual(expected);
+    const extra = parseKnowledgeGraph({
+      nodes: Array.from({ length: 290 }, (_, i) => ({ id: 'hidden-' + i, label: 'hidden' })),
+      edges: Array.from({ length: 145 }, (_, i) => ({ source: 'hidden-' + i * 2, target: 'hidden-' + (i * 2 + 1), weight: 100 })),
+    });
+    expect(contextRegions(visible, { nodes: [...graph.nodes, ...extra.nodes], edges: [...extra.edges, ...graph.edges] })).toEqual(expected);
+  });
+
+  it('reads current paths by source ID even when the selected view still has old paths', () => {
+    const graph = hubGraph(), selected = { ...graph, focusId: 'source:original', hops: 2 };
+    const current = hubGraph();
+    current.nodes.find(node => node.id === 'source:original')!.space = '00_Scope/Moved/Notes';
+    current.nodes.find(node => node.id === 'osk:hub-a')!.space = '00_Scope/Moved/Index';
+    const before = JSON.stringify({ selected, current });
+    const regions = contextRegions(selected, current);
+    expect(regions.find(region => region.id === 'space:00_Scope/Notes')).toBeUndefined();
+    expect(regions.find(region => region.id === 'space:00_Scope/Moved/Notes')!.nodeIds).toEqual(['source:original']);
+    expect(regions.find(region => region.id === 'space:00_Scope/Moved/Index')!.nodeIds).toEqual(['osk:hub-a']);
+    expect(regions.find(region => region.id === 'space:00_Scope/Index')!.nodeIds).toEqual(['osk:hub-b', 'osk:ordinary']);
+    expect(regions.find(region => region.id === 'hub:osk:hub-a')!.nodeIds).toContain('source:original');
+    expect(JSON.stringify({ selected, current })).toBe(before);
+  });
+
+  it('reads hub renames, explicit-link removal and hub removal without stale memberships', () => {
+    const graph = hubGraph(), selected = { ...hubGraph(), focusId: null, hops: 0 };
+    graph.nodes.find(node => node.id === 'osk:hub-a')!.label = 'Renamed on disk';
+    graph.edges = graph.edges.filter(edge => edge.target !== 'osk:unplaced');
+    let regions = contextRegions(selected, graph);
+    expect(regions.find(region => region.id === 'hub:osk:hub-a')).toEqual({
+      id: 'hub:osk:hub-a', label: 'Renamed on disk', nodeIds: ['osk:hub-a', 'source:original'],
+    });
+    expect(regions.some(region => region.nodeIds.includes('osk:unplaced'))).toBe(false);
+    graph.nodes.find(node => node.id === 'osk:hub-a')!.isHub = false;
+    expect(contextRegions(selected, graph).some(region => region.id === 'hub:osk:hub-a')).toBe(false);
+    graph.nodes = graph.nodes.filter(node => node.id !== 'osk:hub-b');
+    regions = contextRegions(selected, graph);
+    expect(regions.some(region => region.id.startsWith('hub:') || region.nodeIds.includes('osk:hub-b'))).toBe(false);
+    expect(regions.find(region => region.id === 'space:00_Scope/Notes')!.nodeIds).toEqual(['source:original']);
+  });
+
+  it('does not keep retracted hubs or notes through dangling explicit links', () => {
+    const graph = hubGraph(), selected = { ...hubGraph(), focusId: null, hops: 0 };
+    graph.nodes.find(node => node.id === 'osk:hub-a')!.evidence.retracted = true;
+    graph.nodes.find(node => node.id === 'source:original')!.evidence.retracted = true;
+    const regions = contextRegions(selected, graph);
+    expect(regions.some(region => region.id === 'hub:osk:hub-a')).toBe(false);
+    expect(regions.flatMap(region => region.nodeIds)).not.toEqual(expect.arrayContaining(['source:original']));
+    expect(regions.flatMap(region => region.nodeIds)).not.toEqual(expect.arrayContaining(['osk:hub-a']));
+    expect(regions.some(region => region.nodeIds.includes('osk:unplaced'))).toBe(false);
+  });
+
+  it('honours link validity boundaries and retractions without dropping a note’s own directory', () => {
+    const graph = hubGraph(), visible = { ...graph, nodes: graph.nodes.filter(node => node.id === 'source:original'), edges: [], focusId: null, hops: 0 };
+    graph.edges = [graph.edges[0]];
+    graph.edges[0].validFrom = '2026-10-01T00:00:00Z';
+    graph.edges[0].validTo = '2026-10-02T00:00:00Z';
+    const from = Date.parse(graph.edges[0].validFrom), until = Date.parse(graph.edges[0].validTo);
+    const directory = { id: 'space:00_Scope/Notes', label: 'Notes', nodeIds: ['source:original'] };
+    const hub = { id: 'hub:osk:hub-a', label: 'Saved hub', nodeIds: ['source:original'] };
+    expect(contextRegions(visible, graph, from - 1)).toEqual([directory]);
+    expect(contextRegions(visible, graph, from)).toEqual([directory, hub]);
+    expect(contextRegions(visible, graph, until - 1)).toEqual([directory, hub]);
+    expect(contextRegions(visible, graph, until)).toEqual([directory]);
+    graph.edges[0].evidence.retracted = true;
+    expect(contextRegions(visible, graph, from)).toEqual([directory]);
   });
 });
 

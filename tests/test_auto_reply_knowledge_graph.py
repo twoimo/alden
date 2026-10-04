@@ -44,6 +44,17 @@ KG = load_graph()
 CHAT_ID = "417780809780519"
 
 
+def setUpModule():
+    # Retrieval tests use fixture vectors or the BM25 fallback. Never contact
+    # a live embedding model; transport tests install their own fake response.
+    transport = mock.patch.object(
+        KG, "_open_loopback_embedding_request",
+        side_effect=KG._DenseEmbeddingPermanentError("fixture embedding endpoint unavailable"),
+    )
+    transport.start()
+    unittest.addModuleCleanup(transport.stop)
+
+
 def make_state_root(tmp: str) -> Path:
     """A state root with one room ledger, shaped like the real one."""
     root = Path(tmp) / "state"
@@ -242,9 +253,9 @@ class KHopNeighborhoodTests(unittest.TestCase):
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
                 self._add_entity(conn, "ent:test:root", "root")
-                self._add_entity(conn, "topic:test:child", "child")
+                self._add_entity(conn, "ent:test:child", "child")
                 self._add_entity(conn, "message:raw:1", "raw message")
-                self._add_relation(conn, "ent:test:root", "topic:test:child", 90)
+                self._add_relation(conn, "ent:test:root", "ent:test:child", 90)
                 self._add_relation(conn, "ent:test:root", "message:raw:1", 100)
                 conn.commit()
             finally:
@@ -257,9 +268,9 @@ class KHopNeighborhoodTests(unittest.TestCase):
                 focus_limit=10,
             )
             node_ids = {node["id"] for node in report["nodes"]}
-            self.assertEqual(node_ids, {"ent:test:root", "topic:test:child"})
+            self.assertEqual(node_ids, {"ent:test:root", "ent:test:child"})
             self.assertEqual(len(report["edges"]), 1)
-            self.assertEqual(report["edges"][0]["target"], "topic:test:child")
+            self.assertEqual(report["edges"][0]["target"], "ent:test:child")
 
     def test_retrieve_bundle_uses_default_two_hop_focus(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -268,7 +279,7 @@ class KHopNeighborhoodTests(unittest.TestCase):
             try:
                 for entity_id, name, aliases in (
                     ("ent:test:alpha", "Alpha", ["alpha"]),
-                    ("topic:test:beta", "Beta", []),
+                    ("ent:test:beta", "Beta", []),
                     ("ent:test:gamma", "Gamma", []),
                 ):
                     conn.execute(
@@ -286,8 +297,8 @@ class KHopNeighborhoodTests(unittest.TestCase):
                             1,
                         ),
                     )
-                self._add_relation(conn, "ent:test:alpha", "topic:test:beta", 90)
-                self._add_relation(conn, "topic:test:beta", "ent:test:gamma", 80)
+                self._add_relation(conn, "ent:test:alpha", "ent:test:beta", 90)
+                self._add_relation(conn, "ent:test:beta", "ent:test:gamma", 80)
                 conn.commit()
             finally:
                 conn.close()
@@ -491,6 +502,7 @@ class BackgroundReindexTests(unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
+                env={**os.environ, "OPENKAKAO_LOCAL_EMBEDDING_URL": "https://fixture.invalid/embeddings"},
                 timeout=120,
                 check=False,
             )
@@ -617,14 +629,8 @@ class RealIndexPathTests(unittest.TestCase):
                 ).fetchone()
             finally:
                 kg.close()
-        self.assertEqual(stats["written"], 1)
-        self.assertEqual(stats["with_samples"], 1)
-        self.assertIsNotNone(row)
-        stored = json.dumps(row, ensure_ascii=False)
-        self.assertNotIn(raw_message, stored)
-        facts = json.loads(row[2])
-        self.assertIn("30건", facts[0])
-        self.assertIn("2026-09-21", facts[1])
+        self.assertEqual(stats, {"topics": 0, "written": 0, "with_samples": 0})
+        self.assertIsNone(row)
 
     def test_person_indexer_reads_while_source_database_is_exclusively_locked(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2692,15 +2698,15 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
                 for entity_id in (
-                    "topic:bundle:root",
-                    "topic:bundle:allowed",
-                    "topic:bundle:room-leak",
-                    "topic:bundle:retracted",
+                    "ent:bundle:root",
+                    "ent:bundle:allowed",
+                    "ent:bundle:room-leak",
+                    "ent:bundle:retracted",
                 ):
                     self._insert_entity(conn, entity_id)
                 conn.execute(
                     "UPDATE kg_entities SET name='관계 전용',aliases_json='[]'"
-                    " WHERE entity_id != 'topic:bundle:root'"
+                    " WHERE entity_id != 'ent:bundle:root'"
                 )
 
                 def add_relation(relation, target_id, context, evidence):
@@ -2710,7 +2716,7 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
                         " context,weight,evidence_json,updated_at)"
                         " VALUES (?,?,?,?,?,?,?,?,?)",
                         (
-                            "topic:bundle:root",
+                            "ent:bundle:root",
                             relation,
                             target_id,
                             "",
@@ -2724,7 +2730,7 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
 
                 add_relation(
                     "ALLOWED",
-                    "topic:bundle:allowed",
+                    "ent:bundle:allowed",
                     "알파 허용 관계",
                     {
                         "kind": "ledger",
@@ -2736,7 +2742,7 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
                 )
                 add_relation(
                     "ROOM_LEAK",
-                    "topic:bundle:room-leak",
+                    "ent:bundle:room-leak",
                     "베타 관계 누출",
                     {
                         "kind": "ledger",
@@ -2748,7 +2754,7 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
                 )
                 add_relation(
                     "RETRACTED",
-                    "topic:bundle:retracted",
+                    "ent:bundle:retracted",
                     "철회 관계 누출",
                     {
                         "kind": "ledger",
@@ -2762,7 +2768,7 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
             finally:
                 conn.close()
 
-            dense = [("topic:bundle:root", 1.0)]
+            dense = [("ent:bundle:root", 1.0)]
             with mock.patch.object(KG, "_dense_ann_query", return_value=(dense, "w1")):
                 ranked = KG._query_knowledge_ranked(
                     "출시 일정", state_root=root, chat_id="room-alpha"
@@ -2791,7 +2797,7 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
         self.assertEqual(len(bundle["facts"]), len(bundle["fact_provenance"]))
         self.assertEqual(
             set(bundle["evidence_ids"]),
-            {"synthetic:topic:bundle:root", "synthetic:bundle:allowed"},
+            {"synthetic:ent:bundle:root", "synthetic:bundle:allowed"},
         )
         self.assertNotIn("synthetic:bundle:room-beta", bundle["evidence_ids"])
         self.assertNotIn("synthetic:bundle:retracted", bundle["evidence_ids"])
@@ -2823,6 +2829,39 @@ class RetrievalCandidateBoundaryTests(unittest.TestCase):
             self.assertEqual(result["entity_facts"], [])
             self.assertEqual(result["relation_facts"], [])
             self.assertEqual(result["relation_provenance"], [])
+
+
+    def test_retirement_removes_all_projections_and_blocks_legacy_reinjection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            kg = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
+            kg.execute("INSERT INTO kg_entities(entity_id,name,category,aliases_json,description,key_facts_json,importance,updated_at) VALUES('topic:old','OLDTOPIC','topic','[]','classification','[]',50,1)")
+            kg.commit(); kg.close()
+            with sqlite3.connect(root / 'context.sqlite3') as db:
+                db.executescript("CREATE TABLE context_message_topics(message_id,topic);CREATE TABLE context_topic_stats(topic);CREATE TABLE context_messages(id,body);CREATE TABLE context_reference_packs(id INTEGER PRIMARY KEY,topics TEXT,body TEXT);INSERT INTO context_message_topics VALUES(1,'stocks');INSERT INTO context_topic_stats VALUES('stocks');INSERT INTO context_messages VALUES(1,'ORIGINAL RAW');INSERT INTO context_reference_packs VALUES(1,'stocks','original pack');")
+            with sqlite3.connect(root / KG.DENSE_INDEX_DB_NAME) as db:
+                db.executescript("CREATE TABLE dense_vectors(entity_id,vector_json);CREATE TABLE ann_buckets(entity_id);INSERT INTO dense_vectors VALUES('topic:old','[1]');INSERT INTO ann_buckets VALUES('topic:old');")
+            stats = KG.retire_preclassification_indexes(root)
+            self.assertEqual(stats['topic_nodes'], 1)
+            self.assertEqual(stats['assignments'], 2)
+            self.assertEqual(stats['vectors'], 2)
+            with sqlite3.connect(root / 'context.sqlite3') as db:
+                db.execute("INSERT INTO context_message_topics VALUES(1,'ai')")
+                db.execute("INSERT INTO context_topic_stats VALUES('ai')")
+                db.execute("UPDATE context_reference_packs SET topics='ai'")
+                self.assertEqual(db.execute('SELECT * FROM context_messages').fetchall(), [(1,'ORIGINAL RAW')])
+                self.assertEqual(db.execute('SELECT topics,body FROM context_reference_packs').fetchall(), [('', 'original pack')])
+                self.assertEqual(db.execute('SELECT * FROM context_message_topics').fetchall(), [])
+                self.assertEqual(db.execute('SELECT * FROM context_topic_stats').fetchall(), [])
+            with sqlite3.connect(root / KG.KNOWLEDGE_GRAPH_DB_NAME) as db:
+                db.execute("INSERT INTO kg_entities(entity_id,name,category,aliases_json,description,key_facts_json,importance,updated_at) VALUES('topic:old','OLDTOPIC','topic','[]','classification','[]',50,1)")
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM kg_entities WHERE entity_id LIKE 'topic:%'").fetchone()[0], 0)
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM kg_entities_fts WHERE kg_entities_fts MATCH 'OLDTOPIC'").fetchone()[0], 0)
+            with sqlite3.connect(root / KG.DENSE_INDEX_DB_NAME) as db:
+                db.execute("INSERT INTO dense_vectors VALUES('topic:old','[1]')")
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM dense_vectors').fetchone()[0], 0)
+            again = KG.retire_preclassification_indexes(root)
+            self.assertEqual(sum(again[k] for k in ('assignments','topic_nodes','relations','vectors','packs')), 0)
 
 
 if __name__ == "__main__":

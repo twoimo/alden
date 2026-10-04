@@ -55,15 +55,11 @@ def room_displays(root: Path, room_ids, expected_account: str = '') -> dict[str,
     cache, with title versus peer/display provenance), snapshot (captured room
     display name), catalog (saved user title),
     catalog_history (saved past title), activity_alias (recent recorded peers),
-    topic_alias (dominant repeated subject in existing topic metadata),
     unresolved (identifiable archive label, not a confirmed title).
     A snapshot name may itself be a direct
     chat's peer display name; the current corpus does not distinguish this.
     Catalog files are capped at 64 KiB and history at 32 files. Only requested
     room metadata and at most 256 recent sender rows per unnamed room are read.
-    Rooms without usable names additionally read at most 512 recent IDs and
-    8192 existing topic assignments plus one overflow probe. Topic aliases require 20 peer messages,
-    20% sample coverage, 60% tagged-message coverage and twice the runner-up.
     Message bodies and the global author table are never read here.
     Optional observations are read from knowledge/corpus/<account>/room-observations.json
     (2 MiB/10000 rows, same snapshot, at most 24h old). The producer must attest

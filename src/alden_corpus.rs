@@ -200,6 +200,9 @@ pub(crate) fn synchronize(source: &Connection, options: Options<'_>) -> Result<R
         .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
         .collect::<Result<HashMap<_, _>, _>>()?;
     let tx = out.transaction()?;
+    // Retain the compatibility tables, but never publish lexical topic labels.
+    // Clear legacy rows even when a resumed snapshot has no changed messages.
+    tx.execute("DELETE FROM context_message_topics", [])?;
     for (id, label) in &rooms {
         let key = format!("kakao:{account}:room:{id}");
         tx.execute("INSERT INTO alden_rooms VALUES(?,?,?) ON CONFLICT(chat)DO UPDATE SET label=excluded.label",params![key,id.to_string(),label])?;
@@ -265,23 +268,6 @@ pub(crate) fn synchronize(source: &Connection, options: Options<'_>) -> Result<R
                 sent_at_source
             ])?;
             changed += writes;
-            if writes > 0 {
-                let id: i64 = tx.query_row(
-                    "SELECT id FROM alden_messages WHERE chat_id=? AND log_id=?",
-                    params![chat.to_string(), log.to_string()],
-                    |r| r.get(0),
-                )?;
-                tx.execute(
-                    "DELETE FROM context_message_topics WHERE message_id=?",
-                    [id],
-                )?;
-                for topic in crate::context::classify_message_topics(&text) {
-                    tx.execute(
-                        "INSERT INTO context_message_topics VALUES(?,?)",
-                        params![id, topic],
-                    )?;
-                }
-            }
             seen.execute(params![chat, log])?;
             processed += 1;
         }
@@ -292,7 +278,6 @@ pub(crate) fn synchronize(source: &Connection, options: Options<'_>) -> Result<R
         |r| r.get::<_, bool>(0),
     )?;
     if finished {
-        tx.execute("DELETE FROM context_message_topics WHERE message_id IN(SELECT id FROM alden_messages WHERE NOT EXISTS(SELECT 1 FROM corpus_seen s WHERE s.chat_id=CAST(alden_messages.chat_id AS INTEGER) AND s.log_id=CAST(alden_messages.log_id AS INTEGER)))",[]) ?;
         tx.execute("DELETE FROM alden_messages WHERE NOT EXISTS(SELECT 1 FROM corpus_seen s WHERE s.chat_id=CAST(alden_messages.chat_id AS INTEGER) AND s.log_id=CAST(alden_messages.log_id AS INTEGER))", [])?;
         set_meta(&tx, "complete", 1)?;
     }
@@ -377,6 +362,114 @@ mod tests {
         c.execute_batch("CREATE TABLE NTChatMessage(logId INTEGER,chatId INTEGER,authorId INTEGER,message TEXT,attachment TEXT,type INTEGER,sentAt INTEGER);CREATE TABLE NTUser(userId INTEGER,displayName TEXT,friendNickName TEXT,nickName TEXT,linkId INTEGER);CREATE TABLE NTChatRoom(chatId INTEGER,chatName TEXT);INSERT INTO NTUser VALUES(7,'同名','','',0),(8,'同名','','',0);INSERT INTO NTChatRoom VALUES(42,'同名房'),(84,'同名房');INSERT INTO NTChatMessage VALUES(9007199254740997,42,7,'원문 <script>\n全','',1,1234),(9007199254740997,84,8,'다른 방','',1,1234),(100,42,7,'끝','',1,1234);PRAGMA query_only=ON;").unwrap();
         c
     }
+    fn topic_test_rows(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
+        let mut stmt = conn.prepare(sql).unwrap();
+        let columns = stmt.column_count();
+        stmt.query_map([], |row| (0..columns).map(|i| row.get(i)).collect())
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn repeated_keywords_and_replays_never_publish_topics_or_change_source_rows() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().canonicalize()?.join("corpus");
+        let account = "e".repeat(64);
+        let src = source();
+        let text = format!(
+            "  {}\n原文 <script>  ",
+            "stock AI crypto 주식 비트코인 인공지능 ".repeat(32)
+        );
+        src.execute_batch("PRAGMA query_only=OFF")?;
+        src.execute("UPDATE NTChatMessage SET message=?1", [&text])?;
+        src.execute_batch("PRAGMA query_only=ON")?;
+        let source_rows =
+            topic_test_rows(&src, "SELECT rowid, * FROM NTChatMessage ORDER BY rowid");
+        assert!(!sync!(&src, &root, &account, 7, "first", 1, 1, None)?.complete);
+        let working = root.join(&account).join("working.sqlite3");
+        let conn = Connection::open(&working)?;
+        assert!(topic_test_rows(&conn, "SELECT * FROM context_message_topics").is_empty());
+        // Old labels can exist when resuming a corpus written by an older build.
+        conn.execute(
+            "INSERT INTO context_message_topics SELECT id, 'stocks' FROM alden_messages",
+            [],
+        )?;
+        drop(conn);
+        assert!(sync!(&src, &root, &account, 7, "first", 1, 10, None)?.complete);
+        let conn = Connection::open(&working)?;
+        let queries = [
+            "SELECT * FROM alden_messages ORDER BY id",
+            "SELECT * FROM context_messages ORDER BY id",
+            "SELECT * FROM alden_rooms ORDER BY chat",
+            "SELECT * FROM alden_authors ORDER BY author_id",
+            "SELECT rowid, bm25(context_messages_fts) FROM context_messages_fts
+                 WHERE context_messages_fts MATCH 'stock OR AI OR crypto' ORDER BY rowid",
+        ];
+        let before: Vec<_> = queries
+            .iter()
+            .map(|sql| topic_test_rows(&conn, sql))
+            .collect();
+        assert_eq!(before[4].len(), 3);
+        let identities = topic_test_rows(
+            &conn,
+            "SELECT chat_id, log_id, author_id, is_self, message FROM context_messages ORDER BY id",
+        );
+        use rusqlite::types::Value;
+        assert_eq!(
+            identities,
+            vec![
+                vec![
+                    Value::Text("42".into()),
+                    Value::Text("9007199254740997".into()),
+                    Value::Text("7".into()),
+                    Value::Integer(1),
+                    Value::Text(text.clone())
+                ],
+                vec![
+                    Value::Text("84".into()),
+                    Value::Text("9007199254740997".into()),
+                    Value::Text("8".into()),
+                    Value::Integer(0),
+                    Value::Text(text.clone())
+                ],
+                vec![
+                    Value::Text("42".into()),
+                    Value::Text("100".into()),
+                    Value::Text("7".into()),
+                    Value::Integer(1),
+                    Value::Text(text.clone())
+                ],
+            ]
+        );
+        drop(conn);
+        for snapshot in ["first", "second", "second"] {
+            let conn = Connection::open(&working)?;
+            assert!(topic_test_rows(&conn, "SELECT * FROM context_message_topics").is_empty());
+            conn.execute(
+                "INSERT INTO context_message_topics SELECT id, 'ai' FROM alden_messages",
+                [],
+            )?;
+            drop(conn);
+            let report = sync!(&src, &root, &account, 7, snapshot, 2, 10, None)?;
+            assert!(report.complete);
+            assert_eq!(report.changed, 0);
+            for name in ["working.sqlite3", "context.sqlite3"] {
+                let conn = Connection::open(root.join(&account).join(name))?;
+                assert!(topic_test_rows(&conn, "SELECT * FROM context_message_topics").is_empty());
+                assert!(topic_test_rows(&conn, "SELECT * FROM context_topic_stats").is_empty());
+                for (sql, expected) in queries.iter().zip(&before) {
+                    assert_eq!(&topic_test_rows(&conn, sql), expected, "{name}: {sql}");
+                }
+            }
+            assert_eq!(
+                topic_test_rows(&src, "SELECT rowid, * FROM NTChatMessage ORDER BY rowid"),
+                source_rows
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn resume_and_replay_preserve_full_text_room_and_actor_identity() -> Result<()> {
         let tmp = tempfile::tempdir()?;

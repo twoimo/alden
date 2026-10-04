@@ -41,7 +41,7 @@ GRAPH_SOURCE_KIND = "knowledge_graph"
 DEFAULT_K_HOP = 2
 MAX_K_HOP = 3
 K_HOP_NEIGHBOR_LIMIT = 10
-GRAPH_ENTITY_PREFIXES = ("ent:", "chat:", "person:", "topic:", "time:", "author:")
+GRAPH_ENTITY_PREFIXES = ("ent:", "chat:", "person:", "time:", "author:")
 INDEX_STATUS_STALE_SECONDS = 300
 
 SEARCH_INDEX_VERSION = "unit4-rrf-bm25-dense-v1"
@@ -608,23 +608,8 @@ def _room_ledgers(state_root: Path) -> list[Path]:
 # the author had not thought of in advance: the room discussed Alibaba Cloud
 # for an hour and the graph still had nothing to say about it. These rows turn
 # the index into neurons and synapses (2026-09-16).
-INDEX_TOPIC_LABELS = {
-    "coins": "코인",
-    "stocks": "주식",
-    "ai": "AI",
-    "business": "사업/창업",
-    "llm_tools": "LLM 도구",
-    "investing": "투자",
-    "real_estate": "부동산",
-    "contact": "연락/인맥",
-    "auction": "경매",
-    "computer_use": "컴퓨터 유즈",
-    "news": "뉴스",
-    "infra": "인프라/클라우드",
-    "kakao_auto": "카카오 자동화",
-    "identity": "정체성",
-    "ax_macos": "macOS 자동화",
-}
+# Compatibility name: no predefined topic taxonomy remains.
+INDEX_TOPIC_LABELS = {}
 
 # A topic needs this many messages before it earns a neuron. Below it the
 # graph fills with one-off words that tell the reader nothing.
@@ -1089,19 +1074,6 @@ def _short_identity(key: str) -> str:
 
 
 ROOM_PARTICIPANT_SAMPLE_LIMIT = 256
-ROOM_TOPIC_SAMPLE_LIMIT = 512
-ROOM_TOPIC_ASSIGNMENT_LIMIT = ROOM_TOPIC_SAMPLE_LIMIT * 16
-ROOM_TOPIC_MIN_MESSAGES = 20
-# Count distinct message IDs, not repeated topic rows. Topic assignments can
-# overlap; dominance is measured against tagged messages and the runner-up.
-ROOM_TOPIC_MIN_TAGGED_PERCENT = 60
-ROOM_TOPIC_MIN_SAMPLE_PERCENT = 20
-ROOM_TOPIC_RUNNER_UP_RATIO = 2
-# Neutral subject labels only. Unknown topics still count in the denominator
-# and compete for first place; personal identity/contact tags cannot name rooms.
-ROOM_TOPIC_LABELS = {key: value for key, value in INDEX_TOPIC_LABELS.items()
-                     if key not in ('identity', 'contact')}
-ROOM_TOPIC_LABELS.update({'a11y': '접근성', 'computer': '컴퓨터', 'tools': '도구/모델', 'kakao': '카카오 자동화'})
 ROOM_CATALOG_MAX_BYTES = 64 * 1024
 ROOM_CATALOG_HISTORY_LIMIT = 32
 ROOM_OBSERVATIONS_MAX_BYTES = 2 * 1024 * 1024
@@ -1142,8 +1114,6 @@ def _corpus_room_displays(labels: dict[str, str], titles: dict[str, Any], activi
                 source = catalog.get("label_source", "catalog")
             if not title and activity_aliases and activity_aliases.get(key):
                 title = _identity_label(activity_aliases[key]); source = "activity_alias"
-            if not title and topic_aliases and topic_aliases.get(key):
-                title = _identity_label(topic_aliases[key]); source = "topic_alias"
         resolved[key] = (title, source)
     # Generated aliases already carry an ID suffix. They must not force a
     # previously known title to gain a suffix merely by sharing its wording.
@@ -1194,67 +1164,8 @@ def _corpus_activity_aliases(index_conn: sqlite3.Connection, labels: dict[str, s
 
 
 def _corpus_topic_aliases(index_conn: sqlite3.Connection, room_keys) -> dict[str, str]:
-    """Use existing topic metadata, never classify text or execute the stats view.
-
-    The published context_topic_stats is a GROUP BY view, not a materialized
-    summary: even WHERE chat=? walks the room's entire history. Instead read
-    at most 512 recent IDs per requested room and their indexed, persisted topic
-    assignments (8192 plus one overflow probe). Filter self/system/non-text
-    rows after LIMIT.
-
-    Require 20 distinct peer messages, >=20% of eligible sampled messages,
-    >=60% of tagged messages and >=2x the runner-up. Ties, near ties, unknown
-    winning topics, unavailable indexes and excessive assignments yield no
-    alias. This describes a repeated subject in a bounded sample, not the
-    room's official title, membership, purpose or whole-history main topic.
-    """
-    rooms = sorted(set(room_keys))
-    if not rooms or not index_conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='context_message_topics'"
-    ).fetchone():
-        return {}
-    # Refuse a fallback table scan if an older corpus lacks the message index.
-    topic_index = ''
-    for row in index_conn.execute("PRAGMA index_list('context_message_topics')"):
-        if row[4]:  # Partial indexes cannot cover arbitrary message IDs.
-            continue
-        quoted = '"' + row[1].replace('"', '""') + '"'
-        columns = index_conn.execute('PRAGMA index_info(' + quoted + ')').fetchall()
-        if columns and columns[0][2] == 'message_id':
-            topic_index = quoted
-            break
-    if not topic_index:
-        return {}
-    aliases = {}
-    for room in rooms:
-        rows = index_conn.execute(
-            'SELECT id,author_id,is_self,message_type FROM alden_messages INDEXED BY corpus_by_room '
-            'WHERE chat=? ORDER BY id DESC LIMIT ?', (room, ROOM_TOPIC_SAMPLE_LIMIT)).fetchall()
-        ids = [row[0] for row in rows if row[2] == 0 and row[3] == 1
-               and str(row[1]).isascii() and str(row[1]).isdigit() and 0 < int(row[1]) < 2**63]
-        if len(ids) < ROOM_TOPIC_MIN_MESSAGES:
-            continue
-        placeholders = ','.join('?' for _ in ids)
-        assignments = index_conn.execute(
-            f'SELECT message_id,topic FROM context_message_topics INDEXED BY {topic_index} '
-            f'WHERE message_id IN ({placeholders}) LIMIT ?', [*ids, ROOM_TOPIC_ASSIGNMENT_LIMIT + 1]).fetchall()
-        if len(assignments) > ROOM_TOPIC_ASSIGNMENT_LIMIT:
-            continue
-        assignments = set(assignments)
-        if not assignments or any(not isinstance(topic, str) or not topic or len(topic) > 64 for _, topic in assignments):
-            continue
-        counts = Counter(topic for _, topic in assignments)
-        ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-        topic, support = ranked[0]
-        tagged = len({message_id for message_id, _ in assignments})
-        runner_up = ranked[1][1] if len(ranked) > 1 else 0
-        if (topic not in ROOM_TOPIC_LABELS or support < ROOM_TOPIC_MIN_MESSAGES
-                or support * 100 < ROOM_TOPIC_MIN_SAMPLE_PERCENT * len(ids)
-                or support * 100 < ROOM_TOPIC_MIN_TAGGED_PERCENT * tagged
-                or support < ROOM_TOPIC_RUNNER_UP_RATIO * runner_up):
-            continue
-        aliases[room] = ROOM_TOPIC_LABELS[topic] + ' 관련 대화'
-    return aliases
+    """Room identities never come from predefined topic assignments."""
+    return {}
 
 
 def _corpus_display_policy(index_conn: sqlite3.Connection, state_root: Path, labels: dict[str, str],
@@ -1994,142 +1905,62 @@ def _index_person_lines(
 
 
 
-def index_topic_entities(
-    conn: sqlite3.Connection,
-    state_root: Path,
-    *,
-    chat: str = "",
-    limit: int = 40,
-) -> dict[str, int]:
-    """Turn indexed topics into compact derived nodes.
-
-    The source message stays in the canonical conversation index. A graph node
-    stores topic metadata and later receives bounded evidence IDs, rather than
-    copying recent message bodies into a second store.
-    """
-    stats = {"topics": 0, "written": 0, "with_samples": 0}
-    index_path = _index_db_path(state_root)
-    if not index_path.exists():
-        return stats
-    try:
-        with _open_isolated_ro_conn(index_path) as index_conn:
-            has_topics = index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='context_message_topics'").fetchone()
-            raw_rebuild = _raw_source_mode(state_root)
-            if (index_conn.execute("SELECT 1 FROM sqlite_master WHERE name='alden_messages'").fetchone()
-                and (raw_rebuild or not has_topics or not index_conn.execute('SELECT 1 FROM context_message_topics LIMIT 1').fetchone())):
-                from alden_corpus_topics import index as index_raw_topics
-                return index_raw_topics(conn, index_conn, chat=chat, minimum=INDEX_TOPIC_MIN_MESSAGES)
-            topics = _index_topic_rows(index_conn, chat=chat)[: max(int(limit), 1)]
-            stats["topics"] = len(topics)
-            now = int(time.time())
-            for topic, count in topics:
-                samples = _index_topic_samples(index_conn, topic, chat=chat)
-                label = INDEX_TOPIC_LABELS.get(topic, topic)
-                dates = [date for date, _user, _message in samples if date]
-                span = ""
-                if dates:
-                    span = f"{dates[0][:10]} ~ {dates[-1][:10]}"
-                facts: list[str] = []
-                if count:
-                    facts.append(f"이 방에서 {count}건의 메시지가 이 주제로 묶였습니다")
-                if span:
-                    facts.append(f"기록된 기간: {span}")
-                if samples:
-                    stats["with_samples"] += 1
-                conn.execute(
-                    """
-                    INSERT INTO kg_entities
-                        (entity_id, name, category, aliases_json, description,
-                         key_facts_json, importance, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(entity_id) DO UPDATE SET
-                        name=excluded.name,
-                        category=excluded.category,
-                        aliases_json=excluded.aliases_json,
-                        description=excluded.description,
-                        key_facts_json=excluded.key_facts_json,
-                        importance=excluded.importance,
-                        updated_at=excluded.updated_at
-                    """,
-                    (
-                        f"topic:{topic}",
-                        f"{label} (대화 주제)",
-                        "대화 주제",
-                        json.dumps(_topic_terms(topic), ensure_ascii=False),
-                        f"색인된 대화에서 {count}건이 묶인 주제입니다. 원문은 대화 색인에서 확인합니다.",
-                        json.dumps(facts, ensure_ascii=False),
-                        min(99, 40 + count // 200),
-                        now,
-                    ),
-                )
-                stats["written"] += 1
-            conn.commit()
-    except (sqlite3.Error, OSError, ValueError):
-        return stats
-    return stats
+def remove_preclassified_topics(conn: sqlite3.Connection) -> dict[str, int]:
+    """Remove only generated topic identities, without touching source messages."""
+    count = conn.execute("SELECT COUNT(*) FROM kg_entities WHERE entity_id LIKE 'topic:%'").fetchone()[0]
+    edges = conn.execute("DELETE FROM kg_relations WHERE source_id LIKE 'topic:%' OR target_id LIKE 'topic:%'").rowcount
+    conn.execute("DELETE FROM kg_entities WHERE entity_id LIKE 'topic:%'")
+    # Persist the retirement boundary for already-running legacy importers.
+    for table, condition in [('kg_entities', "NEW.entity_id LIKE 'topic:%'"),
+                             ('kg_relations', "NEW.source_id LIKE 'topic:%' OR NEW.target_id LIKE 'topic:%'")]:
+        for event in ('INSERT', 'UPDATE'):
+            conn.execute(f"CREATE TRIGGER IF NOT EXISTS retire_topic_{table}_{event.lower()} BEFORE {event} ON {table} WHEN {condition} BEGIN SELECT RAISE(IGNORE); END")
+    return {"nodes": count, "relations": max(edges, 0)}
 
 
-
-def index_topic_relations(
-    conn: sqlite3.Connection,
-    state_root: Path,
-    *,
-    chat: str = "",
-    limit: int = 40,
-) -> dict[str, int]:
-    """Draw a synapse between two topics that share messages.
-
-    Two topics mentioned in the same message are related, and the number of
-    such messages is the weight. That is what makes the picture a network
-    rather than a list of separate circles (2026-09-16).
-    """
-    stats = {"pairs": 0, "written": 0}
-    if _raw_source_mode(state_root): return stats  # Raw topic pass already wrote grounded pairs.
-    index_path = _index_db_path(state_root)
-    if not index_path.exists():
-        return stats
-    known = {
-        row[0]
-        for row in conn.execute(
-            "SELECT entity_id FROM kg_entities WHERE entity_id LIKE 'topic:%'"
-        )
-    }
-    if not known:
-        return stats
-    try:
-        with _open_isolated_ro_conn(index_path) as index_conn:
-            sql = (
-                "SELECT a.topic, b.topic, COUNT(*) FROM context_message_topics a"
-                " JOIN context_message_topics b"
-                "   ON a.message_id = b.message_id AND a.topic < b.topic"
-            )
-            params: list[Any] = []
-            if chat:
-                sql += " JOIN context_messages m ON m.id = a.message_id WHERE m.chat = ?"
-                params.append(chat)
-            sql += " GROUP BY a.topic, b.topic ORDER BY COUNT(*) DESC LIMIT ?"
-            params.append(max(int(limit), 1))
-            rows = index_conn.execute(sql, params).fetchall()
-    except sqlite3.Error:
-        return stats
-    now = int(time.time())
-    for left, right, count in rows:
-        left_id, right_id = f"topic:{left}", f"topic:{right}"
-        if left_id not in known or right_id not in known:
+def retire_preclassification_indexes(state_root: Path) -> dict[str, int]:
+    """Clean only Alden-owned projections; never open Kakao's original DB."""
+    paths = {state_root / KNOWLEDGE_GRAPH_DB_NAME, state_root / DENSE_INDEX_DB_NAME,
+             state_root / 'context.sqlite3', _index_db_path(state_root)}
+    counts = {'databases': 0, 'assignments': 0, 'topic_nodes': 0, 'relations': 0, 'vectors': 0, 'packs': 0}
+    for path in sorted(paths):
+        if not path.exists():
             continue
-        stats["pairs"] += 1
-        _upsert_relation(
-            conn,
-            source_id=left_id,
-            relation="CO_OCCURS",
-            target_id=right_id,
-            context=f"같은 메시지에서 {int(count)}번 함께 언급됨",
-            weight=_synapse_weight(count),
-            updated_at=now,
-        )
-        stats["written"] += 1
+        if (not path.is_relative_to(state_root) and path != state_root.parent / 'context.sqlite3') or any(p.is_symlink() for p in [path, *path.parents]):
+            raise RuntimeError('topic_retirement_unsafe_index')
+        with sqlite3.connect(path.as_uri() + '?mode=rw', uri=True, timeout=.2) as db:
+            tables = {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'kg_entities' in tables and 'kg_relations' in tables:
+                stats = remove_preclassified_topics(db)
+                counts['topic_nodes'] += stats['nodes']; counts['relations'] += stats['relations']
+            for table in ('context_message_topics', 'context_topic_stats'):
+                if table in tables:
+                    counts['assignments'] += db.execute(f'DELETE FROM {table}').rowcount
+                    for event in ('INSERT', 'UPDATE'):
+                        db.execute(f'CREATE TRIGGER IF NOT EXISTS retire_{table}_{event.lower()} BEFORE {event} ON {table} BEGIN SELECT RAISE(IGNORE); END')
+            for table in ('dense_vectors', 'ann_buckets'):
+                if table in tables:
+                    counts['vectors'] += db.execute(f"DELETE FROM {table} WHERE entity_id LIKE 'topic:%'").rowcount
+                    for event in ('INSERT', 'UPDATE'):
+                        db.execute(f"CREATE TRIGGER IF NOT EXISTS retire_{table}_{event.lower()} BEFORE {event} ON {table} WHEN NEW.entity_id LIKE 'topic:%' BEGIN SELECT RAISE(IGNORE); END")
+            if 'context_reference_packs' in tables:
+                counts['packs'] += db.execute("UPDATE context_reference_packs SET topics='' WHERE topics<>''").rowcount
+                for event in ('INSERT', 'UPDATE'):
+                    db.execute(f"CREATE TRIGGER IF NOT EXISTS retire_pack_topics_{event.lower()} AFTER {event} ON context_reference_packs WHEN NEW.topics<>'' BEGIN UPDATE context_reference_packs SET topics='' WHERE id=NEW.id; END")
+            db.commit()
+            counts['databases'] += 1
+    return counts
+
+
+def index_topic_entities(conn: sqlite3.Connection, state_root: Path, *, chat: str = "", limit: int = 40) -> dict[str, int]:
+    """Compatibility boundary; a keyword assignment never becomes a knowledge node."""
+    remove_preclassified_topics(conn)
     conn.commit()
-    return stats
+    return {"topics": 0, "written": 0, "with_samples": 0}
+
+
+def index_topic_relations(conn: sqlite3.Connection, state_root: Path, *, chat: str = "", limit: int = 40) -> dict[str, int]:
+    return {"pairs": 0, "written": 0}
 
 
 
@@ -2194,73 +2025,6 @@ def index_membership_relations(
                         room_id=room_key,
                     )
                     stats["person_chat"] += 1
-            except sqlite3.Error:
-                pass
-            if _raw_source_mode(state_root):
-                conn.commit();return stats  # Topic edges came from the same Raw pass.
-            # 방 → 주제. 방마다 그 주제가 얼마나 나왔는지가 곧 연결 강도다.
-            sql = (
-                "SELECT m.chat, t.topic, COUNT(*) FROM context_message_topics t"
-                " JOIN context_messages m ON m.id = t.message_id"
-                " WHERE m.chat IS NOT NULL AND m.chat != ''"
-            )
-            params = []
-            if chat:
-                sql += " AND m.chat = ?"
-                params.append(chat)
-            sql += " GROUP BY m.chat, t.topic ORDER BY COUNT(*) DESC LIMIT ?"
-            params.append(max(int(limit), 1))
-            try:
-                for room, topic, count in index_conn.execute(sql, params):
-                    source = f"chat:{_room_key(state_root, str(room))}"
-                    target = f"topic:{topic}"
-                    if source not in known or target not in known:
-                        continue
-                    _upsert_relation(
-                        conn,
-                        source_id=source,
-                        relation="DISCUSSED",
-                        target_id=target,
-                        context=f"이 방에서 {int(count or 0):,}건이 이 주제로 묶임",
-                        weight=_synapse_weight(int(count or 0)),
-                        updated_at=now,
-                        room_id=_room_key(state_root, str(room)),
-                    )
-                    stats["chat_topic"] += 1
-            except sqlite3.Error:
-                pass
-            # 사람 → 주제. 사람 뉴런은 `person:방:이름` 꼴이라, 그 사람의 메시지에
-            # 붙은 주제를 세면 곧 사람과 주제의 연결이 된다.
-            sql = (
-                ("SELECT m.chat, m.author_id, t.topic, COUNT(*)" if is_corpus else "SELECT m.chat, m.user_name, t.topic, COUNT(*)") +
-                " FROM context_message_topics t"
-                " JOIN context_messages m ON m.id = t.message_id"
-                " WHERE m.chat IS NOT NULL AND m.chat != ''"
-                "   AND m.user_name IS NOT NULL AND m.user_name != ''"
-            )
-            params = []
-            if chat:
-                sql += " AND m.chat = ?"
-                params.append(chat)
-            sql += (" GROUP BY m.chat, m.author_id, t.topic ORDER BY COUNT(*) DESC LIMIT ?" if is_corpus else " GROUP BY m.chat, m.user_name, t.topic ORDER BY COUNT(*) DESC LIMIT ?")
-            params.append(max(int(limit), 1))
-            try:
-                for room, user, topic, count in index_conn.execute(sql, params):
-                    source = _corpus_person_id(str(room),str(user)) if is_corpus and str(user).isdigit() and int(user)>0 else f"person:{_room_key(state_root, str(room))}:{str(user).strip()}"
-                    target = f"topic:{topic}"
-                    if source not in known or target not in known:
-                        continue
-                    _upsert_relation(
-                        conn,
-                        source_id=source,
-                        relation="TALKS_ABOUT",
-                        target_id=target,
-                        context=f"이 주제로 {int(count or 0):,}건을 말함",
-                        weight=_synapse_weight(int(count or 0)),
-                        updated_at=now,
-                        room_id=_room_key(state_root, str(room)),
-                    )
-                    stats["person_topic"] += 1
             except sqlite3.Error:
                 pass
     except sqlite3.Error:

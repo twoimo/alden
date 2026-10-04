@@ -245,9 +245,8 @@ class CorpusTests(unittest.TestCase):
                 result = alden_corpus.room_displays(root, ['42'], account)
             self.assertEqual(result['42']['label_source'], 'unresolved')
             message_queries = [sql for sql in statements if 'FROM alden_messages ' in sql]
-            self.assertEqual(len(message_queries), 2)
+            self.assertEqual(len(message_queries), 1)
             self.assertIn('LIMIT 256', message_queries[0])
-            self.assertIn('LIMIT 512', message_queries[1])
             for sql in message_queries:
                 self.assertIn('INDEXED BY corpus_by_room', sql)
                 self.assertIn(f'kakao:{account}:room:42', sql)
@@ -267,7 +266,7 @@ class CorpusTests(unittest.TestCase):
 
     def test_topic_alias_minimum_dominance_and_ambiguity_rules(self):
         cases = [
-            ([('coins', 20), ('stocks', 10)], 'topic_alias'),
+            ([('coins', 20), ('stocks', 10)], 'unresolved'),
             ([('coins', 19)], 'unresolved'),
             ([('coins', 20), ('stocks', 11)], 'unresolved'),
             ([('coins', 20), ('stocks', 20)], 'unresolved'),
@@ -347,7 +346,7 @@ class CorpusTests(unittest.TestCase):
             finally:
                 graph.close()
             report = KG.collect_knowledge_graph(root / 'context.sqlite3', state_root=root, read_only=True)
-            self.assertEqual({node['label_source'] for node in report['nodes']}, {'topic_alias', 'unresolved'})
+            self.assertEqual({node['label_source'] for node in report['nodes']}, {'unresolved'})
 
     def test_duplicate_topic_names_keep_separate_ids_and_archive_cannot_become_title(self):
         with TemporaryDirectory() as td:
@@ -357,11 +356,11 @@ class CorpusTests(unittest.TestCase):
                 db.execute("UPDATE alden_messages SET user_name=''")
                 db.executemany('INSERT INTO context_message_topics VALUES(?,?)', [(i + offset, 'coins') for offset in (0, 120) for i in ids[:30]])
             result = alden_corpus.room_displays(root, [42, 84], account)
-            self.assertTrue(all(r['label_source'] == 'topic_alias' for r in result.values()))
+            self.assertTrue(all(r['label_source'] == 'unresolved' for r in result.values()))
             self.assertNotEqual(result['42']['label'], result['84']['label'])
             for title in [result['42']['label'], '보관 대화 · #' + KG._short_identity(f'kakao:{account}:room:42')]:
                 (root / 'menubar-room-catalog.json').write_text(json.dumps({'rooms': [{'chat_id': 42, 'title': title}]}))
-                self.assertEqual(alden_corpus.room_displays(root, [42], account)['42']['label_source'], 'topic_alias')
+                self.assertEqual(alden_corpus.room_displays(root, [42], account)['42']['label_source'], 'unresolved')
 
     def test_topic_lookup_is_indexed_bounded_and_never_reads_stats_view_or_text(self):
         with TemporaryDirectory() as td:
@@ -388,11 +387,9 @@ class CorpusTests(unittest.TestCase):
                 return db
             with mock.patch.object(alden_corpus.sqlite3, 'connect', side_effect=guarded_connect):
                 result = alden_corpus.room_displays(root, [42], account)
-            self.assertEqual(result['42']['label_source'], 'topic_alias')
+            self.assertEqual(result['42']['label_source'], 'unresolved')
             topic_queries = [q for q in statements if 'FROM context_message_topics ' in q]
-            self.assertEqual(len(topic_queries), 1)
-            self.assertIn('INDEXED BY', topic_queries[0])
-            self.assertIn('LIMIT 8193', topic_queries[0])
+            self.assertEqual(topic_queries, [])
             self.assertFalse(any('GROUP BY' in q or 'FROM context_topic_stats' in q for q in statements))
 
     def test_topic_metadata_without_index_fails_closed_and_duplicates_do_not_inflate_support(self):
@@ -426,8 +423,8 @@ class CorpusTests(unittest.TestCase):
                 db.executemany('INSERT INTO context_message_topics VALUES(?,?)', [(i, 'coins') for i in ids])
             result = alden_corpus.room_displays(root, [42, 84], account)
             self.assertEqual(result['84'], {'label': '코인 관련 대화', 'label_source': 'snapshot'})
-            self.assertEqual(result['42']['label_source'], 'topic_alias')
-            self.assertTrue(result['42']['label'].startswith('코인 관련 대화 · #'))
+            self.assertEqual(result['42']['label_source'], 'unresolved')
+            self.assertTrue(result['42']['label'].startswith('보관 대화 · #'))
             self.assertNotEqual(result['42']['label'], result['84']['label'])
 
     def observation_cache(self, path, account, rooms, **overrides):

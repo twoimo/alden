@@ -34,7 +34,7 @@ COMMIT = "9bbf08febc5a1fb2af068006735ed79cbdb71178"
 ARCHIVE_HASH = "74feda64efb68c819a45746359de4158e426f87d74f682602f23fb6d46c9d4e3"
 MAX_MUTATIONS = 32  # Source writes, cluster creation and moves share one budget.
 MAX_HUB_WRITES = 16
-ORGANIZATION_VERSION = 2
+ORGANIZATION_VERSION = 3
 MAX_BODY = 12000
 _ENGINE = None
 _ROOT = None
@@ -83,7 +83,7 @@ def _reconcile_note(home: Path, item: dict, idx, contract):
         item.update(space=space, held=False)
         item.pop('planned_move', None)
         item.pop('organization_reason', None)
-    elif not _same_note(home, item, resolved) or item.get('human_corrected'):
+    elif not _same_note(home, item, resolved) or (item.get('human_corrected') and not item.get('canonical_only')):
         if path.stem != item['title']:
             item['human_title'] = True
         item.update(title=path.stem, space=space, held=True, human_corrected=True,
@@ -114,20 +114,8 @@ def _context_plan(checkpoint: dict) -> tuple[dict, dict]:
             ref = node.get('evidence', {}).get('chat_id')
             if ref:
                 rooms[str(ref)] = item
-    contexts = {key: set() for key in active}
-    for key, item in active.items():
-        evidence = item['source'].get('evidence', {})
-        contexts[key].update(str(r) for r in evidence.get('room_ids', []) if r)
-        if evidence.get('chat_id'):
-            contexts[key].add(str(evidence['chat_id']))
-    for edge in checkpoint.get('edges', []):
-        room = str(edge.get('room_id') or edge.get('evidence', {}).get('chat_id') or '')
-        if room and not edge.get('evidence', {}).get('retracted'):
-            for key in (edge.get('source'), edge.get('target')):
-                if key in contexts:
-                    contexts[key].add(room)
-    assignments = {key: next(iter(refs)) if len(refs) == 1 and next(iter(refs)) in rooms else '' for key, refs in contexts.items()}
-    return rooms, assignments
+    return rooms, {}  # Source metadata never assigns a canonical directory.
+
 
 
 def _placements(home: Path, graph) -> list:
@@ -145,27 +133,22 @@ def _hub_body(item: dict, placements: list) -> str:
     if item.get('legacy'):
         intro = '이전 유형별 배치의 보존된 입구입니다. 현재 이 위치에 남은 기억만 가리킵니다.'
     elif item.get('room_ref'):
-        intro = '같은 채팅방 원문에서 확인한 대화 맥락입니다. 인물과 주제의 관계는 각 기억의 참조로 이어집니다.'
+        intro = '출처에서 확인한 기억 문서의 실제 참조를 잇는 입구입니다.'
     elif space == SOURCE_SPACE:
-        intro = '카카오톡 원문에서 얻은 기억입니다. 한 채팅방에 결속된 기억은 그 맥락으로, 여러 방에 걸친 기억은 이 입구에 둡니다.'
+        intro = '카카오톡 원문을 참조하는 기억 문서의 입구입니다.'
     else:
         intro = '올든이 관리하는 로컬 대화 지식과 출처별 입구입니다.'
     return intro + '\n\n' + '\n'.join('- [[' + title + ']]' for title in sorted(set(targets)))
 
 
 def _layout_pending(checkpoint: dict, home: Path, contract, graph) -> int:
-    rooms, assignments = _context_plan(checkpoint)
     hubs = checkpoint.get('organization', {}).get('hubs', {})
     placements = _placements(home, graph)
     pending = 0
-    for key, ref in assignments.items():
-        context = hubs.get('context:' + digest(ref.encode())) if ref else None
-        dest = context['space'] if context else SOURCE_SPACE
-        item = checkpoint['managed'][key]
-        if (ref and (not context or context.get('held')) or item.get('held')
-                or item.get('planned_move') or item.get('space') != dest):
-            pending += 1
     idx = graph.Index()
+    for item in checkpoint.get('managed', {}).values():
+        if item.get('active'):
+            _reconcile_note(home, item, idx, contract)
     for hub in hubs.values():
         resolved = _resolve_note(hub, idx, contract)
         if not hub.get('held') and _same_note(home, hub, resolved):
@@ -197,56 +180,9 @@ def _organize_vault(home: Path, checkpoint: dict, contract, graph, write, budget
         # Only adopt the adapter's known initial hub, never a human-authored body.
         if not contract.validate(note) and note.body.strip() == '올든이 관리하는 로컬 대화 지식입니다.':
             hubs[key] = {'title': title, 'space': space, 'osk_id': note.id, 'written_hash': digest(path.read_bytes())}
-    rooms, assignments = _context_plan(checkpoint)
-    for ref, room in sorted(rooms.items()):
-        if _aborted(home.parent.parent):
-            break
-        key = 'context:' + digest(ref.encode())
-        if key in hubs or budget <= 0:
-            continue
-        # Stable source coordinate, not a display-name identity or topic guess.
-        title = '대화 맥락 · ' + room['title']
-        space = SOURCE_SPACE + '/' + title
-        path = home / 'vault' / space / (title + '.md')
-        initial = '같은 채팅방 원문에서 확인한 기억을 잇는 입구입니다.'
-        if not path.exists():
-            write.create_node(title, initial, initial, 'agent', space=space)
-            budget -= 1
-        note = contract.parse(path)
-        if contract.validate(note) or note.body.strip() != initial:
-            continue
-        hubs[key] = {'title': title, 'space': space, 'osk_id': note.id, 'written_hash': digest(path.read_bytes()), 'room_ref': ref}
-        _save(home / 'sync.json', checkpoint)
+    # Stored paths remain authoritative. No source/ERE/type inference creates
+    # a branch or relocates a memory. Organizational review writes actual paths.
     moved = 0
-    for key, ref in sorted(assignments.items()):
-        if _aborted(home.parent.parent):
-            break
-        item = checkpoint['managed'][key]
-        context = hubs.get('context:' + digest(ref.encode())) if ref else None
-        resolved = _reconcile_note(home, item, graph.Index(), contract)
-        if ref and (not context or context.get('held')) or item.get('held') or not resolved:
-            continue
-        dest = context['space'] if context else SOURCE_SPACE
-        if item.get('space', '00_Scope/Alden') == dest or budget <= 0:
-            continue
-        item['planned_move'] = {'osk_id': item['osk_id'], 'title': item['title'],
-                                'from_space': item['space'], 'dest_space': dest,
-                                'written_hash': item['written_hash']}
-        _save(home / 'sync.json', checkpoint)
-        try:
-            result = write.move_node(item['osk_id'], dest)
-        except write.WriteError as error:
-            item.update(held=True, organization_reason=str(error)[:500])
-            continue
-        if not result.get('ok'):
-            item.update(held=True, organization_reason='osk_move_incomplete')
-            continue
-        _reconcile_note(home, item, graph.Index(), contract)
-        if item.get('held') or item.get('planned_move'):
-            raise RuntimeError('osk_move_identity_changed')
-        moved += 1
-        budget -= 1
-        _save(home / 'sync.json', checkpoint)
     repaired = 0
     placements = _placements(home, graph)
     for hub in hubs.values():
@@ -455,7 +391,7 @@ def _body(node: dict, links: list[dict], titles: dict[str, str], secrets, *, leg
     lines.extend("- " + _clean(fact, secrets, 600).replace("\n", " ") for fact in node.get("facts", [])[:12])
     evidence = node.get("evidence") or {}
     lines += ["", "## 출처", json.dumps(evidence, ensure_ascii=False, sort_keys=True)]
-    links = links if legacy else [edge for edge in links if _edge_active(edge)]
+    links = links if legacy else []  # ERE cache never authors OSK dependencies.
     if links:
         lines += [""] + ([] if legacy else ['<!-- alden:relations:start -->']) + ["## 대화에서 발견한 관계"]
     for edge in links[:24]:
@@ -531,6 +467,150 @@ def _source_signature(state_root: Path) -> str:
     return digest(json.dumps(pointer,sort_keys=True).encode()+code+observed)
 
 
+def _withdraw_preclassification(home: Path, checkpoint: dict, contract, graph, secrets, write) -> dict:
+    """Withdraw adapter-owned lexical claims, with durable pre-write receipts.
+
+    OSK has no public delete API. Ordinary body edits use its CAS writer; the
+    archival migration uses its shared mutation lock and migration ledger.
+    Raw, governance, pins, protected notes and independently edited topics are
+    preserved. This does not approve a protected working tree.
+    """
+    from osk import approvals, core
+    managed = checkpoint.get('managed', {})
+    previous = checkpoint.get('canonical_migration', {})
+    if (previous.get('version') == 1 and not previous.get('held') and not checkpoint.get('edges')
+            and all(v.get('withdrawn') and not (home / 'vault' / v['space'] / (v['title'] + '.md')).exists()
+                    for k, v in managed.items() if k.startswith('topic:'))
+            and all(not v.get('automatic_relation_block') for k, v in managed.items() if not k.startswith('topic:'))):
+        return previous
+    archive = home / 'vault/_archive/alden-preclassification-v1'
+    ledger = core.LEDGER / 'migration/events.jsonl'
+    manifest_path = home / 'canonical-migration.json'
+    result = {'version': 1, 'archived': 0, 'rewritten': 0, 'held': []}
+    idx = graph.Index()
+    topics = {}
+    for key, item in managed.items():
+        if not key.startswith('topic:') or item.get('withdrawn'):
+            continue
+        resolved = _resolve_note(item, idx, contract)
+        if not resolved:
+            backup = archive / (str(item.get('written_hash', '')) + '.md')
+            if backup.is_file() and not backup.is_symlink() and digest(backup.read_bytes()) == item.get('written_hash') and item.get('osk_id') not in idx.dup_ids:
+                item.update(active=False, withdrawn=True)
+            else:
+                result['held'].append(key)
+                item['active'] = False
+            continue
+        path, note, current_hash = resolved
+        if (item.get('human_corrected') or current_hash != item.get('written_hash')
+                or approvals.containing_regions(path) or write._pinned(note.id, subtree=str(path.parent.relative_to(home / 'vault')))):
+            result['held'].append(key)
+            item['active'] = False
+            continue
+        topics[key] = resolved
+    retired = {note.id: path.stem for path, note, _ in topics.values()}
+    def is_retired(target):
+        if idx.resolve(target)[0] != 'node':
+            return False  # Raw and other non-node provenance are immutable.
+        found = idx.locate(target)
+        return bool(found and contract.parse(found[0]).id in retired)
+    plans = []
+    for title, (path, kind) in idx.nodes.items():
+        if kind[0] in ('governance', 'workbench', 'archive'):
+            continue
+        note = contract.parse(path)
+        if note.id in retired or contract.validate(note):
+            continue
+        item = next((v for v in managed.values() if v.get('osk_id') == note.id), None)
+        body = _reference_body(note, item, checkpoint, secrets)
+        # Incoming dependencies to a withdrawn classification become plain
+        # text, preserving any separately authored prose and display labels.
+        def plain(match):
+            target = match.group(1)
+            if is_retired(target):
+                return match.group(2) or target
+            return match.group(0)
+        body = re.sub(r'\[\[([^\]|]+)(?:\|([^\]]+))?\]\]', plain, body)
+        removed = {pred: [ref for ref in note.edges(pred) if is_retired(ref)]
+                   for pred in ('derived-from', 'conflicts')}
+        if body == note.body and not any(removed.values()):
+            continue
+        if approvals.containing_regions(path) or write._pinned(note.id, subtree=str(path.parent.relative_to(home / 'vault'))):
+            result['held'].append('osk:' + note.id)
+            continue
+        plans.append((path, note, digest(path.read_bytes()), body, removed, item))
+    if not topics and not plans:
+        if result['held'] or not checkpoint.get('canonical_migration'):
+            checkpoint['canonical_migration'] = result
+        return result
+    # Archive every original byte before the first edit. The manifest lists the
+    # complete intended change set, and remains recoverable after interruption.
+    _safe_directory(archive)
+    manifest = {'version': 1, 'state': 'prepared', 'rule': 'user_requested_remove_all_preclassification',
+                'topics': [{'key': key, 'id': note.id, 'path': str(path.relative_to(home / 'vault')), 'before': sha}
+                           for key, (path, note, sha) in topics.items()],
+                'edits': [{'id': note.id, 'path': str(path.relative_to(home / 'vault')), 'before': sha}
+                          for path, note, sha, *_ in plans]}
+    for path, note, sha in [*topics.values(), *[(p, n, h) for p, n, h, *_ in plans]]:
+        backup = archive / (sha + '.md')
+        if backup.exists():
+            if backup.is_symlink() or digest(backup.read_bytes()) != sha:
+                raise RuntimeError('osk_canonical_backup_integrity')
+        else:
+            core.atomic_write(backup, path.read_bytes())
+            backup.chmod(0o600)
+        if digest(backup.read_bytes()) != sha:
+            raise RuntimeError('osk_canonical_source_changed')
+    _save(manifest_path, manifest)
+    for path, note, sha, body, removed, item in plans:
+        with core.mutation_lock():
+            if digest(path.read_bytes()) != sha:
+                raise RuntimeError('osk_canonical_cas_changed')
+            core.ledger_append(ledger, {'kind': 'transform', 'source': str(path.relative_to(home / 'vault')),
+                                       'dest': str(path.relative_to(home / 'vault')), 'before': 'sha256:' + sha,
+                                       'after': None, 'rule': manifest['rule'], 'note': 'CAS body and edge withdrawal; original bytes in _archive'})
+        write.update_node(note.id, body=body, expect_hash=sha, remove_edges=removed)
+        with core.mutation_lock():
+            core.ledger_append(ledger, {'kind': 'transform', 'source': str(path.relative_to(home / 'vault')),
+                                       'dest': str(path.relative_to(home / 'vault')), 'before': 'sha256:' + sha,
+                                       'after': 'sha256:' + digest(path.read_bytes()), 'rule': manifest['rule'], 'note': 'completed'})
+        if item:
+            # A source importer must not restore a claim expressly withdrawn by
+            # the user. Legacy workers honor this existing preservation flag too.
+            item.update(written_hash=digest(path.read_bytes()), automatic_relation_block='',
+                        human_corrected=True, canonical_only=True, organization_reason='user_requested_canonical_osk')
+        hub = next((v for v in checkpoint.get('organization', {}).get('hubs', {}).values() if v.get('osk_id') == note.id), None)
+        if hub:
+            hub['written_hash'] = digest(path.read_bytes())
+        result['rewritten'] += 1
+        _save(home / 'sync.json', checkpoint)
+    # A held incoming note would become broken if the target vanished. Keep the
+    # withdrawal pending instead of silently breaking a protected dependency.
+    if result['held']:
+        manifest.update(state='pending', result=result)
+        _save(manifest_path, manifest)
+        checkpoint['canonical_migration'] = result
+        return result
+    for key, (path, note, sha) in topics.items():
+        with core.mutation_lock():
+            if digest(path.read_bytes()) != sha or approvals.containing_regions(path):
+                raise RuntimeError('osk_canonical_cas_changed')
+            core.ledger_append(ledger, {'kind': 'archive', 'source': str(path.relative_to(home / 'vault')),
+                                       'dest': str((archive / (sha + '.md')).relative_to(home / 'vault')),
+                                       'before': 'sha256:' + sha, 'after': 'sha256:' + sha, 'rule': manifest['rule']})
+            path.unlink()
+            core.fsync_dir(path.parent)
+        managed[key].update(active=False, withdrawn=True, held=False)
+        result['archived'] += 1
+        _save(home / 'sync.json', checkpoint)
+    checkpoint['edges'] = []
+    checkpoint['canonical_migration'] = result
+    manifest.update(state='complete', result=result)
+    _save(manifest_path, manifest)
+    _save(home / 'sync.json', checkpoint)
+    return result
+
+
 def synchronize(state_root: Path, source: dict | None = None) -> dict:
     """One bounded, replayable tick. Source deletion retracts, never purges notes."""
     home = _safe_directory(_home(state_root))
@@ -545,6 +625,12 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         contract, graph, secrets, write = _load_engine(state_root)
         checkpoint_path = home / "sync.json"
         checkpoint = _read_json(checkpoint_path, {"managed": {}, "generation": 0})
+        _withdraw_preclassification(home, checkpoint, contract, graph, secrets, write)
+        if checkpoint.get('indexes_retired_version') != 1:
+            from auto_reply_knowledge_graph import retire_preclassification_indexes
+            checkpoint['indexes_retired'] = retire_preclassification_indexes(state_root)
+            checkpoint['indexes_retired_version'] = 1
+            _save(checkpoint_path, checkpoint)
         idx = graph.Index()
         signature = _source_signature(state_root) if source is None else ''
         if (signature and checkpoint.get('source_signature')==signature and checkpoint.get('pending')==0
@@ -564,6 +650,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         if source.get("ok") is not True:
             raise RuntimeError("osk_source_unavailable")
         from alden_osk_sources import ground_graph
+        source = {**source, 'nodes': [n for n in source.get('nodes', []) if not str(n.get('id', '')).startswith('topic:')], 'edges': []}
         source = ground_graph(state_root, source, secrets.filter_text)
         source = json.loads(secrets.filter_text(json.dumps(source, ensure_ascii=False))[0])
         managed = checkpoint["managed"]
@@ -587,6 +674,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         hub = home / "vault/00_Scope/Alden/Alden.md"
         if not hub.exists() and 'root' not in checkpoint.get('organization', {}).get('hubs', {}):
             write.create_node("Alden", "올든의 대화에서 얻은 지식과 그 출처", "올든이 관리하는 로컬 대화 지식입니다.", "agent", space="00_Scope/Alden")
+        _organize_vault(home, checkpoint, contract, graph, write, MAX_MUTATIONS)
         changed = 0
         conflicts = 0
         for key, node in sorted(nodes.items()):
@@ -598,7 +686,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
             body = _body(node, incident[key], titles, secrets)
             revision = _revision(node, body)
             revisions[key] = revision
-            space=old.get('space','00_Scope/Alden') if old else '00_Scope/Alden'
+            space=old.get('space', SOURCE_SPACE) if old else SOURCE_SPACE
             path = home / 'vault' / space / f"{title}.md"
             if old is None and not path.exists():
                 found=graph.Index().nodes.get(title)
@@ -608,6 +696,9 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
                 raise RuntimeError("osk_symlink_note")
             current = path.read_bytes() if path.exists() else None
             current_hash = digest(current) if current is not None else ""
+            if old and old.get('canonical_only') and current_hash == old.get('written_hash'):
+                old.update(active=True, held=False)
+                continue  # Canonical notes are revised through OSK, never by Raw re-import.
             if old and (old.get('human_corrected') or current_hash != old.get("written_hash")):
                 conflicts += 1
                 old["held"] = True
@@ -659,7 +750,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
                 if key not in nodes:
                     item["active"] = False
         active = {key for key, item in managed.items() if item.get("active")}
-        checkpoint['edges'] = [e for e in source.get('edges', []) if e.get('source') in active and e.get('target') in active]
+        checkpoint['edges'] = []
         moved = 0
         if not _aborted(state_root):
             moved = _organize_vault(home,checkpoint,contract,graph,write,MAX_MUTATIONS-changed)
@@ -669,7 +760,7 @@ def synchronize(state_root: Path, source: dict | None = None) -> dict:
         checkpoint.update({"engine": VERSION, "commit": COMMIT, "generation": checkpoint.get("generation", 0) + 1,
                            "synced_at": int(time.time()), "source_indexed_at": source.get("indexed_at", 0),"layout_pending":layout_pending,
                            "stale": bool(source.get("stale")), "changed": changed, "moved": moved, "conflicts": conflicts,
-                           "pending": sum(managed.get(k, {}).get("revision") != (revisions[k] if k in revisions else _revision(n, _body(n, incident[k], titles, secrets))) for k, n in nodes.items()),
+                           "pending": sum(managed.get(k, {}).get("revision") != (revisions[k] if k in revisions else _revision(n, _body(n, incident[k], titles, secrets))) for k, n in nodes.items() if not managed.get(k, {}).get("canonical_only")),
                            "placement_signature": _placement_signature(home, graph),
                            "active_relation_signature": _active_relation_signature(checkpoint),
                            "edges": [e for e in source.get("edges", []) if e.get("source") in active and e.get("target") in active]})
@@ -723,7 +814,7 @@ def read_graph(state_root: Path, *, read_only: bool = False) -> dict:
     hubs_by_id = {hub['osk_id']: hub for hub in checkpoint.get('organization', {}).get('hubs', {}).values()}
     rooms, _ = _context_plan(checkpoint)
     for key, item in checkpoint.get("managed", {}).items():
-        if not item.get("active"):
+        if not item.get("active") or key.startswith('topic:'):
             continue
         resolved = _resolve_note(item, idx, contract)
         if not resolved:
@@ -779,27 +870,37 @@ def read_graph(state_root: Path, *, read_only: bool = False) -> dict:
         if node['category']!='collection': node['importance']=min(int(node.get('importance',50)),94)
     ids = {n["id"] for n in nodes}
     now = time.time()
-    semantic_edges = [e for e in checkpoint.get('edges', []) if e.get('purpose') not in ('navigation', 'reference')]
-    edges = [{**e, 'purpose': 'semantic'} for e in semantic_edges
-             if e.get("source") in ids and e.get("target") in ids and _edge_active(e, now=now)]
-    existing = {(e["source"], e["target"]) for e in edges}
-    targets = dict(identities)
-    for title, key in identities.items():
-        targets[notes[title].id] = key
-        path = idx.nodes[title][0].relative_to(home / 'vault')
-        targets[path.as_posix()] = targets[path.with_suffix('').as_posix()] = key
+    # The SDK's parsed notes and resolver are the relation authority. Cached
+    # ERE rows, source-room lists and lexical labels cannot add an edge.
+    edges = []
+    seen = set()
     for title, key in identities.items():
         note = notes[title]
-        from_body = replace(note, body=_reference_body(note, managed_by_id.get(note.id), checkpoint, secrets))
-        for target in from_body.wikilinks():
-            if target in targets and targets[target] != key and (key, targets[target]) not in existing:
-                navigation = graph.is_hub(idx.nodes[title][0])
-                edges.append({"source": key, "target": targets[target], "relation": "linked", "weight": 1,
-                              "purpose": "navigation" if navigation else "reference", "evidence": {"kind": "structure" if navigation else "seed"}})
-                existing.add((key, targets[target]))
+        # A compatibility read excludes only recorded generated blocks until
+        # the bounded canonical migration has removed them from the file.
+        cleaned = replace(note, body=_reference_body(note, managed_by_id.get(note.id), checkpoint, secrets))
+        refs = [(target, 'linked', graph.W_LINK) for target in cleaned.wikilinks()]
+        refs += [(target, 'derived-from', graph.W_DERIVED) for target in cleaned.edges('derived-from')]
+        refs += [(target, 'conflicts', 1.0) for target in cleaned.edges('conflicts')]
+        for target, relation, weight in refs:
+            resolution = idx.resolve(target)
+            if resolution[0] != 'node':
+                continue  # Raw/non-node coordinates remain provenance only.
+            found = idx.locate(target)
+            if not found:
+                continue
+            other = identities.get(found[0].stem)
+            identity = (key, relation, other)
+            if not other or other == key or identity in seen:
+                continue
+            seen.add(identity)
+            navigation = relation == 'linked' and graph.is_hub(idx.nodes[title][0])
+            edges.append({'source': key, 'target': other, 'relation': relation, 'weight': weight,
+                          'purpose': 'navigation' if navigation else 'reference' if relation == 'linked' else 'semantic',
+                          'evidence': {'kind': 'structure' if navigation else 'note', 'osk_id': note.id}})
     stale = checkpoint.get("stale", True) or int(now) - checkpoint.get("synced_at", 0) > 180
     return {"ok": True, "nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges),
-            "next_transition_at": _next_transition_at(semantic_edges, now),
+            "next_transition_at": 0,
             "indexed_at": checkpoint.get("source_indexed_at", 0), "stale": stale,
             "osk": {"state": "paused" if _aborted(state_root) else "ready", "engine": VERSION,
                     "synced_at": checkpoint.get("synced_at", 0), "pending": checkpoint.get("pending", 0),
@@ -816,6 +917,8 @@ def read_focus(state_root: Path, node_id: str, *, chat_id: str = '') -> dict:
     contract, graph, secrets, _ = _load_engine(state_root)
     idx = graph.Index()
     item = checkpoint.get("managed", {}).get(node_id)
+    if node_id.startswith('topic:') or any(k.startswith('topic:') and v.get('osk_id') == node_id.removeprefix('osk:') for k, v in checkpoint.get('managed', {}).items()):
+        return {'ok': False, 'facts': [], 'fact_count': 0}
     resolved = _resolve_note(item, idx, contract) if item and item.get('active') else None
     if node_id.startswith("osk:"):
         resolved = _resolve_note({'osk_id': node_id[4:]}, idx, contract)

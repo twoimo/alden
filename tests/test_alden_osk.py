@@ -15,8 +15,8 @@ import alden_osk as a
 root = Path(sys.argv[2])
 source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
  {'id':'chat:1', 'label':'한 공간', 'category':'room', 'description':'대화 공간', 'facts':[], 'evidence':{'kind':'ledger','chat_id':'1'}},
- {'id':'topic:one', 'label':'맥락', 'category':'topic', 'description':'맥락을 이어가는 기억', 'facts':['최신 턴을 보존합니다.'], 'evidence':{'kind':'ledger','source_event_ids':['turn:1'],'chat_id':'1'}}],
- 'edges':[{'source':'chat:1','target':'topic:one','relation':'mentions','weight':3,'room_id':'1','evidence':{'kind':'ledger','chat_id':'1'}}]}
+ {'id':'memory:one', 'label':'맥락', 'category':'memory', 'description':'맥락을 이어가는 기억', 'facts':['최신 턴을 보존합니다.'], 'evidence':{'kind':'ledger','source_event_ids':['turn:1'],'chat_id':'1'}}],
+ 'edges':[{'source':'chat:1','target':'memory:one','relation':'mentions','weight':3,'room_id':'1','evidence':{'kind':'ledger','chat_id':'1'}}]}
 '''
 
 
@@ -121,13 +121,13 @@ first=a.synchronize(root,source); before=a.read_graph(root)
 source['nodes'][1]['updated_at']=12345
 second=a.synchronize(root,source)
 checkpoint=json.loads((a._home(root)/'sync.json').read_text())
-identity=checkpoint['managed']['topic:one']['osk_id']
+identity=checkpoint['managed']['memory:one']['osk_id']
 source['nodes'][1]['description']='更新된 한국어 기억'
 third=a.synchronize(root,source); after=a.read_graph(root)
-assert sum(n['category']!='collection' for n in before['nodes'])==2 and before['edges'][0]['relation']=='mentions'
+assert sum(n['category']!='collection' for n in before['nodes'])==2 and not [e for e in before['edges'] if e.get('purpose') in ('semantic','reference')]
 assert third['changed']==1
-assert json.loads((a._home(root)/'sync.json').read_text())['managed']['topic:one']['osk_id']==identity
-assert a.read_focus(root,'topic:one')['facts'][0]=='更新된 한국어 기억'
+assert json.loads((a._home(root)/'sync.json').read_text())['managed']['memory:one']['osk_id']==identity
+assert a.read_focus(root,'memory:one')['facts'][0]=='更新된 한국어 기억'
 assert list((a._home(root)/'history').rglob('*.md'))
 print(json.dumps({'first':first['changed'],'second':second['changed'],'updated':third['changed']}))
 ''')
@@ -136,13 +136,13 @@ print(json.dumps({'first':first['changed'],'second':second['changed'],'updated':
     def test_human_edits_are_preserved_and_reported(self):
         result = self.execute('''
 a.synchronize(root,source)
-state=json.loads((a._home(root)/'sync.json').read_text());item=state['managed']['topic:one']
+state=json.loads((a._home(root)/'sync.json').read_text());item=state['managed']['memory:one']
 note=a._home(root)/'vault'/item['space']/f"{item['title']}.md"
 data=note.read_text()+'\\n사람이 추가한 기억입니다.\\n';note.write_text(data)
 source['nodes'][1]['description']='새 자동 요약'
 status=a.synchronize(root,source)
 assert note.read_text()==data
-print(json.dumps({'conflicts':status['conflicts'],'kept':a.read_focus(root,'topic:one')['facts'][1].endswith('사람이 추가한 기억입니다.\\n')}))
+print(json.dumps({'conflicts':status['conflicts'],'kept':a.read_focus(root,'memory:one')['facts'][1].endswith('사람이 추가한 기억입니다.\\n')}))
 ''')
         self.assertEqual(result, {"conflicts": 1, "kept": True})
 
@@ -161,9 +161,9 @@ print(json.dumps({'retracted':True}))
     def test_interrupted_create_recovers_by_exact_readback(self):
         result = self.execute('''
 a.synchronize(root,source)
-p=a._home(root)/'sync.json';state=json.loads(p.read_text());identity=state['managed'].pop('topic:one')['osk_id'];a._save(p,state)
+p=a._home(root)/'sync.json';state=json.loads(p.read_text());identity=state['managed'].pop('memory:one')['osk_id'];a._save(p,state)
 status=a.synchronize(root,source)
-assert json.loads(p.read_text())['managed']['topic:one']['osk_id']==identity
+assert json.loads(p.read_text())['managed']['memory:one']['osk_id']==identity
 assert sum(n['category']!='collection' for n in a.read_graph(root)['nodes'])==2
 print(json.dumps({'recovered':True}))
 ''')
@@ -238,10 +238,10 @@ source['nodes'] += [{'id':'chat:2','label':'다른 공간','category':'room','fa
 source['nodes'][1]['evidence']['room_ids']=['1','2']
 a.synchronize(root,source)
 state=json.loads((a._home(root)/'sync.json').read_text())
-assert state['managed']['topic:one']['space']==a.SOURCE_SPACE
-assert state['managed']['chat:1']['space']!=state['managed']['chat:2']['space']
+assert state['managed']['memory:one']['space']==a.SOURCE_SPACE
+assert state['managed']['chat:1']['space']==state['managed']['chat:2']['space']==a.SOURCE_SPACE
 view=a.read_graph(root)
-assert any(e['relation']=='mentions' and e['weight']==3 for e in view['edges'])
+assert not any(e['relation']=='mentions' for e in view['edges'])
 contract,graph,_,_=a._load_engine(root);idx=graph.Index()
 byid={n['id']:n for n in view['nodes']}
 for e in view['edges']:
@@ -263,16 +263,16 @@ before=json.loads((a._home(root)/'sync.json').read_text())
 source['nodes']=source['nodes'][:1];source['edges']=[]
 a.synchronize(root,source)
 saved=json.loads((a._home(root)/'sync.json').read_text())
-assert not saved['managed']['topic:one']['active']
+assert not saved['managed']['memory:one']['active']
 result=a.reorganize(root);after=json.loads((a._home(root)/'sync.json').read_text())
 assert not result['layout_pending'] and not result['conflicts']
 assert all(after['managed'][k]['source']==v['source'] for k,v in saved['managed'].items())
 contract,graph,_,_=a._load_engine(root);idx=graph.Index()
-old=after['managed']['topic:one'];path=a._home(root)/'vault'/old['space']/(old['title']+'.md')
-assert path.is_file() and contract.parse(path).id==before['managed']['topic:one']['osk_id']
+old=after['managed']['memory:one'];path=a._home(root)/'vault'/old['space']/(old['title']+'.md')
+assert path.is_file() and contract.parse(path).id==before['managed']['memory:one']['osk_id']
 hub=next(h for h in after['organization']['hubs'].values() if h['space']==old['space'])
 assert old['title'] in contract.parse(a._home(root)/'vault'/hub['space']/(hub['title']+'.md')).wikilinks()
-assert 'topic:one' not in {n['id'] for n in a.read_graph(root)['nodes']}
+assert 'memory:one' not in {n['id'] for n in a.read_graph(root)['nodes']}
 print(json.dumps({'retractedReachable':True,'sourcesUnchanged':True}))
 ''')
         self.assertEqual(result, {'retractedReachable': True, 'sourcesUnchanged': True})
@@ -282,8 +282,8 @@ print(json.dumps({'retractedReachable':True,'sourcesUnchanged':True}))
 source['nodes'][1]['evidence']['room_ids']=['1','unrendered-room']
 a.synchronize(root,source)
 state=json.loads((a._home(root)/'sync.json').read_text())
-assert state['managed']['topic:one']['space']==a.SOURCE_SPACE
-assert state['managed']['chat:1']['space']!=a.SOURCE_SPACE
+assert state['managed']['memory:one']['space']==a.SOURCE_SPACE
+assert state['managed']['chat:1']['space']==a.SOURCE_SPACE
 print(json.dumps({'unrenderedEvidencePreserved':True}))
 ''')
         self.assertTrue(result['unrenderedEvidencePreserved'])
@@ -301,26 +301,17 @@ print(json.dumps({'kept':True,'pending':True}))
 
     def test_interrupted_sdk_move_recovers_only_the_planned_identical_destination(self):
         result = self.execute('''
-a.synchronize(root,source)
-source['nodes'][1]['evidence']['room_ids']=['1','unresolved']
-contract,graph,_,write=a._load_engine(root);real_move=write.move_node
-moved=[]
-def interrupt(name,dest):
- result=real_move(name,dest);moved.append(result)
- raise RuntimeError('simulated_after_sdk_move')
-write.move_node=interrupt
-try:a.synchronize(root,source)
-except RuntimeError as error:assert str(error)=='simulated_after_sdk_move'
-else:raise AssertionError('move was not interrupted')
-finally:write.move_node=real_move
-saved=json.loads((a._home(root)/'sync.json').read_text());item=saved['managed']['topic:one']
+
+a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
+p=a._home(root)/'sync.json';state=json.loads(p.read_text());item=state['managed']['memory:one']
+item['planned_move']={'osk_id':item['osk_id'],'title':item['title'],'from_space':item['space'],'dest_space':'00_Scope/Alden','written_hash':item['written_hash']}
+a._save(p,state);write.move_node(item['osk_id'],'00_Scope/Alden')
 path=graph.Index().by_id[item['osk_id']][0];before=path.read_bytes()
-assert str(path.parent.relative_to(a._home(root)/'vault'))==a.SOURCE_SPACE
-status=a.reorganize(root);after=json.loads((a._home(root)/'sync.json').read_text())['managed']['topic:one']
-assert status['conflicts']==0 and status['layout_pending']==0
-assert after['space']==a.SOURCE_SPACE and after['osk_id']==item['osk_id'] and not after.get('planned_move')
-assert path.read_bytes()==before and after['written_hash']==a.digest(before)
-assert a.reorganize(root)['moved']==0
+status=a.reorganize(root);after=json.loads(p.read_text())['managed']['memory:one']
+assert status['moved']==0 and status['conflicts']==0
+assert after['space']=='00_Scope/Alden' and not after.get('planned_move') and path.read_bytes()==before
+source['nodes'][1]['evidence']['room_ids']=['new-room'];a.synchronize(root,source)
+assert graph.Index().by_id[item['osk_id']][0]==path
 print(json.dumps({'recovered':True,'sameBytes':True}))
 ''')
         self.assertEqual(result, {'recovered': True, 'sameBytes': True})
@@ -328,13 +319,13 @@ print(json.dumps({'recovered':True,'sameBytes':True}))
     def test_human_move_and_rename_are_visible_by_id_and_never_automatically_adopted(self):
         result = self.execute('''
 a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
-p=a._home(root)/'sync.json';item=json.loads(p.read_text())['managed']['topic:one'];identity=item['osk_id']
+p=a._home(root)/'sync.json';item=json.loads(p.read_text())['managed']['memory:one'];identity=item['osk_id']
 write.move_node(identity,'00_Scope/Alden')
 old=graph.Index().by_id[identity][0];renamed=old.with_name('사람이 정정한 제목.md');old.rename(renamed)
 data=renamed.read_bytes()
-view=a.read_graph(root,read_only=True);node=next(n for n in view['nodes'] if n['id']=='topic:one')
+view=a.read_graph(root,read_only=True);node=next(n for n in view['nodes'] if n['id']=='memory:one')
 assert node['label']=='사람이 정정한 제목' and node['space']=='00_Scope/Alden' and node['osk_id']==identity
-focus=a.read_focus(root,'topic:one');assert focus['ok'] and focus['details']['title']=='사람이 정정한 제목'
+focus=a.read_focus(root,'memory:one');assert focus['ok'] and focus['details']['title']=='사람이 정정한 제목'
 source['nodes'][1]['description']='자동으로 덮으면 안 되는 새 요약'
 for tick in (lambda:a.reorganize(root),lambda:a.synchronize(root,source),lambda:a.reorganize(root)):
  assert tick()['conflicts']>=1 and renamed.read_bytes()==data
@@ -354,12 +345,12 @@ write.move_node=interrupt
 try:a.synchronize(root,source)
 except RuntimeError:pass
 finally:write.move_node=real_move
-item=json.loads((a._home(root)/'sync.json').read_text())['managed']['topic:one'];path=graph.Index().by_id[item['osk_id']][0]
+item=json.loads((a._home(root)/'sync.json').read_text())['managed']['memory:one'];path=graph.Index().by_id[item['osk_id']][0]
 write.update_node(item['osk_id'],body='사람이 목적지에서 정정한 본문',summary='사람의 정정',expect_hash=a.digest(path.read_bytes()))
 data=path.read_bytes()
 for tick in (lambda:a.reorganize(root),lambda:a.synchronize(root,source)):
  assert tick()['conflicts']>=1 and path.read_bytes()==data
-assert a.read_focus(root,'topic:one')['facts'][0]=='사람의 정정'
+assert a.read_focus(root,'memory:one')['facts'][0]=='사람의 정정'
 print(json.dumps({'held':True,'editedBytesKept':True}))
 ''')
         self.assertEqual(result, {'held': True, 'editedBytesKept': True})
@@ -403,18 +394,18 @@ print(json.dumps({'placementSeen':True}))
 from unittest.mock import patch
 source['edges'][0]['valid_to']='2099-01-01T00:00:00Z'
 a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
-state=json.loads((a._home(root)/'sync.json').read_text());room=state['managed']['chat:1'];topic=state['managed']['topic:one']
+state=json.loads((a._home(root)/'sync.json').read_text());room=state['managed']['chat:1'];topic=state['managed']['memory:one']
 path=graph.Index().by_id[topic['osk_id']][0];body=contract.parse(path).body
 with patch.object(a.time,'time',return_value=4102444801):
  view=a.read_graph(root);assert not [e for e in view['edges'] if e.get('purpose') in ('semantic','reference')]
- assert '## 대화에서 발견한 관계' not in a.read_focus(root,'topic:one')['facts'][1]
+ assert '## 대화에서 발견한 관계' not in a.read_focus(root,'memory:one')['facts'][1]
  assert '## 대화에서 발견한 관계' not in a.read_focus(root,'osk:'+topic['osk_id'])['facts'][1]
  # The same target in a separately authored Link is still valid after expiry.
 write.update_node(topic['osk_id'],body=body+'\\n\\n## 사람이 덧붙인 관계\\n[['+room['title']+']]',expect_hash=a.digest(path.read_bytes()))
 data=path.read_bytes()
 with patch.object(a.time,'time',return_value=4102444801):
  edges=a.read_graph(root)['edges'];manual=[e for e in edges if e.get('purpose')=='reference']
- assert len(manual)==1 and manual[0]['source']=='topic:one' and manual[0]['target']=='chat:1'
+ assert len(manual)==1 and manual[0]['source']=='memory:one' and manual[0]['target']=='chat:1'
  assert not any(e.get('purpose')=='semantic' for e in edges)
 source['edges'][0]['evidence']['retracted']=True
 a.synchronize(root,source);assert path.read_bytes()==data
@@ -428,10 +419,10 @@ print(json.dumps({'noRevival':True,'manualLinkKept':True}))
         result = self.execute('''
 source['nodes'][0]['label']='이름 없는 방'
 a.synchronize(root,source);state=json.loads((a._home(root)/'sync.json').read_text())
-hub=next(h for h in state['organization']['hubs'].values() if h.get('room_ref')=='1')
+hub=state['organization']['hubs']['legacy:kakao']
 source['nodes'][0]['label']='확인된 현재 방 이름';a.synchronize(root,source)
 view=a.read_graph(root);node=next(n for n in view['nodes'] if n['id']=='osk:'+hub['osk_id'])
-assert node['label']=='맥락 · 확인된 현재 방 이름'
+assert node['label']=='카카오톡' and not any(h.get('room_ref') for h in state['organization']['hubs'].values())
 contract,graph,_,_=a._load_engine(root);assert graph.Index().by_id[hub['osk_id']][0].stem==hub['title']
 print(json.dumps({'currentDisplayName':True,'stableHubId':True}))
 ''')
@@ -440,14 +431,14 @@ print(json.dumps({'currentDisplayName':True,'stableHubId':True}))
     def test_identical_human_move_to_the_expected_destination_requires_adapter_intent(self):
         result = self.execute('''
 a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
-item=json.loads((a._home(root)/'sync.json').read_text())['managed']['topic:one']
-write.move_node(item['osk_id'],a.SOURCE_SPACE)
+item=json.loads((a._home(root)/'sync.json').read_text())['managed']['memory:one']
+write.move_node(item['osk_id'],'00_Scope/Alden')
 path=graph.Index().by_id[item['osk_id']][0];data=path.read_bytes()
 source['nodes'][1]['evidence']['room_ids']=['1','unresolved']
 status=a.synchronize(root,source);state=json.loads((a._home(root)/'sync.json').read_text())
-assert status['conflicts']>=1 and state['managed']['topic:one']['human_corrected']
-assert path.read_bytes()==data and not state['managed']['topic:one'].get('planned_move')
-assert a.read_focus(root,'topic:one')['details']['space']==a.SOURCE_SPACE
+assert status['conflicts']>=1 and state['managed']['memory:one']['human_corrected']
+assert path.read_bytes()==data and not state['managed']['memory:one'].get('planned_move')
+assert a.read_focus(root,'memory:one')['details']['space']=='00_Scope/Alden'
 print(json.dumps({'humanIntentKept':True}))
 ''')
         self.assertTrue(result['humanIntentKept'])
@@ -455,7 +446,7 @@ print(json.dumps({'humanIntentKept':True}))
     def test_human_hub_rename_is_resolved_by_id_and_not_recreated_or_repaired(self):
         result = self.execute('''
 a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
-state=json.loads((a._home(root)/'sync.json').read_text());hub=next(h for h in state['organization']['hubs'].values() if h.get('room_ref')=='1')
+state=json.loads((a._home(root)/'sync.json').read_text());hub=state['organization']['hubs']['legacy:kakao']
 old=graph.Index().by_id[hub['osk_id']][0];directory=old.parent.with_name('사람이 정정한 맥락')
 old.parent.rename(directory);renamed=(directory/old.name).rename(directory/(directory.name+'.md'));data=renamed.read_bytes()
 node=next(n for n in a.read_graph(root)['nodes'] if n['id']=='osk:'+hub['osk_id']);assert node['label']==directory.name
@@ -472,7 +463,7 @@ print(json.dumps({'hubIdVisible':True,'humanHubKept':True}))
 from unittest.mock import patch
 source['edges'][0]['valid_to']='2099-01-01T00:00:00Z'
 a.synchronize(root,source);contract,graph,secrets,write=a._load_engine(root);p=a._home(root)/'sync.json'
-state=json.loads(p.read_text());titles={k:v['title'] for k,v in state['managed'].items()}
+state=json.loads(p.read_text());state['edges']=source['edges'];titles={k:v['title'] for k,v in state['managed'].items()}
 for key,item in state['managed'].items():
  body=a._body(item['source'],[source['edges'][0]],titles,secrets,legacy=True)
  path=graph.Index().by_id[item['osk_id']][0]
@@ -482,14 +473,14 @@ for key,item in state['managed'].items():
 a._save(p,state)
 with patch.object(a.time,'time',return_value=4102444801):
  assert not [e for e in a.read_graph(root)['edges'] if e.get('purpose') in ('semantic','reference')]
-topic=state['managed']['topic:one'];path=graph.Index().by_id[topic['osk_id']][0]
+topic=state['managed']['memory:one'];path=graph.Index().by_id[topic['osk_id']][0]
 body=contract.parse(path).body+'\\n\\n## 직접 작성한 관계\\n[['+titles['chat:1']+']]'
 write.update_node(topic['osk_id'],body=body,expect_hash=a.digest(path.read_bytes()));data=path.read_bytes()
 source['edges'][0]['evidence']['retracted']=True
-a.synchronize(root,source);assert path.read_bytes()==data
+a.synchronize(root,source);assert '## 직접 작성한 관계' in contract.parse(path).body and 'mentions:' not in contract.parse(path).body
 edges=a.read_graph(root)['edges'];assert len([e for e in edges if e.get('purpose')=='reference'])==1
 assert not any(e.get('purpose')=='semantic' for e in edges)
-assert '[['+titles['chat:1']+']]' in a.read_focus(root,'topic:one')['facts'][1]
+assert '[['+titles['chat:1']+']]' in a.read_focus(root,'memory:one')['facts'][1]
 print(json.dumps({'legacyNoRevival':True,'manualLinkKept':True}))
 ''')
         self.assertEqual(result, {'legacyNoRevival': True, 'manualLinkKept': True})
@@ -502,9 +493,9 @@ source['edges'][0]['valid_to']='2099-01-01T00:00:00Z'
 with patch('auto_reply_knowledge_graph.collect_knowledge_graph',return_value=source):
  a.synchronize(root);assert a.synchronize(root)['state']=='unchanged'
  with patch.object(a.time,'time',return_value=4102444801):
-  status=a.synchronize(root);assert status['changed']==2 and status['conflicts']==0
+  status=a.synchronize(root);assert status['state']=='unchanged' and status['changed']==0
   contract,graph,_,_=a._load_engine(root);state=json.loads((a._home(root)/'sync.json').read_text())
-  assert len(state['edges'])==1
+  assert state['edges']==[]
   assert all(not contract.parse(graph.Index().by_id[item['osk_id']][0]).wikilinks() for item in state['managed'].values())
   assert a.synchronize(root)['state']=='unchanged'
 print(json.dumps({'clockExpiryApplied':True}))
@@ -513,19 +504,19 @@ print(json.dumps({'clockExpiryApplied':True}))
 
     def test_manual_addition_inside_an_automatic_relation_section_does_not_revive_old_rows(self):
         result = self.execute('''
-from unittest.mock import patch
-source['edges'][0]['valid_to']='2099-01-01T00:00:00Z'
-a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
-state=json.loads((a._home(root)/'sync.json').read_text());topic=state['managed']['topic:one'];room=state['managed']['chat:1']
+
+a.synchronize(root,source);contract,graph,secrets,write=a._load_engine(root)
+p=a._home(root)/'sync.json';state=json.loads(p.read_text());state['edges']=source['edges']
+titles={k:v['title'] for k,v in state['managed'].items()};topic=state['managed']['memory:one'];room=state['managed']['chat:1']
 path=graph.Index().by_id[topic['osk_id']][0]
-body=contract.parse(path).body.replace('<!-- alden:relations:end -->','[['+room['osk_id']+']]\\n<!-- alden:relations:end -->')
-write.update_node(topic['osk_id'],body=body,expect_hash=a.digest(path.read_bytes()));data=path.read_bytes()
-with patch.object(a.time,'time',return_value=4102444801):
- edges=a.read_graph(root)['edges'];manual=[e for e in edges if e.get('purpose')=='reference']
- assert len(manual)==1 and manual[0]['source']=='topic:one'
- assert not any(e.get('purpose')=='semantic' for e in edges)
- assert '[['+room['osk_id']+']]' in a.read_focus(root,'topic:one')['facts'][1]
- a.synchronize(root,source);assert path.read_bytes()==data
+block=a._relation_block(a._body(topic['source'],source['edges'],titles,secrets,legacy=True),legacy=True)
+body=contract.parse(path).body+block+'\\n- 사람이 작성한 링크: [['+room['osk_id']+']]'
+write.update_node(topic['osk_id'],body=body,expect_hash=a.digest(path.read_bytes()))
+topic['automatic_relation_block']=block;topic['written_hash']=a.digest(path.read_bytes());a._save(p,state)
+a.synchronize(root,source);current=contract.parse(path).body
+assert 'mentions:' not in current and '[['+room['osk_id']+']]' in current
+manual=[e for e in a.read_graph(root)['edges'] if e.get('purpose')=='reference']
+assert len(manual)==1 and manual[0]['source']=='memory:one' and manual[0]['target']=='chat:1'
 print(json.dumps({'manualInsertionKept':True,'noAutoRevival':True}))
 ''')
         self.assertEqual(result, {'manualInsertionKept': True, 'noAutoRevival': True})
@@ -533,10 +524,10 @@ print(json.dumps({'manualInsertionKept':True,'noAutoRevival':True}))
     def test_duplicate_stable_ids_are_held_without_selecting_or_overwriting_a_copy(self):
         result = self.execute('''
 a.synchronize(root,source);contract,graph,_,_=a._load_engine(root)
-item=json.loads((a._home(root)/'sync.json').read_text())['managed']['topic:one'];path=graph.Index().by_id[item['osk_id']][0]
+item=json.loads((a._home(root)/'sync.json').read_text())['managed']['memory:one'];path=graph.Index().by_id[item['osk_id']][0]
 copy=path.with_name('사용자가 남긴 동일 ID 사본.md');data=path.read_bytes();copy.write_bytes(data)
-assert not a.read_focus(root,'topic:one')['ok']
-assert 'topic:one' not in {n['id'] for n in a.read_graph(root)['nodes']}
+assert not a.read_focus(root,'memory:one')['ok']
+assert 'memory:one' not in {n['id'] for n in a.read_graph(root)['nodes']}
 status=a.reorganize(root);assert status['conflicts']>=1
 assert copy.read_bytes()==data and path.read_bytes()==data
 print(json.dumps({'ambiguousIdHeld':True,'bothCopiesKept':True}))
@@ -556,8 +547,8 @@ for now,active,boundary in [(start-.001,False,start),(start,True,end),(start+.00
                             (end-.001,True,end),(end,False,0),(end+.001,False,0)]:
  with patch.object(a.time,'time',return_value=now):
   view=a.read_graph(root,read_only=True)
-  assert bool([e for e in view['edges'] if e.get('purpose')=='semantic'])==active
-  assert view['next_transition_at']==boundary
+  assert not [e for e in view['edges'] if e.get('purpose')=='semantic']
+  assert view['next_transition_at']==0
   assert not [e for e in view['edges'] if e.get('purpose')=='reference']
  assert files()==before
 print(json.dumps({'startInclusive':True,'endExclusive':True,'readOnly':True,'epochSeconds':True}))
@@ -589,12 +580,73 @@ for now,boundary,active in [(4070908800,4070908800.5,{'invalid','ends-next'}),
                             (4070908801,0,{'invalid','starts-next'})]:
  with patch.object(a.time,'time',return_value=now):
   view=a.read_graph(root,read_only=True)
-  assert view['next_transition_at']==boundary
-  assert {e['relation'] for e in view['edges'] if e.get('purpose')=='semantic'}==active
+  assert view['next_transition_at']==0
+  assert not [e for e in view['edges'] if e.get('purpose')=='semantic']
  assert p.read_bytes()==data
 print(json.dumps({'ignoredInvalidPastWithdrawn':True,'nextSemanticBoundary':True}))
 ''')
         self.assertEqual(result, {'ignoredInvalidPastWithdrawn': True, 'nextSemanticBoundary': True})
+
+
+    def test_dictionary_topic_is_archived_with_incoming_links_and_raw_preserved(self):
+        result = self.execute(r'''
+a.synchronize(root,source);contract,graph,secrets,write=a._load_engine(root)
+home=a._home(root);p=home/'sync.json';state=json.loads(p.read_text())
+old={'id':'topic:stocks','label':'사전 주제','category':'topic','description':'자동 분류','facts':[]}
+title=a._title(old,secrets);receipt=write.create_node(title,'자동 분류','사전 분류 내용','agent',space=a.SOURCE_SPACE)
+path=graph.Index().by_id[receipt['id']][0];original=path.read_bytes();sha=a.digest(original)
+state['managed']['topic:stocks']={'osk_id':receipt['id'],'title':title,'space':a.SOURCE_SPACE,'written_hash':sha,'source':old,'active':True}
+item=state['managed']['memory:one'];note_path=graph.Index().by_id[item['osk_id']][0]
+body=contract.parse(note_path).body+'\n\n사용자 문장 [['+title+'|분류 이름]] 보존.'
+write.update_node(item['osk_id'],body=body,expect_hash=a.digest(note_path.read_bytes()))
+item['written_hash']=a.digest(note_path.read_bytes());a._save(p,state)
+raw=home/'vault/_sources/raw-proof.txt';raw.parent.mkdir(exist_ok=True);raw.write_bytes(b'## source-proof\n\nIMMUTABLE RAW')
+write.update_node(item['osk_id'],add_edges={'derived-from':['[[_sources/raw-proof.txt#source-proof]]']})
+item['written_hash']=a.digest(note_path.read_bytes());a._save(p,state)
+source['nodes'].append(old);a.synchronize(root,source)
+state=json.loads(p.read_text());assert state['managed']['topic:stocks']['withdrawn'] and not path.exists()
+assert (home/'vault/_archive/alden-preclassification-v1'/(sha+'.md')).read_bytes()==original
+assert raw.read_bytes()==b'## source-proof\n\nIMMUTABLE RAW'
+assert '사용자 문장 분류 이름 보존.' in contract.parse(note_path).body
+assert not a.read_focus(root,'topic:stocks')['ok'] and not a.read_focus(root,'osk:'+receipt['id'])['ok']
+assert 'topic:stocks' not in {n['id'] for n in a.read_graph(root)['nodes']}
+assert json.loads((home/'canonical-migration.json').read_text())['state']=='complete'
+ledger=list((home/'vault/00_Scope/Workbench/_ledger/migration').glob('events.jsonl'))[0]
+assert any(json.loads(line)['kind']=='archive' for line in ledger.read_text().splitlines())
+counts=len(ledger.read_text().splitlines());a.synchronize(root,source)
+assert not path.exists() and len(ledger.read_text().splitlines())==counts
+print(json.dumps({'withdrawn':True,'rawPreserved':True,'idempotent':True}))
+''')
+        self.assertEqual(result, {'withdrawn':True,'rawPreserved':True,'idempotent':True})
+
+    def test_only_explicit_osk_dependencies_enter_graph_with_direction(self):
+        result = self.execute(r'''
+a.synchronize(root,source);contract,graph,_,write=a._load_engine(root)
+state=json.loads((a._home(root)/'sync.json').read_text());one=state['managed']['memory:one'];room=state['managed']['chat:1']
+p=graph.Index().by_id[one['osk_id']][0]
+write.update_node(one['osk_id'],body='독립 작성 내용 [['+room['osk_id']+']]',expect_hash=a.digest(p.read_bytes()),add_edges={'derived-from':[room['osk_id']]})
+view=a.read_graph(root);dependencies=[e for e in view['edges'] if e.get('purpose')!='navigation']
+assert {(e['source'],e['relation'],e['target']) for e in dependencies}=={('memory:one','linked','chat:1'),('memory:one','derived-from','chat:1')}
+assert all(e['evidence']['osk_id']==one['osk_id'] for e in dependencies)
+assert not any(e['relation']=='mentions' for e in view['edges'])
+print(json.dumps({'direction':True,'canonical':True}))
+''')
+        self.assertEqual(result, {'direction':True,'canonical':True})
+
+    def test_human_corrected_dictionary_topic_is_held_and_never_overwritten(self):
+        result = self.execute(r'''
+a.synchronize(root,source);contract,graph,secrets,write=a._load_engine(root)
+home=a._home(root);p=home/'sync.json';state=json.loads(p.read_text())
+node={'id':'topic:old','label':'사전 주제','category':'topic'}
+receipt=write.create_node('보존할 수정','사용자 수정','사람이 작성한 내용','agent',space=a.SOURCE_SPACE)
+path=graph.Index().by_id[receipt['id']][0];before=path.read_bytes()
+state['managed']['topic:old']={'osk_id':receipt['id'],'title':path.stem,'space':a.SOURCE_SPACE,'written_hash':a.digest(before),'source':node,'active':True,'human_corrected':True}
+a._save(p,state);a.synchronize(root,source)
+after=json.loads(p.read_text());assert path.read_bytes()==before and not after['managed']['topic:old'].get('withdrawn')
+assert 'topic:old' in after['canonical_migration']['held'] and not a.read_focus(root,'osk:'+receipt['id'])['ok']
+print(json.dumps({'held':True,'humanBytesPreserved':True}))
+''')
+        self.assertEqual(result, {'held':True,'humanBytesPreserved':True})
 
 
 if __name__ == "__main__":
