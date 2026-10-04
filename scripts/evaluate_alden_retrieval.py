@@ -193,9 +193,7 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
             if not value.startswith("synthetic:"):
                 raise FixtureError("all evidence IDs must use the synthetic: namespace")
 
-    # Product seeding happens before fixture upserts, so judgments may forbid
-    # an actually present built-in node even when the fixture doesn't replace it.
-    entity_ids.update(item["entity_id"] for item in KG.DEFAULT_ENTITIES)
+    # All entities, including negative historical cases, belong to the fixture.
     query_ids: set[str] = set()
     splits: Counter[str] = Counter()
     for index, query in enumerate(queries):

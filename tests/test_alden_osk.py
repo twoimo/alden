@@ -21,6 +21,20 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_note_body_keeps_meaning_without_truncated_machine_metadata(self):
+        result=self.execute(r'''
+a.synchronize(root,source);c,g,secrets,_=a._load_engine(root)
+node={'id':'memory:compact','label':'맥락','description':'확인한 관측입니다.','facts':['같은 사실','같은 사실'],'evidence':{'room_ids':['x'*80]*1000}}
+body=a._body(node,[],{},secrets)
+assert body=='확인한 관측입니다.\n\n- 같은 사실'
+assert '출처 ID' not in body and 'room_ids' not in body
+node['evidence']={}
+legacy=a._body(node,[{'source':node['id'],'target':'chat:1','relation':'TALKED_IN'}],{'chat:1':'과거 방'},secrets,legacy=True)
+assert '## 대화에서 발견한 관계' in legacy
+print(json.dumps({'compact':True,'legacyPreserved':True}))
+''')
+        self.assertTrue(result['compact'])
+
     def test_review_retired_generated_hub_is_not_recreated_or_marked_pending(self):
         result=self.execute(r'''
 a.synchronize(root,source);c,g,_,w=a._load_engine(root);home=a._home(root)

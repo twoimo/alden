@@ -1,6 +1,7 @@
 """Unit 4: BM25+Dense RRF retrieval, DPO logprob eval, golden re-audit."""
 
 from __future__ import annotations
+from tests.legacy_knowledge_fixture import seed_historical_fixture
 
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -90,7 +91,7 @@ class LiveRetrievalTests(unittest.TestCase):
     def _seed(self, root: Path) -> None:
         conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
         try:
-            KG.ensure_seeded(conn)
+            seed_historical_fixture(conn,KG)
             conn.execute(
                 "INSERT INTO kg_entities (entity_id, name, category, aliases_json, description,"
                 " key_facts_json, importance, updated_at) VALUES (?,?,?,?,?,?,?,?)",
@@ -279,7 +280,7 @@ class LiveRetrievalTests(unittest.TestCase):
             with sqlite3.connect(Path(tmp) / "context.sqlite3") as source:
                 source.execute("CREATE TABLE context_messages(id INTEGER PRIMARY KEY)")
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
-            KG.ensure_seeded(conn)
+            seed_historical_fixture(conn,KG)
             with mock.patch.multiple(
                 KG,
                 index_topic_entities=mock.DEFAULT,
@@ -308,7 +309,7 @@ class LiveRetrievalTests(unittest.TestCase):
             with sqlite3.connect(Path(tmp) / "context.sqlite3") as source:
                 source.execute("CREATE TABLE context_messages(id INTEGER PRIMARY KEY)")
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
-            KG.ensure_seeded(conn)
+            seed_historical_fixture(conn,KG)
             KG.write_meta(conn, "last_indexed_at", "12345")
             KG.write_meta(conn, "last_snapshot_status", "previous_snapshot")
             KG.write_meta(conn, "last_dense_status", "previous_dense")
@@ -488,7 +489,7 @@ class TripleSchemaTests(unittest.TestCase):
             root = Path(tmp)
             conn = KG._connect_kg(root / KG.KNOWLEDGE_GRAPH_DB_NAME)
             try:
-                KG.ensure_seeded(conn)
+                seed_historical_fixture(conn,KG)
                 row = conn.execute(
                     "SELECT subject_id, relation_type, object_id FROM kg_relations LIMIT 1"
                 ).fetchone()

@@ -501,6 +501,79 @@
         "confirmed_at": "2026-09-29T15:01:00+09:00",
         "retracted": false
       }
+    },
+    {
+      "entity_id": "ent:person:moon_seunghyun",
+      "name": "문승현",
+      "category": "대화 상대",
+      "description": "부자멘토멘티 채팅방의 핵심 대화 상대. 러닝/운동을 즐기며 인증 사진을 자주 공유함.",
+      "aliases": [
+        "문승현",
+        "승현",
+        "승현님"
+      ],
+      "facts": [
+        "취미로 야외 러닝/마라톤 훈련을 진행함",
+        "운동 기록(NRC/가민 등) 및 러닝 후기 사진을 공유함 (음식 사진과 혼동 금지)",
+        "최연우의 알쫀쿠 추천 및 테크/스타트업 논의에 호응함"
+      ],
+      "importance": 90,
+      "evidence": {
+        "kind": "seed",
+        "source_event_ids": [],
+        "chat_id": "",
+        "confirmed_at": null,
+        "retracted": false
+      },
+      "updated_at": 1
+    },
+    {
+      "entity_id": "ent:person:choi_yeonwoo",
+      "name": "최연우 (페르소나/본인)",
+      "category": "화자",
+      "description": "오픈카카오 봇의 사용자 페르소나. 솔직하고 현실적인 말투로 스타트업, 클라우드, 자동화에 대해 실용적 조언을 제공함.",
+      "aliases": [
+        "최연우",
+        "연우"
+      ],
+      "facts": [
+        "자신감 넘치고 담백한 어투 (과도한 존대나 AI스러운 문체 지양)",
+        "클라우드 비용과 인프라 효율성을 매우 중요하게 평가함",
+        "친구들과의 일상 공유(운동, 식사)에 자연스럽고 따뜻하게 반응함"
+      ],
+      "importance": 98,
+      "evidence": {
+        "kind": "seed",
+        "source_event_ids": [],
+        "chat_id": "",
+        "confirmed_at": null,
+        "retracted": false
+      },
+      "updated_at": 1
+    },
+    {
+      "entity_id": "ent:channel:bujamentor",
+      "name": "부자멘토멘티",
+      "category": "채팅방",
+      "description": "문승현, 송우섭, 주원, 현준, 최연우가 참여하는 핵심 카카오톡 그룹 채팅방 (ID: 417780809780519).",
+      "aliases": [
+        "부자멘토멘티",
+        "부자방",
+        "멘토멘티"
+      ],
+      "facts": [
+        "스타트업 인프라, 클라우드 비용 절감, 일상 라이프스타일 논의",
+        "과거 합의된 맥락(알쫀쿠 가성비 추천)을 일관되게 유지해야 함"
+      ],
+      "importance": 100,
+      "evidence": {
+        "kind": "seed",
+        "source_event_ids": [],
+        "chat_id": "",
+        "confirmed_at": null,
+        "retracted": false
+      },
+      "updated_at": 1
     }
   ],
   "relations": [

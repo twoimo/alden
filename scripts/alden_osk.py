@@ -393,6 +393,13 @@ def _active_relation_signature(checkpoint: dict) -> str:
 
 
 def _body(node: dict, links: list[dict], titles: dict[str, str], secrets, *, legacy: bool = False) -> str:
+    if not legacy:
+        # Machine identity, roles and full evidence stay in the immutable Raw
+        # records/checkpoint and derived-from, rather than a truncated JSON body.
+        description = _clean(node.get('description') or node.get('label'), secrets, 1800)
+        facts = list(dict.fromkeys(_clean(fact, secrets, 600).replace('\n', ' ')
+                                  for fact in node.get('facts', [])[:12]))
+        return secrets.filter_text(description + ('\n\n' + '\n'.join('- ' + fact for fact in facts) if facts else ''))[0][:MAX_BODY]
     lines = ["## 올든이 관리하는 대화 지식", "", f"출처 ID: `{_clean(node['id'], secrets, 192)}`",
              f"유형: {_clean(node.get('category'), secrets, 96)}", "",
              _clean(node.get("description"), secrets, 1800)]
