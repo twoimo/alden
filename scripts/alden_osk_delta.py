@@ -13,6 +13,7 @@ from contextlib import closing
 from pathlib import Path
 
 from alden_osk_sources import _safe, _immutable, _hash, _json_value
+from alden_corpus import message_source_role
 
 
 def _readonly(path: Path):
@@ -27,7 +28,7 @@ def _identity(account: str, row) -> str:
 
 def _payload(row, account):
     original={key:_json_value(value) for key,value in dict(row).items()}
-    role='system_history' if str(original.get('author_id','0'))=='0' else 'outgoing_unclassified' if original.get('is_self') else 'peer_history'
+    role=message_source_role(original)
     return {'record_kind':'external_kakao_message','source_id':_identity(account,row),'source_role':role,'original':original}
 
 

@@ -17,6 +17,7 @@ import re
 from array import array
 from contextlib import closing
 from pathlib import Path
+from alden_corpus import message_source_role
 
 SCHEMA = 1
 CHUNK_ROWS = 512
@@ -109,7 +110,7 @@ def export_corpus(snapshot: Path, vault: Path, generation: str, filter_text,
             source_id = 'kakao:' + account + ':room:' + room + ':log:' + log
             # Preserve malformed/duplicate source identities as distinct rows.
             # A consumer receives every coordinate and cannot silently merge.
-            role = 'outgoing_unclassified' if row.get('is_self') else 'peer_history' if str(row.get('author_id', '')).isdigit() and int(row['author_id']) > 0 else 'system_history'
+            role = message_source_role(row)
             raw = json.dumps({'record_kind': 'external_kakao_message', 'source_id': source_id,
                               'source_role': role, 'original': row}, ensure_ascii=False, sort_keys=True, allow_nan=False)
             filtered = filter_text(raw)[0]
@@ -281,7 +282,7 @@ def ground_graph(state_root: Path, graph: dict, filter_text) -> dict:
                 variants={json.dumps({field:dict(row).get(field) for field in ('author_id','message','attachment','message_type','sent_at','is_self')},sort_keys=True,default=_json_value) for row in records}
                 if len(variants)>1: conflicts.add(key)
                 for row in records:
-                    original=dict(row);role='system_history' if str(original.get('author_id','0'))=='0' else 'outgoing_unclassified' if original.get('is_self') else 'peer_history'
+                    original=dict(row);role=message_source_role(original)
                     packets.setdefault(key,[]).append({'record_kind':'external_kakao_message','source_role':role,'original':original})
             else:
                 room=re.fullmatch('kakao:([0-9a-f]{64}):room:([1-9][0-9]*)',key)

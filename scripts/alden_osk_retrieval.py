@@ -19,11 +19,40 @@ EMBED_BATCH = 8  # The existing pinned E5 service's supported maximum.
 RELATION_ORDER = {'derived-from': 0, 'linked': 1, 'conflicts': 2}
 
 
+def _source_numeric_id(value, kind, account):
+    value = str(value or '').strip()
+    qualified = re.fullmatch(r'kakao:([0-9a-f]{64}):' + kind + r':([0-9]+)', value)
+    if qualified:
+        if account and qualified[1] != account:
+            return '', account
+        value, account = qualified[2], qualified[1]
+    if not value.isascii() or not value.isdigit() or not 0 < int(value) < 2**63:
+        return '', account
+    return str(int(value)), account
+
+
 def _snapshot(root: Path, cancelled=lambda: False):
     home = osk._home(root)
     checkpoint = osk._read_json(home / 'sync.json')
     contract, graph, secrets, _ = osk._load_engine(root, read_only=True)
     index = graph.Index()
+    if index.scan_errors:
+        raise RuntimeError('canonical_inventory_unresolved')
+    # Seed this one SDK Index with contracts parsed from the exact bytes we
+    # hash below. The SDK still performs its full identity/ambiguity checks.
+    # A fresh Index/buffer is created on every request; no cross-read body cache.
+    buffers = {}
+    for path, _kind in index.names.values():
+        if cancelled():
+            raise RuntimeError('canonical_retrieval_cancelled')
+        if any(p.is_symlink() for p in [path, *path.parents]):
+            raise RuntimeError('canonical_note_symlink')
+        try:
+            data = path.read_bytes()
+            index.parsed[path] = contract.parse_bytes(path, data)
+        except Exception as error:
+            raise RuntimeError('canonical_inventory_unresolved') from error
+        buffers[path] = data
     if index.scan_errors or index.broken or index.dup_ids or index.dup_stems:
         raise RuntimeError('canonical_inventory_unresolved')
     managed = {v['osk_id']: (k, v) for k, v in checkpoint.get('managed', {}).items()}
@@ -35,8 +64,8 @@ def _snapshot(root: Path, cancelled=lambda: False):
             continue
         if any(p.is_symlink() for p in [path, *path.parents]):
             raise RuntimeError('canonical_note_symlink')
-        data = path.read_bytes()
-        note = contract.parse_bytes(path, data)
+        data = buffers[path]
+        note = index.node(path)
         item = managed.get(note.id)
         if contract.validate(note) or item and (not item[1].get('active') or item[0].startswith('topic:')):
             continue
@@ -45,6 +74,11 @@ def _snapshot(root: Path, cancelled=lambda: False):
         account = re.match(r'^(?:chat|person|memory):kakao:([0-9a-f]{64}):', str(source.get('id') or ''))
         source_account = account[1] if account else str(evidence.get('account') or '')
         source_account = source_account if re.fullmatch(r'[0-9a-f]{64}', source_account) else ''
+        room_id, source_account = _source_numeric_id(evidence.get('chat_id'), 'room', source_account)
+        actor_id, actor_account = _source_numeric_id(evidence.get('author_id'), 'actor', source_account)
+        if actor_id and source_account and actor_account != source_account:
+            actor_id = ''
+        source_account = source_account or actor_account
         body = secrets.filter_text(osk._reference_body(note, item[1] if item else None, checkpoint, secrets))[0]
         referenced = replace(note, body=body)
         refs = note.meta.get('derived-from') or []
@@ -54,15 +88,15 @@ def _snapshot(root: Path, cancelled=lambda: False):
             for target in targets:
                 if index.resolve(target)[0] == 'node':
                     hit = index.locate(target)
-                    links.append((relation, contract.parse(hit[0]).id))
+                    links.append((relation, index.node(hit[0]).id))
         stamp = datetime.strptime(str(note.meta['updated']), '%Y-%m-%d %H:%M (KST)').replace(tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
         docs.append({'id': 'osk:' + note.id, 'note_id': note.id, 'path': str(path.relative_to(home / 'vault')),
                      'hash': osk.digest(data), 'title': title, 'summary': str(note.meta.get('summary', '')),
                      'body': body, 'updated_at': int(stamp), 'space': str(path.parent.relative_to(home / 'vault')),
                      'derived_from': refs, 'conflicts': note.meta.get('conflicts') or [], 'links': links, 'source_identity': str(source.get('id') or ''),
                      'source_account': source_account,
-                     'room_id': str(evidence.get('chat_id') or ''), 'room_ids': evidence.get('room_ids') or [],
-                     'actor_id': str(evidence.get('author_id') or ''), 'source_event_ids': evidence.get('source_event_ids') or []})
+                     'room_id': room_id, 'room_ids': evidence.get('room_ids') or [],
+                     'actor_id': actor_id, 'source_event_ids': evidence.get('source_event_ids') or []})
         if len(docs) > MAX_NOTES:
             raise RuntimeError('canonical_inventory_exceeds_projection_budget')
     docs.sort(key=lambda d: d['id'])

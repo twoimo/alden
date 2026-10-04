@@ -7,6 +7,23 @@ import unicodedata
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+
+def message_source_role(row) -> str:
+    """Database feed notifications remain system records even with a member ID."""
+    content = row.get('message')
+    kind = row.get('message_type', row.get('type'))
+    if type(kind) is int and kind == 0 and isinstance(content, str):
+        try:
+            feed = json.loads(content)
+        except (ValueError, TypeError, RecursionError):
+            feed = None
+        if isinstance(feed, dict) and type(feed.get('feedType')) is int:
+            return 'system_history'
+    author = str(row.get('author_id') or '0')
+    if not author.isascii() or not author.isdigit() or int(author) <= 0:
+        return 'system_history'
+    return 'outgoing_unclassified' if row.get('is_self') else 'peer_history'
+
 MAX_ROOM_DISPLAY_IDS = 256
 
 
@@ -169,6 +186,6 @@ def search(root: Path, query: str, *, chat_id: str = '', author_id: str = '', li
             excerpt=str(text)[:min(1000,budget)];budget-=len(excerpt)
             observed=_message_datetime_kst(date)
             items.append({'source_id':f'kakao:{account}:room:{room}:log:{log}','chat_id':room,'log_id':log,'author_id':actor,'sender':name,'content':excerpt,'date':observed.isoformat() if observed is not None else str(date),'source_date':date,'truncated':len(excerpt)<len(str(text)),
-                          'source_kind':'local_db_snapshot','source_role':'outgoing_unclassified' if self_row else 'peer_history' if int(actor)>0 else 'system_history','message_type':kind})
+                          'source_kind':'local_db_snapshot','source_role':message_source_role({'message':text,'message_type':kind,'author_id':actor,'is_self':self_row}),'message_type':kind})
             if budget<=0:break
         return {'ok':True,'mode':'bm25','account':account,'items':items}

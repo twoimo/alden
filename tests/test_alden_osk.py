@@ -21,6 +21,50 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_canonical_snapshot_parses_exact_bytes_once_and_fences_mid_read_edits(self):
+        result=self.execute(r'''
+a.synchronize(root,source);c,g,_,w=a._load_engine(root)
+from unittest.mock import patch
+import alden_osk_retrieval as r
+from collections import Counter
+one=w.create_node('바이트 근거','정본 읽기','원래 본문','agent',space=a.SOURCE_SPACE)
+two=w.create_node('바이트 설계','저장 참조','전제 [['+one['id']+']]','agent',space=a.SOURCE_SPACE,edges={'derived-from':[one['id']]})
+original=c.parse_bytes;counts=Counter()
+def read(path,data):counts[str(path)]+=1;return original(path,data)
+with patch.object(c,'parse_bytes',side_effect=read):docs,_=r._snapshot(root)
+assert counts and all(n==1 for n in counts.values())
+path=g.Index().by_id[one['id']][0];changed=False
+def racing(path_arg,data):
+ global changed
+ note=original(path_arg,data)
+ if Path(path_arg)==path and not changed:
+  changed=True;path.write_bytes(data.replace('원래 본문'.encode(),'변경 본문'.encode()))
+ return note
+with patch.object(c,'parse_bytes',side_effect=racing):
+ try:r.retrieve(root,'바이트 근거',also=['osk:'+one['id']],max_entities=1)
+ except RuntimeError as e:assert 'changed_during_query' in str(e)
+ else:raise AssertionError('cached body acquired newer disk hash')
+new,_=r._snapshot(root);assert next(d for d in new if d['note_id']==one['id'])['body'].strip()=='변경 본문'
+print(json.dumps({'parsedOnce':True,'raceFenced':True,'nextReadFresh':True}))
+''')
+        self.assertTrue(result['parsedOnce'])
+
+    def test_canonical_qualified_source_ids_match_numeric_queries_without_account_merges(self):
+        result=self.execute(r'''
+account='a'*64;foreign='b'*64
+source['nodes']=[{'id':'memory:kakao:'+account+':observation:42','label':'실제 범위 근거','category':'memory','description':'범위 질의','facts':['관측 원문'],'evidence':{'kind':'snapshot','chat_id':'kakao:'+account+':room:42','author_id':'kakao:'+account+':actor:7'}}]
+a.synchronize(root,source)
+folder=root/'knowledge/corpus';folder.mkdir();(folder/'current.json').write_text(json.dumps({'account':account}))
+import alden_osk_retrieval as r
+b=r.retrieve(root,'범위 질의',chat_id='42',participant_id='7');assert len(b['candidate_provenance'])==1 and b['candidate_provenance'][0]['room_id']=='42'
+docs,_=r._snapshot(root);assert docs[0]['actor_id']=='7' and docs[0]['source_account']==account
+assert r._source_numeric_id('kakao:'+foreign+':room:42','room',account)==('',account)
+assert r._source_numeric_id('0042','room',account)==('42',account)
+assert r._source_numeric_id('-42','room',account)==('',account)
+print(json.dumps({'numericQueriesMatchQualifiedSources':True,'accountMismatchRejected':True}))
+''')
+        self.assertTrue(result['numericQueriesMatchQualifiedSources'])
+
     def test_canonical_retrieval_expands_real_outgoing_premises_with_fair_budget(self):
         result=self.execute(r'''
 a.synchronize(root,source);c,g,_,w=a._load_engine(root)

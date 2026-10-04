@@ -12,6 +12,21 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import alden_corpus
 
 class CorpusTests(unittest.TestCase):
+    def test_member_feed_is_system_history_without_changing_original_message(self):
+        feed='{"feedType":2,"member":{"userId":7,"nickName":"가입 알림"}}'
+        row={'message':feed,'message_type':0,'author_id':'7','is_self':False}
+        self.assertEqual(alden_corpus.message_source_role(row),'system_history')
+        self.assertEqual(row['message'],feed)
+        self.assertEqual(alden_corpus.message_source_role({**row,'message_type':1}),'peer_history')
+        self.assertEqual(alden_corpus.message_source_role({**row,'message':'{"feedType":true}'}),'peer_history')
+        self.assertEqual(alden_corpus.message_source_role({**row,'message':'일반 발화','is_self':True}),'outgoing_unclassified')
+        with TemporaryDirectory() as td:
+            root,account,path=self.fixture(Path(td))
+            with sqlite3.connect(path) as db:
+                db.execute('INSERT INTO alden_messages(chat,chat_id,log_id,author_id,user_name,message,date,is_self,message_type,source) VALUES(?,?,?,?,?,?,?,?,?,?)',('kakao:'+account+':room:42','42','999999','7','가입 알림',feed,'2026-10-04',0,0,'kakao:'+account+':room:42'))
+            db.close()
+            result=alden_corpus.search(root,'',chat_id='42',author_id='7',limit=1)
+            self.assertEqual(result['items'][0]['source_role'],'system_history');self.assertEqual(result['items'][0]['content'],feed)
     def fixture(self,base):
         root=base/'state';root.mkdir()
         account='a'*64;folder=root/'knowledge/corpus'/account;folder.mkdir(parents=True)
