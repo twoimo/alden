@@ -9,6 +9,9 @@ import sys
 import time
 from pathlib import Path
 
+# Importing installed resources must never alter a signed application bundle.
+sys.dont_write_bytecode = True
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

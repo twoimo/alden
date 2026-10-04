@@ -13,6 +13,24 @@ class VoiceRetrievalTests(unittest.TestCase):
     def root(self,path):
         root=Path(path);folder=root/'knowledge/corpus';folder.mkdir(parents=True);(folder/'current.json').write_text('{}');return root
 
+    def test_requested_premises_keep_each_relation_identity_and_endpoint_hash(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            notes=[{'fact_type':'entity','note_id':i,'entity_id':'osk:'+i,'note_hash':'sha-'+i,'source_kind':'canonical_osk_note'} for i in ['plan','a','b','c']]
+            relations=[{'fact_type':'relation','source_id':'osk:plan','target_id':'osk:'+i,'source_note_id':'plan','target_note_id':i,
+                        'relation':'derived-from','note_hash':'sha-plan','target_note_hash':'sha-'+i,'source_kind':'canonical_osk_note','provenance_valid':True} for i in ['a','b','c']]
+            bundle={'facts':['설계','근거 A','근거 B','근거 C','설계 전제 A','설계 전제 B','설계 전제 C'],
+                    'fact_provenance':notes+relations,'search_mode':'rrf'}
+            with mock.patch('alden_corpus.search') as search,mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=bundle) as graph:
+                reference,metrics=voice._voice_knowledge_reference('기억 설계의 세 전제와 연결을 알려줘',[],root,AbortController(root).token())
+            search.assert_not_called();self.assertEqual(graph.call_args.kwargs['max_entities'],4);self.assertEqual(graph.call_args.kwargs['max_relations'],3)
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(len(context['graph_facts']),7);self.assertEqual(metrics['graph_provenance'][4:],relations)
+            for row,original in zip(context['graph_provenance'][4:],relations):
+                self.assertEqual(row['source_id'],original['source_id']);self.assertEqual(row['target_id'],original['target_id'])
+                self.assertEqual(row['relation'],'derived-from');self.assertNotIn('note_hash',row)
+            self.assertEqual(metrics['note_sources'],4)
+
     def test_canonical_knowledge_keeps_note_provenance_without_reading_unrelated_chats(self):
         with TemporaryDirectory() as td:
             root=self.root(td);folder=root/'knowledge/osk';folder.mkdir();(folder/'sync.json').write_text('{}')
@@ -20,14 +38,22 @@ class VoiceRetrievalTests(unittest.TestCase):
                    'fact_provenance':[{'note_id':'stable','note_hash':'exact-sha','space':'00_Scope/Alden',
                                        'source_kind':'canonical_osk_note','derived_from':['source#quote'],'updated_at':123}]}
             with mock.patch('alden_corpus.resolve_room') as rooms,mock.patch('alden_corpus.search') as search,mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=graph):
-                reference,metrics=voice._voice_knowledge_reference('저장된 기억 자료의 한계를 알려줘',[],root,AbortController(root).token())
+                reference,metrics=voice._voice_knowledge_reference('저장된 논문 원문 자료의 한계를 알려줘',[],root,AbortController(root).token())
             rooms.assert_not_called();search.assert_not_called()
             context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
             self.assertEqual(context['quoted_history'],[]);self.assertEqual(len(context['graph_facts'][0]),600)
-            source=context['graph_provenance'][0]
+            source=metrics['graph_provenance'][0]
             self.assertEqual(source['note_hash'],'exact-sha');self.assertEqual(source['derived_from'],['source#quote'])
             self.assertTrue(source['fact_truncated']);self.assertEqual(metrics['sources'],1)
             self.assertEqual(metrics['note_sources'],1);self.assertEqual(metrics['history_sources'],0)
+
+    def test_explicit_hash_request_retains_full_proof_in_model_context(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td);source={'note_id':'stable','note_hash':'exact-sha','source_kind':'canonical_osk_note','derived_from':['source#quote']}
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['본문'],'fact_provenance':[source],'search_mode':'rrf'}):
+                reference,metrics=voice._voice_knowledge_reference('저장된 노드 SHA256과 출처 좌표를 알려줘',[],root,AbortController(root).token())
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(context['graph_provenance'][0],source);self.assertFalse(metrics['model_provenance_compact'])
 
     def test_reference_stays_quoted_and_unclassified_outgoing_is_not_user_input(self):
         with TemporaryDirectory() as td:

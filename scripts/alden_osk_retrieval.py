@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from dataclasses import replace
@@ -15,6 +16,7 @@ SCHEMA = 1
 ENCODING = 'e5-char256-stride192-weighted-unit-pool-v1'
 MAX_NOTES = 4096
 EMBED_BATCH = 8  # The existing pinned E5 service's supported maximum.
+RELATION_ORDER = {'derived-from': 0, 'linked': 1, 'conflicts': 2}
 
 
 def _snapshot(root: Path, cancelled=lambda: False):
@@ -40,6 +42,9 @@ def _snapshot(root: Path, cancelled=lambda: False):
             continue
         source = item[1].get('source', {}) if item else {}
         evidence = source.get('evidence') or {}
+        account = re.match(r'^(?:chat|person|memory):kakao:([0-9a-f]{64}):', str(source.get('id') or ''))
+        source_account = account[1] if account else str(evidence.get('account') or '')
+        source_account = source_account if re.fullmatch(r'[0-9a-f]{64}', source_account) else ''
         body = secrets.filter_text(osk._reference_body(note, item[1] if item else None, checkpoint, secrets))[0]
         referenced = replace(note, body=body)
         refs = note.meta.get('derived-from') or []
@@ -55,6 +60,7 @@ def _snapshot(root: Path, cancelled=lambda: False):
                      'hash': osk.digest(data), 'title': title, 'summary': str(note.meta.get('summary', '')),
                      'body': body, 'updated_at': int(stamp), 'space': str(path.parent.relative_to(home / 'vault')),
                      'derived_from': refs, 'conflicts': note.meta.get('conflicts') or [], 'links': links, 'source_identity': str(source.get('id') or ''),
+                     'source_account': source_account,
                      'room_id': str(evidence.get('chat_id') or ''), 'room_ids': evidence.get('room_ids') or [],
                      'actor_id': str(evidence.get('author_id') or ''), 'source_event_ids': evidence.get('source_event_ids') or []})
         if len(docs) > MAX_NOTES:
@@ -142,12 +148,34 @@ def index_dense(root: Path, *, cancelled=lambda: False, embed=None) -> dict:
                 'embedded_changed': len(pending), 'embedded_windows': len(pieces), 'snapshot': signature}
 
 
-def _eligible(d, chat_id, participant_id, time_from, time_to):
+def _room_scope(root, chat_id):
+    if not chat_id:
+        return None, None
+    value = str(chat_id).strip()
+    qualified = re.fullmatch(r'kakao:([0-9a-f]{64}):room:([0-9]+)', value)
+    room, account = (qualified[2], qualified[1]) if qualified else (value, None)
+    if not room.isascii() or not room.isdigit() or not 0 < int(room) < 2**63:
+        raise ValueError('canonical_room_scope_invalid')
+    pointer = osk._home(root).parent / 'corpus/current.json'
+    if any(path.is_symlink() for path in [pointer, *pointer.parents]):
+        raise RuntimeError('canonical_room_pointer_unsafe')
+    if pointer.is_file():
+        published = str(osk._read_json(pointer).get('account') or '')
+        if not re.fullmatch(r'[0-9a-f]{64}', published):
+            raise RuntimeError('canonical_room_account_unavailable')
+        if account and account != published:
+            raise RuntimeError('canonical_room_account_mismatch')
+        account = published
+    return room, account
+
+
+def _eligible(d, chat_id, participant_id, time_from, time_to, account=None):
     import auto_reply_knowledge_graph as kg
     # An aggregate speaker note can mix rooms; original message retrieval owns
     # scoped speaker context. Unscoped manual notes cannot invent a room binding.
     if chat_id:
-        if d['source_identity'].startswith('person:') or d['room_id'] != str(chat_id):
+        if (d['source_identity'].startswith('person:') or d['room_id'] != str(chat_id)
+                or account and d['source_account'] != account):
             return False
     if participant_id and d['actor_id'] != str(participant_id):
         return False
@@ -162,7 +190,8 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
     if type(max_context_chars) is not int or not 256 <= max_context_chars <= 16000:
         raise ValueError('canonical_context_budget')
     docs, signature = _snapshot(root, cancelled)
-    eligible = {d['id']: d for d in docs if _eligible(d, chat_id, participant_id, time_from, time_to)}
+    chat_id, account = _room_scope(root, chat_id)
+    eligible = {d['id']: d for d in docs if _eligible(d, chat_id, participant_id, time_from, time_to, account)}
     with closing(_connection(root)) as connection:
         _project(connection, docs, signature)
         terms = kg._fts_query_terms([query])
@@ -192,30 +221,64 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
     explicit = {str(value) for value in also or []}
     pinned = [d['id'] for d in docs if d['id'] in eligible and (d['id'] in explicit or d['source_identity'] in explicit)]
     ranked = [(identity, 0.) for identity in pinned] + [(i, s) for i, s in ranked if i not in pinned]
-    selected = [eligible[i] for i, _ in ranked[:max(0, int(max_entities))]]
-    facts, provenance, relations, relation_provenance = [], [], [], []
-    remaining = max_context_chars
+    limit = max(0, int(max_entities))
+    identities = [identity for identity, _ in ranked]
+    seed = identities[0] if identities and limit else ''
+    # A retrieved note's actual outgoing premises take precedence over unrelated
+    # next-ranked notes. One hop only; source filters apply before expansion.
+    neighbors = []
+    if seed and max_relations > 0:
+        position = {identity: rank for rank, identity in enumerate(identities)}
+        edges = sorted(eligible[seed]['links'], key=lambda edge: (
+            RELATION_ORDER[edge[0]], position.get('osk:' + edge[1], len(position)), edge[1]))
+        for _, target in edges:
+            identity = 'osk:' + target
+            if identity in eligible and identity != seed and identity not in neighbors:
+                neighbors.append(identity)
+    ordered = ([seed] if seed else []) + neighbors + [identity for identity in identities if identity != seed and identity not in neighbors]
+    selected = [eligible[identity] for identity in ordered[:limit]]
+    selected_ids = {d['note_id']: d for d in selected}
+    planned = []
+    seen = set()
     for d in selected:
-        fact = (d['title'] + ': ' + d['body'])[:remaining]
+        for relation, target in sorted(d['links'], key=lambda edge: (RELATION_ORDER[edge[0]], edge[1])):
+            edge_id = (d['id'], relation, target)
+            if target not in selected_ids or target == d['note_id'] or edge_id in seen:
+                continue
+            seen.add(edge_id)
+            planned.append((d, relation, selected_ids[target]))
+    planned = planned[:max(0, int(max_relations))]
+    facts, provenance, relations, relation_provenance = [], [], [], []
+    relation_texts = [d['title'] + ' — ' + relation + ' → ' + target['title'] for d, relation, target in planned]
+    reserved = min(max_context_chars // 3, sum(map(len, relation_texts)))
+    remaining = max_context_chars - reserved
+    for offset, d in enumerate(selected):
+        # Fair per-note bounds keep a long first body from erasing its premises.
+        allowance = remaining // (len(selected) - offset)
+        fact = (d['title'] + ': ' + d['body'])[:allowance]
         if not fact:
             break
         remaining -= len(fact);facts.append(fact)
         provenance.append({'fact_type': 'entity', 'entity_id': d['id'], 'note_id': d['note_id'], 'note_hash': d['hash'],
                            'source_kind': 'canonical_osk_note', 'space': d['space'], 'room_id': d['room_id'],
+                           'source_account': d['source_account'],
                            'source_event_ids': d['source_event_ids'], 'derived_from': d['derived_from'], 'conflicts': d['conflicts'],
                            'updated_at': d['updated_at'], 'retracted': False, 'provenance_valid': True,
+                           'retrieval_role': 'seed' if d['id'] == seed else 'outgoing_reference' if d['id'] in neighbors else 'ranked',
                            'fact_truncated': len(fact) < len(d['title'] + ': ' + d['body'])})
     used_docs = selected[:len(facts)]
-    selected_ids = {d['note_id']: d for d in used_docs}
-    for d in used_docs:
-        for relation, target in d['links']:
-            if target not in selected_ids or len(relations) >= max_relations or remaining <= 0:
-                continue
-            fact = (d['title'] + ' — ' + relation + ' → ' + selected_ids[target]['title'])[:remaining]
-            remaining -= len(fact);relations.append(fact)
-            relation_provenance.append({'fact_type': 'relation', 'source_id': d['id'], 'target_id': 'osk:' + target,
-                                       'source_kind': 'canonical_osk_note', 'note_hash': d['hash'], 'relation': relation,
-                                       'source_event_ids': [], 'retracted': False, 'provenance_valid': True})
+    used_ids = {d['id'] for d in used_docs}
+    remaining = max_context_chars - sum(map(len, facts))
+    for (d, relation, target), text in zip(planned, relation_texts):
+        if d['id'] not in used_ids or target['id'] not in used_ids or remaining <= 0:
+            continue
+        fact = text[:remaining]
+        remaining -= len(fact);relations.append(fact)
+        relation_provenance.append({'fact_type': 'relation', 'source_id': d['id'], 'target_id': target['id'],
+                                   'source_note_id': d['note_id'], 'target_note_id': target['note_id'],
+                                   'source_kind': 'canonical_osk_note', 'note_hash': d['hash'], 'target_note_hash': target['hash'],
+                                   'relation': relation, 'fact_truncated': len(fact) < len(text),
+                                   'source_event_ids': [], 'retracted': False, 'provenance_valid': True})
     for d in used_docs:
         path = osk._home(root) / 'vault' / d['path']
         if cancelled():
@@ -226,9 +289,10 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
             'fact_provenance': provenance + relation_provenance, 'candidate_provenance': provenance,
             'relation_provenance': relation_provenance, 'entities_count': len(facts), 'relations_count': len(relations),
             'candidate_count': len(facts), 'retrieved_candidate_count': len(ranked), 'focus_node_id': used_docs[0]['id'] if used_docs else '',
-            'focus_k': 0, 'focus_node_count': len(used_docs), 'focus_edge_count': len(relations),
+            'focus_k': 1 if any(d['id'] in neighbors for d in used_docs) else 0, 'focus_node_count': len(used_docs), 'focus_edge_count': len(relations),
             'search_mode': mode, 'index_version': 'canonical-osk-1', 'watermark': signature,
             'evidence_ids': list(dict.fromkeys(ref for d in used_docs for ref in d['derived_from'])),
             'retrieval_policy': {'rrf_k': rrf_k, 'rrf_weights': list(kg._validated_rrf_weights(rrf_weights)),
                                  'candidate_limit': candidate_limit, 'max_context_chars': max_context_chars,
+                                 'max_entities': limit, 'max_relations': max(0, int(max_relations)), 'graph_expansion_hops': 1,
                                  'time_basis': 'canonical_note_updated'}, 'authority': 'OSK canonical notes'}

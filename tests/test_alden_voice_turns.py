@@ -29,6 +29,26 @@ class Speech:
 
 
 class AldenVoiceTurnTests(unittest.TestCase):
+    def test_source_proof_belongs_to_generated_turn_even_if_adapter_metrics_change(self):
+        class Llm:
+            def generate(self, *_args, **_kwargs):
+                self.last_metrics={'retrieval':{'graph_provenance':[{'note_id':'actual','note_hash':'fixed','derived_from':['original#row']}]}}
+                return '확인한 답변'
+        llm=Llm()
+        class Tts:
+            def speak(self, _text, token):
+                token.raise_if_cancelled()
+                llm.last_metrics['retrieval']['graph_provenance'][0]['derived_from'].append('later#row')
+                llm.last_metrics={'retrieval':{'graph_provenance':[{'note_id':'later','note_hash':'wrong'}]}}
+        with TemporaryDirectory() as temp:
+            root=Path(temp);pipeline=AldenVoicePipeline(stt=object(),llm=llm,tts=Tts(),token=AbortController(root).token(),status=VoiceStatusStore(root))
+            try:
+                self.assertEqual(pipeline.process_text('자료 질문').state,VoiceState.ENDED)
+                from alden_history import read
+                page=read(root,Path('/unused'),'voice-history-messages',chat_id=pipeline.conversation_id)
+                answer=next(row for row in page['items'] if row['role']=='assistant')
+                self.assertEqual(answer['retrieval_provenance'],[{'note_id':'actual','note_hash':'fixed','derived_from':['original#row']}])
+            finally:pipeline.close()
     def test_external_abort_resume_never_revives_a_queued_job(self):
         with TemporaryDirectory() as temp:
             first = AbortController(Path(temp))

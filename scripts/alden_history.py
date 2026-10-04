@@ -33,6 +33,7 @@ def database(state_root: Path, *, write: bool = False):
         db.executescript('''
         CREATE TABLE IF NOT EXISTS voice_sessions(id TEXT PRIMARY KEY,started_at REAL,title TEXT,source TEXT);
         CREATE TABLE IF NOT EXISTS voice_messages(session_id TEXT,turn_id INTEGER,role TEXT,content TEXT,created_at REAL,context_version INTEGER,state TEXT,PRIMARY KEY(session_id,turn_id,role));
+        CREATE TABLE IF NOT EXISTS voice_sources(session_id TEXT,turn_id INTEGER,provenance TEXT,PRIMARY KEY(session_id,turn_id));
         CREATE TABLE IF NOT EXISTS db_cycles(id TEXT PRIMARY KEY,started_at REAL,updated_at REAL,phase TEXT,pid INTEGER,details TEXT);
         CREATE TABLE IF NOT EXISTS db_steps(id INTEGER PRIMARY KEY,cycle_id TEXT,at REAL,phase TEXT,details TEXT);
         CREATE INDEX IF NOT EXISTS voice_message_page ON voice_messages(session_id,turn_id);
@@ -54,13 +55,24 @@ def database(state_root: Path, *, write: bool = False):
         db.close()
 
 def record_voice(state_root: Path, session: str, turn: int, role: str, content: str,
-                 context_version: int, *, source: str = 'microphone', state: str = 'confirmed') -> None:
+                 context_version: int, *, source: str = 'microphone', state: str = 'confirmed',
+                 provenance: list[dict] | None = None) -> None:
     if role not in ('user','assistant') or not isinstance(content,str) or not content:
         raise ValueError('voice_history_record_invalid')
+    encoded = None
+    if provenance:
+        if role != 'assistant' or not isinstance(provenance,list) or len(provenance)>7 or not all(isinstance(row,dict) for row in provenance):
+            raise ValueError('voice_source_record_invalid')
+        allowed={'fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated'}
+        safe=[{key:value for key,value in row.items() if key in allowed} for row in provenance]
+        encoded=json.dumps(safe,ensure_ascii=False,allow_nan=False)
+        if len(encoded.encode())>64*1024:raise ValueError('voice_source_record_too_large')
     now=time.time()
     with database(state_root,write=True) as db:
         db.execute('INSERT OR IGNORE INTO voice_sessions VALUES(?,?,?,?)',(session,now,content[:80],source))
-        db.execute('INSERT OR IGNORE INTO voice_messages VALUES(?,?,?,?,?,?,?)',(session,turn,role,content,now,context_version,state))
+        inserted=db.execute('INSERT OR IGNORE INTO voice_messages VALUES(?,?,?,?,?,?,?)',(session,turn,role,content,now,context_version,state))
+        if inserted.rowcount and encoded is not None:
+            db.execute('INSERT INTO voice_sources VALUES(?,?,?)',(session,turn,encoded))
 
 def context_coverage(state_root: Path) -> dict:
     """Counts in the existing search corpus, separate from raw Kakao collection."""
@@ -135,7 +147,15 @@ def read(state_root: Path, binary: Path, action: str, query: str | None = None, 
             if not turns: return {'ok':True,'items':[],'next':None}
             low=turns[-1]['turn_id'];high=turns[0]['turn_id']
             rows=db.execute('SELECT * FROM voice_messages WHERE session_id=? AND turn_id BETWEEN ? AND ? ORDER BY turn_id,CASE role WHEN "user" THEN 0 ELSE 1 END',(chat_id,low,high)).fetchall()
-            return {'ok':True,'items':[dict(row) for row in rows],'next':low if more else None}
+            sources={}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='voice_sources'").fetchone():
+                sources={row['turn_id']:json.loads(row['provenance']) for row in db.execute('SELECT * FROM voice_sources WHERE session_id=? AND turn_id BETWEEN ? AND ?',(chat_id,low,high))}
+            items=[]
+            for row in rows:
+                item=dict(row)
+                if row['role']=='assistant' and row['turn_id'] in sources:item['retrieval_provenance']=sources[row['turn_id']]
+                items.append(item)
+            return {'ok':True,'items':items,'next':low if more else None}
         if action=='db-sync-history':
             before=options.get('before')
             if before is not None and (type(before) is not int or before<=0): raise ValueError('db_history_cursor_invalid')

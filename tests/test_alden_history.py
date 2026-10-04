@@ -8,6 +8,19 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import alden_history as h
 
 class HistoryTests(unittest.TestCase):
+    def test_voice_source_proof_is_atomic_private_and_never_replaced_by_duplicate(self):
+        with TemporaryDirectory() as directory:
+            root=Path(directory);proof=[{'fact_type':'relation','source_id':'osk:a','target_id':'osk:b','relation':'derived-from',
+                                       'note_hash':'a'*64,'target_note_hash':'b'*64,'derived_from':['source#row'],'credential':'omit','content':'omit'}]
+            h.record_voice(root,'session',1,'assistant','확인한 답변',1,provenance=proof)
+            h.record_voice(root,'session',1,'assistant','늦은 다른 답변',2,provenance=[{'note_hash':'changed'}])
+            page=h.read(root,Path('/unused'),'voice-history-messages',chat_id='session');row=page['items'][0]
+            self.assertEqual(row['content'],'확인한 답변');self.assertEqual(row['retrieval_provenance'][0]['note_hash'],'a'*64)
+            self.assertEqual(row['retrieval_provenance'][0]['target_note_hash'],'b'*64);self.assertEqual(row['retrieval_provenance'][0]['derived_from'],['source#row'])
+            self.assertNotIn('credential',row['retrieval_provenance'][0]);self.assertNotIn('content',row['retrieval_provenance'][0])
+            with self.assertRaises(ValueError):h.record_voice(root,'session',2,'user','질문',2,provenance=proof)
+            self.assertEqual(len(h.read(root,Path('/unused'),'voice-history-messages',chat_id='session')['items']),1)
+            self.assertEqual((root/'alden-history.sqlite3').stat().st_mode&0o777,0o600)
     def test_unnamed_display_alias_keeps_original_names_ids_and_account_scope(self):
         with TemporaryDirectory() as directory:
             root=Path(directory);(root/'knowledge').mkdir()

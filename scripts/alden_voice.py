@@ -420,6 +420,7 @@ class VoiceTurn:
     token: VoiceTurnToken
     transcript: str = ""
     reply: str = ""
+    retrieval_provenance: list[dict] | None = None
 
 
 def _load_voice_audio_library() -> Any:
@@ -1415,6 +1416,10 @@ class AldenVoicePipeline:
             if not reply:
                 return self._turn_end(turn, VoiceState.ERROR, "generation_error")
             turn.reply = reply
+            metrics=getattr(self.llm,'last_metrics',{})
+            retrieval=metrics.get('retrieval',{}) if isinstance(metrics,dict) else {}
+            proof=retrieval.get('graph_provenance') if isinstance(retrieval,dict) else None
+            turn.retrieval_provenance=json.loads(json.dumps(proof,allow_nan=False)) if isinstance(proof,list) and all(isinstance(row,dict) for row in proof) else None
         except AldenCancelled:
             return self._turn_end(turn, VoiceState.ABORTED, "global_abort" if self.token.is_cancelled() else "turn_cancelled")
         except Exception as exc:
@@ -1452,7 +1457,8 @@ class AldenVoicePipeline:
                     turn.token.raise_if_cancelled()
                     if self.history_root is not None:
                         from alden_history import record_voice
-                        record_voice(self.history_root,self.conversation_id,turn.turn_id,"assistant",reply,turn.context_version,source=turn.source)
+                        record_voice(self.history_root,self.conversation_id,turn.turn_id,"assistant",reply,turn.context_version,
+                                     source=turn.source,provenance=turn.retrieval_provenance)
                     return self._result(turn, VoiceState.ENDED)
             except AldenCancelled:
                 self._reply = ""
@@ -1466,7 +1472,7 @@ class AldenVoicePipeline:
 def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], root: Path | None,
                                token: AbortToken) -> tuple[str,dict[str,Any]]:
     """Only explicit knowledge turns read quoted context; speech stays last."""
-    markers=('카카오톡','카톡','채팅방','대화방','지식','자료','기억')
+    markers=('카카오톡','카톡','채팅방','대화방','지식','자료','기억','노드','그래프')
     followup_prefixes=('그','거기','아까','계속','또','그러면')
     earlier=''
     for message in reversed(history):
@@ -1485,16 +1491,19 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
     try:
         from alden_corpus import search,resolve_room
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle,embedding_abort_scope
-        chat_requested = any(word in query for word in ('카카오톡','카톡','채팅방','대화방','원문','메시지'))
+        chat_requested = any(word in query for word in ('카카오톡','카톡','채팅방','대화방','메시지'))
         scope=resolve_room(root,query) if chat_requested and (root/'knowledge/corpus/current.json').is_file() else {'state':'none','chat_id':''}
         if scope['state']=='ambiguous':
             return '현재 요청에 나온 이름을 가진 대화방이 여러 개다. 방을 임의로 선택하지 말고 어느 대화방인지 구분할 수 있는 정보 한 가지만 질문한다.',{'state':'ambiguous_room','mode':'none','sources':0,'seconds':time.perf_counter()-started}
         raw=search(root,query,chat_id=scope['chat_id'],limit=4,cancelled=token.is_cancelled) if chat_requested and (root/'knowledge/corpus/current.json').is_file() else {'items':[]}
         token.raise_if_cancelled()
+        relation_requested = any(word in query.casefold() for word in ('전제','연결','관계','의존','연관','premise','relationship','dependency'))
+        entity_budget, relation_budget = (4, 3) if relation_requested else (2, 1)
         with embedding_abort_scope(token):
-            ranked=retrieve_knowledge_bundle(query,state_root=root,chat_id=scope['chat_id'] or None,max_entities=2,max_relations=1)
+            ranked=retrieve_knowledge_bundle(query,state_root=root,chat_id=scope['chat_id'] or None,max_entities=entity_budget,max_relations=relation_budget)
         token.raise_if_cancelled()
-        context={'graph_facts':ranked.get('facts',[])[:3],'graph_provenance':ranked.get('fact_provenance',[])[:3],
+        fact_budget = entity_budget + relation_budget
+        context={'graph_facts':ranked.get('facts',[])[:fact_budget],'graph_provenance':ranked.get('fact_provenance',[])[:fact_budget],
                  'quoted_history':raw.get('items',[])}
         if not context['graph_facts'] and not context['quoted_history']:
             return '',{'state':'empty','mode':ranked.get('search_mode','bm25_only'),'sources':0,'seconds':time.perf_counter()-started}
@@ -1502,7 +1511,15 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         context['graph_facts']=[fact[:600] for fact in original_facts]
         for fact, row in zip(original_facts, context['graph_provenance']):
             if isinstance(row,dict) and len(fact)>600:row['fact_truncated']=True
-        context['graph_provenance']=[{key:value for key,value in row.items() if key in ('entity_id','source_kind','room_id','retracted','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','fact_truncated')} for row in context['graph_provenance'] if isinstance(row,dict)]
+        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated')} for row in context['graph_provenance'] if isinstance(row,dict)]
+        # Hashes and raw coordinates are checked by the adapter, rather than by
+        # the language model. Keep the full proof in metrics and retain stable
+        # identities, edge direction, source kind, time and truncation in input.
+        proof_requested = bool(re.search(r'\bsha(?:-?256)?\b|\bhash\b|해시|출처\s*좌표', query, re.I))
+        redundant={'note_hash','target_note_hash','source_note_id','target_note_id','source_account','source_event_ids','derived_from','conflicts','space','retrieval_role'}
+        context['graph_provenance']=[row if proof_requested or row.get('source_kind')!='canonical_osk_note' else
+                                     {key:value for key,value in row.items() if key not in redundant and
+                                      not (key=='note_id' and row.get('entity_id'))} for row in full_provenance]
         def quoted_json():
             return json.dumps(context,ensure_ascii=False).replace('<',r'\u003c').replace('>',r'\u003e').replace('&',r'\u0026')
         encoded=quoted_json()
@@ -1528,9 +1545,12 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'fact_truncated가 참인 자료는 일부만 읽었다고 취급한다. '
                    '검색 결과가 없다는 사실을 사용자 발화를 이해하지 못했다는 뜻으로 바꾸지 마라.\n'
                    '<quoted_local_history>'+encoded+'</quoted_local_history>')
-        note_sources=len({row['note_id'] for row in context['graph_provenance'] if row.get('note_id')})
+        full_provenance=full_provenance[:len(context['graph_facts'])]
+        note_sources=len({row['note_id'] for row in full_provenance if row.get('note_id')})
         return reference,{'state':'found','mode':ranked.get('search_mode','bm25_only'),'sources':len(context['quoted_history'])+note_sources,
-                          'note_sources':note_sources,'history_sources':len(context['quoted_history']),'seconds':time.perf_counter()-started}
+                          'note_sources':note_sources,'history_sources':len(context['quoted_history']),
+                          'graph_provenance':full_provenance,'model_provenance_compact':not proof_requested,
+                          'seconds':time.perf_counter()-started}
     except AldenCancelled:raise
     except Exception:
         token.raise_if_cancelled()

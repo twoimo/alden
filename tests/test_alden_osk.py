@@ -21,6 +21,73 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
 
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_canonical_retrieval_expands_real_outgoing_premises_with_fair_budget(self):
+        result=self.execute(r'''
+a.synchronize(root,source);c,g,_,w=a._load_engine(root)
+from unittest.mock import patch
+import alden_osk_retrieval as r
+import auto_reply_knowledge_graph as kg
+deep=w.create_node('두 번째 단계','직접 전제가 아님','두 단계 밖의 자료.','agent',space=a.SOURCE_SPACE)
+premises=[w.create_node('전제 '+str(i),'검토한 원문','조건을 보존한다.\n'*200 if i==0 else '각 전제의 적용 한계.','agent',space=a.SOURCE_SPACE) for i in range(3)]
+p=g.Index().by_id[premises[0]['id']][0];w.update_node(premises[0]['id'],body='긴 근거.\n'*200+'[['+deep['id']+']]',expect_hash=a.digest(p.read_bytes()))
+plan=w.create_node('결합 설계','실험 전의 가설','긴 가설.\n'*200+'\n'+''.join('[['+x['id']+']]' for x in premises),'agent',space=a.SOURCE_SPACE,edges={'derived-from':[x['id'] for x in premises]})
+w.create_node('설계 검색 방해','설계 어휘 반복','설계 설계 설계 설계','agent',space=a.SOURCE_SPACE)
+before={str(p):p.read_bytes() for p in (a._home(root)/'vault').rglob('*') if p.is_file()}
+with patch.object(kg,'_active_dense_embedding_model',return_value='fixture-encoder'),patch.object(kg,'_dense_endpoint_identity',return_value='http://127.0.0.1/fixture'):
+ r.index_dense(root,embed=lambda texts:[[1.,0.] for _ in texts])
+ b=r.retrieve(root,'설계',also=['osk:'+plan['id']],candidate_limit=1,max_entities=4,max_relations=3,max_context_chars=700,query_embed=lambda _:[1.,0.])
+ ids={p['note_id'] for p in b['candidate_provenance']};assert ids=={plan['id'],*[x['id'] for x in premises]}
+ assert deep['id'] not in ids and b['focus_k']==1
+ assert len(b['relation_provenance'])==3 and all(p['relation']=='derived-from' for p in b['relation_provenance'])
+ assert {p['target_note_id'] for p in b['relation_provenance']}=={x['id'] for x in premises}
+ hashes={p['note_id']:p['note_hash'] for p in b['candidate_provenance']}
+ assert all(p['note_hash']==hashes[p['source_note_id']] and p['target_note_hash']==hashes[p['target_note_id']] for p in b['relation_provenance'])
+ assert sum(map(len,b['facts']))<=700 and len(b['facts'])==len(b['fact_provenance'])
+ assert any(p['fact_truncated'] for p in b['candidate_provenance']) and all(p['retrieval_role']=='outgoing_reference' for p in b['candidate_provenance'][1:])
+ assert before=={str(p):p.read_bytes() for p in (a._home(root)/'vault').rglob('*') if p.is_file()}
+print(json.dumps({'premises':3,'relations':3,'noSecondHop':True,'budget':True,'bothEndpointHashes':True}))
+''')
+        self.assertEqual(result['premises'],3)
+
+    def test_canonical_outgoing_expansion_cannot_cross_room_filter(self):
+        result=self.execute(r'''
+source['nodes'].append({'id':'memory:foreign','label':'다른 방 근거','category':'memory','description':'외부 방 내용','facts':['범위 밖 자료'],'evidence':{'kind':'ledger','chat_id':'42'}})
+a.synchronize(root,source);c,g,_,w=a._load_engine(root);cp=a._read_json(a._home(root)/'sync.json')
+one=cp['managed']['memory:one']['osk_id'];foreign=cp['managed']['memory:foreign']['osk_id'];p=g.Index().by_id[one][0]
+w.update_node(one,body='고유질의 [['+foreign+']]',expect_hash=a.digest(p.read_bytes()))
+import alden_osk_retrieval as r
+b=r.retrieve(root,'고유질의',chat_id='1',also=['osk:'+one],max_entities=4,max_relations=3)
+assert foreign not in {p['note_id'] for p in b['candidate_provenance']} and b['relation_provenance']==[]
+assert not any('범위 밖 자료' in f for f in b['facts'])
+print(json.dumps({'scoped':True}))
+''')
+        self.assertTrue(result['scoped'])
+
+    def test_canonical_outgoing_expansion_keeps_published_account_identity(self):
+        result=self.execute(r'''
+account='a'*64;foreign_account='b'*64
+for prefix,label in [(account,'현재 계정 근거'),(foreign_account,'외부 계정 근거')]:
+ source['nodes'].append({'id':'memory:kakao:'+prefix+':scope:42','label':label,'category':'memory','description':'고유질의','facts':['현재 계정 자료' if prefix==account else '외부 계정 자료'],'evidence':{'kind':'local_db_snapshot','chat_id':'42'}})
+a.synchronize(root,source);c,g,_,w=a._load_engine(root);cp=a._read_json(a._home(root)/'sync.json')
+one=cp['managed']['memory:kakao:'+account+':scope:42']['osk_id'];foreign=cp['managed']['memory:kakao:'+foreign_account+':scope:42']['osk_id'];p=g.Index().by_id[one][0]
+w.update_node(one,body='고유질의 [['+foreign+']]',expect_hash=a.digest(p.read_bytes()))
+folder=root/'knowledge/corpus';folder.mkdir();(folder/'current.json').write_text(json.dumps({'account':account}))
+import alden_osk_retrieval as r
+for scope in ['42','kakao:'+account+':room:42']:
+ b=r.retrieve(root,'고유질의',chat_id=scope,also=['osk:'+one],max_entities=4,max_relations=3)
+ assert {p['note_id'] for p in b['candidate_provenance']}=={one} and b['relation_provenance']==[]
+ assert all(p['source_account']==account for p in b['candidate_provenance'])
+try:r.retrieve(root,'고유질의',chat_id='kakao:'+foreign_account+':room:42')
+except RuntimeError as e:assert 'account_mismatch' in str(e)
+else:raise AssertionError('foreign account accepted')
+pointer=folder/'current.json';pointer.unlink();other=folder/'other.json';other.write_text(json.dumps({'account':foreign_account}));pointer.symlink_to(other)
+try:r.retrieve(root,'고유질의',chat_id='42')
+except RuntimeError as e:assert 'pointer_unsafe' in str(e)
+else:raise AssertionError('foreign account pointer followed')
+print(json.dumps({'accountScoped':True}))
+''')
+        self.assertTrue(result['accountScoped'])
+
     def test_canonical_retrieval_rrf_freshness_deletion_and_room_boundaries(self):
         result=self.execute(r'''
 a.synchronize(root,source);c,g,_,w=a._load_engine(root)

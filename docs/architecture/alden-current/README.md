@@ -1,5 +1,7 @@
 # 현재 Alden 구현과 검증
 
+0.3.25의 직접 참조 예산·축약 입력·턴별 source 기록은 [현재 변경 문서](../alden-canonical-edges-20261005.md)에서 확인합니다. 아래 도식과 검색 측정은 명시한 고정 판본의 기록입니다.
+
 이 문서는 구현 커밋 `9732617bc78c80fadafd431c250b958b3408683c`의 경로를 설명합니다. 설치본은 0.3.24이며, 도식·검색 검사는 물리 음성·권한·공증·프로덕션 완료를 뜻하지 않습니다. 작성 내용은 한국어이고 Archify 뷰어의 고정 UI는 영어입니다.
 
 | 요구 범위 | 현재 도식 | 구현 근거 |
@@ -28,7 +30,7 @@
 [고정 질의](canonical-judgments.json), [최초 원자료](canonical-evaluation-initial.json), [재현 스크립트](canonical-evaluate.py)를 제공합니다. 재현은 정확한 정본 snapshot과 기존 로컬 색인을 요구하며, 다르면 중단합니다. 원본 카카오톡 DB를 읽거나 문서 임베딩·학습·모델 교체를 시작하지 않습니다. 제품 검색 호출이 폐기 가능한 검색 캐시를 갱신할 수 있습니다.
 
 ```bash
-python3 docs/architecture/alden-current/canonical-evaluate.py \
+python3 -B docs/architecture/alden-current/canonical-evaluate.py \
   --scripts-dir /Applications/Alden.app/Contents/Resources/scripts \
   --state-root "$HOME/Library/Application Support/openkakao/bujamentor" \
   --judgments docs/architecture/alden-current/canonical-judgments.json \
