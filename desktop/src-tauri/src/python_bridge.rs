@@ -3988,6 +3988,9 @@ fn sanitize_knowledge_focus(value: &Value, expected_node: &str) -> Value {
     }
     let safe_details = details.map(|details|json!({
         "node_id":expected_node,"summary":bounded_json_string(details.get("summary"),1200),
+        "body":if scope.is_empty() && !(identity.len()==5 && identity[1]=="kakao") {
+            bounded_json_string(details.get("body"),12000)
+        } else { String::new() },
         "kind":bounded_json_string(details.get("kind"),96),"basis":bounded_json_string(details.get("basis"),32),
         "key_facts":bounded_string_list(details.get("key_facts"),6,600),"scope_room_id":scope,
         "source_updated_at":as_u64(details.get("source_updated_at")),"note_updated_at":as_u64(details.get("note_updated_at")),
@@ -5979,7 +5982,7 @@ mod tests {
         wrong_account["source_id"] = json!(format!("kakao:{}:room:42:log:3", "2".repeat(64)));
         let safe = sanitize_knowledge_focus(
             &json!({"ok":true,"details":{"node_id":node,"scope_room_id":"42",
-            "summary":"a recorded participant","token":"drop"},"sources":[valid.clone(), valid, wrong_room, wrong_actor, wrong_account]}),
+            "summary":"a recorded participant","body":"unscoped other-room body","token":"drop"},"sources":[valid.clone(), valid, wrong_room, wrong_actor, wrong_account]}),
             &node,
         );
         assert_eq!(safe["sources"].as_array().unwrap().len(), 1);
@@ -5987,6 +5990,16 @@ mod tests {
         assert_eq!(safe["sources"][0]["content"], "Friday at 3");
         assert!(safe["sources"][0].get("private_path").is_none());
         assert!(safe["details"].get("token").is_none());
+        assert_eq!(safe["details"]["body"], "");
+        let note = sanitize_knowledge_focus(
+            &json!({"ok":true,"details":{"node_id":"osk:261005-012a-abcdefgh","basis":"note","body":"saved body [[261005-012a-ijklmnop]]","token":"drop"}}),
+            "osk:261005-012a-abcdefgh",
+        );
+        assert_eq!(
+            note["details"]["body"],
+            "saved body [[261005-012a-ijklmnop]]"
+        );
+        assert!(note["details"].get("token").is_none());
         let rejected = sanitize_knowledge_focus(&safe, "another-node");
         assert!(rejected["details"].is_null());
         assert!(rejected["sources"].as_array().unwrap().is_empty());

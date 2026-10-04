@@ -732,7 +732,10 @@ fn audit_settings(
         && (first["notePane"]["focusState"] != "ready"
             || first["notePane"]["bodyChars"].as_u64().unwrap_or(0) == 0)
     {
-        return Err("requested canonical note did not return its saved body".into());
+        return Err(format!(
+            "requested canonical note did not return its saved body: {}",
+            first["notePane"]
+        ));
     }
     if first["notePane"]["hidden"] != false
         || first["notePane"]["width"].as_f64().unwrap_or(0.0) <= 0.0
