@@ -1,0 +1,176 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "카카오톡 스냅샷과 증분 색인",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "source",
+      "label": "암호화 원본"
+    },
+    {
+      "id": "ingest",
+      "label": "격리 읽기·게시"
+    },
+    {
+      "id": "stop",
+      "label": "오류와 대기",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "source",
+    "copy",
+    "readonly",
+    "rows",
+    "publish",
+    "raw"
+  ],
+  "nodes": [
+    {
+      "id": "source",
+      "lane": "source",
+      "col": 0,
+      "type": "database",
+      "label": "원본 DB·WAL",
+      "sublabel": "계정·inode 고정",
+      "width": 132
+    },
+    {
+      "id": "copy",
+      "lane": "source",
+      "col": 1,
+      "type": "backend",
+      "label": "일관된 복제",
+      "sublabel": "전후 서명·재시도 상한",
+      "width": 132
+    },
+    {
+      "id": "readonly",
+      "lane": "ingest",
+      "col": 2,
+      "type": "security",
+      "label": "복제본만 읽기",
+      "sublabel": "SQLCipher·query-only",
+      "width": 132
+    },
+    {
+      "id": "rows",
+      "lane": "ingest",
+      "col": 3,
+      "type": "backend",
+      "label": "증분 행 수집",
+      "sublabel": "원래 ID·역할·순서",
+      "width": 132
+    },
+    {
+      "id": "publish",
+      "lane": "ingest",
+      "col": 4,
+      "type": "database",
+      "label": "완성 색인 게시",
+      "sublabel": "계정·snapshot 일치",
+      "width": 132
+    },
+    {
+      "id": "raw",
+      "lane": "ingest",
+      "col": 5,
+      "type": "database",
+      "label": "Raw와 OSK",
+      "sublabel": "원문 보존·SDK 검토",
+      "width": 132
+    },
+    {
+      "id": "waiting",
+      "lane": "stop",
+      "col": 1,
+      "type": "security",
+      "label": "권한·변경 대기",
+      "sublabel": "원본 직접 읽기 우회 없음",
+      "width": 132
+    },
+    {
+      "id": "reject",
+      "lane": "stop",
+      "col": 3,
+      "type": "security",
+      "label": "게시 보류",
+      "sublabel": "불완전·계정 불일치",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-0",
+      "from": "source",
+      "to": "copy",
+      "label": "DB와 WAL",
+      "role": "main"
+    },
+    {
+      "id": "edge-1",
+      "from": "copy",
+      "to": "readonly",
+      "label": "일관성 확인",
+      "role": "main"
+    },
+    {
+      "id": "edge-2",
+      "from": "readonly",
+      "to": "rows",
+      "label": "읽기 전용 행",
+      "role": "main"
+    },
+    {
+      "id": "edge-3",
+      "from": "rows",
+      "to": "publish",
+      "label": "완성 증명",
+      "role": "main"
+    },
+    {
+      "id": "edge-4",
+      "from": "publish",
+      "to": "raw",
+      "label": "출처 좌표",
+      "role": "main"
+    },
+    {
+      "id": "edge-5",
+      "from": "copy",
+      "to": "waiting",
+      "label": "권한·계속 변경",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "edge-6",
+      "from": "rows",
+      "to": "reject",
+      "label": "완성 증명 실패",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "원본 영향",
+      "items": [
+        "원본 journal_mode·checkpoint를 바꾸지 않는다.",
+        "SHM은 격리 DB·WAL로 재구성한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "실제 방식",
+      "items": [
+        "현재 암호화 복제 경로는 전후 파일 서명을 확인한다.",
+        "SQLite Online Backup API 사용으로 표시하지 않는다."
+      ]
+    }
+  ]
+}

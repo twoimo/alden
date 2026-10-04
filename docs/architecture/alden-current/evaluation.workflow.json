@@ -1,0 +1,167 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "모델 평가·오프라인 DPO·반영 경계",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "evidence",
+      "label": "근거와 분리"
+    },
+    {
+      "id": "offline",
+      "label": "독립 실행"
+    },
+    {
+      "id": "stop",
+      "label": "품질 판정·제품 경계",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "failures",
+    "split",
+    "score",
+    "train",
+    "reload",
+    "final"
+  ],
+  "nodes": [
+    {
+      "id": "failures",
+      "lane": "evidence",
+      "col": 0,
+      "type": "database",
+      "label": "실패와 출처",
+      "sublabel": "사용자·자료·독립 기준",
+      "width": 132
+    },
+    {
+      "id": "split",
+      "lane": "evidence",
+      "col": 1,
+      "type": "security",
+      "label": "데이터 분리",
+      "sublabel": "train·validation·final",
+      "width": 132
+    },
+    {
+      "id": "score",
+      "lane": "offline",
+      "col": 2,
+      "type": "backend",
+      "label": "실제 로그확률",
+      "sublabel": "chosen·rejected·기준",
+      "width": 132
+    },
+    {
+      "id": "train",
+      "lane": "offline",
+      "col": 3,
+      "type": "backend",
+      "label": "오프라인 DPO",
+      "sublabel": "응답 토큰 손실·gradient",
+      "width": 132
+    },
+    {
+      "id": "reload",
+      "lane": "offline",
+      "col": 4,
+      "type": "backend",
+      "label": "어댑터 재검증",
+      "sublabel": "기준 가중치 보존",
+      "width": 132
+    },
+    {
+      "id": "final",
+      "lane": "offline",
+      "col": 5,
+      "type": "security",
+      "label": "독립 최종 평가",
+      "sublabel": "같은 final 재사용 금지",
+      "width": 132
+    },
+    {
+      "id": "hold",
+      "lane": "stop",
+      "col": 5,
+      "type": "security",
+      "label": "후보 보류",
+      "sublabel": "실행·품질·운영 대조",
+      "width": 132
+    },
+    {
+      "id": "product",
+      "lane": "stop",
+      "col": 3,
+      "type": "database",
+      "label": "제품 모델",
+      "sublabel": "승인된 현재 설정 유지",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-0",
+      "from": "failures",
+      "to": "split",
+      "label": "근거 라벨",
+      "role": "main"
+    },
+    {
+      "id": "edge-1",
+      "from": "split",
+      "to": "score",
+      "label": "고정 선호 쌍",
+      "role": "main"
+    },
+    {
+      "id": "edge-2",
+      "from": "score",
+      "to": "train",
+      "label": "train만 학습",
+      "role": "main"
+    },
+    {
+      "id": "edge-3",
+      "from": "train",
+      "to": "reload",
+      "label": "저장·다시 로드",
+      "role": "main"
+    },
+    {
+      "id": "edge-4",
+      "from": "reload",
+      "to": "final",
+      "label": "미사용 final",
+      "role": "main"
+    },
+    {
+      "id": "edge-5",
+      "from": "final",
+      "to": "hold",
+      "label": "품질·성능 판정",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "실제 계산",
+      "items": [
+        "DPO는 응답 토큰 로그확률로 계산한다.",
+        "학습·평가·제품 모델 교체를 구분한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "현재 결과",
+      "items": [
+        "기존 최종 3쌍은 소비됐으며 재평가하지 않는다.",
+        "품질 개선 미달 후보는 제품에 승격하지 않았다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,189 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "올든 렌더링과 창 수명",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "window",
+      "label": "창 이벤트"
+    },
+    {
+      "id": "scene",
+      "label": "고정 장면 자원"
+    },
+    {
+      "id": "stop",
+      "label": "정지와 해제",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "visibility",
+    "visible",
+    "state",
+    "frame",
+    "settled"
+  ],
+  "nodes": [
+    {
+      "id": "visibility",
+      "lane": "window",
+      "col": 0,
+      "type": "frontend",
+      "label": "네이티브 가시성",
+      "sublabel": "Rust 이벤트·초기 조회",
+      "width": 132
+    },
+    {
+      "id": "visible",
+      "lane": "window",
+      "col": 1,
+      "type": "frontend",
+      "label": "표면 표시",
+      "sublabel": "선택 페이지도 확인",
+      "width": 132
+    },
+    {
+      "id": "state",
+      "lane": "scene",
+      "col": 2,
+      "type": "backend",
+      "label": "실제 작업 신호",
+      "sublabel": "입출력 RMS·관계 변화",
+      "width": 132
+    },
+    {
+      "id": "frame",
+      "lane": "scene",
+      "col": 3,
+      "type": "frontend",
+      "label": "한 렌더 루프",
+      "sublabel": "고정 geometry·buffer",
+      "width": 132
+    },
+    {
+      "id": "settled",
+      "lane": "scene",
+      "col": 4,
+      "type": "backend",
+      "label": "안정 상태",
+      "sublabel": "추가 프레임 정지",
+      "width": 132
+    },
+    {
+      "id": "hidden",
+      "lane": "stop",
+      "col": 1,
+      "type": "security",
+      "label": "숨김·잠금 이벤트",
+      "sublabel": "DOM 재개 차단",
+      "width": 132
+    },
+    {
+      "id": "stopped",
+      "lane": "stop",
+      "col": 3,
+      "type": "backend",
+      "label": "루프·타이머 정지",
+      "sublabel": "대기 콜백 취소",
+      "width": 132
+    },
+    {
+      "id": "closed",
+      "lane": "stop",
+      "col": 5,
+      "type": "backend",
+      "label": "종료 정리",
+      "sublabel": "구독·GPU 자원 해제",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-0",
+      "from": "visibility",
+      "to": "visible",
+      "label": "표시",
+      "role": "main"
+    },
+    {
+      "id": "edge-1",
+      "from": "visible",
+      "to": "state",
+      "label": "장면 재사용",
+      "role": "main"
+    },
+    {
+      "id": "edge-2",
+      "from": "state",
+      "to": "frame",
+      "label": "변화·사용자 탐색",
+      "role": "main"
+    },
+    {
+      "id": "edge-3",
+      "from": "frame",
+      "to": "settled",
+      "label": "안정화",
+      "role": "main"
+    },
+    {
+      "id": "edge-4",
+      "from": "visibility",
+      "to": "hidden",
+      "label": "숨김·세션 알림",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "edge-5",
+      "from": "hidden",
+      "to": "stopped",
+      "label": "동기 중단",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "edge-6",
+      "from": "stopped",
+      "to": "visible",
+      "label": "명시 창 열기",
+      "role": "return"
+    },
+    {
+      "id": "edge-7",
+      "from": "stopped",
+      "to": "closed",
+      "label": "창 종료",
+      "role": "branch"
+    },
+    {
+      "id": "edge-8",
+      "from": "settled",
+      "to": "frame",
+      "label": "새 실제 이벤트",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "프레임 책임",
+      "items": [
+        "상시 음성·자동화는 시각화와 별개다.",
+        "전체 앱의 GPU·전력 0을 주장하지 않는다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "측정 범위",
+      "items": [
+        "합성 숨김 검사와 실제 OS 잠금을 구분한다.",
+        "물리 Retina·잠금·상시 창 검증은 남아 있다."
+      ]
+    }
+  ]
+}
