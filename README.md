@@ -1,12 +1,12 @@
 <div align="center">
 
-# openkakao-bot
+# Alden
 
 **A private assistant for the KakaoTalk macOS app.**
 
-[![CI](https://github.com/twoimo/openkakao-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/twoimo/openkakao-bot/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/twoimo/openkakao-bot?color=blue&logo=github)](https://github.com/twoimo/openkakao-bot/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS-000000?logo=apple&logoColor=white)](https://github.com/twoimo/openkakao-bot)
+[![CI](https://github.com/twoimo/alden/actions/workflows/ci.yml/badge.svg)](https://github.com/twoimo/alden/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/twoimo/alden?color=blue&logo=github)](https://github.com/twoimo/alden/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS-000000?logo=apple&logoColor=white)](https://github.com/twoimo/alden)
 [![Rust](https://img.shields.io/badge/core-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -23,7 +23,7 @@
 
 ---
 
-`openkakao-bot` helps you find context and prepare replies in KakaoTalk. Conversation data and AI requests stay on your Mac; replies go through the KakaoTalk app already installed there.
+`Alden` helps you find context and prepare replies in KakaoTalk. Conversation data and AI requests stay on your Mac; replies go through the KakaoTalk app already installed there.
 
 <h2 id="architecture">Architecture</h2>
 
@@ -105,8 +105,8 @@ The menu app offers a fast local model for everyday replies and a larger local m
 ### 1. Build from Source
 
 ```bash
-git clone https://github.com/twoimo/openkakao-bot.git
-cd openkakao-bot
+git clone https://github.com/twoimo/alden.git
+cd alden
 cargo build --release
 ```
 

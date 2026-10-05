@@ -11,7 +11,7 @@
 # shell is not sandboxed, so the files it creates carry no flag and nothing asks.
 set -eu
 
-REPO="$HOME/Documents/projects/openkakao-bot"
+REPO="$HOME/Documents/projects/alden"
 STATE_ROOT="$HOME/Library/Application Support/openkakao/bujamentor"
 LABEL="com.openkakao.auto-reply.session-monitor"
 DOMAIN="gui/$(id -u)"

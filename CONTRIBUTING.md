@@ -1,6 +1,6 @@
 # Contributing
 
-OpenKakao에 기여해주셔서 감사합니다.
+Alden에 기여해주셔서 감사합니다.
 
 ## 시작하기
 
