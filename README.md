@@ -18,9 +18,9 @@
 
 [이전 판본의 측정·전달 이력](docs/ALDEN_RELEASE_HISTORY.md)
 
-[![CI](https://github.com/twoimo/openkakao-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/twoimo/openkakao-bot/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/twoimo/openkakao-bot?color=blue&logo=github)](https://github.com/twoimo/openkakao-bot/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS-000000?logo=apple&logoColor=white)](https://github.com/twoimo/openkakao-bot)
+[![CI](https://github.com/twoimo/alden/actions/workflows/ci.yml/badge.svg)](https://github.com/twoimo/alden/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/twoimo/alden?color=blue&logo=github)](https://github.com/twoimo/alden/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS-000000?logo=apple&logoColor=white)](https://github.com/twoimo/alden)
 [![Rust](https://img.shields.io/badge/core-Rust-dea584?logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -122,7 +122,7 @@ The corrected source and standalone AX CLI were rebuilt and installed locally at
 
 ## Source readiness and dated evidence
 
-Installed Alden 0.3.24 matches 45 built files and uses the canonical OSK/E5 path. Its exact source passed [all four CI jobs](https://github.com/twoimo/openkakao-bot/actions/runs/37229498034). The installed local 27B returned a complete knowledge answer; natural microphone/playback, primary/tray/Retina/lock/shortcut, Flash-Next admission, Dot invocation and Developer ID production delivery remain open. [Current evidence boundaries and six diagrams](docs/architecture/alden-current/README.md) include the limited source-note retrieval checks.
+Installed Alden 0.3.24 matches 45 built files and uses the canonical OSK/E5 path. Its exact source passed [all four CI jobs](https://github.com/twoimo/alden/actions/runs/37229498034). The installed local 27B returned a complete knowledge answer; natural microphone/playback, primary/tray/Retina/lock/shortcut, Flash-Next admission, Dot invocation and Developer ID production delivery remain open. [Current evidence boundaries and six diagrams](docs/architecture/alden-current/README.md) include the limited source-note retrieval checks.
 
 The owned vision path can run the verified local 27B during one bounded request when memory, model, identity/auth and cancellation gates pass. It preserves the existing shared server and model selections. Four public fixture answers and cleanup were verified; actual Kakao image transport and physical UI interaction remain separate unfinished checks. [Owned vision evidence](docs/architecture/alden-owned-vision-20261004.md).
 
@@ -221,8 +221,8 @@ The menu app offers a fast local model for everyday replies and a larger local m
 ### 1. Build from Source
 
 ```bash
-git clone https://github.com/twoimo/openkakao-bot.git
-cd openkakao-bot
+git clone https://github.com/twoimo/alden.git
+cd alden
 cargo build --release
 ```
 

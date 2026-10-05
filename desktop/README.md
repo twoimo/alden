@@ -1,7 +1,8 @@
 # macOS Python/Rust resource contract
 
-**Alden** is the menu-bar product name. `openkakao-cli` and this repository
-retain the OpenKakao project identifiers.
+**Alden** is the project and menu-bar product name. The GitHub repository is
+`twoimo/alden`; `openkakao-cli` and the existing runtime identifiers remain
+compatible with installed scripts, state, and permissions.
 
 The running executable selects the layout, independently of the current directory:
 

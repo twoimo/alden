@@ -1,4 +1,4 @@
-# openkakao-bot
+# Alden
 
 English: [README.md](README.md)
 
@@ -9,7 +9,7 @@ macOS 카카오톡에서 **지정한 채팅방만** 읽고, 내 말투에 가깝
 그런 데이터는 모두 **내 Mac 안의 원래 위치**에 그대로 둡니다.
 
 > 실행 파일 이름은 기존과 같이 `openkakao-cli` 입니다.
-> GitHub 저장소 이름만 `openkakao-bot` 입니다.
+> 프로젝트 이름은 **Alden(올든)**, GitHub 저장소 이름은 `alden` 입니다.
 > 메뉴바 앱 이름은 **Alden(올든)** 입니다.
 
 ---
@@ -168,7 +168,7 @@ openkakao-cli
 ### 1. 소스 빌드
 
 ```bash
-cd openkakao-bot
+cd alden
 cargo build --release
 ./target/release/openkakao-cli --help
 ```
