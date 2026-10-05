@@ -140,7 +140,7 @@ jobs:
         with:
           tag_name: ${{ needs.release_metadata.outputs.tag_name }}
           target_commitish: ${{ github.sha }}
-          name: openkakao-bot ${{ needs.release_metadata.outputs.version }}
+          name: Alden ${{ needs.release_metadata.outputs.version }}
           draft: false
           prerelease: false
           make_latest: true
