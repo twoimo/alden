@@ -139,6 +139,7 @@ jobs:
         with:
           toolchain: 1.95.0
           rustflags: ""
+          cache: false
 
       - name: Install locked desktop dependencies
         working-directory: desktop

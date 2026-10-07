@@ -1191,6 +1191,9 @@ impl PythonBridge {
                 | "voice-history-sessions"
                 | "voice-history-messages"
                 | "db-sync-history"
+                | "collection-history"
+                | "collection-graph"
+                | "collection-projects"
                 | "reply-history"
                 | "geeknews-history"
                 | "room-catalog"
@@ -2233,6 +2236,9 @@ fn settings_action_args(
         | "voice-history-sessions"
         | "voice-history-messages"
         | "db-sync-history"
+        | "collection-history"
+        | "collection-graph"
+        | "collection-projects"
         | "reply-history"
         | "geeknews-history" => {
             // Read-only history requests; no worker or send action is exposed.

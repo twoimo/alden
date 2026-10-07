@@ -16,6 +16,7 @@ import tempfile
 import time
 
 from alden_collection import CollectionStore, encoded, identity
+from alden_abort import ABORT_STATE_NAME, AbortToken
 
 MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
 BATCH_SIZE = 1000
@@ -148,6 +149,8 @@ def spark_snapshot(target: dict, path: Path):
 
 
 def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: False):
+    if cancelled():
+        raise RuntimeError("collection_cancelled")
     target = store.target(target_id)
     config = target["config"]
     path = Path(config["path"])
@@ -187,7 +190,8 @@ def main():
             targets.append(store.register(**config))
         print(json.dumps({"registered": targets}, ensure_ascii=False))
     elif args.target:
-        print(json.dumps(collect_target(store, args.target), ensure_ascii=False))
+        token = AbortToken(args.state_root / ABORT_STATE_NAME)
+        print(json.dumps(collect_target(store, args.target, cancelled=token.is_cancelled), ensure_ascii=False))
     elif args.graph is not None:
         print(json.dumps(store.graph(projects=args.graph), ensure_ascii=False))
     elif args.events:

@@ -337,6 +337,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           rustflags: ""
+          cache: false
 
       - name: Cache release build inputs
         uses: actions/cache@v4
@@ -346,8 +347,10 @@ jobs:
             ~/.cargo/git
             target
             desktop/src-tauri/target
-          key: alden-pr-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'desktop/src-tauri/Cargo.lock') }}
-          restore-keys: alden-pr-release-${{ runner.os }}-${{ runner.arch }}-
+          # Tauri build outputs include absolute checkout paths. Do not reuse
+          # the old openkakao-bot repository's release target directory.
+          key: alden-pr-release-root-v2-${{ github.repository }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: alden-pr-release-root-v2-${{ github.repository }}-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build unsigned Alden release bundle
         run: |

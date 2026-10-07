@@ -11,7 +11,8 @@ type SettingsAction =
   | "room-upsert" | "room-delete" | "room-catalog"
   | "history-rooms" | "history-messages"
   | "reply-history" | "geeknews-history"
-  | "voice-history-sessions" | "voice-history-messages" | "db-sync-history";
+  | "voice-history-sessions" | "voice-history-messages" | "db-sync-history"
+  | "collection-history" | "collection-graph" | "collection-projects";
 
 export async function operatorPause(): Promise<EmergencyState | null> {
   try { return parseEmergencyState(await invoke<unknown>("operator_pause")); }

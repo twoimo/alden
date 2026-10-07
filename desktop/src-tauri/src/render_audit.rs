@@ -474,6 +474,9 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
                     | "voice-history-sessions"
                     | "voice-history-messages"
                     | "db-sync-history"
+                    | "collection-history"
+                    | "collection-projects"
+                    | "collection-graph"
                     | "reply-history"
                     | "geeknews-history"
                     | "room-catalog"
@@ -505,6 +508,8 @@ fn capture_workspaces(
               const pending=(p==='voice'||p==='conversation')&&prompt&&!prompt.hidden&&prompt.querySelector('strong')?.textContent.includes('불러옵니다');
               const loadingSettings=p==='settings'&&document.querySelector('#automation-count')?.textContent==='확인 중'&&!document.querySelector('#automation-status')?.textContent;
               const loadingHistory=p==='history'&&document.querySelector('#db-current-title')?.textContent==='갱신 상태 확인 중';
+              const collection=document.querySelector('.collection-history');
+              const loadingCollection=p==='history'&&collection?.getAttribute('aria-busy')==='true';
               const loadingAutomation=(p==='reply'||p==='geeknews')&&document.querySelector(`#${p}-status`)?.textContent==='기록을 불러옵니다.';
               const panel=document.querySelector(`#settings-page-${p}`);
               const list=panel?.querySelector('.message-scroll');const r=list?.getBoundingClientRect();
@@ -514,7 +519,9 @@ fn capture_workspaces(
               const status=panel?.querySelector('#'+statusId)?.textContent??'';
               const paint=window.__aldenAuditWorkspacePaint;
               return {page:p,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,
-                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
+                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingCollection&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
+                collectionState:p==='history'?collection?.dataset.state:null,
+                collectionRenderedRows:p==='history'?collection?.querySelectorAll('.collection-event-row').length:0,
                 navigationFirstFrameMs:typeof paint?.firstFrameAtMs==='number'?paint.firstFrameAtMs-paint.clickedAtMs:null,
                 transcriptViewportHeight:r?.height??0,
                 fullyVisibleMessages:r?rows.filter(n=>n.top>=r.top-.5&&n.bottom<=r.bottom+.5).length:0,
@@ -1231,6 +1238,14 @@ mod tests {
         }
         assert!(audit_read_action("history-rooms", true));
         assert!(!audit_read_action("history-rooms", false));
+        for action in [
+            "collection-history",
+            "collection-projects",
+            "collection-graph",
+        ] {
+            assert!(audit_read_action(action, true));
+            assert!(!audit_read_action(action, false));
+        }
         let request = parse_args(
             [
                 OsString::from(WORKSPACES_FLAG),

@@ -285,6 +285,12 @@ sh scripts/start-auto-reply-menubar.command
 
 Privacy paths, KakaoTalk table names, and Korean operator notes live in [README.ko.md](README.ko.md). Do not commit chat databases, `context.sqlite3`, `knowledge-graph.sqlite3`, or credentials.
 
+### Versioned collection connection — 2026-10-07 candidate
+
+Alden now stores source versions and per-target project membership separately, with private recovery backups, transactional checkpoints and ordered stage history. The memory-history view has project/target/source/time filters, bounded rows and forward recovery after hiding. A different target's revision cannot replace a project's permitted source version.
+
+The actual application data directory contains26,622 source documents and48,355 explicit relations from four declared graph snapshots. An ad-hoc0.3.28 candidate rendered their stage history in two native window sizes. This does not establish the primary installed-app update or production release. See the [collection execution boundary](docs/architecture/alden-collection-20261007.md) and [aggregate native readback](docs/architecture/alden-collection-application-readback-20261007.json). Live acquisition, scheduler execution, Dense search and the new graph viewer connection remain in progress.
+
 ---
 
 ## License

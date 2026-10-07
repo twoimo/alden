@@ -2699,6 +2699,13 @@ def main():
         )
         return 0
     action = _argv_flag_value("--action")
+    if action in {"collection-history", "collection-graph", "collection-projects"}:
+        from alden_collection import read_action
+        try:
+            _print_json(read_action(_menubar_state_root(), action, _argv_flag_value("--history-query")))
+        except (ValueError, RuntimeError) as error:
+            _print_json({"ok": False, "items": [], "reason": str(error)[:96]})
+        return 0
     if action in {"history-rooms","history-messages","voice-history-sessions","voice-history-messages","db-sync-history","reply-history","geeknews-history"}:
         from alden_history import read
         state_raw=_argv_flag_value("--state-root")
