@@ -1,3 +1,5 @@
+# Alden
+
 ## Alden 0.3.28 candidate — 대화 경계와 실제 요청 metrics
 
 이력 로딩 중 입력과 대화 전환을 함께 보호하고, 실제 backend 요청 ID를 대화·턴·입력 맥락에 연결합니다. 엔진 metrics는 전체 엔진 관측값으로 구분하며 연결되지 않은 값은 미확인으로 남깁니다. 집중83개와 변경 후30쌍을 검증했습니다. 전체 mandatory legacy 계약 정비·최종 설치·릴리즈·확장된 수집/통합 목표는 진행 중입니다. [변경·측정·남은 작업](docs/architecture/alden-context-metrics-20261007.md)
@@ -45,7 +47,7 @@ Alden 첨부 문서 읽기는 [구현·설치·실제 로컬 모델 측정 기�
 
 ---
 
-`openkakao-bot` is the project and CLI name; **Alden** is its macOS menu-bar assistant. It helps you find context and prepare replies in KakaoTalk. Conversation data and AI requests stay on your Mac; replies go through the KakaoTalk app already installed there.
+`Alden` helps you find context and prepare replies in KakaoTalk. Conversation data and AI requests stay on your Mac; replies go through the KakaoTalk app already installed there.
 
 <h2 id="architecture">Architecture</h2>
 
