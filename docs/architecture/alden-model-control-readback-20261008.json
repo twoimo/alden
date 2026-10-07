@@ -1,7 +1,12 @@
 {
   "schema": 1,
   "version": "0.3.32",
-  "state": "source_and_actual_controlled_runtime",
+  "state": "installed_control_protocol_verified",
+  "runtime_source_commit": "36f951581157a6e035d69c0e80048ba9226704c6",
+  "runtime_ci_successful_jobs": 4,
+  "installed_bundle_files_equal": 47,
+  "installed_config_files_equal": 3,
+  "installed_control": { "unload_confirmed": true, "restore_confirmed": true, "server_pid_preserved": 63062, "unload_ms": 236.67, "restore_ms": 2245.36, "sample_pairs": 1 },
   "installed_mlx_serve_version": "26.10.1",
   "focused_tests_passed": 126,
   "control_protocol": { "load": "/v1/load-model", "unload": "/v1/unload-model", "model_in_json": true, "changes_server_default": false },
