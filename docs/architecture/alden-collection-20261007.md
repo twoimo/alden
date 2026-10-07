@@ -1,6 +1,6 @@
 # Alden multi-target collection — current execution boundary
 
-The collection journal retains independent source identity, immutable original snapshots, version history, target/project membership, per-target locking, transactional checkpoints and ordered persisted stage events. Failed batches roll back documents, indexing and checkpoints; failure history remains. Exact source replay does not create another version. Semantic similarity does not merge authors or entities.
+The collection journal retains independent source identity, immutable source-record snapshots, version history, target/project membership, per-target locking, transactional checkpoints and ordered persisted stage events. Failed batches roll back documents, indexing and checkpoints; failure history remains. Exact source replay does not create another version. Semantic similarity does not merge authors or entities.
 
 Actual configured metadata sources were read: employment public graph, Spark privacy-filtered derived index, 장사의신 and YouTube 쯔양. 쯔양 is a distinct project from Tzudong. Their existing stores remain canonical; this is a separate logical derived projection.
 
@@ -30,4 +30,6 @@ The actual application data directory now contains the four declared sources:26,
 
 The unsigned release cache is now repository-specific and the Rust setup action's automatic cache is disabled for release jobs. The supported input was checked in the publisher's [action schema](https://github.com/actions-rust-lang/setup-rust-toolchain/blob/v1/action.yml). A successful new remote CI run is still required.
 
-Remaining: source-order/deletion/revision reconciliation and processing-version policy; conflict/merge history; scheduler storage/execution and interruption recovery; host-specific skill discovery/execution; live Threads/YouTube acquisition scope; Dense integration; meaningful connected overview and graph source/filter navigation; actual-event3D; installed bundle, CI/release/production readback. No new unattended schedule or canonical source-store migration has been enabled.
+Current raw blobs preserve canonical serialized record objects, not the byte-for-byte source JSON file or full SQLite snapshot. Source file hashes and provenance remain, and the independent original stores are unchanged. Whole-source byte capture and evidence-position replay are still required; record-file SHA verification alone does not complete that requirement.
+
+Remaining: whole-source byte snapshot provenance and evidence-position replay within the permitted source scope; source-order/deletion/revision reconciliation and processing-version policy; conflict/merge history; scheduler storage/execution and interruption recovery; host-specific skill discovery/execution; live Threads/YouTube acquisition scope; Dense integration; meaningful connected overview and graph source/filter navigation; actual-event3D; installed bundle, CI/release/production readback. No new unattended schedule or canonical source-store migration has been enabled.
