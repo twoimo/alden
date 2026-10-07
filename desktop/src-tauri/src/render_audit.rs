@@ -190,6 +190,7 @@ impl Output {
                 | "workspace-settings-compact.png"
                 | "settings-layout.json"
                 | "workspace-readback.json"
+                | "activity-ready.json"
                 | "render-audit.json"
         ) || bytes.len() > MAX_BYTES
         {
@@ -580,6 +581,7 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
     navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
     regions:d?.regions??null,synapses:d?.synapses??null,
+    nodeActivity:d?.nodeActivity??null,activityJournal:d?.activityJournal??null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
     notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth,focusState:n.dataset.focusState,nodeId:n.dataset.nodeId,bodyChars:document.querySelector('#knowledge-node-body')?.textContent?.length??0}:null;})(),
     backDisabled:document.querySelector('#knowledge-back')?.disabled,
@@ -729,6 +731,28 @@ fn audit_settings(
     {
         return Err("persisted graph has insufficient nodes or invalid overview".into());
     }
+    // A debug checkout can observe an external test importer in an isolated
+    // state root. The native audit itself remains strictly read-only.
+    let initial = if cfg!(debug_assertions) {
+        if let Ok(expected) = std::env::var("ALDEN_AUDIT_EXPECT_RUN") {
+            if expected.is_empty() || expected.len() > 128 {
+                return Err("activity test run ID is invalid".into());
+            }
+            publish(output, "activity-ready.json", b"{\"ready\":true}", deadline)?;
+            let waited_by = deadline.min(Instant::now() + Duration::from_secs(15));
+            loop {
+                let state = collect_script(&window, GRAPH_COLLECT.into(), waited_by)?;
+                if state["nodeActivity"]["last"]["run_id"] == expected
+                    && state["nodeActivity"]["last"]["success"] == true
+                    && state["nodeActivity"]["active"].as_u64().unwrap_or(0) > 0
+                    && state["graphPending"] != true {
+                    break state;
+                }
+                live(waited_by)?;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        } else { initial }
+    } else { initial };
     graph_step(&window, "scroll", deadline)?;
     publish(
         output,
@@ -771,6 +795,12 @@ fn audit_settings(
         || first["navigation"]["nodeCount"] != initial["navigation"]["nodeCount"]
     {
         return Err("native note reader lost its graph or did not open".into());
+    }
+    if first["navigation"]["source"] == "collection"
+        && (first["nodeActivity"]["last"]["kind"] != "read"
+            || first["nodeActivity"]["last"]["document_id"] != first["notePane"]["nodeId"]
+            || first["nodeActivity"]["last"]["success"] != true) {
+        return Err("native source detail did not emit its confirmed read receipt".into());
     }
     publish(
         output,
@@ -962,7 +992,8 @@ fn audit_settings(
         let latency = started.elapsed().as_secs_f64() * 1000.0;
         std::thread::sleep(Duration::from_millis(350));
         let hidden = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
-        if count(&hidden) != count(&stopped) || hidden["pause"]["rendersAfterEvent"] != 0 {
+        if count(&hidden) != count(&stopped) || hidden["pause"]["rendersAfterEvent"] != 0
+            || hidden["nodeActivity"]["active"] != 0 || hidden["activityJournal"]["active"] != false {
             return Err("settings graph rendered while hidden".into());
         }
         last_hidden_count = count(&hidden);

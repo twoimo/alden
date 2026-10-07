@@ -116,6 +116,7 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
                   <details id="knowledge-list"><summary>목록</summary><div id="knowledge-result-list" role="list" aria-label="현재 표시한 지식 목록"></div></details>
                 </form>
                 <p id="knowledge-scope" class="knowledge-scope" role="status" aria-live="polite"></p>
+                <p class="knowledge-activity-key"><span>● 선택</span><span>● 저장 변경</span><span>● 원문 읽기</span></p>
                 <div class="knowledge-hologram-shell"><canvas id="knowledge-graph-canvas" width="1600" height="1200" tabindex="0" aria-label="대화 속 이름과 주제의 연결 그림" aria-controls="knowledge-note-pane"></canvas><div class="knowledge-node-labels" aria-hidden="true"></div><div id="knowledge-accessible-nodes" class="sr-only" role="region" aria-label="대화 검색 항목 목록"></div></div>
                 <div class="knowledge-hologram-toolbar"><button id="knowledge-back" type="button" disabled>이전</button><button id="knowledge-overview" type="button" disabled>전체 보기</button><button id="knowledge-expand-hop" type="button" disabled>더 보기</button><button id="knowledge-camera-reset" type="button">시점 초기화</button></div>
               </div>

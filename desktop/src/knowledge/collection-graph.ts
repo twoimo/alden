@@ -4,8 +4,9 @@ import type { KnowledgeNode } from './graph-model';
 import { parseKnowledgeGraph, MAX_FOCUS_HOPS, NAVIGATION_HISTORY_LIMIT } from './graph-model';
 import { knowledgeSignature } from './changes';
 import { KnowledgeRefresh } from './refresh';
+import { CollectionActivity } from './collection-activity';
 
-type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode'>;
+type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode' | 'showNodeActivity' | 'clearNodeActivity'>;
 type Navigation = { offset: number; focusId: string | null; hops: number };
 type Viewpoint = { camera: number[]; lookAt: number[] };
 export type GraphAction = 'expand' | 'back' | 'reset' | 'clear';
@@ -19,6 +20,8 @@ function records(value: unknown): Record<string, unknown>[] {
 export class CollectionGraphController {
   private readonly controls = new AbortController();
   private readonly refresh: KnowledgeRefresh;
+  private readonly journal: CollectionActivity;
+  private readSequence = 0;
   private active = false;
   private disposed = false;
   private epoch = 0;
@@ -41,6 +44,11 @@ export class CollectionGraphController {
     this.source = root.getElementById('knowledge-project') as HTMLSelectElement;
     this.refresh = new KnowledgeRefresh(() => this.read(), payload => this.apply(payload), 15000,
       () => this.collection ? Promise.resolve(null) : revision?.() ?? Promise.resolve(null));
+    this.journal = new CollectionActivity(options => {
+      const query = this.query();
+      return this.load('collection-graph', { query: JSON.stringify({ ...options,
+        projects: query.projects, target_id: query.target_id, platform: query.platform }) });
+    }, () => this.refresh.invalidate(), event => this.graph.showNodeActivity(event), () => this.graph.clearNodeActivity());
     const signal = this.controls.signal;
     this.source.addEventListener('change', () => {
       this.userSelected = true;
@@ -56,7 +64,7 @@ export class CollectionGraphController {
     root.getElementById('knowledge-search')?.addEventListener('input', () => {
       if (this.debounce !== null) clearTimeout(this.debounce);
       // Fence the old query immediately, before the bounded debounce elapses.
-      this.epoch++; this.refresh.stop();
+      this.epoch++; this.refresh.stop(); this.journal.reset();
       this.debounce = setTimeout(() => { this.debounce = null; this.changeScope(); }, 250);
     }, { signal });
     root.getElementById('knowledge-result-list')?.addEventListener('click', event => {
@@ -70,16 +78,18 @@ export class CollectionGraphController {
   get canGoBack(): boolean { return this.history.length > 0; }
   get offset(): number { return this.state.offset; }
   get hasMore(): boolean { return this.next !== null; }
+  get activityDiagnostics() { return this.journal.diagnostics(); }
 
   start(): void {
     if (this.active || this.disposed) return;
     this.active = true; this.epoch++;
+    if (this.collection) this.journal.start();
     this.root.getElementById('knowledge-filter-form')?.setAttribute('aria-busy', 'true');
     void this.initialize().then(() => { if (this.active && !this.disposed) this.refresh.start(); });
   }
 
   stop(): void {
-    this.active = false; this.epoch++; this.refresh.stop();
+    this.active = false; this.epoch++; this.refresh.stop(); this.journal.stop();
     if (this.debounce !== null) clearTimeout(this.debounce);
     this.debounce = null;
     this.root.getElementById('knowledge-filter-form')?.removeAttribute('aria-busy');
@@ -123,7 +133,7 @@ export class CollectionGraphController {
 
   private changeScope(): void {
     if (this.disposed) return;
-    this.epoch++; this.refresh.stop(); this.history = [];
+    this.epoch++; this.refresh.stop(); this.journal.reset(); this.history = [];
     this.state = { offset: 0, focusId: null, hops: 0 }; this.next = null;
     this.navigationChanged = true; this.pendingCamera = undefined; this.signature = '';
     this.applying = true;
@@ -131,10 +141,11 @@ export class CollectionGraphController {
     this.applying = false;
     this.setFilterAvailability(); this.updateTools(); this.renderList();
     this.setText('knowledge-summary', '불러오는 중'); this.setText('knowledge-scope', '');
-    if (this.active) this.refresh.start();
+    if (this.active) { if (this.collection) this.journal.start(); this.refresh.start(); }
   }
 
   private setFilterAvailability(): void {
+    const key = this.root.querySelector<HTMLElement>('.knowledge-activity-key'); if (key) key.hidden = !this.collection;
     for (const id of ['knowledge-search', 'knowledge-platform', 'knowledge-target', 'knowledge-type', 'knowledge-relation', 'knowledge-since', 'knowledge-until']) {
       const input = this.root.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
       if (input) input.disabled = !this.collection;
@@ -156,7 +167,14 @@ export class CollectionGraphController {
     const epoch = this.epoch;
     const result = this.collection ? await this.load('collection-graph', { query: JSON.stringify({ ...this.query(),
       focus: node.id, hops: 0, details: true, expected_version: node.sourceVersion }) }) : await legacy();
-    return this.active && epoch === this.epoch && !this.disposed ? result : { discarded: true };
+    if (!this.active || epoch !== this.epoch || this.disposed) return { discarded: true };
+    const detail = result?.details as Record<string, unknown> | undefined;
+    if (this.collection && this.graph.currentView.focusId === node.id && result?.ok === true && detail?.node_id === node.id && detail.version === node.sourceVersion && detail.target_id === node.sourceTarget) {
+      this.graph.showNodeActivity({ event_id: `read:${++this.readSequence}`, sequence: 0, document_id: node.id,
+        version: node.sourceVersion!, target_id: node.sourceTarget!, run_id: 'visible-detail', origin: 'alden-detail',
+        at: Date.now() / 1000, kind: 'read', success: true });
+    }
+    return result;
   }
 
   selected(event: KnowledgeFocusEvent): void {
@@ -193,7 +211,11 @@ export class CollectionGraphController {
 
   private apply(payload: Record<string, unknown>): void {
     if (!this.active || this.disposed) return;
-    if (payload.ok !== true) { this.setText('knowledge-sync', '자료를 불러오지 못했습니다.'); return; }
+    if (payload.ok !== true) {
+      this.setText('knowledge-sync', '자료를 불러오지 못했습니다.');
+      if (!this.graph.currentView.nodes.length) this.setText('knowledge-summary', '자료를 불러오지 못했습니다.');
+      return;
+    }
     const next = parseKnowledgeGraph(payload), signature = knowledgeSignature(next);
     this.applying = true;
     if (signature !== this.signature || this.navigationChanged) {
@@ -209,6 +231,7 @@ export class CollectionGraphController {
     this.setText('knowledge-sync', this.collection ? '저장된 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
     this.setText('knowledge-mode', this.collection ? '수집 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
     this.updateFacets(payload); this.updateTools(); this.describeScope(); this.renderList();
+    if (this.collection) this.journal.snapshot(payload.activity_checkpoint, this.graph.currentView.nodes);
   }
 
   private describeScope(): void {

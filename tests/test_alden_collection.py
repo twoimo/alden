@@ -13,6 +13,31 @@ from alden_collect import capture_source, collect_target
 
 
 class CollectionTests(unittest.TestCase):
+    def test_first_target_change_after_other_target_stages_is_not_a_pruning_reset(self):
+        allowed, other = self.target(), self.target("elsewhere", "other")
+        self.store.ingest(other, [self.record("unrelated")])
+        baseline = self.store.activity_page(projects=["one"], target_id=allowed)
+        self.assertEqual(baseline["cursor"], 0)
+        self.store.ingest(other, [self.record("unrelated", text="other change")])
+        self.store.ingest(allowed, [self.record()])
+        page = self.store.activity_page(projects=["one"], target_id=allowed,
+                                        after=0, stream_id=baseline["stream_id"])
+        self.assertFalse(page["reset"])
+        self.assertEqual(len(page["items"]), 1)
+        self.assertEqual(page["items"][0]["kind"], "added")
+
+    def test_graph_and_activity_share_target_scoped_snapshot_checkpoint(self):
+        a, b = self.target(), self.target("channel-B")
+        self.store.ingest(a, [self.record()])
+        self.store.ingest(b, [self.record("other")])
+        for projects, options in [(["one"], {}), (["one"], {"target_id": a}), ([], {})]:
+            graph = self.store.graph_page(projects=projects, **options)
+            baseline = self.store.activity_page(projects=projects, **options)
+            self.assertEqual(graph["activity_checkpoint"], {key: baseline[key] for key in ("cursor", "stream_id")})
+        empty = self.store.graph_page(projects=["one"], target_id=a, query="nonexistent")
+        self.assertIn("activity_checkpoint", empty)
+        self.assertEqual(empty["nodes"], [])
+
     def setUp(self):
         temporary = TemporaryDirectory(dir=Path("/private/tmp") if Path("/private/tmp").is_dir() else None)
         self.addCleanup(temporary.cleanup)

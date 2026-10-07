@@ -10,6 +10,7 @@ export class KnowledgeRefresh {
   private lastRead = -Infinity;
   private retryAfter = 0;
   private needsRead = true;
+  private readRequest = 0;
   constructor(private readonly read: () => Promise<Record<string, unknown> | null>, private readonly apply: (payload: Record<string, unknown>) => void, private readonly interval = 15000,
     private readonly revision?: () => Promise<string | null>, private readonly probeInterval = 1000) {}
   start(): void {
@@ -27,6 +28,11 @@ export class KnowledgeRefresh {
     this.timer = null;
     if (this.boundaryTimer !== null) clearTimeout(this.boundaryTimer);
     this.boundaryTimer = null;
+  }
+  invalidate(): void {
+    this.readRequest++; this.needsRead = true; this.retryAfter = 0;
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null; this.schedule(0);
   }
   private schedule(delay: number): void {
     if (!this.active || this.timer !== null) return;
@@ -71,15 +77,16 @@ export class KnowledgeRefresh {
       if (this.revision && !this.needsRead && !changed && now - this.lastRead < this.interval) return;
       if (now < this.retryAfter) return;
       this.retryAfter = now + Math.min(2000, this.interval);
+      const request = this.readRequest;
       const payload = await this.read();
       if (payload && this.active && epoch === this.epoch) {
         this.apply(payload);
         if (payload.ok !== false) {
-          this.confirmedRevision = revision; this.lastRead = Date.now(); this.needsRead = false; this.retryAfter = 0;
+          this.confirmedRevision = revision; this.lastRead = Date.now(); this.needsRead = request !== this.readRequest; this.retryAfter = 0;
           this.confirmedPayload = payload; this.scheduleBoundary(payload);
         }
       }
     } catch { /* Preserve the last confirmed graph; next bounded read can recover. */ }
-    finally { this.busy = false; this.schedule(cadence); }
+    finally { this.busy = false; this.schedule(this.needsRead && this.retryAfter === 0 ? 0 : cadence); }
   }
 }

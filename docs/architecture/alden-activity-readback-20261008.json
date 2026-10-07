@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "version": "0.3.31",
+  "state": "source_and_controlled_native_test",
+  "installed_version_at_test": "0.3.30",
+  "scope": "private fixture file import to collection SQLite journal to bounded IPC consumer to actual debug WKWebView; not live production source mutation or full skill/MCP/GraphRAG chain",
+  "tests": { "ui_passed": 385, "collection_passed": 29, "native_audit_passed": 8 },
+  "controlled_native": {
+    "success": true,
+    "records": 12,
+    "explicit_test_relationships": 11,
+    "revised_records": 1,
+    "committed_candidates": 1,
+    "admitted_saved_receipts": 1,
+    "producer_consumer_receipt_equal": true,
+    "detail_read_confirmed": true,
+    "source_start_to_capture_upper_bound_ms": 2881.56,
+    "latency_samples": 1,
+    "default_pixels_inspected": true,
+    "synthetic_hidden_samples": [
+      { "signal": "display-sleep", "hidden_render_delta": 0, "sample_ms": 350, "stop_observation_upper_bound_ms": 19.05 },
+      { "signal": "session-inactive", "hidden_render_delta": 0, "sample_ms": 350, "stop_observation_upper_bound_ms": 14.91 }
+    ]
+  },
+  "actual_read_only_sql_pairs": {
+    "n": 5,
+    "equal_response": true,
+    "before_median_ms": 72.57,
+    "after_median_ms": 32.15,
+    "reduction_percent": 55.70,
+    "cursor": 133115,
+    "historical_candidates": 0,
+    "power_and_ambient_load_controlled": false,
+    "scope": "activity baseline SQL operation; no quota, quality or whole-app efficiency claim"
+  }
+}

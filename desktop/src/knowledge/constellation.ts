@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { KnowledgeEdge, KnowledgeNode } from './graph-model';
 import type { Point3 } from './plasticity';
+import { ACTIVITY_TTL_MS, type NodeActivity } from './collection-activity';
 
 const CAPACITY = 120;
 const MIN_RADIUS = .018;
@@ -9,6 +10,8 @@ const SILVER = new THREE.Color('#939fac');
 const ICE = new THREE.Color('#9baebe');
 const NEIGHBOUR = new THREE.Color('#c2d8e8');
 const SELECTED = new THREE.Color('#d8c19d');
+const STORED = new THREE.Color('#8ac5a6');
+const READ = new THREE.Color('#8ab9e0');
 
 /**
  * Overview stars only. The owner supplies positions, links and sphere picking;
@@ -26,6 +29,8 @@ export class ConstellationNodes extends THREE.Group {
   private readonly instanceOrientation = new THREE.Quaternion();
   private readonly instanceSize = new THREE.Vector3();
   private selectedId: string | null = null;
+  private readonly activity = new Map<string, NodeActivity>();
+  private readonly activityColor = new THREE.Color();
 
   constructor() {
     super();
@@ -85,6 +90,10 @@ export class ConstellationNodes extends THREE.Group {
 
     this.radii.fill(0);
     const nodesById = new Map(nodes.map(node => [node.id, node]));
+    for (const [id, event] of this.activity) {
+      const node = nodesById.get(id);
+      if (!nextIds.has(id) || node?.sourceVersion !== event.version || node.sourceTarget !== event.target_id) this.activity.delete(id);
+    }
     let count = 0;
     for (let slot = 0; slot < CAPACITY; slot++) {
       const id = this.slotIds[slot];
@@ -127,6 +136,26 @@ export class ConstellationNodes extends THREE.Group {
   /** One warm selection and ice-blue direct neighbours; unrelated stars keep their base color. */
   highlight(id: string | null): void {
     this.selectedId = id !== null && this.slots.has(id) ? id : null;
+    this.paint(Date.now(), false);
+  }
+
+  showActivity(event: NodeActivity): void {
+    if (this.slots.has(event.document_id)) this.activity.set(event.document_id, event);
+  }
+  clearActivity(): void { this.activity.clear(); this.paint(Date.now(), false); }
+  get activityCount(): number { return this.activity.size; }
+  get nextActivityExpiry(): number {
+    let expiry = Infinity;
+    for (const event of this.activity.values()) expiry = Math.min(expiry, event.at * 1000 + ACTIVITY_TTL_MS);
+    return expiry;
+  }
+  advanceActivity(now: number, staticColor = false): boolean {
+    if (!this.activity.size) return false;
+    this.paint(now, staticColor);
+    return this.activity.size > 0 && !staticColor;
+  }
+  private paint(now: number, staticColor: boolean): void {
+    for (const [id, event] of this.activity) if (now < event.at * 1000 || now - event.at * 1000 >= ACTIVITY_TTL_MS) this.activity.delete(id);
     const neighbours = this.selectedId === null ? undefined : this.adjacency.get(this.selectedId);
     for (let slot = 0; slot < this.stars.count; slot++) {
       const nodeId = this.slotIds[slot];
@@ -135,7 +164,12 @@ export class ConstellationNodes extends THREE.Group {
         color = nodeId === this.selectedId ? SELECTED : neighbours?.has(nodeId) ? NEIGHBOUR
           : this.adjacency.get(nodeId)!.size > 0 ? ICE : SILVER;
       }
-      this.stars.setColorAt(slot, color);
+      const event = nodeId === null ? undefined : this.activity.get(nodeId);
+      if (event && nodeId !== this.selectedId) {
+        const intensity = staticColor ? .65 : .85 * Math.exp(-(now - event.at * 1000) / 1500);
+        this.activityColor.copy(color).lerp(event.kind === 'read' ? READ : STORED, intensity);
+        this.stars.setColorAt(slot, this.activityColor);
+      } else this.stars.setColorAt(slot, color);
     }
     this.stars.instanceColor!.needsUpdate = true;
   }

@@ -713,6 +713,8 @@ export async function bootSettings(
         hasMoreContexts:collectionGraph?.collection?collectionGraph.hasMore:!!graph.currentView.hasMoreContexts,
         focusId: graph.currentView.focusId,
         source: collectionGraph?.collection ? 'collection' : 'legacy',
+        nodeActivity: graph.nodeActivityDiagnostics,
+        activityJournal: collectionGraph?.activityDiagnostics,
         motionReduced: graph.reducedMotionEnabled,
         focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? graph.currentGraph.nodes.findIndex(node => node.id === graph.currentView.focusId),
         canGoBack: collectionGraph?.collection ? collectionGraph.canGoBack : graph.canGoBack,

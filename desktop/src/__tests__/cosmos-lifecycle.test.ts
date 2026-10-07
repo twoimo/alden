@@ -34,6 +34,7 @@ describe("decorative sky ownership", () => {
       loop:{value:{stop:stopped,start:started,setVoiceActive:vi.fn()}},orbit:{value:{dispose:vi.fn()}},
       resizeObserver:{value:null},graphRoot:{value:graphRoot},scene:{value:scene},voiceEnvelope:{value:voiceEnvelope},
       synapses:{value:synapses},overviewSynapses:{value:overviewSynapses},
+      constellationNodes:{value:{clearActivity:vi.fn()}},activityExpiry:{value:null,writable:true},
       renderer:{value:{dispose:rendererDispose}},labels:{value:new Map()},labelBounds:{value:[]},
     });
     graph.dispose();graph.dispose();graph.start();

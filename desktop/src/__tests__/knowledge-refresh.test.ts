@@ -3,6 +3,18 @@ import { KnowledgeRefresh } from "../knowledge/refresh";
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
 afterEach(() => vi.useRealTimers());
 describe("local knowledge refresh", () => {
+  it('coalesces invalidations without losing one that arrives during an in-flight read', async () => {
+    vi.useFakeTimers();
+    let resolve!: (value: Record<string, unknown>) => void;
+    const read = vi.fn(() => new Promise<Record<string, unknown>>(done => { resolve = done; }));
+    const apply = vi.fn(), refresh = new KnowledgeRefresh(read, apply, 15000, async () => null);
+    refresh.start(); await vi.advanceTimersByTimeAsync(0);
+    refresh.invalidate(); refresh.invalidate(); resolve({ ok: true });
+    await Promise.resolve(); await vi.advanceTimersByTimeAsync(1000);
+    expect(read).toHaveBeenCalledTimes(2); expect(apply).toHaveBeenCalledTimes(1);
+    refresh.stop(); resolve({ ok: true }); await Promise.resolve();
+    expect(apply).toHaveBeenCalledTimes(1); expect(vi.getTimerCount()).toBe(0);
+  });
   it('expires a saved relationship at its clock boundary even if storage reads fail', async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date('2026-10-04T00:00:00Z'));
     const end = new Date(Date.now() + 500).toISOString();

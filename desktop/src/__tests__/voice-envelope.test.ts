@@ -84,6 +84,7 @@ describe("bounded amplitude envelope", () => {
       disposed: { value: false, writable: true }, requestedAnimation: { value: false, writable: true },
       graphRoot: { value: new THREE.Group() }, voiceEnvelope: { value: envelope },
       synapses: { value: {setVisualMotion:vi.fn()} },
+      constellationNodes: { value: { clearActivity: vi.fn() } }, activityExpiry: { value: null, writable: true },
       view: { value: { nodes: [{ id: "a" }] } }, loop: { value: { start, stop: vi.fn(), setLoad: vi.fn(), setVoiceActive: vi.fn() } },
     });
     graph.setSignals(1, 0.5);expect(start).not.toHaveBeenCalled();

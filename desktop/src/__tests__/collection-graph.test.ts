@@ -16,6 +16,8 @@ class Port {
   controller!: CollectionGraphController;
   camera = { camera: [9, 8, 7], lookAt: [1, 2, 3] };
   replacements = 0;
+  showNodeActivity = vi.fn();
+  clearNodeActivity = vi.fn();
   get currentGraph() { return this.graph; }
   get currentView() { return this.model.current(); }
   get navigationTargets() { return { camera: [...this.camera.camera], lookAt: [...this.camera.lookAt] }; }

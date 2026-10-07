@@ -435,6 +435,10 @@ body.settings-view {
 #knowledge-result-list button { flex:1; text-align:left; min-width:0; background:none; border:0; color:var(--text); padding:8px 4px; overflow-wrap:anywhere; }
 #knowledge-result-list small { color:var(--muted); font-size:10px; }
 .knowledge-scope { font-size:10px; line-height:1.5; color:var(--muted); margin:0 20px 8px; }
+.knowledge-activity-key { display:flex; flex-wrap:wrap; gap:12px; margin:0 20px 8px; font-size:10px; }
+.knowledge-activity-key span:nth-child(1) { color:#d8c19d; }
+.knowledge-activity-key span:nth-child(2) { color:#8ac5a6; }
+.knowledge-activity-key span:nth-child(3) { color:#8ab9e0; }
 .knowledge-source { overflow-wrap:anywhere; }
 @media(max-width:720px) {
   .settings-view .settings-shell { grid-template-columns:145px minmax(0,1fr); }

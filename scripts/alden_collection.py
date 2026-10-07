@@ -511,9 +511,11 @@ class CollectionStore:
             raise ValueError("collection_event_time_invalid")
         if type(details) is not bool or not isinstance(query, str) or len(query) > 256:
             raise ValueError("collection_graph_filter_invalid")
-        if not projects:
-            return {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "next": None}
         with self.database() as db:
+            checkpoint, _, _, _ = self._activity_scope(db, projects, target_id, platform)
+            if not projects:
+                return {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0,
+                        "next": None, "activity_checkpoint": checkpoint}
             marks = ",".join("?" for _ in projects)
             # Materialize the permitted versions once per SQL statement. Target
             # selection precedes version ranking, so another target's revision
@@ -606,7 +608,8 @@ class CollectionStore:
                         break
                 more = False
             if not ids:
-                return {"ok": True, "nodes": [], "edges": [], "total_nodes": total, "total_edges": total_edges, "next": None, "facets": facets}
+                return {"ok": True, "nodes": [], "edges": [], "total_nodes": total, "total_edges": total_edges,
+                        "next": None, "facets": facets, "activity_checkpoint": checkpoint}
             selected = ",".join("?" for _ in ids)
             if focus:
                 rows = [{**dict(row), "degree": len(adjacency.get(row["id"], set()))} for row in db.execute(cte + "SELECT " + fields + " FROM visible s JOIN versions v ON v.id=s.visible_version WHERE s.id IN (" + selected + ") ORDER BY s.id", (*args, *ids))]
@@ -632,7 +635,7 @@ class CollectionStore:
                     "next": offset+limit if more else None, "focus": focus, "scope": projects,
                     "facets": facets, "targets": self.targets(projects),
                     "revision": (db.execute("SELECT e.sequence FROM events e WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id AND p.permission!='denied' AND p.project IN (" + marks + ")) ORDER BY e.sequence DESC LIMIT 1", projects).fetchone() or [0])[0],
-                    "display_scope": "bounded derived projection; not full graph"}
+                    "display_scope": "bounded derived projection; not full graph", "activity_checkpoint": checkpoint}
             if details and focus:
                 row = next(r for r in rows if r["id"] == focus)
                 detail = self._record_details(db, row, expected_version)
@@ -737,6 +740,21 @@ class CollectionStore:
             return {"ok": True, "items": items, "next": items[-1]["sequence"] if len(rows)>limit else None,
                     "cursor": items[-1]["sequence"] if after is not None and items else after}
 
+    @staticmethod
+    def _activity_scope(db, projects, target_id=None, platform=None):
+        first = db.execute("SELECT event_id FROM events ORDER BY sequence LIMIT 1").fetchone()
+        generation = identity("stream", str(SCHEMA) + ":" + (first[0] if first else "empty"))
+        marks = ",".join("?" for _ in projects) or "NULL"
+        # Materialize the small permitted target set once, rather than running
+        # a correlated permission lookup for every retained journal stage.
+        where = """e.target_id IN (SELECT p.target_id FROM target_projects p
+          JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied'
+          AND p.project IN (""" + marks + """ ) AND (? IS NULL OR p.target_id=?)
+          AND (? IS NULL OR t.platform=?))"""
+        args = [*projects, target_id, target_id, platform, platform]
+        earliest, latest = db.execute("SELECT COALESCE(MIN(e.sequence),0),COALESCE(MAX(e.sequence),0) FROM events e JOIN targets t ON t.id=e.target_id WHERE " + where, args).fetchone()
+        return {"stream_id": generation, "cursor": latest}, earliest, where, args
+
     def activity_page(self, *, projects: list[str], after=None, stream_id=None, limit=200,
                       target_id=None, platform=None) -> dict:
         """Committed journal receipts, never inferred knowledge/model activity.
@@ -754,16 +772,12 @@ class CollectionStore:
         if platform is not None and platform not in {"youtube", "threads", "files", "graph"}:
             raise ValueError("collection_platform_invalid")
         with self.database() as db:
-            first = db.execute("SELECT event_id FROM events ORDER BY sequence LIMIT 1").fetchone()
-            generation = identity("stream", str(SCHEMA) + ":" + (first[0] if first else "empty"))
-            marks = ",".join("?" for _ in projects) or "NULL"
-            where = """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id
-              AND p.permission!='denied' AND p.project IN (""" + marks + """))
-              AND (? IS NULL OR e.target_id=?) AND (? IS NULL OR t.platform=?)"""
-            args = [*projects, target_id, target_id, platform, platform]
-            earliest, latest = db.execute("SELECT COALESCE(MIN(e.sequence),0),COALESCE(MAX(e.sequence),0) FROM events e JOIN targets t ON t.id=e.target_id WHERE " + where, args).fetchone()
-            reset = (after is None or stream_id != generation or after > latest
-                     or earliest > 0 and after < earliest-1)
+            checkpoint, earliest, where, args = self._activity_scope(db, projects, target_id, platform)
+            generation, latest = checkpoint["stream_id"], checkpoint["cursor"]
+            # Sequence gaps also belong to other permitted/denied targets.
+            # They are not pruning evidence. The retained first global event
+            # identifies replacement/pruning; a rewind is checked separately.
+            reset = after is None or stream_id != generation or after > latest
             if reset:
                 return {"ok": True, "items": [], "cursor": latest, "latest": latest,
                         "stream_id": generation, "reset": True, "has_more": False}

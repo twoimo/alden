@@ -4,9 +4,11 @@ import { ConstellationNodes } from '../knowledge/constellation';
 import type { KnowledgeEdge, KnowledgeEvidence, KnowledgeNode } from '../knowledge/graph-model';
 import type { Point3 } from '../knowledge/plasticity';
 import { pickKnowledgeSphere } from '../knowledge/picking';
+import type { NodeActivity } from '../knowledge/collection-activity';
 
 type Stars = THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
 const owned: ConstellationNodes[] = [];
+const distance = (a: THREE.Color, b: THREE.Color) => Math.hypot(a.r-b.r, a.g-b.g, a.b-b.b);
 const evidence = (): KnowledgeEvidence => ({
   kind: 'snapshot', sourceEventIds: [], chatId: '', confirmedAt: null, retracted: false,
 });
@@ -44,6 +46,34 @@ afterEach(() => {
   vi.restoreAllMocks(); vi.useRealTimers();
   for (const group of owned) dispose(group);
   owned.length = 0;
+});
+
+describe('saved activity color buffers', () => {
+  it('decays a saved receipt on its real node without replacing geometry, slots or buffers', () => {
+    vi.useFakeTimers(); vi.setSystemTime(10000);
+    const group = batch([node('a', { sourceVersion: 'v2', sourceTarget: 't' }), node('b')]);
+    const mesh = stars(group), attribute = mesh.instanceColor, geometry = mesh.geometry;
+    const initial = color(mesh, 0);
+    const receipt: NodeActivity = { event_id: 'e', sequence: 1, document_id: 'a', version: 'v2', target_id: 't',
+      run_id: 'r', origin: 'import', at: 10, kind: 'revised', success: true };
+    group.showActivity(receipt); expect(group.advanceActivity(10000)).toBe(true);
+    const peak = color(mesh, 0); expect(distance(peak, initial)).toBeGreaterThan(.1);
+    group.advanceActivity(13000); expect(distance(color(mesh, 0), initial)).toBeLessThan(distance(peak, initial));
+    group.highlight('a'); expect(color(mesh, 0).getHexString()).toBe('d8c19d');
+    group.highlight(null); expect(group.advanceActivity(20000)).toBe(false);
+    expect(distance(color(mesh, 0), initial)).toBeLessThan(.00001);
+    expect(mesh.instanceColor).toBe(attribute); expect(mesh.geometry).toBe(geometry); expect(group.activityCount).toBe(0);
+  });
+  it('uses one static reduced-motion color and drops receipts when their source version or scope leaves', () => {
+    vi.useFakeTimers(); vi.setSystemTime(10000);
+    const a = node('a', { sourceVersion: 'v1', sourceTarget: 't' }), group = batch([a]);
+    group.showActivity({ event_id: 'read', sequence: 0, document_id: 'a', version: 'v1', target_id: 't',
+      run_id: 'detail', origin: 'detail', at: 10, kind: 'read', success: true });
+    expect(group.advanceActivity(10000, true)).toBe(false); const staticColor = color(stars(group), 0);
+    group.advanceActivity(13000, true); expect(distance(color(stars(group), 0), staticColor)).toBeLessThan(.00001);
+    group.set([{ ...a, sourceVersion: 'v2' }], []); expect(group.activityCount).toBe(0);
+    group.set([], []); expect(group.nextActivityExpiry).toBe(Infinity);
+  });
 });
 
 describe('constellation overview stars', () => {

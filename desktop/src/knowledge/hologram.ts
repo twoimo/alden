@@ -20,6 +20,7 @@ import type { EmergencyState, RuntimeSnapshot, VoiceStatus } from '../contracts'
 import { ThinkingOrbMesh } from '../orbs/mesh';
 import { runtimeOrb, QUIET_ORB, PAUSED_ORB, type OrbActivity } from '../orbs/activity';
 import { orbCacheBytes, type OrbState } from '../orbs/frames';
+import { ACTIVITY_TTL_MS, type NodeActivity } from './collection-activity';
 import {
   KnowledgeDrilldown,
   OVERVIEW_NODE_CAP,
@@ -102,6 +103,9 @@ export class KnowledgeHologram {
   private view: KnowledgeView;
   private disposed = false;
   private requestedAnimation = false;
+  private activityExpiry: ReturnType<typeof setTimeout> | null = null;
+  private activityAccepted = 0;
+  private lastNodeActivity: NodeActivity | null = null;
   private viewport = { x: 0, y: 0, width: 1, height: 1 };
 
   constructor(
@@ -173,6 +177,7 @@ export class KnowledgeHologram {
 
   stop(): void {
     this.requestedAnimation = false;
+    this.clearNodeActivity();
     try { this.voicePoller?.stop(); } finally {
       try { this.loop.stop(); } finally {
         this.loop.setVoiceActive(false);
@@ -235,6 +240,32 @@ export class KnowledgeHologram {
     return this.view;
   }
   get currentGraph(): KnowledgeGraph { return this.graph; }
+  get nodeActivityDiagnostics() { return { active: this.constellationNodes.activityCount, accepted: this.activityAccepted, last: this.lastNodeActivity }; }
+
+  showNodeActivity(event: NodeActivity): void {
+    const now = Date.now(), at = event.at * 1000;
+    if (this.disposed || !this.requestedAnimation || event.success !== true || !Number.isFinite(at)
+      || at > now || now - at >= ACTIVITY_TTL_MS || !this.view.nodes.some(node => node.id === event.document_id
+        && node.sourceVersion === event.version && node.sourceTarget === event.target_id && !node.evidence.retracted)) return;
+    this.constellationNodes.showActivity(event); this.activityAccepted++; this.lastNodeActivity = event;
+    this.constellationNodes.advanceActivity(now, this.reducedMotionEnabled);
+    this.scheduleActivityExpiry(); this.invalidateFrame();
+  }
+  clearNodeActivity(): void {
+    if (this.activityExpiry !== null) clearTimeout(this.activityExpiry);
+    this.activityExpiry = null; this.lastNodeActivity = null; this.constellationNodes.clearActivity(); this.invalidateFrame();
+  }
+  private scheduleActivityExpiry(): void {
+    if (this.activityExpiry !== null) clearTimeout(this.activityExpiry);
+    this.activityExpiry = null;
+    const expiry = this.constellationNodes.nextActivityExpiry;
+    if (!this.requestedAnimation || !Number.isFinite(expiry)) return;
+    this.activityExpiry = setTimeout(() => {
+      this.activityExpiry = null;
+      this.constellationNodes.advanceActivity(Date.now(), this.reducedMotionEnabled);
+      this.invalidateFrame(); this.scheduleActivityExpiry();
+    }, Math.max(1, expiry - Date.now()));
+  }
 
   get canGoBack(): boolean { return this.drilldown.canGoBack; }
 
@@ -596,6 +627,7 @@ export class KnowledgeHologram {
     this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     this.constellationNodes.update(this.displayedPositions);
+    const nodeActivityMoving = this.constellationNodes.advanceActivity(Date.now(), this.reducedMotionEnabled || this.paused);
     this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
     this.loop.setInteractive(this.plasticity.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
@@ -648,7 +680,7 @@ export class KnowledgeHologram {
       if (label.hidden === box.visible) label.hidden = !box.visible;
       if (box.visible && (!wasVisible || previousLeft !== box.left || previousTop !== box.top)) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }
-    if (this.paused || this.reducedMotionEnabled || (!this.plasticity.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
+    if (this.paused || this.reducedMotionEnabled || (!nodeActivityMoving && !this.plasticity.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
   }
   private readonly syncPoint = (id:string,x:number,y:number,z:number):void => {this.positions.get(id)?.set(x,y,z);};
 }
