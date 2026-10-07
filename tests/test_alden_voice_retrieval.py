@@ -13,6 +13,38 @@ class VoiceRetrievalTests(unittest.TestCase):
     def root(self,path):
         root=Path(path);folder=root/'knowledge/corpus';folder.mkdir(parents=True);(folder/'current.json').write_text('{}');return root
 
+    def test_remember_current_input_is_not_a_corpus_lookup(self):
+        commands = [
+            '회의는 3층입니다. 기억하고 확인했습니다라고만 답하세요.',
+            '내일 약속은 5시입니다. 기억해줘.',
+            '방금 말한 코드는 731입니다. 기억해 두세요.',
+            '출근지는 강남입니다. 기억해주세요.',
+        ]
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            for command in commands:
+                with self.subTest(command=command), mock.patch('alden_corpus.search') as search, \
+                     mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle', return_value={'facts':['관련 없는 기록']}) as graph:
+                    reference,metrics=voice._voice_knowledge_reference(command,[],root,AbortController(root).token())
+                    self.assertEqual(reference,'');self.assertEqual(metrics['state'],'not_requested')
+                    search.assert_not_called();graph.assert_not_called()
+
+    def test_followup_to_remembered_current_input_uses_conversation_only(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            history=[{'role':'user','content':'회의는 3층입니다. 기억하고 확인했다고만 답하세요.'},
+                     {'role':'assistant','content':'확인했습니다.'}]
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['관련 없는 기록']}) as graph:
+                reference,metrics=voice._voice_knowledge_reference('그럼 어디로 가면 되죠?',history,root,AbortController(root).token())
+            self.assertEqual(reference,'');self.assertEqual(metrics['state'],'not_requested');graph.assert_not_called()
+
+    def test_explicit_recall_request_still_reads_saved_memory(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['저장된 회의 기록'],'fact_provenance':[],'search_mode':'rrf'}) as graph:
+                reference,metrics=voice._voice_knowledge_reference('예전에 기억한 회의 정보를 찾아줘',[],root,AbortController(root).token())
+            graph.assert_called_once();self.assertEqual(metrics['state'],'found');self.assertIn('저장된 회의 기록',reference)
+
     def test_requested_premises_keep_each_relation_identity_and_endpoint_hash(self):
         with TemporaryDirectory() as td:
             root=self.root(td)

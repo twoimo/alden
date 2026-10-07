@@ -227,6 +227,7 @@ class MlxLaunchSpec:
             str(self.kv_quant),
             "--max-resident-models",
             str(self.max_resident_models),
+            "--metrics",
         )
 
     def prefix(self) -> tuple[str, ...]:

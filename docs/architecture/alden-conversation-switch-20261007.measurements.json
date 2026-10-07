@@ -1,0 +1,524 @@
+{
+  "schema_version": 1,
+  "python": "3.11.9",
+  "machine": "arm64",
+  "captured_at": "2026-10-07T07:49:50Z",
+  "baseline_ref": "d136b80",
+  "before_sha256": "0a0c56e0b2764e0f9d600e90ee45dae290f97ec638e1404f345764e5aeaef94c",
+  "after_sha256": "78b8e4638337a7ad6cb4b8e160aafc4e43cac002eb98938463f7c9f73486e0e2",
+  "order": "alternating paired order; fresh synthetic database per arm",
+  "summary": {
+    "before": {
+      "n": 30,
+      "switch_ms_p50": 0.7721045,
+      "switch_ms_p95": 1.417708,
+      "late_playback": 30,
+      "late_answer_in_destination": 30,
+      "wrong_result_conversation": 30,
+      "cancelled_result": 0,
+      "cancelled_reply_exposed": 0
+    },
+    "after": {
+      "n": 30,
+      "switch_ms_p50": 0.875583,
+      "switch_ms_p95": 1.257959,
+      "late_playback": 0,
+      "late_answer_in_destination": 0,
+      "wrong_result_conversation": 0,
+      "cancelled_result": 30,
+      "cancelled_reply_exposed": 0
+    }
+  },
+  "samples": {
+    "before": [
+      {
+        "switch_ms": 1.491458,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.023,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.623375,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.674542,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.9825,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.892792,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.926875,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.675083,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.417708,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.696042,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.8495,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.230958,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.670208,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.719459,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.650375,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.769292,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.684584,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.187,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.774917,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.719084,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.748542,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.688916,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.780625,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.701333,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.732083,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.822666,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.968333,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.682208,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.872791,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.946792,
+        "late_playback": 1,
+        "late_answer_in_destination": 1,
+        "wrong_result_conversation": 1,
+        "cancelled_result": 0,
+        "cancelled_reply_exposed": 0
+      }
+    ],
+    "after": [
+      {
+        "switch_ms": 0.881834,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.810833,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.257959,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.225292,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.129958,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.774292,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.03875,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.871625,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.019792,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.937084,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.112042,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.829666,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.879541,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.835417,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.000084,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.979875,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.732875,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.782625,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.799459,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.702542,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.8095,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.989458,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.707667,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.905875,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.897958,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.729,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 1.381542,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.717459,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.848292,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      },
+      {
+        "switch_ms": 0.757584,
+        "late_playback": 0,
+        "late_answer_in_destination": 0,
+        "wrong_result_conversation": 0,
+        "cancelled_result": 1,
+        "cancelled_reply_exposed": 0
+      }
+    ]
+  },
+  "limits": [
+    "Controlled blocked generation, not natural dialogue or physical barge-in",
+    "Switch time includes private SQLite history read and status publication",
+    "No LLM, voice hardware, network, Kakao send or global abort changes",
+    "Other host workloads were preserved; no whole-app latency or power claim"
+  ]
+}

@@ -162,3 +162,10 @@ LaunchAgent is bootstrapped.
 0.3.0 uses a resumable account-scoped corpus populated from a consistent encrypted DB+WAL snapshot. Working and published SQLite databases are separate. A complete publication invalidates the graph cache; actual numeric author IDs identify people across rooms. Same names never establish identity. Snapshot evidence records observed source rows and is separate from decision-ledger evidence. Focus lookup returns scoped quoted history, with unclassified outgoing history marked explicitly. Dense/model inference coverage is not implied by raw full-text coverage.
 
 DB history resets its oldest-page cursor when a newly fetched page does not overlap the prior window after a long hidden interval. All loaded rows remain available while the live DOM is bounded. Row keys preserve reading position through append, prepend and height measurement. Hidden views cancel their animation requests and observers.
+
+
+## 2026-10-07 — request and conversation boundaries
+
+A history selection and its input belong to one conversation boundary. The current generation carries immutable conversation/turn identity; metrics retain the input context version rather than replacing it with the reply's later context version. Engine statistics remain internal and are not added to the main user screen. Missing telemetry is unknown, not zero.
+
+The expanded graph direction is a dark three-dimensional knowledge view, with actual nodes/relations and restrained luminosity. Main dialogue/settings retain calm neutral Alden surfaces. Decorative fake knowledge points and fabricated activity are excluded. Canonical knowledge, display proximity and biological metaphors remain distinct. Existing stable node identity, bounded physics, source provenance and hidden lifecycle are retained while collection/integration evolves.

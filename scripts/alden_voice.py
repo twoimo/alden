@@ -31,6 +31,7 @@ from collections.abc import Mapping, Sequence
 from collections import deque
 from concurrent.futures import Future
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -414,6 +415,7 @@ class VoiceTurnToken(AbortToken):
 
 @dataclass
 class VoiceTurn:
+    conversation_id: str
     turn_id: int
     context_version: int
     source: str
@@ -949,7 +951,7 @@ class AldenVoicePipeline:
         self.turn_id = 0
         self.context_version = 0
         self._active_turn: VoiceTurn | None = None
-        self._seen_events: deque[tuple[str, str]] = deque(maxlen=128)
+        self._seen_events: deque[tuple[str, str, str]] = deque(maxlen=128)
         self._closed = False
         self._adapters_closed = False
         self._worker: threading.Thread | None = None
@@ -997,16 +999,34 @@ class AldenVoicePipeline:
         if not self.manual_listen or self.history_root is None or not re.fullmatch(r"[0-9a-f]{32}", conversation_id):
             raise RuntimeError("voice_conversation_unavailable")
         from alden_history import database
-        with database(self.history_root) as db:
-            if db is None or db.execute("SELECT 1 FROM voice_sessions WHERE id=?", (conversation_id,)).fetchone() is None:
-                raise RuntimeError("voice_conversation_unavailable")
-            rows = db.execute("SELECT role,content FROM voice_messages WHERE session_id=? AND state='confirmed' AND role IN ('user','assistant') ORDER BY turn_id DESC, CASE role WHEN 'assistant' THEN 1 ELSE 0 END DESC LIMIT ?", (conversation_id, VOICE_CONTEXT_TURNS * 2)).fetchall()
-            counters = db.execute("SELECT COALESCE(MAX(turn_id),0),COALESCE(MAX(context_version),0) FROM voice_messages WHERE session_id=?", (conversation_id,)).fetchone()
         with self._lock:
-            self.conversation_id = conversation_id
-            self.turn_id, self.context_version = map(int, counters)
-            self._conversation = deque(({'role':row['role'],'content':row['content'][:VOICE_CONTEXT_ITEM_MAX_CHARS]} for row in reversed(rows)), maxlen=VOICE_CONTEXT_TURNS*2)
-            self._last_conversation_turn = time.monotonic()
+            if self._closed:
+                raise RuntimeError("voice_conversation_unavailable")
+            self.token.raise_if_cancelled()
+            # Input acquisition shares this lock: an input arriving while
+            # history loads cannot start a turn in the previous conversation.
+            with database(self.history_root) as db:
+                if db is None:
+                    raise RuntimeError("voice_conversation_unavailable")
+                db.execute("BEGIN")
+                if db.execute("SELECT 1 FROM voice_sessions WHERE id=?", (conversation_id,)).fetchone() is None:
+                    raise RuntimeError("voice_conversation_unavailable")
+                rows = db.execute("SELECT role,content FROM voice_messages WHERE session_id=? AND state='confirmed' AND role IN ('user','assistant') ORDER BY turn_id DESC, CASE role WHEN 'assistant' THEN 1 ELSE 0 END DESC LIMIT ?", (conversation_id, VOICE_CONTEXT_TURNS * 2)).fetchall()
+                counters = db.execute("SELECT COALESCE(MAX(turn_id),0),COALESCE(MAX(context_version),0) FROM voice_messages WHERE session_id=?", (conversation_id,)).fetchone()
+            with self.token.commit_guard():
+                self.token.raise_if_cancelled()
+                was_idle = self.state == VoiceState.IDLE
+                # Selecting history is a conversation boundary. Neither an
+                # in-flight kernel nor the latest pending input owns it.
+                self.interrupt()
+                self.conversation_id = conversation_id
+                self.turn_id, self.context_version = map(int, counters)
+                self._conversation = deque(({'role':row['role'],'content':row['content'][:VOICE_CONTEXT_ITEM_MAX_CHARS]} for row in reversed(rows)), maxlen=VOICE_CONTEXT_TURNS*2)
+                self._last_conversation_turn = time.monotonic()
+                self._transcript = self._reply = ""
+                self._rearm_after_reply(publish=False)
+                if was_idle:
+                    self.state = VoiceState.IDLE
             self._publish()
 
     def _publish(self, error_code: str = "") -> None:
@@ -1202,7 +1222,7 @@ class AldenVoicePipeline:
             if event_id is not None:
                 if not isinstance(event_id, str) or not event_id or len(event_id) > 256:
                     return None
-                key = (source, event_id)
+                key = (self.conversation_id, source, event_id)
                 if key in self._seen_events:
                     return None
                 self._seen_events.append(key)
@@ -1215,7 +1235,7 @@ class AldenVoicePipeline:
                 self._pending_turn[3].cancel()
                 self._pending_turn = None
             self.turn_id += 1
-            turn = VoiceTurn(self.turn_id, self.context_version, source, VoiceTurnToken(self.token))
+            turn = VoiceTurn(self.conversation_id, self.turn_id, self.context_version, source, VoiceTurnToken(self.token))
             self._active_turn = turn
             self._transcript = self._reply = ""
             self.ring.clear()
@@ -1326,7 +1346,8 @@ class AldenVoicePipeline:
             return future.result()
 
     def _result(self, turn: VoiceTurn, state: VoiceState, error: str = "") -> VoiceResult:
-        return VoiceResult(state, error, turn.transcript, turn.reply, self.conversation_id, turn.turn_id, turn.context_version, turn.token.is_cancelled())
+        cancelled = state == VoiceState.ABORTED or turn.token.is_cancelled()
+        return VoiceResult(state, error, turn.transcript, "" if cancelled else turn.reply, turn.conversation_id, turn.turn_id, turn.context_version, cancelled)
 
     def _turn_state(self, turn: VoiceTurn, state: VoiceState, error: str = "") -> None:
         with self._lock:
@@ -1406,12 +1427,12 @@ class AldenVoicePipeline:
                     turn.context_version = self.context_version
                     if self.history_root is not None:
                         from alden_history import record_voice
-                        record_voice(self.history_root,self.conversation_id,turn.turn_id,"user",transcript,turn.context_version,source=turn.source)
-            reply = self.llm.generate(
-                transcript,
-                turn.token,
-                history=history,
-            ).strip()
+                        record_voice(self.history_root,turn.conversation_id,turn.turn_id,"user",transcript,turn.context_version,source=turn.source)
+            contextual_generate = getattr(self.llm, "generate_for_turn", None)
+            if callable(contextual_generate):
+                reply = contextual_generate(transcript, turn.token, history=history, turn=turn).strip()
+            else:
+                reply = self.llm.generate(transcript, turn.token, history=history).strip()
             turn.token.raise_if_cancelled()
             if not reply:
                 return self._turn_end(turn, VoiceState.ERROR, "generation_error")
@@ -1457,7 +1478,7 @@ class AldenVoicePipeline:
                     turn.token.raise_if_cancelled()
                     if self.history_root is not None:
                         from alden_history import record_voice
-                        record_voice(self.history_root,self.conversation_id,turn.turn_id,"assistant",reply,turn.context_version,
+                        record_voice(self.history_root,turn.conversation_id,turn.turn_id,"assistant",reply,turn.context_version,
                                      source=turn.source,provenance=turn.retrieval_provenance)
                     return self._result(turn, VoiceState.ENDED)
             except AldenCancelled:
@@ -1469,25 +1490,40 @@ class AldenVoicePipeline:
                 return self._turn_end(turn, VoiceState.ABORTED, "turn_cancelled")
 
 
+def _voice_requests_knowledge(text: str) -> bool:
+    """Keep an instruction to remember this input in its own conversation.
+
+    Explicit saved-memory queries retain the existing lookup path. This is
+    request routing, not a claim that the input was stored as an OSK note.
+    """
+    if any(word in text for word in ('카카오톡','카톡','채팅방','대화방','지식','자료','노드','그래프')):
+        return True
+    if '기억' not in text:
+        return False
+    remembering_input = re.search(r'기억(?:하고|하세요|해(?:\s*(?:줘|주|두|둬)|(?=[.!]|$)))', text)
+    recalling_saved = any(word in text for word in ('기록','저장된','예전에','검색','찾','조회','뭐','무엇','어떤','누가','언제','어디','?'))
+    return not remembering_input or recalling_saved
+
+
 def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], root: Path | None,
                                token: AbortToken) -> tuple[str,dict[str,Any]]:
     """Only explicit knowledge turns read quoted context; speech stays last."""
-    markers=('카카오톡','카톡','채팅방','대화방','지식','자료','기억','노드','그래프')
+    explicit_request = _voice_requests_knowledge(text)
     followup_prefixes=('그','거기','아까','계속','또','그러면')
     earlier=''
     for message in reversed(history):
         if message.get('role')!='user' or not isinstance(message.get('content'),str):
             continue
         previous=message['content']
-        if any(word in previous for word in markers):
+        if _voice_requests_knowledge(previous):
             earlier=previous
             break
         if not previous.strip().startswith(followup_prefixes):
             break
     followup=text.strip().startswith(followup_prefixes)
-    if root is None or not ((root/'knowledge/corpus/current.json').is_file() or (root/'knowledge/osk/sync.json').is_file()) or not (any(word in text for word in markers) or (earlier and followup)):
+    if root is None or not ((root/'knowledge/corpus/current.json').is_file() or (root/'knowledge/osk/sync.json').is_file()) or not (explicit_request or (earlier and followup)):
         return '',{'state':'not_requested','mode':'none','sources':0}
-    token.raise_if_cancelled();query=(text+(' '+earlier if followup and not any(word in text for word in markers) else '')).strip()[:1024];started=time.perf_counter()
+    token.raise_if_cancelled();query=(text+(' '+earlier if followup and not explicit_request else '')).strip()[:1024];started=time.perf_counter()
     try:
         from alden_corpus import search,resolve_room
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle,embedding_abort_scope
@@ -1570,6 +1606,54 @@ class LocalMlxLlm:
         self.model = model
         self.state_root = state_root
         self.last_metrics: dict[str, Any] = {}
+        self._turn_context: ContextVar[dict[str, Any] | None] = ContextVar("alden_llm_turn", default=None)
+
+    def generate_for_turn(self, text: str, token: AbortToken, *, history=(), turn: VoiceTurn) -> str:
+        context = {
+            "conversation_id": turn.conversation_id, "turn_id": turn.turn_id,
+            "context_version": turn.context_version, "source": turn.source,
+            "context_scope": "confirmed_input_before_inference",
+        }
+        binding = self._turn_context.set(context)
+        try:
+            return self.generate(text, token, history=history)
+        finally:
+            self._turn_context.reset(binding)
+
+    def _sample_engine_metrics(self, token: AbortToken) -> dict[str, Any]:
+        sample: dict[str, Any] = {
+            "state": "unavailable", "observed_at_unix": time.time(),
+            "scope": "engine_aggregate; not per-request memory", "values": None,
+        }
+        request = urllib.request.Request(self.base_url.removesuffix("/v1") + "/metrics")
+        request._alden_abort_token = token
+        names = {
+            "vllm:num_requests_running", "vllm:request_success_total", "vllm:request_cancelled_total",
+            "vllm:prompt_tokens_total", "vllm:generation_tokens_total",
+            "mlx_serve:mlx_active_bytes", "mlx_serve:mlx_cache_bytes", "mlx_serve:mlx_peak_bytes",
+        }
+        try:
+            token.raise_if_cancelled()
+            with _local_urlopen(request, timeout=.35) as response:
+                raw = response.read(128 * 1024 + 1)
+            if len(raw) > 128 * 1024:
+                return sample
+            values = {}
+            for line in raw.decode("utf-8", "replace").splitlines():
+                fields = line.split()
+                if len(fields) != 2 or fields[0] not in names:
+                    continue
+                value = float(fields[1])
+                if math.isfinite(value) and value >= 0:
+                    values[fields[0]] = value
+            if values:
+                sample.update(state="connected", values=values)
+        except AldenCancelled:
+            raise
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
+        sample["observed_at_unix"] = time.time()
+        return sample
 
     def _read_stream(self, response, token: AbortToken, started: float) -> dict[str, Any]:
         total = 0
@@ -1593,6 +1677,12 @@ class LocalMlxLlm:
             chunk = json.loads(data)
             if not isinstance(chunk, dict):
                 raise RuntimeError("local_llm_response_invalid")
+            request_id = chunk.get("id")
+            if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", request_id):
+                previous_id = self.last_metrics.get("backend_request_id")
+                if previous_id is not None and previous_id != request_id:
+                    raise RuntimeError("local_llm_stream_request_mismatch")
+                self.last_metrics["backend_request_id"] = request_id
             if mlx_response_model_conflicts(self.model, chunk.get("model")):
                 raise RuntimeError("local_llm_model_mismatch")
             if chunk.get("model") is not None:
@@ -1621,7 +1711,7 @@ class LocalMlxLlm:
                 finish_reason = choice["finish_reason"]
         elapsed = time.perf_counter() - started
         self.last_metrics.update({"elapsed_seconds": elapsed, "usage": usage, "finish_reason": finish_reason})
-        return {"model": model, "usage": usage, "choices": [{"finish_reason": finish_reason, "message": {"content": "".join(parts)}}]}
+        return {"id": self.last_metrics.get("backend_request_id"), "model": model, "usage": usage, "choices": [{"finish_reason": finish_reason, "message": {"content": "".join(parts)}}]}
 
     def _require_selected_model_ready(self, token: AbortToken) -> None:
         request = urllib.request.Request(
@@ -1670,7 +1760,31 @@ class LocalMlxLlm:
         history: Sequence[Mapping[str, str]] = (),
     ) -> str:
         started = time.perf_counter()
-        self.last_metrics = {}
+        context = self._turn_context.get()
+        request_info = {
+            **(context or {}), "local_request_id": uuid.uuid4().hex,
+            "model_id": self.model, "requested_at_unix": time.time(),
+            "state": "running", "cancelled": False,
+        }
+        self.last_metrics = {"request": request_info, "backend_request_id": None}
+        try:
+            with mlx_model_request_lease(self.state_root):
+                result = self._generate_response(text, token, history=history, started=started)
+            request_info["state"] = "completed"
+            return result
+        except MlxRequestAdmissionClosed as exc:
+            request_info["state"] = "failed"
+            raise RuntimeError(exc.code) from exc
+        except Exception:
+            request_info["state"] = "cancelled" if token.is_cancelled() else "failed"
+            raise
+        finally:
+            request_info["cancelled"] = token.is_cancelled()
+            if request_info["cancelled"]:
+                request_info["state"] = "cancelled"
+            request_info["completed_at_unix"] = time.time()
+
+    def _generate_response(self, text: str, token: AbortToken, *, history, started: float) -> str:
         token.raise_if_cancelled()
         if self.model not in LOCAL_LLM_ALLOWED_MODEL_IDS:
             raise RuntimeError("model_swap_required")
@@ -1706,15 +1820,21 @@ class LocalMlxLlm:
             data=payload,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
+        request.add_header("X-Alden-Request-Id", self.last_metrics["request"]["local_request_id"])
+        context = self._turn_context.get()
+        if context is not None:
+            for key in ("conversation_id", "turn_id", "context_version"):
+                request.add_header("X-Alden-" + key.replace("_", "-"), str(context[key]))
         request._alden_abort_token = token
         try:
-            with mlx_model_request_lease(self.state_root):
-                self._require_selected_model_ready(token)
-                with _local_urlopen(request, timeout=90.0) as response:
-                    if "text/event-stream" in str(getattr(response, "headers", {}).get("Content-Type", "")).lower():
-                        raw = json.dumps(self._read_stream(response, token, started)).encode("utf-8")
-                    else:
-                        raw = response.read(LOCAL_LLM_MAX_RESPONSE_BYTES + 1)
+            self._require_selected_model_ready(token)
+            if context is not None:
+                self.last_metrics["engine_before"] = self._sample_engine_metrics(token)
+            with _local_urlopen(request, timeout=90.0) as response:
+                if "text/event-stream" in str(getattr(response, "headers", {}).get("Content-Type", "")).lower():
+                    raw = json.dumps(self._read_stream(response, token, started)).encode("utf-8")
+                else:
+                    raw = response.read(LOCAL_LLM_MAX_RESPONSE_BYTES + 1)
         except MlxRequestAdmissionClosed as exc:
             raise RuntimeError(exc.code) from exc
         except (OSError, urllib.error.URLError, ValueError) as exc:
@@ -1729,7 +1849,11 @@ class LocalMlxLlm:
             raise RuntimeError("local_llm_response_invalid") from exc
         if mlx_response_model_conflicts(self.model, body.get("model")):
             raise RuntimeError("local_llm_model_mismatch")
+        backend_id = body.get("id")
+        if isinstance(backend_id, str) and re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", backend_id):
+            self.last_metrics["backend_request_id"] = backend_id
         finish_reason = body["choices"][0].get("finish_reason")
+        self.last_metrics["usage"] = body.get("usage")
         self.last_metrics["finish_reason"] = finish_reason
         if finish_reason == "length":
             # A transport-complete stream can still contain an unfinished
@@ -1740,6 +1864,8 @@ class LocalMlxLlm:
             # user-facing answer. A reasoning-only response ends this turn.
             raise RuntimeError("local_llm_reply_empty")
         token.raise_if_cancelled()
+        if context is not None:
+            self.last_metrics["engine_after"] = self._sample_engine_metrics(token)
         return content.strip()
 
 

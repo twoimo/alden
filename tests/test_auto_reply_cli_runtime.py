@@ -148,6 +148,21 @@ def settling_sleep(db_watch, real_sleep, real_monotonic, timeout: float = 5.0):
 
 
 class AutoReplyCliRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        # Isolate user enrollment, prompts and model preferences. Model tests
+        # must explicitly supply a fake transport instead of using a live server.
+        home = tempfile.TemporaryDirectory(prefix="autoreply-unit-home-")
+        self.addCleanup(home.cleanup)
+        home_patch = mock.patch.object(Path, "home", return_value=Path(home.name))
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
+        model_transport = mock.patch(
+            "auto_reply_ondevice._local_only_urlopen",
+            side_effect=OSError("unit test requires an explicit model transport"),
+        )
+        model_transport.start()
+        self.addCleanup(model_transport.stop)
+
     @staticmethod
     def _load_auto_reply_module(name):
         spec = importlib.util.spec_from_file_location(

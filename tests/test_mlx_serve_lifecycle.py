@@ -253,6 +253,7 @@ class LaunchHappyPathTests(unittest.TestCase):
                     str(spec.kv_quant),
                     "--max-resident-models",
                     str(spec.max_resident_models),
+                    "--metrics",
                 ),
             )
             self.assertNotIn("--request-timeout", command)
@@ -408,6 +409,7 @@ class FlashNextIqOwnershipTests(unittest.TestCase):
                     str(spec.kv_quant),
                     "--max-resident-models",
                     str(spec.max_resident_models),
+                    "--metrics",
                 ),
             )
             self.assertNotIn("--request-timeout", spec.command())

@@ -26,7 +26,10 @@ class CancellableLocalResponse:
     def __enter__(self):
         self.token.raise_if_cancelled()
         parsed = urllib.parse.urlsplit(self.request.full_url)
-        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != (11236 if self.embedding else 11234) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ({"/v1/models", "/v1/embeddings"} if self.embedding else {"/v1/models", "/v1/chat/completions"}):
+        allowed_paths = {"/v1/models", "/v1/embeddings"} if self.embedding else {"/v1/models", "/v1/chat/completions", "/metrics"}
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != (11236 if self.embedding else 11234) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in allowed_paths:
+            raise ValueError("local_llm_endpoint_invalid")
+        if parsed.path == "/metrics" and (self.request.get_method() != "GET" or self.request.data is not None):
             raise ValueError("local_llm_endpoint_invalid")
         started = time.monotonic()
         connection = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=min(3.0, self.timeout))
@@ -96,4 +99,3 @@ class CancellableLocalResponse:
         if self.connection is not None:
             self.connection.close()
         return False
-
