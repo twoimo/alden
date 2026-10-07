@@ -236,6 +236,20 @@ class CollectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "collection_graph_focus_not_in_scope"):
             self.store.graph_page(projects=["one"], focus=identity("youtube", "AbC"), details=True)
 
+    def test_focus_bfs_handles_cycles_parallel_edges_and_exact_hop_boundaries(self):
+        target = self.target()
+        pairs = [("a", "b"), ("b", "c"), ("c", "a"), ("a", "d"), ("d", "e"), ("a", "a")]
+        edges = [{"source_platform": "youtube", "source_id": a, "target_platform": "youtube",
+                  "target_id": b, "type": "refers-to"} for a, b in pairs]
+        edges.append({**edges[0], "type": "supports"})
+        self.store.ingest(target, [self.record(letter) for letter in "abcde"], relations=edges)
+        for hops, expected in [(0, "a"), (1, "abcd"), (2, "abcde"), (3, "abcde")]:
+            page = self.store.graph_page(projects=["one"], focus=identity("youtube", "a"), hops=hops)
+            self.assertEqual({n["id"] for n in page["nodes"]}, {identity("youtube", letter) for letter in expected})
+            root = next(n for n in page["nodes"] if n["id"] == identity("youtube", "a"))
+            self.assertEqual(root["degree"], 3)
+            self.assertTrue(all(e["source"] in {n["id"] for n in page["nodes"]} and e["target"] in {n["id"] for n in page["nodes"]} for e in page["edges"]))
+
     def test_history_forward_reconnect_recovers_more_than_one_page_without_duplicates(self):
         target = self.target()
         self.store.ingest(target, [self.record(str(i)) for i in range(25)])

@@ -579,20 +579,29 @@ class CollectionStore:
                 rows, edge_rows = json.loads(nodes_json), json.loads(edges_json)
                 ids = [r["id"] for r in rows]
             else:
-                total, total_edges, kinds, types = db.execute(cte + """SELECT (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),
+                total, total_edges, kinds, types, edge_json, focus_exists = db.execute(cte + """SELECT (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),
               (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind
                 FROM ranked s JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
                 WHERE s.choice=1 AND d.availability='available' AND kind IS NOT NULL ORDER BY kind LIMIT 128)),
-              (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128))""", args).fetchone()
+              (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128)),
+              (SELECT json_group_array(json_array(id,source,target,type)) FROM permitted_edges),
+              EXISTS(SELECT 1 FROM shown WHERE id=?)""", (*args, focus)).fetchone()
+                if not focus_exists:
+                    raise ValueError("collection_graph_focus_not_in_scope")
+                # Build bounded BFS from one consistent permitted edge read.
+                # This does not create relationships or copy source bodies.
+                edge_rows = [{"id": r[0], "source": r[1], "target": r[2], "type": r[3]} for r in json.loads(edge_json)]
+                adjacency = {}
+                for edge in edge_rows:
+                    if edge["source"] != edge["target"]:
+                        adjacency.setdefault(edge["source"], set()).add(edge["target"])
+                        adjacency.setdefault(edge["target"], set()).add(edge["source"])
             facets = {"node_types": json.loads(kinds), "relations": json.loads(types)}
             if focus:
-                if not db.execute(cte + "SELECT 1 FROM shown WHERE id=?", (*args, focus)).fetchone():
-                    raise ValueError("collection_graph_focus_not_in_scope")
                 ids = [focus]
                 for _ in range(hops):
-                    current = ",".join("?" for _ in ids)
-                    neighbors = db.execute(cte + "SELECT id FROM (SELECT target AS id FROM permitted_edges WHERE source IN (" + current + ") UNION SELECT source AS id FROM permitted_edges WHERE target IN (" + current + ")) WHERE id NOT IN (" + current + ") ORDER BY id LIMIT ?", (*args, *ids, *ids, *ids, min(limit, 24)-len(ids))).fetchall()
-                    ids.extend(row[0] for row in neighbors)
+                    neighbors = sorted(set().union(*(adjacency.get(identifier, set()) for identifier in ids))-set(ids))[:min(limit,24)-len(ids)]
+                    ids.extend(neighbors)
                     if not neighbors or len(ids) >= min(limit, 24):
                         break
                 more = False
@@ -600,8 +609,9 @@ class CollectionStore:
                 return {"ok": True, "nodes": [], "edges": [], "total_nodes": total, "total_edges": total_edges, "next": None, "facets": facets}
             selected = ",".join("?" for _ in ids)
             if focus:
-                rows = db.execute(cte + "SELECT " + fields + ",COALESCE(d.degree,0) AS degree FROM shown s JOIN versions v ON v.id=s.visible_version LEFT JOIN degrees d ON d.id=s.id WHERE s.id IN (" + selected + ") ORDER BY s.id", (*args, *ids)).fetchall()
-                edge_rows = db.execute(cte + "SELECT * FROM permitted_edges WHERE source IN (" + selected + ") AND target IN (" + selected + ") ORDER BY id LIMIT 144", (*args, *ids, *ids)).fetchall()
+                rows = [{**dict(row), "degree": len(adjacency.get(row["id"], set()))} for row in db.execute(cte + "SELECT " + fields + " FROM visible s JOIN versions v ON v.id=s.visible_version WHERE s.id IN (" + selected + ") ORDER BY s.id", (*args, *ids))]
+                selected_ids = set(ids)
+                edge_rows = sorted((row for row in edge_rows if row["source"] in selected_ids and row["target"] in selected_ids), key=lambda row: row["id"])[:144]
             target_spaces = {}
             for association in db.execute("SELECT target_id,project FROM target_projects WHERE permission!='denied' AND project IN (" + marks + ") ORDER BY project", projects):
                 target_spaces.setdefault(association["target_id"], []).append(association["project"])

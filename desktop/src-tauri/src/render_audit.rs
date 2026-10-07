@@ -631,7 +631,10 @@ fn graph_step(
             return Ok(state);
         }
         if Instant::now() >= settle {
-            return Err("note lookup did not settle".into());
+            return Err(format!(
+                "graph action {action} did not settle: pending={}, focusState={}",
+                graph_pending["pending"], state["notePane"]["focusState"]
+            ));
         }
         live(deadline)?;
         std::thread::sleep(Duration::from_millis(50));
