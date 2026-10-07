@@ -739,7 +739,7 @@ fn audit_settings(
     }
     // A debug checkout can observe an external test importer in an isolated
     // state root. The native audit itself remains strictly read-only.
-    let initial = if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) {
         if let Ok(expected) = std::env::var("ALDEN_AUDIT_EXPECT_RUN") {
             if expected.is_empty() || expected.len() > 128 {
                 return Err("activity test run ID is invalid".into());
@@ -752,13 +752,13 @@ fn audit_settings(
                     && state["nodeActivity"]["last"]["success"] == true
                     && state["nodeActivity"]["active"].as_u64().unwrap_or(0) > 0
                     && state["graphPending"] != true {
-                    break state;
+                    break;
                 }
                 live(waited_by)?;
                 std::thread::sleep(Duration::from_millis(50));
             }
-        } else { initial }
-    } else { initial };
+        }
+    }
     graph_step(&window, "scroll", deadline)?;
     publish(
         output,
