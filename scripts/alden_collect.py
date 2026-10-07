@@ -22,7 +22,7 @@ MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
 BATCH_SIZE = 1000
 
 
-def json_snapshot(path: Path):
+def json_snapshot(path: Path, *, include_raw=False):
     path = path.absolute()
     if any(p.is_symlink() for p in [*path.parents, path]):
         raise ValueError("collection_source_symlink")
@@ -37,8 +37,9 @@ def json_snapshot(path: Path):
     signature = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
     if signature(before) != signature(after) or signature(after) != signature(current):
         raise RuntimeError("collection_source_changed_during_read")
-    return json.loads(raw), {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
-                             "mtime_ns": before.st_mtime_ns, "observed_at": time.time()}
+    result = (json.loads(raw), {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
+                               "mtime_ns": before.st_mtime_ns, "observed_at": time.time()})
+    return (*result, raw) if include_raw else result
 
 
 def source_graph(target: dict, data: dict, source: dict):
@@ -173,11 +174,61 @@ def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: 
             "source": source, "batches": results, "coverage": "declared source snapshot, not a wider account survey"}
 
 
+def capture_source(store: CollectionStore, target_id: str, *, cancelled=lambda: False):
+    """Retain the permitted source bytes and replayable JSON evidence locations."""
+    if cancelled():
+        raise RuntimeError("collection_cancelled")
+    target = store.target(target_id)
+    if not target["enabled"]:
+        raise RuntimeError("collection_target_paused")
+    if not any(p["permission"] != "denied" for p in target["projects"]):
+        raise ValueError("collection_source_scope_denied")
+    cursor = json.loads(target["cursor"] or "{}")
+    if not isinstance(cursor, dict) or cursor.get("complete") is not True:
+        raise RuntimeError("collection_source_projection_incomplete")
+    config = target["config"]; path = Path(config["path"]); adapter = config["adapter"]
+    if adapter == "spark-index":
+        records, relations, source = spark_snapshot(target, path)
+        data = {"nodes": [r["raw"] for r in records], "relations": relations}
+        raw = encoded(data)
+        pointers = ["/nodes/" + str(i) for i in range(len(records))]
+        scope = "exact bytes of privacy-filtered metadata export; body/protected originals excluded"
+    else:
+        data, source, raw = json_snapshot(path, include_raw=True)
+        if source["sha256"] != cursor.get("source_revision"):
+            raise RuntimeError("collection_source_revision_changed")
+        handlers = {"source-graph": source_graph, "youtube-graph": youtube_graph, "threads-snapshot": threads_snapshot}
+        records, relations = handlers[adapter](target, data, source)
+        fields = ["nodes"] if adapter == "source-graph" else ["posts"] if adapter == "threads-snapshot" else ["series", "videos", "claims"]
+        pointers = ["/" + key + "/" + str(i) for key in fields for i in range(len(data.get(key, [])))]
+        scope = "exact original JSON file bytes"
+    if len(records) != len(pointers):
+        raise RuntimeError("collection_source_pointer_coverage")
+    refs = []
+    for record, pointer in zip(records, pointers):
+        doc = identity(record["platform"], record["original_id"])
+        raw_hash = hashlib.sha256(encoded(record["raw"])).hexdigest()
+        refs.append({"document_id": doc, "version": identity("version", doc + ":" + raw_hash),
+                     "json_pointer": pointer, "record_sha256": raw_hash})
+    manifest = {"schema": 1, "target_id": target_id, "adapter": adapter, "origin": str(path),
+                "byte_scope": scope, "processing_version": "alden-source-capture-1", "records": refs}
+    if adapter == "spark-index":
+        manifest["current_origin_snapshot_sha256"] = source["snapshot_sha256"]
+        manifest["prior_projection_origin_revision"] = cursor.get("source_revision")
+        manifest["relations"] = {}
+        for r in relations:
+            a = identity(r["source_platform"], r["source_id"]); b = identity(r["target_platform"], r["target_id"])
+            identifier = identity("relation", encoded([target_id, a, r["type"], b, r.get("original_id", "")]).decode())
+            manifest["relations"][identifier] = hashlib.sha256(encoded(r["evidence"])).hexdigest()
+    return store.retain_source_capture(target_id, raw, manifest, expected_cursor=target["cursor"], cancelled=cancelled)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-root", type=Path, required=True)
     parser.add_argument("--config", type=Path)
     parser.add_argument("--target")
+    parser.add_argument("--capture-source")
     parser.add_argument("--graph", nargs="*")
     parser.add_argument("--events", action="store_true")
     parser.add_argument("--after", type=int, default=0)
@@ -189,6 +240,9 @@ def main():
         for config in data["targets"]:
             targets.append(store.register(**config))
         print(json.dumps({"registered": targets}, ensure_ascii=False))
+    elif args.capture_source:
+        token = AbortToken(args.state_root / ABORT_STATE_NAME)
+        print(json.dumps(capture_source(store, args.capture_source, cancelled=token.is_cancelled), ensure_ascii=False))
     elif args.target:
         token = AbortToken(args.state_root / ABORT_STATE_NAME)
         print(json.dumps(collect_target(store, args.target, cancelled=token.is_cancelled), ensure_ascii=False))

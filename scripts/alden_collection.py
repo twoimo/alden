@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -224,16 +225,17 @@ class CollectionStore:
             data["projects"] = [dict(x) for x in db.execute("SELECT project,permission FROM target_projects WHERE target_id=?", (target_id,))]
             return data
 
-    def _blob(self, raw: bytes) -> tuple[str, str]:
-        if len(raw) > MAX_RECORD_BYTES:
+    def _blob(self, raw: bytes, *, folder=None, budget=MAX_RECORD_BYTES) -> tuple[str, str]:
+        if len(raw) > budget:
             raise ValueError("collection_record_too_large")
+        folder = folder or self.blobs
         sha = digest(raw)
-        path = self.blobs / (sha + ".json")
+        path = folder / (sha + ".json")
         if path.exists():
             if path.is_symlink() or digest(path.read_bytes()) != sha:
                 raise RuntimeError("collection_source_integrity")
         else:
-            fd, temporary = tempfile.mkstemp(prefix=".source-", dir=self.blobs)
+            fd, temporary = tempfile.mkstemp(prefix=".source-", dir=folder)
             try:
                 with os.fdopen(fd, "wb") as out:
                     out.write(raw)
@@ -247,6 +249,79 @@ class CollectionStore:
             finally:
                 os.unlink(temporary)
         return sha, path.name
+
+    def retain_source_capture(self, target_id: str, raw: bytes, manifest: dict, *, expected_cursor: str, cancelled=lambda: False) -> dict:
+        """Add evidence to an already committed projection without reindexing it."""
+        with self.target_lock(target_id):
+            if cancelled():
+                raise RuntimeError("collection_cancelled")
+            target = self.target(target_id)
+            if not target["enabled"]:
+                raise RuntimeError("collection_target_paused")
+            if not any(p["permission"] != "denied" for p in target["projects"]):
+                raise ValueError("collection_source_scope_denied")
+            if target["cursor"] != expected_cursor:
+                raise RuntimeError("collection_source_checkpoint_changed")
+            with self.database() as db:
+                saved = {r["document_id"]: r["current_version"] for r in db.execute(
+                    "SELECT document_id,current_version FROM memberships WHERE target_id=?", (target_id,))}
+                refs = manifest["records"]
+                if set(saved) != {r["document_id"] for r in refs} or any(saved.get(r["document_id"]) != r["version"] for r in refs):
+                    raise RuntimeError("collection_source_projection_changed")
+                if "relations" in manifest:
+                    relationships = {r["id"]: r["version"] for r in db.execute(
+                        "SELECT id,version FROM relations WHERE target_id=? AND active=1", (target_id,))}
+                    if relationships != manifest["relations"]:
+                        raise RuntimeError("collection_source_relations_changed")
+            folder = safe_directory(self.root / "source-captures")
+            prior_capture = json.loads(expected_cursor).get("source_capture", {})
+            if prior_capture.get("sha256") == digest(raw) and prior_capture.get("byte_scope") == manifest["byte_scope"]:
+                prior_name = prior_capture.get("manifest", "")
+                if not isinstance(prior_name, str) or not re.fullmatch(r"[0-9a-f]{64}\.json", prior_name):
+                    raise RuntimeError("collection_source_manifest_invalid")
+                prior_path = folder / prior_name
+                if prior_path.is_symlink():
+                    raise RuntimeError("collection_source_integrity")
+                prior_bytes = prior_path.read_bytes()
+                if digest(prior_bytes) + ".json" != prior_name:
+                    raise RuntimeError("collection_source_integrity")
+                prior = json.loads(prior_bytes)
+                # A live SQLite backup header may change while the permitted
+                # export stays identical. Reuse the original evidence receipt.
+                if all(prior.get(k) == manifest.get(k) for k in ["records", "relations", "processing_version", "origin", "adapter"]):
+                    if not isinstance(prior.get("source_file"), str) or not re.fullmatch(r"[0-9a-f]{64}\.json", prior["source_file"]):
+                        raise RuntimeError("collection_source_manifest_invalid")
+                    archived = folder / prior["source_file"]
+                    if archived.is_symlink() or digest(archived.read_bytes()) != digest(raw):
+                        raise RuntimeError("collection_source_integrity")
+                    if cancelled():
+                        raise RuntimeError("collection_cancelled")
+                    return {"state": "unchanged", "manifest": prior_name, "sha256": digest(raw)}
+            sha, name = self._blob(raw, folder=folder, budget=32 * 1024 * 1024)
+            receipt = {**manifest, "source_sha256": sha, "source_bytes": len(raw), "source_file": name}
+            manifest_sha, manifest_name = self._blob(encoded(receipt), folder=folder, budget=16 * 1024 * 1024)
+            run_id = identity("source-capture", target_id + ":" + manifest_sha)
+            with self.database() as db:
+                current = db.execute("SELECT cursor FROM targets WHERE id=?", (target_id,)).fetchone()
+                if current[0] != expected_cursor:
+                    raise RuntimeError("collection_source_checkpoint_changed")
+                previous = db.execute("SELECT 1 FROM runs WHERE id=? AND state='complete'", (run_id,)).fetchone()
+                if previous:
+                    return {"state": "unchanged", "run_id": run_id, "manifest": manifest_name, "sha256": sha}
+                if cancelled():
+                    raise RuntimeError("collection_cancelled")
+                cursor = json.loads(expected_cursor)
+                cursor["source_capture"] = {"schema": 1, "manifest": manifest_name,
+                                            "sha256": sha, "byte_scope": manifest["byte_scope"]}
+                now = time.time()
+                db.execute("""INSERT INTO runs(id,target_id,origin,state,started_at,ended_at,cursor_before,cursor_after)
+                  VALUES(?,?,?,?,?,?,?,?)""", (run_id, target_id, "alden-source-capture", "complete", now, now,
+                                              expected_cursor, encoded(cursor).decode()))
+                db.execute("UPDATE targets SET cursor=? WHERE id=?", (encoded(cursor).decode(), target_id))
+                self._event(db, run_id, target_id, "stored", change="source_evidence",
+                            source_manifest=manifest_name, source_sha256=sha, byte_scope=manifest["byte_scope"],
+                            reason="원문 근거를 보존했습니다. 지식 항목·관계·검색 색인은 변경하지 않았습니다.")
+            return {"state": "complete", "run_id": run_id, "manifest": manifest_name, "sha256": sha}
 
     @staticmethod
     def _event(db, run_id, target_id, stage, *, document_id=None, version=None, **details):

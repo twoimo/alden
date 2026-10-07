@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from alden_collection import CollectionStore, TargetBusy, identity, read_action
+from alden_collect import capture_source, collect_target
 
 
 class CollectionTests(unittest.TestCase):
@@ -248,6 +249,75 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(self.store.recent_events(projects=["one"])["items"][0]["stage"], "paused")
         with self.store.database() as db:
             self.assertEqual(db.execute("SELECT state FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()[0], "paused")
+
+    def source_target(self):
+        path = self.store.root.parent.parent / "source.json"
+        raw = b'{\r\n  "nodes": [ {"id": "A/B", "label": "\\uC6D0\\uBB38", "summary": "  keep  spaces "} ],\r\n  "edges": []\r\n}\r\n'
+        path.write_bytes(raw)
+        target = self.store.register(platform="graph", original_id="public-source", kind="graph", label="source",
+                                     projects=["one"], config={"adapter": "source-graph", "path": str(path)})
+        collect_target(self.store, target)
+        return target, path, raw
+
+    def test_source_capture_preserves_exact_file_bytes_and_replays_record_pointer(self):
+        target, path, raw = self.source_target()
+        before = self.store.graph(projects=["one"])
+        result = capture_source(self.store, target)
+        folder = self.store.root / "source-captures"
+        manifest = json.loads((folder / result["manifest"]).read_bytes())
+        self.assertEqual((folder / manifest["source_file"]).read_bytes(), raw)
+        self.assertEqual(path.read_bytes(), raw)
+        self.assertEqual(before, self.store.graph(projects=["one"]))
+        self.assertEqual(manifest["records"][0]["json_pointer"], "/nodes/0")
+        self.assertEqual(manifest["records"][0]["version"], before["nodes"][0]["source_version"])
+        cursor = json.loads(self.store.target(target)["cursor"])
+        self.assertEqual(cursor["source_capture"]["sha256"], result["sha256"])
+        with self.store.database() as db:
+            counts = [db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0] for table in ["runs", "events", "versions"]]
+        replay = capture_source(self.store, target)
+        self.assertEqual(replay["state"], "unchanged")
+        with self.store.database() as db:
+            self.assertEqual(counts, [db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0] for table in ["runs", "events", "versions"]])
+
+    def test_changed_source_capture_does_not_overwrite_projection_checkpoint(self):
+        target, path, _ = self.source_target()
+        before = self.store.target(target)["cursor"]
+        path.write_text('{"nodes":[],"edges":[]}')
+        with self.assertRaisesRegex(RuntimeError, "collection_source_revision_changed"):
+            capture_source(self.store, target)
+        self.assertEqual(self.store.target(target)["cursor"], before)
+        self.assertFalse((self.store.root / "source-captures").exists())
+
+    def test_source_capture_rejects_projection_mismatch_and_cancellation(self):
+        target, _, _ = self.source_target()
+        cursor = json.loads(self.store.target(target)["cursor"])
+        self.store.ingest(target, [{"platform": "graph", "original_id": "public-source:node:A/B",
+                                   "label": "changed", "text": "unrelated content"}], cursor=cursor)
+        with self.assertRaisesRegex(RuntimeError, "collection_source_projection_changed"):
+            capture_source(self.store, target)
+        with self.assertRaisesRegex(RuntimeError, "collection_cancelled"):
+            capture_source(self.store, target, cancelled=lambda: True)
+        self.assertFalse((self.store.root / "source-captures").exists())
+
+    def test_source_capture_checks_scope_before_opening_the_file(self):
+        target, path, _ = self.source_target()
+        with self.store.database() as db:
+            db.execute("UPDATE target_projects SET permission='denied' WHERE target_id=?", (target,))
+        path.unlink()
+        with self.assertRaisesRegex(ValueError, "collection_source_scope_denied"):
+            capture_source(self.store, target)
+
+    def test_same_permitted_export_reuses_receipt_despite_changed_origin_snapshot_header(self):
+        target, _, raw = self.source_target()
+        first = capture_source(self.store, target)
+        folder = self.store.root / "source-captures"
+        manifest = json.loads((folder / first["manifest"]).read_text())
+        with self.store.database() as db:before = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        manifest["current_origin_snapshot_sha256"] = "changed-header-observation"
+        replay = self.store.retain_source_capture(target, raw, manifest, expected_cursor=self.store.target(target)["cursor"])
+        self.assertEqual(replay["state"], "unchanged")
+        self.assertEqual(replay["manifest"], first["manifest"])
+        with self.store.database() as db:self.assertEqual(before, db.execute("SELECT COUNT(*) FROM events").fetchone()[0])
 
 
 if __name__ == "__main__":
