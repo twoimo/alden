@@ -31,6 +31,10 @@ def measure(wav: Path, *, cancel_after: float | None = None, barge_in: bool = Fa
     vad = webrtcvad.Vad(2)
     observations, errors = [], []
     stop_at = completed_at = None
+    first_output_at = None
+    input_reason = ""
+    output_rms_max = 0.0
+    nonzero_output_samples = 0
     old_turn = None
     pipeline = None
     with TemporaryDirectory(prefix="alden-audio-owned-") as temp:
@@ -39,6 +43,9 @@ def measure(wav: Path, *, cancel_after: float | None = None, barge_in: bool = Fa
         with MacVoiceAudio() as audio:
             ready = time.monotonic()
             poller = _MicrophoneFramePoller(audio, stale_seconds=3)
+            input_reason = audio.input_blocked_reason
+            if barge_in and input_reason:
+                raise RuntimeError(input_reason)
             worker = None
 
             def play(playback_token=token):
@@ -69,10 +76,21 @@ def measure(wav: Path, *, cancel_after: float | None = None, barge_in: bool = Fa
                 deadline = ready + len(samples) / 24_000 + 1
                 while time.monotonic() < deadline:
                     now = time.monotonic()
-                    if cancel_after is not None and stop_at is None and now - ready >= cancel_after:
+                    # Output/cancellation remain testable while built-in input
+                    # is physically disconnected. Never qualify echo/near-end
+                    # behavior from a disconnected microphone's zero buffers.
+                    input_reason = audio.input_blocked_reason
+                    if pipeline is not None and input_reason:
+                        errors.append(input_reason); token.cancel(); break
+                    frame = None if input_reason else poller.poll()
+                    output_rms = audio.output_rms
+                    if output_rms > 0 and first_output_at is None:
+                        first_output_at = now
+                    output_rms_max = max(output_rms_max, output_rms)
+                    nonzero_output_samples += int(output_rms > 0)
+                    if cancel_after is not None and stop_at is None and first_output_at is not None and now - first_output_at >= cancel_after:
                         stop_at = now
                         token.cancel()
-                    frame = poller.poll()
                     if frame:
                         pcm, overflow = frame
                         rms, speech = OpenWakeVadFrontend._rms(pcm), vad.is_speech(pcm, 16_000)
@@ -99,19 +117,25 @@ def measure(wav: Path, *, cancel_after: float | None = None, barge_in: bool = Fa
                     if worker.is_alive():
                         raise RuntimeError("owned playback did not unwind")
     return {
-        "schema": "alden-native-audio-playback-v1", "ok": not errors,
+        "schema": "alden-native-audio-playback-v2", "ok": not errors and nonzero_output_samples > 0 and (cancel_after is None or stop_at is not None),
         "startup_seconds": ready - started, "duration_seconds": time.monotonic() - ready,
         "reference_sha256": hashlib.sha256(wav.read_bytes()).hexdigest(),
         "reference_seconds": len(samples) / 24_000, "frames": len(observations),
         "rms_max": max((row[0] for row in observations), default=None),
         "vad_speech_frames": sum(int(row[1]) for row in observations),
         "overflow_frames": sum(int(row[2]) for row in observations), "echo_processed": processed,
+        "input_blocked_reason": input_reason,
+        "input_activity_present": any(row[0] > 0 for row in observations),
+        "echo_reingestion_qualified": False,
+        "output_rms_max": output_rms_max, "nonzero_output_samples": nonzero_output_samples,
+        "first_rendered_output_seconds": None if first_output_at is None else first_output_at - ready,
+        "cancel_anchor": "first measured rendered output",
         "cancel_after_seconds": cancel_after,
         "hardware_barge_in_requested": barge_in,
         "hardware_barge_in_detected": barge_in and stop_at is not None,
         "cancel_waiter_ms": None if stop_at is None or completed_at is None else (completed_at - stop_at) * 1000,
         "errors": errors, "raw_audio_saved": False, "model_calls": 0,
-        "limits": ["Synthetic recorded reference, not current STT/LLM/TTS generation",
+        "limits": ["Recorded bounded reference; model generation is measured separately",
                    "Near-end speech and intelligibility remain unverified by VAD alone or zero input",
                    "Waiter cancellation is not an acoustic speaker-tail latency measurement"],
     }
@@ -131,7 +155,7 @@ def main() -> None:
     report = measure(args.wav, cancel_after=args.cancel_after, barge_in=args.barge_in)
     report["source_sha256"] = {
         str(relative): hashlib.sha256((Path(__file__).resolve().parents[1] / relative).read_bytes()).hexdigest()
-        for relative in ["scripts/alden_voice.py", "scripts/libalden_audio.dylib", "voice/native/alden_audio.swift"]
+        for relative in ["scripts/alden_voice.py", "scripts/libalden_audio.dylib", "voice/native/alden_audio.swift", "voice/native/input_availability.swift"]
     }
     args.output.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(report, ensure_ascii=False))

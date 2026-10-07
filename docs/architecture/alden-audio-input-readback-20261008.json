@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "version": "0.3.33",
+  "state": "source_and_real_candidate_audio_verified",
+  "microphone_authorization": 3,
+  "default_input_builtin": true,
+  "lid_closed_observed": true,
+  "baseline": { "frames": 51, "rms_max": 0, "overflow_frames": 0, "usable_human_input_verified": false },
+  "candidate": { "abi": 3, "hardware_block_classified": true, "blocked_frame_consumption_rejected": true, "normal_playback_trials": 3, "rendered_output_rms_max": 0.17597352 },
+  "tts_reference": { "model": "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "revision": "0c0e3051f131929182e2c023b9537f8b1c68adfe", "precision": "bf16", "speaker": "sohee", "device": "mps", "rate_hz": 24000, "seconds": 2.96, "generation_seconds": 16.86869, "generation_samples": 1 },
+  "qualified_cancellation": { "anchor": "first positive rendered output plus 0.4s", "waiter_delays_ms": [1.832, 2.45379, 8.70650], "n": 3, "median_ms": 2.45379, "max_ms": 8.70650, "acoustic_tail_measured": false },
+  "tests": { "voice_passed": 58, "ui_passed": 385, "desktop_rust_passed": 108, "clippy_passed": true, "native_input_cases": 6, "offline_dsp_windows": 7, "offline_dsp_mismatches": 0 },
+  "raw_microphone_data_saved": false,
+  "human_barge_in_verified": false,
+  "self_echo_qualified": false,
+  "full_goal_completed": false
+}

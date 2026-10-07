@@ -260,6 +260,13 @@ jobs:
         working-directory: desktop
         run: npm run build
 
+      - name: Test native microphone qualification and offline playback envelope
+        run: |
+          xcrun swiftc -swift-version 5 -framework AVFoundation -framework CoreAudio \
+            voice/native/input_availability.swift voice/native/playback_envelope.swift \
+            voice/native/tests/main.swift -o "$RUNNER_TEMP/alden-audio-native-tests"
+          "$RUNNER_TEMP/alden-audio-native-tests"
+
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:

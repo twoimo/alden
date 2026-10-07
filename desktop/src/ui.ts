@@ -18,6 +18,12 @@ export function voiceErrorMessage(errorCode: string | null): string | null {
       return "‘올든’을 알아듣는 기능이 준비되지 않아 음성 입력을 시작하지 않았습니다.";
     case "mic_disconnected":
       return "마이크를 사용할 수 없습니다. 연결을 확인해 주세요.";
+    case "mic_hardware_lid_closed":
+      return "내장 마이크를 사용하려면 맥북 덮개를 열거나 외장 마이크를 연결해 주세요.";
+    case "mic_input_route_changed":
+      return "마이크가 바뀌어 듣기를 멈췄습니다. 다시 시작해 주세요.";
+    case "mic_input_state_unverified":
+      return "마이크 상태를 확인할 수 없어 듣기를 시작하지 않았습니다.";
     case "mic_unavailable":
       return "마이크를 열 수 없습니다. 연결 상태를 확인해 주세요.";
     case "mic_access_required":

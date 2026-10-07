@@ -449,13 +449,14 @@ class MacVoiceAudio:
         self._library = _load_voice_audio_library()
         abi = self._library.alden_audio_abi
         abi.argtypes, abi.restype = [], ctypes.c_int32
-        if abi() != 2:
+        if abi() != 3:
             raise RuntimeError("voice_audio_abi_unsupported")
         signatures = {
             "abi": ([], ctypes.c_int32), "permission": ([], ctypes.c_int32),
             "request_permission": ([], None),
             "create": ([], ctypes.c_void_p), "start": ([ctypes.c_void_p], ctypes.c_int32),
             "processed": ([ctypes.c_void_p], ctypes.c_int32),
+            "input_status": ([ctypes.c_void_p], ctypes.c_int32),
             "available": ([ctypes.c_void_p], ctypes.c_int32),
             "dropped": ([ctypes.c_void_p], ctypes.c_uint64),
             "read": ([ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int32], ctypes.c_int32),
@@ -530,6 +531,15 @@ class MacVoiceAudio:
     @property
     def active(self) -> bool:
         return self.echo_processed
+
+    @property
+    def input_blocked_reason(self) -> str:
+        with self._lock:
+            if self._handle is None:
+                return "mic_disconnected"
+            status = self._library.alden_audio_input_status(self._handle)
+        return {0: "", 1: "mic_hardware_lid_closed", 2: "mic_input_route_changed",
+                3: "mic_input_state_unverified"}.get(status, "mic_input_state_unverified")
 
     @property
     def read_available(self) -> int:
@@ -1064,8 +1074,9 @@ class AldenVoicePipeline:
             self._publish(error_code)
             return VoiceResult(state=state, error_code=error_code, transcript=self._transcript, reply=self._reply, conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version, cancelled=state == VoiceState.ABORTED)
 
-    def mic_disconnected(self) -> VoiceResult:
-        return self._end(VoiceState.ERROR, "mic_disconnected")
+    def mic_disconnected(self, reason: str = "mic_disconnected") -> VoiceResult:
+        code = reason if reason in {"mic_hardware_lid_closed", "mic_input_route_changed", "mic_input_state_unverified"} else "mic_disconnected"
+        return self._end(VoiceState.ERROR, code)
 
     def mic_unavailable(self) -> VoiceResult:
         return self._end(VoiceState.ERROR, "mic_unavailable")
@@ -2203,6 +2214,9 @@ class _MicrophoneFramePoller:
 
     def poll(self) -> tuple[bytes, bool] | None:
         try:
+            reason = getattr(self.stream, "input_blocked_reason", "")
+            if reason:
+                raise _MicrophoneDisconnected(reason)
             if not bool(self.stream.active):
                 raise _MicrophoneDisconnected("microphone stream is inactive")
             available = int(self.stream.read_available)
@@ -2268,7 +2282,6 @@ def run_microphone_session(
         if (not manual_listen and (selected is None or (custom_wake_model is not None and custom_wake_model != selected))) or (manual_listen and custom_wake_model is not None):
             return pipeline._end(VoiceState.ERROR, "alden_wake_model_unavailable")
         pipeline._custom_model_selected = selected is not None
-        pipeline._publish()
         frontend = OpenWakeVadFrontend(custom_wake_model=selected)
         # One echo-processing engine owns both input and TTS output. Input
         # polling remains independent of the single inference worker.
@@ -2281,8 +2294,13 @@ def run_microphone_session(
                 stream_entered = True
                 pipeline.tts.audio_backend = stream
                 pipeline._echo_processed_microphone = stream.echo_processed
+                reason = getattr(stream, "input_blocked_reason", "")
+                if reason:
+                    return pipeline.mic_disconnected(reason)
                 if manual_listen:
                     pipeline.begin_manual_listening()
+                else:
+                    pipeline._publish()
                 poller = _MicrophoneFramePoller(stream)
                 while True:
                     if parent_pid is not None and os.getppid() != parent_pid:
@@ -2298,8 +2316,8 @@ def run_microphone_session(
                             return completed
                     try:
                         polled = poller.poll()
-                    except _MicrophoneDisconnected:
-                        return pipeline.mic_disconnected()
+                    except _MicrophoneDisconnected as error:
+                        return pipeline.mic_disconnected(str(error))
                     if polled is None:
                         if pipeline.state in {VoiceState.WAKE_LISTEN, VoiceState.SPEAKING}:
                             pipeline._publish()

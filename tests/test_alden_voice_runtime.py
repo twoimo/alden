@@ -372,6 +372,15 @@ class FakeStream:
 
 
 class MicrophoneFramePollerTests(unittest.TestCase):
+    def test_hardware_block_or_route_change_cannot_be_consumed_as_silent_usable_input(self) -> None:
+        for reason in ("mic_hardware_lid_closed", "mic_input_route_changed", "mic_input_state_unverified"):
+            stream = FakeStream(available=VOICE_MIC_FRAME_SAMPLES)
+            stream.input_blocked_reason = reason
+            with self.assertRaisesRegex(_MicrophoneDisconnected, reason):
+                _MicrophoneFramePoller(stream).poll()
+            self.assertEqual(stream.read_calls, 0)
+            self.assertEqual(stream.availability_checks, 0)
+
     def test_idle_poll_checks_availability_without_blocking_read(self) -> None:
         clock = FakeClock(10.0)
         stream = FakeStream(available=0)
@@ -451,6 +460,15 @@ class VoiceStatusStoreTests(unittest.TestCase):
 
 
 class MicrophoneSessionErrorTests(unittest.TestCase):
+    def test_hardware_disconnected_builtin_input_cannot_start_listening(self) -> None:
+        stream = FakeStream(available=VOICE_MIC_FRAME_SAMPLES)
+        stream.input_blocked_reason = "mic_hardware_lid_closed"
+        stream.echo_processed = True
+        result = self._run_with_stream_factory(lambda: stream)
+        self.assertEqual(result.state, VoiceState.ERROR)
+        self.assertEqual(result.error_code, "mic_hardware_lid_closed")
+        self.assertEqual(stream.read_calls, 0)
+
     @staticmethod
     def _run_with_stream_factory(factory: object):
         with TemporaryDirectory() as temp_dir, mock.patch.dict(

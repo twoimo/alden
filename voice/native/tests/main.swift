@@ -1,5 +1,13 @@
 // Actual AVAudioPlayerNode clock / PCM integration, with no device or microphone.
 import AVFoundation
+import CoreAudio
+
+precondition(microphoneInputStatus(transport: kAudioDeviceTransportTypeBuiltIn, lidClosed: true, routeChanged: false) == 1)
+precondition(microphoneInputStatus(transport: kAudioDeviceTransportTypeBuiltIn, lidClosed: false, routeChanged: false) == 0)
+precondition(microphoneInputStatus(transport: kAudioDeviceTransportTypeUSB, lidClosed: true, routeChanged: false) == 0)
+precondition(microphoneInputStatus(transport: nil, lidClosed: false, routeChanged: false) == 3)
+precondition(microphoneInputStatus(transport: kAudioDeviceTransportTypeBuiltIn, lidClosed: nil, routeChanged: false) == 3)
+precondition(microphoneInputStatus(transport: kAudioDeviceTransportTypeBuiltIn, lidClosed: false, routeChanged: true) == 2)
 import Foundation
 
 func render(_ input: AVAudioPCMBuffer, name: String) throws -> [String: Any] {

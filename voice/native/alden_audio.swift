@@ -3,6 +3,31 @@
 import AVFoundation
 import Foundation
 import Darwin
+import CoreAudio
+import IOKit
+
+private func defaultInputInfo() -> (AudioDeviceID, UInt32)? {
+    var device = AudioDeviceID(0)
+    var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+    var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+    guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device) == noErr,
+          device != kAudioObjectUnknown else { return nil }
+    var transport: UInt32 = 0
+    address.mSelector = kAudioDevicePropertyTransportType
+    size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr else { return nil }
+    return (device, transport)
+}
+
+private func clamshellClosed() -> Bool? {
+    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+    guard service != 0 else { return nil }
+    defer { IOObjectRelease(service) }
+    guard let value = IORegistryEntryCreateCFProperty(service, "AppleClamshellState" as CFString,
+        kCFAllocatorDefault, 0)?.takeRetainedValue() as? Bool else { return nil }
+    return value
+}
 
 private final class VoiceAudio {
     let engine = AVAudioEngine()
@@ -19,11 +44,15 @@ private final class VoiceAudio {
     var generation: UInt64 = 0
     var playing: UInt64 = 0
     var playbackEnvelope: PlaybackEnvelope?
+    var inputDevice: AudioDeviceID?
+    var inputCheckedAt = -Double.infinity
+    var cachedInputStatus: Int32 = 3
 
     func start() -> Int32 {
         // Do not request permission or show an OS dialog from a background probe.
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return -3 }
         do {
+            inputDevice = defaultInputInfo()?.0
             // Establish the render graph before switching the duplex I/O unit.
             // Switching first makes output-node initialization fail on this Mac.
             engine.attach(player)
@@ -117,6 +146,20 @@ private final class VoiceAudio {
             && !engine.inputNode.isVoiceProcessingBypassed && !engine.inputNode.isVoiceProcessingInputMuted
     }
 
+    func inputStatus() -> Int32 {
+        let now = ProcessInfo.processInfo.systemUptime
+        state.lock()
+        if now - inputCheckedAt < 1 { let status = cachedInputStatus; state.unlock(); return status }
+        state.unlock()
+        let info = defaultInputInfo()
+        let changed = inputDevice != nil && info != nil && inputDevice != info?.0
+        let status = microphoneInputStatus(transport: info?.1,
+            lidClosed: info?.1 == kAudioDeviceTransportTypeBuiltIn ? clamshellClosed() : nil,
+            routeChanged: changed)
+        state.lock(); inputCheckedAt = now; cachedInputStatus = status; state.unlock()
+        return status
+    }
+
     func play(_ samples: UnsafePointer<Float>, frames: Int, rate: Double) -> UInt64 {
         guard frames > 0, rate == 24_000, frames <= 2_880_000,
               let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1),
@@ -188,7 +231,10 @@ private func audio(_ pointer: UnsafeMutableRawPointer) -> VoiceAudio {
     Unmanaged<VoiceAudio>.fromOpaque(pointer).takeUnretainedValue()
 }
 
-@_cdecl("alden_audio_abi") public func audioABI() -> Int32 { 2 }
+@_cdecl("alden_audio_abi") public func audioABI() -> Int32 { 3 }
+@_cdecl("alden_audio_input_status") public func audioInputStatus(_ pointer: UnsafeMutableRawPointer) -> Int32 {
+    audio(pointer).inputStatus()
+}
 @_cdecl("alden_audio_permission") public func audioPermission() -> Int32 {
     Int32(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)
 }

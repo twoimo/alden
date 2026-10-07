@@ -132,7 +132,7 @@ class BargeInTests(unittest.TestCase):
 
 
 def native_library():
-    values = {"abi": 2, "permission": 3, "create": 7, "start": 0, "processed": 1,
+    values = {"abi": 3, "permission": 3, "create": 7, "start": 0, "processed": 1, "input_status": 0,
               "available": 640, "dropped": 0, "read": 640, "play": 17, "playing": 0,
               "cancel": None, "destroy": None, "request_permission": None, "output_rms": 0.0}
     return SimpleNamespace(**{"alden_audio_" + name: Mock(return_value=value) for name, value in values.items()})
@@ -286,6 +286,8 @@ class AudioMeasurementCleanupTests(unittest.TestCase):
                 pipelines = []
 
                 class FakeAudio:
+                    input_blocked_reason = ""
+                    output_rms = 0.0
                     echo_processed = True
                     def __enter__(self): return self
                     def __exit__(self, *_args):

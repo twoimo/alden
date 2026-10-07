@@ -8,7 +8,8 @@ trap 'rm -f "$TASK_TEMP"' EXIT HUP INT TERM
 /usr/bin/xcrun swiftc -swift-version 5 -O -emit-library \
   -target arm64-apple-macosx13.0 -module-name AldenVoiceAudio \
   -Xlinker -install_name -Xlinker @rpath/libalden_audio.dylib \
-  -framework AVFoundation \
+  -framework AVFoundation -framework CoreAudio -framework IOKit \
+  "$TASK_ROOT/voice/native/input_availability.swift" \
   "$TASK_ROOT/voice/native/playback_envelope.swift" \
   "$TASK_ROOT/voice/native/alden_audio.swift" -o "$TASK_TEMP"
 /usr/bin/codesign --force --sign - --identifier com.openkakao.alden.voice-audio "$TASK_TEMP"
