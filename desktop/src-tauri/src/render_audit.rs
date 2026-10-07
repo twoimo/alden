@@ -387,6 +387,12 @@ fn rendered_since(value: &Value, before: u64) -> bool {
     value["ready"] == true && count(value) > before && value["canvas"]["contextLost"] == false
 }
 
+fn resumed_graph(value: &Value, before: u64) -> bool {
+    rendered_since(value, before)
+        && (value["navigation"]["source"] != "collection"
+            || value["activityJournal"]["active"] == true)
+}
+
 fn fresh_pause(state: &Value, previous: f64) -> bool {
     state["loop"]["running"] == false
         && state["loop"]["pendingFrame"] == false
@@ -949,14 +955,23 @@ fn audit_settings(
         let show_baseline = count(&collect_script(&window, GRAPH_COLLECT.into(), deadline)?);
         visibility(&window, true, deadline)?;
         let resume_deadline = Instant::now() + Duration::from_secs(2);
+        let mut visible_since = None;
         let before = loop {
             let sample = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
-            if rendered_since(&sample, show_baseline) || Instant::now() >= resume_deadline {
+            // A queued DOM hide can follow the first resumed frame. Observe a
+            // stable active consumer before measuring a new native hide note.
+            if resumed_graph(&sample, show_baseline) && window.is_visible().ok() == Some(true) {
+                let started = visible_since.get_or_insert_with(Instant::now);
+                if started.elapsed() >= Duration::from_millis(100) { break sample; }
+            } else { visible_since = None; }
+            if Instant::now() >= resume_deadline {
                 break sample;
             }
             std::thread::sleep(Duration::from_millis(25));
         };
-        if !rendered_since(&before, show_baseline) || window.is_visible().ok() != Some(true) {
+        if !resumed_graph(&before, show_baseline)
+            || !visible_since.is_some_and(|at| at.elapsed() >= Duration::from_millis(100))
+            || window.is_visible().ok() != Some(true) {
             return Err(format!(
                 "settings graph did not draw before notification: {before}"
             ));
@@ -1289,6 +1304,16 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn resumed_collection_requires_its_visible_consumer_not_only_an_old_frame() {
+        let mut state = serde_json::json!({"ready":true,"renderCount":11,"canvas":{"contextLost":false},
+            "navigation":{"source":"collection"},"activityJournal":{"active":false}});
+        assert!(super::rendered_since(&state, 10));
+        assert!(!super::resumed_graph(&state, 10));
+        state["activityJournal"]["active"] = serde_json::json!(true);
+        assert!(super::resumed_graph(&state, 10));
+        assert!(!super::resumed_graph(&state, 11));
+    }
     use super::*;
     #[test]
     fn workspace_capture_admits_reads_but_never_commands() {
