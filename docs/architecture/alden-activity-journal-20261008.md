@@ -1,0 +1,11 @@
+# Committed collection activity boundary
+
+The read-only `collection-graph` action accepts an `activity: true` request with permitted projects, optional target/platform, an opaque `stream_id`, an `after` sequence and a page budget up to200. It reads the existing collection journal within one consistent transaction. It does not create a store, change permissions, migrate data, infer relationships or call a model.
+
+The response advances its cursor across all permitted stages, including skipped stages. Only a `stored` event for an actual document/version, from a completed run, with `change` equal to `added` or `revised` becomes an activity candidate. Each candidate carries event/sequence, source target, document/version, source run/origin, timestamp and explicit success. Unchanged records, evidence-only receipts, parsing/validation/indexing stages, failed/paused runs and denied targets do not become candidates.
+
+Initial attachment, an unknown/replaced journal, cursor rollback and missing earlier history return `reset: true`, no candidates and a current baseline cursor. A consumer must refresh its permitted graph snapshot and establish that checkpoint. It must not animate historical data as a new save. The generation derives from the stored first event; pruning that event deliberately forces resynchronization.
+
+Verification:27 collection contracts passed. Tests cover source/version/origin lineage, unchanged and denied records, skipped-stage keyset pagination, replay without candidates, replacement/rewind/pruning, and invalid cursors. The actual source store baseline was133115 with zero historical candidates; an unchanged resume had zero candidates and the same cursor. The first observed read was597.88ms(n=1); no general latency or quota improvement is claimed. That private read produced no graph/index/source changes.
+
+This is a backend contract in the development source. The installed app remains0.3.30. It is not yet connected to visible3D activity, and it does not prove freshness/decay, visible-ID/version fencing, permission-change UI recovery, consumer cursors, retention recovery, model-context usage, relationship traversal or physics quality. Those consumer and installed end-to-end gates remain required by the full Alden objective.

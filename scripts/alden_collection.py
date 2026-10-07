@@ -737,6 +737,52 @@ class CollectionStore:
             return {"ok": True, "items": items, "next": items[-1]["sequence"] if len(rows)>limit else None,
                     "cursor": items[-1]["sequence"] if after is not None and items else after}
 
+    def activity_page(self, *, projects: list[str], after=None, stream_id=None, limit=200,
+                      target_id=None, platform=None) -> dict:
+        """Committed journal receipts, never inferred knowledge/model activity.
+
+        The cursor advances over every permitted stage. Only actual changed
+        records from completed runs become visual candidates. A baseline or
+        replaced/rewound journal requires a graph snapshot, not old pulses.
+        """
+        if (type(limit) is not int or not 1 <= limit <= 200
+            or after is not None and (type(after) is not int or after < 0)
+            or stream_id is not None and (not isinstance(stream_id, str) or len(stream_id) > 128)):
+            raise ValueError("collection_activity_cursor_invalid")
+        if target_id is not None and (not isinstance(target_id, str) or len(target_id) > 256):
+            raise ValueError("collection_graph_filter_invalid")
+        if platform is not None and platform not in {"youtube", "threads", "files", "graph"}:
+            raise ValueError("collection_platform_invalid")
+        with self.database() as db:
+            first = db.execute("SELECT event_id FROM events ORDER BY sequence LIMIT 1").fetchone()
+            generation = identity("stream", str(SCHEMA) + ":" + (first[0] if first else "empty"))
+            marks = ",".join("?" for _ in projects) or "NULL"
+            where = """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id
+              AND p.permission!='denied' AND p.project IN (""" + marks + """))
+              AND (? IS NULL OR e.target_id=?) AND (? IS NULL OR t.platform=?)"""
+            args = [*projects, target_id, target_id, platform, platform]
+            earliest, latest = db.execute("SELECT COALESCE(MIN(e.sequence),0),COALESCE(MAX(e.sequence),0) FROM events e JOIN targets t ON t.id=e.target_id WHERE " + where, args).fetchone()
+            reset = (after is None or stream_id != generation or after > latest
+                     or earliest > 0 and after < earliest-1)
+            if reset:
+                return {"ok": True, "items": [], "cursor": latest, "latest": latest,
+                        "stream_id": generation, "reset": True, "has_more": False}
+            rows = db.execute("""SELECT e.*,r.origin,r.state AS run_state FROM events e
+              JOIN targets t ON t.id=e.target_id JOIN runs r ON r.id=e.run_id WHERE """ + where +
+              " AND e.sequence>? ORDER BY e.sequence LIMIT ?", (*args, after, limit+1)).fetchall()
+            items = []
+            for row in rows[:limit]:
+                details = json.loads(row["details"])
+                if (row["stage"] != "stored" or row["run_state"] != "complete"
+                    or not row["document_id"] or details.get("change") not in {"added", "revised"}):
+                    continue
+                items.append({"sequence": row["sequence"], "event_id": row["event_id"],
+                              "document_id": row["document_id"], "version": row["version"],
+                              "at": row["at"], "target_id": row["target_id"], "run_id": row["run_id"],
+                              "origin": row["origin"], "kind": details["change"], "success": True})
+            return {"ok": True, "items": items, "cursor": rows[min(len(rows),limit)-1]["sequence"] if rows else after,
+                    "latest": latest, "stream_id": generation, "reset": False, "has_more": len(rows)>limit}
+
 
 def read_action(state_root: Path, action: str, query: str | None = None) -> dict:
     """Bounded read-only application boundary; never creates a store on lookup."""
@@ -764,6 +810,9 @@ def read_action(state_root: Path, action: str, query: str | None = None) -> dict
         result["targets"] = store.targets(projects)
         return result
     if action == "collection-graph":
+        if options.get("activity") is True:
+            return store.activity_page(projects=projects, after=options.get("after"), stream_id=options.get("stream_id"),
+                                       limit=options.get("limit",200), target_id=options.get("target_id"), platform=options.get("platform"))
         return store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
                                 focus=options.get("focus"), hops=options.get("hops",1), query=str(options.get("search", ""))[:256],
                                 target_id=options.get("target_id"), platform=options.get("platform"),

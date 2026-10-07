@@ -250,6 +250,57 @@ class CollectionTests(unittest.TestCase):
             self.assertEqual(root["degree"], 3)
             self.assertTrue(all(e["source"] in {n["id"] for n in page["nodes"]} and e["target"] in {n["id"] for n in page["nodes"]} for e in page["edges"]))
 
+    def test_activity_baseline_and_committed_changes_keep_origin_and_version(self):
+        target = self.target()
+        self.store.ingest(target, [self.record()], origin="first-collector")
+        baseline = self.store.activity_page(projects=["one"])
+        self.assertTrue(baseline["reset"])
+        self.assertEqual(baseline["items"], [])
+        self.store.ingest(target, [self.record(text="개정 내용")], origin="revision-collector")
+        page = self.store.activity_page(projects=["one"], after=baseline["cursor"], stream_id=baseline["stream_id"])
+        self.assertFalse(page["reset"])
+        self.assertEqual(len(page["items"]), 1)
+        item = page["items"][0]
+        self.assertEqual(item["document_id"], identity("youtube", "AbC"))
+        self.assertEqual(item["kind"], "revised")
+        self.assertEqual(item["origin"], "revision-collector")
+        self.assertTrue(item["success"])
+        self.assertEqual(item["version"], self.store.graph_page(projects=["one"])["nodes"][0]["source_version"])
+        self.assertEqual(self.store.activity_page(projects=["one"], after=page["cursor"], stream_id=page["stream_id"])["items"], [])
+
+    def test_activity_pages_advance_over_skipped_stages_and_never_emit_unchanged_or_denied(self):
+        target, hidden = self.target(), self.target("hidden", "one", permission="denied")
+        self.store.ingest(target, [self.record()])
+        baseline = self.store.activity_page(projects=["one"])
+        self.store.ingest(hidden, [self.record("secret")])
+        self.store.ingest(target, [self.record()])
+        after = baseline["cursor"]
+        count = 0
+        while True:
+            page = self.store.activity_page(projects=["one"], after=after, stream_id=baseline["stream_id"], limit=2)
+            self.assertEqual(page["items"], [])
+            self.assertFalse(page["reset"])
+            self.assertGreater(page["cursor"], after)
+            after = page["cursor"];count += 1
+            if not page["has_more"]:break
+            self.assertLess(count, 5)
+        self.assertEqual(count, 3)
+
+    def test_activity_journal_replacement_and_rewind_require_snapshot_without_old_pulses(self):
+        target = self.target();self.store.ingest(target, [self.record()])
+        baseline = self.store.activity_page(projects=["one"])
+        for options in [{"stream_id": "different-stream", "after": baseline["cursor"]},
+                        {"stream_id": baseline["stream_id"], "after": baseline["cursor"]+10}]:
+            page = self.store.activity_page(projects=["one"], **options)
+            self.assertTrue(page["reset"])
+            self.assertEqual(page["items"], [])
+        with self.store.database() as db:db.execute("DELETE FROM events WHERE sequence<=2")
+        pruned = self.store.activity_page(projects=["one"], after=0, stream_id=baseline["stream_id"])
+        self.assertTrue(pruned["reset"])
+        self.assertEqual(pruned["items"], [])
+        for invalid in [{"after": True}, {"after": -1}, {"limit": 201}, {"stream_id": []}]:
+            with self.assertRaises(ValueError):self.store.activity_page(projects=["one"], **invalid)
+
     def test_history_forward_reconnect_recovers_more_than_one_page_without_duplicates(self):
         target = self.target()
         self.store.ingest(target, [self.record(str(i)) for i in range(25)])
