@@ -1,0 +1,12 @@
+{
+  "nodes": 26622,
+  "relations": 48355,
+  "orphan_relations": 0,
+  "scope": [
+    "career",
+    "sparkuniverse",
+    "jangsin",
+    "youtube-tzuyang"
+  ],
+  "source_identity_correction": "YouTube 쯔양 is a distinct source/project, not Tzudong; original source bytes/IDs unchanged"
+}
