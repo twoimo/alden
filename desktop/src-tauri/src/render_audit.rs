@@ -970,7 +970,7 @@ fn audit_settings(
             std::thread::sleep(Duration::from_millis(25));
         };
         if !resumed_graph(&before, show_baseline)
-            || !visible_since.is_some_and(|at| at.elapsed() >= Duration::from_millis(100))
+            || visible_since.is_none_or(|at| at.elapsed() < Duration::from_millis(100))
             || window.is_visible().ok() != Some(true) {
             return Err(format!(
                 "settings graph did not draw before notification: {before}"

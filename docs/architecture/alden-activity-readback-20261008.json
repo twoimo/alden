@@ -7,7 +7,9 @@
   "tests": {
     "ui_passed": 385,
     "collection_passed": 29,
-    "native_audit_passed": 9
+    "native_audit_passed": 9,
+    "desktop_suite_passed": 108,
+    "desktop_clippy_passed": true
   },
   "controlled_native": {
     "success": true,
@@ -55,5 +57,14 @@
     "captured_workspace_views": 14,
     "reason": "synthetic hide note could not distinguish prior paused timestamp after first resumed frame; observed loop and activity consumer stopped",
     "repair": "require consumer active with a new rendered frame for 100ms before issuing the hide note; stale timestamps remain rejected"
+  },
+  "candidate_at_2efc7cd": {
+    "success": true,
+    "version": "0.3.31",
+    "source_commit": "2efc7cd5944b36687045e2904faa27a19186a6e6",
+    "workspace_views": 14,
+    "source_read_confirmed": true,
+    "hidden_render_delta": 0,
+    "scope": "owned native read-only window; compact legend clipping found by visual inspection and repaired afterwards; current delivery report remains separate"
   }
 }
