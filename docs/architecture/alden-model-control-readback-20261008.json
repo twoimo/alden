@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "version": "0.3.32",
+  "state": "source_and_actual_controlled_runtime",
+  "installed_mlx_serve_version": "26.10.1",
+  "focused_tests_passed": 126,
+  "control_protocol": { "load": "/v1/load-model", "unload": "/v1/unload-model", "model_in_json": true, "changes_server_default": false },
+  "actual_27b_unload_restore": { "passed": true, "request_admission_exclusive": true, "inference_idle_confirmed": true, "free_bytes_before": 46024802304, "free_bytes_after_unload": 65664188416 },
+  "flash_next_iq": { "loaded": false, "generation_tested": false, "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw", "required_free_gb_backend_report": 57.6, "available_gb_after_unload": 49.64, "available_gb_after_owned_server_stop": 49.33, "memory_preflight_bypassed": false, "local_weight_revision_reverified": false },
+  "restoration": { "same_model_and_command": true, "original_server_pid": 6464, "restored_server_pid": 63062, "configs_unchanged": 3, "embedding_preserved": true, "actual_voice_llm_reply_confirmed": true, "physical_voice_tested": false },
+  "full_goal_completed": false
+}

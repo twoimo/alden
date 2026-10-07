@@ -202,10 +202,15 @@ class HttpMlxModelGateway:
     def _model_action(self, model_id: str, action: str) -> None:
         if not _canonical_managed_model_id(model_id):
             raise ValueError("model_not_allowed")
-        encoded = urllib.parse.quote(model_id.removeprefix("mlx/"), safe="")
+        if action not in {"load", "unload"}:
+            raise ValueError("mlx_model_action_invalid")
+        # MLX Serve 26.10.1 names the model in a JSON control body. There is
+        # no /models/{id}/{action} route; that guessed path returned 404 on
+        # the real owned server even when the unit transport accepted it.
         request = urllib.request.Request(
-            f"{self.base_url}/models/{encoded}/{action}",
-            data=b"",
+            f"{self.base_url}/{action}-model",
+            data=json.dumps({"model": model_id.removeprefix("mlx/")}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
             method="POST",
         )
         try:

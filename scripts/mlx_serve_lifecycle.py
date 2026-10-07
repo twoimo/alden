@@ -840,6 +840,26 @@ def _stop_quietly(pid: int, hooks: LaunchHooks) -> None:
         pass
 
 
+def _startup_exit_reason(spec: MlxLaunchSpec, log_start: int | None) -> str:
+    """Classify only this launch's bounded, owned log suffix; expose no text."""
+    if log_start is None:
+        return "launch_spawn_exited"
+    try:
+        fd = os.open(spec.log_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_size < log_start:
+                return "launch_spawn_exited"
+            handle.seek(max(log_start, info.st_size - 16384))
+            text = handle.read(16384).decode("utf-8", "replace")
+        if (f"[args] model: {spec.resident_model_dir}\n" in text
+            and "Insufficient memory to load model:" in text and "error: LoadFailed" in text):
+            return "launch_memory_insufficient"
+    except (OSError, ValueError):
+        pass
+    return "launch_spawn_exited"
+
+
 def launch_app_owned_server(
     spec: MlxLaunchSpec,
     state_root: Path,
@@ -904,6 +924,13 @@ def launch_app_owned_server(
 
     stages.append(LaunchStage.SPAWN.value)
     try:
+        info = spec.log_path.lstat()
+        log_start = info.st_size if stat.S_ISREG(info.st_mode) else None
+    except FileNotFoundError:
+        log_start = 0
+    except OSError:
+        log_start = None
+    try:
         process = runtime.spawn(spec.command(), spec.log_path)
         pid = int(process.pid)
     except Exception:
@@ -916,6 +943,8 @@ def launch_app_owned_server(
     if not ready:
         if startup_reason != "launch_spawn_exited":
             _stop_quietly(pid, runtime)
+        else:
+            startup_reason = _startup_exit_reason(spec, log_start)
         return fail(startup_reason)
 
     stages.append(LaunchStage.ATTEST.value)

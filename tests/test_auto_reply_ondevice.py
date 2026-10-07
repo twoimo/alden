@@ -745,7 +745,9 @@ class TestHttpSwapContract(unittest.TestCase):
                 getattr(self.gateway, action)(QWEN38_27B_MODEL_ID)
                 requests = [call.args[0] for call in self.http.call_args_list]
                 self.assertEqual([req.get_method() for req in requests], ["POST", "GET"])
-                self.assertTrue(requests[0].full_url.endswith(f"Qwen3.8-27B-MLX-Serve-4bit/{action}"))
+                self.assertEqual(requests[0].full_url, f"http://127.0.0.1:11234/v1/{action}-model")
+                self.assertEqual(json.loads(requests[0].data), {"model": QWEN38_27B_ADVERTISED_ID})
+                self.assertEqual(requests[0].get_header("Content-type"), "application/json")
                 self.assertEqual(requests[1].full_url, "http://127.0.0.1:11234/v1/models")
             duplicate = self.catalog(loaded, state)
             duplicate["data"].append({**duplicate["data"][0], "id": QWEN38_27B_MODEL_ID})
@@ -776,7 +778,7 @@ class TestHttpSwapContract(unittest.TestCase):
                             for model, loaded in resident.items()
                         ]})
                     action = request.full_url.rsplit("/", 1)[-1]
-                    action = "probe" if action == "completions" else action
+                    action = "probe" if action == "completions" else action.removesuffix("-model")
                     actions.append(action)
                     if action == failure:
                         # The server may have committed before its response was lost.

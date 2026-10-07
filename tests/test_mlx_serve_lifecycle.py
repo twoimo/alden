@@ -761,6 +761,26 @@ class RefusalStageTests(unittest.TestCase):
 
 
 class StartupAndAttestationTests(unittest.TestCase):
+    def test_memory_rejection_is_classified_only_from_this_launch_model_and_log_suffix(self) -> None:
+        for prior, matching in ((False, True), (True, True), (False, False)):
+            with self.subTest(prior=prior, matching=matching), TemporaryDirectory() as raw:
+                root = Path(raw); spec = make_spec(root); harness = Harness(spec)
+                harness.spawn_poll_result = 1
+                spec.log_path.parent.mkdir()
+                failure = (f"[args] model: {spec.resident_model_dir}\n"
+                           "Insufficient memory to load model: needs ~57.6 GB free but only 49.3 GB is available.\n"
+                           "error: LoadFailed\n")
+                spec.log_path.write_text(failure if prior else "")
+                hooks = harness.hooks(); actual_spawn = hooks.popen
+                def spawn(command, log):
+                    with log.open('a') as handle:
+                        handle.write("new launch failed elsewhere\n" if prior else failure if matching else failure.replace(str(spec.resident_model_dir), "/other-model"))
+                    return actual_spawn(command, log)
+                hooks.popen = spawn
+                result = launch_app_owned_server(spec, root / "state", hooks=hooks)
+                self.assertEqual(result.reason, "launch_memory_insufficient" if not prior and matching else "launch_spawn_exited")
+                self.assertFalse(result.ok); self.assertEqual(harness.signals, [])
+
     def test_child_poll_exit_wins_over_zombie_pid_liveness_without_catalog_polling(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw)
