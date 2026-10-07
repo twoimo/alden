@@ -271,8 +271,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop/src-tauri/target
-          key: cargo-desktop-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
-          restore-keys: cargo-desktop-${{ runner.os }}-
+          # Tauri permission outputs contain absolute checkout paths. A cache
+          # from the previous repository name must not be restored here.
+          key: cargo-desktop-root-v1-${{ github.repository }}-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-desktop-root-v1-${{ github.repository }}-${{ runner.os }}-
 
       - name: Fetch locked desktop Rust dependencies
         run: cargo fetch --manifest-path desktop/src-tauri/Cargo.toml --locked

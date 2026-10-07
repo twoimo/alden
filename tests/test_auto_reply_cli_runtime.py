@@ -151,7 +151,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
     def setUp(self):
         # Isolate user enrollment, prompts and model preferences. Model tests
         # must explicitly supply a fake transport instead of using a live server.
-        home = tempfile.TemporaryDirectory(prefix="autoreply-unit-home-")
+        # macOS /var is a symlink; the production filesystem boundary rejects
+        # it. Use the physical temp root for fixtures rather than relaxing it.
+        home = tempfile.TemporaryDirectory(prefix="autoreply-unit-home-", dir=Path("/private/tmp") if Path("/private/tmp").is_dir() else None)
         self.addCleanup(home.cleanup)
         home_patch = mock.patch.object(Path, "home", return_value=Path(home.name))
         home_patch.start()
