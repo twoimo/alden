@@ -17,6 +17,7 @@ export class KnowledgeRefresh {
     this.active = true;
     this.epoch += 1;
     this.needsRead = true;
+    this.retryAfter = 0;
     this.schedule(0);
   }
   stop(): void {

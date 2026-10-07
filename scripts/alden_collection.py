@@ -494,55 +494,188 @@ class CollectionStore:
               WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id
               AND p.permission!='denied' AND p.project IN (""" + ",".join("?" for _ in projects) + ")) ORDER BY t.label,t.id", projects)]
 
-    def graph_page(self, *, projects: list[str], limit=120, offset=0, focus=None, hops=1, query="") -> dict:
+    def graph_page(self, *, projects: list[str], limit=120, offset=0, focus=None, hops=1, query="",
+                   target_id=None, platform=None, node_type=None, relation=None, since=None, until=None,
+                   details=False, expected_version=None) -> dict:
         if type(limit) is not int or not 1 <= limit <= 120 or type(offset) is not int or offset < 0 or type(hops) is not int or not 0 <= hops <= 3:
             raise ValueError("collection_graph_budget_invalid")
+        for value in (focus, target_id, node_type, relation, expected_version):
+            if value is not None and (not isinstance(value, str) or not value or len(value) > 256):
+                raise ValueError("collection_graph_filter_invalid")
+        if platform is not None and platform not in {"youtube", "threads", "files", "graph"}:
+            raise ValueError("collection_platform_invalid")
+        for value in (since, until):
+            if value is not None and (type(value) not in {int, float} or not math.isfinite(value) or value < 0):
+                raise ValueError("collection_event_time_invalid")
+        if since is not None and until is not None and since >= until:
+            raise ValueError("collection_event_time_invalid")
+        if type(details) is not bool or not isinstance(query, str) or len(query) > 256:
+            raise ValueError("collection_graph_filter_invalid")
         if not projects:
             return {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "next": None}
         with self.database() as db:
             marks = ",".join("?" for _ in projects)
-            versions = self._scope_versions(projects)
-            scope = "SELECT document_id FROM (" + versions + ")"
-            total = db.execute("SELECT COUNT(*) FROM (" + scope + ")", projects).fetchone()[0]
-            edge_scope = "SELECT r.* FROM relations r WHERE r.active=1 AND r.source IN (" + scope + ") AND r.target IN (" + scope + ") AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN (" + marks + "))"
-            edge_args = [*projects, *projects, *projects]
-            total_edges = db.execute("SELECT COUNT(*) FROM (" + edge_scope + ")", edge_args).fetchone()[0]
+            # Materialize the permitted versions once per SQL statement. Target
+            # selection precedes version ranking, so another target's revision
+            # cannot replace the selected target's record.
+            cte = """WITH ranked AS MATERIALIZED (
+              SELECT m.document_id,m.current_version,m.target_id,ROW_NUMBER() OVER(
+                PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
+              FROM memberships m JOIN versions v ON v.id=m.current_version JOIN targets t ON t.id=m.target_id
+              WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+                AND p.permission!='denied' AND p.project IN (""" + marks + """))
+                AND (? IS NULL OR m.target_id=?) AND (? IS NULL OR t.platform=?)),
+              visible AS MATERIALIZED (
+              SELECT d.id,d.platform,d.original_id,s.current_version AS visible_version,s.target_id,v.collected_at
+              FROM ranked s JOIN documents d ON d.id=s.document_id JOIN versions v ON v.id=s.current_version
+              WHERE s.choice=1 AND d.availability='available' AND (? IS NULL OR json_extract(v.metadata,'$.kind')=?)
+                AND (? IS NULL OR v.collected_at>=?) AND (? IS NULL OR v.collected_at<?)),
+              permitted_relationships AS MATERIALIZED (
+              SELECT r.* FROM relations r JOIN visible a ON a.id=r.source JOIN visible b ON b.id=r.target
+              WHERE r.active=1 AND (? IS NULL OR r.target_id=?)
+                AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
+                  AND p.permission!='denied' AND p.project IN (""" + marks + """))),
+              permitted_edges AS MATERIALIZED (SELECT * FROM permitted_relationships WHERE ? IS NULL OR type=?),
+              shown AS MATERIALIZED (SELECT * FROM visible WHERE ? IS NULL OR id IN (
+                SELECT source FROM permitted_edges UNION SELECT target FROM permitted_edges)),
+              degrees AS (SELECT id,COUNT(DISTINCT neighbor) AS degree FROM (
+                SELECT source AS id,target AS neighbor FROM permitted_edges WHERE source!=target
+                UNION ALL SELECT target AS id,source AS neighbor FROM permitted_edges WHERE source!=target) GROUP BY id) """
+            args = [*projects, target_id, target_id, platform, platform, node_type, node_type,
+                    since, since, until, until, target_id, target_id, *projects, relation, relation, relation]
+            fields = """s.id,s.platform,s.original_id,s.visible_version,s.target_id,s.collected_at,
+              v.label,v.body,v.metadata,v.raw_sha256,v.raw_path,json_extract(v.metadata,'$.source_url') AS source_url"""
+            if details and focus and hops == 0 and relation is None:
+                # An already-selected record needs one exact permitted lookup,
+                # not repeated materialization of all 26k nodes and 48k edges.
+                exact = cte.replace("WHERE EXISTS(", "WHERE m.document_id=? AND EXISTS(", 1)
+                row = db.execute(exact + "SELECT " + fields + " FROM shown s JOIN versions v ON v.id=s.visible_version WHERE s.id=?", (focus, *args, focus)).fetchone()
+                if row is None:
+                    raise ValueError("collection_graph_focus_not_in_scope")
+                return self._record_details(db, row, expected_version)
+            json_node = """json_object('id',s.id,'platform',s.platform,'original_id',s.original_id,
+              'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
+              'label',v.label,'body',substr(v.body,1,2400),'metadata',json_object('kind',substr(CAST(json_extract(v.metadata,'$.kind') AS TEXT),1,256)),
+              'source_url',json_extract(v.metadata,'$.source_url'),'degree',COALESCE(d.degree,0))"""
+            if not focus:
+                # All overview outputs share one materialized permitted scope.
+                # LIMIT+1 remains inside SQL, including FTS pages.
+                fts = ' AND '.join('"' + term.replace('"', '""') + '"' for term in query.split())
+                picking = ("SELECT s.id FROM version_search JOIN shown s ON s.visible_version=version_search.version_id WHERE version_search MATCH ? ORDER BY bm25(version_search),s.id" if fts else
+                           "SELECT s.id FROM shown s LEFT JOIN degrees d ON d.id=s.id ORDER BY COALESCE(d.degree,0) DESC,s.id")
+                pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
+                overview = cte + ",picked AS MATERIALIZED (" + picking + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
+                nodes_json, edges_json, total, total_edges, more, kinds, types = db.execute(overview + """SELECT
+                  (SELECT json_group_array(json(item)) FROM (SELECT """ + json_node + """ AS item
+                    FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version
+                    LEFT JOIN degrees d ON d.id=s.id ORDER BY s.id)),
+                  (SELECT json_group_array(json(item)) FROM (SELECT json_object('id',r.id,'source',r.source,'target',r.target,'type',r.type) AS item
+                    FROM permitted_edges r JOIN selected a ON a.id=r.source JOIN selected b ON b.id=r.target ORDER BY r.id LIMIT 512)),
+                  (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),(SELECT COUNT(*) FROM picked)>?,
+                  (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind FROM ranked s
+                    JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
+                    WHERE s.choice=1 AND d.availability='available' AND kind IS NOT NULL ORDER BY kind LIMIT 128)),
+                  (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128))""", (*args, *pick_args, limit)).fetchone()
+                rows, edge_rows = json.loads(nodes_json), json.loads(edges_json)
+                ids = [r["id"] for r in rows]
+            else:
+                total, total_edges, kinds, types = db.execute(cte + """SELECT (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),
+              (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind
+                FROM ranked s JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
+                WHERE s.choice=1 AND d.availability='available' AND kind IS NOT NULL ORDER BY kind LIMIT 128)),
+              (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128))""", args).fetchone()
+            facets = {"node_types": json.loads(kinds), "relations": json.loads(types)}
             if focus:
-                if not db.execute("SELECT 1 FROM (" + scope + ") WHERE document_id=?", (*projects, focus)).fetchone():
+                if not db.execute(cte + "SELECT 1 FROM shown WHERE id=?", (*args, focus)).fetchone():
                     raise ValueError("collection_graph_focus_not_in_scope")
                 ids = [focus]
                 for _ in range(hops):
                     current = ",".join("?" for _ in ids)
-                    neighbors = db.execute("SELECT source,target FROM (" + edge_scope + ") WHERE source IN (" + current + ") OR target IN (" + current + ") LIMIT 144", (*edge_args, *ids, *ids)).fetchall()
-                    for edge in neighbors:
-                        for identifier in edge:
-                            if identifier not in ids and len(ids) < min(limit, 24):
-                                ids.append(identifier)
+                    neighbors = db.execute(cte + "SELECT id FROM (SELECT target AS id FROM permitted_edges WHERE source IN (" + current + ") UNION SELECT source AS id FROM permitted_edges WHERE target IN (" + current + ")) WHERE id NOT IN (" + current + ") ORDER BY id LIMIT ?", (*args, *ids, *ids, *ids, min(limit, 24)-len(ids))).fetchall()
+                    ids.extend(row[0] for row in neighbors)
+                    if not neighbors or len(ids) >= min(limit, 24):
+                        break
                 more = False
-            elif query:
-                hits = self.search(query, projects=projects, limit=offset+limit+1)
-                ids = [item["id"] for item in hits[offset:offset+limit]]
-                more = len(hits) > offset+limit
-            else:
-                rows = db.execute("SELECT document_id FROM (" + scope + ") ORDER BY document_id LIMIT ? OFFSET ?", (*projects, limit+1, offset)).fetchall()
-                ids = [row[0] for row in rows[:limit]]
-                more = len(rows) > limit
             if not ids:
-                return {"ok": True, "nodes": [], "edges": [], "total_nodes": total, "total_edges": total_edges, "next": None}
+                return {"ok": True, "nodes": [], "edges": [], "total_nodes": total, "total_edges": total_edges, "next": None, "facets": facets}
             selected = ",".join("?" for _ in ids)
-            rows = db.execute("SELECT d.*,s.current_version AS visible_version,v.label,v.body,v.metadata,v.collected_at FROM documents d JOIN (" + versions + ") s ON s.document_id=d.id JOIN versions v ON v.id=s.current_version WHERE d.id IN (" + selected + ") ORDER BY d.id", (*projects, *ids)).fetchall()
+            if focus:
+                rows = db.execute(cte + "SELECT " + fields + ",COALESCE(d.degree,0) AS degree FROM shown s JOIN versions v ON v.id=s.visible_version LEFT JOIN degrees d ON d.id=s.id WHERE s.id IN (" + selected + ") ORDER BY s.id", (*args, *ids)).fetchall()
+                edge_rows = db.execute(cte + "SELECT * FROM permitted_edges WHERE source IN (" + selected + ") AND target IN (" + selected + ") ORDER BY id LIMIT 144", (*args, *ids, *ids)).fetchall()
+            target_spaces = {}
+            for association in db.execute("SELECT target_id,project FROM target_projects WHERE permission!='denied' AND project IN (" + marks + ") ORDER BY project", projects):
+                target_spaces.setdefault(association["target_id"], []).append(association["project"])
             nodes = []
             for row in rows:
-                meta = json.loads(row["metadata"])
-                nodes.append({"id": row["id"], "label": row["label"], "category": meta.get("kind", "document"),
+                meta = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
+                kind = meta.get("kind")
+                kind = kind[:256] if isinstance(kind, str) and kind else "document"
+                nodes.append({"id": row["id"], "label": row["label"], "category": kind,
                               "importance": 20, "updated_at": row["collected_at"], "description": row["body"][:2400],
-                              "space": ", ".join(projects), "source_version": row["visible_version"],
-                              "source_metadata": meta, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": row["availability"] == "deleted"}})
+                              "space": ", ".join(target_spaces.get(row["target_id"], [])), "source_version": row["visible_version"],
+                              "source_url": row["source_url"], "source_target": row["target_id"], "source_platform": row["platform"],
+                              "degree": row["degree"], "degree_scope": "permitted filtered graph",
+                              "source_metadata": {"kind": kind}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
             edges = [{"id": row["id"], "source": row["source"], "target": row["target"], "relation": row["type"], "context": "explicit source relationship", "weight": 1, "purpose": "reference", "evidence_message_id": row["id"], "evidence": {"kind": "snapshot", "source_event_ids": [row["id"]], "chat_id": "", "confirmed_at": None, "retracted": False}}
-                     for row in db.execute("SELECT * FROM (" + edge_scope + ") WHERE source IN (" + selected + ") AND target IN (" + selected + ") LIMIT 144", (*edge_args, *ids, *ids))]
-            return {"ok": True, "nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": total_edges,
+                     for row in edge_rows]
+            result = {"ok": True, "nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": total_edges,
                     "next": offset+limit if more else None, "focus": focus, "scope": projects,
+                    "facets": facets, "targets": self.targets(projects),
+                    "revision": (db.execute("SELECT e.sequence FROM events e WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id AND p.permission!='denied' AND p.project IN (" + marks + ")) ORDER BY e.sequence DESC LIMIT 1", projects).fetchone() or [0])[0],
                     "display_scope": "bounded derived projection; not full graph"}
+            if details and focus:
+                row = next(r for r in rows if r["id"] == focus)
+                detail = self._record_details(db, row, expected_version)
+                if detail["ok"] is not True:
+                    return detail
+                result["details"] = detail["details"]
+            return result
+
+    def _record_details(self, db, row, expected_version) -> dict:
+        if expected_version is not None and row["visible_version"] != expected_version:
+            return {"ok": False, "error": "collection_graph_version_changed"}
+        raw = self._verified_source_blob(self.blobs, row["raw_path"], MAX_RECORD_BYTES)
+        if digest(raw) != row["raw_sha256"]:
+            raise RuntimeError("collection_source_integrity")
+        body = row["body"] or json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
+        return {"ok": True, "details": {"node_id": row["id"], "basis": "source_record", "summary": row["label"],
+                                     "body": body[:12000], "truncated": len(body) > 12000,
+                                     "body_format": "normalized_text" if row["body"] else "retained_record_json",
+                                     "version": row["visible_version"], "collected_at": row["collected_at"],
+                                     "raw_sha256": row["raw_sha256"], "source_url": row["source_url"],
+                                     "target_id": row["target_id"], "platform": row["platform"],
+                                     "capture": self._source_capture_reference(db, row)}}
+
+    @staticmethod
+    def _verified_source_blob(folder: Path, name: str, budget: int) -> bytes:
+        if not isinstance(name, str) or not re.fullmatch(r"[0-9a-f]{64}\.json", name):
+            raise RuntimeError("collection_source_manifest_invalid")
+        path = folder / name
+        if any(part.is_symlink() for part in [path, *path.parents]):
+            raise RuntimeError("collection_source_integrity")
+        with path.open("rb") as handle:
+            data = handle.read(budget + 1)
+        if len(data) > budget or digest(data) + ".json" != name:
+            raise RuntimeError("collection_source_integrity")
+        return data
+
+    def _source_capture_reference(self, db, row) -> dict | None:
+        cursor = db.execute("SELECT cursor FROM targets WHERE id=?", (row["target_id"],)).fetchone()
+        checkpoint = json.loads(cursor[0] or "{}")
+        capture = checkpoint.get("source_capture") if isinstance(checkpoint, dict) else None
+        if not isinstance(capture, dict):
+            return None
+        manifest = json.loads(self._verified_source_blob(self.root / "source-captures", capture.get("manifest"), 16 * 1024 * 1024))
+        if manifest.get("target_id") != row["target_id"] or manifest.get("source_sha256") != capture.get("sha256"):
+            raise RuntimeError("collection_source_integrity")
+        entry = next((r for r in manifest["records"] if r["document_id"] == row["id"] and r["version"] == row["visible_version"]), None)
+        if entry is None:
+            return None  # The saved file receipt predates this record revision.
+        if entry.get("record_sha256") != row["raw_sha256"]:
+            raise RuntimeError("collection_source_integrity")
+        return {"status": "manifest_verified", "json_pointer": entry["json_pointer"],
+                "source_sha256": manifest["source_sha256"], "source_bytes": manifest["source_bytes"],
+                "byte_scope": manifest["byte_scope"]}
 
     def recent_events(self, *, before=None, after=None, limit=50, projects=None,
                       target_id=None, platform=None, stage=None, query="", since=None, until=None) -> dict:
@@ -622,5 +755,9 @@ def read_action(state_root: Path, action: str, query: str | None = None) -> dict
         return result
     if action == "collection-graph":
         return store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
-                                focus=options.get("focus"), hops=options.get("hops",1), query=str(options.get("search", ""))[:256])
+                                focus=options.get("focus"), hops=options.get("hops",1), query=str(options.get("search", ""))[:256],
+                                target_id=options.get("target_id"), platform=options.get("platform"),
+                                node_type=options.get("node_type"), relation=options.get("relation"),
+                                since=options.get("since"), until=options.get("until"),
+                                details=options.get("details",False), expected_version=options.get("expected_version"))
     raise ValueError("collection_action_invalid")

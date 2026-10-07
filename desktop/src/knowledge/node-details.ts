@@ -88,11 +88,12 @@ function renderBody(container: HTMLElement, body: string, graph: KnowledgeGraph)
 
 export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, payload: Record<string, unknown> | null = null, root: Document = document): void {
   const details = record(payload?.details);
-  const selected = details && details.node_id === node.id ? details : null;
+  const selected = details && details.node_id === node.id
+    && (details.basis !== 'source_record' || details.version === node.sourceVersion) ? details : null;
   const summary = root.getElementById('knowledge-node-summary');
   if (summary) summary.textContent = text(selected?.summary) || nodeSummary(graph, node);
   const body = root.getElementById('knowledge-node-body');
-  const copy = selected?.basis === 'note' && node.category !== 'collection' ? text(selected.body, 12000) : '';
+  const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
   if (body) { renderBody(body, copy, graph); body.hidden = !copy; }
   if (summary) summary.hidden = Boolean(body && copy);
   const kind = root.getElementById('knowledge-node-kind'); if (kind) kind.textContent = nodeKind(node);
@@ -137,6 +138,30 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     heading.textContent = seen.size ? `원문 근거 · ${seen.size}건` : '원문 근거';
   }
   const basis = root.getElementById('knowledge-node-basis');
+  if (selected?.basis === 'source_record' && selected.version === node.sourceVersion && /^[0-9a-f]{64}$/.test(text(selected.raw_sha256))) {
+    const receipt = element('div', 'knowledge-source');
+    receipt.append(element('p', '', `수집 기록 · ${text(selected.platform, 32)} · ${date(selected.collected_at)}${selected.truncated === true ? ' · 일부 발췌' : ''}`));
+    receipt.append(element('p', '', `기록 버전: ${text(selected.version, 256)}`));
+    receipt.append(element('p', '', `보존 기록 SHA-256: ${text(selected.raw_sha256, 64)}`));
+    const capture = record(selected.capture);
+    if (capture?.status === 'manifest_verified') {
+      receipt.append(element('p', '', `보존 파일: ${text(capture.byte_scope, 160)} · ${text(capture.json_pointer, 256)}`));
+      receipt.append(element('p', '', `보존 파일 SHA-256: ${text(capture.source_sha256, 64)}`));
+    }
+    const rawUrl = text(selected.source_url, 4096);
+    try {
+      const url = new URL(rawUrl);
+      if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password) {
+        const link = document.createElement('a'); link.href = url.href; link.textContent = '출처 열기'; link.target = '_blank'; link.rel = 'noopener noreferrer'; receipt.append(link);
+      }
+    } catch { /* Records without a public URL retain local evidence. */ }
+    evidence?.append(receipt);
+    if (disclosure) disclosure.hidden = false;
+    if (heading) heading.textContent = '보존 근거';
+    if (basis) basis.textContent = '수집된 기록과 해시를 확인했습니다. 내용의 사실 여부를 검증한 것은 아닙니다.';
+    prepareNotePane(root, node.id, payload === null);
+    return;
+  }
   if (basis) basis.textContent = seen.size ? `원문 ${seen.size}건 · 최근 기록의 일부입니다.`
     : node.category === 'collection' ? '그래프에 실제 등록된 구조를 기준으로 설명합니다.'
     : selected?.basis === 'note' ? '저장된 노트의 설명입니다. 대화 원문으로 확인된 사실과 구분합니다.'

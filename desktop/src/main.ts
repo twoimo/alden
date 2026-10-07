@@ -1,5 +1,6 @@
-import { KnowledgeRefresh } from "./knowledge/refresh";
-import { knowledgeSignature, knowledgeChangeSummary } from './knowledge/changes';
+import { CollectionGraphController, type GraphAction } from './knowledge/collection-graph';
+import { KnowledgeRefresh } from './knowledge/refresh';
+import { knowledgeSignature } from './knowledge/changes';
 import { OrbSurfaces } from './orbs/surfaces';
 import { renderNodeDetails } from './knowledge/node-details';
 import type { VoiceStatus } from './contracts';
@@ -29,7 +30,7 @@ import {
   type VisibilityReader,
   type VisibilitySubscriber,
 } from "./core/lifecycle-wiring";
-import type { KnowledgeHologram } from "./knowledge/hologram";
+import type { KnowledgeFocusEvent, KnowledgeHologram } from "./knowledge/hologram";
 import {
   MAX_FOCUS_HOPS,
   OVERVIEW_NODE_CAP,
@@ -377,7 +378,8 @@ function relationLabel(relation: string): string {
   }
 }
 
-function relationMeta(edge: KnowledgeEdge, snapshot: RuntimeSnapshot): string {
+function relationMeta(edge: KnowledgeEdge, snapshot: RuntimeSnapshot, collected = false): string {
+  if (collected) return '출처에 저장된 관계';
   if (edge.relation === 'contains') return '그래프의 분류 구조';
   const roomId = edge.roomId || edge.evidence.chatId;
   const room = snapshot.rooms.find((candidate) => String(candidate.chatId) === roomId)?.title;
@@ -417,7 +419,7 @@ function renderKnowledgeRelations(
     triple.textContent = labels.get(other)??'노트';
     row.title=`${node.label} · ${relationLabel(edge.relation)} · ${labels.get(other)}`;
     const meta = document.createElement("span");
-    meta.textContent = relationMeta(edge, snapshot);
+    meta.textContent = relationMeta(edge, snapshot, Boolean(node.sourceVersion));
     row.append(triple, meta);
     container.append(row);
   });
@@ -434,12 +436,19 @@ function renderKnowledgeSync(payload: Record<string, unknown> | null): void {
   setText("knowledge-sync", Number(state.conflicts) > 0 ? "직접 편집 보존" : Number(state.pending) > 0 ? "기억 정리 중" : at ? `${at} 갱신` : "자동 갱신");
 }
 
+interface KnowledgeGraphHooks {
+  selected(event: KnowledgeFocusEvent): void;
+  navigate(action: GraphAction): boolean;
+  focus(node: KnowledgeNode, legacy: () => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown> | null>;
+}
+
 export async function setupKnowledgeGraph(
   payload: Record<string, unknown> | null,
   snapshot: RuntimeSnapshot,
   loadAction: typeof fetchSettingsAction = fetchSettingsAction,
   allowEmpty = false,
   onVoice: (voice: VoiceStatus | null) => void = () => undefined,
+  hooks?: KnowledgeGraphHooks,
 ): Promise<KnowledgeHologram | null> {
   const graph = parseKnowledgeGraph(payload);
   renderKnowledgeSync(payload);
@@ -476,15 +485,18 @@ export async function setupKnowledgeGraph(
   let disposed = false;
   const controls = new AbortController();
   const { KnowledgeHologram } = await import("./knowledge/hologram");
-  const hologram = new KnowledgeHologram(canvas, graph, ({ node, view }) => {
+  const hologram = new KnowledgeHologram(canvas, graph, ({ node, view, previousCamera }) => {
     if (disposed) return;
     const epoch = ++selectionEpoch;
     if (detailPanel) detailPanel.hidden = node === null;
     document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open',String(node!==null));
     if (back) back.disabled = !hologram.canGoBack;
     if (overview) overview.disabled = view.focusId === null && (view.overviewOffset??0)===0;
+    const cameraReset = document.getElementById('knowledge-camera-reset') as HTMLButtonElement | null;
+    if (cameraReset) cameraReset.disabled = view.nodes.length === 0;
     expand.disabled = view.focusId === null ? !view.hasMoreContexts : view.hops >= MAX_FOCUS_HOPS;
     expand.textContent=view.focusId===null?'다음 보기':view.hops===0?'연결 보기':'더 보기';
+    hooks?.selected({ node, view, previousCamera });
     if (!node) {
       if (detailPanel) delete detailPanel.dataset.focusState;
       setText("knowledge-focus-title", "항목을 선택하면 관련 정보를 보여드립니다.");
@@ -501,14 +513,15 @@ export async function setupKnowledgeGraph(
 
     const localRoom = node.evidence.chatId
       || view.edges.find((edge) => edge.source === node.id || edge.target === node.id)?.roomId || '';
-    void loadAction("knowledge-graph-focus", {
+    const legacyFocus = () => loadAction("knowledge-graph-focus", {
       query: node.label,
       nodeId: node.id,
       chatId: localRoom,
-    }).then((focus) => {
+    });
+    void (hooks ? hooks.focus(node, legacyFocus) : legacyFocus()).then((focus) => {
       // A → B → A and overview/back are different selections even when the
       // node ID repeats. Earlier retrievals cannot overwrite the current one.
-      if (selectionEpoch !== epoch) return;
+      if (selectionEpoch !== epoch || focus?.discarded === true) return;
       if (!focus || focus.ok !== true) {
         if (detailPanel) detailPanel.dataset.focusState = 'unavailable';
         renderNodeDetails(currentGraph, node, focus ?? { ok: false });
@@ -519,7 +532,7 @@ export async function setupKnowledgeGraph(
       if (detailPanel) detailPanel.dataset.focusState = 'ready';
       const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
       const firstFact = facts[0]?.slice(0, 180);
-      setText("knowledge-retrieve", focus.details ? '이 기기에 수집된 기록과 저장된 노트를 기준으로 합니다.' : facts.length
+      setText("knowledge-retrieve", focus.details ? '이 기기에 수집된 기록과 저장된 근거를 기준으로 합니다.' : facts.length
         ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
         : "관련 대화를 찾지 못했습니다.");
     }).catch(() => {
@@ -532,15 +545,22 @@ export async function setupKnowledgeGraph(
   }, 'workspace', undefined, onVoice);
 
   expand.addEventListener("click", () => {
+    if (hooks?.navigate('expand')) return;
     hologram.expandOneHop();
   }, { signal: controls.signal });
   document.getElementById('knowledge-note-pane')?.addEventListener('click',event=>{
     const target=event.target instanceof Element?event.target.closest<HTMLButtonElement>('button[data-knowledge-node]'):null;
     if(target?.dataset.knowledgeNode)hologram.clickNode(target.dataset.knowledgeNode);
   },{signal:controls.signal});
-  back?.addEventListener("click", () => hologram.back(), { signal: controls.signal });
-  overview?.addEventListener("click", () => hologram.reset(), { signal: controls.signal });
-  document.getElementById('knowledge-focus-close')?.addEventListener('click', () => hologram.reset(), { signal: controls.signal });
+  back?.addEventListener("click", () => { if (!hooks?.navigate('back')) hologram.back(); }, { signal: controls.signal });
+  overview?.addEventListener("click", () => { if (!hooks?.navigate('reset')) hologram.reset(); }, { signal: controls.signal });
+  document.getElementById('knowledge-focus-close')?.addEventListener('click', () => { if (!hooks?.navigate('clear')) hologram.reset(); }, { signal: controls.signal });
+  document.getElementById('knowledge-camera-reset')?.addEventListener('click', () => hologram.resetCamera(), { signal: controls.signal });
+  const reduceMotion = document.getElementById('knowledge-reduce-motion') as HTMLInputElement | null;
+  if (reduceMotion) {
+    reduceMotion.checked = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    reduceMotion.addEventListener('change', () => hologram.setReducedMotion(reduceMotion.checked), { signal: controls.signal });
+  }
   expand.disabled=!hologram.currentView.hasMoreContexts;
 
   return hologram;
@@ -602,6 +622,7 @@ export async function bootSettings(
   });
   window.addEventListener("pagehide", navigation.dispose, { once: true });
   let hologram: KnowledgeHologram | null = null;
+  let collectionGraph: CollectionGraphController | null = null;
   let emergencyState: EmergencyState | null = null;
   try {
     const emergency = wireEmergencyResume(dependencies.resumeEmergency,document,dependencies.pauseEmergency, state => {
@@ -651,7 +672,11 @@ export async function bootSettings(
     }
 
     try {
-      hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction, snapshot.available, voice => orbs.setVoice(voice));
+      hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction, true, voice => orbs.setVoice(voice), {
+        selected: event => collectionGraph?.selected(event),
+        navigate: action => collectionGraph?.navigate(action) ?? false,
+        focus: (node, legacy) => collectionGraph ? collectionGraph.focus(node, legacy) : legacy(),
+      });
     } catch {
       setText("knowledge-summary", "지식 그래프 화면을 준비하지 못했습니다.");
       // A graphics failure must not disable the other already-confirmed settings.
@@ -674,33 +699,23 @@ export async function bootSettings(
       graph.setSignals(snapshot.jobLoad, freshInputRms(snapshot));
       const focusSlots = new Map(parseKnowledgeGraph(graphPayload).nodes.map((node, index) => [node.id, index]));
       Object.defineProperty(window, "__knowledgeRenderCount", { configurable: true, get: () => graph.renderCount });
-      let lastGraph = parseKnowledgeGraph(graphPayload);
-      let graphVersion = knowledgeSignature(lastGraph);
-      const refresh = new KnowledgeRefresh(() => dependencies.loadAction("knowledge-graph"), payload => {
-        renderKnowledgeSync(payload);
-        if (payload.ok !== true) return;
-        const next = parseKnowledgeGraph(payload);
-        const version = knowledgeSignature(next);
-        if (version === graphVersion) return;
-        graphVersion = version;
-        const change = knowledgeChangeSummary(lastGraph, next);
-        lastGraph = next;
-        graph.replaceGraph(next);
-        setText("knowledge-summary", `${next.nodes.filter(node=>!node.isHub).length||next.nodes.length}개`);
-        if (change) setText('knowledge-sync', change);
-      }, 15000, fetchKnowledgeRevision);
+      collectionGraph = new CollectionGraphController(dependencies.loadAction, graph, document, fetchKnowledgeRevision);
+      window.addEventListener('pagehide', () => collectionGraph?.dispose(), { once: true });
       const lifecycle = new RenderLifecycle(graph,
-        () => refresh.stop(),
-        () => refresh.start());
+        () => collectionGraph?.stop(),
+        () => collectionGraph?.start());
       graphLifecycle = lifecycle;
       lifecycle.setSurfaceVisible(navigation.current() === "memory");
       Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({
         ...graph.diagnostics(), nodeCount: graph.currentView.nodes.length, edgeCount: graph.currentView.edges.length,
         hops: graph.currentView.hops, focused: graph.currentView.focusId !== null,
-        overviewLimit:graph.currentView.overviewLimit??OVERVIEW_NODE_CAP,overviewOffset:graph.currentView.overviewOffset??0,
-        hasMoreContexts:!!graph.currentView.hasMoreContexts,
-        focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? -1,
-        canGoBack: graph.canGoBack,
+        overviewLimit:graph.currentView.overviewLimit??OVERVIEW_NODE_CAP,overviewOffset:collectionGraph?.collection?collectionGraph.offset:graph.currentView.overviewOffset??0,
+        hasMoreContexts:collectionGraph?.collection?collectionGraph.hasMore:!!graph.currentView.hasMoreContexts,
+        focusId: graph.currentView.focusId,
+        source: collectionGraph?.collection ? 'collection' : 'legacy',
+        motionReduced: graph.reducedMotionEnabled,
+        focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? graph.currentGraph.nodes.findIndex(node => node.id === graph.currentView.focusId),
+        canGoBack: collectionGraph?.collection ? collectionGraph.canGoBack : graph.canGoBack,
         targets: graph.navigationTargets,
       }) });
       Object.defineProperty(window, "__knowledgeRenderPause", { configurable: true, get: () => lifecycle.lastPauseMeasurement() });

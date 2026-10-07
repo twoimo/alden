@@ -102,8 +102,22 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
             <div class="knowledge-workspace">
               <div class="knowledge-graph-pane">
                 <header class="knowledge-heading"><h1 id="knowledge-title">지식 그래프</h1><p id="knowledge-summary" role="status" aria-live="polite">불러오는 중</p><span id="knowledge-mode" class="tag" hidden>확인 중</span><p id="knowledge-sync" class="knowledge-sync" role="status" aria-live="polite">갱신 확인 중</p></header>
+                <form id="knowledge-filter-form" class="knowledge-filter-bar" role="search">
+                  <select id="knowledge-project" aria-label="지식 프로젝트"><option value="legacy">기존 기억</option></select>
+                  <input id="knowledge-search" type="search" maxlength="256" placeholder="저장된 지식 찾기" aria-label="저장된 지식 찾기">
+                  <details id="knowledge-filter-more"><summary>필터</summary><div class="knowledge-filter-options">
+                    <label>출처<select id="knowledge-platform"><option value="">모든 출처</option><option value="graph">기존 그래프</option><option value="youtube">YouTube</option><option value="threads">Threads</option><option value="files">파일</option></select></label>
+                    <label>대상<select id="knowledge-target"><option value="">모든 대상</option></select></label>
+                    <label>유형<select id="knowledge-type"><option value="">모든 유형</option></select></label>
+                    <label>관계<select id="knowledge-relation"><option value="">모든 관계</option></select></label>
+                    <label>수집 시작<input id="knowledge-since" type="date"></label><label>수집 종료<input id="knowledge-until" type="date"></label>
+                    <label class="knowledge-motion-option"><input id="knowledge-reduce-motion" type="checkbox">움직임 줄이기</label>
+                  </div></details>
+                  <details id="knowledge-list"><summary>목록</summary><div id="knowledge-result-list" role="list" aria-label="현재 표시한 지식 목록"></div></details>
+                </form>
+                <p id="knowledge-scope" class="knowledge-scope" role="status" aria-live="polite"></p>
                 <div class="knowledge-hologram-shell"><canvas id="knowledge-graph-canvas" width="1600" height="1200" tabindex="0" aria-label="대화 속 이름과 주제의 연결 그림" aria-controls="knowledge-note-pane"></canvas><div class="knowledge-node-labels" aria-hidden="true"></div><div id="knowledge-accessible-nodes" class="sr-only" role="region" aria-label="대화 검색 항목 목록"></div></div>
-                <div class="knowledge-hologram-toolbar"><button id="knowledge-back" type="button" disabled>이전</button><button id="knowledge-overview" type="button" disabled>전체 보기</button><button id="knowledge-expand-hop" type="button" disabled>더 보기</button></div>
+                <div class="knowledge-hologram-toolbar"><button id="knowledge-back" type="button" disabled>이전</button><button id="knowledge-overview" type="button" disabled>전체 보기</button><button id="knowledge-expand-hop" type="button" disabled>더 보기</button><button id="knowledge-camera-reset" type="button">시점 초기화</button></div>
               </div>
               <aside id="knowledge-note-pane" class="knowledge-focus-card" aria-labelledby="knowledge-focus-title" tabindex="0" hidden>
                 <header class="knowledge-detail-heading"><div><span id="knowledge-node-kind" hidden>저장된 기억</span><h2 id="knowledge-focus-title">선택한 지식</h2></div><button id="knowledge-focus-close" type="button" aria-label="노트 닫기"><i data-lucide="X" aria-hidden="true"></i></button></header>

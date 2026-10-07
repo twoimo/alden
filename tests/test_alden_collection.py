@@ -188,6 +188,54 @@ class CollectionTests(unittest.TestCase):
         recovered = CollectionStore(root)
         self.assertEqual(recovered.search("3층", projects=["one"])[0]["body"], "회의는 3층")
 
+    def test_graph_filters_choose_the_selected_targets_version_and_real_degree(self):
+        a, b = self.target(), self.target("channel-B", "one")
+        self.store.ingest(a, [self.record("root", label="목표 A", kind="topic", source_url="https://example.test/a"),
+                              self.record("leaf", kind="topic"), self.record("other", kind="video")],
+                          relations=[{"source_platform": "youtube", "source_id": "root", "target_platform": "youtube", "target_id": "leaf", "type": relation} for relation in ["refers-to", "supports"]])
+        self.store.ingest(b, [self.record("root", label="목표 B", source_url="https://example.test/b")])
+        page = self.store.graph_page(projects=["one"], target_id=a, node_type="topic", relation="supports")
+        self.assertEqual(page["total_nodes"], 2)
+        self.assertEqual(page["total_edges"], 1)
+        root = next(n for n in page["nodes"] if n["id"] == identity("youtube", "root"))
+        self.assertEqual(root["label"], "목표 A")
+        self.assertEqual(root["source_url"], "https://example.test/a")
+        self.assertEqual(root["degree"], 1)
+        self.assertEqual(root["space"], "one")
+        self.assertEqual(self.store.graph_page(projects=["one"], platform="threads")["total_nodes"], 0)
+        self.assertEqual(self.store.graph_page(projects=["one"], since=10**10)["total_nodes"], 0)
+        self.assertEqual(self.store.graph_page(projects=["one"], node_type="missing")["nodes"], [])
+        unfiltered = self.store.graph_page(projects=["one"], target_id=a)
+        self.assertEqual(next(n for n in unfiltered["nodes"] if n["id"] == root["id"])["degree"], 1)
+
+    def test_graph_details_verify_record_hash_and_fence_old_selected_versions(self):
+        target = self.target()
+        self.store.ingest(target, [self.record(source_url="https://example.test/source")])
+        node = self.store.graph_page(projects=["one"])["nodes"][0]
+        result = read_action(self.store.root.parent.parent, "collection-graph", json.dumps({"projects": ["one"],
+            "focus": node["id"], "hops": 0, "details": True, "expected_version": node["source_version"]}))
+        self.assertEqual(result["details"]["body"], "회의는 3층")
+        self.assertEqual(result["details"]["basis"], "source_record")
+        self.assertIsNone(result["details"]["capture"])
+        self.store.ingest(target, [self.record(text="개정 내용")])
+        stale = self.store.graph_page(projects=["one"], focus=node["id"], details=True, expected_version=node["source_version"])
+        self.assertEqual(stale, {"ok": False, "error": "collection_graph_version_changed"})
+        with self.store.database() as db:
+            path = db.execute("SELECT raw_path FROM versions JOIN memberships ON versions.id=memberships.current_version").fetchone()[0]
+        (self.store.blobs / path).write_text("corrupted")
+        with self.assertRaisesRegex(RuntimeError, "collection_source_integrity"):
+            self.store.graph_page(projects=["one"], focus=node["id"], details=True)
+
+    def test_graph_filter_validation_and_denied_detail_scope(self):
+        hidden = self.target(permission="denied")
+        self.store.ingest(hidden, [self.record()])
+        for options in [{"platform": "unknown"}, {"node_type": []}, {"since": float("nan")},
+                        {"since": 2, "until": 1}, {"details": "true"}, {"hops": True}]:
+            with self.assertRaises(ValueError):
+                self.store.graph_page(projects=["one"], **options)
+        with self.assertRaisesRegex(ValueError, "collection_graph_focus_not_in_scope"):
+            self.store.graph_page(projects=["one"], focus=identity("youtube", "AbC"), details=True)
+
     def test_history_forward_reconnect_recovers_more_than_one_page_without_duplicates(self):
         target = self.target()
         self.store.ingest(target, [self.record(str(i)) for i in range(25)])

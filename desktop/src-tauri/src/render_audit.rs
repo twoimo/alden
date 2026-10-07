@@ -79,15 +79,22 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
             s.bytes()
                 .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
         };
-        if parts.len() != 3
-            || parts[0].len() != 6
-            || !parts[0].bytes().all(|b| b.is_ascii_digit())
-            || parts[1].len() != 4
-            || !alnum(parts[1])
-            || ![4, 8].contains(&parts[2].len())
-            || !alnum(parts[2])
-        {
-            return Err("focus node must be one canonical OSK ID".into());
+        let osk = parts.len() == 3
+            && parts[0].len() == 6
+            && parts[0].bytes().all(|b| b.is_ascii_digit())
+            && parts[1].len() == 4
+            && alnum(parts[1])
+            && [4, 8].contains(&parts[2].len())
+            && alnum(parts[2]);
+        let collection = value.split_once(':').is_some_and(|(prefix, hash)| {
+            ["graph", "youtube", "threads", "files"].contains(&prefix)
+                && hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+        if !osk && !collection {
+            return Err("focus node must be one canonical OSK or collection ID".into());
         }
         Some(value.to_string())
     } else {
@@ -182,6 +189,7 @@ impl Output {
                 | "workspace-history-compact.png"
                 | "workspace-settings-compact.png"
                 | "settings-layout.json"
+                | "workspace-readback.json"
                 | "render-audit.json"
         ) || bytes.len() > MAX_BYTES
         {
@@ -510,6 +518,7 @@ fn capture_workspaces(
               const loadingHistory=p==='history'&&document.querySelector('#db-current-title')?.textContent==='갱신 상태 확인 중';
               const collection=document.querySelector('.collection-history');
               const loadingCollection=p==='history'&&collection?.getAttribute('aria-busy')==='true';
+              const loadingGraph=p==='memory'&&(document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중');
               const loadingAutomation=(p==='reply'||p==='geeknews')&&document.querySelector(`#${p}-status`)?.textContent==='기록을 불러옵니다.';
               const panel=document.querySelector(`#settings-page-${p}`);
               const list=panel?.querySelector('.message-scroll');const r=list?.getBoundingClientRect();
@@ -519,7 +528,11 @@ fn capture_workspaces(
               const status=panel?.querySelector('#'+statusId)?.textContent??'';
               const paint=window.__aldenAuditWorkspacePaint;
               return {page:p,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,
-                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingCollection&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
+                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingCollection&&!loadingGraph&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
+                graphProject:p==='memory'?document.querySelector('#knowledge-project')?.value:null,
+                graphScope:p==='memory'?document.querySelector('#knowledge-scope')?.textContent:null,
+                graphDisplayedNodes:p==='memory'?window.__knowledgeRenderDiagnostics?.nodeCount:null,
+                graphDisplayedEdges:p==='memory'?window.__knowledgeRenderDiagnostics?.edgeCount:null,
                 collectionState:p==='history'?collection?.dataset.state:null,
                 collectionRenderedRows:p==='history'?collection?.querySelectorAll('.collection-event-row').length:0,
                 navigationFirstFrameMs:typeof paint?.firstFrameAtMs==='number'?paint.firstFrameAtMs-paint.clickedAtMs:null,
@@ -563,8 +576,9 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     documentVisibility:document.visibilityState,documentFocused:document.hasFocus(),
     scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
     settingsState:document.getElementById('app')?.dataset.state,settingsPage:document.querySelector('.settings-shell')?.dataset.settingsPage,
+    graphPending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중',
     renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
-    navigation:d?{focused:d.focused,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
+    navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
     regions:d?.regions??null,synapses:d?.synapses??null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
     notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth,focusState:n.dataset.focusState,nodeId:n.dataset.nodeId,bodyChars:document.querySelector('#knowledge-node-body')?.textContent?.length??0}:null;})(),
@@ -591,6 +605,7 @@ fn graph_step(
         ("first", Some(id)) => format!("(()=>{{const b=[...document.querySelectorAll('.knowledge-a11y-node')].find(n=>n.dataset.nodeId==={id});if(!b)throw Error('requested canonical note is not visible');b.click();}})()"),
         ("second", Some(id)) => format!("[...document.querySelectorAll('.knowledge-a11y-node')].find(n=>n.dataset.nodeId!=={id})?.click()"),
         (action, _) => match action {
+        "memory-page" if focus.as_deref().is_some_and(|id| id.starts_with("osk:")) => "(()=>{document.querySelector('#settings-tab-memory')?.click();const source=document.querySelector('#knowledge-project');if(source){source.value='legacy';source.dispatchEvent(new Event('change'));}})()",
         "memory-page" => "document.querySelector('#settings-tab-memory')?.click()",
         "first" => "document.querySelectorAll('.knowledge-a11y-node')[0]?.click()",
         "second" => "document.querySelectorAll('.knowledge-a11y-node')[1]?.click()",
@@ -608,7 +623,11 @@ fn graph_step(
     let settle = Instant::now() + Duration::from_secs(5);
     loop {
         let state = collect_script(window, GRAPH_COLLECT.into(), deadline)?;
-        if state["notePane"]["hidden"] != false || state["notePane"]["focusState"] != "loading" {
+        let graph_pending = collect_script(window,"JSON.stringify({pending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중'})".into(),deadline)?;
+        if graph_pending["pending"] != true
+            && (state["notePane"]["hidden"] != false
+                || state["notePane"]["focusState"] != "loading")
+        {
             return Ok(state);
         }
         if Instant::now() >= settle {
@@ -696,7 +715,7 @@ fn audit_settings(
     graph_step(&window, "memory-page", deadline)?;
     let initial = loop {
         let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
-        if rendered_since(&state, 0) {
+        if rendered_since(&state, 0) && state["graphPending"] != true {
             break state;
         }
         live(deadline)?;
@@ -763,9 +782,14 @@ fn audit_settings(
     let back_overview = graph_step(&window, "back", deadline)?;
     if first["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
         || first["navigation"]["hops"] != 0
-        || expanded["navigation"]["hops"] != 2
+        || expanded["navigation"]["hops"]
+            != if initial["navigation"]["source"] == "collection" {
+                1
+            } else {
+                2
+            }
         || second["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
-        || second["navigation"]["focusSlot"] == first["navigation"]["focusSlot"]
+        || second["navigation"]["focusId"] == first["navigation"]["focusId"]
         || back_expanded["navigation"] != expanded["navigation"]
         || back_first["navigation"] != first["navigation"]
         || back_overview["navigation"] != initial["navigation"]
@@ -879,6 +903,11 @@ fn audit_settings(
     } else {
         Vec::new()
     };
+    publish(output, "workspace-readback.json", &serde_json::to_vec_pretty(&json!({
+        "schema":1,"scope":"owned read-only WKWebView with persisted application data; not the primary process, physical voice, lock or production",
+        "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
+        "navigation":{"initial":initial["navigation"],"expanded":expanded["navigation"],"backOverview":back_overview["navigation"]}
+    })).map_err(|_| "workspace readback JSON failed")?,deadline)?;
     let counters = app.state::<WorkspaceCounters>();
     let mut hidden_samples = Vec::new();
     let mut last_hidden_count = count(&compact);
@@ -911,6 +940,7 @@ fn audit_settings(
             })
             .map_err(|_| "settings note dispatch failed")?;
         receive(rx, deadline)?;
+        let stopped_by = Instant::now() + Duration::from_secs(2);
         let stopped = loop {
             let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
             if counters.count(note) > seen
@@ -918,6 +948,10 @@ fn audit_settings(
                 && window.is_visible().ok() == Some(false)
             {
                 break state;
+            }
+            if Instant::now() >= stopped_by {
+                return Err(format!("settings notification {} did not settle: observedCount={}, previousPause={}, nativeVisible={}, state={}",
+                    note.code(),counters.count(note)-seen,previous,window.is_visible().ok()==Some(true),state));
             }
             live(deadline)?;
             std::thread::sleep(Duration::from_millis(10));
@@ -1278,6 +1312,18 @@ mod tests {
         assert!(parse_args(args(SETTINGS_FLAG, "osk:261005-012a-abcdefgh")).is_err());
         assert!(parse_args(args(WORKSPACES_FLAG, "osk:261005-012a-a');alert(1)//")).is_err());
         assert!(parse_args(args(WORKSPACES_FLAG, "../node")).is_err());
+        for prefix in ["graph", "youtube", "threads", "files"] {
+            let id = format!("{}:{}", prefix, "a".repeat(64));
+            assert_eq!(
+                parse_args(args(WORKSPACES_FLAG, &id))
+                    .unwrap()
+                    .unwrap()
+                    .focus_node,
+                Some(id)
+            );
+        }
+        assert!(parse_args(args(WORKSPACES_FLAG, &format!("graph:{}", "g".repeat(64)))).is_err());
+        assert!(parse_args(args(WORKSPACES_FLAG, "graph:short")).is_err());
     }
     use std::os::unix::fs::{symlink, PermissionsExt};
     #[test]

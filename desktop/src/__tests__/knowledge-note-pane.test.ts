@@ -16,6 +16,31 @@ beforeEach(() => {
 });
 
 describe('adjacent note reader', () => {
+  it('shows matching collection record evidence without promoting source content to verified facts', () => {
+    const collected = parseKnowledgeGraph({ nodes: [{ id: 'source:a', label: '원문 제목', source_version: 'version:a' }] });
+    const selected = collected.nodes[0];
+    renderNodeDetails(collected, selected, { details: { node_id: selected.id, basis: 'source_record',
+      version: 'version:a', body: '<script>source text</script>', raw_sha256: 'a'.repeat(64),
+      source_url: 'https://example.test/public', collected_at: 1791350000, platform: 'threads',
+      capture: { status: 'manifest_verified', source_sha256: 'b'.repeat(64), byte_scope: 'exact original JSON file bytes', json_pointer: '/posts/0' } } });
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe('<script>source text</script>');
+    expect(document.getElementById('knowledge-node-body')!.querySelector('script')).toBeNull();
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).toContain('/posts/0');
+    expect(document.getElementById('knowledge-node-basis')!.textContent).toContain('사실 여부를 검증한 것은 아닙니다');
+    expect(document.getElementById('knowledge-node-facts')!.hidden).toBe(true);
+    expect(document.querySelector<HTMLAnchorElement>('#knowledge-node-evidence a')!.href).toBe('https://example.test/public');
+  });
+
+  it('rejects other versions and credential-bearing source links', () => {
+    const collected = parseKnowledgeGraph({ nodes: [{ id: 'a', label: '원문', source_version: 'version:a' }] });
+    const details = { node_id: 'a', basis: 'source_record', version: 'version:a', body: 'collected text',
+      raw_sha256: 'a'.repeat(64), source_url: 'https://user:secret@example.test/private' };
+    renderNodeDetails(collected, collected.nodes[0], { details });
+    expect(document.querySelector('#knowledge-node-evidence a')).toBeNull();
+    renderNodeDetails(collected, collected.nodes[0], { details: { ...details, version: 'other-version', body: 'wrong revision' } });
+    expect(document.getElementById('knowledge-node-body')!.textContent).not.toContain('wrong revision');
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).not.toContain('other-version');
+  });
   it('keeps the graph and all existing detail targets inside separate workspace panes', () => {
     const pane = document.getElementById('knowledge-note-pane')!;
     const workspace = document.querySelector('.knowledge-workspace')!;

@@ -31,7 +31,7 @@ export class ConstellationNodes extends THREE.Group {
     super();
     this.stars = new THREE.InstancedMesh(
       new THREE.SphereGeometry(1,12,8),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: .12, roughness: .56, toneMapped: false }),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x35475a, emissiveIntensity: .18, metalness: .12, roughness: .56, toneMapped: false }),
       CAPACITY,
     );
     this.stars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -84,11 +84,15 @@ export class ConstellationNodes extends THREE.Group {
     }
 
     this.radii.fill(0);
+    const nodesById = new Map(nodes.map(node => [node.id, node]));
     let count = 0;
     for (let slot = 0; slot < CAPACITY; slot++) {
       const id = this.slotIds[slot];
       if (id === null) continue;
-      this.radii[slot] = Math.min(MAX_RADIUS, MIN_RADIUS + .007 * Math.sqrt(this.adjacency.get(id)!.size));
+      const node = nodesById.get(id);
+      this.radii[slot] = node?.degreeScope === 'permitted filtered graph' && node.degree !== undefined
+        ? Math.min(MAX_RADIUS, MIN_RADIUS + .007 * Math.log1p(node.degree))
+        : Math.min(MAX_RADIUS, MIN_RADIUS + .007 * Math.sqrt(this.adjacency.get(id)!.size));
       count = slot + 1;
     }
     // Holes stay collapsed so retained IDs do not move when another ID leaves.

@@ -3,7 +3,6 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { AnimationLoop } from "../core/animation-loop";
 import type { AnimationLoopDiagnostics } from "../core/animation-loop";
 import { ContextNebulae } from './cortex';
-import { createCosmosBackdrop } from './cosmos';
 import { contextRegions, regionBounds } from './context-regions';
 import { createNeuronGlyph, NEURON_EXTENT_RATIO } from './neuron';
 import type { NeuronPort } from './neuron';
@@ -32,6 +31,7 @@ import {
 export interface KnowledgeFocusEvent {
   node: KnowledgeNode | null;
   view: KnowledgeView;
+  previousCamera?: { camera: number[]; lookAt: number[] };
 }
 
 type FocusHandler = (event: KnowledgeFocusEvent) => void;
@@ -71,7 +71,6 @@ export class KnowledgeHologram {
   private readonly positions = new Map<string, THREE.Vector3>();
   private readonly displayedPositions = new Map<string, THREE.Vector3>();
   private readonly nebulae = new ContextNebulae();
-  private readonly cosmos = createCosmosBackdrop();
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly plasticity = new PlasticityLayout(OVERVIEW_NODE_CAP,512);
   private readonly synapses = new SynapticBridges();
@@ -88,6 +87,7 @@ export class KnowledgeHologram {
   private snapshot: RuntimeSnapshot | null = null;
   private latestVoice: VoiceStatus | null = null;
   private paused = false;
+  private reducedMotion = false;
   private activity: OrbActivity = QUIET_ORB;
   private rootNodeId = '';
   private readonly labels = new Map<string, HTMLSpanElement>();
@@ -131,7 +131,7 @@ export class KnowledgeHologram {
     const key = new THREE.DirectionalLight(0xffedcc, 2.1);
     key.position.set(2.5, 3.5, 5);
     this.scene.add(ambient, key);
-    this.scene.add(this.cosmos, this.nebulae);
+    this.scene.add(this.nebulae);
     this.scene.add(this.voiceEnvelope.line);
 
     this.drilldown = new KnowledgeDrilldown(graph);
@@ -215,6 +215,17 @@ export class KnowledgeHologram {
     // Graph-node motion comes only from its real references and user navigation.
   };
   private readonly handleMotionChange = (): void => { this.updateOrbActivity(); this.invalidateFrame(); };
+  get reducedMotionEnabled(): boolean { return this.reducedMotion || this.motion.matches; }
+  setReducedMotion(reduced: boolean): void {
+    this.reducedMotion = reduced;
+    if (this.reducedMotionEnabled) this.plasticity.settle();
+    this.handleMotionChange();
+  }
+  resetCamera(): void {
+    if (this.view.focusId && this.view.hops > 0) this.focusCamera(this.view.focusId);
+    else this.resetOverviewCamera();
+    this.invalidateFrame();
+  }
 
   private invalidateFrame(): void {
     if (!this.disposed && this.requestedAnimation && this.view.nodes.length > 0) this.loop.start();
@@ -227,7 +238,7 @@ export class KnowledgeHologram {
 
   get canGoBack(): boolean { return this.drilldown.canGoBack; }
 
-  replaceGraph(graph: KnowledgeGraph): void {
+  replaceGraph(graph: KnowledgeGraph, navigation?: { focusId: string | null; hops: number }, viewpoint?: { camera: number[]; lookAt: number[] }): void {
     if (this.disposed) return;
     const focus = this.view.focusId;
     this.graph = graph;
@@ -235,12 +246,15 @@ export class KnowledgeHologram {
     const ids = new Set(sorted.map(node => node.id));
     for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
     for (const id of this.displayedPositions.keys()) if (!ids.has(id)) this.displayedPositions.delete(id);
-    this.view = this.drilldown.replaceGraph(graph);
-    if (!focus || !ids.has(focus)) this.resetOverviewCamera();
+    this.view = navigation ? this.drilldown.restore(graph, navigation) : this.drilldown.replaceGraph(graph);
     this.rebuildGraph();
-    if (focus && ids.has(focus)) {if(this.view.hops>0)this.focusCamera(focus);else this.resetOverviewCamera();}
+    if (navigation || focus && !ids.has(focus)) this.resetOverviewCamera();
+    if (navigation && this.view.focusId && this.view.hops > 0) this.focusCamera(this.view.focusId);
+    if (viewpoint && [viewpoint.camera, viewpoint.lookAt].every(values => values.length === 3 && values.every(Number.isFinite))) {
+      this.desiredCamera.fromArray(viewpoint.camera); this.desiredLookAt.fromArray(viewpoint.lookAt);
+    }
     this.canvas.hidden = graph.nodes.length === 0;
-    this.resize();
+    this.resize(false);
     if (this.requestedAnimation && graph.nodes.length > 0) { this.loop.start(); this.voicePoller?.start(); }
     else { this.loop.stop(); this.voicePoller?.stop(); this.voiceEnvelope.clear(); this.voiceSource = "none"; }
     this.notifyView();
@@ -259,10 +273,11 @@ export class KnowledgeHologram {
     if (this.disposed) return this.view;
     const node = this.graph.nodes.find((candidate) => candidate.id === nodeId);
     if (!node) return this.view;
+    const previousCamera = this.navigationTargets;
     this.view = this.drilldown.openNote(nodeId);
     this.rebuildGraph();
     this.resetOverviewCamera();this.invalidateFrame();
-    this.onFocus({ node, view: this.view });
+    this.onFocus({ node, view: this.view, previousCamera });
     return this.view;
   }
 
@@ -364,18 +379,18 @@ export class KnowledgeHologram {
     this.constellationNodes.set(this.view.nodes,this.view.edges);
     this.constellationNodes.highlight(focusId);
     this.constellationNodes.visible=true;this.neuronDetail=false;
-    this.orbit.enableRotate=!global;this.orbit.mouseButtons.LEFT=global?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
+    this.orbit.enableRotate=true;this.orbit.mouseButtons.LEFT=THREE.MOUSE.ROTATE;
     for(const node of [...this.view.nodes].sort((a,b)=>this.constellationNodes.radius(b.id)-this.constellationNodes.radius(a.id)||a.id.localeCompare(b.id)).slice(0,12))this.globalLabels.add(node.id);
     this.rootNodeId = relationCenterId(this.view);
 
     this.plasticity.setGraph(this.view, this.anchors, this.positions);
-    if (this.motion.matches) this.plasticity.settle();
+    if (this.reducedMotionEnabled) this.plasticity.settle();
     this.plasticity.forEachPoint(this.syncPoint);
     const regions = global?[]:contextRegions(this.view, this.graph);
     this.nebulae.set(regions);
     this.canvas.setAttribute('aria-label', global?`${this.view.nodes.length}개 기억의 연결 성도`:`${this.view.nodes.length}개 기억, ${regions.length}개 맥락의 연결 그림`);
     this.canvas.title = regions.map(region => region.label).join(' · ');
-    this.nebulae.update(0, this.positions, this.motion.matches);
+    this.nebulae.update(0, this.positions, this.reducedMotionEnabled);
 
     const sharedPickGeometry=global?new THREE.SphereGeometry(1,8,6):null;
     const sharedPickMaterial=global?new THREE.MeshBasicMaterial({visible:false}):null;
@@ -442,9 +457,9 @@ export class KnowledgeHologram {
     }
     const activeIds=new Set(this.view.nodes.map(node=>node.id));
     this.synapses.set(global?[]:selectSynapses(this.view.edges,activeIds),focusId,true,this.neuronPorts,this.anchors);
-    this.synapses.update(0,this.positions,this.motion.matches);
-    this.overviewSynapses.set(selectSynapses(this.view.edges,activeIds,Date.now(),global?512:144),focusId,this.motion.matches);
-    this.overviewSynapses.update(0,this.positions,this.motion.matches);
+    this.synapses.update(0,this.positions,this.reducedMotionEnabled);
+    this.overviewSynapses.set(selectSynapses(this.view.edges,activeIds,Date.now(),global?512:144),focusId,this.reducedMotionEnabled);
+    this.overviewSynapses.update(0,this.positions,this.reducedMotionEnabled);
     this.constellationNodes.update(this.positions);
     this.applyDetailMode(false,true);
   }
@@ -487,7 +502,7 @@ export class KnowledgeHologram {
     for(const label of this.labels.values())label.dataset.view=detail?'local':'overview';
     if(detail){
       this.synapses.set([],null,true);
-      this.synapses.set(selectSynapses(this.view.edges,new Set(this.view.nodes.map(n=>n.id))),this.view.focusId,this.motion.matches,this.neuronPorts,this.anchors);
+      this.synapses.set(selectSynapses(this.view.edges,new Set(this.view.nodes.map(n=>n.id))),this.view.focusId,this.reducedMotionEnabled,this.neuronPorts,this.anchors);
     } else if(this.view.hops>0) {
       this.synapses.set(selectSynapses(this.view.edges,new Set(this.view.nodes.map(n=>n.id))),this.view.focusId,true,this.neuronPorts,this.anchors);
     }
@@ -537,7 +552,7 @@ export class KnowledgeHologram {
     this.orbit.maxDistance = Math.max(12,distance+.5);
   }
 
-  private resize(): void {
+  private resize(resetCamera = true): void {
     if (this.disposed) return;
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, Math.floor(rect.width || 640));
@@ -549,7 +564,7 @@ export class KnowledgeHologram {
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
-    if (this.view.hops===0) this.resetOverviewCamera();
+    if (resetCamera && this.view.hops===0) this.resetOverviewCamera();
     for (const orb of this.orbMeshes.values()) orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
     for (const box of this.labelBounds) box.width = 0;
     // Overlay geometry is read only on resize/selection layout changes.
@@ -568,7 +583,7 @@ export class KnowledgeHologram {
   private render(dt: number): void {
     if (this.disposed) return;
     const elapsed = Math.min(.25, Math.max(0, dt));
-    if (this.motion.matches && this.plasticity.moving) this.plasticity.settle();
+    if (this.reducedMotionEnabled && this.plasticity.moving) this.plasticity.settle();
     else if (!this.paused) this.plasticity.advance(elapsed);
     this.plasticity.forEachPoint(this.syncPoint);
     for (const [id,mesh] of this.nodeMeshes) {
@@ -578,13 +593,13 @@ export class KnowledgeHologram {
         mesh.position.copy(position);this.orbMeshes.get(id)?.position.copy(position);this.neuronMeshes.get(id)?.position.copy(position);
       }
     }
-    this.synapses.update(elapsed,this.displayedPositions,this.motion.matches||this.paused);
-    this.overviewSynapses.update(elapsed,this.displayedPositions,this.motion.matches||this.paused);
+    this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
+    this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     this.constellationNodes.update(this.displayedPositions);
-    this.nebulae.update(elapsed,this.displayedPositions,this.motion.matches||this.paused);
+    this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
     this.loop.setInteractive(this.plasticity.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
-    const alpha = this.motion.matches||this.paused ? 1 : 1 - Math.exp(-12 * elapsed);
+    const alpha = this.reducedMotionEnabled||this.paused ? 1 : 1 - Math.exp(-12 * elapsed);
     this.camera.position.lerp(this.desiredCamera, alpha);
     this.lookAt.lerp(this.desiredLookAt, alpha);
     this.camera.lookAt(this.lookAt);
@@ -633,7 +648,7 @@ export class KnowledgeHologram {
       if (label.hidden === box.visible) label.hidden = !box.visible;
       if (box.visible && (!wasVisible || previousLeft !== box.left || previousTop !== box.top)) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }
-    if (this.paused || this.motion.matches || (!this.plasticity.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
+    if (this.paused || this.reducedMotionEnabled || (!this.plasticity.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
   }
   private readonly syncPoint = (id:string,x:number,y:number,z:number):void => {this.positions.get(id)?.set(x,y,z);};
 }

@@ -26,6 +26,12 @@ export interface KnowledgeNode {
   space?: string;
   isHub?: boolean;
   oskId?: string;
+  sourceVersion?: string;
+  sourceTarget?: string;
+  sourcePlatform?: string;
+  sourceUrl?: string;
+  degree?: number;
+  degreeScope?: string;
 }
 
 export interface KnowledgeEdge {
@@ -116,6 +122,12 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         space: stringValue(item.space),
         isHub: item.is_hub === true,
         oskId: stringValue(item.osk_id),
+        sourceVersion: stringValue(item.source_version).slice(0, 256),
+        sourceTarget: stringValue(item.source_target).slice(0, 256),
+        sourcePlatform: stringValue(item.source_platform).slice(0, 32),
+        sourceUrl: stringValue(item.source_url).slice(0, 4096),
+        degree: typeof item.degree === 'number' && Number.isFinite(item.degree) ? Math.max(0, Math.floor(item.degree)) : undefined,
+        degreeScope: stringValue(item.degree_scope),
       }];
     })
     : [];
@@ -233,6 +245,16 @@ export class KnowledgeDrilldown {
     const ids = new Set(graph.nodes.map(node => node.id));
     this.history.splice(0, this.history.length, ...this.history.filter(entry => entry.focusId === null || ids.has(entry.focusId)));
     if (this.focusId && !ids.has(this.focusId)) { this.focusId = null; this.hops = 0; }
+    return this.current();
+  }
+
+  restore(graph: KnowledgeGraph, state: { focusId: string | null; hops: number }): KnowledgeView {
+    this.graph = graph;
+    this.focusId = graph.nodes.some(node => node.id === state.focusId) ? state.focusId : null;
+    this.hops = this.focusId ? Math.min(MAX_FOCUS_HOPS, Math.max(0, state.hops)) : 0;
+    this.contextOffset = 0;
+    this.contextLimit = OVERVIEW_NODE_CAP;
+    this.history.length = 0;
     return this.current();
   }
 
