@@ -766,6 +766,9 @@ fn audit_settings(
         &snapshot(&window, deadline)?,
         deadline,
     )?;
+    // The native capture flushes layout/ResizeObserver work. Navigation must
+    // restore the pose actually shown at click time, not a pre-layout sample.
+    let initial = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
     let overview_more = if initial["expandDisabled"] == false {
         let more = graph_step(&window, "expand", deadline)?;
         if more["navigation"]["focused"] != false
@@ -780,7 +783,8 @@ fn audit_settings(
         }
         let restored = graph_step(&window, "back", deadline)?;
         if restored["navigation"] != initial["navigation"] {
-            return Err("native overview expansion did not restore prior context selection".into());
+            return Err(format!("native overview expansion did not restore prior context selection: before={}, restored={}",
+                initial["navigation"], restored["navigation"]));
         }
         more
     } else {
