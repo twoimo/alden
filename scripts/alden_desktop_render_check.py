@@ -248,6 +248,9 @@ SETTINGS_ACTIONS: dict[str, Any] = {
     "voice-history-sessions": {"ok": True, "items": []},
     "voice-history-messages": {"ok": True, "items": [], "next": None},
     "db-sync-history": {"ok": True, "items": [], "next": None, "current": None},
+    "collection-history": {"ok": True, "state": "not_configured", "items": [], "projects": [], "targets": [], "next": None},
+    "collection-projects": {"ok": True, "projects": []},
+    "collection-graph": {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "next": None},
     "reply-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},
     "geeknews-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},
     "knowledge-graph-status": {
