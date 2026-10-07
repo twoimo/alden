@@ -1,8 +1,8 @@
 # Alden
 
-## Alden 0.3.31 source — 저장 변경과 실제 읽기 활동
+## Alden 0.3.31 local install — 저장 변경과 실제 읽기 활동
 
-저장 완료 이력을 현재 보이는 노드의 정확한 버전·대상과 대조해 표시합니다. 숨김 중 발생한 이력을 새 점등으로 연출하지 않고, 중복·역전·재연결과 조회 예산을 처리합니다. 격리된 파일 개정1건이 실제 WKWebView의 노드 활동으로 이어졌으며 UI385/Python29/Rust9 검사가 통과했습니다. 현재 설치본은 아래0.3.30이며0.3.31의 후보·설치 확인은 별도 단계입니다. [활동 계약과 검증 범위](docs/architecture/alden-activity-journal-20261008.md), [공개 집계](docs/architecture/alden-activity-readback-20261008.json)
+저장 완료 이력을 현재 보이는 노드의 정확한 버전·대상과 대조해 표시합니다. 숨김 중 발생한 이력을 새 점등으로 연출하지 않고, 중복·역전·재연결과 조회 예산을 처리합니다. 격리된 파일 개정1건이 실제 WKWebView의 노드 활동으로 이어졌으며 UI385/Python29/Rust108(감사9 포함)·Clippy가 통과했습니다.0.3.31을 정상 설치했고47개 번들 파일과 설정3개를 대조했습니다. 설치 경로의14개 화면, 원문 읽기 활동, 탐색 복원과 합성 숨김 검사가 통과했습니다. 직접 UI 접근은 시간 초과로 미검증이며 물리 음성·단축키·잠금·Retina·서명 릴리즈·프로덕션은 남아 있습니다. [설치본 집계](docs/architecture/alden-activity-installed-20261008.json), [활동 계약과 검증 범위](docs/architecture/alden-activity-journal-20261008.md), [격리 검증과 측정](docs/architecture/alden-activity-readback-20261008.json)
 
 ## Alden 0.3.30 local install — 주변 조회 비용 수정
 
