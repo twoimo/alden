@@ -70,6 +70,21 @@ class CollectionRetrievalTests(unittest.TestCase):
             index_dense(self.root,['one'],embed=embed,cancelled=lambda:True)
         with self.profile():self.assertEqual(index_dense(self.root,['one'],embed=embed)['embedded_changed'],1)
 
+    def test_processing_revision_reuses_only_exact_verified_text_and_encoder(self):
+        records=[{'platform':'graph','original_id':'a','label':'shared term','text':'original'}]
+        self.store.ingest(self.allowed,records,processing_version='parser-one')
+        with self.profile():
+            self.assertEqual(index_dense(self.root,['one'],embed=self.embed)['embedded_changed'],1)
+            self.store.ingest(self.allowed,records,processing_version='parser-two')
+            report=index_dense(self.root,['one'],embed=lambda _:self.fail('unchanged input must reuse its vector'))
+            self.assertEqual(report['reused_versions'],1);self.assertEqual(report['embedded_changed'],0)
+            result=retrieve(self.root,'shared',projects=['one'],query_embed=lambda _:[1.,0.])
+            self.assertEqual(result['search_mode'],'rrf');self.assertIn('original',result['facts'][0])
+            self.store.ingest(self.allowed,[{**records[0],'text':'changed content'}],processing_version='parser-three')
+            self.assertEqual(index_dense(self.root,['one'],embed=self.embed)['embedded_changed'],1)
+        with patch.object(kg,'_active_dense_embedding_model',return_value='different-encoder'):
+            self.assertEqual(index_dense(self.root,['one'],embed=self.embed)['embedded_changed'],1)
+
     def test_mcp_scope_and_unknown_arguments_cannot_expand_startup_authority(self):
         self.add(self.allowed,'a','original');server=KnowledgeServer(self.root,['one'])
         for args in [{'projects':['two'],'query':'shared'}, {'projects':[],'query':'shared'},

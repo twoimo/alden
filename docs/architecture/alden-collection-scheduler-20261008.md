@@ -16,7 +16,7 @@ Supported installed commands:
 
 Use the same arguments with `--install-schedule`, `--once`, `--pause`, or `--resume`. `--target <registered-id>` restricts a run or pauses/resumes that target. Scheduler resume does not resume the emergency latch. Installing an identical loaded definition reuses it; foreign/different definitions are preserved and reported. The job can run while the desktop window is closed and requires a logged-in launchd user session and the installed app/runtime.
 
-Source verification: 67 collection/retrieval/snapshot/scheduler tests and eight build-receipt tests passed locally. Scheduler cases include real snapshot parsing/original capture/index production with fixture vectors, index failure, crash recovery, voice priority, permission exclusion, pause versus publication, exact schedule persistence and duplicate installation. These checks do not establish production acquisition, installed periodic execution, or physical voice behavior; installation readback is recorded separately.
+Source verification: 68 collection/retrieval/snapshot/scheduler tests and eight build-receipt tests passed locally. Scheduler cases include real snapshot parsing/original capture/index production with fixture vectors, index failure, crash recovery, voice priority, permission exclusion, pause versus publication, exact schedule persistence and duplicate installation. These checks do not establish production acquisition, installed periodic execution, or physical voice behavior; installation readback is recorded separately.
 
 # Build reuse
 
@@ -31,3 +31,5 @@ The 0.3.39 app and 52 files were installed after all four CI jobs passed at sour
 The FTS projection previously deleted each document by an UNINDEXED field, repeatedly scanning the26,622-row corpus. In0.3.40, final bodies are staged by document ID and the FTS table is updated once inside the same transaction. Duplicate IDs preserve the last body, unrelated rows remain intact, and later relation failures still roll back search/data/events/checkpoint together. No schema migration is needed.
 
 A single consistent private recovery copy supplied500 selected rows, alternating old and batch SQL three times each. Median update time was2.530 seconds versus0.0467 seconds. All selected values matched and each trial rolled back. This measures only that FTS operation; installed whole-cycle time and search-index completion must be read separately.
+
+Text extraction also avoids deleting nonexistent FTS rows for new versions. A processing-only revision reuses a prior vector only for the same document, exact text hash, model, endpoint and encoding, after checking the permitted retained source bytes. Reused versions are reported separately from actual embedding calls. Changed text or encoder requires new embeddings. Reuse inserts are committed in bounded batches; this does not fabricate inference success or merge document identities.

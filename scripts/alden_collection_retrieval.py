@@ -74,7 +74,11 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
                         text_db.execute('INSERT OR REPLACE INTO texts VALUES(?,?,?,?,?,?,?,?)',
                                         (item['id'], item['version'], base_hash, item['raw_sha256'], TEXT_VERSION,
                                          item['label'], item['body'], field))
-                        text_db.execute('DELETE FROM text_fts WHERE document_id=? AND version=?', (item['id'], item['version']))
+                        # A new version has no FTS row to replace. Both tables
+                        # are written atomically, so avoid a full FTS scan for
+                        # every newly materialized source version.
+                        if cached is not None:
+                            text_db.execute('DELETE FROM text_fts WHERE document_id=? AND version=?', (item['id'], item['version']))
                         text_db.execute('INSERT INTO text_fts VALUES(?,?,?,?)', (item['id'], item['version'], item['label'], item['body']))
                     ready = True
                 item['text_ready'], item['body_source'] = ready, field
@@ -144,7 +148,13 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
         rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
         saved = {(r[0], r[1]): r[2:] for r in db.execute(
             'SELECT document_id,version,text_hash,model,endpoint,encoding FROM vectors')}
-        changed, windows = 0, 0
+        changed, windows, reused = 0, 0, 0
+        reused_rows = []
+        def flush_reused():
+            if not reused_rows:return
+            _check(cancelled)
+            with db:db.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)',reused_rows)
+            reused_rows.clear()
         pieces, owners, totals = [], [], {}
         def flush():
             nonlocal changed, windows
@@ -183,6 +193,15 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
             raw = store._verified_source_blob(store.blobs, row['raw_path'], MAX_RECORD_BYTES)
             if digest(raw) != row['raw_sha256']:
                 raise RuntimeError('collection_source_integrity')
+            prior=db.execute('SELECT vector FROM vectors WHERE document_id=? AND text_hash=? AND model=? AND endpoint=? AND encoding=? LIMIT 1',
+                             (row['id'],row['text_hash'],model,endpoint,ENCODING)).fetchone()
+            if prior:
+                # Only the same document and exact encoder input/profile can
+                # reuse a vector. Source/version authority was checked above.
+                _vector(prior[0])
+                reused_rows.append((row['id'],row['version'],row['text_hash'],model,endpoint,ENCODING,prior[0]));reused+=1
+                if len(reused_rows)>=64:flush_reused()
+                continue
             text = row['label'] + '\n' + row['body']
             for offset in range(0, len(text), 192):
                 piece = text[offset:offset + 256]
@@ -190,12 +209,13 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
                 if len(pieces) == BATCH:
                     flush()
         flush()
+        flush_reused()
         latest = _index_rows(store, projects, cancelled, text_db=db)
     signature = lambda values: [(r['id'], r['version'], r['text_hash']) for r in values]
     return {'state': 'ready' if signature(source_rows) == signature(latest) else 'pending',
             'projects': _scope(projects), 'documents': len(rows), 'embedded_changed': changed,
             'source_versions': len(source_rows), 'unsearchable_versions': len(source_rows) - len(rows),
-            'embedded_windows': windows, 'model': model, 'encoding': ENCODING}
+            'embedded_windows': windows, 'reused_versions':reused, 'model': model, 'encoding': ENCODING}
 
 
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
