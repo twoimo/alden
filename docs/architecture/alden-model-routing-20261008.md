@@ -17,3 +17,11 @@
 검증: 실제 비공개 GeminiHigh 음성 어댑터 경로는확인응답/4.0056초n1, 실제 staged Python3.13 자동답변 생성도확인응답/exit0을 받았다. 메시지 전송은 없다. UI395, Python route/voice19와worker42, Rust108/Clippy가 통과했다. 기본·최소 native 화면과 모델 메뉴의 QA를 수행했다. 작은 창에서 위쪽 메뉴가 잘리던 문제를 수정해 실제 남은 높이로 제한했다. 설치·기본값·활성 런타임 되읽기는 진행 중이다. 단일 probe를 일반 성능·품질·쿼터 절감으로 해석하지 않는다.
 
 [EmbeddingGemma2 후보 실행 범위](alden-embeddinggemma2-20261008.md)
+
+## 실제 전달 확인
+
+실행 소스88cec0fb85d3e2e1d4b2dc64e61ce5bf589388e5의 최종CI37757017490가4개 작업 모두 통과했다. 초기1529개 focused검사 중 rendered stub의2개 신규 action누락 실패를 수정했고 해당33개 검사도 통과했다. 정상0.3.38 installer로 설치하고51개 파일 및 strict/deep ad-hoc signature를 대조했다. 이전0.3.36 전체49개 파일과 schema3 DB/config3 backup을 보존했다.
+
+현재primary17687, 기존27B/E5서버63062/11016을 유지했다. enrollment의 runtime_root만 정상 준비된 호환 디렉터리로 바꾸고 선택자·CLI·설정·기존 대기열을 유지했다. 기본 모델은 설치된 setter로Gemini canonicalID/high/manual을 저장하고 실제 파일을 읽어 확인했다. 비상 중단 파일은 그대로다. 이미 실행 중인worker/supervisor는 없었으며 새 메시지를 전송하거나 작업을 시작하지 않았다.
+
+설치된 실제 factory도확인을 응답했고4.6486초n1이었다. 원문 버전·해시·허용 범위와 E5+BM25/RRF의 설치된 MCP readback이 통과했다. 이 검사는 모든17개 제공자의 추론·사람 음성·OS잠금·최종 signed/notarized production의 성공을 의미하지 않는다. 개별 모델 상태와 물리 입력 검증은 각각의 근거를 사용한다.
