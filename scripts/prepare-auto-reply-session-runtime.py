@@ -82,6 +82,7 @@ RUNTIME_SCRIPT_NAMES = (
     "alden_corpus.py",
     "alden_collection.py",
     "alden_collection_retrieval.py",
+    "alden_retrieval_time.py",
     "alden_corpus_topics.py",
     "alden_osk.py",
     "alden_osk_retrieval.py",
