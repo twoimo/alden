@@ -236,6 +236,9 @@ KNOWLEDGE_GRAPH: dict[str, Any] = {
 }
 
 SETTINGS_ACTIONS: dict[str, Any] = {
+    "routed-models": {"ok": True, "model": "google-antigravity/gemini-3.8-flash", "reasoning_effort": "high", "mode": "manual",
+        "models": [{"id":"google-antigravity/gemini-3.8-flash", "label":"agy/gemini-3.8-flash", "provider":"google-antigravity", "local":False, "efforts":["low","medium","high"], "default_effort":"medium", "status":"connected", "selectable":True}]},
+    "routed-model-set": {"ok":True, "stored":True, "model":"google-antigravity/gemini-3.8-flash", "reasoning_effort":"high", "mode":"manual"},
     # The three model actions below report the state this host is really in: an
     # external mlx-serve owns port 11234, so the app refuses the 27B swap.
     "model-set": {"ok": True, "action": "model-set", "model": "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit", "stored": True, "prepared": False, "needs_prepare": True},
