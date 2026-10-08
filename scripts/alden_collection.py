@@ -419,6 +419,10 @@ class CollectionStore:
             try:
                 with self.database(publication_guard=publication_guard) as db:
                     db.execute('BEGIN IMMEDIATE')
+                    # document_id is UNINDEXED in FTS5. Deleting once per input
+                    # record scans the entire corpus each time. Stage each
+                    # final body, then update the projection in one table scan.
+                    db.execute('CREATE TEMP TABLE search_updates(document_id TEXT PRIMARY KEY,label TEXT,body TEXT)')
                     if complete_snapshot:
                         prior_relations = dict(db.execute('SELECT id,version FROM relations WHERE target_id=? AND active=1', (target_id,)))
                         db.execute('CREATE TEMP TABLE snapshot_members(document_id TEXT PRIMARY KEY)')
@@ -459,10 +463,12 @@ class CollectionStore:
                         if complete_snapshot:
                             db.execute('INSERT INTO snapshot_members VALUES(?)', (doc_id,))
                         self._event(db, run_id, target_id, "stored", document_id=doc_id, version=version, change=category)
-                        db.execute("DELETE FROM document_search WHERE document_id=?", (doc_id,))
-                        db.execute("INSERT INTO document_search VALUES(?,?,?)", (doc_id, label, body))
+                        db.execute('INSERT INTO search_updates VALUES(?,?,?) ON CONFLICT(document_id) DO UPDATE SET label=excluded.label,body=excluded.body', (doc_id,label,body))
                         self._event(db, run_id, target_id, "indexed", document_id=doc_id, version=version,
                                     index="sqlite_fts5", dense_index="not_yet_confirmed")
+                    if cancelled():raise RuntimeError('collection_cancelled')
+                    db.execute('DELETE FROM document_search WHERE document_id IN (SELECT document_id FROM search_updates)')
+                    db.execute('INSERT INTO document_search SELECT document_id,label,body FROM search_updates')
                     for relation in relations:
                         source = identity(relation["source_platform"], relation["source_id"])
                         destination = identity(relation["target_platform"], relation["target_id"])

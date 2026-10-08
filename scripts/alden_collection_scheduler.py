@@ -212,6 +212,7 @@ class CollectionScheduler:
                     state='paused' if isinstance(exc,AldenCancelled) else 'busy';error=type(exc).__name__
                 except Exception as exc:
                     error=str(exc)[:160];state='paused' if error in {'collection_cancelled','collection_target_paused','collection_scheduler_paused','collection_retrieval_cancelled'} else 'blocked' if error in {'collection_source_revision_stale','collection_source_revision_conflict','collection_source_scope_denied'} else 'failed'
+                if state=='paused' and time.monotonic()-started>=max_seconds:error='collection_budget_exhausted'
                 result['finished_stage']=stage
                 failures=0 if state=='complete' else int(previous.get('failures',0))+1
                 delay=min(21600,60*2**min(8,failures-1)) if failures else 0

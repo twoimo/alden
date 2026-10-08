@@ -116,6 +116,25 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual([e["stage"] for e in self.store.events()["items"]][-1], "failed")
         self.assertFalse(any(e["document_id"] == identity("youtube", "new") for e in self.store.events()["items"]))
 
+    def test_batch_search_preserves_unrelated_rows_and_last_duplicate_body(self):
+        target=self.target()
+        self.store.ingest(target,[self.record('keep',text='unrelated'),self.record('edit',text='before')])
+        self.store.ingest(target,[self.record('edit',text='intermediate'),self.record('new',text='inserted'),self.record('edit',text='final')])
+        with self.store.database() as db:
+            rows=db.execute('SELECT document_id,body FROM document_search ORDER BY document_id').fetchall()
+        self.assertEqual(dict(rows),{identity('youtube','keep'):'unrelated',identity('youtube','edit'):'final',identity('youtube','new'):'inserted'})
+        self.assertEqual(len(rows),3)
+        self.assertEqual(self.store.search('final',projects=['one'])[0]['body'],'final')
+
+    def test_failed_later_relation_rolls_back_batched_search_projection(self):
+        target=self.target();self.store.ingest(target,[self.record(text='before')],cursor='before')
+        relation={'source_platform':'youtube','source_id':'AbC','target_platform':'youtube','target_id':'missing','type':'reference'}
+        with self.assertRaisesRegex(ValueError,'orphan_relation'):
+            self.store.ingest(target,[self.record(text='after')],relations=[relation],cursor='after')
+        self.assertEqual(json.loads(self.store.target(target)['cursor']),'before')
+        self.assertEqual(self.store.search('before',projects=['one'])[0]['body'],'before')
+        self.assertEqual(self.store.search('after',projects=['one']),[])
+
     def test_permissions_filter_graph_search_and_history(self):
         allowed = self.target()
         denied = self.target("channel-B", "two", permission="denied")
