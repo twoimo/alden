@@ -14,7 +14,8 @@ class NativePlaybackEnvelopeTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory(prefix="alden-playback-sdk-") as folder:
             program = Path(folder) / "probe"
-            built = subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-O", "-framework", "AVFoundation",
+            built = subprocess.run(["xcrun", "swiftc", "-swift-version", "5", "-O", "-framework", "AVFoundation", "-framework", "CoreAudio",
+                                    str(root / "voice/native/input_availability.swift"),
                                     str(root / "voice/native/playback_envelope.swift"),
                                     str(root / "voice/native/tests/main.swift"), "-o", str(program)],
                                    capture_output=True, text=True, timeout=60)
