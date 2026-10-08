@@ -585,7 +585,7 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     settingsState:document.getElementById('app')?.dataset.state,settingsPage:document.querySelector('.settings-shell')?.dataset.settingsPage,
     graphPending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중',
     renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
-    navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
+    graphRead:d?d.graphRead:null, navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
     regions:d?.regions??null,synapses:d?.synapses??null,
     nodeActivity:d?.nodeActivity??null,activityJournal:d?.activityJournal??null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
@@ -703,6 +703,10 @@ fn audit_settings(
                 live(deadline)?;
                 unsafe {
                     (&*native.cast::<NSWindow>()).setLevel(NSFloatingWindowLevel);
+                    // This audit uses fixed JS actions. Physical mouse input
+                    // must continue to the user's existing app, not rotate our
+                    // floating graph between the saved navigation snapshots.
+                    (&*native.cast::<NSWindow>()).setIgnoresMouseEvents(true);
                 }
                 Ok(())
             });
@@ -773,12 +777,15 @@ fn audit_settings(
     let overview_more = if initial["expandDisabled"] == false {
         let more = graph_step(&window, "expand", deadline)?;
         if more["navigation"]["focused"] != false
-            || more["navigation"]["overviewLimit"] != 120
+            || more["navigation"]["overviewLimit"]
+                .as_u64()
+                .unwrap_or(u64::MAX)
+                > 2048
             || more["navigation"]["overviewOffset"].as_u64().unwrap_or(0)
                 <= initial["navigation"]["overviewOffset"]
                     .as_u64()
                     .unwrap_or(0)
-            || more["navigation"]["nodeCount"].as_u64().unwrap_or(u64::MAX) > 120
+            || more["navigation"]["nodeCount"].as_u64().unwrap_or(u64::MAX) > 2048
         {
             return Err("native overview expansion did not expose bounded extra contexts".into());
         }

@@ -7,7 +7,7 @@ export interface Point3 { x: number; y: number; z: number }
 export interface Synapse { key: string; source: string; target: string; strength: number; purpose?: KnowledgeEdge['purpose'] }
 
 /** Visual bundles only: source triples and their evidence remain unchanged. */
-export function selectSynapses(edges: readonly KnowledgeEdge[], activeIds?: ReadonlySet<string>, nowMs = Date.now(), cap = SYNAPSE_CAP): Synapse[] {
+export function selectSynapses(edges: readonly KnowledgeEdge[], activeIds?: ReadonlySet<string>, nowMs = Date.now(), cap = SYNAPSE_CAP, overview = false): Synapse[] {
   const pairs = new Map<string, Synapse>();
   for (const edge of edges) {
     if (edge.source === edge.target || edge.evidence.retracted) continue;
@@ -25,7 +25,7 @@ export function selectSynapses(edges: readonly KnowledgeEdge[], activeIds?: Read
     if (!old || rank(edge.purpose) > rank(old.purpose) || rank(edge.purpose) === rank(old.purpose) && strength > old.strength)
       pairs.set(key, { key, source, target, strength, purpose: edge.purpose });
   }
-  return [...pairs.values()].sort((a, b) => Number(a.purpose === 'navigation') - Number(b.purpose === 'navigation') || b.strength - a.strength || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, boundedCapacity(cap, SYNAPSE_CAP, MAX_SYNAPSE_CAP));
+  return [...pairs.values()].sort((a, b) => Number(a.purpose === 'navigation') - Number(b.purpose === 'navigation') || b.strength - a.strength || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, boundedCapacity(cap, SYNAPSE_CAP, overview ? 4096 : MAX_SYNAPSE_CAP));
 }
 
 export function synapseRestLength(strength: number): number { return .3 + .45 * (1 - strength); }

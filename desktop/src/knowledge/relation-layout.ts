@@ -20,6 +20,7 @@ function seedPoint(id: string): Point3 {
  * solved, once on graph/navigation changes, never on each animation frame.
  */
 export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = view, nodeCap=ON_SCREEN_NODE_CAP): Map<string, Point3> {
+  if (view.nodes.length > 120 && nodeCap > 120) return overviewAnchors(view, nodeCap);
   const nodes = [...view.nodes].filter(n => !n.evidence.retracted)
     .sort((a, b) => a.id.localeCompare(b.id)).slice(0, Math.min(120,Math.max(1,nodeCap)));
   const points = nodes.map(n => seedPoint(n.id));
@@ -92,6 +93,27 @@ export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = vie
     }
   }
   return new Map(nodes.map((node, i) => [node.id, points[i]]));
+}
+
+/** Source grouping is visual navigation, never a stored relationship. A large
+ * overview uses bounded O(V+E) anchors, leaving the 120-node dynamic solver
+ * budget unchanged. IDs keep their positions when another source is refreshed. */
+function overviewAnchors(view: KnowledgeView, cap: number): Map<string, Point3> {
+  const nodes = view.nodes.filter(node => !node.evidence.retracted).slice(0, Math.min(2048, cap));
+  const groups = [...new Set(nodes.map(node => node.sourceTarget || node.space || 'memory'))].sort();
+  const points = new Map<string, Point3>();
+  const scale = Math.min(1.1, 2.4 / Math.sqrt(Math.max(1, groups.length)));
+  for (const node of nodes) {
+    const group = node.sourceTarget || node.space || 'memory';
+    const center = seedPoint(group);
+    const point = seedPoint(node.id);
+    // A deterministic radial distribution makes a volume, not a sphere shell.
+    const radial = .15 + .7 * Math.abs(seedPoint(node.id + ':radius').y);
+    points.set(node.id, { x: center.x * 1.65 + point.x * radial * scale,
+      y: center.y * 1.65 + point.y * radial * scale,
+      z: center.z + point.z * radial * scale });
+  }
+  return points;
 }
 
 export function relationCenterId(view: KnowledgeView): string {

@@ -13,6 +13,21 @@ from alden_collect import capture_source, collect_target
 
 
 class CollectionTests(unittest.TestCase):
+    def test_overview_density_is_explicit_bounded_and_keeps_scope_and_detail_budgets(self):
+        allowed, denied = self.target(), self.target("denied", "other")
+        self.store.ingest(allowed, [self.record(str(i)) for i in range(160)])
+        self.store.ingest(denied, [self.record("private")])
+        with self.assertRaises(ValueError):
+            self.store.graph_page(projects=["one"], limit=1984)
+        result = self.store.graph_page(projects=["one"], limit=1984, overview=True)
+        self.assertEqual(len(result["nodes"]), 160)
+        self.assertEqual(result["total_nodes"], 160)
+        self.assertTrue(all(node["source_target"] == allowed for node in result["nodes"]))
+        with self.assertRaises(ValueError):
+            self.store.graph_page(projects=["one"], limit=1985, overview=True)
+        with self.assertRaises(ValueError):
+            self.store.graph_page(projects=["one"], limit=1984, overview=True, focus=result["nodes"][0]["id"])
+
     def test_first_target_change_after_other_target_stages_is_not_a_pruning_reset(self):
         allowed, other = self.target(), self.target("elsewhere", "other")
         self.store.ingest(other, [self.record("unrelated")])
@@ -232,6 +247,20 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(self.store.graph_page(projects=["one"], node_type="missing")["nodes"], [])
         unfiltered = self.store.graph_page(projects=["one"], target_id=a)
         self.assertEqual(next(n for n in unfiltered["nodes"] if n["id"] == root["id"])["degree"], 1)
+
+    def test_detail_reads_retained_original_instead_of_internal_json_for_old_graph_versions(self):
+        target = self.store.register(platform="graph", original_id="retained", kind="graph", label="원본", projects=["one"])
+        record = {"original_id": "source-a", "label": "", "text": "", "raw":
+                  {"localOriginalText": "채용 공고의 원문\n경험을 구체적으로 적습니다.", "handle": "@original", "date": "2026-10-01"}}
+        self.store.ingest(target, [record])
+        node = self.store.graph_page(projects=["one"])["nodes"][0]
+        detail = self.store.graph_page(projects=["one"], focus=node["id"], hops=0,
+                                        details=True, expected_version=node["source_version"])["details"]
+        self.assertEqual(node["label"], "source-a")
+        self.assertEqual(detail["body"], record["raw"]["localOriginalText"])
+        self.assertEqual(detail["body_format"], "retained_original_text")
+        self.assertIn("@original", detail["display_label"])
+        self.assertEqual(detail["version"], node["source_version"])
 
     def test_graph_details_verify_record_hash_and_fence_old_selected_versions(self):
         target = self.target()

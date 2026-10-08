@@ -536,8 +536,13 @@ body.settings-view {
 .knowledge-focus-card #knowledge-retrieve { font-size:11px; color:var(--muted); margin-bottom:0; }
 .knowledge-node-summary, .knowledge-source-text { font-weight:400; }
 @media (max-width:1000px) {
-  .knowledge-section[data-note-open="true"] > .knowledge-workspace { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(220px,.85fr) minmax(0,1fr); }
+  .knowledge-section[data-note-open="true"] > .knowledge-workspace { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(360px,1.35fr) minmax(0,1fr); }
   .settings-view .knowledge-focus-card { border-left:0; border-top:1px solid var(--border); }
   .knowledge-detail-heading { padding:14px 18px 12px; }
   .knowledge-note-body { padding:16px 18px 20px; }
 }
+
+/* The graph is a quiet black field; source colours belong to real data. */
+.settings-shell[data-settings-page="memory"] .knowledge-hologram-shell { background:#030405; }
+.settings-shell[data-settings-page="memory"] { --canvas:#07090c; --surface:#0e1218; --border:#26303b; }
+.knowledge-node-label[data-focused="true"] { color:#ed8bab; border-color:#ed8bab70; }

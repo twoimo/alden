@@ -48,6 +48,18 @@ afterEach(() => {
   owned.length = 0;
 });
 
+describe('dense overview visibility', () => {
+  it('keeps tiny real nodes visible and pickable without showing missing positions', () => {
+    const group = new ConstellationNodes(2048); owned.push(group);
+    group.set([node('small', { degree: 0, degreeScope: 'permitted filtered graph' })], []);
+    group.setMinimumRadius(.015); group.update(points('small'));
+    expect(group.radius('small')).toBe(.015);
+    expect(transform(stars(group), 0).elements[0]).toBeCloseTo(.015);
+    group.update(new Map()); collapsed(stars(group), 0);
+    group.setMinimumRadius(NaN); expect(group.radius('small')).toBe(.006);
+  });
+});
+
 describe('saved activity color buffers', () => {
   it('decays a saved receipt on its real node without replacing geometry, slots or buffers', () => {
     vi.useFakeTimers(); vi.setSystemTime(10000);

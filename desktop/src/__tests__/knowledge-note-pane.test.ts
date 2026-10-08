@@ -150,7 +150,7 @@ describe('note reader responsive CSS', () => {
         const layout = browser.getComputedStyle(workspace);
         expect(layout.display).toBe('grid');
         expect(layout.gridTemplateColumns).toBe(stacked ? 'minmax(0,1fr)' : 'minmax(0,1fr) minmax(300px,38%)');
-        expect(layout.gridTemplateRows).toBe(stacked ? 'minmax(220px,.85fr) minmax(0,1fr)' : 'minmax(0,1fr)');
+        expect(layout.gridTemplateRows).toBe(stacked ? 'minmax(360px,1.35fr) minmax(0,1fr)' : 'minmax(0,1fr)');
         const note = browser.getComputedStyle(pane);
         expect(note.position).toBe('relative');
         expect(note.overflowY).toBe('auto');

@@ -3,6 +3,7 @@ export const MAX_FOCUS_HOPS = 3;
 export const FOCUS_NEIGHBOR_LIMIT = 10;
 export const ON_SCREEN_NODE_CAP = 24;
 export const OVERVIEW_NODE_CAP = 120;
+export const OVERVIEW_LOD_CAP = 2048;
 export const NAVIGATION_HISTORY_LIMIT = 32;
 
 export interface KnowledgeEvidence {
@@ -26,6 +27,7 @@ export interface KnowledgeNode {
   space?: string;
   isHub?: boolean;
   oskId?: string;
+  canonicalId?: string;
   sourceVersion?: string;
   sourceTarget?: string;
   sourcePlatform?: string;
@@ -49,6 +51,7 @@ export interface KnowledgeEdge {
 }
 
 export interface KnowledgeGraph {
+  overviewBudget?: number;
   nodes: KnowledgeNode[];
   edges: KnowledgeEdge[];
 }
@@ -122,6 +125,7 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         space: stringValue(item.space),
         isHub: item.is_hub === true,
         oskId: stringValue(item.osk_id),
+        canonicalId: stringValue(item.canonical_id),
         sourceVersion: stringValue(item.source_version).slice(0, 256),
         sourceTarget: stringValue(item.source_target).slice(0, 256),
         sourcePlatform: stringValue(item.source_platform).slice(0, 32),
@@ -158,11 +162,11 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
       }];
     })
     : [];
-  return { nodes, edges };
+  return { nodes, edges, overviewBudget: payload?.overview_budget === OVERVIEW_LOD_CAP ? OVERVIEW_LOD_CAP : undefined };
 }
 
 function subgraph(graph: KnowledgeGraph, ids: string[], focusId: string | null, hops: number): KnowledgeView {
-  const keep = new Set(ids.slice(0, focusId === null ? OVERVIEW_NODE_CAP : ON_SCREEN_NODE_CAP));
+  const keep = new Set(ids.slice(0, focusId === null ? OVERVIEW_LOD_CAP : ON_SCREEN_NODE_CAP));
   return {
     nodes: graph.nodes.filter((node) => keep.has(node.id)),
     edges: graph.edges.filter((edge) => keep.has(edge.source) && keep.has(edge.target)),
@@ -176,7 +180,7 @@ function subgraph(graph: KnowledgeGraph, ids: string[], focusId: string | null, 
  * Space/category does not choose global positions or hide disconnected notes.
  */
 export function overviewGraph(graph: KnowledgeGraph, nodeLimit=OVERVIEW_NODE_CAP, nodeOffset=0, nowMs=Date.now()): KnowledgeView {
-  const memories=graph.nodes.filter(node=>!node.isHub&&!node.evidence.retracted);
+  const memories=(graph.overviewBudget ? graph.nodes : graph.nodes.filter(node=>!node.isHub&&!node.evidence.retracted));
   const candidates=memories.length?memories:graph.nodes.filter(node=>!node.evidence.retracted);
   const degree=new Map<string,Set<string>>();
   for(const edge of graph.edges) {
@@ -187,8 +191,8 @@ export function overviewGraph(graph: KnowledgeGraph, nodeLimit=OVERVIEW_NODE_CAP
       const neighbours=degree.get(id)??new Set<string>();neighbours.add(other);degree.set(id,neighbours);
     }
   }
-  const ordered=[...candidates].sort((a,b)=>(degree.get(b.id)?.size??0)-(degree.get(a.id)?.size??0)||b.importance-a.importance||a.id.localeCompare(b.id));
-  const limit=Number.isFinite(nodeLimit)?Math.min(OVERVIEW_NODE_CAP,Math.max(1,Math.floor(nodeLimit))):OVERVIEW_NODE_CAP;
+  const ordered=graph.overviewBudget ? candidates : [...candidates].sort((a,b)=>(degree.get(b.id)?.size??0)-(degree.get(a.id)?.size??0)||b.importance-a.importance||a.id.localeCompare(b.id));
+  const limit=Number.isFinite(nodeLimit)?Math.min(OVERVIEW_LOD_CAP,Math.max(1,Math.floor(nodeLimit))):OVERVIEW_NODE_CAP;
   const offset=Number.isFinite(nodeOffset)?Math.min(Math.max(0,Math.floor(nodeOffset)),Math.max(0,Math.floor((ordered.length-1)/limit)*limit)):0;
   return {...subgraph(graph,ordered.slice(offset,offset+limit).map(n=>n.id),null,0),overviewLimit:limit,overviewOffset:offset,hasMoreContexts:offset+limit<ordered.length};
 }
@@ -238,10 +242,11 @@ export class KnowledgeDrilldown {
   private contextOffset=0;
   private readonly history: Array<{ focusId: string | null; hops: number; contextLimit:number; contextOffset:number }> = [];
 
-  constructor(private graph: KnowledgeGraph) {}
+  constructor(private graph: KnowledgeGraph) { this.contextLimit = graph.overviewBudget ?? OVERVIEW_NODE_CAP; }
 
   replaceGraph(graph: KnowledgeGraph): KnowledgeView {
     this.graph = graph;
+    this.contextLimit = graph.overviewBudget ?? OVERVIEW_NODE_CAP;
     const ids = new Set(graph.nodes.map(node => node.id));
     this.history.splice(0, this.history.length, ...this.history.filter(entry => entry.focusId === null || ids.has(entry.focusId)));
     if (this.focusId && !ids.has(this.focusId)) { this.focusId = null; this.hops = 0; }
@@ -250,10 +255,11 @@ export class KnowledgeDrilldown {
 
   restore(graph: KnowledgeGraph, state: { focusId: string | null; hops: number }): KnowledgeView {
     this.graph = graph;
+    this.contextLimit = graph.overviewBudget ?? OVERVIEW_NODE_CAP;
     this.focusId = graph.nodes.some(node => node.id === state.focusId) ? state.focusId : null;
     this.hops = this.focusId ? Math.min(MAX_FOCUS_HOPS, Math.max(0, state.hops)) : 0;
     this.contextOffset = 0;
-    this.contextLimit = OVERVIEW_NODE_CAP;
+    this.contextLimit = graph.overviewBudget ?? OVERVIEW_NODE_CAP;
     this.history.length = 0;
     return this.current();
   }
@@ -263,7 +269,7 @@ export class KnowledgeDrilldown {
     if(this.hops===0){
       const overview=overviewGraph(this.graph,this.contextLimit,this.contextOffset);
       if(!overview.nodes.some(n=>n.id===this.focusId)){
-        const ids=overview.nodes.slice(0,OVERVIEW_NODE_CAP-1).map(n=>n.id);ids.push(this.focusId);
+        const ids=overview.nodes.slice(0,this.contextLimit-1).map(n=>n.id);ids.push(this.focusId);
         return {...subgraph(this.graph,ids,null,0),focusId:this.focusId,overviewLimit:overview.overviewLimit,overviewOffset:overview.overviewOffset,hasMoreContexts:overview.hasMoreContexts};
       }
       return {...overview,focusId:this.focusId};
@@ -306,7 +312,7 @@ export class KnowledgeDrilldown {
     this.remember(null, 0,OVERVIEW_NODE_CAP,0);
     this.focusId = null;
     this.hops = 0;
-    this.contextLimit=OVERVIEW_NODE_CAP;this.contextOffset=0;
+    this.contextLimit=this.graph.overviewBudget??OVERVIEW_NODE_CAP;this.contextOffset=0;
     return this.current();
   }
 

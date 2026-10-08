@@ -515,7 +515,7 @@ export async function setupKnowledgeGraph(
       || view.edges.find((edge) => edge.source === node.id || edge.target === node.id)?.roomId || '';
     const legacyFocus = () => loadAction("knowledge-graph-focus", {
       query: node.label,
-      nodeId: node.id,
+      nodeId: node.canonicalId || node.id,
       chatId: localRoom,
     });
     void (hooks ? hooks.focus(node, legacyFocus) : legacyFocus()).then((focus) => {
@@ -527,6 +527,10 @@ export async function setupKnowledgeGraph(
         renderNodeDetails(currentGraph, node, focus ?? { ok: false });
         setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
         return;
+      }
+      const detail = focus.details as Record<string, unknown> | undefined;
+      if (detail?.node_id === node.id && typeof detail.display_label === 'string' && detail.display_label.trim()) {
+        setText('knowledge-focus-title', detail.display_label);
       }
       renderNodeDetails(currentGraph, node, focus);
       if (detailPanel) detailPanel.dataset.focusState = 'ready';
@@ -715,6 +719,7 @@ export async function bootSettings(
         source: collectionGraph?.collection ? 'collection' : 'legacy',
         nodeActivity: graph.nodeActivityDiagnostics,
         activityJournal: collectionGraph?.activityDiagnostics,
+        graphRead: collectionGraph?.readDiagnostics,
         motionReduced: graph.reducedMotionEnabled,
         focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? graph.currentGraph.nodes.findIndex(node => node.id === graph.currentView.focusId),
         canGoBack: collectionGraph?.collection ? collectionGraph.canGoBack : graph.canGoBack,

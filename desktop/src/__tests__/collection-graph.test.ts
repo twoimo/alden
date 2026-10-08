@@ -31,10 +31,10 @@ class Port {
     this.controller.selected({ node: this.graph.nodes.find(n => n.id === id) ?? null, view, previousCamera }); return view;
   }
 }
-function controller(read: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => page()) {
+function controller(read: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => page(), memory: Record<string, unknown> = { ok: true, nodes: [], edges: [] }) {
   const load = vi.fn<typeof fetchSettingsAction>(async (action, input = {}) => action === 'collection-projects'
     ? { ok: true, projects: [{ project: 'one' }, { project: 'two' }] } : action === 'collection-graph'
-      ? read(JSON.parse(input.query ?? '{}')) : { ok: true, nodes: [], edges: [] });
+      ? read(JSON.parse(input.query ?? '{}')) : memory);
   const port = new Port(); const c = new CollectionGraphController(load, port); port.controller = c; owned.push(c); c.start();
   return { c, port, load };
 }
@@ -44,6 +44,19 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const c of owned) c.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('permitted collection graph navigation', () => {
+  it('reads a memory inside the unified view through its canonical reader without mutating source payloads', async () => {
+    const { c, port, load } = controller(async () => page(), { ok: true, nodes: [{ id: 'canonical', label: '기억' }], edges: [] });
+    await settle();
+    const n = port.currentGraph.nodes.find(node => node.id === 'memory:canonical')!;
+    const original = Object.freeze({ ok: true, details: Object.freeze({ node_id: 'canonical', body: '원문' }) });
+    const legacy = vi.fn(async () => original);
+    const result = await c.focus(n, legacy);
+    expect(legacy).toHaveBeenCalledTimes(1);
+    expect(result?.details).toMatchObject({ node_id: 'memory:canonical', body: '원문' });
+    expect(original.details.node_id).toBe('canonical');
+    expect(load.mock.calls.some(([action, input]) => action === 'collection-graph' && JSON.parse(input!.query!).focus === 'memory:canonical')).toBe(false);
+  });
+
   it('loads actual project choices and distinguishes the bounded scene from the full permitted graph', async () => {
     const { port, load } = controller(); await settle();
     expect(port.currentGraph.nodes.map(n => n.id)).toEqual(['a', 'b']);
@@ -88,7 +101,7 @@ describe('permitted collection graph navigation', () => {
     pending.resolve({ ok: true, details: { node_id: 'a' } });
     expect(await focus).toEqual({ discarded: true }); await settle(60000);
     expect(load).toHaveBeenCalledTimes(count);
-    c.start(); c.start(); await settle(); expect(load).toHaveBeenCalledTimes(count + 1);
+    c.start(); c.start(); await settle(); expect(load).toHaveBeenCalledTimes(count + 2); // One collection read and one scoped memory read.
   });
 
   it('sends the selected target, relation, type, source and local date boundaries to the read API', async () => {

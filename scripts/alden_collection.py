@@ -599,8 +599,10 @@ class CollectionStore:
 
     def graph_page(self, *, projects: list[str], limit=120, offset=0, focus=None, hops=1, query="",
                    target_id=None, platform=None, node_type=None, relation=None, since=None, until=None,
-                   details=False, expected_version=None) -> dict:
-        if type(limit) is not int or not 1 <= limit <= 120 or type(offset) is not int or offset < 0 or type(hops) is not int or not 0 <= hops <= 3:
+                   details=False, expected_version=None, overview=False) -> dict:
+        if type(limit) is not int or not 1 <= limit <= (1984 if overview is True and not focus else 120) or type(offset) is not int or offset < 0 or type(hops) is not int or not 0 <= hops <= 3:
+            raise ValueError("collection_graph_budget_invalid")
+        if type(overview) is not bool:
             raise ValueError("collection_graph_budget_invalid")
         for value in (focus, target_id, node_type, relation, expected_version):
             if value is not None and (not isinstance(value, str) or not value or len(value) > 256):
@@ -663,12 +665,20 @@ class CollectionStore:
               'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
               'label',v.label,'body',substr(v.body,1,2400),'metadata',json_object('kind',substr(CAST(json_extract(v.metadata,'$.kind') AS TEXT),1,256)),
               'source_url',json_extract(v.metadata,'$.source_url'),'degree',COALESCE(d.degree,0))"""
+            if overview:
+                json_node = json_node.replace("substr(v.body,1,2400)", "substr(v.body,1,0)")
             if not focus:
                 # All overview outputs share one materialized permitted scope.
                 # LIMIT+1 remains inside SQL, including FTS pages.
                 fts = ' AND '.join('"' + term.replace('"', '""') + '"' for term in query.split())
                 picking = ("SELECT s.id FROM version_search JOIN shown s ON s.visible_version=version_search.version_id WHERE version_search MATCH ? ORDER BY bm25(version_search),s.id" if fts else
                            "SELECT s.id FROM shown s LEFT JOIN degrees d ON d.id=s.id ORDER BY COALESCE(d.degree,0) DESC,s.id")
+                if overview and not fts:
+                    # Interleave real source targets so a large project's hubs
+                    # cannot occupy the whole unified overview. No fake links.
+                    picking = """SELECT id FROM (SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.target_id
+                      ORDER BY COALESCE(d.degree,0) DESC,s.id) AS source_slot
+                      FROM shown s LEFT JOIN degrees d ON d.id=s.id) ORDER BY source_slot,id"""
                 pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
                 overview = cte + ",picked AS MATERIALIZED (" + picking + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
                 nodes_json, edges_json, total, total_edges, more, kinds, types = db.execute(overview + """SELECT
@@ -676,7 +686,7 @@ class CollectionStore:
                     FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version
                     LEFT JOIN degrees d ON d.id=s.id ORDER BY s.id)),
                   (SELECT json_group_array(json(item)) FROM (SELECT json_object('id',r.id,'source',r.source,'target',r.target,'type',r.type) AS item
-                    FROM permitted_edges r JOIN selected a ON a.id=r.source JOIN selected b ON b.id=r.target ORDER BY r.id LIMIT 512)),
+                    FROM permitted_edges r JOIN selected a ON a.id=r.source JOIN selected b ON b.id=r.target ORDER BY r.id LIMIT """ + ("4096" if overview else "512") + """)),
                   (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),(SELECT COUNT(*) FROM picked)>?,
                   (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind FROM ranked s
                     JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
@@ -727,7 +737,7 @@ class CollectionStore:
                 meta = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
                 kind = meta.get("kind")
                 kind = kind[:256] if isinstance(kind, str) and kind else "document"
-                nodes.append({"id": row["id"], "label": row["label"], "category": kind,
+                nodes.append({"id": row["id"], "label": row["label"] or row["original_id"], "category": kind,
                               "importance": 20, "updated_at": row["collected_at"], "description": row["body"][:2400],
                               "space": ", ".join(target_spaces.get(row["target_id"], [])), "source_version": row["visible_version"],
                               "source_url": row["source_url"], "source_target": row["target_id"], "source_platform": row["platform"],
@@ -754,10 +764,24 @@ class CollectionStore:
         raw = self._verified_source_blob(self.blobs, row["raw_path"], MAX_RECORD_BYTES)
         if digest(raw) != row["raw_sha256"]:
             raise RuntimeError("collection_source_integrity")
-        body = row["body"] or json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
-        return {"ok": True, "details": {"node_id": row["id"], "basis": "source_record", "summary": row["label"],
+        record = json.loads(raw)
+        retained = record.get("localOriginalText") if row["platform"] == "graph" and isinstance(record, dict) else None
+        if isinstance(retained, str) and retained.strip():
+            body, body_format = retained, "retained_original_text"
+        else:
+            body, body_format = row["body"], "normalized_text"
+        # Structured raw data remains recoverable through its verified archive;
+        # implementation metadata is not the reading experience.
+        display_label = row["label"]
+        if not display_label and isinstance(record, dict):
+            display_label = record.get("title") or record.get("name")
+            if not isinstance(display_label, str) or not display_label.strip():
+                display_label = " · ".join(str(record[key]) for key in ("handle", "author", "date") if record.get(key))
+        if not display_label:
+            display_label = row["original_id"]
+        return {"ok": True, "details": {"node_id": row["id"], "basis": "source_record", "summary": row["label"], "display_label": display_label,
                                      "body": body[:12000], "truncated": len(body) > 12000,
-                                     "body_format": "normalized_text" if row["body"] else "retained_record_json",
+                                     "body_format": body_format,
                                      "version": row["visible_version"], "collected_at": row["collected_at"],
                                      "raw_sha256": row["raw_sha256"], "source_url": row["source_url"],
                                      "target_id": row["target_id"], "platform": row["platform"],
@@ -936,5 +960,5 @@ def read_action(state_root: Path, action: str, query: str | None = None) -> dict
                                 target_id=options.get("target_id"), platform=options.get("platform"),
                                 node_type=options.get("node_type"), relation=options.get("relation"),
                                 since=options.get("since"), until=options.get("until"),
-                                details=options.get("details",False), expected_version=options.get("expected_version"))
+                                details=options.get("details",False), expected_version=options.get("expected_version"), overview=options.get("overview",False))
     raise ValueError("collection_action_invalid")

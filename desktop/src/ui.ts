@@ -115,7 +115,7 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
               <div class="knowledge-graph-pane">
                 <header class="knowledge-heading"><h1 id="knowledge-title">지식 그래프</h1><p id="knowledge-summary" role="status" aria-live="polite">불러오는 중</p><span id="knowledge-mode" class="tag" hidden>확인 중</span><p id="knowledge-sync" class="knowledge-sync" role="status" aria-live="polite">갱신 확인 중</p></header>
                 <form id="knowledge-filter-form" class="knowledge-filter-bar" role="search">
-                  <select id="knowledge-project" aria-label="지식 프로젝트"><option value="legacy">기존 기억</option></select>
+                  <select id="knowledge-project" aria-label="지식 프로젝트"><option value="all">통합 지식 그래프</option><option value="legacy">기억 · 대화</option></select>
                   <input id="knowledge-search" type="search" maxlength="256" placeholder="저장된 지식 찾기" aria-label="저장된 지식 찾기">
                   <details id="knowledge-filter-more"><summary>필터</summary><div class="knowledge-filter-options">
                     <label>출처<select id="knowledge-platform"><option value="">모든 출처</option><option value="graph">기존 그래프</option><option value="youtube">YouTube</option><option value="threads">Threads</option><option value="files">파일</option></select></label>

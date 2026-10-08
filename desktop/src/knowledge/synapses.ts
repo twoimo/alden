@@ -33,7 +33,7 @@ export class SynapticBridges {
   private readonly records: Bridge[] = [];
   private readonly index = new Map<string, Bridge>();
   private readonly neutral = new THREE.Color('#90a9bc');
-  private readonly selected = new THREE.Color('#dacda8');
+  private readonly selected = new THREE.Color('#d5bf81');
   moving = false;
   private dirty = true;
   private disposed = false;
@@ -41,7 +41,7 @@ export class SynapticBridges {
   private readonly activeCap:number;
   private readonly capacity:number;
   constructor(cap=SYNAPSE_CAP, detail=true) {
-    this.activeCap=Number.isFinite(cap)?Math.min(512,Math.max(1,Math.floor(cap))):SYNAPSE_CAP;
+    this.activeCap=Number.isFinite(cap)?Math.min(4096,Math.max(1,Math.floor(cap))):SYNAPSE_CAP;
     this.capacity=this.activeCap*2;
     this.starts=new Float32Array(this.capacity * 3);
     this.ends=new Float32Array(this.capacity * 3);

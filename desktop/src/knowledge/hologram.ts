@@ -24,6 +24,7 @@ import { ACTIVITY_TTL_MS, type NodeActivity } from './collection-activity';
 import {
   KnowledgeDrilldown,
   OVERVIEW_NODE_CAP,
+  OVERVIEW_LOD_CAP,
   type KnowledgeGraph,
   type KnowledgeNode,
   type KnowledgeView,
@@ -75,8 +76,8 @@ export class KnowledgeHologram {
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly plasticity = new PlasticityLayout(OVERVIEW_NODE_CAP,512);
   private readonly synapses = new SynapticBridges();
-  private readonly overviewSynapses = new SynapticBridges(512,false);
-  private readonly constellationNodes = new ConstellationNodes();
+  private readonly overviewSynapses = new SynapticBridges(4096,false);
+  private readonly constellationNodes = new ConstellationNodes(OVERVIEW_LOD_CAP);
   private readonly globalLabels = new Set<string>();
   private hoveredId:string|null=null;
   private neuronDetail=false;
@@ -378,7 +379,7 @@ export class KnowledgeHologram {
 
   private layoutPositions():void {
     this.anchors.clear();
-    for (const [id, p] of relationAnchors(this.view, this.graph,this.view.hops===0?OVERVIEW_NODE_CAP:24)) {
+    for (const [id, p] of relationAnchors(this.view, this.graph,this.view.hops===0?OVERVIEW_LOD_CAP:24)) {
       const point = new THREE.Vector3(p.x, p.y, p.z);
       this.anchors.set(id, point);
       if (!this.positions.has(id)) this.positions.set(id, point.clone());
@@ -411,7 +412,12 @@ export class KnowledgeHologram {
     this.constellationNodes.highlight(focusId);
     this.constellationNodes.visible=true;this.neuronDetail=false;
     this.orbit.enableRotate=true;this.orbit.mouseButtons.LEFT=THREE.MOUSE.ROTATE;
-    for(const node of [...this.view.nodes].sort((a,b)=>this.constellationNodes.radius(b.id)-this.constellationNodes.radius(a.id)||a.id.localeCompare(b.id)).slice(0,12))this.globalLabels.add(node.id);
+    const labelledGroups = new Set<string>();
+    for (const node of [...this.view.nodes].sort((a,b)=>this.constellationNodes.radius(b.id)-this.constellationNodes.radius(a.id)||a.id.localeCompare(b.id))) {
+      const group = node.sourceTarget || node.space || node.category;
+      if (!labelledGroups.has(group)) { this.globalLabels.add(node.id); labelledGroups.add(group); }
+      if (this.globalLabels.size >= 8) break;
+    }
     this.rootNodeId = relationCenterId(this.view);
 
     this.plasticity.setGraph(this.view, this.anchors, this.positions);
@@ -489,7 +495,7 @@ export class KnowledgeHologram {
     const activeIds=new Set(this.view.nodes.map(node=>node.id));
     this.synapses.set(global?[]:selectSynapses(this.view.edges,activeIds),focusId,true,this.neuronPorts,this.anchors);
     this.synapses.update(0,this.positions,this.reducedMotionEnabled);
-    this.overviewSynapses.set(selectSynapses(this.view.edges,activeIds,Date.now(),global?512:144),focusId,this.reducedMotionEnabled);
+    this.overviewSynapses.set(selectSynapses(this.view.edges,activeIds,Date.now(),global?4096:144,global),focusId,this.reducedMotionEnabled);
     this.overviewSynapses.update(0,this.positions,this.reducedMotionEnabled);
     this.constellationNodes.update(this.positions);
     this.applyDetailMode(false,true);
@@ -589,13 +595,14 @@ export class KnowledgeHologram {
     const width = Math.max(1, Math.floor(rect.width || 640));
     const height = Math.max(1, Math.floor(rect.height || 320));
     this.renderer.setSize(width, height, false);
+    const previousWidth = this.viewport.width, previousHeight = this.viewport.height;
     const top = this.layoutMode==='popover'?58:12;
     const bottom=this.layoutMode==='popover'?42:16;
     this.viewport = { x: 28, y: Math.min(top, height / 2), width: Math.max(1, width - 56), height: Math.max(1, height - Math.min(top, height / 2) - bottom) };
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
-    if (resetCamera && this.view.hops===0) this.resetOverviewCamera();
+    if (resetCamera && this.view.hops===0 && (previousWidth !== this.viewport.width || previousHeight !== this.viewport.height)) this.resetOverviewCamera();
     for (const orb of this.orbMeshes.values()) orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
     for (const box of this.labelBounds) box.width = 0;
     // Overlay geometry is read only on resize/selection layout changes.
@@ -617,6 +624,9 @@ export class KnowledgeHologram {
     if (this.reducedMotionEnabled && this.plasticity.moving) this.plasticity.settle();
     else if (!this.paused) this.plasticity.advance(elapsed);
     this.plasticity.forEachPoint(this.syncPoint);
+    this.constellationNodes.setMinimumRadius(this.camera.position.distanceTo(this.lookAt)
+      * 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) / Math.max(1, this.viewport.height) * .6);
+    if (this.view.hops === 0) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
       if(base&&position){

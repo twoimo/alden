@@ -169,3 +169,8 @@ DB history resets its oldest-page cursor when a newly fetched page does not over
 A history selection and its input belong to one conversation boundary. The current generation carries immutable conversation/turn identity; metrics retain the input context version rather than replacing it with the reply's later context version. Engine statistics remain internal and are not added to the main user screen. Missing telemetry is unknown, not zero.
 
 The expanded graph direction is a dark three-dimensional knowledge view, with actual nodes/relations and restrained luminosity. Main dialogue/settings retain calm neutral Alden surfaces. Decorative fake knowledge points and fabricated activity are excluded. Canonical knowledge, display proximity and biological metaphors remain distinct. Existing stable node identity, bounded physics, source provenance and hidden lifecycle are retained while collection/integration evolves.
+
+
+## 2026-10-08 통합 그래프 이미지 방향
+
+사용자가 첨부한 검은 배경의 신경망 군집 이미지를 그래프 화면의 최신 기준으로 적용한다. 작은 실제 저장 노드, 가는 실제 관계선, 최소한의 이름과 분홍·청록·금색 선택 강조를 사용한다. 군집은 출처를 표시하는 배치이고 임의의 의미 관계·실제 활동을 만들지 않는다. 메인 Alden 화면의 차분한 기존 디자인은 유지한다. 통합 화면은 기억과 허용된 수집 자료의 논리적 합집합이며 출처·권한·원문 버전을 보존한다. 자세한 예산과 검증 범위는 `docs/architecture/alden-unified-graph-20261008.md`를 본다.
