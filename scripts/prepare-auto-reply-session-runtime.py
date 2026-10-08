@@ -76,6 +76,8 @@ RUNTIME_SCRIPT_NAMES = (
     "alden_abort.py",
     "alden_local_http.py",
     "alden_corpus.py",
+    "alden_collection.py",
+    "alden_collection_retrieval.py",
     "alden_corpus_topics.py",
     "alden_osk.py",
     "alden_osk_retrieval.py",
