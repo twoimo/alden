@@ -1633,16 +1633,18 @@ enum AutoReplyLlmChoice {
     MlxQwen38FlashNext,
     MlxQwen38TwentySevenB,
     GjcGemini37Flash,
+    GjcGemini38Flash,
     GjcOpencodeDeepseek41Flash,
     CodexGpt56Luna,
 }
 
 impl AutoReplyLlmChoice {
-    fn all() -> [Self; 5] {
+    fn all() -> [Self; 6] {
         [
             Self::MlxQwen38FlashNext,
             Self::MlxQwen38TwentySevenB,
             Self::GjcGemini37Flash,
+            Self::GjcGemini38Flash,
             Self::GjcOpencodeDeepseek41Flash,
             Self::CodexGpt56Luna,
         ]
@@ -1655,18 +1657,19 @@ impl AutoReplyLlmChoice {
             _ => {}
         }
         match model.trim() {
-            "google-antigravity/gemini-3.8-flash"
-            | "google-antigravity/gemini-3.7-flash-high"
+            "google-antigravity/gemini-3.7-flash-high"
             | "google-antigravity/gemini-3.7-flash-tiered"
-            | "google-antigravity/gemini-3.8-flash-tiered"
-            | "google-antigravity/gemini-3.8-flash-high"
             | "google-antigravity/gemini-3.6-flash-tiered"
             | "gjc"
             | "gemini"
             | "gemini-3.7-flash"
+            | "gemini-3.6-flash" => Some(Self::GjcGemini37Flash),
+            "google-antigravity/gemini-3.8-flash"
+            | "google-antigravity/gemini-3.8-flash-tiered"
+            | "google-antigravity/gemini-3.8-flash-high"
             | "gemini-3.8-flash"
             | "gemini-3.8-flash-high"
-            | "gemini-3.6-flash" => Some(Self::GjcGemini37Flash),
+            | "agy/gemini-3.8-flash" => Some(Self::GjcGemini38Flash),
             "opencode-go-session/deepseek-v4.1-flash"
             | "opencode-go/deepseek-v4.1-flash"
             | "deepseek-v4.1-flash"
@@ -1681,6 +1684,7 @@ impl AutoReplyLlmChoice {
             Self::MlxQwen38FlashNext => "Local MLX Qwen3.8 Flash-Next",
             Self::MlxQwen38TwentySevenB => "Local MLX Qwen3.8 27B",
             Self::GjcGemini37Flash => "Gajae-Code Gemini 3.7 Flash (high)",
+            Self::GjcGemini38Flash => "Gemini 3.8 Flash (high)",
             Self::GjcOpencodeDeepseek41Flash => "OpenCode Go DeepSeek V4.1 Flash",
             Self::CodexGpt56Luna => "Codex GPT-5.6 Luna",
         }
@@ -1691,6 +1695,7 @@ impl AutoReplyLlmChoice {
             Self::MlxQwen38FlashNext => config::MLX_FLASH_NEXT_MODEL_ID,
             Self::MlxQwen38TwentySevenB => config::MLX_27B_MODEL_ID,
             Self::GjcGemini37Flash => "google-antigravity/gemini-3.7-flash-tiered",
+            Self::GjcGemini38Flash => "google-antigravity/gemini-3.8-flash",
             Self::GjcOpencodeDeepseek41Flash => "opencode-go-session/deepseek-v4.1-flash",
             Self::CodexGpt56Luna => "gpt-5.6-luna",
         }
@@ -1727,7 +1732,7 @@ impl AutoReplyLlmChoice {
         match self {
             Self::MlxQwen38FlashNext => unreachable!("local MLX choice returns above"),
             Self::MlxQwen38TwentySevenB => unreachable!("local MLX choice returns above"),
-            Self::GjcGemini37Flash | Self::GjcOpencodeDeepseek41Flash => {
+            Self::GjcGemini37Flash | Self::GjcGemini38Flash | Self::GjcOpencodeDeepseek41Flash => {
                 config.model.privacy_mode = Some("remote_explicit".into());
                 config.model.allow_egress = true;
                 config.model.provider = Some(
@@ -1776,7 +1781,7 @@ fn select_auto_reply_llm(
 ) -> Result<AutoReplyLlmChoice> {
     if let Some(requested) = requested {
         return AutoReplyLlmChoice::from_model(requested).with_context(|| {
-            format!("unknown reply model {requested:?}; use the exact local Qwen3.8 Flash-Next or Qwen3.8 27B ID, gemini-3.7-flash, deepseek-v4.1-flash or gpt-5.6-luna")
+            format!("unknown reply model {requested:?}; use the exact local Qwen3.8 Flash-Next or Qwen3.8 27B ID, gemini-3.8-flash, gemini-3.7-flash, deepseek-v4.1-flash or gpt-5.6-luna")
         });
     }
     if json_output || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
@@ -1995,6 +2000,53 @@ fn probe_local_mlx_auto_reply(
     Ok(())
 }
 
+fn opencodex_probe_payload(model: &str, effort: &str) -> serde_json::Value {
+    serde_json::json!({"model": model, "input": [{"role":"user","content":"Reply with exactly OK"}],
+        "reasoning":{"effort":effort}, "max_output_tokens":512, "stream":false, "store":false})
+}
+
+fn validate_opencodex_probe(status: u16, bytes: &[u8], expected_model: &str) -> Result<()> {
+    if status != 200 || bytes.len() > 65536 {
+        anyhow::bail!("selected OpenCodex model probe failed (HTTP {status})");
+    }
+    let response: serde_json::Value =
+        serde_json::from_slice(bytes).context("selected-model probe returned invalid JSON")?;
+    let returned = response["model"].as_str().unwrap_or("");
+    if ![
+        expected_model,
+        expected_model
+            .split_once('/')
+            .map(|(_, tail)| tail)
+            .unwrap_or(expected_model),
+    ]
+    .contains(&returned)
+        || response["status"] != "completed"
+    {
+        anyhow::bail!("selected OpenCodex model identity or completion was not verified");
+    }
+    let mut text = response["output_text"].as_str().unwrap_or("").to_owned();
+    if text.is_empty() {
+        if let Some(output) = response["output"].as_array() {
+            for message in output {
+                if message["type"] != "message" || message["role"] != "assistant" {
+                    continue;
+                }
+                if let Some(parts) = message["content"].as_array() {
+                    for part in parts {
+                        if part["type"] == "output_text" {
+                            text.push_str(part["text"].as_str().unwrap_or(""));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if text.trim() != "OK" {
+        anyhow::bail!("selected OpenCodex model did not return the probe response");
+    }
+    Ok(())
+}
+
 fn probe_auto_reply_llm(
     config: &config::OpenKakaoConfig,
     choice: AutoReplyLlmChoice,
@@ -2014,50 +2066,37 @@ fn probe_auto_reply_llm_with_local_transport(
         return probe_local_mlx_auto_reply(config, local_transport);
     }
 
-    // Remote choices retain the existing OpenCodex authentication-gateway probe.
-    if let Ok(client) = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-    {
-        let ocx_model = match choice {
-            AutoReplyLlmChoice::GjcGemini37Flash => "google-antigravity/gemini-3.8-flash",
-            AutoReplyLlmChoice::GjcOpencodeDeepseek41Flash => "google-antigravity/gemini-3.8-flash",
-            _ => "",
-        };
-        if !ocx_model.is_empty() {
-            if let Ok(resp) = client
-                .post("http://127.0.0.1:10100/v1/chat/completions")
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer not-needed")
-                .json(&serde_json::json!({
-                    "model": ocx_model,
-                    "messages": [{"role": "user", "content": "Reply with exactly OK"}]
-                }))
-                .send()
-            {
-                if resp.status().is_success() {
-                    eprintln!(
-                        "advisory: OpenCodex authentication gateway verified OK ({})",
-                        ocx_model
-                    );
-                    return Ok(());
-                }
-            }
-        }
-    }
-
     let runner = validate_auto_reply_runner(config)?;
     if runner.kind == "opencodex" {
-        let output = Command::new(&runner.path)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .output()
-            .context("probe opencodex reply runner")?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if output.status.success() && stdout.contains("opencodex") {
-            return Ok(());
-        }
-        anyhow::bail!("opencodex runner failed probe: {}", stdout.trim());
+        let model = config
+            .auto_reply
+            .reply_model
+            .as_deref()
+            .unwrap_or(choice.model());
+        let effort = config
+            .auto_reply
+            .reply_reasoning_effort
+            .as_deref()
+            .unwrap_or("high");
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(45))
+            .build()
+            .context("build OpenCodex selected-model probe")?;
+        let response = client
+            .post("http://127.0.0.1:10101/v1/responses")
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer not-needed")
+            .json(&opencodex_probe_payload(model, effort))
+            .send()
+            .context("probe selected OpenCodex model")?;
+        let status = response.status().as_u16();
+        let mut bytes = Vec::new();
+        response.take(65537).read_to_end(&mut bytes)?;
+        validate_opencodex_probe(status, &bytes, model)?;
+        return Ok(());
     }
     match choice {
         AutoReplyLlmChoice::MlxQwen38FlashNext => {
@@ -2066,7 +2105,7 @@ fn probe_auto_reply_llm_with_local_transport(
         AutoReplyLlmChoice::MlxQwen38TwentySevenB => {
             unreachable!("local MLX choice returns before remote probes")
         }
-        AutoReplyLlmChoice::GjcGemini37Flash => {
+        AutoReplyLlmChoice::GjcGemini37Flash | AutoReplyLlmChoice::GjcGemini38Flash => {
             let output = Command::new(&runner.path)
                 .args([
                     "-p",
@@ -2089,9 +2128,6 @@ fn probe_auto_reply_llm_with_local_transport(
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             if output.status.success() && stdout.contains("OK") {
-                return Ok(());
-            }
-            if stderr.to_ascii_lowercase().contains("no api key") {
                 return Ok(());
             }
             anyhow::bail!(
@@ -2151,7 +2187,6 @@ fn probe_auto_reply_llm_with_local_transport(
             }
             let stdout_str = String::from_utf8_lossy(&stdout);
             let stderr_str = String::from_utf8_lossy(&stderr);
-            let stderr_lower = stderr_str.to_ascii_lowercase();
 
             if let Some(status) = status {
                 if status.success() && stdout_str.contains("OK") {
@@ -2159,38 +2194,8 @@ fn probe_auto_reply_llm_with_local_transport(
                 }
             }
 
-            if timed_out
-                || stderr_lower.contains("usage limit")
-                || stderr_lower.contains("rate limit")
-                || stderr_lower.contains("quota")
-                || stderr_lower.contains("429")
-                || stderr_lower.contains("no api key")
-            {
-                eprintln!("advisory: OpenCode Go usage limit/auth issue detected; probing Antigravity Gemini Flash high fallback");
-                let fallback_output = Command::new(&runner.path)
-                    .args([
-                        "-p",
-                        "--no-session",
-                        "--no-rules",
-                        "--no-lsp",
-                        "--no-title",
-                        "--no-tools",
-                        "--mode",
-                        "text",
-                        "--model",
-                        "google-antigravity/gemini-3.7-flash-tiered",
-                        "--thinking",
-                        "high",
-                        "Reply with exactly OK",
-                    ])
-                    .stdin(Stdio::null())
-                    .output()
-                    .context("probe Antigravity Gemini fallback model")?;
-                let fb_stdout = String::from_utf8_lossy(&fallback_output.stdout);
-                if fallback_output.status.success() && fb_stdout.contains("OK") {
-                    eprintln!("advisory: Antigravity Gemini Flash high fallback verified OK");
-                    return Ok(());
-                }
+            if timed_out {
+                anyhow::bail!("selected OpenCode model probe timed out");
             }
             anyhow::bail!(
                 "selected LLM {} did not respond; runner={} stdout={} stderr={}",
@@ -9739,6 +9744,71 @@ mod tests {
     }
 
     #[test]
+    fn gemini_38_cli_selection_preserves_requested_version_and_opencodex_effort() {
+        for model in [
+            "google-antigravity/gemini-3.8-flash",
+            "google-antigravity/gemini-3.8-flash-high",
+            "google-antigravity/gemini-3.8-flash-tiered",
+            "agy/gemini-3.8-flash",
+            "gemini-3.8-flash",
+        ] {
+            let mut config = config::OpenKakaoConfig::default();
+            config.auto_reply.reply_runner_kind = Some("opencodex".into());
+            let choice = select_auto_reply_llm(&mut config, Some(model), true).unwrap();
+            assert_eq!(choice, AutoReplyLlmChoice::GjcGemini38Flash);
+            choice.apply(&mut config);
+            assert_eq!(
+                config.auto_reply.reply_model.as_deref(),
+                Some("google-antigravity/gemini-3.8-flash")
+            );
+            assert_eq!(
+                config.auto_reply.reply_reasoning_effort.as_deref(),
+                Some("high")
+            );
+            assert_eq!(
+                config.auto_reply.reply_runner_kind.as_deref(),
+                Some("opencodex")
+            );
+            assert_eq!(
+                config.model.privacy_mode.as_deref(),
+                Some("remote_explicit")
+            );
+        }
+        let mut config = config::OpenKakaoConfig::default();
+        config.auto_reply.reply_model = Some("google-antigravity/gemini-3.8-flash".into());
+        assert_eq!(
+            select_auto_reply_llm(&mut config, None, true).unwrap(),
+            AutoReplyLlmChoice::GjcGemini38Flash
+        );
+    }
+
+    #[test]
+    fn selected_opencodex_probe_requires_the_selected_model_and_completed_text() {
+        let model = "google-antigravity/gemini-3.8-flash";
+        let request = opencodex_probe_payload(model, "high");
+        assert_eq!(request["model"], model);
+        assert_eq!(request["reasoning"]["effort"], "high");
+        assert_eq!(request["store"], false);
+        assert_eq!(request["input"][0]["content"], "Reply with exactly OK");
+        let mut value = serde_json::json!({"model":model,"status":"completed",
+            "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]});
+        assert!(validate_opencodex_probe(200, &serde_json::to_vec(&value).unwrap(), model).is_ok());
+        assert!(
+            validate_opencodex_probe(429, &serde_json::to_vec(&value).unwrap(), model).is_err()
+        );
+        value["model"] = serde_json::json!("google-antigravity/gemini-3.7-flash-tiered");
+        assert!(
+            validate_opencodex_probe(200, &serde_json::to_vec(&value).unwrap(), model).is_err()
+        );
+        value["model"] = serde_json::json!(model);
+        value["status"] = serde_json::json!("incomplete");
+        assert!(
+            validate_opencodex_probe(200, &serde_json::to_vec(&value).unwrap(), model).is_err()
+        );
+        assert!(validate_opencodex_probe(200, b"{}", model).is_err());
+    }
+
+    #[test]
     fn auto_reply_llm_aliases_map_to_attested_models() {
         for exact in [
             config::MLX_FLASH_NEXT_MODEL_ID,
@@ -9794,7 +9864,7 @@ mod tests {
             Some("opencode-go-session")
         );
         assert_eq!(config.auto_reply.reply_runner_kind.as_deref(), Some("gjc"));
-        assert_eq!(AutoReplyLlmChoice::all().len(), 5);
+        assert_eq!(AutoReplyLlmChoice::all().len(), 6);
     }
 
     #[test]
