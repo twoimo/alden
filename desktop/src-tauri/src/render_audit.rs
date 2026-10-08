@@ -657,6 +657,7 @@ fn graph_step(
         let state = collect_script(window, GRAPH_COLLECT.into(), deadline)?;
         let graph_pending = collect_script(window,"JSON.stringify({pending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중'})".into(),deadline)?;
         if graph_pending["pending"] != true
+            && state["graphRead"]["navigationPending"] != true
             && (state["notePane"]["hidden"] != false
                 || state["notePane"]["focusState"] != "loading")
         {
@@ -891,6 +892,7 @@ fn audit_settings(
                 "second":second["navigation"],"backExpanded":back_expanded.as_ref().map(|state| &state["navigation"]),
                 "backFirst":back_first["navigation"],"backOverview":back_overview["navigation"],
                 "backDisabled":back_overview["backDisabled"],"clearedDetail":back_overview["clearedDetail"]
+                ,"read":back_overview["graphRead"],"graphPending":back_overview["graphPending"]
             })
         ));
     }

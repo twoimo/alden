@@ -80,7 +80,7 @@ export class CollectionGraphController {
   get canGoBack(): boolean { return this.history.length > 0; }
   get offset(): number { return this.state.offset; }
   get hasMore(): boolean { return this.next !== null; }
-  get readDiagnostics() { return this.lastRead; }
+  get readDiagnostics() { return this.lastRead && { ...this.lastRead, navigation: { ...this.state }, navigationPending: this.navigationChanged }; }
   get activityDiagnostics() { return this.journal.diagnostics(); }
 
   start(): void {
