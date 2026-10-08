@@ -80,5 +80,11 @@ class BuildReceiptTests(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, 'already running'): build.main()
                 run.assert_not_called()
 
+    def test_missing_dependency_evidence_never_invokes_toolchain_shims(self):
+        self.npm.rename(self.npm.with_name('unavailable-dependencies'))
+        with patch.object(build.subprocess,'run') as run:
+            with self.assertRaisesRegex(RuntimeError,'dependency_missing'):build.inputs(self.root)
+            run.assert_not_called()
+
 
 if __name__ == '__main__': unittest.main()

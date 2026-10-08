@@ -86,6 +86,9 @@ def inputs(root):
                  'rust-toolchain','rust-toolchain.toml','desktop/rust-toolchain.toml','desktop/src-tauri/rust-toolchain.toml']:
         if (root/name).is_file():names.add(name)
     files={name:sha(root/name) for name in sorted(names)}
+    # A clean/fixture checkout has no verified dependency evidence. Refuse reuse
+    # before invoking tool shims (rustup may otherwise download a toolchain).
+    dependency_input=dependencies(root)
     environment={key:hashlib.sha256(os.environ.get(key,'').encode()).hexdigest() for key in ['OPENKAKAO_SIGN_IDENTITY','APPLE_SIGNING_IDENTITY','OPENKAKAO_TAURI_SOURCE_CHECK','TAURI_CONFIG','CARGO_TARGET_DIR','RUSTFLAGS','CARGO_ENCODED_RUSTFLAGS','MACOSX_DEPLOYMENT_TARGET','SDKROOT','CC','CXX']}
     tools={}
     for name in ['rustc','cargo','node','npm']:
@@ -94,7 +97,7 @@ def inputs(root):
     if os.uname().sysname == 'Darwin':
         for name, command in [('swift', ['xcrun','swiftc','--version']), ('macos_sdk', ['xcrun','--sdk','macosx','--show-sdk-version'])]:
             tools[name] = subprocess.run(command, capture_output=True, text=True, check=True).stdout.strip()
-    value={'files':files,'environment':environment,'tools':tools,'dependencies':dependencies(root)}
+    value={'files':files,'environment':environment,'tools':tools,'dependencies':dependency_input}
     return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest(),value
 
 def output_manifest(app):
