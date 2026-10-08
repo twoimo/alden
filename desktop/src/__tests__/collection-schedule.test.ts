@@ -4,13 +4,48 @@ import {wireCollectionSchedule} from '../collection-schedule';
 import type {fetchSettingsAction} from '../runtime';
 
 const result=(extra:Record<string,unknown>={})=>({ok:true,state:'enabled',global_paused:false,abort_latched:false,
-  time_zone:'KST',schedule:{state:'waiting'},targets:[{id:'target-a',label:'공개 영상',enabled:1,interval_seconds:21600,
+  time_zone:'KST',schedule:{state:'waiting'},targets:[{id:'target-a',label:'공개 영상',enabled:1,permitted:1,interval_seconds:21600,
     next_run:1791511200,last_state:'complete',last_finished:1791489600,paused:false}],...extra});
 const owned:ReturnType<typeof wireCollectionSchedule>[]=[];
 beforeEach(()=>{vi.useFakeTimers();document.body.innerHTML='<section id="settings-page-history"><header class="settings-page-heading"></header></section>';});
 afterEach(()=>{for(const component of owned.splice(0))component.dispose();vi.useRealTimers();document.body.replaceChildren();});
 const setup=(load:ReturnType<typeof vi.fn<typeof fetchSettingsAction>>)=>{const component=wireCollectionSchedule(load);owned.push(component);component.select('history');return component;};
 describe('native collection schedule',()=>{
+  it('queues one explicit manual request and disables duplicate clicks while waiting',async()=>{
+    const pending=result({targets:[{...result().targets[0],manual_pending:true}]});
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(result()).mockResolvedValue(pending);
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    const button=document.querySelector<HTMLButtonElement>('.collection-run')!;
+    button.click();button.click();await vi.advanceTimersByTimeAsync(0);
+    const calls=load.mock.calls.filter(call=>call[0]==='collection-scheduler-control');expect(calls).toHaveLength(1);
+    expect(calls[0][1]?.explicitOptIn).toBe(true);
+    expect(JSON.parse(calls[0][1]!.query!)).toMatchObject({operation:'run',target_id:'target-a',request_id:expect.stringMatching(/^[\da-f-]{36}$/)});
+    expect(button.disabled).toBe(true);expect(button.textContent).toBe('대기 중');
+    await vi.advanceTimersByTimeAsync(15000);expect(load.mock.calls.filter(call=>call[0]==='collection-scheduler-control')).toHaveLength(1);
+  });
+
+  it('retains a draft across polling and sends the original observed interval only when saved',async()=>{
+    const changed=result({targets:[{...result().targets[0],interval_seconds:43200}]});
+    const saved=result({targets:[{...result().targets[0],interval_seconds:10800}]});
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(result()).mockResolvedValueOnce(changed).mockResolvedValue(saved);
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    const select=document.querySelector<HTMLSelectElement>('.collection-interval select')!;
+    select.value='10800';select.dispatchEvent(new Event('change'));
+    await vi.advanceTimersByTimeAsync(15000);expect(select.value).toBe('10800');
+    expect(load.mock.calls.filter(call=>call[0]==='collection-scheduler-control')).toHaveLength(0);
+    document.querySelector<HTMLButtonElement>('.collection-interval-save')!.click();await vi.advanceTimersByTimeAsync(0);
+    expect(JSON.parse(load.mock.calls.at(-1)![1]!.query!)).toEqual({operation:'interval',target_id:'target-a',interval_seconds:10800,expected_interval:21600});
+    expect(select.dataset.expected).toBe('10800');expect(document.querySelector<HTMLButtonElement>('.collection-interval-save')!.disabled).toBe(true);
+  });
+
+  it.each([{global_paused:true},{abort_latched:true},
+    {targets:[{...result().targets[0],paused:true}]},{targets:[{...result().targets[0],permitted:0}]}])
+  ('keeps manual execution disabled while its execution gates are closed',async(extra)=>{
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValue(result(extra));
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    const button=document.querySelector<HTMLButtonElement>('.collection-run')!;expect(button.disabled).toBe(true);
+    button.click();expect(load.mock.calls).toHaveLength(1);
+  });
   it('reads on history visibility and sends exactly one deliberate target control without starting work',async()=>{
     const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValue(result());
     setup(load);await vi.advanceTimersByTimeAsync(0);

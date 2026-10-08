@@ -2249,15 +2249,48 @@ fn settings_action_args(
             let parsed: Value =
                 serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
             let object = parsed.as_object().ok_or(BridgeError::ActionNotAllowed)?;
-            if object
-                .keys()
-                .any(|key| key != "operation" && key != "target_id")
-                || !matches!(parsed["operation"].as_str(), Some("pause" | "resume"))
+            let operation = parsed["operation"]
+                .as_str()
+                .ok_or(BridgeError::ActionNotAllowed)?;
+            let fields: &[&str] = match operation {
+                "pause" | "resume" => &["operation", "target_id"],
+                "interval" => &[
+                    "operation",
+                    "target_id",
+                    "interval_seconds",
+                    "expected_interval",
+                ],
+                "run" => &["operation", "target_id", "request_id"],
+                _ => return Err(BridgeError::ActionNotAllowed),
+            };
+            if object.keys().any(|key| !fields.contains(&key.as_str()))
                 || object.get("target_id").is_some_and(|target| {
                     !target.is_null()
                         && target
                             .as_str()
                             .is_none_or(|value| value.is_empty() || value.len() > 128)
+                })
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if matches!(operation, "interval" | "run") && parsed["target_id"].as_str().is_none() {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if operation == "interval"
+                && ["interval_seconds", "expected_interval"].iter().any(|key| {
+                    parsed[key]
+                        .as_u64()
+                        .is_none_or(|value| !(60..=2_592_000).contains(&value))
+                })
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if operation == "run"
+                && parsed["request_id"].as_str().is_none_or(|value| {
+                    !(16..=64).contains(&value.len())
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
                 })
             {
                 return Err(BridgeError::ActionNotAllowed);
@@ -5340,6 +5373,10 @@ mod tests {
             r#"{"operation":"send"}"#,
             r#"{"operation":"pause","target_id":1}"#,
             r#"{"operation":"pause","command":"launch"}"#,
+            r#"{"operation":"interval","target_id":"declared-target","interval_seconds":true,"expected_interval":60}"#,
+            r#"{"operation":"interval","target_id":"declared-target","interval_seconds":59,"expected_interval":60}"#,
+            r#"{"operation":"run","target_id":null,"request_id":"manual-request-123"}"#,
+            r#"{"operation":"run","target_id":"declared-target","request_id":"../../bad/request"}"#,
         ] {
             assert!(settings_action_args(
                 "collection-scheduler-control",
@@ -5351,6 +5388,21 @@ mod tests {
                 None
             )
             .is_err());
+        }
+        for query in [
+            r#"{"operation":"interval","target_id":"declared-target","interval_seconds":3600,"expected_interval":21600}"#,
+            r#"{"operation":"run","target_id":"declared-target","request_id":"manual-request-123"}"#,
+        ] {
+            assert!(settings_action_args(
+                "collection-scheduler-control",
+                Some(query),
+                None,
+                None,
+                None,
+                Some(true),
+                None
+            )
+            .is_ok());
         }
     }
 

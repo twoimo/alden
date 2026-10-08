@@ -177,6 +177,12 @@ body.settings-view #app { height: 100%; min-height: 0; }
 .collection-schedule-targets li { display:grid; grid-template-columns:minmax(130px,1.1fr) minmax(130px,1fr) minmax(115px,1fr) auto; align-items:center; gap:12px; padding:9px 0; border-top:1px solid var(--border); }
 .collection-schedule-targets strong { font-size:12px; font-weight:550; overflow-wrap:anywhere; }
 .collection-schedule-targets span { font-size:11px; color:var(--muted); }
+.collection-target-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:end; gap:8px; }
+.collection-interval { font-size:11px; color:var(--muted); }
+.collection-interval summary { cursor:pointer; padding:7px 0; }
+.collection-interval > div { display:flex; align-items:center; gap:6px; }
+.collection-interval select { max-width:92px; padding:6px; font:inherit; color:var(--text); background:var(--surface); border:1px solid var(--border); }
+@media(max-width:800px) { .collection-schedule-targets .collection-target-actions { grid-column:2; grid-row:1 / span 3; max-width:155px; } }
 @media(max-width:800px) { .collection-schedule-targets li { grid-template-columns:minmax(0,1fr) auto; gap:5px 12px; } .collection-schedule-targets strong { grid-column:1; } .collection-schedule-targets span { grid-column:1; } .collection-schedule-targets button { grid-column:2; grid-row:1 / span 3; } }
 .collection-history h2 { margin: 0 0 14px; font-size: 15px; font-weight: 550; }
 .collection-filters { display: flex; flex-wrap: wrap; gap: 8px; }

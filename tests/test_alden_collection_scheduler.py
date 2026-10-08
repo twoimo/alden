@@ -16,6 +16,80 @@ from alden_collection_retrieval import index_dense
 import auto_reply_knowledge_graph as kg
 
 class SchedulerTests(unittest.TestCase):
+    def test_interval_compare_and_swap_retains_checkpoint_and_private_previous_values(self):
+        self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)
+        before=self.store.target(self.target)
+        result=self.store.update_interval(self.target,7200,before['interval_seconds'])
+        self.assertEqual(result['state'],'saved')
+        after=self.store.target(self.target)
+        self.assertEqual(after['cursor'],before['cursor']);self.assertEqual(after['config'],before['config'])
+        self.assertEqual(after['interval_seconds'],7200)
+        backup,=(self.store.root/'schedule-backups').glob('*.json')
+        self.assertEqual(backup.stat().st_mode&0o777,0o600)
+        self.assertEqual(json.loads(backup.read_text())['interval_seconds'],before['interval_seconds'])
+        with self.assertRaisesRegex(ValueError,'collection_interval_changed'):
+            self.store.update_interval(self.target,3600,before['interval_seconds'])
+        self.assertEqual(self.store.target(self.target)['interval_seconds'],7200)
+
+    def test_interval_controls_reject_invalid_fields_and_preserve_abort_and_due_work(self):
+        from alden_abort import AbortController
+        AbortController(self.root).abort('interval-test')
+        abort=(self.root/'alden-abort.json').read_bytes()
+        before=self.store.target(self.target)
+        for values in [dict(interval_seconds=True,expected_interval=21600),dict(interval_seconds=59,expected_interval=21600),
+                       dict(interval_seconds=3600,expected_interval=21600,command='send')]:
+            with self.assertRaises(ValueError):settings_action(self.root,'collection-scheduler-control',json.dumps(dict(operation='interval',target_id=self.target,**values)),explicit_opt_in=True)
+        with patch('alden_collection_scheduler.read_schedule',return_value={'state':'waiting'}):
+            saved=settings_action(self.root,'collection-scheduler-control',json.dumps(dict(operation='interval',target_id=self.target,interval_seconds=3600,expected_interval=before['interval_seconds'])),explicit_opt_in=True)
+        self.assertEqual(saved['targets'][0]['interval_seconds'],3600)
+        self.assertEqual(self.store.target(self.target)['next_run'],before['next_run'])
+        self.assertEqual((self.root/'alden-abort.json').read_bytes(),abort)
+
+    def test_manual_run_is_durable_deduplicated_and_completed_only_by_a_cycle(self):
+        self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)
+        self.assertGreater(self.store.target(self.target)['next_run'],time.time())
+        request='manual-request-once'
+        self.assertEqual(self.scheduler.request_run(self.target,request)['state'],'queued')
+        self.assertEqual(self.scheduler.request_run(self.target,'manual-second-click')['request_id'],request)
+        self.assertIn(self.target,self.scheduler.status()['manual_pending'])
+        self.assertEqual(len(self.scheduler.status()['attempts']),1)
+        result=self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)
+        self.assertEqual(result['attempts'][0]['target_id'],self.target)
+        self.assertEqual(result['attempts'][0]['state'],'complete')
+        self.assertEqual(self.scheduler.request_run(self.target,request)['state'],'complete')
+        self.assertEqual(self.scheduler.status()['manual_pending'],[])
+        self.assertEqual(self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)['attempts'],[])
+
+    def test_manual_request_survives_voice_pause_retry_and_interruption(self):
+        self.scheduler.request_run(self.target,'manual-recover-once')
+        voice=self.root/'alden-voice-status.json';voice.write_text(json.dumps({'state':'generating','updated_at':time.time()}))
+        self.assertEqual(self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)['state'],'deferred')
+        self.assertIn(self.target,self.scheduler.status()['manual_pending'])
+        voice.unlink()
+        def interrupted(*args,**kwargs):raise SystemExit('owned interruption')
+        with self.assertRaises(SystemExit):self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=interrupted)
+        self.scheduler.pause(True)
+        self.assertEqual(self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)['state'],'paused')
+        self.scheduler.pause(False)
+        result=self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)
+        self.assertEqual(result['attempts'][0]['state'],'complete')
+        self.assertEqual(self.scheduler.status()['manual_pending'],[])
+
+    def test_manual_request_obeys_backoff_and_refuses_disabled_denied_or_aborted_targets(self):
+        self.scheduler.request_run(self.target,'manual-backoff-one')
+        def failed(*args,**kwargs):raise RuntimeError('capture_failed')
+        self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=failed)
+        self.assertEqual(self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture)['attempts'],[])
+        self.assertIn(self.target,self.scheduler.status()['manual_pending'])
+        self.assertEqual(self.scheduler.cycle(indexer=self.index,collector=self.collect,capturer=self.capture,now=time.time()+61)['attempts'][0]['state'],'complete')
+        from alden_abort import AbortController
+        AbortController(self.root).abort('manual-test')
+        with self.assertRaisesRegex(ValueError,'collection_scheduler_paused'):
+            self.scheduler.request_run(self.target,'manual-aborted-one')
+        denied=self.store.register(platform='files',original_id='denied',kind='file',label='denied',projects=['private'],permission='denied')
+        with self.assertRaisesRegex(ValueError,'collection_target_missing_or_denied'):
+            self.scheduler.request_run(denied,'manual-denied-one')
+
     def test_settings_lookup_does_not_initialize_scheduler_or_expose_source_config(self):
         with patch('alden_collection_scheduler.read_schedule',return_value={'state':'waiting'}):
             result=settings_action(self.root,'collection-scheduler-status')

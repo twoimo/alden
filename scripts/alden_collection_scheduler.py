@@ -42,7 +42,7 @@ def read_schedule(state_root):
     except (OSError,ValueError,subprocess.TimeoutExpired):return {'state':'unverified'}
 
 def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
-    """Bounded local UI projection and explicit pause controls. No work starts."""
+    """Bounded UI projection and explicit controls. Runs are durable requests."""
     if action not in {'collection-scheduler-status','collection-scheduler-control'}:
         raise ValueError('collection_scheduler_action_invalid')
     options=json.loads(query) if query else {}
@@ -50,13 +50,26 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
     scheduler=CollectionScheduler(Path(state_root))
     if action=='collection-scheduler-control':
         if explicit_opt_in is not True:raise ValueError('collection_scheduler_opt_in_required')
-        if set(options)-{'operation','target_id'} or options.get('operation') not in {'pause','resume'}:
+        operation=options.get('operation')
+        fields={'pause':{'operation','target_id'},'resume':{'operation','target_id'},
+                'interval':{'operation','target_id','interval_seconds','expected_interval'},
+                'run':{'operation','target_id','request_id'}}
+        if not isinstance(operation,str) or operation not in fields or set(options)-fields[operation]:
             raise ValueError('collection_scheduler_control_invalid')
         target=options.get('target_id')
         if target is not None and (not isinstance(target,str) or not target or len(target)>128):
             raise ValueError('collection_scheduler_target_invalid')
         # Resuming the schedule never clears the independent emergency latch.
-        scheduler.pause(options['operation']=='pause',target)
+        if operation in {'pause','resume'}:scheduler.pause(operation=='pause',target)
+        elif not target:raise ValueError('collection_scheduler_target_invalid')
+        elif operation=='interval':
+            for field in ('interval_seconds','expected_interval'):
+                if type(options.get(field)) is not int or not 60<=options[field]<=30*86400:
+                    raise ValueError('collection_interval_invalid')
+            store=CollectionStore.open_existing(Path(state_root))
+            if store is None:raise ValueError('collection_target_missing')
+            CollectionStore(Path(state_root)).update_interval(target,options['interval_seconds'],options['expected_interval'])
+        else:scheduler.request_run(target,options.get('request_id'))
     elif options:raise ValueError('collection_scheduler_query_invalid')
     data=scheduler.status(limit=200)
     store=CollectionStore.open_existing(Path(state_root))
@@ -76,6 +89,7 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
         state=states.get(target['id'],{});last=latest.get(target['id'],{})
         stage=(last.get('result') or {}).get('finished_stage')
         targets.append({**target,'paused':bool(controls.get(target['id'])),
+            'manual_pending':target['id'] in data.get('manual_pending',[]),
             'blocked':bool(state.get('blocked')),'retry_at':state.get('retry_at',0),
             'last_state':last.get('state'),'last_started':last.get('started'),'last_finished':last.get('finished'),
             'last_stage':stage if stage in {'collection','capture','index'} else None})
@@ -147,12 +161,21 @@ class CollectionScheduler:
         if not self.path.exists():
             fd=os.open(self.path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
         db=sqlite3.connect(self.path,timeout=5);db.row_factory=sqlite3.Row
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='controls'").fetchone() and not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_requests'").fetchone():
+            backup=self.folder/('scheduler.before-manual-'+uuid.uuid4().hex+'.sqlite3')
+            fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
+            with sqlite3.connect(backup) as recovery:
+                db.backup(recovery)
+                if recovery.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise RuntimeError('collection_scheduler_backup_invalid')
         db.executescript('''CREATE TABLE IF NOT EXISTS controls(id TEXT PRIMARY KEY,paused INTEGER NOT NULL);
           CREATE TABLE IF NOT EXISTS target_state(target_id TEXT PRIMARY KEY,failures INTEGER NOT NULL DEFAULT 0,
             retry_at REAL NOT NULL DEFAULT 0,blocked INTEGER NOT NULL DEFAULT 0,last_error TEXT,last_run TEXT);
           CREATE TABLE IF NOT EXISTS cycles(id TEXT PRIMARY KEY,started REAL NOT NULL,finished REAL,state TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY,cycle_id TEXT NOT NULL,target_id TEXT NOT NULL,
             started REAL NOT NULL,finished REAL,state TEXT NOT NULL,result TEXT,error TEXT);
+          CREATE TABLE IF NOT EXISTS manual_requests(id TEXT PRIMARY KEY,target_id TEXT NOT NULL,
+            requested_at REAL NOT NULL,state TEXT NOT NULL,attempt_id TEXT,finished_at REAL);
+          CREATE UNIQUE INDEX IF NOT EXISTS manual_active_target ON manual_requests(target_id) WHERE state IN ('queued','running');
           INSERT OR IGNORE INTO controls VALUES('global',0);''')
         try:yield db;db.commit()
         except BaseException:db.rollback();raise
@@ -184,6 +207,28 @@ class CollectionScheduler:
             keys=['global',target_id] if target_id else ['global']
             return any(row[0] for row in db.execute('SELECT paused FROM controls WHERE id IN ('+','.join('?' for _ in keys)+')',keys))
 
+    def request_run(self,target_id,request_id):
+        if not isinstance(request_id,str) or not re.fullmatch(r'[a-zA-Z0-9-]{16,64}',request_id):
+            raise ValueError('collection_scheduler_request_invalid')
+        store=CollectionStore.open_existing(self.state_root)
+        if store is None:raise ValueError('collection_target_missing')
+        target=store.target(target_id)
+        if not target['enabled'] or not any(p['permission']!='denied' for p in target['projects']):
+            raise ValueError('collection_target_missing_or_denied')
+        with self.control_lock(), self.database() as db:
+            existing=db.execute('SELECT * FROM manual_requests WHERE id=?',(request_id,)).fetchone()
+            if existing:
+                if existing['target_id']!=target_id:raise ValueError('collection_scheduler_request_conflict')
+                return {'state':existing['state'],'request_id':existing['id']}
+            if AbortToken(self.state_root/ABORT_STATE_NAME).is_cancelled() or self._paused(target_id):
+                raise ValueError('collection_scheduler_paused')
+            if db.execute('SELECT 1 FROM target_state WHERE target_id=? AND blocked=1',(target_id,)).fetchone():
+                raise ValueError('collection_scheduler_target_blocked')
+            active=db.execute("SELECT id,state FROM manual_requests WHERE target_id=? AND state IN ('queued','running')",(target_id,)).fetchone()
+            if active:return {'state':active['state'],'request_id':active['id']}
+            db.execute("INSERT INTO manual_requests VALUES(?,?,?,'queued',NULL,NULL)",(request_id,target_id,time.time()))
+            return {'state':'queued','request_id':request_id}
+
     def _voice_busy(self):
         path=self.state_root/'alden-voice-status.json'
         if not path.exists():return False
@@ -207,6 +252,7 @@ class CollectionScheduler:
             for row in attempts:
                 row['result']=json.loads(row['result']) if row['result'] else None
             targets=[dict(r) for r in db.execute('SELECT * FROM target_state ORDER BY target_id LIMIT 200')]
+            manual=[r[0] for r in db.execute("SELECT target_id FROM manual_requests WHERE state IN ('queued','running') ORDER BY requested_at LIMIT 200")] if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_requests'").fetchone() else []
             store=CollectionStore.open_existing(self.state_root)
             declared=[]
             if store:
@@ -214,7 +260,7 @@ class CollectionScheduler:
                     declared=[dict(r) for r in source.execute('SELECT id,label,platform,enabled,interval_seconds,next_run FROM targets ORDER BY id LIMIT 200')]
             aborted=AbortToken(self.state_root/ABORT_STATE_NAME).is_cancelled()
             return {'state':'paused' if controls.get('global') or aborted else 'enabled','abort_latched':aborted,
-                    'controls':controls,'attempts':attempts,'targets':targets,'declared_targets':declared,'time_zone':time.tzname[0]}
+                    'controls':controls,'attempts':attempts,'targets':targets,'manual_pending':manual,'declared_targets':declared,'time_zone':time.tzname[0]}
         finally:db.close()
 
     def cycle(self, *, max_targets=1, max_seconds=300, target_id=None, collector=collect_target,
@@ -241,11 +287,17 @@ class CollectionScheduler:
                 pending.update(row[0] for row in db.execute("SELECT s.target_id FROM target_state s JOIN attempts a ON a.id=s.last_run WHERE a.state!='complete'"))
                 db.execute("UPDATE cycles SET state='interrupted',finished=? WHERE state='running'",(stamp,))
                 db.execute("UPDATE attempts SET state='interrupted',finished=? WHERE state='running'",(stamp,))
+                db.execute("UPDATE manual_requests SET state='queued' WHERE state='running'")
+                manual={r['target_id']:r['id'] for r in db.execute("SELECT id,target_id FROM manual_requests WHERE state='queued' ORDER BY requested_at")}
                 retry={row['target_id']:dict(row) for row in db.execute('SELECT * FROM target_state')}
             with store.database() as db:
+                eligible=sorted(pending|manual.keys())
                 due=[row[0] for row in db.execute('''SELECT t.id FROM targets t WHERE t.enabled=1 AND (t.next_run<=? OR t.id IN ('PLACEHOLDER'))
                   AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied')
-                  ORDER BY t.next_run,t.id'''.replace("'PLACEHOLDER'",','.join('?' for _ in pending) or 'NULL'),(stamp,*pending))]
+                  ORDER BY t.next_run,t.id'''.replace("'PLACEHOLDER'",','.join('?' for _ in eligible) or 'NULL'),(stamp,*eligible))]
+            order={target:index for index,target in enumerate(due)}
+            manual_order={target:index for index,target in enumerate(manual)}
+            due.sort(key=lambda target:(target not in manual,manual_order.get(target,order[target])))
             due=[target for target in due if (not selected or target==selected) and not retry.get(target,{}).get('blocked')
                  and retry.get(target,{}).get('retry_at',0)<=stamp and not self._paused(target)]
             if not due:return {'state':'idle','attempts':[]}
@@ -258,6 +310,8 @@ class CollectionScheduler:
                 if token.is_cancelled() or self._paused():break
                 attempt=uuid.uuid4().hex
                 with self.database() as db:db.execute('INSERT INTO attempts VALUES(?,?,?,?,NULL,?,NULL,NULL)',(attempt,cycle,target_id,time.time(),'running'))
+                if target_id in manual:
+                    with self.database() as db:db.execute("UPDATE manual_requests SET state='running',attempt_id=? WHERE id=?",(attempt,manual[target_id]))
                 pause_check=[-1.0,False]
                 def cancelled():
                     if token.is_cancelled() or time.monotonic()-started>=max_seconds:return True
@@ -296,6 +350,9 @@ class CollectionScheduler:
                     db.execute('''INSERT INTO target_state VALUES(?,?,?,?,?,?) ON CONFLICT(target_id) DO UPDATE SET
                       failures=excluded.failures,retry_at=excluded.retry_at,blocked=excluded.blocked,last_error=excluded.last_error,last_run=excluded.last_run''',
                       (target_id,failures,finished+delay,int(state=='blocked'),error,attempt))
+                    if target_id in manual:
+                        request_state='complete' if state=='complete' else 'blocked' if state=='blocked' else 'queued'
+                        db.execute('UPDATE manual_requests SET state=?,finished_at=? WHERE id=?',(request_state,finished if request_state!='queued' else None,manual[target_id]))
                 attempts.append({'id':attempt,'target_id':target_id,'state':state,'stage':stage,'error':error})
             state='paused' if token.is_cancelled() or self._paused() else 'partial' if any(row['state']!='complete' for row in attempts) else 'complete'
             with self.database() as db:db.execute('UPDATE cycles SET finished=?,state=? WHERE id=?',(time.time(),state,cycle))

@@ -189,6 +189,8 @@ impl Output {
                 | "workspace-geeknews-compact.png"
                 | "workspace-voice-compact.png"
                 | "workspace-history-compact.png"
+                | "collection-schedule-default.png"
+                | "collection-schedule-compact.png"
                 | "workspace-settings-compact.png"
                 | "settings-layout.json"
                 | "workspace-readback.json"
@@ -579,6 +581,25 @@ fn capture_workspaces(
             &snapshot(window, deadline)?,
             deadline,
         )?;
+        if page == "history" {
+            collect_script(window, r#"JSON.stringify((()=>{
+              const schedule=document.querySelector('.collection-schedule');
+              const editor=schedule?.querySelector('.collection-interval');if(editor)editor.open=true;
+              schedule?.scrollIntoView({block:'start'});return {ready:!!schedule};
+            })())"#.into(), deadline)?;
+            std::thread::sleep(Duration::from_millis(100));
+            publish(
+                output,
+                &format!("collection-schedule-{size}.png"),
+                &snapshot(window, deadline)?,
+                deadline,
+            )?;
+            collect_script(window, r#"JSON.stringify((()=>{
+              const editor=document.querySelector('.collection-schedule .collection-interval');if(editor)editor.open=false;
+              document.querySelector('#settings-page-history .settings-page-heading')?.scrollIntoView({block:'start'});
+              return {restored:true};
+            })())"#.into(), deadline)?;
+        }
         if page == "settings" {
             collect_script(window,"JSON.stringify((()=>{const p=document.querySelector('#routed-model-picker');p?.scrollIntoView({block:'center'});if(p)p.open=true;return {opened:!!p};})())".into(),deadline)?;
             let ready_by = Instant::now() + Duration::from_secs(5);

@@ -2,6 +2,9 @@ import { fetchSettingsAction } from './runtime';
 import type { SettingsPage } from './settings-navigation';
 
 type Row = Record<string, unknown>;
+type Operation = 'pause' | 'resume' | 'interval' | 'run';
+type Entry = {row:HTMLElement;label:HTMLElement;next:HTMLElement;last:HTMLElement;button:HTMLButtonElement;
+  run:HTMLButtonElement;interval:HTMLSelectElement;save:HTMLButtonElement;dirty:boolean};
 const records = (value: unknown): Row[] => Array.isArray(value)
   ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const time = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -23,7 +26,7 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
   header.append(title,global,reload);section.append(header,status,list,note);
   (host.querySelector('.collection-history') ?? host.querySelector('.settings-page-heading'))?.after(section);
   if(!section.parentElement)host.prepend(section);
-  const entries=new Map<string,{row:HTMLElement;label:HTMLElement;next:HTMLElement;last:HTMLElement;button:HTMLButtonElement}>();
+  const entries=new Map<string,Entry>();
   const listeners=new AbortController();let page:SettingsPage='memory', visible=true, dead=false, busy=false, epoch=0;
   let timer:ReturnType<typeof setTimeout>|null=null, verified=false, aborted=false, globalPaused=false;
   const stop=()=>{if(timer!==null)clearTimeout(timer);timer=null;};
@@ -31,7 +34,11 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
   const controls=()=>{
     global.disabled=busy||!verified||aborted||entries.size===0;
     reload.disabled=busy;
-    for(const entry of entries.values())entry.button.disabled=busy||!verified||aborted||entry.button.dataset.excluded==='true';
+    for(const entry of entries.values()){
+      const disabled=busy||!verified||aborted||entry.button.dataset.excluded==='true';
+      entry.button.disabled=disabled;entry.interval.disabled=disabled;entry.save.disabled=disabled||!entry.dirty;
+      entry.run.disabled=disabled||globalPaused||entry.run.dataset.blocked==='true';
+    }
   };
   function render(data:Row) {
     verified=true;aborted=data.abort_latched===true;globalPaused=data.global_paused===true;
@@ -55,8 +62,21 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
       const id=String(target.id);let entry=entries.get(id);
       if(!entry){
         const row=create('li'),label=create('strong'),next=create('span'),last=create('span'),button=document.createElement('button');
-        button.type='button';row.append(label,next,last,button);list.append(row);entry={row,label,next,last,button};entries.set(id,entry);
+        const actions=create('div');actions.className='collection-target-actions';
+        const run=document.createElement('button');run.type='button';run.className='collection-run';
+        const editor=document.createElement('details');editor.className='collection-interval';
+        editor.append(create('summary','주기'));
+        const fields=create('div'),interval=document.createElement('select'),save=document.createElement('button');
+        save.type='button';save.textContent='저장';save.className='collection-interval-save';
+        for(const [seconds,text] of [[900,'15분'],[3600,'1시간'],[10800,'3시간'],[21600,'6시간'],[43200,'12시간'],[86400,'1일'],[259200,'3일'],[604800,'7일'],[2592000,'30일']] as const){
+          const option=document.createElement('option');option.value=String(seconds);option.textContent=text;interval.append(option);
+        }
+        fields.append(interval,save);editor.append(fields);button.type='button';actions.append(button,run,editor);
+        row.append(label,next,last,actions);list.append(row);entry={row,label,next,last,button,run,interval,save,dirty:false};entries.set(id,entry);
         button.addEventListener('click',()=>void change(button.dataset.operation==='resume'?'resume':'pause',id),{signal:listeners.signal});
+        run.addEventListener('click',()=>{if(!run.disabled)void change('run',id,{request_id:crypto.randomUUID()});},{signal:listeners.signal});
+        interval.addEventListener('change',()=>{const current=entries.get(id);if(current){current.dirty=true;controls();}},{signal:listeners.signal});
+        save.addEventListener('click',()=>{if(!save.disabled)void change('interval',id,{interval_seconds:Number(interval.value),expected_interval:Number(interval.dataset.expected)});},{signal:listeners.signal});
       }
       entry.label.textContent=String(target.label??'수집 대상');
       const hours=Number(target.interval_seconds)/3600;
@@ -64,22 +84,34 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
       const paused=target.paused===true, blocked=target.blocked===true;
       const retry=Number(target.retry_at)||0;
       const nextAt=target.last_state&&target.last_state!=='complete'&&retry>0?retry:Number(target.next_run)||0;
-      entry.next.textContent=`${interval} · ${target.permitted===0?'접근 확인 필요':target.enabled===0?'대상 제외':aborted||globalPaused||paused?'중지됨':blocked?'확인 후 재개':nextAt<=Date.now()/1000?'실행 대기':'다음 '+time(nextAt)}`;
+      entry.next.textContent=`${interval} · ${target.permitted===0?'접근 확인 필요':target.enabled===0?'대상 제외':aborted||globalPaused||paused?'중지됨':blocked?'확인 후 재개':target.manual_pending===true?'재실행 대기':nextAt<=Date.now()/1000?'실행 대기':'다음 '+time(nextAt)}`;
       entry.last.textContent=`최근 ${lastStates[String(target.last_state)]??'결과 미확인'} · ${time(target.last_finished??target.last_success)}`;
       entry.button.dataset.operation=paused||blocked?'resume':'pause';entry.button.textContent=paused||blocked?'재개':'중지';
       entry.button.dataset.excluded=String(target.enabled===0||target.permitted===0);
       entry.button.setAttribute('aria-label',String(target.label??'수집 대상')+' 수집 '+entry.button.textContent);
+      entry.run.textContent=target.manual_pending===true?'대기 중':'지금 수집';
+      entry.run.setAttribute('aria-label',String(target.label??'수집 대상')+' 지금 수집');
+      entry.run.dataset.blocked=String(paused||blocked||target.manual_pending===true||target.permitted!==1);
+      entry.interval.setAttribute('aria-label',String(target.label??'수집 대상')+' 수집 주기');
+      entry.save.setAttribute('aria-label',String(target.label??'수집 대상')+' 수집 주기 저장');
+      if(!entry.dirty){
+        const value=String(target.interval_seconds);
+        if(!Array.from(entry.interval.options).some(option=>option.value===value)){
+          const option=document.createElement('option');option.value=value;option.textContent=interval.replace(' 간격','');entry.interval.append(option);
+        }
+        entry.interval.value=value;entry.interval.dataset.expected=value;
+      }
     }
     controls();
   }
-  async function request(operation?:'pause'|'resume',targetId?:string) {
+  async function request(operation?:Operation,targetId?:string,extra:Row={}) {
     if(!active()||busy)return;stop();busy=true;controls();const ticket=epoch;
     section.setAttribute('aria-busy','true');
     try{
       const data=await load(operation?'collection-scheduler-control':'collection-scheduler-status',operation?
-        {query:JSON.stringify({operation,target_id:targetId??null}),explicitOptIn:true}:{});
+        {query:JSON.stringify({operation,target_id:targetId??null,...extra}),explicitOptIn:true}:{});
       if(!active()||ticket!==epoch)return;
-      if(data?.ok===true)render(data);
+      if(data?.ok===true){if(operation==='interval'&&targetId){const entry=entries.get(targetId);if(entry)entry.dirty=false;}render(data);}
       else {verified=false;section.dataset.state='unavailable';status.textContent=operation?
         '변경 결과를 확인하지 못했습니다. 새로고침으로 확인하세요.':'일정을 확인하지 못했습니다. 잠시 후 다시 확인합니다.';}
     }catch{if(active()&&ticket===epoch){verified=false;section.dataset.state='unavailable';status.textContent='일정을 확인하지 못했습니다.';}}
@@ -88,9 +120,9 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
       if(active()){if(ticket!==epoch)void request();else timer=setTimeout(()=>void request(),15000);}
     }
   }
-  async function change(operation:'pause'|'resume',targetId?:string){if(verified&&!aborted)await request(operation,targetId);}
+  async function change(operation:Operation,targetId?:string,extra:Row={}){if(verified&&!aborted)await request(operation,targetId,extra);}
   global.addEventListener('click',()=>void change(globalPaused?'resume':'pause'),{signal:listeners.signal});
-  reload.addEventListener('click',()=>void request(),{signal:listeners.signal});controls();
+  reload.addEventListener('click',()=>{for(const entry of entries.values())entry.dirty=false;void request();},{signal:listeners.signal});controls();
   return {
     select(next:SettingsPage){if(page===next)return;page=next;epoch++;stop();if(active())void request();},
     visible(flag:boolean){if(visible===flag)return;visible=flag;epoch++;stop();if(active())void request();},

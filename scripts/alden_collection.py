@@ -292,6 +292,32 @@ class CollectionStore:
             data["projects"] = [dict(x) for x in db.execute("SELECT project,permission FROM target_projects WHERE target_id=?", (target_id,))]
             return data
 
+    def update_interval(self, target_id: str, seconds: int, expected: int) -> dict:
+        if (type(seconds) is not int or not 60 <= seconds <= 30 * 86400
+                or type(expected) is not int or not 60 <= expected <= 30 * 86400):
+            raise ValueError('collection_interval_invalid')
+        with self.target_lock(target_id), self.database() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('''SELECT t.id,t.interval_seconds,t.next_run,t.last_success FROM targets t
+                WHERE t.id=? AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied')''', (target_id,)).fetchone()
+            if row is None: raise ValueError('collection_target_missing_or_denied')
+            if row['interval_seconds'] != expected: raise ValueError('collection_interval_changed')
+            if seconds == expected: return {'state': 'unchanged', 'target_id': target_id}
+            raw = encoded(dict(row))
+            folder = safe_directory(self.root / 'schedule-backups')
+            path = folder / (digest(raw) + '.json')
+            if not path.exists():
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, 'wb') as handle:
+                    handle.write(raw); handle.flush(); os.fsync(handle.fileno())
+            if path.is_symlink() or path.read_bytes() != raw:
+                raise RuntimeError('collection_schedule_backup_mismatch')
+            now = time.time()
+            due = row['next_run'] is None or row['next_run'] <= now
+            next_run = (row['next_run'] if row['next_run'] is not None else now) if due else max(now, (row['last_success'] or now) + seconds)
+            db.execute('UPDATE targets SET interval_seconds=?,next_run=? WHERE id=?', (seconds, next_run, target_id))
+            return {'state': 'saved', 'target_id': target_id, 'interval_seconds': seconds, 'next_run': next_run}
+
     def _blob(self, raw: bytes, *, folder=None, budget=MAX_RECORD_BYTES) -> tuple[str, str]:
         if len(raw) > budget:
             raise ValueError("collection_record_too_large")
@@ -440,7 +466,7 @@ class CollectionStore:
                     if prior and prior['source_revision'] != source_revision and source_order <= prior['source_order']:
                         raise RuntimeError('collection_source_revision_stale' if source_order < prior['source_order'] else 'collection_source_revision_conflict')
                     if prior and prior['source_revision'] == source_revision and prior['processing_version'] == processing_version and prior['projection_sha256'] == projection:
-                        db.execute('UPDATE targets SET next_run=? WHERE id=?', (time.time() + target['interval_seconds'], target_id))
+                        db.execute('UPDATE targets SET next_run=?+interval_seconds WHERE id=?', (time.time(), target_id))
                         return {'run_id': prior['run_id'], 'target_id': target_id, 'state': 'unchanged',
                                 'added': 0, 'revised': 0, 'unchanged': len(records), 'removed': 0}
                 previous = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -541,8 +567,8 @@ class CollectionStore:
                     now = time.time()
                     db.execute("UPDATE runs SET state='complete',ended_at=?,cursor_after=?,added=?,revised=?,unchanged=? WHERE id=?",
                                (now, encoded(cursor).decode(), counts["added"], counts["revised"], counts["unchanged"], run_id))
-                    db.execute("UPDATE targets SET cursor=?,last_success=?,last_error=NULL,next_run=? WHERE id=?",
-                               (encoded(cursor).decode(), now, now + target["interval_seconds"], target_id))
+                    db.execute("UPDATE targets SET cursor=?,last_success=?,last_error=NULL,next_run=?+interval_seconds WHERE id=?",
+                               (encoded(cursor).decode(), now, now, target_id))
                 return {"run_id": run_id, "target_id": target_id, "state": "complete", **counts, "removed": removed}
             except Exception as error:
                 reason = str(error)[:200]
