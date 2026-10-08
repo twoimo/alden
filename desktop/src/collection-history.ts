@@ -70,7 +70,8 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
   older.className = 'history-older'; older.textContent = '이전 처리 더 보기'; older.hidden = true;
   const latest = document.createElement('button'); latest.type = 'button';
   latest.className = 'history-latest'; latest.textContent = '최신 이력 보기'; latest.hidden = true;
-  section.append(heading, toolbar, extra, status, totals, list, older, latest); host.append(section);
+  section.append(heading, toolbar, extra, status, totals, list, older, latest);
+  host.querySelector('.settings-page-heading')?.after(section); if (!section.parentElement) host.prepend(section);
 
   let page: SettingsPage = 'memory', visible = true, dead = false, busy = false, epoch = 0;
   let before: number | null = null, newest: number | null = null, items: Row[] = [];

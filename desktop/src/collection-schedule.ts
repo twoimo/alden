@@ -21,7 +21,8 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
   const note=create('p');note.className='collection-schedule-note';
   const list=create('ul');list.className='collection-schedule-targets';
   header.append(title,global,reload);section.append(header,status,list,note);
-  host.querySelector('.settings-page-heading')?.after(section);if(!section.parentElement)host.prepend(section);
+  (host.querySelector('.collection-history') ?? host.querySelector('.settings-page-heading'))?.after(section);
+  if(!section.parentElement)host.prepend(section);
   const entries=new Map<string,{row:HTMLElement;label:HTMLElement;next:HTMLElement;last:HTMLElement;button:HTMLButtonElement}>();
   const listeners=new AbortController();let page:SettingsPage='memory', visible=true, dead=false, busy=false, epoch=0;
   let timer:ReturnType<typeof setTimeout>|null=null, verified=false, aborted=false, globalPaused=false;

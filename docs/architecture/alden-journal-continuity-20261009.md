@@ -6,6 +6,8 @@ History pages carry the same scoped stream identity and a high-water cursor. A r
 
 The summary counts stage receipts separately from stored additions, revisions and unchanged records. Its scope matches project, target, platform, stage, search and local-date filters. A save receipt is not factual validation, a text-index receipt is not dense-index proof, and a read is not a knowledge change. Details retain the actual collector origin and run/version/source identities. Project labels outside the requested project set are excluded.
 
+Native inspection found the seven scheduled targets occupying the compact viewport above the actual history. Current history and counts now precede the schedule; all schedule controls remain available below it.
+
 Default and stage-only summaries read exact per-target counters. Insert, delete and update triggers maintain them in the same transaction as the journal, including older writers, duplicate rejection and rollback. Time/search filters count their exact matching receipts without extrapolation. Counters and the target/sequence index are optional schema-3 accelerators; original records and existing schema readers stay compatible. A one-time, private online-backup recovery copy precedes initialization on an existing store. Read-only lookup does not migrate or create storage.
 
 The first full-size trial exposed a planner regression: the new target index made overview pages join and sort the entire journal. Retained failure measurements document this. Final overview pages use the integer-primary-key keyset order, and checkpoint endpoints use bounded per-target lookups. Full aggregation is not repeated by 2.5-second forward polling; the visible consumer increments matching counts from newly committed, deduplicated pages.
