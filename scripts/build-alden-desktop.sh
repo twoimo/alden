@@ -3,6 +3,9 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ "${ALDEN_CANONICAL_BUILD_LOCKED:-0}" != "1" ]; then
+  exec python3 "$ROOT/scripts/alden_build_receipt.py" run --root "$ROOT"
+fi
 DESKTOP="$ROOT/desktop"
 APP_NAME="Alden.app"
 APP="$DESKTOP/src-tauri/target/release/bundle/macos/$APP_NAME"
@@ -17,6 +20,16 @@ if ! (cd "$ROOT" && shasum -a 256 -c scripts/menubar-bytecode.sha256); then
   echo "build-alden-desktop: pinned menu runtime is missing or changed" >&2
   exit 2
 fi
+
+# A receipt is written only after one complete canonical build. Reuse compares
+# source, locks, resources, toolchain, CLI, every bundle file and strict signature.
+# Evaluation requests deliberately run the ordinary build path.
+if [ "${OPENKAKAO_FORCE_BUILD:-0}" != "1" ] && [ -z "${ALDEN_EVALUATION_DATASET:-}" ]; then
+  if python3 "$ROOT/scripts/alden_build_receipt.py" check --root "$ROOT"; then
+    exit 0
+  fi
+fi
+ALDEN_BUILD_INPUT_KEY=$(python3 "$ROOT/scripts/alden_build_receipt.py" key --root "$ROOT")
 
 # Explicit local evaluation settings make each changed source/model/dataset
 # version run once. No evaluator, download or training starts by default.
@@ -78,4 +91,5 @@ if [ ! -x "$APP_BIN" ]; then
   exit 2
 fi
 
+python3 "$ROOT/scripts/alden_build_receipt.py" record --root "$ROOT" --expected-key "$ALDEN_BUILD_INPUT_KEY"
 printf '%s\n' "$APP"

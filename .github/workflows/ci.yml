@@ -160,6 +160,8 @@ jobs:
           tests.test_alden_voice_llm_measurement
           tests.test_alden_graph_snapshot_cycle
           tests.test_alden_file_content
+          tests.test_alden_build_receipt
+          tests.test_alden_collection_scheduler
           tests.test_alden_retrieval_eval
           tests.test_auto_reply_finetune
           tests.test_alden_dpo_scorer
