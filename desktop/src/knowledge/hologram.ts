@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { AnimationLoop } from "../core/animation-loop";
 import type { AnimationLoopDiagnostics } from "../core/animation-loop";
 import { ContextNebulae } from './cortex';
-import { contextRegions, regionBounds } from './context-regions';
+import { contextRegions, sourceRegions, regionBounds } from './context-regions';
 import { createNeuronGlyph, NEURON_EXTENT_RATIO } from './neuron';
 import type { NeuronPort } from './neuron';
 import { ConstellationNodes } from './constellation';
@@ -80,6 +80,11 @@ export class KnowledgeHologram {
   private readonly constellationNodes = new ConstellationNodes(OVERVIEW_LOD_CAP);
   private readonly globalLabels = new Set<string>();
   private hoveredId:string|null=null;
+  private hoverFrame: number | null = null;
+  private hoverX = 0;
+  private hoverY = 0;
+  private pickGeometry: THREE.SphereGeometry | null = null;
+  private pickMaterial: THREE.MeshBasicMaterial | null = null;
   private neuronDetail=false;
   private readonly nodeMeshes = new Map<string, THREE.Mesh>();
   private readonly orbMeshes = new Map<string, ThinkingOrbMesh>();
@@ -99,6 +104,7 @@ export class KnowledgeHologram {
   private readonly projected = new THREE.Vector3();
   private readonly desiredCamera = new THREE.Vector3(0, 0, 5.2);
   private readonly desiredLookAt = new THREE.Vector3();
+  private restoredWindowSize: {width:number; height:number} | null = null;
   private readonly lookAt = new THREE.Vector3();
   private readonly resizeObserver: ResizeObserver | null;
   private view: KnowledgeView;
@@ -178,6 +184,7 @@ export class KnowledgeHologram {
 
   stop(): void {
     this.requestedAnimation = false;
+    this.cancelHover();
     this.clearNodeActivity();
     try { this.voicePoller?.stop(); } finally {
       try { this.loop.stop(); } finally {
@@ -228,6 +235,7 @@ export class KnowledgeHologram {
     this.handleMotionChange();
   }
   resetCamera(): void {
+    this.restoredWindowSize=null;
     if (this.view.focusId && this.view.hops > 0) this.focusCamera(this.view.focusId);
     else this.resetOverviewCamera();
     this.invalidateFrame();
@@ -272,6 +280,7 @@ export class KnowledgeHologram {
 
   replaceGraph(graph: KnowledgeGraph, navigation?: { focusId: string | null; hops: number }, viewpoint?: { camera: number[]; lookAt: number[] }): void {
     if (this.disposed) return;
+    this.restoredWindowSize=null;
     const focus = this.view.focusId;
     this.graph = graph;
     const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
@@ -284,6 +293,7 @@ export class KnowledgeHologram {
     if (navigation && this.view.focusId && this.view.hops > 0) this.focusCamera(this.view.focusId);
     if (viewpoint && [viewpoint.camera, viewpoint.lookAt].every(values => values.length === 3 && values.every(Number.isFinite))) {
       this.desiredCamera.fromArray(viewpoint.camera); this.desiredLookAt.fromArray(viewpoint.lookAt);
+      this.restoredWindowSize={width:window.innerWidth,height:window.innerHeight};
     }
     this.canvas.hidden = graph.nodes.length === 0;
     this.resize(false);
@@ -303,6 +313,7 @@ export class KnowledgeHologram {
 
   clickNode(nodeId: string): KnowledgeView {
     if (this.disposed) return this.view;
+    this.restoredWindowSize=null;
     const node = this.graph.nodes.find((candidate) => candidate.id === nodeId);
     if (!node) return this.view;
     const previousCamera = this.navigationTargets;
@@ -315,6 +326,7 @@ export class KnowledgeHologram {
 
   expandOneHop(): KnowledgeView {
     if (this.disposed) return this.view;
+    this.restoredWindowSize=null;
     this.view = this.drilldown.expandOneHop();
     this.rebuildGraph();
     if (this.view.focusId&&this.view.hops>0) this.focusCamera(this.view.focusId);
@@ -325,6 +337,7 @@ export class KnowledgeHologram {
 
   reset(): KnowledgeView {
     if (this.disposed) return this.view;
+    this.restoredWindowSize=null;
     this.view = this.drilldown.reset();
     this.rebuildGraph();
     this.resetOverviewCamera();
@@ -335,6 +348,7 @@ export class KnowledgeHologram {
 
   back(): KnowledgeView {
     if (this.disposed) return this.view;
+    this.restoredWindowSize=null;
     this.view = this.drilldown.back();
     this.rebuildGraph();
     if (this.view.focusId&&this.view.hops>0) this.focusCamera(this.view.focusId);
@@ -371,6 +385,7 @@ export class KnowledgeHologram {
       .filter((child) => child !== this.graphRoot)
       .forEach((child) => disposeObject(child));
     this.renderer.dispose();
+    this.pickGeometry?.dispose();this.pickMaterial?.dispose();
     this.labels.clear();
     this.labelBounds.length = 0;
     this.canvas.parentElement?.querySelector(".knowledge-node-labels")?.replaceChildren();
@@ -387,6 +402,7 @@ export class KnowledgeHologram {
   }
 
   private rebuildGraph(): void {
+    this.cancelHover();
     this.layoutPositions();
     const retired=new THREE.Group();
     for (const child of [...this.graphRoot.children]) {
@@ -395,6 +411,8 @@ export class KnowledgeHologram {
       retired.add(child);
     }
     disposeObject(retired);
+    this.pickGeometry?.dispose();this.pickMaterial?.dispose();
+    this.pickGeometry=null;this.pickMaterial=null;
     this.nodeMeshes.clear();
     this.orbMeshes.clear();
     this.neuronMeshes.clear();
@@ -423,14 +441,15 @@ export class KnowledgeHologram {
     this.plasticity.setGraph(this.view, this.anchors, this.positions);
     if (this.reducedMotionEnabled) this.plasticity.settle();
     this.plasticity.forEachPoint(this.syncPoint);
-    const regions = global?[]:contextRegions(this.view, this.graph);
+    const regions = global?sourceRegions(this.view):contextRegions(this.view, this.graph);
     this.nebulae.set(regions);
     this.canvas.setAttribute('aria-label', global?`${this.view.nodes.length}개 기억의 연결 성도`:`${this.view.nodes.length}개 기억, ${regions.length}개 맥락의 연결 그림`);
-    this.canvas.title = regions.map(region => region.label).join(' · ');
+    this.canvas.title = global ? '' : regions.map(region => region.label).join(' · ');
     this.nebulae.update(0, this.positions, this.reducedMotionEnabled);
 
     const sharedPickGeometry=global?new THREE.SphereGeometry(1,8,6):null;
     const sharedPickMaterial=global?new THREE.MeshBasicMaterial({visible:false}):null;
+    this.pickGeometry=sharedPickGeometry;this.pickMaterial=sharedPickMaterial;
     for (const node of this.view.nodes) {
       const position = this.positions.get(node.id);
       if (!position) continue;
@@ -469,7 +488,9 @@ export class KnowledgeHologram {
       mesh.position.copy(position);
       mesh.userData.nodeId = node.id;
       this.nodeMeshes.set(node.id, mesh);
-      this.graphRoot.add(mesh);
+      // Global pick spheres are CPU targets. Keeping thousands of invisible
+      // objects in the rendered scene needlessly traverses them each frame.
+      if (!global) this.graphRoot.add(mesh);
       if (accessible) {
         const button = document.createElement("button");
         button.type = "button";
@@ -480,7 +501,7 @@ export class KnowledgeHologram {
         button.onclick = () => this.clickNode(node.id);
         accessible.append(button);
       }
-      if (labelLayer) {
+      if (labelLayer && (!global || this.globalLabels.has(node.id) || focused)) {
         const label = document.createElement("span");
         label.className = "knowledge-node-label";
         label.textContent = node.label;
@@ -510,22 +531,49 @@ export class KnowledgeHologram {
   }
 
   private readonly rememberPress=(event:PointerEvent):void=>{this.press.set(event.clientX,event.clientY);};
+  private cancelHover(): void {
+    if(typeof this.hoverFrame==='number')cancelAnimationFrame(this.hoverFrame);
+    this.hoverFrame=null;
+  }
+  private refreshOverviewLabels(): void {
+    if(this.view.hops!==0)return;
+    const wanted=new Set(this.globalLabels);
+    if(this.hoveredId)wanted.add(this.hoveredId);
+    if(this.view.focusId)wanted.add(this.view.focusId);
+    for(const [id,label] of this.labels)if(!wanted.has(id)){label.remove();this.labels.delete(id);}
+    const layer=this.canvas.parentElement?.querySelector('.knowledge-node-labels');
+    for(const id of wanted){
+      if(this.labels.has(id)||!layer)continue;
+      const node=this.view.nodes.find(node=>node.id===id);if(!node)continue;
+      const label=document.createElement('span');label.className='knowledge-node-label';
+      label.textContent=node.label;label.title=node.label;label.dataset.view='overview';
+      label.dataset.focused=String(id===this.view.focusId);layer.append(label);this.labels.set(id,label);
+    }
+    this.labelBounds.length=0;
+    for(const _ of this.labels)this.labelBounds.push({width:0,left:0,top:0,visible:false});
+  }
   private readonly clearHover=():void=>{
+    this.cancelHover();
     if(this.hoveredId===null)return;
-    this.hoveredId=null;this.constellationNodes.highlight(this.view.focusId);this.overviewSynapses.highlight(this.view.focusId);this.invalidateFrame();
+    this.hoveredId=null;this.refreshOverviewLabels();this.constellationNodes.highlight(this.view.focusId);this.overviewSynapses.highlight(this.view.focusId);this.invalidateFrame();
   };
   private readonly handleHover=(event:PointerEvent):void=>{
-    if(this.disposed||this.neuronDetail||this.orbitActive)return;
+    if(this.disposed||!this.requestedAnimation||this.neuronDetail||this.orbitActive)return;
+    this.hoverX=event.clientX;this.hoverY=event.clientY;
+    if(this.hoverFrame===null)this.hoverFrame=requestAnimationFrame(()=>{this.hoverFrame=null;this.pickHover();});
+  };
+  private pickHover(): void {
+    if(this.disposed||!this.requestedAnimation||this.neuronDetail||this.orbitActive)return;
     const rect=this.canvas.getBoundingClientRect();
-    const x=event.clientX-rect.left-this.viewport.x,y=event.clientY-rect.top-this.viewport.y;
+    const x=this.hoverX-rect.left-this.viewport.x,y=this.hoverY-rect.top-this.viewport.y;
     if(x<0||y<0||x>this.viewport.width||y>this.viewport.height){this.clearHover();return;}
     this.pointer.set(x/this.viewport.width*2-1,-y/this.viewport.height*2+1);
     this.scene.updateMatrixWorld(true);this.camera.updateMatrixWorld(true);this.raycaster.setFromCamera(this.pointer,this.camera);
     const hit=pickKnowledgeSphere(this.raycaster,this.nodeMeshes.values());
     const id=typeof hit?.userData.nodeId==='string'?hit.userData.nodeId:null;
     if(id===this.hoveredId)return;
-    this.hoveredId=id;this.constellationNodes.highlight(id??this.view.focusId);this.overviewSynapses.highlight(id??this.view.focusId);this.invalidateFrame();
-  };
+    this.hoveredId=id;this.refreshOverviewLabels();this.constellationNodes.highlight(id??this.view.focusId);this.overviewSynapses.highlight(id??this.view.focusId);this.invalidateFrame();
+  }
   private applyDetailMode(detail:boolean,force=false):void {
     if(!force&&detail===this.neuronDetail)return;
     this.neuronDetail=detail;
@@ -602,7 +650,10 @@ export class KnowledgeHologram {
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
-    if (resetCamera && this.view.hops===0 && (previousWidth !== this.viewport.width || previousHeight !== this.viewport.height)) this.resetOverviewCamera();
+    if(this.restoredWindowSize && (this.restoredWindowSize.width!==window.innerWidth || this.restoredWindowSize.height!==window.innerHeight))this.restoredWindowSize=null;
+    // Opening/closing the note pane can notify ResizeObserver after a history
+    // restore. Preserve its saved pose; a real window resize still refits.
+    if (resetCamera && !this.restoredWindowSize && this.view.hops===0 && (previousWidth !== this.viewport.width || previousHeight !== this.viewport.height)) this.resetOverviewCamera();
     for (const orb of this.orbMeshes.values()) orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
     for (const box of this.labelBounds) box.width = 0;
     // Overlay geometry is read only on resize/selection layout changes.
@@ -620,6 +671,7 @@ export class KnowledgeHologram {
 
   private render(dt: number): void {
     if (this.disposed) return;
+    const pointsMoving = this.plasticity.moving;
     const elapsed = Math.min(.25, Math.max(0, dt));
     if (this.reducedMotionEnabled && this.plasticity.moving) this.plasticity.settle();
     else if (!this.paused) this.plasticity.advance(elapsed);
@@ -634,11 +686,11 @@ export class KnowledgeHologram {
         mesh.position.copy(position);this.orbMeshes.get(id)?.position.copy(position);this.neuronMeshes.get(id)?.position.copy(position);
       }
     }
-    this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
-    this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
+    this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving);
+    this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving);
     this.constellationNodes.update(this.displayedPositions);
     const nodeActivityMoving = this.constellationNodes.advanceActivity(Date.now(), this.reducedMotionEnabled || this.paused);
-    this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
+    if(pointsMoving || this.nebulae.moving) this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
     this.loop.setInteractive(this.plasticity.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
     const alpha = this.reducedMotionEnabled||this.paused ? 1 : 1 - Math.exp(-12 * elapsed);

@@ -53,6 +53,7 @@ describe('dense overview visibility', () => {
     const group = new ConstellationNodes(2048); owned.push(group);
     group.set([node('small', { degree: 0, degreeScope: 'permitted filtered graph' })], []);
     group.setMinimumRadius(.015); group.update(points('small'));
+    expect(stars(group).geometry.index!.count/3).toBe(2);
     expect(group.radius('small')).toBe(.015);
     expect(transform(stars(group), 0).elements[0]).toBeCloseTo(.015);
     group.update(new Map()); collapsed(stars(group), 0);
@@ -331,14 +332,9 @@ describe('constellation overview stars', () => {
     expect(mesh.instanceColor!.version).toBe(colorVersion);
     expect(mesh.geometry.getAttribute('position').array).toBe(geometryPositions);
     expect(geometryPositions).toEqual(geometryBefore);
-    expect(compose).toHaveBeenCalledTimes(26);
-    const [position, orientation, size] = compose.mock.calls[0];
-    for (const call of compose.mock.calls) {
-      expect(call[0]).toBe(position); expect(call[1]).toBe(orientation); expect(call[2]).toBe(size);
-    }
-    for (const context of compose.mock.contexts) expect(context).toBe(compose.mock.contexts[0]);
-    expect(compose.mock.contexts[0]).not.toBe(groupMatrix);
-    expect(position).not.toBe(group.position); expect(orientation).not.toBe(group.quaternion); expect(size).not.toBe(groupScale);
+    expect(compose).not.toHaveBeenCalled();
+    const matrixVersion = mesh.instanceMatrix.version;
+    group.update(positions);expect(mesh.instanceMatrix.version).toBe(matrixVersion);
     expect(group.matrix).toBe(groupMatrix); expect(group.matrix).toEqual(originalMatrix);
     expect(group.rotation).toBe(groupRotation); expect(group.rotation.equals(originalRotation)).toBe(true);
     expect(group.scale).toBe(groupScale); expect(group.scale).toEqual(originalScale);

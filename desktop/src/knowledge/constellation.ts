@@ -21,7 +21,7 @@ const READ = new THREE.Color('#8ab9e0');
  * Dispose by traversing normally: mesh.dispose(), geometry.dispose(), material.dispose().
  */
 export class ConstellationNodes extends THREE.Group {
-  private readonly stars: THREE.InstancedMesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>;
+  private readonly stars: THREE.InstancedMesh;
   private readonly slotIds: (string | null)[];
   private readonly slots = new Map<string, number>();
   private readonly sourceColors = new Map<string, THREE.Color>();
@@ -40,9 +40,28 @@ export class ConstellationNodes extends THREE.Group {
     super();
     this.slotIds = new Array(this.capacity).fill(null);
     this.radii = new Float64Array(this.capacity);
+    // Dense stars need two triangles, not a lit sphere for each subpixel dot.
+    // Their real ID, colour, radius and companion CPU picker remain unchanged.
+    const dense = this.capacity > CAPACITY;
     this.stars = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(1,12,8),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x35475a, emissiveIntensity: .18, metalness: .12, roughness: .56, toneMapped: false }),
+      dense ? new THREE.PlaneGeometry(2,2) : new THREE.SphereGeometry(1,12,8),
+      dense ? new THREE.ShaderMaterial({transparent:true,depthWrite:false,toneMapped:false,
+        vertexShader:`varying vec2 vPoint; varying vec3 vTint;
+          void main(){
+            vec4 eye=modelViewMatrix*instanceMatrix*vec4(0.,0.,0.,1.);
+            float radius=length(instanceMatrix[0].xyz);
+            eye.xy+=position.xy*radius*2.;
+            gl_Position=projectionMatrix*eye;vPoint=position.xy;
+            vTint=instanceColor;
+          }`,
+        fragmentShader:`varying vec2 vPoint; varying vec3 vTint;
+          void main(){float r=length(vPoint);if(r>1.)discard;
+            float core=1.-smoothstep(.16,.38,r);
+            float glow=exp(-7.*r*r)*(1.-smoothstep(.75,1.,r));
+            gl_FragColor=vec4(mix(vTint,vec3(1.),core*.35),core*.85+glow*.35);
+            #include <colorspace_fragment>
+          }`,
+      }) : new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x35475a, emissiveIntensity: .18, metalness: .12, roughness: .56, toneMapped: false }),
       this.capacity,
     );
     this.stars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -129,25 +148,25 @@ export class ConstellationNodes extends THREE.Group {
 
   /** Missing/non-finite positions collapse immediately. No per-update allocations. */
   update(positions: ReadonlyMap<string, Point3>): void {
-    let visible = false;
+    let visible = false, changed = false;
+    const matrices = this.stars.instanceMatrix.array;
     for (let slot = 0; slot < this.stars.count; slot++) {
-      const id = this.slotIds[slot];
-      const point = id === null ? undefined : positions.get(id);
-      // Matrices are Float32: a finite JS number can still overflow their buffer.
-      if (point && Number.isFinite(Math.fround(point.x))
-        && Number.isFinite(Math.fround(point.y)) && Number.isFinite(Math.fround(point.z))) {
-        this.instancePosition.set(point.x, point.y, point.z);
-        this.instanceSize.setScalar(Math.max(this.minimumRadius, this.radii[slot]));
-        visible = true;
-      } else {
-        this.instancePosition.set(0, 0, 0);
-        this.instanceSize.setScalar(0);
-      }
-      this.instanceTransform.compose(this.instancePosition, this.instanceOrientation, this.instanceSize);
-      this.stars.setMatrixAt(slot, this.instanceTransform);
+      const id = this.slotIds[slot], point = id === null ? undefined : positions.get(id);
+      const x = Math.fround(point?.x ?? NaN), y = Math.fround(point?.y ?? NaN), z = Math.fround(point?.z ?? NaN);
+      const valid = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
+      const radius = valid ? Math.fround(Math.max(this.minimumRadius,this.radii[slot])) : 0;
+      const px = valid ? x : 0, py = valid ? y : 0, pz = valid ? z : 0, at = slot * 16;
+      visible ||= valid;
+      if (matrices[at] === radius && matrices[at+5] === radius && matrices[at+10] === radius
+        && matrices[at+12] === px && matrices[at+13] === py && matrices[at+14] === pz) continue;
+      // Instances have only uniform scale and translation. The other entries
+      // are already the collapsed identity written on set; no matrix compose.
+      matrices[at]=matrices[at+5]=matrices[at+10]=radius;
+      matrices[at+12]=px;matrices[at+13]=py;matrices[at+14]=pz;
+      changed = true;
     }
     this.stars.visible = visible;
-    this.stars.instanceMatrix.needsUpdate = true;
+    if (changed) this.stars.instanceMatrix.needsUpdate = true;
   }
 
   /** One warm selection and ice-blue direct neighbours; unrelated stars keep their base color. */

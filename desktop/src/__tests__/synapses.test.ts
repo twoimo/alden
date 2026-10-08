@@ -5,6 +5,18 @@ import * as THREE from 'three';
 import {createNeuronGlyph} from '../knowledge/neuron';
 
 describe('source synaptic bridges',()=>{
+  it('keeps dense links quiet until their actual endpoint is selected, then restores them',()=>{
+    const bridges=new SynapticBridges(4096,false);
+    bridges.set([{key:'a-b',source:'a',target:'b',strength:.8,purpose:'semantic'},
+      {key:'b-c',source:'b',target:'c',strength:.8,purpose:'semantic'}],null,true);
+    bridges.update(0,new Map(),true);
+    const opacity=bridges.mesh.geometry.getAttribute('aOpacity');
+    const quiet=opacity.getX(0);expect(quiet).toBeLessThan(.12);
+    bridges.highlight('a');bridges.update(0,new Map(),true);
+    expect(opacity.getX(0)).toBeGreaterThan(quiet*4);expect(opacity.getX(1)).toBeCloseTo(quiet);
+    bridges.highlight(null);bridges.update(0,new Map(),true);expect(opacity.getX(0)).toBeCloseTo(quiet);
+    expect(bridges.diagnostics().active).toBe(2);bridges.dispose();
+  });
   it('grows and retracts inside one retained geometry without inventing relationships',()=>{
     const bridges=new SynapticBridges(),geometry=bridges.mesh.geometry;
     const points=new Map([['a',{x:0,y:0,z:0}],['b',{x:1,y:0,z:0}]]);

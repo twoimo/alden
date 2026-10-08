@@ -108,7 +108,7 @@ function overviewAnchors(view: KnowledgeView, cap: number): Map<string, Point3> 
     const center = seedPoint(group);
     const point = seedPoint(node.id);
     // A deterministic radial distribution makes a volume, not a sphere shell.
-    const radial = .15 + .7 * Math.abs(seedPoint(node.id + ':radius').y);
+    const radial = .85 * Math.cbrt(Math.abs(seedPoint(node.id + ':radius').y));
     points.set(node.id, { x: center.x * 1.65 + point.x * radial * scale,
       y: center.y * 1.65 + point.y * radial * scale,
       z: center.z + point.z * radial * scale });

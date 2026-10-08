@@ -5,28 +5,28 @@ import type { Point3 } from './plasticity';
 /** Envelopes follow their real members. One retained instanced mesh, finite
  * changes, no clock, inferred activity, graph IDs or picking targets. */
 export class ContextNebulae extends THREE.Group {
-  private readonly geometry = new THREE.SphereGeometry(1, 40, 28);
+  private readonly geometry = new THREE.PlaneGeometry(2, 2);
   private readonly opacity = new THREE.InstancedBufferAttribute(new Float32Array(CONTEXT_REGION_CAP), 1);
   private readonly colors = new THREE.InstancedBufferAttribute(new Float32Array(CONTEXT_REGION_CAP * 3), 3);
   private readonly material = new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false, side: THREE.BackSide,
+    transparent: true, depthWrite: false,
     vertexShader: `attribute float regionOpacity; attribute vec3 regionTint;
-      varying vec3 vNormal; varying vec3 vView; varying vec3 vLocal;
+      varying vec2 vLocal;
       varying float vOpacity; varying vec3 vTint;
       void main(){
-        vec4 world = instanceMatrix * vec4(position, 1.0);
+        vec4 world = instanceMatrix * vec4(0.,0.,0.,1.);
         vec4 view = modelViewMatrix * world;
-        vNormal = normalize(normalMatrix * mat3(instanceMatrix) * normal);
-        vView = normalize(-view.xyz); vLocal = position;
+        view.xy += position.xy * length(instanceMatrix[0].xyz);
+        vLocal = position.xy;
         vOpacity = regionOpacity; vTint = regionTint;
         gl_Position = projectionMatrix * view;
       }`,
-    fragmentShader: `varying vec3 vNormal; varying vec3 vView; varying vec3 vLocal;
+    fragmentShader: `varying vec2 vLocal;
       varying float vOpacity; varying vec3 vTint;
       void main(){
-        float rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vView))), 2.6);
-        float mist = .5 + .5 * sin(vLocal.x*7.0 + sin(vLocal.y*5.0) + vLocal.z*3.0);
-        gl_FragColor = vec4(vTint, (.012 + .025*mist + .11*rim)*vOpacity);
+        float r = length(vLocal);
+        float mist = exp(-4.5*r*r)*(1.-smoothstep(.65,1.,r));
+        gl_FragColor = vec4(vTint, .10*mist*vOpacity);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
       }`,
@@ -59,8 +59,9 @@ export class ContextNebulae extends THREE.Group {
       if (slot < 0) continue;
       if (this.slots[slot]?.id !== region.id) {
         this.current.fill(0, slot * 5, slot * 5 + 5);
-        let seed = 2166136261; for (let i = 0; i < region.id.length; i++) seed = Math.imul(seed ^ region.id.charCodeAt(i), 16777619);
-        const palette = ['#9bb8d0', '#b8adc9', '#c9bca4', '#a1bec0'];
+        const key = region.id.replace(/^source:/,'');
+        let seed = 0; for (let i = 0; i < key.length; i++) seed = (Math.imul(seed,31)+key.charCodeAt(i))>>>0;
+        const palette = ['#8daebc', '#b597a9', '#b7a674', '#a0a7b5'];
         const tint = new THREE.Color(palette[(seed >>> 0) % palette.length]);
         this.colors.setXYZ(slot, tint.r, tint.g, tint.b);
       }
@@ -87,7 +88,7 @@ export class ContextNebulae extends THREE.Group {
       }
       let radius = this.current[at + 3];
       if (count) {
-        x /= count; y /= count; z /= count; radius = .32 + .06 * Math.sqrt(count);
+        x /= count; y /= count; z /= count; radius = .32 + .06 * Math.sqrt(Math.min(24,count));
         for (const id of region.nodeIds) {
           const p = positions.get(id);
           if (p && Number.isFinite(p.x + p.y + p.z)) radius = Math.max(radius, Math.hypot(p.x - x, p.y - y, p.z - z) + .2);

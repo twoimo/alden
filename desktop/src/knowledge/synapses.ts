@@ -40,7 +40,8 @@ export class SynapticBridges {
 
   private readonly activeCap:number;
   private readonly capacity:number;
-  constructor(cap=SYNAPSE_CAP, detail=true) {
+  private focus: string | null = null;
+  constructor(cap=SYNAPSE_CAP, private readonly detail=true) {
     this.activeCap=Number.isFinite(cap)?Math.min(4096,Math.max(1,Math.floor(cap))):SYNAPSE_CAP;
     this.capacity=this.activeCap*2;
     this.starts=new Float32Array(this.capacity * 3);
@@ -53,7 +54,7 @@ export class SynapticBridges {
 
     const positions: number[] = [], indices: number[] = [];
     for(const branch of detail?[0,-1,1,-2,2]:[0]) {
-      const offset=positions.length/3, steps=branch===0?(detail?32:16):8;
+      const offset=positions.length/3, steps=branch===0?(detail?32:1):8;
       for(let i=0;i<=steps;i++) positions.push(-1,i/steps,branch,1,i/steps,branch);
       for(let i=0;i<steps;i++){const at=offset+i*2;indices.push(at,at+1,at+2,at+1,at+3,at+2);}
     }
@@ -99,7 +100,7 @@ export class SynapticBridges {
           float taper=abs(branch)>.5 ? mix(.45,.06,localT) : (.65+.35*sin(3.14159265*t))*smoothstep(0.,.035,min(t,1.-t));
           float radius=(.003+.006*aStrength)*taper;
           if(abs(branch)<.5) radius*=1.+1.5*terminal*aSemantic;
-          if(aSemantic<.5 || uDetail<.5) radius=.0018;
+          if(aSemantic<.5 || uDetail<.5) radius=.0012;
           eye.xy += normal*position.x*radius;
           gl_Position = projectionMatrix*eye;
           vAcross=position.x; vAlong=t; vGrowth=aGrowth; vOpacity=aOpacity; vColor=aColor;
@@ -128,6 +129,7 @@ export class SynapticBridges {
   set(synapses: readonly Synapse[], focus: string | null, reducedMotion: boolean,
     ports?: ReadonlyMap<string, readonly Point3[]>, centers?: ReadonlyMap<string, Point3>): void {
     if (this.disposed) return;
+    this.focus = focus;
     const incoming = new Set(synapses.slice(0, this.activeCap).map(edge => edge.key));
     this.records.forEach(record => { record.active = incoming.has(record.key); });
     for (const edge of synapses.slice(0, this.activeCap)) {
@@ -154,8 +156,9 @@ export class SynapticBridges {
     this.geometry.instanceCount = this.records.length; this.mesh.visible = this.records.length > 0;
   }
 
-  update(dt: number, points: ReadonlyMap<string, Point3>, reducedMotion: boolean): boolean {
+  update(dt: number, points: ReadonlyMap<string, Point3>, reducedMotion: boolean, positionsChanged = true): boolean {
     if (this.disposed) return false;
+    if (!this.dirty && !this.moving && !positionsChanged) return false;
     let changed = this.dirty; this.moving = false;
     const elapsed = Number.isFinite(dt) ? Math.min(.25, Math.max(0, dt)) : 0;
     const alpha = 1 - Math.exp(-elapsed / .24);
@@ -180,7 +183,9 @@ export class SynapticBridges {
       this.ends[at]=record.bx; this.ends[at+1]=record.by; this.ends[at+2]=record.bz;
       if (this.growths[i] !== Math.fround(record.growth) || this.strengths[i] !== Math.fround(record.strength)) changed = true;
       this.strengths[i] = record.strength; this.growths[i] = record.growth;
-      this.opacities[i] = (record.purpose === 'navigation' ? .12 : record.active ? .42 + .22 * record.strength : .28) * record.growth;
+      const selected = this.focus !== null && (record.source === this.focus || record.target === this.focus);
+      this.opacities[i] = (this.detail ? (record.purpose === 'navigation' ? .12 : record.active ? .42 + .22 * record.strength : .28)
+        : selected ? .52 : record.purpose === 'navigation' ? .035 : .065 + .055 * record.strength) * record.growth;
       this.semantic[i] = record.purpose === 'navigation' ? 0 : 1;
       this.colors[at] = record.color.r; this.colors[at + 1] = record.color.g; this.colors[at + 2] = record.color.b;
     }
@@ -191,6 +196,7 @@ export class SynapticBridges {
 
   highlight(id:string|null):void {
     if(this.disposed)return;
+    this.focus = id;
     for(const record of this.records)record.color.copy(id&&(record.source===id||record.target===id)?this.selected:this.neutral);
     this.dirty=true;
   }

@@ -4,6 +4,19 @@ import type { Point3 } from './plasticity';
 export interface ContextRegion { id: string; label: string; nodeIds: string[] }
 export const CONTEXT_REGION_CAP = ON_SCREEN_NODE_CAP;
 
+/** Visual envelopes of observed source membership, never semantic links. */
+export function sourceRegions(view: KnowledgeView): ContextRegion[] {
+  const regions = new Map<string, ContextRegion>();
+  for (const node of view.nodes) {
+    if (node.evidence.retracted) continue;
+    const source = node.sourceTarget || node.space || 'memory';
+    const id = 'source:' + source;
+    const region = regions.get(id) ?? {id, label:source, nodeIds:[]};
+    region.nodeIds.push(node.id);regions.set(id,region);
+  }
+  return [...regions.values()].sort((a,b)=>b.nodeIds.length-a.nodeIds.length||a.id.localeCompare(b.id)).slice(0,CONTEXT_REGION_CAP);
+}
+
 function activeHubLinks(graph: KnowledgeGraph, nowMs: number) {
   return graph.edges.filter(edge => {
     const from = Date.parse(edge.validFrom), until = Date.parse(edge.validTo);
