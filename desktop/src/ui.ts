@@ -37,9 +37,9 @@ export function voiceErrorMessage(errorCode: string | null): string | null {
     case "generation_error":
       return "답변을 준비하지 못했습니다. 다시 말씀해 주세요.";
     case "voice_model_configuration_invalid":
-      return "대화 모델 설정을 확인할 수 없습니다. 로컬 모델을 다시 선택해 주세요.";
+      return "대화 모델 설정을 확인할 수 없습니다. 모델을 다시 선택해 주세요.";
     case "voice_model_selection_unavailable":
-      return "음성 대화를 사용하려면 지원하는 로컬 모델을 선택해 주세요.";
+      return "음성 대화에 사용할 모델의 연결을 확인해 주세요.";
     case "local_llm_model_not_ready":
       return "선택한 로컬 모델이 준비되지 않았습니다. 모델 준비 상태를 확인해 주세요.";
     case "tts_error":
@@ -113,11 +113,11 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
           <section id="settings-knowledge-card" class="knowledge-section" aria-labelledby="knowledge-title" data-note-open="false">
             <div class="knowledge-workspace">
               <div class="knowledge-graph-pane">
-                <header class="knowledge-heading"><h1 id="knowledge-title">지식 그래프</h1><p id="knowledge-summary" role="status" aria-live="polite">불러오는 중</p><span id="knowledge-mode" class="tag" hidden>확인 중</span><p id="knowledge-sync" class="knowledge-sync" role="status" aria-live="polite">갱신 확인 중</p></header>
+                <div class="knowledge-topbar"><header class="knowledge-heading"><h1 id="knowledge-title">지식 그래프</h1><p id="knowledge-summary" role="status" aria-live="polite">불러오는 중</p><span id="knowledge-mode" class="tag" hidden>확인 중</span><p id="knowledge-sync" class="knowledge-sync" role="status" aria-live="polite">갱신 확인 중</p></header>
                 <form id="knowledge-filter-form" class="knowledge-filter-bar" role="search">
-                  <select id="knowledge-project" aria-label="지식 프로젝트"><option value="all">통합 지식 그래프</option><option value="legacy">기억 · 대화</option></select>
+                  <select id="knowledge-project" aria-label="지식 프로젝트"><option value="all">전체 지식</option><option value="legacy">기억 · 대화</option></select>
                   <input id="knowledge-search" type="search" maxlength="256" placeholder="저장된 지식 찾기" aria-label="저장된 지식 찾기">
-                  <details id="knowledge-filter-more"><summary>필터</summary><div class="knowledge-filter-options">
+                  <details id="knowledge-filter-more"><summary title="필터" aria-label="필터"><i data-lucide="SlidersHorizontal" aria-hidden="true"></i></summary><div class="knowledge-filter-options">
                     <label>출처<select id="knowledge-platform"><option value="">모든 출처</option><option value="graph">기존 그래프</option><option value="youtube">YouTube</option><option value="threads">Threads</option><option value="files">파일</option></select></label>
                     <label>대상<select id="knowledge-target"><option value="">모든 대상</option></select></label>
                     <label>유형<select id="knowledge-type"><option value="">모든 유형</option></select></label>
@@ -125,10 +125,10 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
                     <label>수집 시작<input id="knowledge-since" type="date"></label><label>수집 종료<input id="knowledge-until" type="date"></label>
                     <label class="knowledge-motion-option"><input id="knowledge-reduce-motion" type="checkbox">움직임 줄이기</label>
                   </div></details>
-                  <details id="knowledge-list"><summary>목록</summary><div id="knowledge-result-list" role="list" aria-label="현재 표시한 지식 목록"></div></details>
+                  <details id="knowledge-list"><summary title="목록" aria-label="목록"><i data-lucide="List" aria-hidden="true"></i></summary><div id="knowledge-result-list" role="list" aria-label="현재 표시한 지식 목록"></div></details>
                 </form>
-                <div class="knowledge-scope-block"><p id="knowledge-scope" class="knowledge-scope" role="status" aria-live="polite"></p>
-                <p class="knowledge-activity-key"><span>● 선택</span><span>● 저장 변경</span><span>● 원문 읽기</span></p></div>
+                <details id="knowledge-info" class="knowledge-info"><summary aria-label="그래프 정보" title="그래프 정보"><i data-lucide="Info" aria-hidden="true"></i></summary><div class="knowledge-scope-block"><p id="knowledge-scope" class="knowledge-scope" role="status" aria-live="polite"></p>
+                <p class="knowledge-activity-key"><span>● 선택</span><span>● 저장 변경</span><span>● 원문 읽기</span></p></div></details></div>
                 <div class="knowledge-hologram-shell"><canvas id="knowledge-graph-canvas" width="1600" height="1200" tabindex="0" aria-label="대화 속 이름과 주제의 연결 그림" aria-controls="knowledge-note-pane"></canvas><div class="knowledge-node-labels" aria-hidden="true"></div><div id="knowledge-accessible-nodes" class="sr-only" role="region" aria-label="대화 검색 항목 목록"></div></div>
                 <div class="knowledge-hologram-toolbar"><button id="knowledge-back" type="button" disabled>이전</button><button id="knowledge-overview" type="button" disabled>전체 보기</button><button id="knowledge-expand-hop" type="button" disabled>더 보기</button><button id="knowledge-camera-reset" type="button">시점 초기화</button></div>
               </div>
@@ -148,7 +148,7 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
         </section>
         <section id="settings-page-history" class="settings-page db-history-page" role="tabpanel" aria-labelledby="settings-tab-history" hidden><header class="settings-page-heading"><h1>기억 정리</h1><p>수집된 대화를 검색할 수 있게 정리합니다.</p></header><section class="db-current" aria-live="polite"><span id="db-current-dot" class="operation-dot" aria-hidden="true"></span><div><strong id="db-current-title">갱신 상태 확인 중</strong><p id="db-current-detail"></p></div></section><div id="db-cycle-list" class="db-cycle-list" role="list" aria-label="기억 정리 기록"></div><button id="db-history-older" type="button" class="history-older" hidden>이전 갱신 더 보기</button></section>
         <section id="settings-page-settings" class="settings-page preferences-page" role="tabpanel" aria-labelledby="settings-tab-settings" hidden>
-          <header class="preferences-heading"><div><h1>설정</h1><p>답변 방식과 채팅방 자동화.</p></div><span class="preferences-local"><i data-lucide="Laptop" aria-hidden="true"></i>이 기기에서 실행</span></header>
+          <header class="preferences-heading"><div><h1>설정</h1><p>답변 방식과 채팅방 자동화.</p></div><span class="preferences-local"><i data-lucide="Laptop" aria-hidden="true"></i>이 기기의 설정</span></header>
           <section class="automation-board" aria-labelledby="automation-title">
             <header class="preferences-section-heading"><div><h2 id="automation-title">채팅방 자동화</h2><p>등록한 방에서만 동작합니다.</p></div><button id="automation-new" type="button" class="preferences-add"><i data-lucide="Plus" aria-hidden="true"></i>새 등록</button></header>
             <div class="automation-workspace"><div class="automation-registry"><div class="automation-list-heading"><span>등록된 채팅방</span><span id="automation-count">확인 중</span></div><div id="automation-list"></div><p class="automation-footnote">재시작 후 적용됩니다.</p></div>
@@ -160,9 +160,14 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
             </div><p id="automation-status" role="status" aria-live="polite" hidden></p>
           </section>
           <div class="preferences-options">
-            <section class="preferences-option" aria-labelledby="model-title"><header class="preferences-section-heading"><div><h2 id="model-title">대화 모델</h2><p>이 기기의 로컬 LLM을 선택하세요.</p></div><i data-lucide="Sparkles" aria-hidden="true"></i></header>
-              <div class="model-options"><button class="model-row selection" type="button" data-model-choice="fast" aria-pressed="true" disabled><span class="model-symbol"><i data-lucide="Zap" aria-hidden="true"></i></span><span class="model-copy"><strong>Qwen3.8 Flash Next</strong><span class="model-desc">빠른 대화</span></span><span class="model-selection-mark" aria-hidden="true"></span></button><button class="model-row" type="button" data-model-choice="deep" aria-pressed="false" disabled><span class="model-symbol"><i data-lucide="Waypoints" aria-hidden="true"></i></span><span class="model-copy"><strong>Qwen3.8 27B</strong><span class="model-desc">깊은 분석</span></span><span class="model-selection-mark" aria-hidden="true"></span></button></div>
-              <p id="model-status" class="model-status-highlight" role="status" aria-live="polite">AI 답변 상태를 확인하고 있습니다.</p>
+            <section class="preferences-option" aria-labelledby="model-title"><header class="preferences-section-heading"><div><h2 id="model-title">대화 모델</h2><p>OpenCodex 모델과 사고 수준을 선택하세요.</p></div><i data-lucide="Sparkles" aria-hidden="true"></i></header>
+              <div id="routed-model-controls" class="routed-model-controls">
+                <div class="routed-model-line"><details id="routed-model-picker"><summary><span id="routed-model-name">모델 확인 중</span><span id="routed-model-indicator" class="model-availability" data-state="unavailable">확인 중</span><i data-lucide="ChevronDown" aria-hidden="true"></i></summary>
+                  <div class="routed-model-menu"><div class="routed-model-menu-tools"><input id="routed-model-search" type="search" placeholder="모델 찾기" aria-label="모델 찾기"><button id="routed-model-refresh" type="button" aria-label="모델 상태 새로고침" title="상태 새로고침"><i data-lucide="RefreshCw" aria-hidden="true"></i></button></div><button id="routed-model-auto" class="routed-model-row" type="button" aria-pressed="false"><span>자동</span><small>확인된 상태로 선택</small></button><div id="routed-model-list" aria-label="OpenCodex 모델 목록"></div></div>
+                </details><select id="routed-model-effort" aria-label="사고 수준" disabled></select></div>
+                <div class="routed-model-caption"><span id="routed-local-status" class="model-availability" data-state="unavailable">로컬 · 상태 확인 중</span><span id="routed-model-status" role="status" aria-live="polite">선택과 실행 상태를 확인합니다.</span></div>
+              </div><div class="local-model-management" hidden><div class="model-options"><button class="model-row selection" type="button" data-model-choice="fast" aria-pressed="true" disabled><span class="model-symbol"><i data-lucide="Zap" aria-hidden="true"></i></span><span class="model-copy"><strong>Qwen3.8 Flash Next</strong><span class="model-desc">빠른 대화</span></span><span class="model-selection-mark" aria-hidden="true"></span></button><button class="model-row" type="button" data-model-choice="deep" aria-pressed="false" disabled><span class="model-symbol"><i data-lucide="Waypoints" aria-hidden="true"></i></span><span class="model-copy"><strong>Qwen3.8 27B</strong><span class="model-desc">깊은 분석</span></span><span class="model-selection-mark" aria-hidden="true"></span></button></div>
+              <p id="model-status" class="model-status-highlight" role="status" aria-live="polite">AI 답변 상태를 확인하고 있습니다.</p></div>
             </section>
             <section class="preferences-option preferences-voice" aria-labelledby="voice-title"><header class="preferences-section-heading"><div><h2 id="voice-title">음성 대화</h2><p>마이크를 켜고 말씀하세요.</p></div><i data-lucide="AudioLines" aria-hidden="true"></i></header><div class="voice-wake-line"><button id="open-voice-page" type="button">음성 대화 열기</button></div></section>
           </div>

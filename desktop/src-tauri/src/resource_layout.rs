@@ -43,6 +43,8 @@ pub const DATA_FILES: &[&str] = &[
     VOICE_AUDIO_LIBRARY,
     "scripts/alden_abort.py",
     "scripts/alden_local_http.py",
+    "scripts/alden_model_routes.py",
+    "scripts/alden_routed_llm.py",
     "scripts/alden_file_content.py",
     "scripts/alden_osk.py",
     "scripts/alden_status_mcp.py",

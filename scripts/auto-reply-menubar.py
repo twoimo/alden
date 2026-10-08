@@ -2682,6 +2682,18 @@ def _mlx_lifecycle_payload(action: str, state_root: Path) -> dict:
 
 
 def main():
+    routed_action = _argv_flag_value("--action")
+    if routed_action in {"routed-models", "routed-model-set"}:
+        from alden_model_routes import catalog, save
+        root_raw = _argv_flag_value("--state-root")
+        root = Path(root_raw).expanduser() if root_raw else _DEFAULT_STATE_ROOT
+        try:
+            options = json.loads(_argv_flag_value("--history-query") or "{}")
+            result = catalog(root) if routed_action == "routed-models" else save(root, options)
+            _print_json(result)
+        except Exception as error:
+            _print_json({"ok": False, "action": routed_action, "reason": str(error)[:96]})
+        return 0
     try:
         _scope_menubar_rooms_to_enrollment()
     except Exception:
@@ -3982,6 +3994,13 @@ def _scope_menubar_rooms_to_enrollment() -> None:
             except Exception:
                 return snap
             snap["reply_model_providers"] = list(models.get("providers") or [])
+            try:
+                from alden_model_routes import _state, MODEL_ID
+                routed = _state(Path(state_root))
+                if routed.get("transport") == "opencodex" and isinstance(routed.get("model"), str) and MODEL_ID.fullmatch(routed["model"]):
+                    snap["reply_model"] = {"id": routed["model"], "transport": "opencodex", "reasoning_effort": routed.get("reasoning_effort"), "mode": routed.get("mode", "manual")}
+            except Exception:
+                pass
             reply_id = str(models.get("model") or "").strip() or _current_reply_model_id(
                 Path(state_root)
             )

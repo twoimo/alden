@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.37",
+  "version": "0.3.38",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,7 +34,7 @@
       },
       {
         "label": "settings",
-        "title": "Alden 설정",
+        "title": "Alden \uc124\uc815",
         "url": "index.html?view=settings",
         "width": 1200,
         "height": 760,
@@ -107,7 +107,9 @@
       "bundle-resources/scripts/alden_collection.py": "scripts/alden_collection.py",
       "bundle-resources/scripts/alden_collection_retrieval.py": "scripts/alden_collection_retrieval.py",
       "bundle-resources/scripts/alden_knowledge_mcp.py": "scripts/alden_knowledge_mcp.py",
-      "bundle-resources/scripts/alden_collect.py": "scripts/alden_collect.py"
+      "bundle-resources/scripts/alden_collect.py": "scripts/alden_collect.py",
+      "bundle-resources/scripts/alden_model_routes.py": "scripts/alden_model_routes.py",
+      "bundle-resources/scripts/alden_routed_llm.py": "scripts/alden_routed_llm.py"
     }
   }
 }

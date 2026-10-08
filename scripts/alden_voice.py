@@ -1638,7 +1638,10 @@ class LocalMlxLlm:
         model: str = QWEN38_27B_MODEL_ID,
         *,
         state_root: Path | None = None,
+        catalog_selected: bool = False,
+        reasoning_effort: str | None = None,
     ):
+        self.catalog_selected, self.reasoning_effort = catalog_selected, reasoning_effort
         fixed = canonical_fixed_local_mlx_model_id(model)
         self.model = "mlx/" + fixed if fixed else model
         expected = LOCAL_LLM_IQ_BASE_URL if self.model == FLASH_NEXT_IQ_MODEL_ID else LOCAL_LLM_BASE_URL
@@ -1827,7 +1830,7 @@ class LocalMlxLlm:
 
     def _generate_response(self, text: str, token: AbortToken, *, history, started: float) -> str:
         token.raise_if_cancelled()
-        if self.model not in LOCAL_LLM_ALLOWED_MODEL_IDS:
+        if self.model not in LOCAL_LLM_ALLOWED_MODEL_IDS and not self.catalog_selected:
             raise RuntimeError("model_swap_required")
         reference,retrieval=_voice_knowledge_reference(text,history,self.state_root,token)
         self.last_metrics['retrieval']=retrieval
@@ -1849,6 +1852,7 @@ class LocalMlxLlm:
                     ],
                     {"role": "user", "content": text[:4000]},
                 ],
+                **({"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}),
                 "temperature": 0.3,
                 "max_tokens": 128,
                 "stream": True,
@@ -1934,6 +1938,9 @@ def configured_voice_model(state_root: Path) -> dict[str, str | None]:
             raise ValueError("invalid model configuration")
     except (OSError, ValueError) as exc:
         raise RuntimeError("voice_model_configuration_invalid") from exc
+    if data.get("transport") in {"opencodex", "local"} or data.get("mode") == "automatic":
+        from alden_model_routes import selection
+        return selection(state_root)
     fixed = canonical_fixed_local_mlx_model_id(data["model"])
     if fixed is None:
         raise RuntimeError("voice_model_selection_unavailable")
@@ -1967,7 +1974,11 @@ class ConfiguredLocalMlxLlm:
         except RuntimeError as error:
             self.last_metrics["request"].update(state="failed", error_code=str(error))
             raise
-        adapter = LocalMlxLlm(base_url=selection["base_url"], model=selection["model"], state_root=self.state_root)
+        if selection.get("transport") == "opencodex":
+            from alden_routed_llm import OpenCodexLlm
+            adapter = OpenCodexLlm(selection["model"], selection.get("reasoning_effort"), self.state_root)
+        else:
+            adapter = LocalMlxLlm(base_url=selection["base_url"], model=selection["model"], state_root=self.state_root, catalog_selected=selection.get("transport")=="local", reasoning_effort=selection.get("reasoning_effort"))
         try:
             return adapter.generate(text, token, history=history) if turn is None else adapter.generate_for_turn(text, token, history=history, turn=turn)
         finally:

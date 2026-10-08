@@ -12004,7 +12004,21 @@ def _load_dream_rsi_checkpoint_metadata() -> dict | None:
     }
 
 
+def _routed_reply_choice(model: str | None = None):
+    from alden_model_routes import _state, selection
+    state = _state(_operator_state_root())
+    if state.get("transport") != "opencodex" and state.get("mode") != "automatic":
+        return None
+    choice = selection(_operator_state_root())
+    return choice if model is None or choice["model"] == model else None
+
 def _active_reply_model() -> str:
+    try:
+        routed = _routed_reply_choice()
+        if routed is not None:
+            return routed["model"]
+    except Exception:
+        return "unavailable/configured-route"
     path = _operator_state_root() / REPLY_MODEL_OVERRIDE_NAME
     try:
         if path.is_file() and not path.is_symlink() and 0 < path.stat().st_size <= 4096:
@@ -12046,6 +12060,13 @@ def _reply_fallback_candidates() -> list[str]:
     missing or unreadable file falls back to the built-ins (2026-09-15).
     """
 
+    try:
+        from alden_model_routes import _state
+        saved = _state(_operator_state_root())
+        if saved.get("transport") == "opencodex" or saved.get("mode") == "automatic":
+            return []
+    except Exception:
+        return []
     path = _operator_state_root() / REPLY_MODEL_FALLBACKS_NAME
     models: list[str] = []
     saved_empty = False
@@ -12175,6 +12196,11 @@ def _is_local_reply_model(model: str) -> bool:
 def _product_local_model_allowed(model: str) -> bool:
     """Product generation is local-only; configured cloud ids fail closed."""
 
+    try:
+        if _routed_reply_choice(model) is not None:
+            return True
+    except Exception:
+        return False
     folded = str(model or "").strip().casefold()
     if not folded:
         return False
@@ -12377,6 +12403,12 @@ def _reply_model_sees_images(model: str) -> bool:
 
 
 def _generation_reply_model(has_images: bool) -> str:
+    try:
+        routed = _routed_reply_choice()
+        if routed is not None:
+            return routed["model"]
+    except Exception:
+        return "unavailable/configured-route"
     if has_images:
         return _active_image_reply_model()
     return _active_reply_model()
@@ -12647,6 +12679,22 @@ def _run_opencodex_generation(
 ) -> tuple[int, bytes, bytes]:
     """Keep local inference inside the same lease used by model swaps."""
     local_mlx = _is_mlx_serve_text_model(model)
+    routed = _routed_reply_choice(model)
+    if routed is not None and routed["transport"] == "opencodex":
+        def remote_generation():
+            from alden_routed_llm import OpenCodexLlm
+            from alden_abort import AbortController
+            token = _active_abort_token() or AbortController(_operator_state_root()).token()
+            adapter = OpenCodexLlm(routed["model"], routed.get("reasoning_effort"), _operator_state_root())
+            try:
+                text = prompt_bytes.decode("utf-8")
+                result = adapter.generate_messages(system_prompt, text, token, image_paths=image_paths or (), timeout=timeout)
+                _raise_if_job_aborted()
+                return 0, result.encode(), b""
+            except Exception as error:
+                _raise_if_job_aborted()
+                return 1, b"", str(error).encode()[:256]
+        return _run_abortable_generation(remote_generation)
 
     def generate() -> tuple[int, bytes, bytes]:
         if not local_mlx:
@@ -12715,9 +12763,9 @@ def _run_generation_candidate(
     _raise_if_job_aborted()
     if not _product_local_model_allowed(model):
         return 1, b"", b"product_cloud_fallback_disabled"
-    if image_paths and not _is_mlx_serve_27b_model(model):
+    if image_paths and not _is_mlx_serve_27b_model(model) and _routed_reply_choice(model) is None:
         return 1, b"", b"local_vision_model_required"
-    if REPLY_RUNNER_KIND == "opencodex" or _is_mlx_serve_text_model(model):
+    if _routed_reply_choice(model) is not None or REPLY_RUNNER_KIND == "opencodex" or _is_mlx_serve_text_model(model):
         return _run_opencodex_generation(
             model,
             system_prompt,

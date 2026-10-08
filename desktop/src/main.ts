@@ -1,3 +1,5 @@
+import { RoutedModels } from './routed-models';
+let routedModels: RoutedModels | null = null;
 import { CollectionGraphController, type GraphAction } from './knowledge/collection-graph';
 import { KnowledgeRefresh } from './knowledge/refresh';
 import { knowledgeSignature } from './knowledge/changes';
@@ -663,6 +665,10 @@ export async function bootSettings(
     renderRooms(snapshot);
     renderModels(snapshot);
     if (snapshot.available) wireModelSelection(dependencies.invokeCommand);
+    routedModels?.dispose();
+    routedModels = new RoutedModels(dependencies.loadAction);
+    void routedModels.refresh();
+    window.addEventListener('pagehide', () => routedModels?.dispose(), { once: true });
     renderVoice(snapshot);
       renderBackground(snapshot);
     dependencies.wireVoice(document, dependencies.invokeCommand);

@@ -174,6 +174,8 @@ impl Output {
                 | "alden-settings-compact.png"
                 | "alden-note-default.png"
                 | "alden-note-compact.png"
+                | "alden-model-menu-default.png"
+                | "alden-model-menu-compact.png"
                 | "workspace-memory-default.png"
                 | "workspace-conversation-default.png"
                 | "workspace-reply-default.png"
@@ -491,6 +493,7 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
                     | "db-sync-history"
                     | "collection-history"
                     | "collection-projects"
+                    | "routed-models"
                     | "collection-graph"
                     | "reply-history"
                     | "geeknews-history"
@@ -570,9 +573,30 @@ fn capture_workspaces(
             &snapshot(window, deadline)?,
             deadline,
         )?;
+        if page == "settings" {
+            collect_script(window,"JSON.stringify((()=>{const p=document.querySelector('#routed-model-picker');p?.scrollIntoView({block:'center'});if(p)p.open=true;return {opened:!!p};})())".into(),deadline)?;
+            let ready_by = Instant::now() + Duration::from_secs(5);
+            loop {
+                let models = collect_script(window,"JSON.stringify({count:document.querySelectorAll('#routed-model-list [data-route-model]').length})".into(),deadline)?;
+                if models["count"].as_u64().unwrap_or(0) > 0 {
+                    break;
+                }
+                if Instant::now() >= ready_by {
+                    return Err("native model catalog did not settle".into());
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            publish(
+                output,
+                &format!("alden-model-menu-{size}.png"),
+                &snapshot(window, deadline)?,
+                deadline,
+            )?;
+            collect_script(window,"JSON.stringify((()=>{const p=document.querySelector('#routed-model-picker');if(p)p.open=false;return {closed:true};})())".into(),deadline)?;
+        }
         states.push(state);
     }
-    collect_script(window,"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();return {selected:true};})())".into(),deadline)?;
+    graph_step(window, "memory-page", deadline)?;
     Ok(states)
 }
 
@@ -965,7 +989,24 @@ fn audit_settings(
     let mut last_hidden_count = count(&compact);
     visibility(&window, false, deadline)?;
     for note in WorkspaceNote::ALL {
-        let show_baseline = count(&collect_script(&window, GRAPH_COLLECT.into(), deadline)?);
+        // orderOut's DOM event is asynchronous. Do not measure a resume from
+        // a baseline taken before the renderer acknowledged the previous hide.
+        let hide_by = Instant::now() + Duration::from_secs(2);
+        let hidden_baseline = loop {
+            let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+            if state["pause"]["state"] == "hidden"
+                && state["loop"]["running"] == false
+                && state["loop"]["pendingFrame"] == false
+                && state["activityJournal"]["active"] != true
+            {
+                break state;
+            }
+            if Instant::now() >= hide_by {
+                return Err("native graph hide was not acknowledged before restore".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let show_baseline = count(&hidden_baseline);
         visibility(&window, true, deadline)?;
         let resume_deadline = Instant::now() + Duration::from_secs(2);
         let mut visible_since = None;

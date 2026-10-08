@@ -105,7 +105,7 @@ export class CollectionGraphController {
     this.initialization = this.load('collection-projects').then(result => {
       const projects = records(result?.projects).filter(row => typeof row.project === 'string');
       if (this.disposed) return;
-      this.options(this.source, [{ value: 'all', label: '통합 지식 그래프' }, { value: 'legacy', label: '기억 · 대화' },
+      this.options(this.source, [{ value: 'all', label: '전체 지식' }, { value: 'legacy', label: '기억 · 대화' },
         ...projects.map(row => ({ value: 'project:' + row.project, label: String(row.project) }))]);
       if (!this.userSelected) { this.source.value = 'all'; this.changeScope(); }
     }).catch(() => { /* Existing memory remains usable if the collection is absent. */ });

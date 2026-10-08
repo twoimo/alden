@@ -1186,7 +1186,9 @@ impl PythonBridge {
                 "model-prepare" => sanitize_model_action(&value, action, SWAP_MODEL_ID),
                 "model-swap" => sanitize_model_swap_action(&value),
                 "room-upsert" => sanitize_room_upsert(&value),
-                "history-rooms"
+                "routed-models"
+                | "routed-model-set"
+                | "history-rooms"
                 | "history-messages"
                 | "voice-history-sessions"
                 | "voice-history-messages"
@@ -2224,14 +2226,16 @@ fn settings_action_args(
         return Err(BridgeError::ActionNotAllowed);
     }
     match action {
-        "models"
+        "routed-models"
+        | "models"
         | "dream-rsi-status"
         | "knowledge-graph-status"
         | "knowledge-graph"
         | "model-owner-status"
         | MLX_SERVER_STATUS_ACTION => {}
         "room-catalog" => {}
-        "history-rooms"
+        "routed-model-set"
+        | "history-rooms"
         | "history-messages"
         | "voice-history-sessions"
         | "voice-history-messages"
@@ -3346,7 +3350,19 @@ fn sanitize_snapshot(value: &Value) -> SafeRuntimeSnapshot {
         .and_then(Value::as_object)
         .and_then(|obj| obj.get("id"))
         .and_then(Value::as_str)
-        .filter(|id| is_snapshot_model_id(id))
+        .filter(|id| {
+            is_snapshot_model_id(id)
+                || (root
+                    .get("reply_model")
+                    .and_then(|value| value.get("transport"))
+                    .and_then(Value::as_str)
+                    == Some("opencodex")
+                    && id.len() <= 200
+                    && !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._/:-".contains(&byte)))
+        })
         .map(str::to_string);
 
     SafeRuntimeSnapshot {

@@ -172,6 +172,8 @@ jobs:
           tests.test_alden_voice_retrieval
           tests.test_alden_voice_turns
           tests.test_alden_voice_metrics
+          tests.test_alden_model_routes
+          tests.test_alden_routed_llm
           tests.test_alden_voice_model_selection
           tests.test_alden_collection
           tests.test_alden_collection_retrieval

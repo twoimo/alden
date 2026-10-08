@@ -5,6 +5,8 @@ import { parseEmergencyState, parseRuntimeSnapshot, parseVoiceStatus, unavailabl
 import { LEGACY_RESIDENT_MODEL_ID, RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 
 type SettingsAction =
+  | "routed-models"
+  | "routed-model-set"
   | "knowledge-graph-status"
   | "knowledge-graph"
   | "knowledge-graph-focus"

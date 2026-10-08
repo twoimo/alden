@@ -62,6 +62,7 @@ describe("simple model settings", () => {
     expect(loadAction.mock.calls).toEqual([
       ["knowledge-graph-status"],
       ["knowledge-graph"],
+      ["routed-models"],
     ]);
     expect(invokeMock).not.toHaveBeenCalled();
     expect(document.querySelector('[data-model-choice="fast"]')?.getAttribute("aria-pressed")).toBe("true");

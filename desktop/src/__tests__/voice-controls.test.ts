@@ -119,7 +119,7 @@ describe("settings voice start control", () => {
     expect(voiceErrorMessage("mic_input_route_changed")).toContain("다시 시작");
     expect(voiceErrorMessage("mic_input_state_unverified")).toContain("확인할 수 없어");
     expect(voiceErrorMessage("voice_model_configuration_invalid")).toContain("설정");
-    expect(voiceErrorMessage("voice_model_selection_unavailable")).toContain("로컬 모델");
+    expect(voiceErrorMessage("voice_model_selection_unavailable")).toContain("모델의 연결");
     expect(voiceErrorMessage("local_llm_model_not_ready")).toContain("준비되지 않았습니다");
     expect(voiceErrorMessage("voice_session_process_check_failed")).toBe("음성 기능을 시작하지 못했습니다.");
     expect(voiceErrorMessage(null)).toBeNull();
