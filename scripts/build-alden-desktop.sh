@@ -29,7 +29,6 @@ if [ "${OPENKAKAO_FORCE_BUILD:-0}" != "1" ] && [ -z "${ALDEN_EVALUATION_DATASET:
     exit 0
   fi
 fi
-ALDEN_BUILD_INPUT_KEY=$(python3 "$ROOT/scripts/alden_build_receipt.py" key --root "$ROOT")
 
 # Explicit local evaluation settings make each changed source/model/dataset
 # version run once. No evaluator, download or training starts by default.
@@ -56,6 +55,8 @@ if [ -n "${ALDEN_EVALUATION_DATASET:-}" ]; then
   fi
   "$@"
 fi
+
+ALDEN_BUILD_INPUT_KEY=$(python3 "$ROOT/scripts/alden_build_receipt.py" key --root "$ROOT")
 
 /bin/sh "$ROOT/scripts/build-alden-voice-audio.sh"
 

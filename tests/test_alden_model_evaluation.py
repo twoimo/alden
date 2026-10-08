@@ -212,6 +212,7 @@ class VersionEvaluationTests(unittest.TestCase):
         (desktop/'package.json').write_text('{}')
         (desktop/'src-tauri/tauri.conf.json').write_text('{"version":"0.1.6"}')
         shutil.copyfile(Path(__file__).parents[1]/'scripts/build-alden-desktop.sh',scripts/'build-alden-desktop.sh')
+        shutil.copyfile(Path(__file__).parents[1]/'scripts/alden_build_receipt.py',scripts/'alden_build_receipt.py')
         (scripts/'asset').write_bytes(b'fixture')
         (scripts/'menubar-bytecode.sha256').write_text(hashlib.sha256(b'fixture').hexdigest()+'  scripts/asset\n')
         (scripts/'build-alden-voice-audio.sh').write_text('#!/bin/sh\nexit 0\n')
