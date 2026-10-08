@@ -853,7 +853,16 @@ fn audit_settings(
     )?;
     let expanded = graph_step(&window, "expand", deadline)?;
     let second = graph_step(&window, "second", deadline)?;
-    let back_expanded = graph_step(&window, "back", deadline)?;
+    // A real isolated source has no second node to select. That action is a
+    // no-op and must not invent an extra history entry or an extra Back click.
+    let secondary_required = expanded["navigation"]["nodeCount"]
+        .as_u64()
+        .is_some_and(|count| count > 1);
+    let back_expanded = if secondary_required {
+        Some(graph_step(&window, "back", deadline)?)
+    } else {
+        None
+    };
     let back_first = graph_step(&window, "back", deadline)?;
     let back_overview = graph_step(&window, "back", deadline)?;
     if first["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
@@ -865,8 +874,11 @@ fn audit_settings(
                 2
             }
         || second["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
-        || second["navigation"]["focusId"] == first["navigation"]["focusId"]
-        || back_expanded["navigation"] != expanded["navigation"]
+        || (secondary_required && second["navigation"]["focusId"] == first["navigation"]["focusId"])
+        || (!secondary_required && second["navigation"] != expanded["navigation"])
+        || back_expanded
+            .as_ref()
+            .is_some_and(|state| state["navigation"] != expanded["navigation"])
         || back_first["navigation"] != first["navigation"]
         || back_overview["navigation"] != initial["navigation"]
         || back_overview["backDisabled"] != true
@@ -876,7 +888,7 @@ fn audit_settings(
             "native graph back navigation did not restore view and targets: {}",
             json!({
                 "initial":initial["navigation"],"first":first["navigation"],"expanded":expanded["navigation"],
-                "second":second["navigation"],"backExpanded":back_expanded["navigation"],
+                "second":second["navigation"],"backExpanded":back_expanded.as_ref().map(|state| &state["navigation"]),
                 "backFirst":back_first["navigation"],"backOverview":back_overview["navigation"],
                 "backDisabled":back_overview["backDisabled"],"clearedDetail":back_overview["clearedDetail"]
             })

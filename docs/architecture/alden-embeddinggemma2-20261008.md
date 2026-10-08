@@ -7,3 +7,15 @@
 한국어 문서3개와 질문2개의 synthetic smoke에서768차원·L2 정규화 벡터를 만들고 기대 문서0·2를 찾았다. 로드1.493초, 프로세스 peak RSS1.23GiB, n=1이다. 이 수치는 전체 앱 메모리·양자화된 Pixel 수치·E5보다 나은 검색 품질을 의미하지 않는다. 이미지·음성·영상과 실제 독립 검색 평가,256d 재정규화·저장 예산과 증분 색인 연결은 진행 항목이다. 기존 생산 색인은 E5+BM25/RRF를 유지한다.
 
 출처: [Google 공식 소개](https://blog.google/innovation-and-ai/technology/developers-tools/embeddinggemma-2/), [모델 카드](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2), [공식 가중치](https://huggingface.co/google/embeddinggemma-2). 비공개 실행 영수증은 task outputs/model-routing-20261008/embeddinggemma2-smoke.json에 보존했다.
+
+## Fixed-fixture text comparison
+
+The already existing20-entity/13-query fixture was fixed before these runs, with6 development and7 held-out queries(5 positive). Real E5 and pinned offline CPU/bfloat16 EmbeddingGemma2 embeddings were used through the same temporary product retrieval/RRF pipeline. Production indices, global model choice and runtime pins were preserved.
+
+| Encoder | Held-out Recall@1 | Held-out nDCG@3 |
+| --- | ---: | ---: |
+| E5 |0.9|1.0|
+| EmbeddingGemma2 768d |0.7|0.9262|
+| EmbeddingGemma2 256d |0.9|0.9912|
+
+Each encoder run is n=1. This small synthetic holdout does not establish independent human-rated real-source quality or comparable device latency. Candidate CPU peak RSS was about1.24GiB. No demonstrated superiority warrants replacing E5. Both encoders had the same latest-intent freshness failure: the previous synthetic pricing entity also entered current-price context. It is a quality failure requiring explicit temporal/supersession handling, not evidence of cross-user/project permission leakage. The fixture/judgments were not altered to make a result pass. Multimodal evaluation and product integration remain open.
