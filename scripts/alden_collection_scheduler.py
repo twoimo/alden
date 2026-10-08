@@ -6,6 +6,7 @@ owns a cycle, while CollectionStore retains its per-target publication locks.
 from __future__ import annotations
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,7 @@ INSTALLED_APP=Path('/Applications/Alden.app')
 def schedule_definition(state_root, python, script):
     return {'Label':AGENT_LABEL,'ProgramArguments':[str(python),'-B',str(script),'--state-root',str(state_root),
             '--once','--max-targets','1','--max-seconds','180'], 'RunAtLoad':True,'StartInterval':60,
-            'ProcessType':'Background','Nice':10,'LowPriorityIO':True,'ThrottleInterval':30,
+            'ProcessType':'Standard','Nice':10,'LowPriorityIO':False,'ThrottleInterval':30,
             'EnvironmentVariables':{'PYTHONDONTWRITEBYTECODE':'1'}}
 
 def install_schedule(state_root):
@@ -42,13 +43,26 @@ def install_schedule(state_root):
     if path.is_symlink():raise RuntimeError('collection_schedule_path_unsafe')
     domain='gui/'+str(os.getuid());service=domain+'/'+AGENT_LABEL
     current=subprocess.run(['/bin/launchctl','print',service],capture_output=True,text=True)
+    rewrite=not path.exists()
     if path.exists():
         prior=plistlib.loads(path.read_bytes())
         if prior.get('Label')!=AGENT_LABEL or prior.get('ProgramArguments',[])[:3]!=definition['ProgramArguments'][:3]:
             raise RuntimeError('collection_schedule_foreign_definition')
-        if prior!=definition:raise RuntimeError('collection_schedule_existing_settings_differ')
-        if current.returncode==0:return {'state':'scheduled','label':AGENT_LABEL,'interval_seconds':60,'reused':True}
-    else:
+        if prior!=definition:
+            legacy={**definition,'ProcessType':'Background','LowPriorityIO':True}
+            if prior!=legacy:raise RuntimeError('collection_schedule_existing_settings_differ')
+            if current.returncode==0:raise RuntimeError('collection_schedule_reload_requires_unloaded_owned_job')
+            # Migrate only the exact earlier app definition. Preserve its
+            # bytes once; caller has already stopped this owned producer.
+            raw=path.read_bytes();backup_folder=safe_directory(Path(state_root)/'knowledge/collection/schedule-backups')
+            backup=backup_folder/(hashlib.sha256(raw).hexdigest()+'.plist')
+            if not backup.exists():
+                fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
+                with os.fdopen(fd,'wb') as handle:handle.write(raw);handle.flush();os.fsync(handle.fileno())
+            if backup.is_symlink() or backup.read_bytes()!=raw:raise RuntimeError('collection_schedule_backup_mismatch')
+            rewrite=True
+        elif current.returncode==0:return {'state':'scheduled','label':AGENT_LABEL,'interval_seconds':60,'reused':True}
+    if rewrite:
         fd,temporary=tempfile.mkstemp(prefix='alden-collection.',dir=folder)
         try:
             with os.fdopen(fd,'wb') as handle:plistlib.dump(definition,handle);handle.flush();os.fsync(handle.fileno())

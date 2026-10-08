@@ -162,4 +162,23 @@ class SchedulerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'foreign_definition'):install_schedule(self.root)
         self.assertEqual(file.read_bytes(),before)
 
+    def test_exact_prior_schedule_policy_migrates_only_while_unloaded_with_backup(self):
+        home=self.root/'home';app=self.root/'Alden.app';python=home/'Library/Application Support/openkakao/runtimes/menubar/bin/python3.11';script=app/'Contents/Resources/scripts/alden_collection_scheduler.py'
+        for f in [python,script]:f.parent.mkdir(parents=True,exist_ok=True);f.write_text('fixture')
+        definition=schedule_definition(self.root,python,script);legacy={**definition,'ProcessType':'Background','LowPriorityIO':True}
+        file=home/'Library/LaunchAgents'/(AGENT_LABEL+'.plist');file.parent.mkdir();file.write_bytes(plistlib.dumps(legacy));before=file.read_bytes()
+        loaded=[False]
+        def run(args,**kw):
+            if args[1]=='bootstrap':loaded[0]=True
+            return subprocess.CompletedProcess(args,1 if args[1]=='print' and not loaded[0] else 0,'','')
+        with patch('alden_collection_scheduler.INSTALLED_APP',app),patch.object(Path,'home',return_value=home),patch('alden_collection_scheduler.subprocess.run',side_effect=run):
+            install_schedule(self.root)
+        self.assertEqual(plistlib.loads(file.read_bytes()),definition)
+        backups=list((self.root/'knowledge/collection/schedule-backups').glob('*.plist'))
+        self.assertEqual(len(backups),1);self.assertEqual(backups[0].read_bytes(),before)
+        file.write_bytes(before)
+        with patch('alden_collection_scheduler.INSTALLED_APP',app),patch.object(Path,'home',return_value=home),patch('alden_collection_scheduler.subprocess.run',side_effect=run):
+            with self.assertRaisesRegex(RuntimeError,'requires_unloaded'):install_schedule(self.root)
+        self.assertEqual(file.read_bytes(),before)
+
 if __name__=='__main__':unittest.main()

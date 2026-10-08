@@ -204,6 +204,11 @@ class CollectionStore:
         if self.read_only:
             db.execute("PRAGMA query_only=ON")
             db.execute("BEGIN")
+        else:
+            # The default ~2 MiB page cache thrashes during the bounded full
+            # source transaction. This applies only to the private derived
+            # writer, never to an original database or foreground reader.
+            db.execute('PRAGMA cache_size=-65536')
         try:
             yield db
             with publication_guard() if publication_guard is not None else nullcontext():
