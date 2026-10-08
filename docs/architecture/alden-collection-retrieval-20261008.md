@@ -27,6 +27,16 @@ The first real attempt rejected an empty embedding input before storing any vect
 
 The actual stdio client used the pinned menubar runtime, initialized the candidate server, listed three tools and rejected a `jangsin` query under a `career`-only startup allowlist. The career query returned `rrf` over 12,101 searchable documents in 2.8715 seconds (n=1). Its entity ID, source version and SHA matched graph focus/detail and the five persisted discovery/parsing/validation/storage/FTS stages. This is a direct candidate MCP and retrieval readback, not Aside/ChatGPT host execution, a new source-change event, physical primary-window verification, latency percentiles or a measured speedup.
 
-The affected Python suite passes 111 cases, including 12 new collection retrieval cases; Rust desktop108 and Clippy pass. Formatting-only audit-source reflows satisfy the full desktop formatter. Installation and exact-source CI are pending at this source checkpoint.
+The affected Python suite passes 111 cases, including 12 new collection retrieval cases; Rust desktop108 and Clippy pass. Formatting-only audit-source reflows satisfy the full desktop formatter.
+
+## Installed delivery
+
+The first CI run found two missing modules in the automatic-reply session package's import closure. Adding the two required data/retrieval modules fixed three packaging failures; 38 affected packaging/retrieval cases pass. Runtime source `9a2e203a21b6e04a2a9af3a7483acb04bb52f6a8` then passed all four CI jobs and a fresh canonical bundle build.
+
+The normal installer delivered0.3.35. All49 files equal the candidate and strict/deep ad-hoc signature passes. Three settings remain identical to pre-cutover backups. The exact prior0.3.34 app was separately copied before cutover and all47 hashes still match; recovery no longer assumes the installer retains an app archive. Primary PID97242 is managed and running; model63062 and embedding11016 remain alive.
+
+The installed MCP server passed the same owned initialization, allowlist rejection, actual RRF search, graph/detail and persisted-history readback. Its one career query took2.9410s over12,101 searchable documents (n=1). This is a separate sample, not a paired performance comparison with the candidate. The installed voice reference adapter separately returned RRF with two retained sources and3,783 reference characters, preserving project, source version, field origin and author. It did not open a microphone, generate a reply, play TTS or write user history.
+
+The shared collection skill was updated at its single canonical Aside source, with both discovery links and file hashes read back. It documents pinned Python with `-B`, explicit local indexing/project queries and the collection MCP's actual scope. Link/hash readback is not host-app discovery or execution proof. Original project stores, graphs, collection counts, queues, settings and model profiles remain preserved.
 
 The full goal remains active: actual two-host skills and shared OSK chain, live acquisition, scheduler, deletion/order/conflict/processing-version policy, independent retrieval-quality evaluation, physical voice/global shortcut/primary UI, Flash effective memory/provenance, DPO, signed release and production.

@@ -1,5 +1,5 @@
 {
-  "phase": "candidate; installation pending",
+  "phase": "installed local delivery; full goal active",
   "version": "0.3.35",
   "original_counts": {
     "targets": 4,
@@ -52,7 +52,8 @@
     "affected_python": 111,
     "new_collection_cases": 12,
     "rust_desktop": 108,
-    "clippy": "passed"
+    "clippy": "passed",
+    "packager_retrieval": 38
   },
   "limitations": [
     "existing collection stages, not a fresh source-change event",
@@ -60,5 +61,39 @@
     "producer final exit status not retained; ready result and terminal PID observed",
     "no latency percentile or performance gain claim",
     "full goal active; signing/production pending"
-  ]
+  ],
+  "installed": {
+    "version": "0.3.35",
+    "runtime_source_commit": "9a2e203a21b6e04a2a9af3a7483acb04bb52f6a8",
+    "files_equal": 49,
+    "previous_app_backup_equal": 47,
+    "configs_equal": 3,
+    "signature_passed": true,
+    "primary_pid": 97242,
+    "model_pids_preserved": [
+      63062,
+      11016
+    ],
+    "source_ci_jobs_success": 4,
+    "signing": "local ad-hoc; signed/notarized production pending"
+  },
+  "installed_mcp": {
+    "mode": "rrf",
+    "eligible_documents": 12101,
+    "query_seconds": 2.9410444581881166,
+    "samples": 1,
+    "scope_rejected": true,
+    "source_version_hash_match": true
+  },
+  "installed_voice_reference": {
+    "mode": "rrf",
+    "sources": 2,
+    "reference_characters": 3783,
+    "scope": "retrieval/reference only; no microphone/generation/playback/history"
+  },
+  "skill": {
+    "canonical_links_verified": 2,
+    "skill_sha256": "10ad508f02a9eaeb7ea3b1e26357676c2d34eebbcbdbd20d90195dc4d8fd4507",
+    "host_execution_verified": false
+  }
 }
