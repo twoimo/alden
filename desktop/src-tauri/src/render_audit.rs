@@ -493,6 +493,7 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
                     | "db-sync-history"
                     | "collection-history"
                     | "collection-projects"
+                    | "collection-scheduler-status"
                     | "routed-models"
                     | "collection-graph"
                     | "reply-history"
@@ -528,6 +529,8 @@ fn capture_workspaces(
               const loadingHistory=p==='history'&&document.querySelector('#db-current-title')?.textContent==='갱신 상태 확인 중';
               const collection=document.querySelector('.collection-history');
               const loadingCollection=p==='history'&&collection?.getAttribute('aria-busy')==='true';
+              const schedule=document.querySelector('.collection-schedule');
+              const loadingSchedule=p==='history'&&schedule?.getAttribute('aria-busy')==='true';
               const loadingGraph=p==='memory'&&(document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중');
               const loadingAutomation=(p==='reply'||p==='geeknews')&&document.querySelector(`#${p}-status`)?.textContent==='기록을 불러옵니다.';
               const panel=document.querySelector(`#settings-page-${p}`);
@@ -538,13 +541,15 @@ fn capture_workspaces(
               const status=panel?.querySelector('#'+statusId)?.textContent??'';
               const paint=window.__aldenAuditWorkspacePaint;
               return {page:p,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,
-                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingCollection&&!loadingGraph&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
+                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingCollection&&!loadingSchedule&&!loadingGraph&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
                 graphProject:p==='memory'?document.querySelector('#knowledge-project')?.value:null,
                 graphScope:p==='memory'?document.querySelector('#knowledge-scope')?.textContent:null,
                 graphDisplayedNodes:p==='memory'?window.__knowledgeRenderDiagnostics?.nodeCount:null,
                 graphDisplayedEdges:p==='memory'?window.__knowledgeRenderDiagnostics?.edgeCount:null,
                 collectionState:p==='history'?collection?.dataset.state:null,
                 collectionRenderedRows:p==='history'?collection?.querySelectorAll('.collection-event-row').length:0,
+                collectionScheduleState:p==='history'?schedule?.dataset.state:null,
+                collectionScheduleTargets:p==='history'?schedule?.dataset.targetCount:null,
                 navigationFirstFrameMs:typeof paint?.firstFrameAtMs==='number'?paint.firstFrameAtMs-paint.clickedAtMs:null,
                 transcriptViewportHeight:r?.height??0,
                 fullyVisibleMessages:r?rows.filter(n=>n.top>=r.top-.5&&n.bottom<=r.bottom+.5).length:0,
@@ -1402,6 +1407,7 @@ mod tests {
             "start_voice_session",
             "send",
             "stop",
+            "collection-scheduler-control",
         ] {
             assert!(!audit_read_action(action, true));
         }
@@ -1411,6 +1417,7 @@ mod tests {
             "collection-history",
             "collection-projects",
             "collection-graph",
+            "collection-scheduler-status",
         ] {
             assert!(audit_read_action(action, true));
             assert!(!audit_read_action(action, false));

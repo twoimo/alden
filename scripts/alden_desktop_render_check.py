@@ -253,6 +253,8 @@ SETTINGS_ACTIONS: dict[str, Any] = {
     "db-sync-history": {"ok": True, "items": [], "next": None, "current": None},
     "collection-history": {"ok": True, "state": "not_configured", "items": [], "projects": [], "targets": [], "next": None},
     "collection-projects": {"ok": True, "projects": []},
+    "collection-scheduler-status": {"ok": True, "state": "not_configured", "targets": [], "schedule": {"state": "not_installed"}},
+    "collection-scheduler-control": {"ok": False, "reason": "read_only_fixture"},
     "collection-graph": {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "next": None},
     "reply-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},
     "geeknews-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},

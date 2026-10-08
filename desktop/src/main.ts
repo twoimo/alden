@@ -8,6 +8,7 @@ import { renderNodeDetails } from './knowledge/node-details';
 import type { VoiceStatus } from './contracts';
 import { wireConversationViews } from './conversations';
 import { wireCollectionHistory } from './collection-history';
+import { wireCollectionSchedule } from './collection-schedule';
 import { wireAutomationHistory } from './automation-history';
 import { wireSettingsPreferences } from './settings-preferences';
 import { invoke } from "@tauri-apps/api/core";
@@ -611,15 +612,17 @@ export async function bootSettings(
   void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
   const archives=wireConversationViews(dependencies.loadAction);
   const collectionHistory=wireCollectionHistory(dependencies.loadAction);
+  const collectionSchedule=wireCollectionSchedule(dependencies.loadAction);
   const automationHistory=wireAutomationHistory(dependencies.loadAction);
   const preferences=wireSettingsPreferences(dependencies.loadAction);
-  window.addEventListener('pagehide',()=>{archives.dispose();collectionHistory.dispose();automationHistory.dispose();preferences.dispose();},{once:true});
+  window.addEventListener('pagehide',()=>{archives.dispose();collectionHistory.dispose();collectionSchedule.dispose();automationHistory.dispose();preferences.dispose();},{once:true});
   let graphLifecycle: RenderLifecycle | null = null;
-  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');collectionHistory.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility});
+  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');collectionHistory.visible(state==='visible');collectionSchedule.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility});
   window.addEventListener('pagehide',detachArchiveVisibility,{once:true});
   const navigation = wireSettingsNavigation(document, (page) => {
     archives.select(page);
     collectionHistory.select(page);
+    collectionSchedule.select(page);
     automationHistory.select(page);
     preferences.select(page);
     orbs.refresh();

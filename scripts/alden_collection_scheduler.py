@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import sqlite3
 import subprocess
 import tempfile
@@ -23,6 +24,65 @@ from alden_collection_retrieval import index_dense
 
 AGENT_LABEL='com.openkakao.alden.collection'
 INSTALLED_APP=Path('/Applications/Alden.app')
+
+def read_schedule(state_root):
+    """Observe only the fixed owned launchd definition, never load a job."""
+    path=Path.home()/'Library/LaunchAgents'/(AGENT_LABEL+'.plist')
+    if not path.exists():return {'state':'not_installed'}
+    if path.is_symlink() or path.stat().st_size>16384:return {'state':'unverified'}
+    try:
+        definition=plistlib.loads(path.read_bytes())
+        python=Path.home()/'Library/Application Support/openkakao/runtimes/menubar/bin/python3.11'
+        script=INSTALLED_APP/'Contents/Resources/scripts/alden_collection_scheduler.py'
+        if definition!=schedule_definition(Path(state_root).absolute(),python,script):return {'state':'different_definition'}
+        result=subprocess.run(['/bin/launchctl','print','gui/'+str(os.getuid())+'/'+AGENT_LABEL],capture_output=True,text=True,timeout=2)
+        if result.returncode:return {'state':'unloaded'}
+        return {'state':'running' if re.search(r'^\s*state = running\s*$',result.stdout,re.M) else 'waiting',
+                'check_seconds':60}
+    except (OSError,ValueError,subprocess.TimeoutExpired):return {'state':'unverified'}
+
+def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
+    """Bounded local UI projection and explicit pause controls. No work starts."""
+    if action not in {'collection-scheduler-status','collection-scheduler-control'}:
+        raise ValueError('collection_scheduler_action_invalid')
+    options=json.loads(query) if query else {}
+    if not isinstance(options,dict):raise ValueError('collection_scheduler_query_invalid')
+    scheduler=CollectionScheduler(Path(state_root))
+    if action=='collection-scheduler-control':
+        if explicit_opt_in is not True:raise ValueError('collection_scheduler_opt_in_required')
+        if set(options)-{'operation','target_id'} or options.get('operation') not in {'pause','resume'}:
+            raise ValueError('collection_scheduler_control_invalid')
+        target=options.get('target_id')
+        if target is not None and (not isinstance(target,str) or not target or len(target)>128):
+            raise ValueError('collection_scheduler_target_invalid')
+        # Resuming the schedule never clears the independent emergency latch.
+        scheduler.pause(options['operation']=='pause',target)
+    elif options:raise ValueError('collection_scheduler_query_invalid')
+    data=scheduler.status(limit=200)
+    store=CollectionStore.open_existing(Path(state_root))
+    declared=[];total=0
+    if store:
+        with store.database() as db:
+            declared=[dict(row) for row in db.execute('''SELECT t.id,t.label,t.platform,t.enabled,t.interval_seconds,t.next_run,t.last_success,
+              EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied') AS permitted
+              FROM targets t ORDER BY t.label,t.id LIMIT 200''')]
+            total=db.execute('SELECT COUNT(*) FROM targets').fetchone()[0]
+    states={row['target_id']:row for row in data.get('targets',[])}
+    latest={}
+    for attempt in data.get('attempts',[]):latest.setdefault(attempt['target_id'],attempt)
+    controls=data.get('controls',{})
+    targets=[]
+    for target in declared:
+        state=states.get(target['id'],{});last=latest.get(target['id'],{})
+        stage=(last.get('result') or {}).get('finished_stage')
+        targets.append({**target,'paused':bool(controls.get(target['id'])),
+            'blocked':bool(state.get('blocked')),'retry_at':state.get('retry_at',0),
+            'last_state':last.get('state'),'last_started':last.get('started'),'last_finished':last.get('finished'),
+            'last_stage':stage if stage in {'collection','capture','index'} else None})
+    aborted=AbortToken(Path(state_root)/ABORT_STATE_NAME).is_cancelled()
+    return {'ok':True,'state':data['state'],'global_paused':bool(controls.get('global')),
+            'abort_latched':aborted,'targets':targets,'total_targets':total,'time_zone':time.tzname[0],
+            'schedule':read_schedule(state_root),'observed_at':time.time()}
 
 def schedule_definition(state_root, python, script):
     return {'Label':AGENT_LABEL,'ProgramArguments':[str(python),'-B',str(script),'--state-root',str(state_root),

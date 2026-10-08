@@ -2711,6 +2711,14 @@ def main():
         )
         return 0
     action = _argv_flag_value("--action")
+    if action in {"collection-scheduler-status", "collection-scheduler-control"}:
+        from alden_collection_scheduler import settings_action
+        try:
+            _print_json(settings_action(_menubar_state_root(), action, _argv_flag_value("--history-query"),
+                explicit_opt_in="--explicit-opt-in" in sys.argv))
+        except (ValueError, RuntimeError, OSError) as error:
+            _print_json({"ok": False, "reason": type(error).__name__, "targets": []})
+        return 0
     if action in {"collection-history", "collection-graph", "collection-projects"}:
         from alden_collection import read_action
         try:

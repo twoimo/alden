@@ -1196,6 +1196,8 @@ impl PythonBridge {
                 | "collection-history"
                 | "collection-graph"
                 | "collection-projects"
+                | "collection-scheduler-status"
+                | "collection-scheduler-control"
                 | "reply-history"
                 | "geeknews-history"
                 | "room-catalog"
@@ -2220,12 +2222,48 @@ fn settings_action_args(
     let mut args = vec!["--action".to_string(), action.to_string()];
     let opt_in_allowed = matches!(
         action,
-        "model-swap" | MLX_SERVER_LAUNCH_ACTION | MLX_SERVER_STOP_ACTION
+        "model-swap"
+            | MLX_SERVER_LAUNCH_ACTION
+            | MLX_SERVER_STOP_ACTION
+            | "collection-scheduler-control"
     );
     if !opt_in_allowed && (explicit_opt_in.is_some() || token_id.is_some()) {
         return Err(BridgeError::ActionNotAllowed);
     }
     match action {
+        "collection-scheduler-status" => {
+            if query.is_some() || node_id.is_some() || chat_id.is_some() || model.is_some() {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+        }
+        "collection-scheduler-control" => {
+            if explicit_opt_in != Some(true)
+                || token_id.is_some()
+                || node_id.is_some()
+                || chat_id.is_some()
+                || model.is_some()
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            let value = bounded_arg(query, 1024).ok_or(BridgeError::ActionNotAllowed)?;
+            let parsed: Value =
+                serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
+            let object = parsed.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+            if object
+                .keys()
+                .any(|key| key != "operation" && key != "target_id")
+                || !matches!(parsed["operation"].as_str(), Some("pause" | "resume"))
+                || object.get("target_id").is_some_and(|target| {
+                    !target.is_null()
+                        && target
+                            .as_str()
+                            .is_none_or(|value| value.is_empty() || value.len() > 128)
+                })
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            args.extend(["--history-query".into(), value, "--explicit-opt-in".into()]);
+        }
         "routed-models"
         | "models"
         | "dream-rsi-status"
@@ -5261,6 +5299,58 @@ mod tests {
             "private-error",
         ] {
             assert!(!text.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn collection_schedule_controls_are_explicit_and_bounded() {
+        assert!(settings_action_args(
+            "collection-scheduler-status",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        )
+        .is_ok());
+        let query = r#"{"operation":"pause","target_id":"declared-target"}"#;
+        assert!(settings_action_args(
+            "collection-scheduler-control",
+            Some(query),
+            None,
+            None,
+            None,
+            None,
+            None
+        )
+        .is_err());
+        let args = settings_action_args(
+            "collection-scheduler-control",
+            Some(query),
+            None,
+            None,
+            None,
+            Some(true),
+            None,
+        )
+        .unwrap();
+        assert_eq!(args.last().unwrap(), "--explicit-opt-in");
+        for invalid in [
+            r#"{"operation":"send"}"#,
+            r#"{"operation":"pause","target_id":1}"#,
+            r#"{"operation":"pause","command":"launch"}"#,
+        ] {
+            assert!(settings_action_args(
+                "collection-scheduler-control",
+                Some(invalid),
+                None,
+                None,
+                None,
+                Some(true),
+                None
+            )
+            .is_err());
         }
     }
 

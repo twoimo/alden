@@ -11,11 +11,34 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 from alden_collection import CollectionStore
-from alden_collection_scheduler import CollectionScheduler, schedule_definition, install_schedule, AGENT_LABEL
+from alden_collection_scheduler import CollectionScheduler, schedule_definition, install_schedule, settings_action, AGENT_LABEL
 from alden_collection_retrieval import index_dense
 import auto_reply_knowledge_graph as kg
 
 class SchedulerTests(unittest.TestCase):
+    def test_settings_lookup_does_not_initialize_scheduler_or_expose_source_config(self):
+        with patch('alden_collection_scheduler.read_schedule',return_value={'state':'waiting'}):
+            result=settings_action(self.root,'collection-scheduler-status')
+        self.assertEqual(len(result['targets']),1);self.assertFalse(self.scheduler.path.exists())
+        self.assertNotIn('config',result['targets'][0]);self.assertNotIn('result',result)
+
+    def test_settings_controls_require_opt_in_and_exact_known_operation_target(self):
+        for query in ['{}','[]','{"operation":"send"}','{"operation":"pause","path":"/tmp"}',
+                      '{"operation":"pause","target_id":"missing"}']:
+            with self.assertRaises(ValueError):settings_action(self.root,'collection-scheduler-control',query,explicit_opt_in=True)
+        with self.assertRaises(ValueError):settings_action(self.root,'collection-scheduler-control','{"operation":"pause"}')
+        self.assertFalse(self.scheduler.path.exists())
+
+    def test_settings_pause_readback_and_resume_preserve_source_checkpoint_and_abort(self):
+        from alden_abort import AbortController
+        with patch('alden_collection_scheduler.read_schedule',return_value={'state':'waiting'}):
+            paused=settings_action(self.root,'collection-scheduler-control',json.dumps({'operation':'pause','target_id':self.target}),explicit_opt_in=True)
+            self.assertTrue(paused['targets'][0]['paused']);self.assertIsNone(self.store.target(self.target)['cursor'])
+            AbortController(self.root).abort('settings-test')
+            prior=(self.root/'alden-abort.json').read_bytes()
+            resumed=settings_action(self.root,'collection-scheduler-control',json.dumps({'operation':'resume','target_id':self.target}),explicit_opt_in=True)
+            self.assertFalse(resumed['targets'][0]['paused']);self.assertTrue(resumed['abort_latched'])
+            self.assertEqual(prior,(self.root/'alden-abort.json').read_bytes())
     def setUp(self):
         t=TemporaryDirectory(dir=Path('/private/tmp') if Path('/private/tmp').is_dir() else None);self.addCleanup(t.cleanup);self.root=Path(t.name).resolve()
         self.store=CollectionStore(self.root);self.scheduler=CollectionScheduler(self.root)
