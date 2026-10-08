@@ -12,6 +12,17 @@ const rows = (value: unknown): Row[] => Array.isArray(value)
 const validEvents = (value: unknown): Row[] => rows(value).filter(row =>
   Number.isSafeInteger(row.sequence) && Number(row.sequence) > 0);
 const WINDOW_LIMIT = 1000;
+const changes = ['added', 'revised', 'unchanged', 'removed', 'relations_changed'] as const;
+type Counts = { total: number; stages: Record<string, number>; changes: Record<string, number> };
+function counts(value: unknown): Counts | null {
+  if (!value || typeof value !== 'object') return null;
+  const row = value as Row, stagesRow = row.stages as Row | undefined, changesRow = row.changes as Row | undefined;
+  const valid = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
+  if (!valid(row.total) || !stagesRow || !changesRow
+    || !Object.keys(stages).every(key => valid(stagesRow[key])) || !changes.every(key => valid(changesRow[key]))) return null;
+  const result = { total: row.total, stages: { ...stagesRow }, changes: { ...changesRow } } as Counts;
+  return Object.keys(stages).reduce((sum, key) => sum + result.stages[key], 0) === result.total ? result : null;
+}
 
 export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSettingsAction) {
   const host = document.getElementById('settings-page-history');
@@ -52,16 +63,18 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
   const extraFields = make('div', 'collection-filter-dates', '');
   extraFields.append(source, start.wrap, end.wrap); extra.append(extraFields);
   const status = make('p', 'collection-status', ''); status.setAttribute('aria-live', 'polite');
+  const totals = make('p', 'collection-summary', ''); totals.hidden = true;
   const list = make('div', 'collection-event-list', '');
   list.setAttribute('role', 'list'); list.setAttribute('aria-label', '수집·저장·검색 반영 이력');
   const older = document.createElement('button'); older.type = 'button';
   older.className = 'history-older'; older.textContent = '이전 처리 더 보기'; older.hidden = true;
   const latest = document.createElement('button'); latest.type = 'button';
   latest.className = 'history-latest'; latest.textContent = '최신 이력 보기'; latest.hidden = true;
-  section.append(heading, toolbar, extra, status, list, older, latest); host.append(section);
+  section.append(heading, toolbar, extra, status, totals, list, older, latest); host.append(section);
 
   let page: SettingsPage = 'memory', visible = true, dead = false, busy = false, epoch = 0;
   let before: number | null = null, newest: number | null = null, items: Row[] = [];
+  let stream: string | null = null, aggregate: Counts | null = null;
   let historical = false, newCount = 0;
   const expanded = new Set<number>();
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -82,6 +95,7 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     more.dataset.sequence = String(row.sequence); more.open = expanded.has(Number(row.sequence));
     const detailTitle = document.createElement('summary'); detailTitle.textContent = '근거와 처리 내역'; more.append(detailTitle);
     more.append(make('p', '', '프로젝트: ' + (Array.isArray(row.projects) ? row.projects.join(', ') : '미확인')));
+    if (typeof row.origin === 'string' && row.origin) more.append(make('p', '', '수집 경로: ' + row.origin));
     const explanation = row.stage === 'validated' ? '원본 ID·내용 해시·자료 형식을 확인했습니다. 내용의 사실 여부를 검증한 단계는 아닙니다.'
       : row.stage === 'indexed' ? '텍스트 검색에 반영했습니다. 임베딩 검색 반영은 아직 확인하지 않았습니다.'
       : unchanged ? '이미 저장된 내용과 같습니다. 새 지식이 추가된 기록으로 세지 않습니다.'
@@ -142,16 +156,33 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     let delay = 2500;
     try {
       const options = { ...filters(), limit: forward ? 200 : 50,
+        ...(stream ? { stream_id: stream } : {}),
         ...(olderPage ? { before } : forward ? { after: newest } : {}) };
       const result = await load('collection-history', { query: JSON.stringify(options) });
       if (dead || ticket !== epoch || !visible || page !== 'history') return;
       if (result?.ok !== true) { section.dataset.state = 'error'; status.textContent = '수집 이력을 불러오지 못했습니다.'; delay = 5000; return; }
       section.dataset.state = result.state === 'not_configured' ? 'not_configured' : 'ready';
       populate(project, result.projects, 'project', 'project'); populate(target, result.targets, 'id', 'label');
-      const incoming = validEvents(result.items).filter(row => !forward || Number(row.sequence) > (newest ?? 0));
+      const nextStream = typeof result.stream_id === 'string' && result.stream_id.length <= 128 ? result.stream_id : null;
+      const restarting = result.reset === true || nextStream !== null && stream !== null && stream !== nextStream;
+      if (restarting) {
+        items = []; newest = before = null; historical = false; newCount = 0; expanded.clear(); aggregate = null;
+      }
+      if (nextStream) stream = nextStream;
+      const append = forward && !restarting;
+      const incoming = validEvents(result.items).filter(row => !append || Number(row.sequence) > (newest ?? 0));
+      const snapshotCounts = counts(result.summary);
+      if (snapshotCounts) aggregate = snapshotCounts;
+      else if (append && aggregate) for (const row of incoming) {
+        aggregate.total++;
+        if (String(row.stage) in aggregate.stages) aggregate.stages[String(row.stage)]++;
+        const detail = row.details as Row | undefined;
+        if (row.stage === 'stored' && detail && String(detail.change) in aggregate.changes) aggregate.changes[String(detail.change)]++;
+      }
       if (incoming.length) newest = Math.max(newest ?? 0, ...incoming.map(row => Number(row.sequence)));
-      if (forward && result.next !== null && result.next !== undefined) delay = 500;
-      if (forward && historical) newCount += incoming.length;
+      if ((!olderPage || restarting) && Number.isSafeInteger(result.cursor) && Number(result.cursor) >= (newest ?? 0)) newest = Number(result.cursor);
+      if (append && result.next !== null && result.next !== undefined) delay = 500;
+      if (append && historical) newCount += incoming.length;
       else {
         const known = new Map(items.map(row => [Number(row.sequence), row]));
         for (const row of incoming) known.set(Number(row.sequence), row);
@@ -159,11 +190,16 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
         if (items.length > WINDOW_LIMIT) items = olderPage ? items.slice(-WINDOW_LIMIT) : items.slice(0, WINDOW_LIMIT);
         const retained = new Set(items.map(row => Number(row.sequence)));
         for (const sequence of expanded) if (!retained.has(sequence)) expanded.delete(sequence);
-        if (!forward || incoming.length) virtual.set(items, { preserve: !olderPage });
+        if (!append || incoming.length) virtual.set(items, { preserve: !olderPage && !restarting });
       }
-      if (olderPage || !forward) before = typeof result.next === 'number' ? result.next : null;
-      if (olderPage) historical = true;
+      if (olderPage || !append) before = typeof result.next === 'number' ? result.next : null;
+      if (olderPage && !restarting) historical = true;
       older.hidden = before === null; latest.hidden = !historical;
+      totals.hidden = aggregate === null;
+      if (aggregate) totals.textContent = '선택한 범위 · ' + aggregate.total.toLocaleString('ko-KR') + '개 단계 기록'
+        + ' · 추가 ' + aggregate.changes.added.toLocaleString('ko-KR') + ' · 수정 ' + aggregate.changes.revised.toLocaleString('ko-KR')
+        + ' · 유지 ' + aggregate.changes.unchanged.toLocaleString('ko-KR') + ' · 실패 ' + aggregate.stages.failed.toLocaleString('ko-KR')
+        + ' · 중지 ' + aggregate.stages.paused.toLocaleString('ko-KR');
       status.textContent = result.state === 'not_configured' ? '아직 수집 대상을 연결하지 않았습니다.'
         : newCount ? '새 처리 이력 ' + newCount + '개 · 최신 이력 보기로 돌아갈 수 있습니다.'
         : items.length ? '현재 목록 ' + items.length + '개 · 각 단계는 확인된 작업을 표시합니다.'
@@ -180,7 +216,8 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     }
   }
   const reset = () => {
-    epoch++; items = []; before = null; newest = null; historical = false; newCount = 0; expanded.clear();
+    epoch++; items = []; before = null; newest = null; stream = null; aggregate = null; totals.hidden = true;
+    historical = false; newCount = 0; expanded.clear();
     older.hidden = true; latest.hidden = true; virtual.set([]); stopTimer(); void refresh();
   };
   project.addEventListener('change', () => { target.value = ''; reset(); }, { signal: listeners.signal });

@@ -23,6 +23,18 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10000); });
 afterEach(() => { owned.forEach(c => c.stop()); owned.length = 0; vi.useRealTimers(); });
 
 describe('committed graph activity consumption', () => {
+  it('admits the first saved event from an empty baseline only after its exact source version is visible', async () => {
+    const read = vi.fn(async () => page(5, [event(4, { kind: 'added' })]));
+    const refresh = vi.fn(), show = vi.fn(), clear = vi.fn();
+    const consumer = new CollectionActivity(read, refresh, show, clear);
+    owned.push(consumer); consumer.start(); consumer.snapshot(point(0), []);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(read).toHaveBeenCalledWith({ activity: true, after: 0, stream_id: 'stream-a', limit: 200 });
+    expect(refresh).toHaveBeenCalledTimes(1); expect(show).not.toHaveBeenCalled();
+    consumer.snapshot(point(5), nodes());
+    expect(show).toHaveBeenCalledExactlyOnceWith(event(4, { kind: 'added' }));
+    consumer.snapshot(point(5), nodes()); expect(show).toHaveBeenCalledTimes(1);
+  });
   it('refreshes committed removal and relationship changes without inventing a node pulse', async () => {
     const changes = [
       { ...event(13), kind: 'removed' },

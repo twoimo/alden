@@ -12,6 +12,10 @@ const response = (items: Row[], next: number | null = null) => ({
   ok: true, items, next, projects: [{ project: 'one' }, { project: 'two' }],
   targets: [{ id: 'a', label: '대상 A' }, { id: 'b', label: '대상 B' }],
 });
+const summary = (added = 0, unchanged = 0) => ({ total: added + unchanged,
+  stages: { discovered: 0, parsed: 0, validated: 0, stored: added + unchanged, indexed: 0, failed: 0, paused: 0 },
+  changes: { added, revised: 0, unchanged, removed: 0, relations_changed: 0 },
+});
 const active: ReturnType<typeof wireCollectionHistory>[] = [];
 const query = (load: ReturnType<typeof vi.fn<typeof fetchSettingsAction>>, index = -1) =>
   JSON.parse(load.mock.calls.at(index)![1]!.query!);
@@ -22,6 +26,30 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = '<div id="setti
 afterEach(() => { for (const item of active.splice(0)) item.dispose(); document.body.replaceChildren(); vi.useRealTimers(); });
 
 describe('durable collection history', () => {
+  it('starts forward consumption at an empty checkpoint and counts changes without counting stages as knowledge', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce({ ...response([]), stream_id: 'one', cursor: 0, summary: summary() })
+      .mockResolvedValueOnce({ ...response([event(1), event(2, { stage: 'indexed' }), event(3, { details: { change: 'unchanged' } })]),
+        stream_id: 'one', cursor: 3 });
+    setup(load); await vi.advanceTimersByTimeAsync(2500);
+    expect(query(load)).toMatchObject({ after: 0, stream_id: 'one' });
+    expect(document.querySelector('.collection-summary')!.textContent).toContain('3개 단계 기록 · 추가 1 · 수정 0 · 유지 1');
+  });
+
+  it('recovers a replaced journal and clears the old rows, expanded evidence and summary', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce({ ...response([event(100, { document_label: '이전 저장소' })], 100),
+        stream_id: 'old', cursor: 100, summary: summary(10) })
+      .mockResolvedValueOnce({ ...response([event(1, { document_label: '복구한 저장소', origin: 'native-source' })]),
+        stream_id: 'new', cursor: 1, reset: true, summary: summary(1) });
+    setup(load); await vi.advanceTimersByTimeAsync(2500);
+    expect(document.body.textContent).not.toContain('이전 저장소');
+    expect(document.body.textContent).toContain('복구한 저장소');
+    expect(document.body.textContent).toContain('수집 경로: native-source');
+    expect(document.querySelector('.collection-summary')!.textContent).toContain('추가 1');
+    expect(document.querySelector<HTMLButtonElement>('.history-older')!.hidden).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+  });
   it('describes validation and unchanged records truthfully and never links executable URLs', async () => {
     const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(response([
       event(3, { stage: 'validated', source_url: 'javascript:alert(1)' }),

@@ -80,7 +80,9 @@ class CollectionStore:
             prior = db.execute("SELECT value FROM meta WHERE key='schema'").fetchone() if has_meta else None
             if prior and int(prior[0]) not in {1, 2, SCHEMA}:
                 raise RuntimeError("collection_schema_requires_migration")
-            if prior and int(prior[0]) < SCHEMA:
+            journal = db.execute("SELECT value FROM meta WHERE key='journal_id'").fetchone() if has_meta else None
+            counts = db.execute("SELECT value FROM meta WHERE key='journal_counts_v1'").fetchone() if has_meta else None
+            if prior and (int(prior[0]) < SCHEMA or journal is None or counts is None):
                 # Only this derived store is migrated. Retain a consistent,
                 # private recovery copy before changing its schema.
                 backup = self.root / ("collection.schema-" + prior[0] + "-" + uuid.uuid4().hex + ".sqlite3")
@@ -177,6 +179,33 @@ class CollectionStore:
                 db.execute('''INSERT OR IGNORE INTO relation_versions
                     SELECT id,version,target_id,source,target,type,evidence,? FROM relations''', (time.time(),))
             db.execute("INSERT INTO meta VALUES('schema',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA),))
+            # Identity precedes the first event and survives reopen. Read-only
+            # lookup never initializes it; legacy stores retain their old ID
+            # until their next ordinary writer opens this backed-up store.
+            db.execute("INSERT OR IGNORE INTO meta VALUES('journal_id',?)", (uuid.uuid4().hex,))
+            db.execute("INSERT OR IGNORE INTO meta VALUES('journal_first_event',COALESCE((SELECT event_id FROM events ORDER BY sequence LIMIT 1),''))")
+            # Optional schema-3 accelerator: old writers also execute these
+            # triggers, so exact counts share commit/rollback and deduplication
+            # with the journal. No model or source record is synthesized.
+            db.execute('''CREATE TABLE IF NOT EXISTS event_counts(
+                target_id TEXT NOT NULL,stage TEXT NOT NULL,change TEXT NOT NULL,count INTEGER NOT NULL,
+                PRIMARY KEY(target_id,stage,change))''')
+            if db.execute("SELECT 1 FROM meta WHERE key='journal_counts_v1'").fetchone() is None:
+                db.execute('''INSERT INTO event_counts
+                    SELECT target_id,stage,CASE WHEN stage='stored' THEN COALESCE(json_extract(details,'$.change'),'') ELSE '' END,COUNT(*)
+                    FROM events GROUP BY 1,2,3''')
+                db.execute("INSERT INTO meta VALUES('journal_counts_v1','1')")
+            increment = """INSERT INTO event_counts VALUES(NEW.target_id,NEW.stage,
+                CASE WHEN NEW.stage='stored' THEN COALESCE(json_extract(NEW.details,'$.change'),'') ELSE '' END,1)
+                ON CONFLICT(target_id,stage,change) DO UPDATE SET count=count+1;"""
+            decrement = """UPDATE event_counts SET count=count-1 WHERE target_id=OLD.target_id AND stage=OLD.stage
+                AND change=CASE WHEN OLD.stage='stored' THEN COALESCE(json_extract(OLD.details,'$.change'),'') ELSE '' END;
+                DELETE FROM event_counts WHERE count=0;"""
+            db.execute('CREATE TRIGGER IF NOT EXISTS event_count_insert AFTER INSERT ON events BEGIN ' + increment +
+                       " UPDATE meta SET value=NEW.event_id WHERE key='journal_first_event' AND value=''; END")
+            db.execute('CREATE TRIGGER IF NOT EXISTS event_count_delete AFTER DELETE ON events BEGIN ' + decrement + ' END')
+            db.execute('CREATE TRIGGER IF NOT EXISTS event_count_update AFTER UPDATE ON events BEGIN ' + decrement + increment + ' END')
+            db.execute('CREATE INDEX IF NOT EXISTS event_target_sequence ON events(target_id,sequence)')
 
     @classmethod
     def open_existing(cls, state_root: Path):
@@ -372,6 +401,7 @@ class CollectionStore:
         event_id = identity("event", encoded(key).decode())
         db.execute("INSERT OR IGNORE INTO events(event_id,run_id,target_id,stage,at,document_id,version,details) VALUES(?,?,?,?,?,?,?,?)",
                    (event_id, run_id, target_id, stage, time.time(), document_id, version, encoded(details).decode()))
+        db.execute("UPDATE meta SET value=(SELECT event_id FROM events ORDER BY sequence LIMIT 1) WHERE key='journal_first_event' AND value=''")
 
     def ingest(self, target_id: str, records, *, cursor=None, origin="alden",
                run_id: str | None = None, relations=(), cancelled=lambda: False,
@@ -829,12 +859,14 @@ class CollectionStore:
                 "source_sha256": manifest["source_sha256"], "source_bytes": manifest["source_bytes"],
                 "byte_scope": manifest["byte_scope"]}
 
-    def recent_events(self, *, before=None, after=None, limit=50, projects=None,
+    def recent_events(self, *, before=None, after=None, stream_id=None, limit=50, projects=None,
                       target_id=None, platform=None, stage=None, query="", since=None, until=None) -> dict:
         if (type(limit) is not int or not 1 <= limit <= 200
             or (before is not None and (type(before) is not int or before <= 0))
             or (after is not None and (type(after) is not int or after < 0))
             or (before is not None and after is not None)):
+            raise ValueError("collection_event_cursor_invalid")
+        if stream_id is not None and (not isinstance(stream_id, str) or not 1 <= len(stream_id) <= 128):
             raise ValueError("collection_event_cursor_invalid")
         if stage is not None and stage not in STAGES:
             raise ValueError("collection_stage_invalid")
@@ -847,17 +879,9 @@ class CollectionStore:
             raise ValueError("collection_event_time_invalid")
         if projects is None:
             projects = [p["project"] for p in self.projects()]
-        clauses = ["(? IS NULL OR e.sequence<?)"];args = [before,before]
-        if after is not None:
-            clauses.append("e.sequence>?");args.append(after)
-        if projects is not None:
-            if not projects:
-                return {"ok": True, "items": [], "next": None}
-            clauses.append("EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id AND p.permission!='denied' AND p.project IN (" + ",".join("?" for _ in projects) + "))");args += projects
-        if target_id:
-            clauses.append("e.target_id=?");args.append(target_id)
-        if platform:
-            clauses.append("t.platform=?");args.append(platform)
+        # Shared scope/checkpoint and page/summary are one read transaction.
+        # Filters remain stable for a frontend cursor; changing one resets it.
+        clauses = []; args = []
         if stage:
             clauses.append("e.stage=?");args.append(stage)
         if since is not None:
@@ -867,22 +891,65 @@ class CollectionStore:
         if query:
             clauses.append("(t.label LIKE ? OR v.label LIKE ?)");args += ["%"+query+"%"]*2
         with self.database() as db:
+            checkpoint, _, scope, scope_args = self._activity_scope(db, projects, target_id, platform)
+            reset = (stream_id is not None and stream_id != checkpoint['stream_id']
+                     or after is not None and after > checkpoint['cursor'])
+            if reset:
+                before = after = None
+            where = " AND ".join([scope, *clauses])
+            args = [*scope_args, *args]
+            # Preserve keyset order on the integer primary key. A target IN
+            # index otherwise makes SQLite join/sort the entire journal for
+            # a 50-row overview after the target endpoint index is installed.
+            joins = " FROM events e NOT INDEXED JOIN targets t ON t.id=e.target_id LEFT JOIN versions v ON v.id=e.version LEFT JOIN runs r ON r.id=e.run_id "
+            summary = None
+            if before is None and after is None:
+                summary = {"total": 0, "stages": {s: 0 for s in sorted(STAGES)},
+                           "changes": {s: 0 for s in ('added', 'revised', 'unchanged', 'removed', 'relations_changed')},
+                           "as_of": checkpoint['cursor']}
+                accelerated = not query and since is None and until is None and db.execute("SELECT 1 FROM meta WHERE key='journal_counts_v1' AND value='1'").fetchone()
+                if accelerated:
+                    count_query = "SELECT e.stage,e.change,SUM(e.count) AS count FROM event_counts e WHERE " + where + " GROUP BY e.stage,e.change"
+                else:
+                    summary_joins = " FROM events e JOIN targets t ON t.id=e.target_id LEFT JOIN versions v ON v.id=e.version " if query else " FROM events e "
+                    count_query = "SELECT e.stage,CASE WHEN e.stage='stored' THEN json_extract(e.details,'$.change') END AS change,COUNT(*) AS count" + summary_joins + "WHERE " + where + " GROUP BY e.stage,change"
+                for group in db.execute(count_query, args):
+                    summary['total'] += group['count']
+                    if group['stage'] in summary['stages']:
+                        summary['stages'][group['stage']] += group['count']
+                    if group['stage'] == 'stored' and group['change'] in summary['changes']:
+                        summary['changes'][group['change']] += group['count']
             order = "ASC" if after is not None else "DESC"
-            rows = db.execute("SELECT e.*,t.label AS target_label,t.platform,v.label AS document_label,v.metadata FROM events e JOIN targets t ON t.id=e.target_id LEFT JOIN versions v ON v.id=e.version WHERE " + " AND ".join(clauses) + " ORDER BY e.sequence " + order + " LIMIT ?", (*args,limit+1)).fetchall()
+            page_where, page_args = where, list(args)
+            if before is not None:
+                page_where += " AND e.sequence<?"; page_args.append(before)
+            if after is not None:
+                page_where += " AND e.sequence>?"; page_args.append(after)
+            rows = db.execute("SELECT e.*,r.origin,r.state AS run_state,t.label AS target_label,t.platform,v.label AS document_label,v.metadata" + joins + "WHERE " + page_where + " ORDER BY e.sequence " + order + " LIMIT ?", (*page_args,limit+1)).fetchall()
             items = []
             for row in rows[:limit]:
                 item = dict(row);item["details"] = json.loads(item["details"])
                 meta = json.loads(item.pop("metadata") or "{}")
                 item["source_url"] = meta.get("url", "")
-                item["projects"] = [x[0] for x in db.execute("SELECT project FROM target_projects WHERE target_id=? AND permission!='denied'", (item["target_id"],))]
+                item["projects"] = [x[0] for x in db.execute("SELECT project FROM target_projects WHERE target_id=? AND permission!='denied' ORDER BY project", (item["target_id"],)) if x[0] in projects]
                 items.append(item)
             return {"ok": True, "items": items, "next": items[-1]["sequence"] if len(rows)>limit else None,
-                    "cursor": items[-1]["sequence"] if after is not None and items else after}
+                    "cursor": items[-1]["sequence"] if after is not None and len(rows)>limit else checkpoint['cursor'],
+                    "stream_id": checkpoint['stream_id'], "reset": reset, "summary": summary}
 
     @staticmethod
     def _activity_scope(db, projects, target_id=None, platform=None):
         first = db.execute("SELECT event_id FROM events ORDER BY sequence LIMIT 1").fetchone()
-        generation = identity("stream", str(SCHEMA) + ":" + (first[0] if first else "empty"))
+        journal = db.execute("SELECT value FROM meta WHERE key='journal_id'").fetchone()
+        if journal is None:
+            generation = identity("stream", str(SCHEMA) + ":" + (first[0] if first else "empty"))
+        else:
+            anchor = db.execute("SELECT value FROM meta WHERE key='journal_first_event'").fetchone()
+            if not re.fullmatch(r'[0-9a-f]{32}', journal[0]) or anchor is None:
+                raise RuntimeError('collection_journal_identity_invalid')
+            retained = first[0] if first else ''
+            suffix = '' if retained == anchor[0] else ':pruned:' + (retained or 'empty')
+            generation = identity("stream", journal[0] + suffix)
         marks = ",".join("?" for _ in projects) or "NULL"
         # Materialize the small permitted target set once, rather than running
         # a correlated permission lookup for every retained journal stage.
@@ -891,7 +958,20 @@ class CollectionStore:
           AND p.project IN (""" + marks + """ ) AND (? IS NULL OR p.target_id=?)
           AND (? IS NULL OR t.platform=?))"""
         args = [*projects, target_id, target_id, platform, platform]
-        earliest, latest = db.execute("SELECT COALESCE(MIN(e.sequence),0),COALESCE(MAX(e.sequence),0) FROM events e JOIN targets t ON t.id=e.target_id WHERE " + where, args).fetchone()
+        # Endpoints need two bounded index lookups, not a full MIN+MAX scan.
+        if db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='event_target_sequence'").fetchone():
+            allowed = db.execute("SELECT DISTINCT p.target_id FROM target_projects p JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied' AND p.project IN (" + marks + ") AND (? IS NULL OR p.target_id=?) AND (? IS NULL OR t.platform=?)", args).fetchall()
+            starts, ends = [], []
+            for target in allowed:
+                first_scoped = db.execute("SELECT sequence FROM events WHERE target_id=? ORDER BY sequence LIMIT 1", (target[0],)).fetchone()
+                last_scoped = db.execute("SELECT sequence FROM events WHERE target_id=? ORDER BY sequence DESC LIMIT 1", (target[0],)).fetchone()
+                if first_scoped: starts.append(first_scoped[0])
+                if last_scoped: ends.append(last_scoped[0])
+            earliest, latest = min(starts, default=0), max(ends, default=0)
+        else:
+            first_scoped = db.execute("SELECT e.sequence FROM events e WHERE " + where + " ORDER BY e.sequence LIMIT 1", args).fetchone()
+            last_scoped = db.execute("SELECT e.sequence FROM events e WHERE " + where + " ORDER BY e.sequence DESC LIMIT 1", args).fetchone()
+            earliest, latest = first_scoped[0] if first_scoped else 0, last_scoped[0] if last_scoped else 0
         return {"stream_id": generation, "cursor": latest}, earliest, where, args
 
     def activity_page(self, *, projects: list[str], after=None, stream_id=None, limit=200,
@@ -955,6 +1035,7 @@ def read_action(state_root: Path, action: str, query: str | None = None) -> dict
         return {"ok": True, "projects": store.projects()}
     if action == "collection-history":
         result = store.recent_events(before=options.get("before"), after=options.get("after"),
+                                     stream_id=options.get("stream_id"),
                                      limit=options.get("limit",50), projects=projects,
                                      target_id=options.get("target_id"), platform=options.get("platform"),
                                      stage=options.get("stage"), query=str(options.get("search", ""))[:256],

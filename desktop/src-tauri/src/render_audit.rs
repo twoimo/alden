@@ -548,6 +548,7 @@ fn capture_workspaces(
                 graphDisplayedEdges:p==='memory'?window.__knowledgeRenderDiagnostics?.edgeCount:null,
                 collectionState:p==='history'?collection?.dataset.state:null,
                 collectionRenderedRows:p==='history'?collection?.querySelectorAll('.collection-event-row').length:0,
+                collectionSummary:p==='history'?collection?.querySelector('.collection-summary')?.textContent:null,
                 collectionScheduleState:p==='history'?schedule?.dataset.state:null,
                 collectionScheduleTargets:p==='history'?schedule?.dataset.targetCount:null,
                 navigationFirstFrameMs:typeof paint?.firstFrameAtMs==='number'?paint.firstFrameAtMs-paint.clickedAtMs:null,

@@ -3,6 +3,7 @@ import json
 import sqlite3
 from pathlib import Path
 import sys
+import time
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -340,6 +341,93 @@ class CollectionTests(unittest.TestCase):
         self.assertTrue(item["success"])
         self.assertEqual(item["version"], self.store.graph_page(projects=["one"])["nodes"][0]["source_version"])
         self.assertEqual(self.store.activity_page(projects=["one"], after=page["cursor"], stream_id=page["stream_id"])["items"], [])
+
+    def test_first_commit_in_empty_journal_keeps_baseline_and_survives_reopen(self):
+        target = self.target()
+        root = self.store.root.parent.parent
+        baseline = self.store.graph_page(projects=["one"])["activity_checkpoint"]
+        self.assertEqual(baseline["cursor"], 0)
+        self.store.ingest(target, [self.record()], origin="first-host")
+        reader = CollectionStore.open_existing(root)
+        page = reader.activity_page(projects=["one"], after=0, stream_id=baseline["stream_id"])
+        self.assertFalse(page["reset"])
+        self.assertEqual(page["stream_id"], baseline["stream_id"])
+        self.assertEqual([(x["kind"], x["origin"]) for x in page["items"]], [("added", "first-host")])
+
+    def test_legacy_journal_identity_is_backed_up_only_on_writer_open(self):
+        target = self.target()
+        self.store.ingest(target, [self.record()])
+        root = self.store.root.parent.parent
+        with self.store.database() as db:
+            db.execute("DELETE FROM meta WHERE key IN ('journal_id','journal_first_event')")
+        before = self.store.path.read_bytes()
+        reader = CollectionStore.open_existing(root)
+        baseline = reader.activity_page(projects=["one"])
+        self.assertEqual(self.store.path.read_bytes(), before)
+        self.assertEqual(list(self.store.root.glob('collection.schema-*.sqlite3')), [])
+        writer = CollectionStore(root)
+        recovery, = writer.root.glob('collection.schema-*.sqlite3')
+        self.assertEqual(recovery.stat().st_mode & 0o777, 0o600)
+        with sqlite3.connect(recovery) as db:
+            self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertIsNone(db.execute("SELECT value FROM meta WHERE key='journal_id'").fetchone())
+        self.assertNotEqual(writer.activity_page(projects=["one"])["stream_id"], baseline["stream_id"])
+        CollectionStore(root)
+        self.assertEqual(len(list(writer.root.glob('collection.schema-*.sqlite3'))), 1)
+
+    def test_history_counts_apply_stage_time_source_and_empty_scope_filters(self):
+        target = self.target()
+        self.store.ingest(target, [self.record()], run_id='first')
+        self.store.ingest(target, [self.record()], run_id='repeat')
+        self.store.ingest(target, [self.record(text='개정')], run_id='revision')
+        self.assertEqual(self.store.recent_events(projects=['one'], stage='stored')['summary']['total'], 3)
+        self.assertEqual(self.store.recent_events(projects=['one'], stage='stored')['summary']['changes'],
+                         dict(added=1, revised=1, unchanged=1, removed=0, relations_changed=0))
+        for options in [dict(projects=[]), dict(projects=['one'], platform='files'),
+                        dict(projects=['one'], since=time.time()+60), dict(projects=['one'], query='no-match')]:
+            page = self.store.recent_events(**options)
+            self.assertEqual(page['items'], [])
+            self.assertEqual(page['summary']['total'], 0)
+
+    def test_journal_counts_follow_replay_rollback_edits_and_retention(self):
+        target = self.target()
+        self.store.ingest(target, [self.record()], run_id='once')
+        before = self.store.recent_events(projects=['one'])['summary']
+        self.store.ingest(target, [self.record()], run_id='once')
+        self.assertEqual(self.store.recent_events(projects=['one'])['summary'], before)
+        with self.assertRaisesRegex(RuntimeError, 'interrupted'):
+            with self.store.database() as db:
+                self.store._event(db, 'once', target, 'failed', reason='test-only')
+                raise RuntimeError('interrupted')
+        self.assertEqual(self.store.recent_events(projects=['one'])['summary'], before)
+        with self.store.database() as db:
+            db.execute("UPDATE events SET details=? WHERE stage='stored'", (json.dumps({'change': 'revised'}),))
+            db.execute("DELETE FROM events WHERE stage='parsed'")
+        result = self.store.recent_events(projects=['one'])
+        self.assertEqual(result['summary']['total'], 4)
+        self.assertEqual(result['summary']['changes']['added'], 0)
+        self.assertEqual(result['summary']['changes']['revised'], 1)
+        self.assertEqual(result['summary']['stages']['parsed'], 0)
+
+    def test_history_replacement_resets_numeric_cursor_and_counts_only_scoped_changes(self):
+        target = self.target()
+        hidden = self.target("hidden", "other")
+        self.store.ingest(target, [self.record()], origin="host-one", run_id="first")
+        self.store.ingest(target, [self.record()], origin="host-two", run_id="repeat")
+        self.store.ingest(hidden, [self.record("secret")], run_id="hidden")
+        self.store.register(platform="youtube", original_id="channel-A", kind="channel",
+                            label="동명이인", projects=["one", "second"])
+        baseline = self.store.recent_events(projects=["one"], limit=2)
+        self.assertEqual(baseline["summary"]["total"], 10)
+        self.assertEqual(baseline["summary"]["changes"]["added"], 1)
+        self.assertEqual(baseline["summary"]["changes"]["unchanged"], 1)
+        self.assertTrue(all(x["projects"] == ["one"] for x in baseline["items"]))
+        self.assertEqual({x["origin"] for x in baseline["items"]}, {"host-two"})
+        page = self.store.recent_events(projects=["one"], after=baseline["cursor"],
+                                        stream_id="replaced-store", limit=2)
+        self.assertTrue(page["reset"])
+        self.assertEqual(len(page["items"]), 2)
+        self.assertEqual(page["summary"], baseline["summary"])
 
     def test_activity_pages_advance_over_skipped_stages_and_never_emit_unchanged_or_denied(self):
         target, hidden = self.target(), self.target("hidden", "one", permission="denied")

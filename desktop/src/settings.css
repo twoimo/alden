@@ -188,6 +188,7 @@ body.settings-view #app { height: 100%; min-height: 0; }
 .collection-filter-dates label { display: grid; gap: 5px; }
 .collection-filter-dates select, .collection-filter-dates input { min-height: 34px; max-width: 100%; padding: 7px 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; }
 .collection-status { color: var(--muted); font-size: 12px; line-height: 1.5; }
+.collection-summary { color: var(--muted); font-size: 12px; line-height: 1.65; margin: 0 0 12px; }
 .collection-event-list { height: min(440px, 54vh); min-height: 200px; overflow: auto; }
 .collection-event-row { display: grid; grid-template-columns: 100px minmax(0,1fr) auto; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); align-items: start; }
 .collection-event-row time { font-size: 11px; color: var(--muted); }
