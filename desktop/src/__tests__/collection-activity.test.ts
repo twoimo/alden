@@ -23,6 +23,19 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10000); });
 afterEach(() => { owned.forEach(c => c.stop()); owned.length = 0; vi.useRealTimers(); });
 
 describe('committed graph activity consumption', () => {
+  it('refreshes committed removal and relationship changes without inventing a node pulse', async () => {
+    const changes = [
+      { ...event(13), kind: 'removed' },
+      { ...event(14), kind: 'relations_changed', document_id: null, version: null },
+    ];
+    const { consumer, refresh, show } = setup(vi.fn(async () => page(14, changes)));
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(show).not.toHaveBeenCalled();
+    expect(consumer.diagnostics().pending).toBe(0);
+    consumer.snapshot(point(14), []);
+    expect(show).not.toHaveBeenCalled();
+  });
   it('baselines without pulses, waits for the saved visible version, and never skips unread pages on refresh', async () => {
     const { consumer, read, refresh, show } = setup();
     consumer.snapshot(point(12), nodes('v1'));

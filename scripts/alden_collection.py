@@ -5,7 +5,8 @@ identity mappings and stage receipts; it never sends messages or infers edges.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from alden_abort import AldenCancelled
 import fcntl
 import hashlib
 import json
@@ -20,7 +21,8 @@ import unicodedata
 import uuid
 
 
-SCHEMA = 2
+SCHEMA = 3
+SNAPSHOT_RECORD_BUDGET = 100000
 MAX_RECORD_BYTES = 2 * 1024 * 1024
 MAX_BATCH_RECORDS = 2000
 STAGES = {"discovered", "parsed", "validated", "stored", "indexed", "failed", "paused"}
@@ -63,6 +65,7 @@ class TargetBusy(RuntimeError):
 class CollectionStore:
     def __init__(self, state_root: Path):
         self.read_only = False
+        self.schema = SCHEMA
         self.root = safe_directory(state_root / "knowledge" / "collection")
         self.blobs = safe_directory(self.root / "sources")
         self.locks = safe_directory(self.root / "locks")
@@ -75,12 +78,12 @@ class CollectionStore:
         with self.database() as db:
             has_meta = db.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone()
             prior = db.execute("SELECT value FROM meta WHERE key='schema'").fetchone() if has_meta else None
-            if prior and int(prior[0]) not in {1, SCHEMA}:
+            if prior and int(prior[0]) not in {1, 2, SCHEMA}:
                 raise RuntimeError("collection_schema_requires_migration")
-            if prior and int(prior[0]) == 1:
+            if prior and int(prior[0]) < SCHEMA:
                 # Only this derived store is migrated. Retain a consistent,
                 # private recovery copy before changing its schema.
-                backup = self.root / ("collection.schema-1-" + uuid.uuid4().hex + ".sqlite3")
+                backup = self.root / ("collection.schema-" + prior[0] + "-" + uuid.uuid4().hex + ".sqlite3")
                 fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 os.close(fd)
                 with sqlite3.connect(backup) as recovery:
@@ -105,10 +108,13 @@ class CollectionStore:
                 CREATE TABLE IF NOT EXISTS versions(
                   id TEXT PRIMARY KEY,document_id TEXT NOT NULL,raw_sha256 TEXT NOT NULL,
                   raw_path TEXT NOT NULL,label TEXT NOT NULL,body TEXT NOT NULL,metadata TEXT NOT NULL,
-                  collected_at REAL NOT NULL,UNIQUE(document_id,raw_sha256),
+                  collected_at REAL NOT NULL,processing_version TEXT NOT NULL DEFAULT 'legacy',
+                  projection_sha256 TEXT NOT NULL DEFAULT '',
+                  UNIQUE(document_id,raw_sha256,processing_version,projection_sha256),
                   FOREIGN KEY(document_id) REFERENCES documents(id));
                 CREATE TABLE IF NOT EXISTS memberships(
                   target_id TEXT NOT NULL,document_id TEXT NOT NULL,current_version TEXT,
+                  availability TEXT NOT NULL DEFAULT 'available',
                   PRIMARY KEY(target_id,document_id),FOREIGN KEY(target_id) REFERENCES targets(id),
                   FOREIGN KEY(document_id) REFERENCES documents(id));
                 CREATE TABLE IF NOT EXISTS relations(
@@ -124,6 +130,14 @@ class CollectionStore:
                   sequence INTEGER PRIMARY KEY AUTOINCREMENT,event_id TEXT NOT NULL UNIQUE,
                   run_id TEXT NOT NULL,target_id TEXT NOT NULL,stage TEXT NOT NULL,
                   at REAL NOT NULL,document_id TEXT,version TEXT,details TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS target_snapshots(
+                  target_id TEXT PRIMARY KEY,source_revision TEXT NOT NULL,source_order INTEGER NOT NULL,
+                  processing_version TEXT NOT NULL,projection_sha256 TEXT NOT NULL,run_id TEXT NOT NULL,
+                  FOREIGN KEY(target_id) REFERENCES targets(id));
+                CREATE TABLE IF NOT EXISTS relation_versions(
+                  relation_id TEXT NOT NULL,version TEXT NOT NULL,target_id TEXT NOT NULL,
+                  source TEXT NOT NULL,target TEXT NOT NULL,type TEXT NOT NULL,evidence TEXT NOT NULL,
+                  at REAL NOT NULL,PRIMARY KEY(relation_id,version));
                 CREATE INDEX IF NOT EXISTS event_run ON events(run_id,sequence);
                 CREATE INDEX IF NOT EXISTS event_document ON events(document_id,target_id,stage,sequence DESC);
                 CREATE INDEX IF NOT EXISTS membership_doc ON memberships(document_id,target_id);
@@ -145,6 +159,23 @@ class CollectionStore:
                   AND e.target_id=memberships.target_id AND e.stage='stored'
                   ORDER BY e.sequence DESC LIMIT 1)""")
                 db.execute("INSERT INTO version_search SELECT id,document_id,label,body FROM versions")
+            if version and int(version[0]) < SCHEMA:
+                columns = {r[1] for r in db.execute('PRAGMA table_info(versions)')}
+                if 'processing_version' not in columns:
+                    db.execute('''CREATE TABLE versions_v3(
+                        id TEXT PRIMARY KEY,document_id TEXT NOT NULL,raw_sha256 TEXT NOT NULL,
+                        raw_path TEXT NOT NULL,label TEXT NOT NULL,body TEXT NOT NULL,metadata TEXT NOT NULL,
+                        collected_at REAL NOT NULL,processing_version TEXT NOT NULL DEFAULT 'legacy',
+                        projection_sha256 TEXT NOT NULL DEFAULT '',
+                        UNIQUE(document_id,raw_sha256,processing_version,projection_sha256),
+                        FOREIGN KEY(document_id) REFERENCES documents(id))''')
+                    db.execute("INSERT INTO versions_v3 SELECT *, 'legacy', '' FROM versions")
+                    db.execute('DROP TABLE versions')
+                    db.execute('ALTER TABLE versions_v3 RENAME TO versions')
+                if 'availability' not in {r[1] for r in db.execute('PRAGMA table_info(memberships)')}:
+                    db.execute("ALTER TABLE memberships ADD COLUMN availability TEXT NOT NULL DEFAULT 'available'")
+                db.execute('''INSERT OR IGNORE INTO relation_versions
+                    SELECT id,version,target_id,source,target,type,evidence,? FROM relations''', (time.time(),))
             db.execute("INSERT INTO meta VALUES('schema',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA),))
 
     @classmethod
@@ -160,12 +191,13 @@ class CollectionStore:
         store.blobs, store.locks = store.root / "sources", store.root / "locks"
         with store.database() as db:
             row = db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
-            if row is None or int(row[0]) != SCHEMA:
+            if row is None or int(row[0]) not in {2, SCHEMA}:
                 raise RuntimeError("collection_schema_requires_migration")
+            store.schema = int(row[0])
         return store
 
     @contextmanager
-    def database(self):
+    def database(self, *, publication_guard=None):
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
@@ -174,7 +206,8 @@ class CollectionStore:
             db.execute("BEGIN")
         try:
             yield db
-            db.commit()
+            with publication_guard() if publication_guard is not None else nullcontext():
+                db.commit()
         except BaseException:
             db.rollback()
             raise
@@ -263,8 +296,9 @@ class CollectionStore:
             if target["cursor"] != expected_cursor:
                 raise RuntimeError("collection_source_checkpoint_changed")
             with self.database() as db:
+                available = " AND availability='available'" if self.schema >= 3 else ""
                 saved = {r["document_id"]: r["current_version"] for r in db.execute(
-                    "SELECT document_id,current_version FROM memberships WHERE target_id=?", (target_id,))}
+                    "SELECT document_id,current_version FROM memberships WHERE target_id=?" + available, (target_id,))}
                 refs = manifest["records"]
                 if set(saved) != {r["document_id"] for r in refs} or any(saved.get(r["document_id"]) != r["version"] for r in refs):
                     raise RuntimeError("collection_source_projection_changed")
@@ -327,19 +361,53 @@ class CollectionStore:
     def _event(db, run_id, target_id, stage, *, document_id=None, version=None, **details):
         if stage not in STAGES:
             raise ValueError("collection_stage_invalid")
-        event_id = identity("event", encoded([run_id, stage, document_id, version]).decode())
+        key = [run_id, stage, document_id, version]
+        if details.get('change') == 'relations_changed':
+            key.append('relations_changed')
+        event_id = identity("event", encoded(key).decode())
         db.execute("INSERT OR IGNORE INTO events(event_id,run_id,target_id,stage,at,document_id,version,details) VALUES(?,?,?,?,?,?,?,?)",
                    (event_id, run_id, target_id, stage, time.time(), document_id, version, encoded(details).decode()))
 
     def ingest(self, target_id: str, records, *, cursor=None, origin="alden",
-               run_id: str | None = None, relations=(), cancelled=lambda: False) -> dict:
+               run_id: str | None = None, relations=(), cancelled=lambda: False,
+               complete_snapshot=False, source_revision=None, source_order=None,
+               processing_version="collection-record-v1", publication_guard=None) -> dict:
+        if not isinstance(processing_version, str) or not 1 <= len(processing_version) <= 128:
+            raise ValueError("collection_processing_version_invalid")
+        if complete_snapshot:
+            if not isinstance(source_revision, str) or not re.fullmatch(r'[0-9a-f]{64}', source_revision) or type(source_order) is not int or source_order < 0:
+                raise ValueError("collection_source_revision_invalid")
+            records, relations = list(records), list(relations)
+            if len(records) > SNAPSHOT_RECORD_BUDGET:
+                raise ValueError("collection_snapshot_budget")
+            target_platform = self.target(target_id)['platform']
+            keys = [identity(r.get('platform', target_platform), r['original_id']) for r in records]
+            if len(keys) != len(set(keys)):
+                raise ValueError("collection_duplicate_original_id")
+            projection = digest(encoded([
+                [{k:v for k,v in r.items() if k != 'source'} for r in records],
+                [{**r, 'evidence': {k:v for k,v in r.get('evidence',{}).items() if k != 'source'}} for r in relations]]))
+            run_id = run_id or identity('snapshot-run', encoded([target_id, source_revision, processing_version, projection]).decode())
+        else:
+            projection = None
         run_id = run_id or uuid.uuid4().hex
         with self.target_lock(target_id):
             target = self.target(target_id)
             if not target["enabled"]:
                 raise RuntimeError("collection_target_paused")
+            if complete_snapshot and not any(p['permission'] != 'denied' for p in target['projects']):
+                raise ValueError('collection_source_scope_denied')
             counts = {"added": 0, "revised": 0, "unchanged": 0}
             with self.database() as db:
+                if complete_snapshot:
+                    prior = db.execute('SELECT * FROM target_snapshots WHERE target_id=?', (target_id,)).fetchone()
+                    effective_order = max(source_order, prior['source_order']) if prior and prior['source_revision'] == source_revision else source_order
+                    if prior and prior['source_revision'] != source_revision and source_order <= prior['source_order']:
+                        raise RuntimeError('collection_source_revision_stale' if source_order < prior['source_order'] else 'collection_source_revision_conflict')
+                    if prior and prior['source_revision'] == source_revision and prior['processing_version'] == processing_version and prior['projection_sha256'] == projection:
+                        db.execute('UPDATE targets SET next_run=? WHERE id=?', (time.time() + target['interval_seconds'], target_id))
+                        return {'run_id': prior['run_id'], 'target_id': target_id, 'state': 'unchanged',
+                                'added': 0, 'revised': 0, 'unchanged': len(records), 'removed': 0}
                 previous = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
                 if previous:
                     if previous["target_id"] != target_id or previous["origin"] != origin:
@@ -349,9 +417,14 @@ class CollectionStore:
                 db.execute("INSERT OR REPLACE INTO runs(id,target_id,origin,state,started_at,cursor_before) VALUES(?,?,?,?,?,?)",
                            (run_id, target_id, origin, "running", time.time(), target["cursor"]))
             try:
-                with self.database() as db:
+                with self.database(publication_guard=publication_guard) as db:
+                    db.execute('BEGIN IMMEDIATE')
+                    if complete_snapshot:
+                        prior_relations = dict(db.execute('SELECT id,version FROM relations WHERE target_id=? AND active=1', (target_id,)))
+                        db.execute('CREATE TEMP TABLE snapshot_members(document_id TEXT PRIMARY KEY)')
+                        db.execute('CREATE TEMP TABLE snapshot_relations(id TEXT PRIMARY KEY)')
                     for index, record in enumerate(records):
-                        if index >= MAX_BATCH_RECORDS:
+                        if index >= (SNAPSHOT_RECORD_BUDGET if complete_snapshot else MAX_BATCH_RECORDS):
                             raise ValueError("collection_batch_budget")
                         if cancelled():
                             raise RuntimeError("collection_cancelled")
@@ -360,10 +433,11 @@ class CollectionStore:
                         doc_id = identity(platform, original_id)
                         raw = encoded(record.get("raw", record))
                         raw_sha, raw_path = self._blob(raw)
-                        version = identity("version", doc_id + ":" + raw_sha)
                         label = normalized_text(str(record.get("label", original_id)))[:1024]
                         body = normalized_text(str(record.get("text", "")))
                         metadata = {k: v for k, v in record.items() if k not in {"raw", "text"}}
+                        projection_sha = digest(encoded([label, body, {k:v for k,v in metadata.items() if k != 'source'}]))
+                        version = identity("version", encoded([doc_id, raw_sha, processing_version, projection_sha]).decode())
                         old = db.execute("SELECT current_version FROM documents WHERE id=?", (doc_id,)).fetchone()
                         membership = db.execute("SELECT current_version FROM memberships WHERE target_id=? AND document_id=?", (target_id, doc_id)).fetchone()
                         prior_version = membership[0] if membership else old[0] if old else None
@@ -372,16 +446,18 @@ class CollectionStore:
                         self._event(db, run_id, target_id, "discovered", document_id=doc_id, version=version)
                         db.execute("INSERT INTO documents VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET current_version=excluded.current_version,availability=excluded.availability",
                                    (doc_id, platform, original_id, version, "available"))
-                        inserted = db.execute("INSERT OR IGNORE INTO versions VALUES(?,?,?,?,?,?,?,?)",
-                                   (version, doc_id, raw_sha, raw_path, label, body, encoded(metadata).decode(), time.time()))
+                        inserted = db.execute("INSERT OR IGNORE INTO versions VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                   (version, doc_id, raw_sha, raw_path, label, body, encoded(metadata).decode(), time.time(), processing_version, projection_sha))
                         if inserted.rowcount:
                             db.execute("INSERT INTO version_search VALUES(?,?,?,?)", (version, doc_id, label, body))
                         self._event(db, run_id, target_id, "parsed", document_id=doc_id, version=version)
                         self._event(db, run_id, target_id, "validated", document_id=doc_id, version=version,
                                     validation="identity, byte hash and shape only; not semantic truth")
-                        db.execute("""INSERT INTO memberships VALUES(?,?,?)
-                          ON CONFLICT(target_id,document_id) DO UPDATE SET current_version=excluded.current_version""",
+                        db.execute("""INSERT INTO memberships(target_id,document_id,current_version,availability) VALUES(?,?,?,'available')
+                          ON CONFLICT(target_id,document_id) DO UPDATE SET current_version=excluded.current_version,availability='available'""",
                                    (target_id, doc_id, version))
+                        if complete_snapshot:
+                            db.execute('INSERT INTO snapshot_members VALUES(?)', (doc_id,))
                         self._event(db, run_id, target_id, "stored", document_id=doc_id, version=version, change=category)
                         db.execute("DELETE FROM document_search WHERE document_id=?", (doc_id,))
                         db.execute("INSERT INTO document_search VALUES(?,?,?)", (doc_id, label, body))
@@ -396,6 +472,29 @@ class CollectionStore:
                         evidence = encoded(relation.get("evidence", {})).decode()
                         db.execute("INSERT INTO relations VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET evidence=excluded.evidence,version=excluded.version,active=1",
                                    (rel_id, target_id, source, destination, relation["type"], evidence, digest(evidence.encode())))
+                        db.execute('INSERT OR IGNORE INTO relation_versions VALUES(?,?,?,?,?,?,?,?)',
+                                   (rel_id, digest(evidence.encode()), target_id, source, destination, relation['type'], evidence, time.time()))
+                        if complete_snapshot:
+                            if not all(db.execute('SELECT 1 FROM snapshot_members WHERE document_id=?', (value,)).fetchone() for value in (source, destination)):
+                                raise ValueError('collection_orphan_relation')
+                            db.execute('INSERT OR IGNORE INTO snapshot_relations VALUES(?)', (rel_id,))
+                    removed = 0
+                    if complete_snapshot:
+                        missing = db.execute("SELECT document_id,current_version FROM memberships WHERE target_id=? AND availability='available' AND document_id NOT IN (SELECT document_id FROM snapshot_members)", (target_id,)).fetchall()
+                        removed = len(missing)
+                        for row in missing:
+                            db.execute("UPDATE memberships SET availability='deleted' WHERE target_id=? AND document_id=?", (target_id, row['document_id']))
+                            db.execute("UPDATE documents SET availability='deleted' WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE document_id=? AND availability='available')", (row['document_id'], row['document_id']))
+                            self._event(db, run_id, target_id, 'stored', document_id=row['document_id'], version=row['current_version'], change='removed', reason='완전한 원본 스냅샷에서 제외되었습니다. 원문과 이전 버전은 보존했습니다.')
+                        db.execute('UPDATE relations SET active=0 WHERE target_id=? AND id NOT IN (SELECT id FROM snapshot_relations)', (target_id,))
+                        current_relations = dict(db.execute('SELECT id,version FROM relations WHERE target_id=? AND active=1', (target_id,)))
+                        if prior_relations != current_relations:
+                            self._event(db, run_id, target_id, 'stored', change='relations_changed',
+                                        added=len(current_relations.keys()-prior_relations.keys()),
+                                        removed=len(prior_relations.keys()-current_relations.keys()),
+                                        reason='저장된 관계와 근거가 갱신되었습니다.')
+                        db.execute('INSERT OR REPLACE INTO target_snapshots VALUES(?,?,?,?,?,?)',
+                                   (target_id, source_revision, effective_order, processing_version, projection, run_id))
                     if cancelled():
                         raise RuntimeError("collection_cancelled")
                     now = time.time()
@@ -403,10 +502,10 @@ class CollectionStore:
                                (now, encoded(cursor).decode(), counts["added"], counts["revised"], counts["unchanged"], run_id))
                     db.execute("UPDATE targets SET cursor=?,last_success=?,last_error=NULL,next_run=? WHERE id=?",
                                (encoded(cursor).decode(), now, now + target["interval_seconds"], target_id))
-                return {"run_id": run_id, "target_id": target_id, "state": "complete", **counts}
+                return {"run_id": run_id, "target_id": target_id, "state": "complete", **counts, "removed": removed}
             except Exception as error:
                 reason = str(error)[:200]
-                state = "paused" if reason == "collection_cancelled" else "failed"
+                state = "paused" if reason == "collection_cancelled" or isinstance(error, AldenCancelled) else "failed"
                 with self.database() as db:
                     db.execute("UPDATE runs SET state=?,ended_at=?,error=? WHERE id=?", (state, time.time(), reason, run_id))
                     db.execute("UPDATE targets SET last_error=? WHERE id=?", (reason, target_id))
@@ -476,14 +575,14 @@ class CollectionStore:
               (*projects, query, *values, limit)).fetchall()
             return [{**dict(row), "metadata": json.loads(row["metadata"])} for row in rows]
 
-    @staticmethod
-    def _scope_versions(projects: list[str]) -> str:
+    def _scope_versions(self, projects: list[str]) -> str:
         marks = ",".join("?" for _ in projects)
+        available = "m.availability='available' AND " if self.schema >= 3 else ""
         return """SELECT document_id,current_version FROM (
           SELECT m.document_id,m.current_version,ROW_NUMBER() OVER(
             PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
           FROM memberships m JOIN versions v ON v.id=m.current_version
-          WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+          WHERE """ + available + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
             AND p.permission!='denied' AND p.project IN (""" + marks + "))) WHERE choice=1"
 
     def projects(self) -> list[dict]:
@@ -524,11 +623,12 @@ class CollectionStore:
             # Materialize the permitted versions once per SQL statement. Target
             # selection precedes version ranking, so another target's revision
             # cannot replace the selected target's record.
+            available = "m.availability='available' AND " if self.schema >= 3 else ""
             cte = """WITH ranked AS MATERIALIZED (
               SELECT m.document_id,m.current_version,m.target_id,ROW_NUMBER() OVER(
                 PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
               FROM memberships m JOIN versions v ON v.id=m.current_version JOIN targets t ON t.id=m.target_id
-              WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+              WHERE """ + available + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
                 AND p.permission!='denied' AND p.project IN (""" + marks + """))
                 AND (? IS NULL OR m.target_id=?) AND (? IS NULL OR t.platform=?)),
               visible AS MATERIALIZED (
@@ -554,7 +654,7 @@ class CollectionStore:
             if details and focus and hops == 0 and relation is None:
                 # An already-selected record needs one exact permitted lookup,
                 # not repeated materialization of all 26k nodes and 48k edges.
-                exact = cte.replace("WHERE EXISTS(", "WHERE m.document_id=? AND EXISTS(", 1)
+                exact = cte.replace("WHERE " + available + "EXISTS(", "WHERE m.document_id=? AND " + available + "EXISTS(", 1)
                 row = db.execute(exact + "SELECT " + fields + " FROM shown s JOIN versions v ON v.id=s.visible_version WHERE s.id=?", (focus, *args, focus)).fetchone()
                 if row is None:
                     raise ValueError("collection_graph_focus_not_in_scope")
@@ -792,7 +892,7 @@ class CollectionStore:
             for row in rows[:limit]:
                 details = json.loads(row["details"])
                 if (row["stage"] != "stored" or row["run_state"] != "complete"
-                    or not row["document_id"] or details.get("change") not in {"added", "revised"}):
+                    or details.get("change") not in {"added", "revised", "removed", "relations_changed"}):
                     continue
                 items.append({"sequence": row["sequence"], "event_id": row["event_id"],
                               "document_id": row["document_id"], "version": row["version"],

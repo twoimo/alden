@@ -45,12 +45,16 @@ def json_snapshot(path: Path, *, include_raw=False):
 def source_graph(target: dict, data: dict, source: dict):
     """Preserve native IDs and explicit edge direction/type; infer nothing."""
     prefix = target["original_id"]
+    if not isinstance(data, dict) or not isinstance(data.get('nodes'), list) or not isinstance(data.get('edges'), list):
+        raise ValueError('collection_incomplete_source_shape')
     records, relations, mappings = [], [], {}
     for node in data.get("nodes", []):
         original = prefix + ":node:" + str(node["id"])
         mappings[str(node["id"])] = ("graph", original)
         records.append({"platform": "graph", "original_id": original, "label": node.get("label", node.get("title", str(node["id"]))),
-                        "kind": node.get("type", node.get("kind", "source_node")), "text": node.get("summary", ""),
+                        "kind": node.get("type", node.get("kind", "source_node")),
+                        "text": node.get("localOriginalText") or node.get("summary", ""),
+                        "text_field": "localOriginalText" if node.get("localOriginalText") else "summary",
                         "source": source, "source_node_id": str(node["id"]), "raw": node,
                         "truth_status": "source_record; not independently verified"})
     for edge in data.get("edges", []):
@@ -66,6 +70,8 @@ def source_graph(target: dict, data: dict, source: dict):
 
 def youtube_graph(target: dict, data: dict, source: dict):
     channel = data.get("channel", {})
+    if not all(isinstance(data.get(key), list) for key in ['series', 'videos', 'claims', 'relations']):
+        raise ValueError('collection_incomplete_source_shape')
     if channel.get("id") != target["original_id"]:
         raise ValueError("collection_channel_identity_mismatch")
     records, mappings, relations = [], {}, []
@@ -102,6 +108,8 @@ def youtube_graph(target: dict, data: dict, source: dict):
 
 def threads_snapshot(target: dict, data: dict, source: dict):
     records, relations = [], []
+    if not isinstance(data, dict) or not isinstance(data.get('posts'), list):
+        raise ValueError('collection_incomplete_source_shape')
     for post in data.get("posts", []):
         if post.get("author_id") != target["original_id"]:
             raise ValueError("collection_threads_author_mismatch")
@@ -119,6 +127,15 @@ def spark_snapshot(target: dict, path: Path):
     path = path.absolute()
     if any(p.is_symlink() for p in [*path.parents, path]):
         raise ValueError("collection_source_symlink")
+    def source_signature():
+        values=[]
+        for file in [path, Path(str(path)+'-wal')]:
+            if file.is_symlink():raise ValueError('collection_source_symlink')
+            try:
+                stat=file.stat();values.append((stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns))
+            except FileNotFoundError:values.append(None)
+        return values
+    before = source_signature()
     with tempfile.TemporaryDirectory(prefix="alden-graph-snapshot-", dir="/private/tmp" if Path("/private/tmp").exists() else None) as tmp:
         snapshot = Path(tmp) / "graph.sqlite3"
         with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=.15) as original:
@@ -144,15 +161,21 @@ def spark_snapshot(target: dict, path: Path):
                           "type": row["type"], "evidence": {"derived_index": str(path), "declared_evidence": row["evidence"]}}
                          for row in db.execute("SELECT source,target,type,evidence FROM edges")]
             source = {"path": str(path), "snapshot_integrity": "ok", "snapshot_sha256": hashlib.sha256(snapshot.read_bytes()).hexdigest(), "observed_at": time.time()}
+            if source_signature() != before:
+                raise RuntimeError('collection_source_changed_during_read')
+            source['mtime_ns'] = max(item[3] for item in before if item is not None)
+            source['sha256'] = hashlib.sha256(encoded([records, relations])).hexdigest()
             for record in records:
                 record["source"] = source
             return records, relations, source
 
 
-def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: False):
+def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: False, publication_guard=None):
     if cancelled():
         raise RuntimeError("collection_cancelled")
     target = store.target(target_id)
+    if not any(p['permission'] != 'denied' for p in target['projects']):
+        raise ValueError('collection_source_scope_denied')
     config = target["config"]
     path = Path(config["path"])
     if config["adapter"] == "spark-index":
@@ -162,16 +185,19 @@ def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: 
         adapter = {"source-graph": source_graph, "youtube-graph": youtube_graph, "threads-snapshot": threads_snapshot}[config["adapter"]]
         records, relations = adapter(target, data, source)
     # Source acquisition/validation completes before any target checkpoint.
-    results = []
     source_revision = source.get("sha256", source.get("snapshot_sha256"))
-    for start in range(0, max(1, len(records)), BATCH_SIZE):
-        end = min(start + BATCH_SIZE, len(records))
-        final = end == len(records)
-        results.append(store.ingest(target_id, records[start:end], relations=relations if final else (),
-                                    cursor={"source_revision": source_revision, "offset": end, "complete": final},
-                                    origin="alden-collector", cancelled=cancelled))
+    order = source.get('mtime_ns')
+    if order is None:
+        # SQLite backup timestamps belong to a temporary copy. Order by the
+        # declared source file's observed modification time instead.
+        order = path.stat(follow_symlinks=False).st_mtime_ns
+    result = store.ingest(target_id, records, relations=relations,
+                          cursor={"source_revision": source_revision, "offset": len(records), "complete": True},
+                          origin="alden-collector", cancelled=cancelled, complete_snapshot=True,
+                          source_revision=source_revision, source_order=order,
+                          processing_version='declared-source-snapshot-v3', publication_guard=publication_guard)
     return {"target_id": target_id, "records": len(records), "relations": len(relations),
-            "source": source, "batches": results, "coverage": "declared source snapshot, not a wider account survey"}
+            "source": source, "batches": [result], "coverage": "declared source snapshot, not a wider account survey"}
 
 
 def capture_source(store: CollectionStore, target_id: str, *, cancelled=lambda: False):
@@ -205,10 +231,16 @@ def capture_source(store: CollectionStore, target_id: str, *, cancelled=lambda: 
     if len(records) != len(pointers):
         raise RuntimeError("collection_source_pointer_coverage")
     refs = []
+    with store.database() as db:
+        current_versions = {row['document_id']: (row['current_version'], row['raw_sha256']) for row in db.execute(
+            'SELECT m.document_id,m.current_version,v.raw_sha256 FROM memberships m JOIN versions v ON v.id=m.current_version WHERE m.target_id=?', (target_id,))}
     for record, pointer in zip(records, pointers):
         doc = identity(record["platform"], record["original_id"])
         raw_hash = hashlib.sha256(encoded(record["raw"])).hexdigest()
-        refs.append({"document_id": doc, "version": identity("version", doc + ":" + raw_hash),
+        current = current_versions.get(doc)
+        if current is None or current[1] != raw_hash:
+            raise RuntimeError('collection_source_projection_changed')
+        refs.append({"document_id": doc, "version": current[0],
                      "json_pointer": pointer, "record_sha256": raw_hash})
     manifest = {"schema": 1, "target_id": target_id, "adapter": adapter, "origin": str(path),
                 "byte_scope": scope, "processing_version": "alden-source-capture-1", "records": refs}
@@ -270,7 +302,7 @@ def main():
         print(json.dumps(capture_source(store, args.capture_source, cancelled=token.is_cancelled), ensure_ascii=False))
     elif args.target:
         token = AbortToken(args.state_root / ABORT_STATE_NAME)
-        print(json.dumps(collect_target(store, args.target, cancelled=token.is_cancelled), ensure_ascii=False))
+        print(json.dumps(collect_target(store, args.target, cancelled=token.is_cancelled, publication_guard=token.commit_guard), ensure_ascii=False))
     elif args.graph is not None:
         print(json.dumps(store.graph(projects=args.graph), ensure_ascii=False))
     elif args.events:

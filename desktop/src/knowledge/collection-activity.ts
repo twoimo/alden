@@ -7,6 +7,9 @@ export type NodeActivity = {
   kind: 'added' | 'revised' | 'read'; success: true;
 };
 type Checkpoint = { stream_id: string; cursor: number };
+type StructuralActivity = Omit<NodeActivity, 'kind' | 'document_id' | 'version'> & {
+  kind: 'removed' | 'relations_changed'; document_id: string | null; version: string | null;
+};
 const object = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
@@ -15,14 +18,21 @@ function checkpoint(value: unknown): Checkpoint | null {
   return row && typeof row.stream_id === 'string' && row.stream_id.length > 0 && row.stream_id.length <= 128 && integer(row.cursor)
     ? { stream_id: row.stream_id, cursor: row.cursor } : null;
 }
-function receipt(value: unknown): NodeActivity | null {
+function receipt(value: unknown): NodeActivity | StructuralActivity | null {
   const row = object(value);
-  if (!row || !integer(row.sequence) || row.success !== true || !['added', 'revised'].includes(String(row.kind))
+  if (!row || !integer(row.sequence) || row.success !== true || !['added', 'revised', 'removed', 'relations_changed'].includes(String(row.kind))
     || typeof row.at !== 'number' || !Number.isFinite(row.at) || row.at < 0) return null;
-  for (const key of ['event_id', 'document_id', 'version', 'target_id', 'run_id', 'origin']) {
+  for (const key of ['event_id', 'target_id', 'run_id', 'origin']) {
     if (typeof row[key] !== 'string' || !row[key] || (row[key] as string).length > 256) return null;
   }
-  return row as NodeActivity;
+  if (row.kind === 'relations_changed') {
+    if (row.document_id !== null || row.version !== null) return null;
+    return row as StructuralActivity;
+  }
+  for (const key of ['document_id', 'version']) {
+    if (typeof row[key] !== 'string' || !row[key] || (row[key] as string).length > 256) return null;
+  }
+  return row as NodeActivity | StructuralActivity;
 }
 
 /** One visible-only, bounded journal consumer. Snapshots establish the first
@@ -107,9 +117,10 @@ export class CollectionActivity {
         if (!event || event.sequence <= previous || event.sequence > next.cursor || this.seen.has(event.event_id)) continue;
         previous = event.sequence; needsSnapshot ||= event.sequence > this.snapshotCursor; this.seen.add(event.event_id);
         if (this.seen.size > 400) this.seen.delete(this.seen.values().next().value!);
+        if (event.kind === 'removed' || event.kind === 'relations_changed') continue;
         const now = this.now(), at = event.at * 1000;
         if (at < this.visibleSince || at > now || now - at >= ACTIVITY_TTL_MS) continue;
-        this.pending.set(event.document_id, event);
+        this.pending.set(event.document_id as string, event as NodeActivity);
         if (this.pending.size > 120) this.pending.delete(this.pending.keys().next().value!);
       }
       this.committed = next;

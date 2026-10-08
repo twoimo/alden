@@ -1,0 +1,21 @@
+# Atomic declared-source snapshots — 0.3.36
+
+Collection previously published each thousand-record batch separately and never retired records or relationships absent from a later complete snapshot. A stopped multi-batch run could therefore expose a partial revision. Version identity depended only on original bytes, so new parsing/normalization rules could not retain their own projection history.
+
+A declared complete snapshot now validates acquisition and shape before one transaction publishes records, explicit relationships, FTS and the target checkpoint. Cancellation, orphan/duplicate identities and invalid source shape preserve the prior committed dataset. A prepared SQLite commit is admitted through the existing global abort guard; bulk work happens before that small publication boundary. A stopped run keeps a durable paused receipt and can retry the same deterministic source/run identity.
+
+Schema3 retains every original version ID and its eight legacy fields, with a verified private Online Backup before migration. New versions separately identify raw SHA, processing rule and projection SHA. Changed processing keeps the same raw bytes while retaining both projections. Membership availability is target-specific: removing one target's record does not withdraw another target's authorized version. Excluded memberships and old relation evidence remain recoverable. No original source store is changed.
+
+Source ordering uses observed local source-file modification time, not publication time or a publisher's revision number. A different older snapshot, or different bytes with the same order value, is rejected rather than replacing current data. Source identity/hash, rule version and projected contents make replay idempotent. For the permitted Spark derived SQLite index, original main/WAL signatures are checked around Online Backup, and exported-content identity is independent of the temporary SQLite backup header. This local ordering guard does not claim remote account-wide history or publisher revision guarantees.
+
+Malformed or inaccessible input is not an empty authoritative snapshot. Complete local graph/YouTube/declared Threads arrays are required; omission from that declared dataset records derived exclusion and does not establish that a social post was globally deleted. Existing archive bytes are retained. Stored removal and relationship changes refresh the graph without falsely pulsing a new/used knowledge node.
+
+## Compatibility and measured checks
+
+The new read-only boundary accepts schema2 and3 without migrating on lookup. This allows installing the compatible binary before changing the existing derived store; the prior0.3.35 binary still requires schema2. Runtime migration must happen after that compatible cutover, with its own recovery/readback. The schema3 change is not a migration of the original career/Spark/YouTube stores.
+
+The actual collection DB was copied with Online Backup into a private task state root. Schema migration preserved4 targets,26,622 documents/versions/memberships,48,355 relations,34 runs and133,115 stage events; the digest of all eight original version fields was identical and integrity/FK checks passed. Migration took5.7033s(n=1). The actual declared career source then published12,561 records into that private migrated copy; its first run took180.2434s with a new empty blob directory. A subsequent identical replay took0.2602s and changed no version/run/stage counts. These are different cold/replay procedures, not a paired speedup or general percentile.
+
+The private source capture, graph count and exact version/SHA detail readback passed. The new reader also opened the existing production schema2 without migration. Eight snapshot regressions and the expanded105 affected Python cases pass; UI386 and build pass, including structural refresh without a fabricated node pulse. Source CI, compatible installation and production-derived-store migration/readback remain pending at this checkpoint.
+
+The full goal remains active: actual native scheduler and host/OSK execution, fresh live acquisition and independent quality, physical voice/emergency/primary UI, Flash effective memory/provenance, DPO, complete Archify diagrams, signed release and production. Local fixtures/private clone execution do not prove those requirements.
