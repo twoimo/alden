@@ -1,6 +1,6 @@
 {
   "version": "0.3.34",
-  "phase": "source candidate; installation pending",
+  "phase": "installed local delivery; full goal active",
   "scope": "actual local diagnostic adapter; no physical microphone/playback/history/model-load",
   "tests": {
     "affected_voice": 88,
@@ -34,6 +34,39 @@
     "iQ protocol fixtures are not loaded-weight inference",
     "human voice/wake/echo/barge-in/emergency shortcut pending",
     "no latency percentile or performance gain claim",
-    "full goal remains active; signed release/production pending"
-  ]
+    "full goal remains active; signed release/production pending",
+    "installer backup has LaunchAgent files; exact previous0.3.33 app archive not retained; future cutovers require explicit full snapshot"
+  ],
+  "observed_at_utc": "2026-10-08T02:31:46.316637+00:00",
+  "installed": {
+    "version": "0.3.34",
+    "runtime_source_commit": "c071b60c664aff6aa9e7db009b9fa4ab5d97fbf9",
+    "files_equal": 47,
+    "signature_passed": true,
+    "configs_equal": 3,
+    "model_pids_preserved": [
+      63062,
+      11016
+    ],
+    "primary_pid": 79496,
+    "voice_probe_passed": true,
+    "loaded_model_reply": "확인",
+    "loaded_model_elapsed_seconds": 0.4905479580629617,
+    "generation_attempts": 2,
+    "timed_samples": 1,
+    "first_attempt": "successful reply 확인.; diagnostic exact-punctuation assertion failed before metrics persistence",
+    "unprepared_iq_requests": [
+      {
+        "url": "http://127.0.0.1:11235/v1/models",
+        "method": "GET"
+      }
+    ],
+    "previous_app_full_snapshot_retained": false,
+    "delivered_app_snapshot_verified": true
+  },
+  "source_ci": {
+    "url": "https://github.com/twoimo/alden/actions/runs/37717463974",
+    "head_sha": "c071b60c664aff6aa9e7db009b9fa4ab5d97fbf9",
+    "jobs_success": 4
+  }
 }
