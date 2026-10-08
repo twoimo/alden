@@ -48,6 +48,8 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/alden_status_mcp.py",
     "scripts/alden_history.py",
     "scripts/alden_collection.py",
+    "scripts/alden_collection_retrieval.py",
+    "scripts/alden_knowledge_mcp.py",
     "scripts/alden_collect.py",
     "scripts/alden_automation_history.py",
     "scripts/alden_osk_sources.py",

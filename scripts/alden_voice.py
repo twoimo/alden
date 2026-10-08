@@ -1525,6 +1525,21 @@ def _voice_requests_knowledge(text: str) -> bool:
     return not remembering_input or recalling_saved
 
 
+def _voice_collection_projects(root: Path, query: str) -> list[str]:
+    from alden_collection import CollectionStore
+    store = CollectionStore.open_existing(root)
+    if store is None:
+        return []
+    compact = lambda value: ''.join(value.casefold().split())
+    wanted = compact(query)
+    with store.database() as db:
+        rows = db.execute("SELECT DISTINCT p.project,t.label FROM target_projects p JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied'")
+        matches = {project for project, label in rows if any(
+            compact(alias) and compact(alias) in wanted
+            for alias in (project, label, label.removesuffix(' 지식 그래프')))}
+    return sorted(matches)
+
+
 def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], root: Path | None,
                                token: AbortToken) -> tuple[str,dict[str,Any]]:
     """Only explicit knowledge turns read quoted context; speech stays last."""
@@ -1541,13 +1556,14 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         if not previous.strip().startswith(followup_prefixes):
             break
     followup=text.strip().startswith(followup_prefixes)
-    if root is None or not ((root/'knowledge/corpus/current.json').is_file() or (root/'knowledge/osk/sync.json').is_file()) or not (explicit_request or (earlier and followup)):
+    if root is None or not ((root/'knowledge/corpus/current.json').is_file() or (root/'knowledge/osk/sync.json').is_file() or (root/'knowledge/collection/collection.sqlite3').is_file()) or not (explicit_request or (earlier and followup)):
         return '',{'state':'not_requested','mode':'none','sources':0}
     token.raise_if_cancelled();query=(text+(' '+earlier if followup and not explicit_request else '')).strip()[:1024];started=time.perf_counter()
     try:
         from alden_corpus import search,resolve_room
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle,embedding_abort_scope
         chat_requested = any(word in query for word in ('카카오톡','카톡','채팅방','대화방','메시지'))
+        projects = _voice_collection_projects(root, query) if not chat_requested else []
         scope=resolve_room(root,query) if chat_requested and (root/'knowledge/corpus/current.json').is_file() else {'state':'none','chat_id':''}
         if scope['state']=='ambiguous':
             return '현재 요청에 나온 이름을 가진 대화방이 여러 개다. 방을 임의로 선택하지 말고 어느 대화방인지 구분할 수 있는 정보 한 가지만 질문한다.',{'state':'ambiguous_room','mode':'none','sources':0,'seconds':time.perf_counter()-started}
@@ -1556,7 +1572,8 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         relation_requested = any(word in query.casefold() for word in ('전제','연결','관계','의존','연관','premise','relationship','dependency'))
         entity_budget, relation_budget = (4, 3) if relation_requested else (2, 1)
         with embedding_abort_scope(token):
-            ranked=retrieve_knowledge_bundle(query,state_root=root,chat_id=scope['chat_id'] or None,max_entities=entity_budget,max_relations=relation_budget)
+            ranked=retrieve_knowledge_bundle(query,state_root=root,chat_id=scope['chat_id'] or None,max_entities=entity_budget,max_relations=relation_budget,
+                                             **({'projects': projects} if projects else {}))
         token.raise_if_cancelled()
         fact_budget = entity_budget + relation_budget
         context={'graph_facts':ranked.get('facts',[])[:fact_budget],'graph_provenance':ranked.get('fact_provenance',[])[:fact_budget],
@@ -1567,7 +1584,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         context['graph_facts']=[fact[:600] for fact in original_facts]
         for fact, row in zip(original_facts, context['graph_provenance']):
             if isinstance(row,dict) and len(fact)>600:row['fact_truncated']=True
-        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated')} for row in context['graph_provenance'] if isinstance(row,dict)]
+        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated','source_version','target_version','relation_id','original_id','platform','projects','source_evidence','truth_status','body_source','source_author')} for row in context['graph_provenance'] if isinstance(row,dict)]
         # Hashes and raw coordinates are checked by the adapter, rather than by
         # the language model. Keep the full proof in metrics and retain stable
         # identities, edge direction, source kind, time and truncation in input.

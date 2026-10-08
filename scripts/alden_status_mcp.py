@@ -251,6 +251,8 @@ def _error(identifier, code: int, message: str) -> dict:
 
 
 class StdioServer:
+    server_name = "alden-readonly-status"
+
     def __init__(self, collector: StatusCollector, *, tool_timeout: float = TOOL_TIMEOUT_SECONDS):
         if not 0 < tool_timeout <= 60:
             raise ValueError("Invalid local tool timeout")
@@ -258,6 +260,17 @@ class StdioServer:
         self.initialized = False
         self.ready = False
         self.tool_timeout = tool_timeout
+
+    def tool_catalog(self):
+        return [{"name": TOOL_NAME, "description": "Read Alden version, aggregate OSK freshness and fixed local endpoint reachability. Does not read conversations, vault notes, or dot state. Does not establish live voice/UI success.",
+                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+                 "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}}]
+
+    def valid_call(self, params):
+        return params.get("name") == TOOL_NAME and params.get("arguments", {}) == {}
+
+    def call_tool(self, params, control):
+        return self.collector.collect(control=control) if control is not None else self.collector.collect()
 
     def dispatch(self, request, control=None, *, validate_only=False):
         if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
@@ -280,7 +293,7 @@ class StdioServer:
             self.initialized = True
             result = {"protocolVersion": requested if requested in PROTOCOL_VERSIONS else PROTOCOL_VERSIONS[0],
                       "capabilities": {"tools": {"listChanged": False}},
-                      "serverInfo": {"name": "alden-readonly-status", "version": "0.2.0"}}
+                      "serverInfo": {"name": self.server_name, "version": "0.2.0"}}
         elif method == "ping":
             result = {}
         elif not self.ready:
@@ -288,16 +301,14 @@ class StdioServer:
         elif method == "tools/list":
             if set(params) - {"_meta"}:
                 return _error(identifier, -32602, "No pagination or arguments supported")
-            result = {"tools": [{"name": TOOL_NAME, "description": "Read Alden version, aggregate OSK freshness and fixed local endpoint reachability. Does not read conversations, vault notes, or dot state. Does not establish live voice/UI success.",
-                                 "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
-                                 "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False}}]}
+            result = {"tools": self.tool_catalog()}
         elif method == "tools/call":
-            if set(params) - {"name", "arguments", "_meta"} or params.get("name") != TOOL_NAME or params.get("arguments", {}) != {}:
+            if set(params) - {"name", "arguments", "_meta"} or not self.valid_call(params):
                 return _error(identifier, -32602, "Unsupported tool or arguments")
             if validate_only:
                 return None
             try:
-                content = self.collector.collect(control=control) if control is not None else self.collector.collect()
+                content = self.call_tool(params, control)
                 _check(control)
             except CallStopped:
                 raise

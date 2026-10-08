@@ -460,16 +460,20 @@ class CollectionStore:
                                   "source_evidence": json.loads(row["evidence"])})
             return {"nodes": nodes, "edges": edges, "scope": projects, "canonical": "independent original sources; this is a derived projection"}
 
-    def search(self, query: str, *, projects: list[str], limit=10) -> list[dict]:
+    def search(self, query: str, *, projects: list[str], limit=10, time_from=None, time_to=None) -> list[dict]:
         if not projects:
             return []
         with self.database() as db:
+            clauses, values = [], []
+            for value, operator in [(time_from, '>='), (time_to, '<=')]:
+                if value is not None:
+                    clauses.append('v.collected_at' + operator + '?');values.append(value)
             rows = db.execute("""SELECT d.id,v.label,v.body,v.metadata,bm25(version_search) AS rank
               FROM version_search JOIN documents d ON d.id=version_search.document_id
               JOIN (""" + self._scope_versions(projects) + """) s ON s.document_id=d.id
               AND s.current_version=version_search.version_id JOIN versions v ON v.id=s.current_version
-              WHERE version_search MATCH ? AND d.availability='available' ORDER BY rank,d.id LIMIT ?""",
-              (*projects, query, limit)).fetchall()
+              WHERE version_search MATCH ? AND d.availability='available' """ + ''.join(' AND ' + c for c in clauses) + ' ORDER BY rank,d.id LIMIT ?',
+              (*projects, query, *values, limit)).fetchall()
             return [{**dict(row), "metadata": json.loads(row["metadata"])} for row in rows]
 
     @staticmethod

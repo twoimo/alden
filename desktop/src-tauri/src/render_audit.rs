@@ -751,7 +751,8 @@ fn audit_settings(
                 if state["nodeActivity"]["last"]["run_id"] == expected
                     && state["nodeActivity"]["last"]["success"] == true
                     && state["nodeActivity"]["active"].as_u64().unwrap_or(0) > 0
-                    && state["graphPending"] != true {
+                    && state["graphPending"] != true
+                {
                     break;
                 }
                 live(waited_by)?;
@@ -809,7 +810,8 @@ fn audit_settings(
     if first["navigation"]["source"] == "collection"
         && (first["nodeActivity"]["last"]["kind"] != "read"
             || first["nodeActivity"]["last"]["document_id"] != first["notePane"]["nodeId"]
-            || first["nodeActivity"]["last"]["success"] != true) {
+            || first["nodeActivity"]["last"]["success"] != true)
+    {
         return Err("native source detail did not emit its confirmed read receipt".into());
     }
     publish(
@@ -966,8 +968,12 @@ fn audit_settings(
             // stable active consumer before measuring a new native hide note.
             if resumed_graph(&sample, show_baseline) && window.is_visible().ok() == Some(true) {
                 let started = visible_since.get_or_insert_with(Instant::now);
-                if started.elapsed() >= Duration::from_millis(100) { break sample; }
-            } else { visible_since = None; }
+                if started.elapsed() >= Duration::from_millis(100) {
+                    break sample;
+                }
+            } else {
+                visible_since = None;
+            }
             if Instant::now() >= resume_deadline {
                 break sample;
             }
@@ -975,7 +981,8 @@ fn audit_settings(
         };
         if !resumed_graph(&before, show_baseline)
             || visible_since.is_none_or(|at| at.elapsed() < Duration::from_millis(100))
-            || window.is_visible().ok() != Some(true) {
+            || window.is_visible().ok() != Some(true)
+        {
             return Err(format!(
                 "settings graph did not draw before notification: {before}"
             ));
@@ -1011,8 +1018,11 @@ fn audit_settings(
         let latency = started.elapsed().as_secs_f64() * 1000.0;
         std::thread::sleep(Duration::from_millis(350));
         let hidden = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
-        if count(&hidden) != count(&stopped) || hidden["pause"]["rendersAfterEvent"] != 0
-            || hidden["nodeActivity"]["active"] != 0 || hidden["activityJournal"]["active"] != false {
+        if count(&hidden) != count(&stopped)
+            || hidden["pause"]["rendersAfterEvent"] != 0
+            || hidden["nodeActivity"]["active"] != 0
+            || hidden["activityJournal"]["active"] != false
+        {
             return Err("settings graph rendered while hidden".into());
         }
         last_hidden_count = count(&hidden);

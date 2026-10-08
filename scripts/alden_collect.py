@@ -231,15 +231,40 @@ def main():
     parser.add_argument("--capture-source")
     parser.add_argument("--graph", nargs="*")
     parser.add_argument("--events", action="store_true")
+    parser.add_argument("--index-dense", action="store_true")
+    parser.add_argument("--query")
+    parser.add_argument("--project", action="append", default=[])
     parser.add_argument("--after", type=int, default=0)
     args = parser.parse_args()
-    store = CollectionStore(args.state_root)
+    choices = [args.config is not None, args.capture_source is not None, args.target is not None,
+               args.graph is not None, args.events, args.index_dense, args.query is not None]
+    if sum(choices) != 1:
+        parser.error("select exactly one collection operation")
+    if (args.index_dense or args.query is not None) and not args.project:
+        parser.error("retrieval requires an explicit project scope")
+    read_only = args.graph is not None or args.events or args.index_dense or args.query is not None
+    store = CollectionStore.open_existing(args.state_root) if read_only else CollectionStore(args.state_root)
+    if store is None:
+        print(json.dumps({"state": "not_configured", "items": [], "facts": [], "nodes": [], "edges": []}))
+        return
     if args.config:
         data, _ = json_snapshot(args.config)
         targets = []
         for config in data["targets"]:
             targets.append(store.register(**config))
         print(json.dumps({"registered": targets}, ensure_ascii=False))
+    elif args.index_dense or args.query is not None:
+        from alden_collection_retrieval import index_dense, retrieve
+        import auto_reply_knowledge_graph as kg
+        token = AbortToken(args.state_root / ABORT_STATE_NAME)
+        with kg.embedding_abort_scope(token):
+            if args.index_dense:
+                os.nice(10)
+                result = index_dense(args.state_root, args.project, cancelled=token.is_cancelled,
+                                     progress=lambda value: print(json.dumps(value), file=__import__('sys').stderr, flush=True))
+            else:
+                result = retrieve(args.state_root, args.query, projects=args.project, cancelled=token.is_cancelled)
+        print(json.dumps(result, ensure_ascii=False))
     elif args.capture_source:
         token = AbortToken(args.state_root / ABORT_STATE_NAME)
         print(json.dumps(capture_source(store, args.capture_source, cancelled=token.is_cancelled), ensure_ascii=False))
