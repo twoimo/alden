@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import http.client
+import hashlib
 import json
 import math
 import os
@@ -39,6 +40,7 @@ from typing import Any, Callable, Protocol
 
 from auto_reply_ondevice import (
     FLASH_NEXT_MODEL_ID,
+    FLASH_NEXT_IQ_MODEL_ID,
     MLX_GATEWAY_MAX_RESPONSE_BYTES,
     QWEN38_27B_MODEL_ID,
 )
@@ -48,6 +50,7 @@ from local_mlx_gateway import (
     mlx_model_request_lease,
     mlx_response_model_conflicts,
 )
+from local_mlx_model_readiness import canonical_fixed_local_mlx_model_id
 
 
 WAKE_PHRASE = "올든"
@@ -63,7 +66,8 @@ QWEN3_TTS_SPEAKER = "sohee"
 QWEN3_TTS_INSTRUCTION = "차분하고 절제된 집사 말투로, 또렷한 한국어를 읽으세요. 감정을 과장하지 마세요."
 LOCAL_LLM_BASE_URL = "http://127.0.0.1:11234/v1"
 LOCAL_LLM_MAX_RESPONSE_BYTES = 64 * 1024
-LOCAL_LLM_ALLOWED_MODEL_IDS = frozenset((QWEN38_27B_MODEL_ID, FLASH_NEXT_MODEL_ID))
+LOCAL_LLM_ALLOWED_MODEL_IDS = frozenset((QWEN38_27B_MODEL_ID, FLASH_NEXT_MODEL_ID, FLASH_NEXT_IQ_MODEL_ID))
+LOCAL_LLM_IQ_BASE_URL = "http://127.0.0.1:11235/v1"
 VOICE_CONTEXT_TURNS = 4
 VOICE_CONTEXT_ITEM_MAX_CHARS = 600
 VOICE_CONTEXT_TTL_SECONDS = 10 * 60
@@ -316,7 +320,7 @@ def _local_urlopen(request: urllib.request.Request, *, timeout: float):
 
     token = getattr(request, "_alden_abort_token", None)
     if isinstance(token, AbortToken):
-        return _CancellableLocalResponse(request, timeout, token)
+        return _CancellableLocalResponse(request, timeout, token, model_port=getattr(request, "_alden_model_port", 11234))
 
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
@@ -325,14 +329,15 @@ def _local_urlopen(request: urllib.request.Request, *, timeout: float):
     return opener.open(request, timeout=timeout)
 
 
-def _validate_local_llm_base_url(value: str) -> str:
+def _validate_local_llm_base_url(value: str, model: str = QWEN38_27B_MODEL_ID) -> str:
     raw = str(value or "").strip().rstrip("/")
     try:
         parsed = urllib.parse.urlsplit(raw)
         valid = (
             parsed.scheme == "http"
             and parsed.hostname == "127.0.0.1"
-            and parsed.port == 11234
+            and parsed.port == (11235 if model == FLASH_NEXT_IQ_MODEL_ID else 11234)
+            and not parsed.username and not parsed.password
             and parsed.path == "/v1"
             and not parsed.query
             and not parsed.fragment
@@ -1455,7 +1460,11 @@ class AldenVoicePipeline:
         except AldenCancelled:
             return self._turn_end(turn, VoiceState.ABORTED, "global_abort" if self.token.is_cancelled() else "turn_cancelled")
         except Exception as exc:
-            code = "model_swap_failed" if "model_swap" in str(exc).casefold() else "generation_error"
+            reason = str(exc)
+            if reason in {"voice_model_configuration_invalid", "voice_model_selection_unavailable", "local_llm_model_not_ready"}:
+                code = reason
+            else:
+                code = "model_swap_failed" if "model_swap" in reason.casefold() else "generation_error"
             return self._turn_end(turn, VoiceState.ERROR, code)
 
         try:
@@ -1608,13 +1617,15 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
 class LocalMlxLlm:
     def __init__(
         self,
-        base_url: str = LOCAL_LLM_BASE_URL,
+        base_url: str | None = None,
         model: str = QWEN38_27B_MODEL_ID,
         *,
         state_root: Path | None = None,
     ):
-        self.base_url = _validate_local_llm_base_url(base_url)
-        self.model = model
+        fixed = canonical_fixed_local_mlx_model_id(model)
+        self.model = "mlx/" + fixed if fixed else model
+        expected = LOCAL_LLM_IQ_BASE_URL if self.model == FLASH_NEXT_IQ_MODEL_ID else LOCAL_LLM_BASE_URL
+        self.base_url = _validate_local_llm_base_url(base_url or expected, self.model)
         self.state_root = state_root
         self.last_metrics: dict[str, Any] = {}
         self._turn_context: ContextVar[dict[str, Any] | None] = ContextVar("alden_llm_turn", default=None)
@@ -1637,6 +1648,7 @@ class LocalMlxLlm:
             "scope": "engine_aggregate; not per-request memory", "values": None,
         }
         request = urllib.request.Request(self.base_url.removesuffix("/v1") + "/metrics")
+        request._alden_model_port = urllib.parse.urlsplit(self.base_url).port
         request._alden_abort_token = token
         names = {
             "vllm:num_requests_running", "vllm:request_success_total", "vllm:request_cancelled_total",
@@ -1729,6 +1741,7 @@ class LocalMlxLlm:
             f"{self.base_url}/models",
             headers={"Accept": "application/json"},
         )
+        request._alden_model_port = urllib.parse.urlsplit(self.base_url).port
         request._alden_abort_token = token
         try:
             with _local_urlopen(request, timeout=3.0) as response:
@@ -1831,6 +1844,7 @@ class LocalMlxLlm:
             data=payload,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
+        request._alden_model_port = urllib.parse.urlsplit(self.base_url).port
         request.add_header("X-Alden-Request-Id", self.last_metrics["request"]["local_request_id"])
         context = self._turn_context.get()
         if context is not None:
@@ -1878,6 +1892,69 @@ class LocalMlxLlm:
         if context is not None:
             self.last_metrics["engine_after"] = self._sample_engine_metrics(token)
         return content.strip()
+
+
+def configured_voice_model(state_root: Path) -> dict[str, str | None]:
+    """Snapshot the saved local choice; never repair/write it or select a fallback."""
+    path = Path(state_root) / "reply-model.json"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return {"model": QWEN38_27B_MODEL_ID, "base_url": LOCAL_LLM_BASE_URL,
+                "source": "documented_default", "configuration_sha256": None}
+    except OSError as exc:
+        raise RuntimeError("voice_model_configuration_invalid") from exc
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 8192:
+                raise ValueError("invalid model configuration")
+            raw = handle.read(8193)
+        if len(raw) > 8192:
+            raise ValueError("invalid model configuration")
+        data = json.loads(raw)
+        if not isinstance(data, dict) or not isinstance(data.get("model"), str):
+            raise ValueError("invalid model configuration")
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("voice_model_configuration_invalid") from exc
+    fixed = canonical_fixed_local_mlx_model_id(data["model"])
+    if fixed is None:
+        raise RuntimeError("voice_model_selection_unavailable")
+    model = "mlx/" + fixed
+    return {"model": model, "base_url": LOCAL_LLM_IQ_BASE_URL if model == FLASH_NEXT_IQ_MODEL_ID else LOCAL_LLM_BASE_URL,
+            "source": "saved_configuration", "configuration_sha256": hashlib.sha256(raw).hexdigest()}
+
+
+class ConfiguredLocalMlxLlm:
+    """A fixed model/socket snapshot per turn, refreshed only for the next turn."""
+    def __init__(self, state_root: Path):
+        self.state_root = Path(state_root)
+        self.last_metrics: dict[str, Any] = {}
+
+    def generate(self, text: str, token: AbortToken, *, history=()) -> str:
+        return self._generate(text, token, history=history)
+
+    def generate_for_turn(self, text: str, token: AbortToken, *, history=(), turn: VoiceTurn) -> str:
+        return self._generate(text, token, history=history, turn=turn)
+
+    def _generate(self, text: str, token: AbortToken, *, history, turn: VoiceTurn | None = None) -> str:
+        context = {} if turn is None else {"conversation_id": turn.conversation_id, "turn_id": turn.turn_id,
+                                            "context_version": turn.context_version, "source": turn.source}
+        self.last_metrics = {"request": {**context, "state": "selecting_model", "transport_started": False}}
+        try:
+            token.raise_if_cancelled()
+            selection = configured_voice_model(self.state_root)
+        except AldenCancelled:
+            self.last_metrics["request"].update(state="cancelled", cancelled=True)
+            raise
+        except RuntimeError as error:
+            self.last_metrics["request"].update(state="failed", error_code=str(error))
+            raise
+        adapter = LocalMlxLlm(base_url=selection["base_url"], model=selection["model"], state_root=self.state_root)
+        try:
+            return adapter.generate(text, token, history=history) if turn is None else adapter.generate_for_turn(text, token, history=history, turn=turn)
+        finally:
+            self.last_metrics = {**adapter.last_metrics, "model_selection": selection}
 
 
 class MlxWhisperAdapter:
@@ -2262,7 +2339,7 @@ def run_microphone_session(
     status = VoiceStatusStore(state_root)
     pipeline = AldenVoicePipeline(
         stt=MlxWhisperAdapter(),
-        llm=LocalMlxLlm(state_root=state_root),
+        llm=ConfiguredLocalMlxLlm(state_root=state_root),
         tts=Qwen3TtsAdapter(),
         token=token,
         status=status,
@@ -2428,7 +2505,7 @@ def run_file_pipeline(
     tts = _FileTts()
     pipeline = AldenVoicePipeline(
         stt=MlxWhisperAdapter(model=os.environ.get("OPENKAKAO_WHISPER_MODEL", WHISPER_MODEL_ID)),
-        llm=LocalMlxLlm(state_root=state_root),
+        llm=ConfiguredLocalMlxLlm(state_root=state_root),
         tts=tts,
         token=token,
         status=status,

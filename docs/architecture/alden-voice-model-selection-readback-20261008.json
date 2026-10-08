@@ -1,0 +1,39 @@
+{
+  "version": "0.3.34",
+  "phase": "source candidate; installation pending",
+  "scope": "actual local diagnostic adapter; no physical microphone/playback/history/model-load",
+  "tests": {
+    "affected_voice": 88,
+    "ui": 385,
+    "new_selection_cases": 9
+  },
+  "loaded_model": {
+    "model": "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+    "selection_source": "saved_configuration",
+    "reply": "확인",
+    "elapsed_seconds": 0.5211227079853415,
+    "sample_count": 1
+  },
+  "unprepared_iq": {
+    "error_code": "local_llm_model_not_ready",
+    "requests": [
+      {
+        "url": "http://127.0.0.1:11235/v1/models",
+        "method": "GET"
+      }
+    ],
+    "elapsed_seconds": 0.0017094160430133343,
+    "sample_count": 1,
+    "generation_requests": 0
+  },
+  "settings_unchanged": true,
+  "loaded_models_after": [
+    "ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
+  ],
+  "limitations": [
+    "iQ protocol fixtures are not loaded-weight inference",
+    "human voice/wake/echo/barge-in/emergency shortcut pending",
+    "no latency percentile or performance gain claim",
+    "full goal remains active; signed release/production pending"
+  ]
+}

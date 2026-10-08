@@ -16,7 +16,7 @@ The original27B server was restored with its exact command, context32768, KV8 an
 
 ## Remaining scope
 
-The installed0.3.32 voice LLM adapter still accepts only27B and port11234, so a future prepared IQ endpoint at11235 is not yet wired to that voice adapter. The model-residency observation cache expires after30s; expired cached permission is not reused as mutation authority. Flash-Next needs sufficient effective memory and exact provenance before end-to-end validation. Physical wakeword/STT/TTS/interruptions, emergency shortcut, broader retrieval/collection/MCP/scheduler, independent DPO and signed release/production remain full-goal work.126 tests and the controlled restoration do not complete those requirements.
+The installed0.3.32 voice runtime always constructs the default27B adapter and port11234 rather than reading the saved reply-model choice. Explicit adapters also allow the mixed4–8 Flash model at11234; the iQ endpoint at11235 is not yet wired to voice. The model-residency observation cache expires after30s; expired cached permission is not reused as mutation authority. Flash-Next needs sufficient effective memory and exact provenance before end-to-end validation. Physical wakeword/STT/TTS/interruptions, emergency shortcut, broader retrieval/collection/MCP/scheduler, independent DPO and signed release/production remain full-goal work.126 tests and the controlled restoration do not complete those requirements.
 
 ## Installed0.3.32 readback
 

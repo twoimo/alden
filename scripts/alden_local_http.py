@@ -15,9 +15,12 @@ class CancellableLocalResponse:
     a buffered urllib response after generation would leave that wait alive.
     """
 
-    def __init__(self, request: urllib.request.Request, timeout: float, token: AbortToken, *, embedding: bool = False):
+    def __init__(self, request: urllib.request.Request, timeout: float, token: AbortToken, *, embedding: bool = False, model_port: int = 11234):
         self.request, self.timeout, self.token = request, timeout, token
         self.embedding = embedding
+        if model_port not in {11234, 11235}:
+            raise ValueError("local_llm_endpoint_invalid")
+        self.model_port = model_port
         self.connection: http.client.HTTPConnection | None = None
         self.response: http.client.HTTPResponse | None = None
         self._done = threading.Event()
@@ -27,7 +30,7 @@ class CancellableLocalResponse:
         self.token.raise_if_cancelled()
         parsed = urllib.parse.urlsplit(self.request.full_url)
         allowed_paths = {"/v1/models", "/v1/embeddings"} if self.embedding else {"/v1/models", "/v1/chat/completions", "/metrics"}
-        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != (11236 if self.embedding else 11234) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in allowed_paths:
+        if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or parsed.port != (11236 if self.embedding else self.model_port) or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in allowed_paths:
             raise ValueError("local_llm_endpoint_invalid")
         if parsed.path == "/metrics" and (self.request.get_method() != "GET" or self.request.data is not None):
             raise ValueError("local_llm_endpoint_invalid")

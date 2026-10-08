@@ -36,6 +36,12 @@ export function voiceErrorMessage(errorCode: string | null): string | null {
       return "말씀을 알아듣지 못했습니다. 다시 말씀해 주세요.";
     case "generation_error":
       return "답변을 준비하지 못했습니다. 다시 말씀해 주세요.";
+    case "voice_model_configuration_invalid":
+      return "대화 모델 설정을 확인할 수 없습니다. 로컬 모델을 다시 선택해 주세요.";
+    case "voice_model_selection_unavailable":
+      return "음성 대화를 사용하려면 지원하는 로컬 모델을 선택해 주세요.";
+    case "local_llm_model_not_ready":
+      return "선택한 로컬 모델이 준비되지 않았습니다. 모델 준비 상태를 확인해 주세요.";
     case "tts_error":
       return "답변을 소리로 들려주지 못했습니다.";
     case "global_abort":
