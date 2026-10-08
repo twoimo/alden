@@ -1,0 +1,11 @@
+# Bounded live source acquisition
+
+The local app named ChatGPT is the Codex desktop distribution (`com.openai.codex`), verified from its installed bundle. Aside is a separate native host. Both read the same canonical `alden-knowledge-collection` skill; discovery alone is not ingestion proof.
+
+Aside's installed YouTube skill acquired metadata, caption-track declarations and timestamped Korean transcripts for two video IDs already present in the authorized channel snapshots. The fresh scope is exactly those two videos. Export and readback ran inside Aside's local REPL. Its guard rejected writing directly into the Codex workspace, so the supported session artifact path was used; no permission/model change or extra agent was started. A local executor transfers verified bytes to a durable source input before registration.
+
+`youtube-video` targets use video IDs and kind `video`, separate from full-channel membership. Canonical URL/video IDs are checked. Metadata display names never become stable author IDs. Caption access failures remain explicit. The tzuyang source advertised both manual and automatic Korean tracks; the native request selects language only, so the chosen kind stays unknown. The jangsin source advertised only automatic Korean. Transcript timestamps and the original response stay retained; descriptions/captions are source claims, not independent facts or visual analysis.
+
+The exact user-provided Threads reference was read through the existing TinyFish Fetch connector. Its visible main-post text matched the OG description. The post shortcode and observed handle remain separate; a numeric author ID is unavailable. `threads-post` ingests only the canonical main post with explicit coverage, preserving missing replies/media. Account-wide registration is never implied.
+
+Source snapshots/captures, current/version hashes, scoped indexing, host readback and native rendering each require separate receipts. Prepared targets are not installed/registered until the compatible collector is delivered. Original channel snapshots, old versions and their membership sets are preserved. No messages, publication, authentication profiles, model loading or cloud browser automation are authorized by this collection.
