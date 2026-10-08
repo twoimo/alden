@@ -18,6 +18,16 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_latest_source_uses_publication_not_collection_time_and_keeps_history(self):
+        self.store.ingest(self.allowed,[{'original_id':'old','label':'shared term','text':'older terms','published_at':'2026-08-01T00:00:00Z'}])
+        self.store.ingest(self.allowed,[{'original_id':'new','label':'shared term','text':'recent terms','published_at':'2026-09-01T00:00:00Z'}])
+        result=retrieve(self.root,'shared term latest',projects=['one'])
+        self.assertEqual([p['entity_id'] for p in result['fact_provenance']],[identity('graph','new')])
+        self.assertEqual(result['temporal_selection']['observation_basis'],['source_published_at'])
+        self.assertIn('효력의 증명은 아님',result['facts'][0])
+        history=retrieve(self.root,'shared term 이전 기록',projects=['one'])
+        self.assertEqual(len(history['fact_provenance']),2)
+        with self.store.database() as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM documents').fetchone()[0],2)
     def setUp(self):
         self.temp = TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve();self.store = CollectionStore(self.root)

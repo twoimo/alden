@@ -229,6 +229,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         raise ValueError('collection_context_budget')
     if type(candidate_limit) is not int or not 1 <= candidate_limit <= 100:
         raise ValueError('collection_candidate_budget')
+    if also is not None and (not isinstance(also,(list,tuple)) or len(also)>40 or any(not isinstance(i,str) for i in also)):
+        raise ValueError('collection_explicit_ids_invalid')
     store = CollectionStore.open_existing(Path(root))
     if store is None:
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
@@ -286,6 +288,32 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     _check(cancelled)
     ranked = kg._rrf_merge(lexical, dense, k=rrf_k, weights=rrf_weights,
                           recency={r['id']: r['collected_at'] for r in rows}) if mode == 'rrf' else lexical
+    from alden_retrieval_time import select_latest, latest_requested, observation_note
+    temporal_selection={'mode':'all','basis':'relevance'}
+    temporal_excluded=set()
+    if ranked and latest_requested(query,time_from,time_to):
+        temporal_records=[]
+        with store.database() as source:
+            for identity,_score in ranked:
+                row=eligible[identity]
+                metadata=json.loads(source.execute('SELECT metadata FROM versions WHERE id=?',(row['version'],)).fetchone()[0])
+                aliases=metadata.get('aliases',[]);aliases=aliases if isinstance(aliases,list) else []
+                marks=','.join('?' for _ in projects)
+                publisher_scopes={}
+                for target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
+                    WHERE m.document_id=? AND m.availability='available' AND EXISTS(SELECT 1 FROM target_projects p
+                    WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,*projects)):
+                    publisher_scopes.setdefault(label,[]).append(target_id)
+                conflict=source.execute('''SELECT r.source,r.target FROM relations r WHERE r.active=1 AND r.type IN ('conflicts','contradicts')
+                    AND (r.source=? OR r.target=?) AND EXISTS(SELECT 1 FROM target_projects p
+                    WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,*projects))
+                temporal_records.append({'id':identity,'name':row['label'],'aliases':aliases+list(publisher_scopes),'mention_scopes':publisher_scopes,
+                    'has_conflict':any(a in eligible and b in eligible for a,b in conflict),
+                    'observed_at':metadata.get('published_at'),'time_basis':'source_published_at',
+                    'pinned':identity in (also or [])})
+        ordered,temporal_selection=select_latest(query,temporal_records,needles=kg.query_haystacks(query,None),time_from=time_from,time_to=time_to)
+        temporal_excluded={identity for identity,_score in ranked}-set(ordered)
+        scores=dict(ranked);ranked=[(identity,scores[identity]) for identity in ordered]
     if also is not None:
         if not isinstance(also, (list, tuple)) or len(also) > 40 or any(not isinstance(i, str) for i in also):
             raise ValueError('collection_explicit_ids_invalid')
@@ -325,7 +353,11 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                      'provenance_valid': True, 'retracted': False}
             if isinstance(record, dict):
                 proof['source_author'] = {key: record[key] for key in ['author', 'handle', 'date', 'url', 'localTextOrigin'] if isinstance(record.get(key), str)}
-            append((row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body'], proof)
+            text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
+            if temporal_selection['mode']=='latest_observation':
+                proof['observation_time']=metadata.get('published_at');proof['observation_basis']='source_published_at'
+                text=observation_note(metadata.get('published_at'),'source_published_at')+text
+            append(text, proof)
             chosen.append(document_id)
         if chosen and max_relations > 0:
             marks = ','.join('?' for _ in projects)
@@ -339,7 +371,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 (chosen[0], *projects))
             for edge in edges:
                 _check(cancelled)
-                if edge['target'] not in eligible:
+                if edge['target'] not in eligible or edge['target'] in temporal_excluded:
                     continue
                 target = eligible[edge['target']]
                 if edge['source_version'] != eligible[edge['source']]['version'] or edge['target_version'] != target['version']:
@@ -361,4 +393,5 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             'unsearchable_documents': len(source_rows) - len(rows),
             'pending_text_versions': sum(not r['text_ready'] for r in source_rows),
             'time_basis': 'collection_time',
+            'temporal_selection':temporal_selection,
             'candidates': [row[0] for row in ranked], 'canonical': 'independent originals; derived collection projection'}

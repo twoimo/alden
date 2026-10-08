@@ -164,6 +164,7 @@ jobs:
           tests.test_alden_collection_scheduler
           tests.test_alden_youtube_video
           tests.test_alden_retrieval_eval
+          tests.test_alden_retrieval_time
           tests.test_auto_reply_finetune
           tests.test_alden_dpo_scorer
           tests.test_alden_model_evaluation

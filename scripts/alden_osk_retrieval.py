@@ -91,6 +91,7 @@ def _snapshot(root: Path, cancelled=lambda: False):
                     links.append((relation, index.node(hit[0]).id))
         stamp = datetime.strptime(str(note.meta['updated']), '%Y-%m-%d %H:%M (KST)').replace(tzinfo=ZoneInfo('Asia/Seoul')).timestamp()
         docs.append({'id': 'osk:' + note.id, 'note_id': note.id, 'path': str(path.relative_to(home / 'vault')),
+                     'aliases':source.get('aliases',[]) if isinstance(source.get('aliases'),list) else [],
                      'hash': osk.digest(data), 'title': title, 'summary': str(note.meta.get('summary', '')),
                      'body': body, 'updated_at': int(stamp), 'space': str(path.parent.relative_to(home / 'vault')),
                      'derived_from': refs, 'conflicts': note.meta.get('conflicts') or [], 'links': links, 'source_identity': str(source.get('id') or ''),
@@ -255,6 +256,14 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
     explicit = {str(value) for value in also or []}
     pinned = [d['id'] for d in docs if d['id'] in eligible and (d['id'] in explicit or d['source_identity'] in explicit)]
     ranked = [(identity, 0.) for identity in pinned] + [(i, s) for i, s in ranked if i not in pinned]
+    from alden_retrieval_time import select_latest, observation_note
+    ordered_ids,temporal_selection=select_latest(query,[{'id':identity,'name':eligible[identity]['title'],
+        'aliases':eligible[identity].get('aliases',[]),'observed_at':eligible[identity]['updated_at'],'time_basis':'note_revision_at',
+        'has_conflict':bool(eligible[identity]['conflicts']),'pinned':identity in pinned,
+        'identity_kind':'person' if eligible[identity]['source_identity'].startswith(('person:','author:','ent:person:')) else 'record'}
+        for identity,_score in ranked],needles=kg.query_haystacks(query,None),time_from=time_from,time_to=time_to)
+    excluded={identity for identity,_score in ranked}-set(ordered_ids)
+    scores=dict(ranked);ranked=[(identity,scores[identity]) for identity in ordered_ids]
     limit = max(0, int(max_entities))
     identities = [identity for identity, _ in ranked]
     seed = identities[0] if identities and limit else ''
@@ -267,7 +276,7 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
             RELATION_ORDER[edge[0]], position.get('osk:' + edge[1], len(position)), edge[1]))
         for _, target in edges:
             identity = 'osk:' + target
-            if identity in eligible and identity != seed and identity not in neighbors:
+            if identity in eligible and identity not in excluded and identity != seed and identity not in neighbors:
                 neighbors.append(identity)
     ordered = ([seed] if seed else []) + neighbors + [identity for identity in identities if identity != seed and identity not in neighbors]
     selected = [eligible[identity] for identity in ordered[:limit]]
@@ -289,7 +298,9 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
     for offset, d in enumerate(selected):
         # Fair per-note bounds keep a long first body from erasing its premises.
         allowance = remaining // (len(selected) - offset)
-        fact = (d['title'] + ': ' + d['body'])[:allowance]
+        text=d['title'] + ': ' + d['body']
+        if temporal_selection['mode']=='latest_observation':text=observation_note(d['updated_at'],'note_revision_at')+text
+        fact = text[:allowance]
         if not fact:
             break
         remaining -= len(fact);facts.append(fact)
@@ -299,7 +310,7 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
                            'source_event_ids': d['source_event_ids'], 'derived_from': d['derived_from'], 'conflicts': d['conflicts'],
                            'updated_at': d['updated_at'], 'retracted': False, 'provenance_valid': True,
                            'retrieval_role': 'seed' if d['id'] == seed else 'outgoing_reference' if d['id'] in neighbors else 'ranked',
-                           'fact_truncated': len(fact) < len(d['title'] + ': ' + d['body'])})
+                           'fact_truncated': len(fact) < len(text)})
     used_docs = selected[:len(facts)]
     used_ids = {d['id'] for d in used_docs}
     remaining = max_context_chars - sum(map(len, facts))
@@ -326,6 +337,7 @@ def retrieve(root: Path, query: str, *, chat_id=None, participant_id=None, time_
             'focus_k': 1 if any(d['id'] in neighbors for d in used_docs) else 0, 'focus_node_count': len(used_docs), 'focus_edge_count': len(relations),
             'search_mode': mode, 'index_version': 'canonical-osk-1', 'watermark': signature,
             'evidence_ids': list(dict.fromkeys(ref for d in used_docs for ref in d['derived_from'])),
+            'temporal_selection':temporal_selection,
             'retrieval_policy': {'rrf_k': rrf_k, 'rrf_weights': list(kg._validated_rrf_weights(rrf_weights)),
                                  'candidate_limit': candidate_limit, 'max_context_chars': max_context_chars,
                                  'max_entities': limit, 'max_relations': max(0, int(max_relations)), 'graph_expansion_hops': 1,

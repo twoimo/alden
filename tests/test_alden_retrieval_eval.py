@@ -212,7 +212,7 @@ class ProductionPathEvaluationTests(unittest.TestCase):
 
     def test_candidate_filters_close_leaks_and_keep_uncertain_freshness_visible(self):
         observed = {item["code"] for item in self.report["production_observations"]}
-        self.assertIn("stale_nonretracted_candidate_remains", observed)
+        self.assertNotIn("stale_nonretracted_candidate_remains", observed)
         self.assertFalse(
             {
                 "retracted_entity_not_filtered",
@@ -229,9 +229,7 @@ class ProductionPathEvaluationTests(unittest.TestCase):
             result = self.result("fixture-rrf", query_id)
             self.assertFalse(result["violations"], query_id)
         latest = self.result("fixture-rrf", "heldout-latest-entity")
-        self.assertTrue(
-            any(item["code"] == "forbidden_entity_returned" for item in latest["violations"])
-        )
+        self.assertFalse(latest["violations"])
 
     def test_time_filter_removes_expired_relation_and_old_entity(self):
         result = self.result("fixture-rrf", "heldout-relation-time-scope")

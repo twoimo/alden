@@ -4353,6 +4353,7 @@ def retrieve_knowledge_bundle(
         "relation_provenance": selected_relation_provenance,
         "fact_provenance": fact_provenance,
         "focus_node_id": str((focus or {}).get("root_id") or ""),
+        "temporal_selection": ranked.get("temporal_selection", {'mode':'all','basis':'relevance'}),
         "focus_k": int((focus or {}).get("k") or 0),
         "focus_node_count": len((focus or {}).get("node_ids", [])),
         "focus_edge_count": len((focus or {}).get("edges", [])),
@@ -4692,6 +4693,35 @@ def _query_knowledge_ranked(
             merged = bm25_ranked if selected_rrf_weights[0] > 0.0 else []
 
         ordered_ids = [entity_id for entity_id, _score in merged]
+        from alden_retrieval_time import select_latest, latest_requested, observation_note
+        original_ordered_ids=list(ordered_ids)
+        temporal_records=[]
+        if ordered_ids and latest_requested(query_text,time_from,time_to):
+            marks=','.join('?' for _ in ordered_ids)
+            metadata={str(identity):(name,category,raw_aliases) for identity,name,category,raw_aliases in conn.execute(
+                f'SELECT entity_id,name,category,aliases_json FROM kg_entities WHERE entity_id IN ({marks})',ordered_ids)}
+            conflicted=set()
+            for source,target,evidence,updated,room,start,end in conn.execute(
+                f"SELECT source_id,target_id,evidence_json,updated_at,room_id,valid_from,valid_to FROM kg_relations WHERE relation IN ('conflicts','contradicts') AND (source_id IN ({marks}) OR target_id IN ({marks}))",ordered_ids+ordered_ids):
+                proof=_candidate_provenance(str(source)+'|'+str(target),evidence,updated)
+                if proof['provenance_valid'] and not proof['retracted'] and _source_room_in_scope(room) and _source_room_in_scope(proof['room_id']) and _relation_time_in_scope(start,end,time.time(),time.time()):
+                    conflicted.update([str(source),str(target)])
+            for identity in ordered_ids:
+                if identity not in metadata:continue
+                name,category,raw_aliases=metadata[identity]
+                try:aliases=json.loads(raw_aliases)
+                except (TypeError,ValueError):aliases=[]
+                proof=provenance_by_entity.get(identity,{})
+                temporal_records.append({'id':identity,'name':name,'aliases':aliases if isinstance(aliases,list) else [],
+                    'observed_at':proof.get('confirmed_at'),'time_basis':'record_confirmed_at' if proof.get('source_event_ids') else None,
+                    'has_conflict':identity in conflicted,
+                    'identity_kind':'person' if identity.startswith(('person:','author:','ent:person:')) or str(category).casefold() in {'인물','사람','person','participant'} else 'record'})
+        if temporal_records:
+            ordered_ids,temporal_selection=select_latest(query_text,temporal_records,needles=query_haystacks(query_text,None),
+                time_from=time_from,time_to=time_to)
+        else:
+            temporal_selection={'mode':'all','basis':'relevance','excluded_older_observations':0}
+        temporal_excluded=set(original_ordered_ids)-set(ordered_ids)
         entity_facts: list[str] = []
         relation_facts: list[str] = []
         relation_provenance: list[dict[str, Any]] = []
@@ -4736,9 +4766,10 @@ def _query_knowledge_ranked(
                 candidates.append(entity_id)
                 matched_entity_ids.add(entity_id)
                 matched_entity_names[entity_id] = str(name)
-                entity_facts.append(
-                    _format_entity_fact(name, category, description, facts)
-                )
+                fact=_format_entity_fact(name, category, description, facts)
+                if temporal_selection['mode']=='latest_observation':
+                    fact=observation_note((provenance or {}).get('confirmed_at'),'record_confirmed_at' if (provenance or {}).get('source_event_ids') else None)+fact
+                entity_facts.append(fact)
                 provenance = provenance_by_entity.get(entity_id)
                 if provenance is None:
                     provenance = _candidate_provenance(entity_id, evidence_json, 0)
@@ -4771,6 +4802,7 @@ def _query_knowledge_ranked(
             ) in rel_cursor.fetchall():
                 src = str(src)
                 tgt = str(tgt)
+                if src in temporal_excluded or tgt in temporal_excluded:continue
                 _load_candidate_provenance([src, tgt])
                 if not _candidate_allowed(src) or not _candidate_allowed(tgt):
                     continue
@@ -4828,6 +4860,7 @@ def _query_knowledge_ranked(
             "entity_facts": entity_facts,
             "relation_facts": relation_facts,
             "candidates": candidates,
+            "temporal_selection": temporal_selection,
             "candidate_provenance": [
                 provenance_by_entity[entity_id]
                 for entity_id in candidates
