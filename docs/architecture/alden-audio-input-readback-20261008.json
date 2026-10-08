@@ -1,7 +1,12 @@
 {
   "schema": 1,
   "version": "0.3.33",
-  "state": "source_and_real_candidate_audio_verified",
+  "state": "installed_input_qualification_and_output_verified",
+  "runtime_source_commit": "0512245df17b9a83f5cc966736f0c95934b5e7d7",
+  "verification_source_commit": "f1170d496665857968edaafa2e3f75228be5acb8",
+  "verification_ci_successful_jobs": 4,
+  "installed": { "bundle_files_equal": 47, "configuration_files_equal": 3, "signature_passed": true, "native_abi": 3, "session_error": "mic_hardware_lid_closed", "positive_output_samples": 35, "qualified_cancel_waiter_ms": 3.60925, "cancel_samples": 1, "signing": "ad-hoc, not notarized" },
+  "local_file_stt": { "transcript": "올든 음성 연결을 확인합니다.", "elapsed_seconds": 0.97395, "n": 1, "human_input": false },
   "microphone_authorization": 3,
   "default_input_builtin": true,
   "lid_closed_observed": true,
