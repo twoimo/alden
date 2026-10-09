@@ -24,6 +24,29 @@ class PhotoContextTests(unittest.TestCase):
         graph.start()
         self.addCleanup(graph.stop)
 
+    def test_routed_input_failure_keeps_specific_non_provider_error(self):
+        from alden_abort import AbortController
+        from alden_model_routes import DEFAULT_MODEL
+        w = self.worker
+        route = {'model': DEFAULT_MODEL, 'transport': 'opencodex', 'reasoning_effort': 'high'}
+        catalog = {'models': [{'id': DEFAULT_MODEL, 'selectable': True, 'local': False, 'efforts': ['high']}]}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            token = AbortController(root).token()
+            for paths, reason in (([root / 'missing.png'], b'image_input_unavailable'),
+                                  ([root / 'missing.png'] * 5, b'image_input_budget')):
+                with self.subTest(reason=reason), \
+                        mock.patch.object(w, '_routed_reply_choice', return_value=route), \
+                        mock.patch.object(w, '_operator_state_root', return_value=root), \
+                        mock.patch.object(w, '_active_abort_token', return_value=token), \
+                        mock.patch('alden_routed_llm.catalog', return_value=catalog), \
+                        mock.patch('alden_routed_llm.CancellableLocalResponse') as transport:
+                    result = w._run_opencodex_generation(DEFAULT_MODEL, 'system', b'latest user', image_paths=paths)
+                self.assertEqual(result, (1, b'', reason))
+                self.assertIn(reason, w.LOCAL_IMAGE_EVIDENCE_FAILURES)
+                transport.assert_not_called()
+                self.assertFalse((root / 'model-route-health.json').exists())
+
     @staticmethod
     def event():
         return {'chat_id': 42, 'author_id': 7, 'log_id': 100, 'sent_at': 1000,

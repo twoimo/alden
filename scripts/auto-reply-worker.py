@@ -44,6 +44,7 @@ MAX_LINK_URLS = 2
 MAX_CONTEXT_URL_BYTES = 2048
 LOCAL_IMAGE_EVIDENCE_FAILURES = frozenset({
     b"image_input_unavailable",
+    b"image_input_budget",
     b"local_vision_model_required",
     b"mlx_serve_vision_model_not_resident",
     b"mlx_serve_vision_capability_unavailable",
