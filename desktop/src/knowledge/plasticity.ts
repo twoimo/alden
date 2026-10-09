@@ -61,6 +61,7 @@ export class PlasticityLayout {
   moving = false;
   private maxSpeed = 0;
   private maxForce = 0;
+  private maxPositionSpeed = 0;
   private simulatedSeconds = 0;
 
   /** Capacities are floored and clamped to [0, maximum]; non-finite values use the defaults. */
@@ -115,7 +116,7 @@ export class PlasticityLayout {
       this.restLength[i] = synapseRestLength(edge.strength);
     }
     for (let i = 0; i < nodes.length; i++) this.components[i] = componentRoot(this.components, i);
-    this.quietSteps = 0; this.maxSpeed = this.maxForce = this.simulatedSeconds = 0; this.moving = this.ids.length > 0;
+    this.quietSteps = 0; this.maxSpeed = this.maxForce = this.maxPositionSpeed = this.simulatedSeconds = 0; this.moving = this.ids.length > 0;
   }
 
   forEachPoint(apply: (id: string, x: number, y: number, z: number) => void): void {
@@ -134,8 +135,8 @@ export class PlasticityLayout {
     this.velocity.fill(0); this.moving = false;
   }
 
-  diagnostics(): { nodes: number; synapses: number; moving: boolean; maxSpeed: number; maxForce: number; simulatedSeconds: number; bufferBytes: number } {
-    return { nodes: this.ids.length, synapses: this.edgeCount, moving: this.moving, maxSpeed: this.maxSpeed, maxForce: this.maxForce,
+  diagnostics(): { nodes: number; synapses: number; moving: boolean; maxSpeed: number; maxForce: number; maxPositionSpeed: number; simulatedSeconds: number; bufferBytes: number } {
+    return { nodes: this.ids.length, synapses: this.edgeCount, moving: this.moving, maxSpeed: this.maxSpeed, maxForce: this.maxForce, maxPositionSpeed: this.maxPositionSpeed,
       simulatedSeconds: this.simulatedSeconds, bufferBytes: this.coordinates.byteLength + this.velocity.byteLength + this.forces.byteLength + this.anchors.byteLength + this.inverseMass.byteLength + this.degree.byteLength + this.components.byteLength + this.edgeA.byteLength + this.edgeB.byteLength + this.edgeStrength.byteLength + this.restLength.byteLength };
   }
 
@@ -163,12 +164,14 @@ export class PlasticityLayout {
       this.forces[ai] -= gain * dx; this.forces[ai + 1] -= gain * dy; this.forces[ai + 2] -= gain * dz;
       this.forces[bi] += gain * dx; this.forces[bi + 1] += gain * dy; this.forces[bi + 2] += gain * dz;
     }
-    this.maxSpeed = 0; this.maxForce = 0;
+    this.maxSpeed = 0; this.maxForce = 0; this.maxPositionSpeed = 0;
     const damping = Math.exp(-11 * h);
     for (let i = 0; i < count; i++) {
       const at = i * 3;
+      const beforeX = positions[at], beforeY = positions[at + 1], beforeZ = positions[at + 2];
       if (this.inverseMass[i] === 0) {
         for (let axis = 0; axis < 3; axis++) { positions[at + axis] = this.anchors[at + axis]; this.velocity[at + axis] = 0; }
+        this.maxPositionSpeed = Math.max(this.maxPositionSpeed, Math.hypot(positions[at] - beforeX, positions[at + 1] - beforeY, positions[at + 2] - beforeZ) / h);
         continue;
       }
       let fx = this.forces[at], fy = this.forces[at + 1], fz = this.forces[at + 2];
@@ -189,8 +192,14 @@ export class PlasticityLayout {
         this.velocity[at] -= normalVelocity * nx; this.velocity[at + 1] -= normalVelocity * ny; this.velocity[at + 2] -= normalVelocity * nz;
       }
       this.maxSpeed = Math.max(this.maxSpeed, Math.hypot(this.velocity[at], this.velocity[at + 1], this.velocity[at + 2])); this.maxForce = Math.max(this.maxForce, Math.hypot(fx, fy, fz));
+      this.maxPositionSpeed = Math.max(this.maxPositionSpeed, Math.hypot(positions[at] - beforeX, positions[at + 1] - beforeY, positions[at + 2] - beforeZ) / h);
     }
-    if (this.maxSpeed < 0.0015 && this.maxForce < 0.025) this.quietSteps++; else this.quietSteps = 0;
+    // Projection onto the scene boundary can leave a small integration
+    // velocity while the rendered coordinates are already stationary.
+    // Require low force, low latent velocity and measured post-projection
+    // movement in display units/second; a turning point alone cannot rest.
+    const visuallyStill = this.maxSpeed < 0.003 && this.maxPositionSpeed < 0.000001;
+    if ((this.maxSpeed < 0.0015 || visuallyStill) && this.maxForce < 0.025) this.quietSteps++; else this.quietSteps = 0;
     if (this.quietSteps >= 12) { this.velocity.fill(0); this.moving = false; }
   }
 }

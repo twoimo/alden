@@ -524,7 +524,7 @@ fn capture_workspaces(
     ] {
         collect_script(window,format!("JSON.stringify((()=>{{const clickedAtMs=performance.now();document.querySelector('#settings-tab-{page}').click();const paint=window.__aldenAuditWorkspacePaint={{page:'{page}',ready:false,clickedAtMs,firstFrameAtMs:null}};requestAnimationFrame(()=>{{paint.firstFrameAtMs=performance.now();requestAnimationFrame(()=>{{paint.ready=true;}});}});return {{selected:true}};}})())"),deadline)?;
         let mut paint_after_data = false;
-        let state = loop {
+        let mut state = loop {
             let state=collect_script(window,r#"JSON.stringify((()=>{
               const p=document.querySelector('.settings-shell')?.dataset.settingsPage;
               const prompt=(p==='voice'||p==='conversation')?document.querySelector(`#${p}-placeholder`):null;
@@ -576,6 +576,9 @@ fn capture_workspaces(
         if state["scrollWidth"].as_u64().unwrap_or(u64::MAX) > state["width"].as_u64().unwrap_or(0)
         {
             return Err(format!("workspace overflow: {page}"));
+        }
+        if page == "memory" {
+            state["physicsObservation"] = observe_graph_rest(window, deadline)?;
         }
         publish(
             output,
@@ -670,6 +673,30 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     accessibleNodes:document.querySelectorAll('.knowledge-a11y-node').length,
     pause:p?{state:p.state,eventAtMs:p.eventAtMs,rendersAfterEvent:p.rendersAfterEvent}:null};
 })())"#;
+
+fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
+      return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
+        displayedNodes:d?.nodeCount??0,physics:d?.physics??null};})())"#;
+    let before = collect_script(window, script.into(), deadline)?;
+    let bound = deadline.min(Instant::now() + Duration::from_secs(15));
+    let rested = loop {
+        let state = collect_script(window, script.into(), deadline)?;
+        if state["physics"]["moving"] == false || Instant::now() >= bound {
+            break state;
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    live(deadline)?;
+    std::thread::sleep(Duration::from_secs(2));
+    let after = collect_script(window, script.into(), deadline)?;
+    Ok(
+        json!({"scope":"owned visible graph; observational only, not primary/GPU/battery or semantic proof",
+        "before":before,"restObserved":rested["physics"]["moving"] == false,
+        "rested":rested,"afterTwoSeconds":after}),
+    )
+}
 
 fn graph_step(
     window: &tauri::WebviewWindow,
