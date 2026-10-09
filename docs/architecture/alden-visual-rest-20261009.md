@@ -12,6 +12,8 @@
 
 첫 설치 소스091855c는 수치 정지만 사용했다. 실제 통합 scene의 기본/작은 창에서 모두 restObserved=false였다. 예를 들어 기본 창의21.766 simulated seconds 관측은 힘0.0255434·실제 이동속도0.000125695였다. 이 실패 관측을 보존하고 화면 스케일 조건을 보완했다. 관찰 전용 native audit는 실제 표시 scene에서 physics 상태를 최대15초 기다리고2초 뒤를 다시 기록한다. restObserved=false여도 정지가 검증됐다고 바꾸지 않는다. primary·실제 입력·GPU·배터리와 의미 군집 완료를 이 관찰로 대신하지 않는다. 감사 제어 쓰기와 추론은 계속 허용하지 않는다.
 
+최종 설치 b7ce26e에서는 기본·작은 창 모두 restObserved=true이고2초 뒤에도 moving=false였다. 표시2048노드 중120노드/9시냅스의 물리 계산은6.933 simulated seconds에서 멈췄다. 이것은 실제 wall-clock 정착 지연 측정이 아니다. 별도 레이어를 포함한 렌더 호출은 두 창 모두2초 동안60회 계속됐으므로 전체 렌더 중단이나 FPS/GPU/배터리 절감으로 보고하지 않는다. read-only native audit 종료0·51.891초·오류null,24개 화면은 직접 검토했다. 설치55개 파일과 mode/hash/strict-deep 서명, 보호설정3개·대상설정7개·자동확인정책2개를 대사했다. 첫 실패 관측과 최종 관측은 outputs/semantic-layout-20261009에 각각 보존했다.
+
 검증: 화면 스케일 보완 후 UI416개, 관련 물리24개, 기존 Rust109개와 strictClippy 통과. 초기 익명회귀2개 실패 중 하나는 실제 moving 버그, 다른 하나는 경계 재투영의 마지막 이진자리까지 동일하다는 과도한 새 assertion이었다. 위치 보존은1e-12 허용 오차로 수정하고 로그를 보존했다. 카메라 전체 회귀의 테스트 객체에는 실제 생성자에 있던 scratch vector를 추가했다. source/CI/build/install/native/signature는 각각 별도 전달 영수증을 사용한다.
 
 GPT6Web 최고추론 병렬 구현/설계는 최초 조회가 OpenAI 도구 승인 검토의 보안 상태 판단 불가로 막혔다. 사용자의 새 지시에 따라 같은 모델/max의 두 작업을 재개했다. affinity 초안은 작성됐으나 테스트·실자료 검증은 진행 중이다. 이전 실행92508은 Unknown process id여서 결과·종료 상태를 확인할 수 없으며 재조회 우회나 새 수량 추정은 하지 않았다. 의미 중복/이상치/대규모 semantic grouping은 미완료다. 시각적 정지 수정은 이 검토와 독립적이다.
