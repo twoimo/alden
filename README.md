@@ -6,6 +6,8 @@
 
 현재 CollectionStore의 권한·버전·원문 해시와 동일 내용 후보를 개발 CLI로 읽기 전용 감사할 수 있습니다. 실제 26,623개 문서·48,355개 관계에서 동일 정규화 검색 내용 698개 묶음을 확인했고 원본 ID를 병합하지 않았습니다. [검사 범위·빈 텍스트·후보와 의미 판정의 차이](docs/architecture/alden-graph-quality-20261009.md)
 
+기존 E5 벡터의 현재 대상·버전·원문·텍스트·프로필을 확인하는 bounded affinity 개발 CLI와 회귀23개를 추가했습니다. 첫 실제512벡터 계산에서는 읽기용 WAL 파일 생성 때문에 보존 검사가 실패했고, 최종 reader는 WAL 파일이 없으면 조회 전에 멈춥니다. 최종 reader의 현재 DB 실행과 의미 군집 UI 통합은 아직 검증되지 않았습니다. [실행 단계별 증거와 제한](docs/architecture/alden-semantic-affinity-20261009.md), [힘·방향·의미의 차이와 통합 설계](docs/architecture/alden-semantic-force-review-20261009.md).
+
 ## Alden 0.3.53 — 원본 자동 확인
 
 기존 YouTube 영상 대상의 정기 수집에서 원본 자동 확인을 켤 수 있습니다. 설정한 주기에 Aside native API로 영상 정보·트랙·한국어 자막을 새로 취득한 뒤 검증·저장·원문 보관·색인을 이어갑니다. 실패하면 마지막 확인 자료를 보존하고 이전 자료를 새 취득 성공으로 표시하지 않습니다. 중지·음성 우선·비상 중단과 대상별 재시도 간격을 지키며, 이미 받은 자료의 저장·색인 복구는 외부 조회를 반복하지 않습니다. [취득·설정·복구 경계](docs/architecture/alden-automatic-acquisition-20261009.md)
