@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden/docs/architecture/alden-0.3.49/evaluation.workflow.json",
+  "output": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden/docs/architecture/alden-0.3.49/evaluation.html",
+  "specification": {
+    "sha256": "7932de7535853d5b7550583692e5f670a2d19797660979c26295b3be93a10b60",
+    "bytes": 2989
+  },
+  "artifact": {
+    "sha256": "355b4b13e80170510543dba2c5a5869419aa7ff88c8bdf10534fde57abdfe0a6",
+    "bytes": 803357
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  }
+}

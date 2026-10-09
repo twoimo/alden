@@ -1,0 +1,129 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.49 · MCP 범위와 호스트",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "mcp_input",
+      "label": "입력·처리 경로"
+    },
+    {
+      "id": "mcp_checks",
+      "label": "검증·확정 경로"
+    }
+  ],
+  "mainPath": [
+    "mcp_0",
+    "mcp_1",
+    "mcp_2",
+    "mcp_3",
+    "mcp_4",
+    "mcp_5"
+  ],
+  "nodes": [
+    {
+      "id": "mcp_0",
+      "lane": "mcp_input",
+      "col": 0,
+      "type": "backend",
+      "label": "스킬·자료 입력",
+      "sublabel": "로컬 ChatGPT·Aside 선언 범위",
+      "width": 170
+    },
+    {
+      "id": "mcp_1",
+      "lane": "mcp_checks",
+      "col": 0,
+      "type": "security",
+      "label": "호스트 인계",
+      "sublabel": "지원 export·세션 artifact",
+      "width": 170
+    },
+    {
+      "id": "mcp_2",
+      "lane": "mcp_input",
+      "col": 1,
+      "type": "backend",
+      "label": "출처 대사",
+      "sublabel": "origin·run·원본 ID·SHA",
+      "width": 170
+    },
+    {
+      "id": "mcp_3",
+      "lane": "mcp_checks",
+      "col": 1,
+      "type": "backend",
+      "label": "범위 지정 MCP",
+      "sublabel": "설치 MCP · 시작 프로젝트 제한",
+      "width": 170
+    },
+    {
+      "id": "mcp_4",
+      "lane": "mcp_input",
+      "col": 2,
+      "type": "security",
+      "label": "읽기·검색",
+      "sublabel": "collection graph·history·RRF",
+      "width": 170
+    },
+    {
+      "id": "mcp_5",
+      "lane": "mcp_checks",
+      "col": 2,
+      "type": "backend",
+      "label": "반환·확인",
+      "sublabel": "실제 표본 인계·ACK",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "id": "mcp_e0",
+      "from": "mcp_0",
+      "to": "mcp_1",
+      "label": "선택한 자료",
+      "role": "main"
+    },
+    {
+      "id": "mcp_e1",
+      "from": "mcp_1",
+      "to": "mcp_2",
+      "label": "파일·영수증",
+      "role": "main"
+    },
+    {
+      "id": "mcp_e2",
+      "from": "mcp_2",
+      "to": "mcp_3",
+      "label": "허용 프로젝트",
+      "role": "main"
+    },
+    {
+      "id": "mcp_e3",
+      "from": "mcp_3",
+      "to": "mcp_4",
+      "label": "읽기 전용",
+      "role": "main"
+    },
+    {
+      "id": "mcp_e4",
+      "from": "mcp_4",
+      "to": "mcp_5",
+      "label": "결과 영수증",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "확인된 경로와 남은 검증",
+      "items": [
+        "실제 표본 인계·ACK",
+        "전역 OSK 양 호스트 쓰기·충돌 검증 미완료"
+      ]
+    }
+  ]
+}
