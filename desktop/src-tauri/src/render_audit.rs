@@ -679,8 +679,8 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
     let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
       return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
         displayedNodes:d?.nodeCount??0,physics:d?.physics??null,
-        semantic:window.__knowledgeView?.semanticLayout??null,
-        affinity:window.__knowledgeView?.graphRead?.affinity??null};})())"#;
+        semantic:d?.semanticLayout??null,
+        affinity:d?.graphRead?.affinity??null};})())"#;
     let before = collect_script(window, script.into(), deadline)?;
     let bound = deadline.min(Instant::now() + Duration::from_secs(15));
     let rested = loop {
