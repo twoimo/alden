@@ -174,7 +174,7 @@ class BridgeStub(unittest.TestCase):
                 "knowledge-graph-focus",
                 "room-upsert", "room-delete", "room-catalog",
                 "history-rooms", "history-messages", "voice-history-sessions", "voice-history-messages", "db-sync-history",
-                "collection-history", "collection-graph", "collection-projects",
+                "collection-history", "collection-graph", "collection-affinity", "collection-projects",
                 "collection-scheduler-status", "collection-scheduler-control",
                 "routed-models", "routed-model-set",
                 "reply-history", "geeknews-history",

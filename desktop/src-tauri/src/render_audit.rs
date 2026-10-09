@@ -745,7 +745,8 @@ fn graph_step(
     };
     collect_script(window, format!("{script};{GRAPH_COLLECT}"), deadline)?;
     std::thread::sleep(Duration::from_millis(250));
-    let settle = Instant::now() + Duration::from_secs(5);
+    // Match bounded source-read budgets; readiness is observed, never forced.
+    let settle = deadline.min(Instant::now() + Duration::from_secs(25));
     loop {
         let state = collect_script(window, GRAPH_COLLECT.into(), deadline)?;
         let graph_pending = collect_script(window,"JSON.stringify({pending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중'})".into(),deadline)?;
