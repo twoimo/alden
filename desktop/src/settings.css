@@ -181,6 +181,8 @@ body.settings-view #app { height: 100%; min-height: 0; }
 .collection-interval { font-size:11px; color:var(--muted); }
 .collection-interval summary { cursor:pointer; padding:7px 0; }
 .collection-interval > div { display:flex; align-items:center; gap:6px; }
+.collection-source-toggle { margin-top:6px; max-width:155px; font-size:11px; }
+.collection-source-toggle[hidden] { display:none; }
 .collection-interval select { max-width:92px; padding:6px; font:inherit; color:var(--text); background:var(--surface); border:1px solid var(--border); }
 @media(max-width:800px) { .collection-schedule-targets .collection-target-actions { grid-column:2; grid-row:1 / span 3; max-width:155px; } }
 @media(max-width:800px) { .collection-schedule-targets li { grid-template-columns:minmax(0,1fr) auto; gap:5px 12px; } .collection-schedule-targets strong { grid-column:1; } .collection-schedule-targets span { grid-column:1; } .collection-schedule-targets button { grid-column:2; grid-row:1 / span 3; } }

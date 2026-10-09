@@ -11,6 +11,25 @@ beforeEach(()=>{vi.useFakeTimers();document.body.innerHTML='<section id="setting
 afterEach(()=>{for(const component of owned.splice(0))component.dispose();vi.useRealTimers();document.body.replaceChildren();});
 const setup=(load:ReturnType<typeof vi.fn<typeof fetchSettingsAction>>)=>{const component=wireCollectionSchedule(load);owned.push(component);component.select('history');return component;};
 describe('native collection schedule',()=>{
+  it('uses the observed source policy revision and changes no interval when toggled',async()=>{
+    const first=result({targets:[{...result().targets[0],acquisition_supported:true,acquisition:{enabled:false,revision:4}}]});
+    const changed=result({targets:[{...result().targets[0],acquisition_supported:true,acquisition:{enabled:true,revision:5},last_acquisition:'2026-10-09T08:00:00Z'}]});
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(first).mockResolvedValue(changed);
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    const source=document.querySelector<HTMLButtonElement>('.collection-source-toggle')!;
+    expect(source.hidden).toBe(false);source.click();source.click();await vi.advanceTimersByTimeAsync(0);
+    expect(load.mock.calls.filter(call=>call[0]==='collection-scheduler-control')).toHaveLength(1);
+    expect(JSON.parse(load.mock.calls.at(-1)![1]!.query!)).toEqual({operation:'acquisition',target_id:'target-a',enabled:true,expected_revision:4});
+    expect(source.textContent).toContain('끄기');expect(document.body.textContent).toContain('원본 확인됨');
+  });
+  it('keeps source controls absent for unsupported targets and requires verified readback',async()=>{
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(result()).mockResolvedValue({ok:false});
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    const source=document.querySelector<HTMLButtonElement>('.collection-source-toggle')!;
+    expect(source.hidden).toBe(true);expect(source.disabled).toBe(true);
+    source.click();expect(load.mock.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(15000);expect(source.disabled).toBe(true);
+  });
   it('queues one explicit manual request and disables duplicate clicks while waiting',async()=>{
     const pending=result({targets:[{...result().targets[0],manual_pending:true}]});
     const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(result()).mockResolvedValue(pending);

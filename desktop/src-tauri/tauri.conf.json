@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.52",
+  "version": "0.3.53",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -111,6 +111,7 @@
       "bundle-resources/scripts/alden_knowledge_mcp.py": "scripts/alden_knowledge_mcp.py",
       "bundle-resources/scripts/alden_collect.py": "scripts/alden_collect.py",
       "bundle-resources/scripts/alden_collection_scheduler.py": "scripts/alden_collection_scheduler.py",
+      "bundle-resources/scripts/alden_source_acquisition.py": "scripts/alden_source_acquisition.py",
       "bundle-resources/scripts/alden_model_routes.py": "scripts/alden_model_routes.py",
       "bundle-resources/scripts/alden_routed_llm.py": "scripts/alden_routed_llm.py"
     }

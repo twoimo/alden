@@ -2,9 +2,9 @@ import { fetchSettingsAction } from './runtime';
 import type { SettingsPage } from './settings-navigation';
 
 type Row = Record<string, unknown>;
-type Operation = 'pause' | 'resume' | 'interval' | 'run';
+type Operation = 'pause' | 'resume' | 'interval' | 'run' | 'acquisition';
 type Entry = {row:HTMLElement;label:HTMLElement;next:HTMLElement;last:HTMLElement;button:HTMLButtonElement;
-  run:HTMLButtonElement;interval:HTMLSelectElement;save:HTMLButtonElement;dirty:boolean};
+  run:HTMLButtonElement;source:HTMLButtonElement;interval:HTMLSelectElement;save:HTMLButtonElement;dirty:boolean};
 const records = (value: unknown): Row[] => Array.isArray(value)
   ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item)) : [];
 const time = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0
@@ -37,6 +37,7 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
     for(const entry of entries.values()){
       const disabled=busy||!verified||aborted||entry.button.dataset.excluded==='true';
       entry.button.disabled=disabled;entry.interval.disabled=disabled;entry.save.disabled=disabled||!entry.dirty;
+      entry.source.disabled=disabled||entry.source.hidden;
       entry.run.disabled=disabled||globalPaused||entry.run.dataset.blocked==='true';
     }
   };
@@ -71,12 +72,15 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
         for(const [seconds,text] of [[900,'15분'],[3600,'1시간'],[10800,'3시간'],[21600,'6시간'],[43200,'12시간'],[86400,'1일'],[259200,'3일'],[604800,'7일'],[2592000,'30일']] as const){
           const option=document.createElement('option');option.value=String(seconds);option.textContent=text;interval.append(option);
         }
-        fields.append(interval,save);editor.append(fields);button.type='button';actions.append(button,run,editor);
-        row.append(label,next,last,actions);list.append(row);entry={row,label,next,last,button,run,interval,save,dirty:false};entries.set(id,entry);
+        const source=document.createElement('button');source.type='button';source.className='collection-source-toggle';source.hidden=true;
+        fields.append(interval,save);editor.append(fields,source);button.type='button';actions.append(button,run,editor);
+        row.append(label,next,last,actions);list.append(row);entry={row,label,next,last,button,run,interval,save,source,dirty:false};entries.set(id,entry);
         button.addEventListener('click',()=>void change(button.dataset.operation==='resume'?'resume':'pause',id),{signal:listeners.signal});
         run.addEventListener('click',()=>{if(!run.disabled)void change('run',id,{request_id:crypto.randomUUID()});},{signal:listeners.signal});
         interval.addEventListener('change',()=>{const current=entries.get(id);if(current){current.dirty=true;controls();}},{signal:listeners.signal});
         save.addEventListener('click',()=>{if(!save.disabled)void change('interval',id,{interval_seconds:Number(interval.value),expected_interval:Number(interval.dataset.expected)});},{signal:listeners.signal});
+        source.addEventListener('click',()=>{if(!source.disabled)void change('acquisition',id,
+          {enabled:source.dataset.enabled!=='true',expected_revision:Number(source.dataset.revision)});},{signal:listeners.signal});
       }
       entry.label.textContent=String(target.label??'수집 대상');
       const hours=Number(target.interval_seconds)/3600;
@@ -86,6 +90,14 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
       const nextAt=target.last_state&&target.last_state!=='complete'&&retry>0?retry:Number(target.next_run)||0;
       entry.next.textContent=`${interval} · ${target.permitted===0?'접근 확인 필요':target.enabled===0?'대상 제외':aborted||globalPaused||paused?'중지됨':blocked?'확인 후 재개':target.manual_pending===true?'재실행 대기':nextAt<=Date.now()/1000?'실행 대기':'다음 '+time(nextAt)}`;
       entry.last.textContent=`최근 ${lastStates[String(target.last_state)]??'결과 미확인'} · ${time(target.last_finished??target.last_success)}`;
+      const acquisition=target.acquisition&&typeof target.acquisition==='object'?target.acquisition as Row:{};
+      entry.source.hidden=target.acquisition_supported!==true&&acquisition.enabled!==true;
+      entry.source.dataset.enabled=String(acquisition.enabled===true);entry.source.dataset.revision=String(acquisition.revision??0);
+      entry.source.textContent=acquisition.enabled===true?'원본 자동 확인 끄기':'원본 자동 확인 켜기';
+      entry.source.setAttribute('aria-label',String(target.label??'수집 대상')+' '+entry.source.textContent);
+      entry.source.title='Aside가 연결된 동안 설정한 주기에 영상 정보와 자막을 새로 확인합니다.';
+      if(acquisition.enabled===true)entry.last.textContent+=' · '+(target.last_stage==='acquisition'&&target.acquisition_error
+        ?'원본 접근 확인 필요':target.last_acquisition?'원본 확인됨':'원본 확인 대기');
       entry.button.dataset.operation=paused||blocked?'resume':'pause';entry.button.textContent=paused||blocked?'재개':'중지';
       entry.button.dataset.excluded=String(target.enabled===0||target.permitted===0);
       entry.button.setAttribute('aria-label',String(target.label??'수집 대상')+' 수집 '+entry.button.textContent);

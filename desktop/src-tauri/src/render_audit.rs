@@ -191,6 +191,8 @@ impl Output {
                 | "workspace-history-compact.png"
                 | "collection-schedule-default.png"
                 | "collection-schedule-compact.png"
+                | "collection-source-default.png"
+                | "collection-source-compact.png"
                 | "workspace-settings-compact.png"
                 | "settings-layout.json"
                 | "workspace-readback.json"
@@ -594,8 +596,22 @@ fn capture_workspaces(
                 &snapshot(window, deadline)?,
                 deadline,
             )?;
+            let source_control = collect_script(window, r#"JSON.stringify((()=>{
+              const source=document.querySelector('.collection-source-toggle:not([hidden])');
+              const editor=source?.closest('details');if(editor)editor.open=true;
+              source?.closest('li')?.scrollIntoView({block:'center'});return {ready:!!source};
+            })())"#.into(), deadline)?;
+            if source_control["ready"].as_bool().unwrap_or(false) {
+                std::thread::sleep(Duration::from_millis(100));
+                publish(
+                    output,
+                    &format!("collection-source-{size}.png"),
+                    &snapshot(window, deadline)?,
+                    deadline,
+                )?;
+            }
             collect_script(window, r#"JSON.stringify((()=>{
-              const editor=document.querySelector('.collection-schedule .collection-interval');if(editor)editor.open=false;
+              for(const editor of document.querySelectorAll('.collection-schedule .collection-interval'))editor.open=false;
               document.querySelector('#settings-page-history .settings-page-heading')?.scrollIntoView({block:'start'});
               return {restored:true};
             })())"#.into(), deadline)?;

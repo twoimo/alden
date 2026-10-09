@@ -45,8 +45,22 @@ def json_snapshot(path: Path, *, include_raw=False):
     return (*result, raw) if include_raw else result
 
 
+def input_destination(store, target):
+    destination = Path(target['config']['path']).absolute()
+    root = (store.root.parent / 'acquisition-inputs').absolute()
+    if destination.name != 'current.json' or not destination.is_relative_to(root):
+        raise ValueError('collection_input_destination_outside_scope')
+    if any(p.is_symlink() for p in [*destination.parents, destination]):
+        raise ValueError('collection_source_symlink')
+    safe_directory(destination.parent)
+    owner = destination.parent.stat()
+    if owner.st_uid != os.geteuid() or stat.S_IMODE(owner.st_mode) & 0o077:
+        raise ValueError('collection_input_destination_not_private')
+    return destination
+
+
 def receive_input(store: CollectionStore, target_id: str, source_path: Path,
-                  expected_current_sha256: str, *, token: AbortToken):
+                  expected_current_sha256: str, *, token: AbortToken, publication_guard=None):
     """Receive fresh host bytes for one existing sample; never collect/index.
 
     Target registration, project scope, schedules and checkpoints are unchanged.
@@ -63,16 +77,7 @@ def receive_input(store: CollectionStore, target_id: str, source_path: Path,
         adapter = target['config'].get('adapter')
         if adapter not in {'youtube-video', 'threads-post'}:
             raise ValueError('collection_input_sample_scope_required')
-        destination = Path(target['config']['path']).absolute()
-        root = (store.root.parent / 'acquisition-inputs').absolute()
-        if destination.name != 'current.json' or not destination.is_relative_to(root):
-            raise ValueError('collection_input_destination_outside_scope')
-        if any(p.is_symlink() for p in [*destination.parents, destination]):
-            raise ValueError('collection_source_symlink')
-        safe_directory(destination.parent)
-        owner = destination.parent.stat()
-        if owner.st_uid != os.geteuid() or stat.S_IMODE(owner.st_mode) & 0o077:
-            raise ValueError('collection_input_destination_not_private')
+        destination = input_destination(store, target)
         incoming, source, raw = json_snapshot(source_path, include_raw=True)
         previous, old_source, old_raw = json_snapshot(destination, include_raw=True)
         handler = youtube_video_snapshot if adapter == 'youtube-video' else threads_post_snapshot
@@ -120,7 +125,7 @@ def receive_input(store: CollectionStore, target_id: str, source_path: Path,
         try:
             with os.fdopen(fd, 'wb') as handle:
                 handle.write(raw); handle.flush(); os.fsync(handle.fileno())
-            with token.commit_guard():
+            with publication_guard() if publication_guard is not None else token.commit_guard():
                 _, current = json_snapshot(destination)
                 if current['sha256'] != expected_current_sha256:
                     raise RuntimeError('collection_input_current_changed')

@@ -21,6 +21,7 @@ from alden_abort import AbortToken, ABORT_STATE_NAME, AldenCancelled
 from alden_collection import CollectionStore, TargetBusy, safe_directory
 from alden_collect import collect_target, capture_source
 from alden_collection_retrieval import index_dense
+from alden_source_acquisition import PROVIDER, acquire_input, supported, host_cli
 
 AGENT_LABEL='com.openkakao.alden.collection'
 INSTALLED_APP=Path('/Applications/Alden.app')
@@ -53,7 +54,8 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
         operation=options.get('operation')
         fields={'pause':{'operation','target_id'},'resume':{'operation','target_id'},
                 'interval':{'operation','target_id','interval_seconds','expected_interval'},
-                'run':{'operation','target_id','request_id'}}
+                'run':{'operation','target_id','request_id'},
+                'acquisition':{'operation','target_id','enabled','expected_revision'}}
         if not isinstance(operation,str) or operation not in fields or set(options)-fields[operation]:
             raise ValueError('collection_scheduler_control_invalid')
         target=options.get('target_id')
@@ -69,6 +71,7 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
             store=CollectionStore.open_existing(Path(state_root))
             if store is None:raise ValueError('collection_target_missing')
             CollectionStore(Path(state_root)).update_interval(target,options['interval_seconds'],options['expected_interval'])
+        elif operation=='acquisition':scheduler.update_acquisition(target,options.get('enabled'),options.get('expected_revision'))
         else:scheduler.request_run(target,options.get('request_id'))
     elif options:raise ValueError('collection_scheduler_query_invalid')
     data=scheduler.status(limit=200)
@@ -76,7 +79,7 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
     declared=[];total=0
     if store:
         with store.database() as db:
-            declared=[dict(row) for row in db.execute('''SELECT t.id,t.label,t.platform,t.enabled,t.interval_seconds,t.next_run,t.last_success,
+            declared=[dict(row) for row in db.execute('''SELECT t.id,t.label,t.platform,t.kind,t.original_id,t.config,t.enabled,t.interval_seconds,t.next_run,t.last_success,
               EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied') AS permitted
               FROM targets t ORDER BY t.label,t.id LIMIT 200''')]
             total=db.execute('SELECT COUNT(*) FROM targets').fetchone()[0]
@@ -88,11 +91,17 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
     for target in declared:
         state=states.get(target['id'],{});last=latest.get(target['id'],{})
         stage=(last.get('result') or {}).get('finished_stage')
+        available=supported({**target,'config':json.loads(target['config'])});target.pop('config');target.pop('original_id');target.pop('kind')
+        policy=scheduler.acquisition_policy(target['id'])
+        acquired=(last.get('result') or {}).get('acquisition')
         targets.append({**target,'paused':bool(controls.get(target['id'])),
             'manual_pending':target['id'] in data.get('manual_pending',[]),
             'blocked':bool(state.get('blocked')),'retry_at':state.get('retry_at',0),
             'last_state':last.get('state'),'last_started':last.get('started'),'last_finished':last.get('finished'),
-            'last_stage':stage if stage in {'collection','capture','index'} else None})
+            'last_stage':stage if stage in {'acquisition','collection','capture','index'} else None,
+            'acquisition_supported':available,'acquisition':policy,
+            'last_acquisition':acquired.get('observed_at') if isinstance(acquired,dict) else None,
+            'acquisition_error':last.get('error') if stage=='acquisition' else None})
     aborted=AbortToken(Path(state_root)/ABORT_STATE_NAME).is_cancelled()
     return {'ok':True,'state':data['state'],'global_paused':bool(controls.get('global')),
             'abort_latched':aborted,'targets':targets,'total_targets':total,'time_zone':time.tzname[0],
@@ -161,6 +170,12 @@ class CollectionScheduler:
         if not self.path.exists():
             fd=os.open(self.path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
         db=sqlite3.connect(self.path,timeout=5);db.row_factory=sqlite3.Row
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='controls'").fetchone() and not db.execute("SELECT 1 FROM sqlite_master WHERE name='acquisition_policy'").fetchone():
+            backup=self.folder/('scheduler.before-acquisition-'+uuid.uuid4().hex+'.sqlite3')
+            fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
+            with sqlite3.connect(backup) as recovery:
+                db.backup(recovery)
+                if recovery.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise RuntimeError('collection_scheduler_backup_invalid')
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='controls'").fetchone() and not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_requests'").fetchone():
             backup=self.folder/('scheduler.before-manual-'+uuid.uuid4().hex+'.sqlite3')
             fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
@@ -176,10 +191,51 @@ class CollectionScheduler:
           CREATE TABLE IF NOT EXISTS manual_requests(id TEXT PRIMARY KEY,target_id TEXT NOT NULL,
             requested_at REAL NOT NULL,state TEXT NOT NULL,attempt_id TEXT,finished_at REAL);
           CREATE UNIQUE INDEX IF NOT EXISTS manual_active_target ON manual_requests(target_id) WHERE state IN ('queued','running');
+          CREATE TABLE IF NOT EXISTS acquisition_policy(target_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,
+            provider TEXT NOT NULL,revision INTEGER NOT NULL);
           INSERT OR IGNORE INTO controls VALUES('global',0);''')
         try:yield db;db.commit()
         except BaseException:db.rollback();raise
         finally:db.close()
+
+    def acquisition_policy(self,target_id):
+        default={'enabled':False,'provider':PROVIDER,'revision':0}
+        if not self.path.exists():return default
+        if any(p.is_symlink() for p in [self.path,*self.path.parents]):raise ValueError('collection_scheduler_state_unsafe')
+        with sqlite3.connect(self.path.absolute().as_uri()+'?mode=ro',uri=True,timeout=.15) as db:
+            db.execute('PRAGMA query_only=ON')
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE name='acquisition_policy'").fetchone():return default
+            row=db.execute('SELECT enabled,provider,revision FROM acquisition_policy WHERE target_id=?',(target_id,)).fetchone()
+            if row is None:return default
+            if row[0] not in (0,1) or row[1]!=PROVIDER or type(row[2]) is not int or not 1<=row[2]<=9007199254740991:
+                raise ValueError('collection_acquisition_policy_invalid')
+            return {'enabled':bool(row[0]),'provider':row[1],'revision':row[2]}
+
+    def update_acquisition(self,target_id,enabled,expected_revision):
+        if type(enabled) is not bool or type(expected_revision) is not int or not 0<=expected_revision<9007199254740991:
+            raise ValueError('collection_acquisition_control_invalid')
+        store=CollectionStore.open_existing(self.state_root)
+        if store is None:raise ValueError('collection_target_missing')
+        target=store.target(target_id)
+        with self.control_lock():
+            prior=self.acquisition_policy(target_id)
+            if prior['revision']!=expected_revision:raise ValueError('collection_acquisition_policy_changed')
+            if enabled:
+                if not supported(target):raise ValueError('collection_acquisition_target_unsupported')
+                if not target['enabled'] or not any(p['permission']!='denied' for p in target['projects']):
+                    raise ValueError('collection_source_scope_denied')
+                host_cli()
+            if prior['enabled']==enabled:return {'state':'unchanged','policy':prior}
+            raw=json.dumps({'target_id':target_id,**prior},sort_keys=True).encode()
+            folder=safe_directory(self.folder/'acquisition-policy-backups')
+            path=folder/(hashlib.sha256(raw).hexdigest()+'.json')
+            if not path.exists():
+                fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
+                with os.fdopen(fd,'wb') as handle:handle.write(raw);handle.flush();os.fsync(handle.fileno())
+            if path.is_symlink() or path.read_bytes()!=raw:raise RuntimeError('collection_acquisition_backup_invalid')
+            with self.database() as db:
+                db.execute('INSERT OR REPLACE INTO acquisition_policy VALUES(?,?,?,?)',(target_id,int(enabled),PROVIDER,expected_revision+1))
+            return {'state':'saved','policy':self.acquisition_policy(target_id),'backup':str(path)}
 
     @contextmanager
     def control_lock(self):
@@ -264,7 +320,7 @@ class CollectionScheduler:
         finally:db.close()
 
     def cycle(self, *, max_targets=1, max_seconds=300, target_id=None, collector=collect_target,
-              capturer=capture_source, indexer=index_dense, now=None, token=None):
+              capturer=capture_source, indexer=index_dense, acquirer=acquire_input, now=None, token=None):
         if type(max_targets) is not int or not 1<=max_targets<=16 or type(max_seconds) is not int or not 1<=max_seconds<=3600:
             raise ValueError('collection_scheduler_budget_invalid')
         store=CollectionStore.open_existing(self.state_root)
@@ -308,6 +364,11 @@ class CollectionScheduler:
                 previous=retry.get(target_id,{})
                 if previous.get('blocked') or previous.get('retry_at',0)>stamp or self._paused(target_id):continue
                 if token.is_cancelled() or self._paused():break
+                with self.database() as db:
+                    prior=db.execute("SELECT state,result FROM attempts WHERE target_id=? ORDER BY started DESC,id DESC LIMIT 1",(target_id,)).fetchone()
+                prior_result=json.loads(prior['result']) if prior and prior['state']!='complete' and prior['result'] else {}
+                policy=self.acquisition_policy(target_id)
+                policy_revision=policy['revision'] if policy['enabled'] else None
                 attempt=uuid.uuid4().hex
                 with self.database() as db:db.execute('INSERT INTO attempts VALUES(?,?,?,?,NULL,?,NULL,NULL)',(attempt,cycle,target_id,time.time(),'running'))
                 if target_id in manual:
@@ -317,16 +378,34 @@ class CollectionScheduler:
                     if token.is_cancelled() or time.monotonic()-started>=max_seconds:return True
                     current=time.monotonic()
                     if current-pause_check[0]>=.25:
-                        pause_check[:]=[current,self._paused(target_id) or self._voice_busy()]
+                        pause_check[:]=[current,self._paused(target_id) or self._voice_busy()
+                            or policy_revision is not None and self.acquisition_policy(target_id)!=policy]
                     return pause_check[1]
                 @contextmanager
                 def publication_guard():
                     with self.control_lock(), token.commit_guard():
                         if self._paused(target_id) or self._voice_busy() or time.monotonic()-started>=max_seconds:
                             raise AldenCancelled('collection_scheduler_paused')
+                        if policy_revision is not None and self.acquisition_policy(target_id)!=policy:
+                            raise AldenCancelled('collection_acquisition_policy_changed')
                         yield
                 state='complete';error=None;result={};stage='collection'
                 try:
+                    if policy['enabled']:
+                        stage='acquisition'
+                        prior_acquisition=prior_result.get('acquisition')
+                        if isinstance(prior_acquisition,dict) and prior_acquisition.get('policy_revision')==policy_revision:
+                            from alden_collect import json_snapshot
+                            _,current=json_snapshot(Path(store.target(target_id)['config']['path']))
+                            if current['sha256']==prior_acquisition.get('source_sha256'):
+                                result['acquisition']={**prior_acquisition,'reused_for_recovery':True,'native_reads_this_attempt':0}
+                        if 'acquisition' not in result:
+                            result['acquisition']=acquirer(store,target_id,policy,token=token,cancelled=cancelled,
+                                timeout=max(1,max_seconds-(time.monotonic()-started)),publication_guard=publication_guard)
+                        result['finished_stage']='acquisition'
+                        with self.database() as db:db.execute('UPDATE attempts SET result=? WHERE id=?',(json.dumps(result,ensure_ascii=False),attempt))
+                        if cancelled():raise AldenCancelled('collection_acquisition_cancelled')
+                    stage='collection'
                     result['collection']=collector(store,target_id,cancelled=cancelled,publication_guard=publication_guard)
                     if cancelled():raise AldenCancelled('collection_scheduler_cancelled')
                     stage='capture';result['capture']=capturer(store,target_id,cancelled=cancelled)
