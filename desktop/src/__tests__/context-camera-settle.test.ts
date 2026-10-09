@@ -73,7 +73,7 @@ describe('context overview camera lifecycle', () => {
     Object.assign(hologram, {
       disposed: false, view, graph, anchors: positions, positions,
       displayedPositions: positions, viewport: { x: 0, y: 0, width: 200, height: 470 },
-      camera, orbit, desiredCamera: new THREE.Vector3(), desiredLookAt: new THREE.Vector3(),
+      camera, orbit, projected: new THREE.Vector3(), desiredCamera: new THREE.Vector3(), desiredLookAt: new THREE.Vector3(),
       lookAt: new THREE.Vector3(), motion: { matches: false }, paused: false,
       plasticity, synapses,overviewSynapses,constellationNodes,globalLabels:new Set(),neuronDetail:false, nebulae, nodeMeshes: new Map(), orbMeshes: new Map(),
       loop, voiceEnvelope, latestVoice: null, labels: new Map(), renderer, scene,

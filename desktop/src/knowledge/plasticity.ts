@@ -62,6 +62,8 @@ export class PlasticityLayout {
   private maxSpeed = 0;
   private maxForce = 0;
   private maxPositionSpeed = 0;
+  private visualRestSpeed = 0.000001;
+  private visualRestForce = 0.025;
   private simulatedSeconds = 0;
 
   /** Capacities are floored and clamped to [0, maximum]; non-finite values use the defaults. */
@@ -121,6 +123,18 @@ export class PlasticityLayout {
 
   forEachPoint(apply: (id: string, x: number, y: number, z: number) => void): void {
     for (let i = 0; i < this.ids.length; i++) apply(this.ids[i], this.coordinates[i * 3], this.coordinates[i * 3 + 1], this.coordinates[i * 3 + 2]);
+  }
+
+  /** Conservative world units per CSS pixel supplied by the visible camera.
+   * Less than 0.05 pixel/second is display rest, never force equilibrium. */
+  setDisplayScale(unitsPerPixel: number): void {
+    const previous = this.visualRestSpeed;
+    const valid = Number.isFinite(unitsPerPixel) && unitsPerPixel > 0;
+    this.visualRestSpeed = valid ? Math.min(0.0002, unitsPerPixel * 0.05) : 0.000001;
+    this.visualRestForce = valid ? 0.05 : 0.025;
+    if (!this.moving && this.ids.length > 0 && this.visualRestSpeed < previous && this.maxPositionSpeed > this.visualRestSpeed) {
+      this.quietSteps = 0; this.moving = true;
+    }
   }
 
   advance(dt: number): boolean {
@@ -198,8 +212,8 @@ export class PlasticityLayout {
     // velocity while the rendered coordinates are already stationary.
     // Require low force, low latent velocity and measured post-projection
     // movement in display units/second; a turning point alone cannot rest.
-    const visuallyStill = this.maxSpeed < 0.003 && this.maxPositionSpeed < 0.000001;
-    if ((this.maxSpeed < 0.0015 || visuallyStill) && this.maxForce < 0.025) this.quietSteps++; else this.quietSteps = 0;
+    const visuallyStill = this.maxSpeed < 0.003 && this.maxForce < this.visualRestForce && this.maxPositionSpeed < this.visualRestSpeed;
+    if ((this.maxSpeed < 0.0015 && this.maxForce < 0.025) || visuallyStill) this.quietSteps++; else this.quietSteps = 0;
     if (this.quietSteps >= 12) { this.velocity.fill(0); this.moving = false; }
   }
 }

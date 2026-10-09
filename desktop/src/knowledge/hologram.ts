@@ -671,8 +671,17 @@ export class KnowledgeHologram {
 
   private render(dt: number): void {
     if (this.disposed) return;
-    const pointsMoving = this.plasticity.moving;
     const elapsed = Math.min(.25, Math.max(0, dt));
+    // Physics points stay within the 2.3-unit envelope. Use a larger bound
+    // to underestimate pixel size for the nearest possible point, including
+    // orbit/zoom, so a visible drift cannot be hidden by the rest criterion.
+    this.camera.getWorldDirection(this.projected);
+    const nearestDepth = Math.max(this.camera.near, -this.camera.position.dot(this.projected) - 3);
+    const halfFovTangent = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
+    // Include perspective motion from depth changes at the viewport corners.
+    const perspectiveBound = Math.hypot(1, halfFovTangent * Math.hypot(1, this.camera.aspect));
+    this.plasticity.setDisplayScale(2 * nearestDepth * halfFovTangent / (Math.max(1, this.viewport.height) * perspectiveBound));
+    const pointsMoving = this.plasticity.moving;
     if (this.reducedMotionEnabled && this.plasticity.moving) this.plasticity.settle();
     else if (!this.paused) this.plasticity.advance(elapsed);
     this.plasticity.forEachPoint(this.syncPoint);
