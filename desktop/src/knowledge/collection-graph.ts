@@ -6,8 +6,10 @@ import { knowledgeSignature } from './changes';
 import { KnowledgeRefresh } from './refresh';
 import { unifiedGraph } from './unified-graph';
 import { CollectionActivity } from './collection-activity';
+import { affinityInput, affinityMatches, parseLayoutAffinity, type LayoutAffinity } from './layout-affinity';
 
-type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode' | 'showNodeActivity' | 'clearNodeActivity'>;
+type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode' | 'showNodeActivity' | 'clearNodeActivity'>
+  & { setLayoutAffinity?: (value: LayoutAffinity | null) => void };
 type Navigation = { offset: number; focusId: string | null; hops: number };
 type Viewpoint = { camera: number[]; lookAt: number[] };
 export type GraphAction = 'expand' | 'back' | 'reset' | 'clear';
@@ -24,6 +26,13 @@ export class CollectionGraphController {
   private readonly journal: CollectionActivity;
   private readSequence = 0;
   private lastRead: Record<string, unknown> | null = null;
+  private affinity: LayoutAffinity | null = null;
+  private affinityBusy = false;
+  private affinityPending: { epoch: number; query: Record<string, unknown>; key: string } | null = null;
+  private affinityRequestKey = '';
+  private affinityRequestEpoch = -1;
+  private affinityReadAt = -Infinity;
+  private affinityDiagnostic: Record<string, unknown> = { state: 'not_requested' };
   private active = false;
   private disposed = false;
   private epoch = 0;
@@ -80,7 +89,7 @@ export class CollectionGraphController {
   get canGoBack(): boolean { return this.history.length > 0; }
   get offset(): number { return this.state.offset; }
   get hasMore(): boolean { return this.next !== null; }
-  get readDiagnostics() { return this.lastRead && { ...this.lastRead, navigation: { ...this.state }, navigationPending: this.navigationChanged }; }
+  get readDiagnostics() { return this.lastRead && { ...this.lastRead, navigation: { ...this.state }, navigationPending: this.navigationChanged, affinity: { ...this.affinityDiagnostic } }; }
   get activityDiagnostics() { return this.journal.diagnostics(); }
 
   start(): void {
@@ -92,6 +101,7 @@ export class CollectionGraphController {
   }
 
   stop(): void {
+    this.affinityPending = null;
     this.active = false; this.epoch++; this.refresh.stop(); this.journal.stop();
     if (this.debounce !== null) clearTimeout(this.debounce);
     this.debounce = null;
@@ -137,6 +147,8 @@ export class CollectionGraphController {
   private changeScope(): void {
     if (this.disposed) return;
     this.epoch++; this.refresh.stop(); this.journal.reset(); this.history = [];
+    this.affinity = null; this.affinityPending = null; this.affinityRequestKey = '';
+    this.affinityDiagnostic = { state: 'not_requested' };
     this.state = { offset: 0, focusId: null, hops: 0 }; this.next = null;
     this.navigationChanged = true; this.pendingCamera = undefined; this.signature = '';
     this.applying = true;
@@ -232,6 +244,8 @@ export class CollectionGraphController {
       return;
     }
     const next = parseKnowledgeGraph(payload), signature = knowledgeSignature(next);
+    if (this.affinity && affinityMatches(this.affinity, next.nodes)) next.layoutAffinity = this.affinity;
+    else this.affinity = null;
     this.applying = true;
     if (signature !== this.signature || this.navigationChanged) {
       this.signature = signature;
@@ -247,6 +261,55 @@ export class CollectionGraphController {
     this.setText('knowledge-mode', this.collection ? '수집 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
     this.updateFacets(payload); this.updateTools(); this.describeScope(); this.renderList();
     if (this.collection) this.journal.snapshot(payload.activity_checkpoint, this.graph.currentView.nodes);
+    this.queueAffinity();
+  }
+
+  private queueAffinity(): void {
+    if (!this.collection || !this.active || this.disposed || !this.graph.setLayoutAffinity) return;
+    const references = affinityInput(this.graph.currentGraph.nodes);
+    if (!references.length) return;
+    const query = this.lastRead?.query as Record<string, unknown> | undefined;
+    if (!query) return;
+    const key = JSON.stringify([query, references]);
+    // Ready candidates are revalidated by the local reader periodically;
+    // partial/missing vectors retry on the ordinary 15-second graph refresh.
+    const ttl = this.affinity && this.affinity.usableNodes === this.affinity.requestedNodes ? 60000 : 15000;
+    if (this.affinityRequestEpoch === this.epoch && key === this.affinityRequestKey && Date.now() - this.affinityReadAt < ttl) return;
+    this.affinityPending = { epoch: this.epoch, query, key };
+    void this.readAffinity();
+  }
+
+  private async readAffinity(): Promise<void> {
+    if (this.affinityBusy || !this.affinityPending || !this.active || this.disposed) return;
+    const request = this.affinityPending;
+    this.affinityPending = null; this.affinityBusy = true;
+    this.affinityRequestKey = request.key; this.affinityReadAt = Date.now();
+    this.affinityRequestEpoch = request.epoch;
+    try {
+      const response = await this.load('collection-affinity', { query: JSON.stringify(request.query) });
+      if (!this.active || this.disposed || request.epoch !== this.epoch
+        || request.key !== JSON.stringify([this.lastRead?.query, affinityInput(this.graph.currentGraph.nodes)])) return;
+      const parsed = parseLayoutAffinity(response?.layout_affinity, this.graph.currentGraph.nodes, request.query.projects as string[] | undefined);
+      if (response?.ok !== true) {
+        parsed.affinity = null;
+        parsed.reason = parseLayoutAffinity({ schema: 'alden-layout-affinity-v1', state: 'unavailable', reason: response?.reason }, []).reason;
+      }
+      const signature = (value: LayoutAffinity | null) => value && JSON.stringify([value.inputKey, value.profileKey, value.state, value.pairs]);
+      if (signature(this.affinity) !== signature(parsed.affinity)) this.graph.setLayoutAffinity?.(parsed.affinity);
+      this.affinity = parsed.affinity;
+      this.affinityDiagnostic = this.affinity ? { state: this.affinity.state, usable: this.affinity.usableNodes,
+        requested: this.affinity.requestedNodes, pairs: this.affinity.pairs.length, evaluated: this.affinity.evaluatedPairs,
+        truncated: this.affinity.truncatedCandidates } : { state: 'unavailable', reason: parsed.reason };
+    } catch {
+      if (this.active && !this.disposed && request.epoch === this.epoch
+        && request.key === JSON.stringify([this.lastRead?.query, affinityInput(this.graph.currentGraph.nodes)])) {
+        this.affinity = null; this.graph.setLayoutAffinity?.(null);
+        this.affinityDiagnostic = { state: 'unavailable', reason: 'affinity_transport_failed' };
+      }
+    } finally {
+      this.affinityBusy = false;
+      if (this.active && !this.disposed && this.affinityPending) void this.readAffinity();
+    }
   }
 
   private describeScope(): void {

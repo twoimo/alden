@@ -1147,7 +1147,10 @@ impl PythonBridge {
         )?;
         let is_swap = action == "model-swap";
         let is_mlx_launch = action == MLX_SERVER_LAUNCH_ACTION;
-        let is_history = matches!(action, "history-rooms" | "history-messages");
+        let is_history = matches!(
+            action,
+            "history-rooms" | "history-messages" | "collection-affinity"
+        );
         let swap_job_id = token_id.unwrap_or("model-swap");
         if is_swap {
             self.begin_job(swap_job_id, "model_swap", "swap", 0.9);
@@ -1195,6 +1198,7 @@ impl PythonBridge {
                 | "db-sync-history"
                 | "collection-history"
                 | "collection-graph"
+                | "collection-affinity"
                 | "collection-projects"
                 | "collection-scheduler-status"
                 | "collection-scheduler-control"
@@ -2324,10 +2328,14 @@ fn settings_action_args(
         | "db-sync-history"
         | "collection-history"
         | "collection-graph"
+        | "collection-affinity"
         | "collection-projects"
         | "reply-history"
         | "geeknews-history" => {
             // Read-only history requests; no worker or send action is exposed.
+            if query.is_some() && bounded_arg(query, 4096).is_none() {
+                return Err(BridgeError::ActionNotAllowed);
+            }
             if let Some(value) = bounded_arg(query, 4096) {
                 let parsed: Value =
                     serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
@@ -5421,6 +5429,41 @@ mod tests {
                 None
             )
             .is_ok());
+        }
+    }
+
+    #[test]
+    fn collection_affinity_read_rejects_invalid_query_without_broadening_scope() {
+        let query = r#"{"projects":["one"],"limit":1984,"overview":true}"#;
+        let args = settings_action_args(
+            "collection-affinity",
+            Some(query),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--history-query", query]));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "--explicit-opt-in" || arg == "--model"));
+        for invalid in ["[]".to_owned(), "{broken".to_owned(), "x".repeat(4097)] {
+            assert!(matches!(
+                settings_action_args(
+                    "collection-affinity",
+                    Some(&invalid),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None
+                ),
+                Err(BridgeError::ActionNotAllowed)
+            ));
         }
     }
 

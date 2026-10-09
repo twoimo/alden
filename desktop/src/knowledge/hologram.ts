@@ -11,6 +11,10 @@ import { pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
 import { PlasticityLayout, selectSynapses } from './plasticity';
 import { relationAnchors, relationCenterId } from './relation-layout';
+import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-layout';
+import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
+import { PositionTransition } from './position-transition';
+import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
 import { VoiceAmplitudePoller, type VoiceStatusLoader } from "../voice-amplitude-poller";
@@ -75,6 +79,11 @@ export class KnowledgeHologram {
   private readonly nebulae = new ContextNebulae();
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly plasticity = new PlasticityLayout(OVERVIEW_NODE_CAP,512);
+  private readonly semanticLayout = new SemanticLayoutDriver(result => this.applySemanticLayout(result));
+  private readonly layoutChanged = new Set<string>();
+  private readonly positionTransition = new PositionTransition();
+  private readonly layoutFingerprints = new Map<string, string>();
+  private layoutDiagnostics: SemanticLayoutDiagnostics | null = null;
   private readonly synapses = new SynapticBridges();
   private readonly overviewSynapses = new SynapticBridges(4096,false);
   private readonly constellationNodes = new ConstellationNodes(OVERVIEW_LOD_CAP);
@@ -178,11 +187,13 @@ export class KnowledgeHologram {
   start(): void {
     if (this.disposed) return;
     this.requestedAnimation = true;
+    this.queueSemanticLayout();
     this.updateOrbActivity();
     if (this.view.nodes.length > 0) { this.loop.start(); this.voicePoller?.start(); }
   }
 
   stop(): void {
+    this.semanticLayout.stop();
     this.requestedAnimation = false;
     this.cancelHover();
     this.clearNodeActivity();
@@ -282,6 +293,9 @@ export class KnowledgeHologram {
     if (this.disposed) return;
     this.restoredWindowSize=null;
     const focus = this.view.focusId;
+    if (!graph.nodes.length) {
+      this.semanticLayout.clear(); this.layoutFingerprints.clear(); this.positionTransition.clear();
+    }
     this.graph = graph;
     const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
     const ids = new Set(sorted.map(node => node.id));
@@ -301,6 +315,21 @@ export class KnowledgeHologram {
     else { this.loop.stop(); this.voicePoller?.stop(); this.voiceEnvelope.clear(); this.voiceSource = "none"; }
     this.notifyView();
   }
+
+  /** A geometry-only enrichment. It never rewrites edges, triggers a read
+   * activity event, replaces selection, or refits the user's camera. */
+  setLayoutAffinity(value: LayoutAffinity | null): void {
+    if (this.disposed) return;
+    this.graph.layoutAffinity = value ?? undefined;
+    this.view.layoutAffinity = value ?? undefined;
+    if (this.view.hops !== 0) return;
+    this.layoutPositions(); this.preparePositionMotion();
+    if (this.requestedAnimation) this.loop.start(); this.invalidateFrame();
+  }
+
+  get semanticDiagnostics() { return { worker: this.semanticLayout.diagnostics, layout: this.layoutDiagnostics, pendingTargets: this.positionTransition.pending,
+    affinity: this.graph.layoutAffinity ? { state: this.graph.layoutAffinity.state, pairs: this.graph.layoutAffinity.pairs.length,
+      usable: this.graph.layoutAffinity.usableNodes, requested: this.graph.layoutAffinity.requestedNodes } : null }; }
 
   diagnostics(): AnimationLoopDiagnostics & { regions: ReturnType<ContextNebulae['diagnostics']>; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number } {
     return { ...this.loop.diagnostics(), regions:this.nebulae.diagnostics(), voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
@@ -370,6 +399,7 @@ export class KnowledgeHologram {
     this.disposed = true;
     this.onDispose();
     this.stop();
+    this.semanticLayout.clear(); this.positionTransition.clear(); this.layoutChanged.clear(); this.layoutFingerprints.clear();
     this.canvas.removeEventListener("pointerdown", this.rememberPress);
     this.canvas.removeEventListener("pointerup", this.handlePointerDown);
     this.canvas.removeEventListener('pointermove',this.handleHover);
@@ -394,11 +424,53 @@ export class KnowledgeHologram {
 
   private layoutPositions():void {
     this.anchors.clear();
-    for (const [id, p] of relationAnchors(this.view, this.graph,this.view.hops===0?OVERVIEW_LOD_CAP:24)) {
+    let anchors;
+    if (this.view.hops === 0) {
+      for (const node of this.view.nodes) {
+        const signature = JSON.stringify([node.sourceVersion, node.sourceTarget, node.importance]);
+        if (this.layoutFingerprints.get(node.id) !== signature) this.layoutChanged.add(node.id);
+        this.layoutFingerprints.set(node.id, signature);
+      }
+      const ids = new Set(this.view.nodes.map(node => node.id));
+      for (const id of this.layoutFingerprints.keys()) if (!ids.has(id)) this.layoutFingerprints.delete(id);
+      // Seed only new real nodes cheaply while the worker computes R/S.
+      // Existing visible coordinates remain intact until a verified result.
+      anchors = new Map(this.view.nodes.map(node => [node.id, this.positions.get(node.id) ?? semanticSeedPoint(node.id)]));
+    } else { this.semanticLayout.stop(); anchors = relationAnchors(this.view, this.graph, 24); }
+    for (const [id, p] of anchors) {
       const point = new THREE.Vector3(p.x, p.y, p.z);
       this.anchors.set(id, point);
       if (!this.positions.has(id)) this.positions.set(id, point.clone());
     }
+    this.queueSemanticLayout();
+  }
+
+  private queueSemanticLayout(): void {
+    if (!this.requestedAnimation || this.disposed || this.view.hops !== 0 || !this.view.nodes.length) return;
+    this.semanticLayout.request(this.view, this.positions, this.layoutChanged, new Set(this.view.focusId ? [this.view.focusId] : []));
+  }
+
+  private applySemanticLayout(result: LayoutResponse): void {
+    if (!this.requestedAnimation || this.disposed || this.view.hops !== 0 || !result.anchors) return;
+    const ids = new Set(this.view.nodes.map(node => node.id));
+    if (result.anchors.length !== ids.size || result.anchors.length > 2048 || new Set(result.anchors.map(([id]) => id)).size !== ids.size
+      || result.anchors.some(([id, p]) => !ids.has(id) || ![p.x, p.y, p.z].every(Number.isFinite))) return;
+    this.anchors.clear();
+    for (const [id, p] of result.anchors) this.anchors.set(id, new THREE.Vector3(p.x, p.y, p.z));
+    this.layoutChanged.clear(); this.layoutDiagnostics = result.diagnostics ?? null;
+    this.preparePositionMotion(); this.loop.start(); this.invalidateFrame();
+  }
+
+  private preparePositionMotion(): void {
+    // Selected overview nodes stay fixed while their surrounding geometry
+    // updates. All other displayed nodes receive targets, including late IDs.
+    const view = this.view.hops === 0 && this.view.focusId
+      ? { ...this.view, nodes: this.view.nodes.filter(node => node.id !== this.view.focusId) } : this.view;
+    this.plasticity.setGraph(view, this.anchors, this.positions);
+    const physics = new Set<string>(); this.plasticity.forEachPoint(id => physics.add(id));
+    this.positionTransition.setTargets(this.anchors, this.positions, physics);
+    if (this.reducedMotionEnabled) { this.plasticity.settle(); this.positionTransition.advance(this.positions, 0, true); }
+    this.plasticity.forEachPoint(this.syncPoint);
   }
 
   private rebuildGraph(): void {
@@ -438,9 +510,7 @@ export class KnowledgeHologram {
     }
     this.rootNodeId = relationCenterId(this.view);
 
-    this.plasticity.setGraph(this.view, this.anchors, this.positions);
-    if (this.reducedMotionEnabled) this.plasticity.settle();
-    this.plasticity.forEachPoint(this.syncPoint);
+    this.preparePositionMotion();
     const regions = global?sourceRegions(this.view):contextRegions(this.view, this.graph);
     this.nebulae.set(regions);
     this.canvas.setAttribute('aria-label', global?`${this.view.nodes.length}개 기억의 연결 성도`:`${this.view.nodes.length}개 기억, ${regions.length}개 맥락의 연결 그림`);
@@ -681,9 +751,10 @@ export class KnowledgeHologram {
     // Include perspective motion from depth changes at the viewport corners.
     const perspectiveBound = Math.hypot(1, halfFovTangent * Math.hypot(1, this.camera.aspect));
     this.plasticity.setDisplayScale(2 * nearestDepth * halfFovTangent / (Math.max(1, this.viewport.height) * perspectiveBound));
-    const pointsMoving = this.plasticity.moving;
+    const pointsMoving = this.plasticity.moving || this.positionTransition.moving;
     if (this.reducedMotionEnabled && this.plasticity.moving) this.plasticity.settle();
     else if (!this.paused) this.plasticity.advance(elapsed);
+    if (!this.paused) this.positionTransition.advance(this.positions, elapsed, this.reducedMotionEnabled);
     this.plasticity.forEachPoint(this.syncPoint);
     this.constellationNodes.setMinimumRadius(this.camera.position.distanceTo(this.lookAt)
       * 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) / Math.max(1, this.viewport.height) * .6);
@@ -701,7 +772,7 @@ export class KnowledgeHologram {
     const nodeActivityMoving = this.constellationNodes.advanceActivity(Date.now(), this.reducedMotionEnabled || this.paused);
     if(pointsMoving || this.nebulae.moving) this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
-    this.loop.setInteractive(this.plasticity.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
+    this.loop.setInteractive(this.plasticity.moving||this.positionTransition.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
     const alpha = this.reducedMotionEnabled||this.paused ? 1 : 1 - Math.exp(-12 * elapsed);
     this.camera.position.lerp(this.desiredCamera, alpha);
     this.lookAt.lerp(this.desiredLookAt, alpha);

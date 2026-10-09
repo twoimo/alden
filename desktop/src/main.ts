@@ -729,6 +729,7 @@ export async function bootSettings(
         nodeActivity: graph.nodeActivityDiagnostics,
         activityJournal: collectionGraph?.activityDiagnostics,
         graphRead: collectionGraph?.readDiagnostics,
+        semanticLayout: graph.semanticDiagnostics,
         motionReduced: graph.reducedMotionEnabled,
         focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? graph.currentGraph.nodes.findIndex(node => node.id === graph.currentView.focusId),
         canGoBack: collectionGraph?.collection ? collectionGraph.canGoBack : graph.canGoBack,

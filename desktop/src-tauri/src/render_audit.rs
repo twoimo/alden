@@ -500,6 +500,7 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
                     | "collection-scheduler-status"
                     | "routed-models"
                     | "collection-graph"
+                    | "collection-affinity"
                     | "reply-history"
                     | "geeknews-history"
                     | "room-catalog"
@@ -677,12 +678,27 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
 fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
     let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
       return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
-        displayedNodes:d?.nodeCount??0,physics:d?.physics??null};})())"#;
+        displayedNodes:d?.nodeCount??0,physics:d?.physics??null,
+        semantic:window.__knowledgeView?.semanticLayout??null,
+        affinity:window.__knowledgeView?.graphRead?.affinity??null};})())"#;
     let before = collect_script(window, script.into(), deadline)?;
     let bound = deadline.min(Instant::now() + Duration::from_secs(15));
     let rested = loop {
         let state = collect_script(window, script.into(), deadline)?;
-        if state["physics"]["moving"] == false || Instant::now() >= bound {
+        let worker_ready = matches!(
+            state["semantic"]["worker"]["state"].as_str(),
+            Some("ready" | "cached")
+        );
+        let affinity_ready = matches!(
+            state["affinity"]["state"].as_str(),
+            Some("bounded_ready" | "bounded_partial" | "unavailable")
+        );
+        if (state["physics"]["moving"] == false
+            && state["semantic"]["pendingTargets"] == 0
+            && worker_ready
+            && affinity_ready)
+            || Instant::now() >= bound
+        {
             break state;
         }
         live(deadline)?;
@@ -694,6 +710,8 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
     Ok(
         json!({"scope":"owned visible graph; observational only, not primary/GPU/battery or semantic proof",
         "before":before,"restObserved":rested["physics"]["moving"] == false,
+        "layoutObserved":matches!(rested["semantic"]["worker"]["state"].as_str(),Some("ready" | "cached")) && rested["semantic"]["pendingTargets"] == 0,
+        "affinityObserved":matches!(rested["affinity"]["state"].as_str(),Some("bounded_ready" | "bounded_partial")),
         "rested":rested,"afterTwoSeconds":after}),
     )
 }
@@ -1487,6 +1505,7 @@ mod tests {
             "collection-history",
             "collection-projects",
             "collection-graph",
+            "collection-affinity",
             "collection-scheduler-status",
         ] {
             assert!(audit_read_action(action, true));

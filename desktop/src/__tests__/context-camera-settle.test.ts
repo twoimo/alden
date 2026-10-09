@@ -7,6 +7,7 @@ import { ContextNebulae } from '../knowledge/cortex';
 import { overviewGraph, parseKnowledgeGraph } from '../knowledge/graph-model';
 import { KnowledgeHologram } from '../knowledge/hologram';
 import { PlasticityLayout } from '../knowledge/plasticity';
+import { PositionTransition } from '../knowledge/position-transition';
 import { relationAnchors } from '../knowledge/relation-layout';
 import { SynapticBridges } from '../knowledge/synapses';
 import { VoiceEnvelope } from '../knowledge/voice-envelope';
@@ -75,7 +76,7 @@ describe('context overview camera lifecycle', () => {
       displayedPositions: positions, viewport: { x: 0, y: 0, width: 200, height: 470 },
       camera, orbit, projected: new THREE.Vector3(), desiredCamera: new THREE.Vector3(), desiredLookAt: new THREE.Vector3(),
       lookAt: new THREE.Vector3(), motion: { matches: false }, paused: false,
-      plasticity, synapses,overviewSynapses,constellationNodes,globalLabels:new Set(),neuronDetail:false, nebulae, nodeMeshes: new Map(), orbMeshes: new Map(),
+      plasticity, positionTransition: new PositionTransition(), synapses,overviewSynapses,constellationNodes,globalLabels:new Set(),neuronDetail:false, nebulae, nodeMeshes: new Map(), orbMeshes: new Map(),
       loop, voiceEnvelope, latestVoice: null, labels: new Map(), renderer, scene,
       orbitActive: false,
       syncPoint: (id: string, x: number, y: number, z: number) => positions.get(id)?.set(x, y, z),

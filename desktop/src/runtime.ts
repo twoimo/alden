@@ -14,7 +14,7 @@ type SettingsAction =
   | "history-rooms" | "history-messages"
   | "reply-history" | "geeknews-history"
   | "voice-history-sessions" | "voice-history-messages" | "db-sync-history"
-  | "collection-history" | "collection-graph" | "collection-projects"
+  | "collection-history" | "collection-graph" | "collection-affinity" | "collection-projects"
   | "collection-scheduler-status" | "collection-scheduler-control";
 
 export async function operatorPause(): Promise<EmergencyState | null> {

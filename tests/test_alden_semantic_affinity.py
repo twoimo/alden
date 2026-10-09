@@ -341,6 +341,26 @@ class SemanticAffinityTests(unittest.TestCase):
         self.reason(self.run_affinity([node]), "stale_vector_text_hash")
         self.assertEqual(before, {p: digest(Path(p).read_bytes()) for p in before})
 
+    def test_shared_evaluator_reuses_verified_owner_without_open_commit_or_close(self):
+        from alden_layout_affinity import read_transactions
+        node = self.make("borrowed")
+        with read_transactions(self.root) as owner:
+            with patch("sqlite3.connect", side_effect=AssertionError("evaluator must borrow")):
+                report = sa._affinity_on_reads(owner.store, owner.collection, owner.cache, ["one"], [node], guard=owner.guard)
+            self.assertEqual(report["state"], "bounded_ready")
+            self.assertTrue(owner.collection.in_transaction)
+            self.assertTrue(owner.cache.in_transaction)
+
+    def test_shared_evaluator_refuses_writer_or_unbegun_reader(self):
+        from alden_layout_affinity import read_transactions
+        node = self.make("writer")
+        with read_transactions(self.root) as owner:
+            with self.assertRaisesRegex(ValueError, "affinity_verified_read_transactions_required"):
+                sa._affinity_on_reads(self.store, owner.collection, owner.cache, ["one"], [node], guard=owner.guard)
+            owner.cache.rollback()
+            with self.assertRaisesRegex(ValueError, "affinity_verified_read_transactions_required"):
+                sa._affinity_on_reads(owner.store, owner.collection, owner.cache, ["one"], [node], guard=owner.guard)
+
     def test_cli_success_and_failure_are_machine_readable_and_emit_no_partial_on_error(self):
         node = self.make("a")
         path = self.root / "nodes.json"

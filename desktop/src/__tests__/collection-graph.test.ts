@@ -4,6 +4,8 @@ import { CollectionGraphController } from '../knowledge/collection-graph';
 import { KnowledgeDrilldown, type KnowledgeGraph, type KnowledgeNode } from '../knowledge/graph-model';
 import { settingsMarkup } from '../ui';
 import type { fetchSettingsAction } from '../runtime';
+import type { LayoutAffinity } from '../knowledge/layout-affinity';
+import { affinityPayload } from './fixtures/affinity-payload';
 
 const owned: CollectionGraphController[] = [];
 const node = (id: string, version = 'v1') => ({ id, label: id, source_version: version, degree: 2, degree_scope: 'permitted filtered graph' });
@@ -18,6 +20,7 @@ class Port {
   replacements = 0;
   showNodeActivity = vi.fn();
   clearNodeActivity = vi.fn();
+  setLayoutAffinity = vi.fn((value: LayoutAffinity | null) => { this.graph.layoutAffinity = value ?? undefined; });
   get currentGraph() { return this.graph; }
   get currentView() { return this.model.current(); }
   get navigationTargets() { return { camera: [...this.camera.camera], lookAt: [...this.camera.lookAt] }; }
@@ -31,10 +34,11 @@ class Port {
     this.controller.selected({ node: this.graph.nodes.find(n => n.id === id) ?? null, view, previousCamera }); return view;
   }
 }
-function controller(read: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => page(), memory: Record<string, unknown> = { ok: true, nodes: [], edges: [] }) {
+function controller(read: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => page(), memory: Record<string, unknown> = { ok: true, nodes: [], edges: [] },
+  affinity: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => ({ ok: false, reason: 'affinity_unavailable' })) {
   const load = vi.fn<typeof fetchSettingsAction>(async (action, input = {}) => action === 'collection-projects'
     ? { ok: true, projects: [{ project: 'one' }, { project: 'two' }] } : action === 'collection-graph'
-      ? read(JSON.parse(input.query ?? '{}')) : memory);
+      ? read(JSON.parse(input.query ?? '{}')) : action === 'collection-affinity' ? affinity(JSON.parse(input.query ?? '{}')) : memory);
   const port = new Port(); const c = new CollectionGraphController(load, port); port.controller = c; owned.push(c); c.start();
   return { c, port, load };
 }
@@ -44,6 +48,51 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const c of owned) c.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('permitted collection graph navigation', () => {
+  it('shows factual data first and applies later valid affinity without moving selection/camera or creating activity', async () => {
+    const pending = deferred<Record<string, unknown>>();
+    const { port, load } = controller(async () => page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })),
+      edges: [{ source: 'a', target: 'b', relation: 'contradicts', weight: 1 }] }), undefined, () => pending.promise);
+    await settle(); expect(port.currentGraph.nodes).toHaveLength(2);
+    const replacements = port.replacements, facts = JSON.stringify(port.currentGraph.edges);
+    port.clickNode('a'); port.camera = { camera: [8, 4, 2], lookAt: [1, 0, 0] };
+    pending.resolve({ ok: true, layout_affinity: affinityPayload() }); await settle();
+    expect(port.setLayoutAffinity).toHaveBeenCalledTimes(1); expect(port.currentGraph.layoutAffinity?.pairs).toHaveLength(1);
+    expect(port.currentView.focusId).toBe('a'); expect(port.navigationTargets.camera).toEqual([8, 4, 2]);
+    expect(port.replacements).toBe(replacements); expect(JSON.stringify(port.currentGraph.edges)).toBe(facts);
+    expect(port.showNodeActivity).not.toHaveBeenCalled();
+    expect(load.mock.calls.filter(([action]) => action === 'collection-affinity')).toHaveLength(1);
+  });
+
+  it('fences an old affinity scope even when two scopes return identical node/version/target references', async () => {
+    const old = deferred<Record<string, unknown>>(), current = deferred<Record<string, unknown>>(); let calls = 0;
+    const { c, port } = controller(async () => page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })) }), undefined,
+      () => ++calls === 1 ? old.promise : current.promise);
+    await settle(); select('knowledge-project', 'project:two'); await settle();
+    old.resolve({ ok: true, layout_affinity: affinityPayload() }); await settle();
+    expect(port.setLayoutAffinity).not.toHaveBeenCalled(); expect(calls).toBe(2);
+    current.resolve({ ok: true, layout_affinity: affinityPayload(['a', 'b'], 'two') }); await settle();
+    expect(port.setLayoutAffinity).toHaveBeenCalledTimes(1); expect(c.readDiagnostics?.affinity).toMatchObject({ state: 'bounded_ready' });
+  });
+
+  it('discards a late hidden result and reads again on resume without overlapping affinity jobs', async () => {
+    const old = deferred<Record<string, unknown>>(); let calls = 0;
+    const { c, port } = controller(async () => page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })) }), undefined,
+      async () => ++calls === 1 ? old.promise : { ok: true, layout_affinity: affinityPayload() });
+    await settle(); c.stop(); c.start(); await settle(); expect(calls).toBe(1);
+    old.resolve({ ok: true, layout_affinity: affinityPayload() }); await settle();
+    expect(calls).toBe(2); expect(port.setLayoutAffinity).toHaveBeenCalledTimes(1);
+    c.stop(); await settle(60000); expect(calls).toBe(2);
+  });
+
+  it('preserves a specific read failure and never applies an old-version candidate', async () => {
+    let response: Record<string, unknown> = { ok: false, reason: 'affinity_cpu_budget' };
+    const { c, port } = controller(async () => page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })) }), undefined, async () => response);
+    await settle(); expect(c.readDiagnostics?.affinity).toMatchObject({ reason: 'affinity_cpu_budget' });
+    response = { ok: true, layout_affinity: affinityPayload(['a', 'b'], 'one', 'old') };
+    await settle(15000); expect(c.readDiagnostics?.affinity).toMatchObject({ reason: 'affinity_stale_input' });
+    expect(port.currentGraph.layoutAffinity).toBeUndefined(); expect(port.setLayoutAffinity).not.toHaveBeenCalled();
+  });
+
   it('reads a memory inside the unified view through its canonical reader without mutating source payloads', async () => {
     const { c, port, load } = controller(async () => page(), { ok: true, nodes: [{ id: 'canonical', label: '기억' }], edges: [] });
     await settle();

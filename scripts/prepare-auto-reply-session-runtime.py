@@ -81,6 +81,8 @@ RUNTIME_SCRIPT_NAMES = (
     "local_mlx_model_readiness.py",
     "alden_corpus.py",
     "alden_collection.py",
+    "alden_semantic_affinity.py",
+    "alden_layout_affinity.py",
     "alden_collection_retrieval.py",
     "alden_retrieval_time.py",
     "alden_corpus_topics.py",

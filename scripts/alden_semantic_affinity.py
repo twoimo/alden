@@ -394,7 +394,6 @@ def affinity(root, projects, nodes, *, profile=E5Profile(), budgets=Budgets(),
         raise ValueError("affinity_existing_v3_store_required")
     cache_path = store.root / "retrieval.sqlite3"
     _regular_path(cache_path)
-    rejected, loaded = Counter(), []
     with _sql_errors(guard), store.database() as db, closing(sqlite3.connect(cache_path.as_uri() + "?mode=ro", uri=True, timeout=.15)) as cache:
         cache.execute("PRAGMA query_only=ON")
         cache.execute("BEGIN")
@@ -402,19 +401,60 @@ def affinity(root, projects, nodes, *, profile=E5Profile(), budgets=Budgets(),
         for connection in (db, cache):
             connection.execute("PRAGMA cache_size=-2048")
             connection.set_progress_handler(guard.progress, 1000)
-        tables = {r[0] for r in cache.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if not {"vectors", "texts"} <= tables:
-            raise ValueError("affinity_existing_vector_text_tables_required")
-        journal = db.execute("SELECT substr(value,1,128) FROM meta WHERE key='journal_id'").fetchone()
-        for node in nodes:
-            guard.check()
-            entry, reason = _load(db, cache, store, node, projects, profile, guard)
-            if entry is None:
-                rejected[reason] += 1
-            else:
-                loaded.append(entry)
-        candidates, pairs = _candidates(loaded, budgets, min_cosine, guard)
+        return _affinity_on_reads(store, db, cache, projects, nodes, profile=profile,
+                                  budgets=budgets, min_cosine=min_cosine, guard=guard)
+
+
+def _validate_reads(store, db, cache):
+    """Verify the borrowed transaction boundary without changing caller state.
+
+    The product adapter attests mode=ro when opening these exact derived files.
+    This helper also requires query-only active transactions and exact main DBs;
+    it never turns an arbitrary writer into a purported read-only connection.
+    """
+    if not store.read_only or store.schema != 3 or db.row_factory is not sqlite3.Row:
+        raise ValueError("affinity_verified_read_transactions_required")
+    for connection, path in ((db, store.path), (cache, store.root / "retrieval.sqlite3")):
+        if not connection.in_transaction or connection.execute("PRAGMA query_only").fetchone()[0] != 1:
+            raise ValueError("affinity_verified_read_transactions_required")
+        databases = connection.execute("PRAGMA database_list").fetchall()
+        main = [r for r in databases if r[1] == "main"]
+        if (len(main) != 1 or Path(main[0][2]).absolute() != path
+                or any(r[1] != "main" and (r[1] != "temp" or r[2]) for r in databases)):
+            raise ValueError("affinity_read_transaction_path_mismatch")
+
+
+def _affinity_on_reads(store, db, cache, projects, nodes, *, profile=E5Profile(),
+                       budgets=Budgets(), min_cosine=.65, guard=None):
+    """Shared evaluator for the strict CLI and attested product-owned readers.
+
+    No connection open/close, transaction begin/commit, checkpoint or write is
+    performed here. The caller owns both lifetimes and SQL progress callbacks.
+    """
+    profile.validate()
+    budgets.validate()
+    projects, nodes = _inputs(projects, nodes, budgets)
+    if type(min_cosine) not in (int, float) or not math.isfinite(min_cosine) or not -1 <= min_cosine <= 1:
+        raise ValueError("affinity_threshold_invalid")
+    guard = guard if guard is not None else _Guard(budgets, lambda: False)
+    if guard.budgets != budgets:
+        raise ValueError("affinity_guard_budget_mismatch")
+    guard.check()
+    _validate_reads(store, db, cache)
+    tables = {r[0] for r in cache.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if not {"vectors", "texts"} <= tables:
+        raise ValueError("affinity_existing_vector_text_tables_required")
+    rejected, loaded = Counter(), []
+    journal = db.execute("SELECT substr(value,1,128) FROM meta WHERE key='journal_id'").fetchone()
+    for node in nodes:
         guard.check()
+        entry, reason = _load(db, cache, store, node, projects, profile, guard)
+        if entry is None:
+            rejected[reason] += 1
+        else:
+            loaded.append(entry)
+    candidates, pairs = _candidates(loaded, budgets, min_cosine, guard)
+    guard.check()
     proofs = [entry[0] for entry in loaded]
     complete = len(proofs) == len(nodes) and not pairs["pair_budget_exhausted"] and not pairs["candidates_truncated"]
     return {"schema": "alden-semantic-affinity-v1", "state": "bounded_ready" if complete else "bounded_partial",

@@ -1,3 +1,5 @@
+import type { LayoutAffinity } from './layout-affinity';
+
 export const DEFAULT_FOCUS_HOPS = 2;
 export const MAX_FOCUS_HOPS = 3;
 export const FOCUS_NEIGHBOR_LIMIT = 10;
@@ -51,6 +53,7 @@ export interface KnowledgeEdge {
 }
 
 export interface KnowledgeGraph {
+  layoutAffinity?: LayoutAffinity;
   overviewBudget?: number;
   nodes: KnowledgeNode[];
   edges: KnowledgeEdge[];
@@ -168,6 +171,7 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
 function subgraph(graph: KnowledgeGraph, ids: string[], focusId: string | null, hops: number): KnowledgeView {
   const keep = new Set(ids.slice(0, focusId === null ? OVERVIEW_LOD_CAP : ON_SCREEN_NODE_CAP));
   return {
+    layoutAffinity: graph.layoutAffinity,
     nodes: graph.nodes.filter((node) => keep.has(node.id)),
     edges: graph.edges.filter((edge) => keep.has(edge.source) && keep.has(edge.target)),
     focusId,

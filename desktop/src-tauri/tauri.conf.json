@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.54",
+  "version": "0.3.55",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -106,6 +106,8 @@
       "bundle-resources/scripts/alden_corpus.py": "scripts/alden_corpus.py",
       "bundle-resources/scripts/alden_local_http.py": "scripts/alden_local_http.py",
       "bundle-resources/scripts/alden_collection.py": "scripts/alden_collection.py",
+      "bundle-resources/scripts/alden_semantic_affinity.py": "scripts/alden_semantic_affinity.py",
+      "bundle-resources/scripts/alden_layout_affinity.py": "scripts/alden_layout_affinity.py",
       "bundle-resources/scripts/alden_collection_retrieval.py": "scripts/alden_collection_retrieval.py",
       "bundle-resources/scripts/alden_retrieval_time.py": "scripts/alden_retrieval_time.py",
       "bundle-resources/scripts/alden_knowledge_mcp.py": "scripts/alden_knowledge_mcp.py",
