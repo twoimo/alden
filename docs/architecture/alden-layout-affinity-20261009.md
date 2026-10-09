@@ -1,5 +1,7 @@
 # 제품 layout affinity 읽기 경계 — 2026-10-09
 
+이 문서의 worker 단위 완료 범위는 그대로 보존한다. 이후 부모의0.3.55 설치·실제 R+S 화면·현재 소스 CI 성공과 남은 품질 항목은 [통합 전달 검증](alden-semantic-integration-20261009.md)에 별도로 기록했다.
+
 `alden_layout_affinity.read_action(state_root, raw_query)`를 부모의
 `collection-affinity` action에 연결할 수 있도록 구현했다. backend가 현재
 `CollectionStore.graph_page`의 참조를 얻으며 클라이언트 노드 배열·본문·벡터는
