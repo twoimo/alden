@@ -22,6 +22,13 @@ const view = (ids = ['a', 'b']) => overviewGraph(parseKnowledgeGraph({ nodes: id
   edges: [{ source: 'a', target: 'b', relation: 'ref', weight: 1 }] }));
 
 describe('owned asynchronous semantic layout', () => {
+  it('does not treat provisional ID seeds as solved cold cluster centers while retaining a fixed selection', () => {
+    const worker = new WorkerStub(), driver = new SemanticLayoutDriver(vi.fn(), () => worker);
+    const initial = new Map([['a', { x: 1, y: 0, z: 0 }], ['b', { x: -1, y: 0, z: 0 }]]);
+    driver.request(view(), initial, new Set(), new Set(['a']));
+    expect(worker.requests[0].previous).toEqual([['a', initial.get('a')!]]);
+    const response = worker.flush(); expect(response.anchors.find(([id]) => id === 'a')![1]).toEqual(initial.get('a')); driver.clear();
+  });
   it('returns without solving and applies only the latest job', () => {
     const workers: WorkerStub[] = [], apply = vi.fn(), driver = new SemanticLayoutDriver(apply, () => { const worker = new WorkerStub(); workers.push(worker); return worker; });
     driver.request(view(), new Map(), new Set(), new Set()); expect(apply).not.toHaveBeenCalled();
