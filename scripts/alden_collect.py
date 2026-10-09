@@ -13,11 +13,12 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import tempfile
 import time
 from urllib.parse import parse_qs, urlparse
 
-from alden_collection import CollectionStore, encoded, identity
+from alden_collection import CollectionStore, encoded, identity, safe_directory
 from alden_abort import ABORT_STATE_NAME, AbortToken
 
 MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
@@ -28,10 +29,10 @@ def json_snapshot(path: Path, *, include_raw=False):
     path = path.absolute()
     if any(p.is_symlink() for p in [*path.parents, path]):
         raise ValueError("collection_source_symlink")
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as source:
         before = os.fstat(source.fileno())
-        if before.st_size > MAX_SNAPSHOT_BYTES:
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= MAX_SNAPSHOT_BYTES:
             raise ValueError("collection_snapshot_budget")
         raw = source.read(MAX_SNAPSHOT_BYTES + 1)
         after = os.fstat(source.fileno())
@@ -42,6 +43,96 @@ def json_snapshot(path: Path, *, include_raw=False):
     result = (json.loads(raw), {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
                                "mtime_ns": before.st_mtime_ns, "observed_at": time.time()})
     return (*result, raw) if include_raw else result
+
+
+def receive_input(store: CollectionStore, target_id: str, source_path: Path,
+                  expected_current_sha256: str, *, token: AbortToken):
+    """Receive fresh host bytes for one existing sample; never collect/index.
+
+    Target registration, project scope, schedules and checkpoints are unchanged.
+    The target lock is shared by cooperative collection/receiver writers. An
+    immutable previous-byte backup makes interrupted handoffs recoverable.
+    """
+    if not isinstance(expected_current_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', expected_current_sha256):
+        raise ValueError('collection_input_expected_hash_required')
+    token.raise_if_cancelled()
+    with store.target_lock(target_id):
+        target = store.target(target_id)
+        if not target['enabled'] or not any(p['permission'] != 'denied' for p in target['projects']):
+            raise ValueError('collection_source_scope_denied')
+        adapter = target['config'].get('adapter')
+        if adapter not in {'youtube-video', 'threads-post'}:
+            raise ValueError('collection_input_sample_scope_required')
+        destination = Path(target['config']['path']).absolute()
+        root = (store.root.parent / 'acquisition-inputs').absolute()
+        if destination.name != 'current.json' or not destination.is_relative_to(root):
+            raise ValueError('collection_input_destination_outside_scope')
+        if any(p.is_symlink() for p in [*destination.parents, destination]):
+            raise ValueError('collection_source_symlink')
+        safe_directory(destination.parent)
+        owner = destination.parent.stat()
+        if owner.st_uid != os.geteuid() or stat.S_IMODE(owner.st_mode) & 0o077:
+            raise ValueError('collection_input_destination_not_private')
+        incoming, source, raw = json_snapshot(source_path, include_raw=True)
+        previous, old_source, old_raw = json_snapshot(destination, include_raw=True)
+        handler = youtube_video_snapshot if adapter == 'youtube-video' else threads_post_snapshot
+        handler(target, incoming, source)
+        token.raise_if_cancelled()
+        if source['sha256'] == old_source['sha256']:
+            return {'state': 'unchanged', 'target_id': target_id, 'source_sha256': source['sha256'], 'collected': False}
+        if old_source['sha256'] != expected_current_sha256:
+            raise RuntimeError('collection_input_current_changed')
+        # An access failure is not a deletion or a new confirmed transcript.
+        if adapter == 'youtube-video':
+            old_caption = previous['videos'][0].get('captions', {})
+            caption = incoming['videos'][0].get('captions', {})
+            if old_caption.get('availability') == 'available' and caption.get('availability') != 'available':
+                raise ValueError('collection_input_caption_unconfirmed')
+        from datetime import datetime, timezone
+        def observed(value, key=None):
+            key = key or ('observedAt' if adapter == 'youtube-video' else 'observed_at')
+            stamp = value.get(key)
+            if stamp is None and adapter == 'threads-post': stamp = value['posts'][0].get('acquisition', {}).get('observed_at')
+            if not isinstance(stamp, str): raise ValueError('collection_input_observation_required')
+            try: parsed = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+            except ValueError as error: raise ValueError('collection_input_observation_invalid') from error
+            if parsed.tzinfo is None or parsed.timestamp() > time.time() + 300:
+                raise ValueError('collection_input_observation_invalid')
+            return parsed.timestamp()
+        incoming_time, old_time = observed(incoming), observed(previous)
+        if adapter == 'youtube-video' and incoming['videos'][0].get('captions', {}).get('availability') == 'available':
+            caption_time = observed(incoming, 'captionObservedAt')
+            if old_caption.get('availability') == 'available' and caption_time < observed(previous, 'captionObservedAt'):
+                raise ValueError('collection_input_observation_stale')
+        token.raise_if_cancelled()
+        if incoming_time <= old_time:
+            raise ValueError('collection_input_observation_stale')
+        folder = safe_directory(destination.parent / 'history')
+        backup = folder / (old_source['sha256'] + '.json')
+        if backup.exists():
+            _, existing, _ = json_snapshot(backup, include_raw=True)
+            if existing['sha256'] != old_source['sha256']: raise RuntimeError('collection_input_backup_invalid')
+        else:
+            fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(old_raw); handle.flush(); os.fsync(handle.fileno())
+        fd, temporary = tempfile.mkstemp(prefix='.incoming-', dir=destination.parent)
+        try:
+            with os.fdopen(fd, 'wb') as handle:
+                handle.write(raw); handle.flush(); os.fsync(handle.fileno())
+            with token.commit_guard():
+                _, current = json_snapshot(destination)
+                if current['sha256'] != expected_current_sha256:
+                    raise RuntimeError('collection_input_current_changed')
+                os.replace(temporary, destination)
+                directory = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                try: os.fsync(directory)
+                finally: os.close(directory)
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+        return {'state': 'received', 'target_id': target_id, 'source_sha256': source['sha256'],
+                'previous_sha256': old_source['sha256'], 'backup': str(backup),
+                'collected': False, 'scope': 'one declared sample; durable input only, not storage/index completion'}
 
 
 def source_graph(target: dict, data: dict, source: dict):
@@ -335,6 +426,9 @@ def main():
     parser.add_argument("--config", type=Path)
     parser.add_argument("--target")
     parser.add_argument("--capture-source")
+    parser.add_argument('--receive-input')
+    parser.add_argument('--input-snapshot', type=Path)
+    parser.add_argument('--expected-current-sha256')
     parser.add_argument("--graph", nargs="*")
     parser.add_argument("--events", action="store_true")
     parser.add_argument("--index-dense", action="store_true")
@@ -343,17 +437,26 @@ def main():
     parser.add_argument("--after", type=int, default=0)
     args = parser.parse_args()
     choices = [args.config is not None, args.capture_source is not None, args.target is not None,
-               args.graph is not None, args.events, args.index_dense, args.query is not None]
+               args.graph is not None, args.events, args.index_dense, args.query is not None, args.receive_input is not None]
     if sum(choices) != 1:
         parser.error("select exactly one collection operation")
     if (args.index_dense or args.query is not None) and not args.project:
         parser.error("retrieval requires an explicit project scope")
-    read_only = args.graph is not None or args.events or args.index_dense or args.query is not None
+    if args.receive_input is not None and (args.input_snapshot is None or args.expected_current_sha256 is None):
+        parser.error('receive-input requires input-snapshot and expected-current-sha256')
+    if args.receive_input is None and (args.input_snapshot is not None or args.expected_current_sha256 is not None):
+        parser.error('input arguments require receive-input')
+    read_only = args.graph is not None or args.events or args.index_dense or args.query is not None or args.receive_input is not None
     store = CollectionStore.open_existing(args.state_root) if read_only else CollectionStore(args.state_root)
     if store is None:
+        if args.receive_input is not None: raise ValueError('collection_target_missing')
         print(json.dumps({"state": "not_configured", "items": [], "facts": [], "nodes": [], "edges": []}))
         return
-    if args.config:
+    if args.receive_input:
+        if store is None: raise ValueError('collection_target_missing')
+        token = AbortToken(args.state_root / ABORT_STATE_NAME)
+        print(json.dumps(receive_input(store, args.receive_input, args.input_snapshot, args.expected_current_sha256, token=token), ensure_ascii=False))
+    elif args.config:
         data, _ = json_snapshot(args.config)
         targets = []
         for config in data["targets"]:
