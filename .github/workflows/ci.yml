@@ -186,6 +186,7 @@ jobs:
           tests.test_alden_collection_snapshots
           tests.test_alden_acquisition_input
           tests.test_alden_source_acquisition
+          tests.test_alden_graph_quality
           tests.test_alden_conversation_switch
           tests.test_alden_status_mcp
           tests.test_alden_history
