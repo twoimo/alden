@@ -596,11 +596,16 @@ fn capture_workspaces(
                 &snapshot(window, deadline)?,
                 deadline,
             )?;
-            let source_control = collect_script(window, r#"JSON.stringify((()=>{
+            let source_control = collect_script(
+                window,
+                r#"JSON.stringify((()=>{
               const source=document.querySelector('.collection-source-toggle:not([hidden])');
               const editor=source?.closest('details');if(editor)editor.open=true;
               source?.closest('li')?.scrollIntoView({block:'center'});return {ready:!!source};
-            })())"#.into(), deadline)?;
+            })())"#
+                    .into(),
+                deadline,
+            )?;
             if source_control["ready"].as_bool().unwrap_or(false) {
                 std::thread::sleep(Duration::from_millis(100));
                 publish(

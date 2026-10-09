@@ -2261,6 +2261,7 @@ fn settings_action_args(
                     "expected_interval",
                 ],
                 "run" => &["operation", "target_id", "request_id"],
+                "acquisition" => &["operation", "target_id", "enabled", "expected_revision"],
                 _ => return Err(BridgeError::ActionNotAllowed),
             };
             if object.keys().any(|key| !fields.contains(&key.as_str()))
@@ -2273,7 +2274,9 @@ fn settings_action_args(
             {
                 return Err(BridgeError::ActionNotAllowed);
             }
-            if matches!(operation, "interval" | "run") && parsed["target_id"].as_str().is_none() {
+            if matches!(operation, "interval" | "run" | "acquisition")
+                && parsed["target_id"].as_str().is_none()
+            {
                 return Err(BridgeError::ActionNotAllowed);
             }
             if operation == "interval"
@@ -2292,6 +2295,14 @@ fn settings_action_args(
                             .bytes()
                             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
                 })
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if operation == "acquisition"
+                && (parsed["enabled"].as_bool().is_none()
+                    || parsed["expected_revision"]
+                        .as_u64()
+                        .is_none_or(|value| value >= 9_007_199_254_740_991))
             {
                 return Err(BridgeError::ActionNotAllowed);
             }
@@ -5377,6 +5388,11 @@ mod tests {
             r#"{"operation":"interval","target_id":"declared-target","interval_seconds":59,"expected_interval":60}"#,
             r#"{"operation":"run","target_id":null,"request_id":"manual-request-123"}"#,
             r#"{"operation":"run","target_id":"declared-target","request_id":"../../bad/request"}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":1,"expected_revision":0}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":true}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":9007199254740991}"#,
+            r#"{"operation":"acquisition","target_id":null,"enabled":true,"expected_revision":0}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":0,"host":"other"}"#,
         ] {
             assert!(settings_action_args(
                 "collection-scheduler-control",
@@ -5392,6 +5408,8 @@ mod tests {
         for query in [
             r#"{"operation":"interval","target_id":"declared-target","interval_seconds":3600,"expected_interval":21600}"#,
             r#"{"operation":"run","target_id":"declared-target","request_id":"manual-request-123"}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":0}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":false,"expected_revision":7}"#,
         ] {
             assert!(settings_action_args(
                 "collection-scheduler-control",
