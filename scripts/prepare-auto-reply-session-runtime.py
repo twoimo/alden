@@ -91,6 +91,7 @@ RUNTIME_SCRIPT_NAMES = (
     "alden_history.py",
     "alden_automation_history.py",
     "alden_file_content.py",
+    "alden_link_content.py",
     "local_mlx_gateway.py",
     "auto-reply-apple-watch.py",
     "auto_reply_ax_ui.py",

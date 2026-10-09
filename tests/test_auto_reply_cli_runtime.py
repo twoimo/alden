@@ -3437,6 +3437,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
         with (
             mock.patch.dict(os.environ, {"OPENKAKAO_ALLOW_LINK_FETCH": "0"}, clear=False),
+            # This checks link opt-in/count gates after the separate freshness
+            # boundary; never query the user's DB for this isolated fixture.
+            mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
             mock.patch.object(module, "fetch_link_previews") as fetch,
         ):
             one_result = module.analyze_event(one)

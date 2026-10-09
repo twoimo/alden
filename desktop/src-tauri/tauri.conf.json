@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.50",
+  "version": "0.3.51",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -74,6 +74,7 @@
       "bundle-resources/scripts/bujamentor_operator_prompt_store.py": "scripts/bujamentor_operator_prompt_store.py",
       "bundle-resources/scripts/auto-reply-operator-prompts.json": "scripts/auto-reply-operator-prompts.json",
       "bundle-resources/scripts/alden_file_content.py": "scripts/alden_file_content.py",
+      "bundle-resources/scripts/alden_link_content.py": "scripts/alden_link_content.py",
       "bundle-resources/scripts/auto_reply_reference_store.py": "scripts/auto_reply_reference_store.py",
       "bundle-resources/scripts/auto_reply_reference_search.py": "scripts/auto_reply_reference_search.py",
       "bundle-resources/scripts/auto_reply_knowledge_graph.py": "scripts/auto_reply_knowledge_graph.py",
