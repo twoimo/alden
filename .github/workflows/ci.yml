@@ -187,7 +187,6 @@ jobs:
           tests.test_alden_acquisition_input
           tests.test_alden_source_acquisition
           tests.test_alden_graph_quality
-          tests.test_alden_semantic_affinity
           tests.test_alden_conversation_switch
           tests.test_alden_status_mcp
           tests.test_alden_history
@@ -255,6 +254,11 @@ jobs:
           tests.test_alden_wake_disjoint
           tests.test_alden_browser_runtime
           tests.test_alden_desktop_render_check
+
+      # The reader enforces a process peak RSS budget. Earlier test modules
+      # must not consume the memory allowance of this independent CLI process.
+      - name: Test bounded affinity in a fresh process
+        run: python -B -m unittest tests.test_alden_semantic_affinity -v
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

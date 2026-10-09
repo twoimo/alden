@@ -11,6 +11,10 @@
 보존했다. 최종 소스의 현재 DB 실행은 WAL sidecar가 없어 연결 전에 차단됐다.
 최종 소스가 실제 현재 DB에서 512개를 다시 계산했다고 보고하지 않는다.
 
+부모의 후속 검증에서는 닫히고 checkpoint된 두 파생 DB를 별도 private 복사본으로 확보했다. 원본 SQL 연결은0이며 복사 전후 main/WAL/SHM fingerprint가 같고, 복사본의 두 quick_check가 통과했다. 필요한512개 canonical JSON도 해시로 대사했다. WAL/SHM 초기화는 소유한 복사본에만 허용한 뒤 같은 최종1ffcbf reader로512개 벡터·32,385쌍·1024후보/184잘림을 확인했다. affinity wall1.326초/CPU0.642초/프로세스 peak RSS58,179,584바이트였다. 자료가 변경되지 않은 복사 구간을 확인한 것이며 여러 DB의 원자적 공동 snapshot·live UI·의미 gold의 증거가 아니다. 논리 DB 복사 크기는698,138,624바이트이고 APFS 공유 물리 블록/공간 절감은 미측정이다. 증거는 부모 outputs/semantic-layout-20261009/frozen-affinity-verification.json에 보존한다.
+
+첫 CI37930697004는 기존 전체 Python 검사와 같은 프로세스에서 실행하면서 이미 사용한 peak RSS가128MiB를 넘어서 실패했다. 실제 reader의 상한은 유지하고 CI의 affinity23검사를 새 Python 프로세스로 분리했다. 첫 CI 실패 로그와 새 프로세스23pass를 보존한다. 이는 CLI 실행 조건의 검사 분리이며 메모리 상한을 무력화한 것이 아니다.
+
 ## 입력·격리·근거 계약
 
 Python API는 `affinity(state_root, projects, nodes, ...)`이다. 프로젝트는 명시적

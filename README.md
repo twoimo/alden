@@ -6,7 +6,7 @@
 
 현재 CollectionStore의 권한·버전·원문 해시와 동일 내용 후보를 개발 CLI로 읽기 전용 감사할 수 있습니다. 실제 26,623개 문서·48,355개 관계에서 동일 정규화 검색 내용 698개 묶음을 확인했고 원본 ID를 병합하지 않았습니다. [검사 범위·빈 텍스트·후보와 의미 판정의 차이](docs/architecture/alden-graph-quality-20261009.md)
 
-기존 E5 벡터의 현재 대상·버전·원문·텍스트·프로필을 확인하는 bounded affinity 개발 CLI와 회귀23개를 추가했습니다. 첫 실제512벡터 계산에서는 읽기용 WAL 파일 생성 때문에 보존 검사가 실패했고, 최종 reader는 WAL 파일이 없으면 조회 전에 멈춥니다. 최종 reader의 현재 DB 실행과 의미 군집 UI 통합은 아직 검증되지 않았습니다. [실행 단계별 증거와 제한](docs/architecture/alden-semantic-affinity-20261009.md), [힘·방향·의미의 차이와 통합 설계](docs/architecture/alden-semantic-force-review-20261009.md).
+기존 E5 벡터의 현재 대상·버전·원문·텍스트·프로필을 확인하는 bounded affinity 개발 CLI와 회귀23개를 추가했습니다. 첫 실제512벡터 계산에서는 읽기용 WAL 파일 생성 때문에 보존 검사가 실패했고, 최종 reader는 WAL 파일이 없으면 조회 전에 멈춥니다. 원본을 바꾸지 않은 검증된 복사본에서는 최종 reader의512벡터 계산을 확인했습니다. live DB 실행과 의미 군집 UI 통합은 남아 있습니다. [실행 단계별 증거와 제한](docs/architecture/alden-semantic-affinity-20261009.md), [힘·방향·의미의 차이와 통합 설계](docs/architecture/alden-semantic-force-review-20261009.md).
 
 ## Alden 0.3.53 — 원본 자동 확인
 
