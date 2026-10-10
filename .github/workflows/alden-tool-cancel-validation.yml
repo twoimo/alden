@@ -1,0 +1,30 @@
+name: Alden tool cancellation attribution
+on:
+  push:
+    branches: [codex/alden-tool-cancel-ci-20261011]
+permissions:
+  contents: read
+jobs:
+  tool-boundary:
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Bind triggering source
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Browser, AX, emergency cancellation and voice ownership regression
+        run: >-
+          python3 -B -m unittest -v
+          tests.test_alden_tool_runtime
+          tests.test_alden_browser_use
+          tests.test_alden_browser_runtime
+          tests.test_alden_browser_runtime_payload
+          tests.test_alden_voice_turns
+          tests.test_alden_voice_completion
