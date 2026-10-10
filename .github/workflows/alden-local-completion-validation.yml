@@ -28,3 +28,8 @@ jobs:
           tests.test_alden_voice_model_selection
           tests.test_alden_voice_bargein
           tests.test_alden_routed_llm
+          tests.test_alden_voice_runtime
+          tests.test_alden_voice_retrieval
+          tests.test_alden_manual_voice
+          tests.test_local_mlx_model_readiness
+          tests.test_alden_unit3
