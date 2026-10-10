@@ -1,3 +1,5 @@
+> 2026-10-11 다중 대상 검색 추가: 같은 프로젝트 안의 대상별 버전·후보·관계 근거를 `target_id`로 격리하고, 최신성 반복문의 범위 변수 충돌을 수정했다. [macOS CI 38068930145](https://github.com/twoimo/alden/actions/runs/38068930145): Python 114/114, UI 30/30, TS/Vite 성공. 운영 대상 검색/모델/호스트 실물 E2E는 아직 확인하지 못했다.
+
 > 2026-10-11 추가 통합: [스냅샷 A→삭제→A 복원 및 수집→색인→이력→그래프/MCP 일치 검사](architecture/alden-pipeline-readback-20261011.md).
 > 별도 `codex/alden-pipeline-readback-20261011` 브랜치에 소스와 회귀가 구현되었다.
 > macOS CI `38067729712`: Python 112/112, UI 30/30, TypeScript/Vite build 성공(격리 fixture).
