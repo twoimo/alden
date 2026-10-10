@@ -1,3 +1,7 @@
+> 2026-10-11 추가: [로컬 브라우저·exact AX 비상 중단 귀속과 눌림 효과 미확인 유지](architecture/alden-tool-cancellation-20261011.md).
+> `codex/alden-tool-cancel-attribution-20261011`: [macOS CI 38072772583](https://github.com/twoimo/alden/actions/runs/38072772583) Python 92/92 통과(분리 fixture와 실제 AbortController).
+> PR #31 다음 단계로 검토하되 원본 운영 사용자 Mac의 GUI, 중단 이벤트, 권한, STATUS는 직접 검증하지 못했으며 병합·설치를 수행하지 않았다.
+
 > 2026-10-11 신규: [로컬 MLX 응답 완결성/오발화 방지와 음성 이력 실제 경로](architecture/alden-local-mlx-completion-20261011.md).
 > `codex/alden-voice-completion-fence-20261011`는 PR #30 다음의 별도 독립 소스 브랜치다.
 > [macOS CI 38072362981](https://github.com/twoimo/alden/actions/runs/38072362981): 175개 중 169개 통과·6개 NumPy skip. 메모리·TTS/SQLite는 고정 모델 전송의 실제 제품 코드 테스트.
