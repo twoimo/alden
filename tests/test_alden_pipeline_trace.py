@@ -7,6 +7,7 @@ import json
 import sqlite3
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -15,6 +16,7 @@ from alden_collection import CollectionStore, digest, encoded, identity, read_ac
 from alden_collection_retrieval import index_dense, retrieve, trace_document
 from alden_knowledge_mcp import KnowledgeServer
 from alden_status_mcp import CallControl
+import auto_reply_knowledge_graph as kg
 
 
 class PipelineReadbackTests(unittest.TestCase):
@@ -89,12 +91,15 @@ class PipelineReadbackTests(unittest.TestCase):
         self.ingest()
         initial=trace_document(self.root,self.first,projects=['research'])
         self.assertEqual(initial['dense']['state'],'not_indexed')
-        indexed=index_dense(self.root,['research'],embed=lambda texts:[[1.0,0.0,0.0] for _ in texts])
-        self.assertEqual(indexed['state'],'ready')
-        trace=trace_document(self.root,self.first,projects=['research'])
-        self.assertEqual(trace['dense']['state'],'stored_vector_binding_verified')
-        self.assertFalse(trace['dense']['model_residency_verified'])
-        answer=retrieve(self.root,'정확한 근거',projects=['research'],query_embed=lambda text:[1.,0.,0.])
+        # A fake profile is scoped to the test. The CI runner has no local
+        # embedding service and must not access the network for the fixture.
+        with patch.object(kg,'_active_dense_embedding_model',return_value='fixed-test-encoder'):
+            indexed=index_dense(self.root,['research'],embed=lambda texts:[[1.0,0.0,0.0] for _ in texts])
+            self.assertEqual(indexed['state'],'ready')
+            trace=trace_document(self.root,self.first,projects=['research'])
+            self.assertEqual(trace['dense']['state'],'stored_vector_binding_verified')
+            self.assertFalse(trace['dense']['model_residency_verified'])
+            answer=retrieve(self.root,'정확한 근거',projects=['research'],query_embed=lambda text:[1.,0.,0.])
         self.assertEqual(answer['search_mode'],'rrf')
         self.assertIn(self.first,answer['candidates'])
         self.assertTrue(any(proof.get('source_version')==trace['version']
