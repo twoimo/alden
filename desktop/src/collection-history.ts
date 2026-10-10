@@ -9,8 +9,24 @@ const stages: Record<string, string> = {
 };
 const rows = (value: unknown): Row[] => Array.isArray(value)
   ? value.filter(v => v && typeof v === 'object' && !Array.isArray(v)) as Row[] : [];
-const validEvents = (value: unknown): Row[] => rows(value).filter(row =>
-  Number.isSafeInteger(row.sequence) && Number(row.sequence) > 0);
+// The server delivers newest-first initial/older pages and oldest-first
+// forward pages. A malformed or reordered page is retried intact; dropping a
+// row and then committing the newer cursor would erase durable history from
+// this view until a manual reset.
+const validEvents = (value: unknown, ascending: boolean): Row[] | null => {
+  if (!Array.isArray(value) || value.length > 200) return null;
+  const result: Row[] = [];
+  let previous: number | null = null;
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const row = item as Row, sequence = row.sequence;
+    if (!Number.isSafeInteger(sequence) || Number(sequence) <= 0) return null;
+    const current = Number(sequence);
+    if (previous !== null && (ascending ? current <= previous : current >= previous)) return null;
+    result.push(row); previous = current;
+  }
+  return result;
+};
 const WINDOW_LIMIT = 1000;
 const changes = ['added', 'revised', 'unchanged', 'removed', 'relations_changed'] as const;
 type Counts = { total: number; stages: Record<string, number>; changes: Record<string, number> };
@@ -162,16 +178,23 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       const result = await load('collection-history', { query: JSON.stringify(options) });
       if (dead || ticket !== epoch || !visible || page !== 'history') return;
       if (result?.ok !== true) { section.dataset.state = 'error'; status.textContent = '수집 이력을 불러오지 못했습니다.'; delay = 5000; return; }
-      section.dataset.state = result.state === 'not_configured' ? 'not_configured' : 'ready';
-      populate(project, result.projects, 'project', 'project'); populate(target, result.targets, 'id', 'label');
       const nextStream = typeof result.stream_id === 'string' && result.stream_id.length <= 128 ? result.stream_id : null;
       const restarting = result.reset === true || nextStream !== null && stream !== null && stream !== nextStream;
+      const verified = validEvents(result.items, forward && !restarting);
+      if (verified === null) {
+        section.dataset.state = 'error';
+        status.textContent = '수집 이력의 순서를 확인하지 못했습니다. 같은 범위를 다시 조회합니다.';
+        delay = 5000;
+        return;
+      }
+      section.dataset.state = result.state === 'not_configured' ? 'not_configured' : 'ready';
+      populate(project, result.projects, 'project', 'project'); populate(target, result.targets, 'id', 'label');
       if (restarting) {
         items = []; newest = before = null; historical = false; newCount = 0; expanded.clear(); aggregate = null;
       }
       if (nextStream) stream = nextStream;
       const append = forward && !restarting;
-      const incoming = validEvents(result.items).filter(row => !append || Number(row.sequence) > (newest ?? 0));
+      const incoming = verified.filter(row => !append || Number(row.sequence) > (newest ?? 0));
       const snapshotCounts = counts(result.summary);
       if (snapshotCounts) aggregate = snapshotCounts;
       else if (append && aggregate) for (const row of incoming) {
