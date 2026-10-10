@@ -9,9 +9,9 @@
 불명확하면 기존 `effect_unknown`을 유지해 중복 누름을 막습니다.
 작업 문구나 예외의 민감한 내용은 상태 응답으로 전파되지 않습니다.
 
-[독립 브라우저·AX 중단 계약](docs/architecture/alden-tool-cancellation-20261011.md) ·
-[macOS CI #38072772583](https://github.com/twoimo/alden/actions/runs/38072772583):
-관련 Python 회귀 92개 통과. 사용자 Mac의 물리 접근성, 실제
+[독립 브라우저·AX·음성 세션 중단 계약](docs/architecture/alden-tool-cancellation-20261011.md) ·
+[macOS CI #38073524156](https://github.com/twoimo/alden/actions/runs/38073524156):
+관련 Python 회귀 94개 통과. 전역 중단과 명시적 재개 동안 이전 음성 입력·브라우저 결과가 새 턴으로 전달되지 않으며, 큐 등록 전 취소를 입력 성공으로 보고하지 않습니다. 사용자 Mac의 물리 접근성, 실제
 클릭 결과 및 운영 서비스 중단을 입증한 결과는 아닙니다.
 
 ## 2026-10-11 — 로컬 MLX 응답 확정 후에만 TTS·기억 저장
