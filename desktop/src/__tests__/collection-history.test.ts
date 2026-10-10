@@ -157,6 +157,66 @@ describe('durable collection history', () => {
     expect(document.querySelector('.collection-event-list')!.textContent).toContain('자료 21');
   });
 
+  it('reads exact current source proof on demand and displays its own previous version', async () => {
+    const document_id = 'youtube:' + 'a'.repeat(64), version = 'version:' + 'b'.repeat(64);
+    const previous_version = 'version:' + 'c'.repeat(64), target_id = 'target-a';
+    const saved = event(8, { event_id: 'event-8', document_id, version, target_id,
+      run_id: 'run-8', details: { change: 'revised', previous_version } });
+    const proof = { ok: true, state: 'available', projects: ['one'], document_id, version, target_id,
+      run_id: 'run-8', source: { state: 'hash_verified' },
+      stages: { stored: true, indexed: true }, fts: { state: 'verified' },
+      dense: { state: 'stored_vector_binding_verified' } };
+    const load = vi.fn<typeof fetchSettingsAction>().mockImplementation(async action =>
+      action === 'collection-trace' ? proof : response([saved]));
+    setup(load); await vi.advanceTimersByTimeAsync(0);
+    expect(load.mock.calls.filter(([action]) => action === 'collection-trace')).toHaveLength(0);
+    const detail = document.querySelector<HTMLDetailsElement>('.collection-event-detail')!;
+    detail.open = true; detail.dispatchEvent(new Event('toggle')); await vi.advanceTimersByTimeAsync(0);
+    const requests = load.mock.calls.filter(([action]) => action === 'collection-trace');
+    expect(requests).toHaveLength(1);
+    expect(JSON.parse(requests[0][1]!.query!)).toEqual({
+      projects: ['one'], document_id, expected_version: version, target_id,
+    });
+    expect(detail.textContent).toContain('변경 전 버전');
+    expect(detail.textContent).toContain(previous_version);
+    expect(detail.querySelector('.collection-readback')!.textContent).toContain('저장·원문 해시 확인');
+    expect(detail.querySelector('.collection-readback')!.textContent).toContain('FTS 확인');
+    expect(detail.querySelector('.collection-readback')!.textContent).toContain('Dense 저장 바인딩 확인');
+    expect(detail.querySelector('.collection-readback')!.textContent).toContain('모델 실행은 별도 검증');
+  });
+  it('rejects mismatched trace identity and never presents readback as new knowledge', async () => {
+    const document_id = 'youtube:' + 'a'.repeat(64), version = 'version:' + 'b'.repeat(64), target_id = 'target-a';
+    const saved = event(8, { document_id, version, target_id, run_id: 'run-8' });
+    const load = vi.fn<typeof fetchSettingsAction>().mockImplementation(async action =>
+      action === 'collection-trace' ? { ok:true,state:'available',projects:['one'],document_id,
+        version,target_id:'different-target',run_id:'run-8',
+        stages:{stored:true,indexed:true},source:{state:'hash_verified'},fts:{state:'verified'} }
+      : response([saved]));
+    setup(load); await vi.advanceTimersByTimeAsync(0);
+    const detail = document.querySelector<HTMLDetailsElement>('.collection-event-detail')!;
+    detail.open = true; detail.dispatchEvent(new Event('toggle')); await vi.advanceTimersByTimeAsync(0);
+    expect(detail.querySelector('.collection-readback')!.textContent).toBe('저장 결과를 확인하지 못했습니다.');
+    expect(document.querySelector('.collection-summary')!.textContent).not.toContain('새로운 기억');
+    expect(load.mock.calls.filter(([action]) => action === 'collection-trace')).toHaveLength(1);
+  });
+  it('drops a late trace reply when history is hidden before the readback completes', async () => {
+    const document_id = 'youtube:' + 'a'.repeat(64), version = 'version:' + 'b'.repeat(64), target_id = 'target-a';
+    const saved = event(8, { document_id, version, target_id, run_id: 'run-8' });
+    let resolve!: (value: Record<string, unknown>) => void;
+    const load = vi.fn<typeof fetchSettingsAction>().mockImplementation(action =>
+      action === 'collection-trace' ? new Promise(done => { resolve = done; })
+        : Promise.resolve(response([saved])));
+    const history = setup(load); await vi.advanceTimersByTimeAsync(0);
+    const detail = document.querySelector<HTMLDetailsElement>('.collection-event-detail')!;
+    detail.open = true; detail.dispatchEvent(new Event('toggle')); await vi.advanceTimersByTimeAsync(0);
+    const readback = detail.querySelector<HTMLElement>('.collection-readback')!;
+    history.visible(false);
+    resolve({ok:true,state:'available',projects:['one'],document_id,version,target_id,run_id:'run-8',
+      stages:{stored:true,indexed:true},source:{state:'hash_verified'},fts:{state:'verified'}});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(readback.textContent).not.toContain('원문 해시 확인');
+    expect(load.mock.calls.filter(([action]) => action === 'collection-trace')).toHaveLength(1);
+  });
   it('passes project, target, source, stage and local date boundaries to the read-only API', async () => {
     const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(response([]));
     setup(load); await vi.advanceTimersByTimeAsync(0);

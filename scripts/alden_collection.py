@@ -539,7 +539,14 @@ class CollectionStore:
                                    (target_id, doc_id, version))
                         if complete_snapshot:
                             db.execute('INSERT INTO snapshot_members VALUES(?)', (doc_id,))
-                        self._event(db, run_id, target_id, "stored", document_id=doc_id, version=version, change=category)
+                        change_details = {"change": category}
+                        # A changed version in this *target's own* membership
+                        # has a concrete before/after lineage. A different
+                        # target's version must never be passed off as its past.
+                        if category == "revised" and membership and membership[0] != version:
+                            change_details["previous_version"] = membership[0]
+                        self._event(db, run_id, target_id, "stored", document_id=doc_id,
+                                    version=version, **change_details)
                         db.execute('INSERT INTO search_updates VALUES(?,?,?) ON CONFLICT(document_id) DO UPDATE SET label=excluded.label,body=excluded.body', (doc_id,label,body))
                         self._event(db, run_id, target_id, "indexed", document_id=doc_id, version=version,
                                     index="sqlite_fts5", dense_index="not_yet_confirmed")
