@@ -57,6 +57,37 @@ class GatedBrowser:
 
 
 class SharedEmergencyBoundary(unittest.IsolatedAsyncioTestCase):
+    async def test_abort_between_ticket_creation_and_dispatch_returns_rejected_submission(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            controller = AbortController(root)
+            class NeverInfer:
+                def generate(self, *args, **kwargs):
+                    self.fail("pre-dispatch abort must never call the model")
+            speaker = TextToSpeechSpy()
+            voice = AldenVoicePipeline(
+                stt=object(), llm=NeverInfer(), tts=speaker,
+                token=AbortController(root).token(), status=VoiceStatusStore(root),
+                manual_listen=True,
+            )
+            try:
+                begin = voice._begin_turn
+                def abort_after_allocating_ticket(source, event_id):
+                    turn = begin(source, event_id)
+                    controller.abort("stop between ticket and worker queue")
+                    return turn
+                voice._begin_turn = abort_after_allocating_ticket
+                self.assertFalse(voice.submit_text("must not reach inference", event_id="ticket-race"))
+                completed = voice.poll_result()
+                self.assertIsNotNone(completed)
+                self.assertEqual(completed.state, VoiceState.ABORTED)
+                self.assertEqual(completed.reply, "")
+                self.assertEqual(voice._recent_conversation(), [])
+                self.assertEqual(speaker.calls, [])
+                self.assertIsNone(voice._worker)
+            finally:
+                voice.close()
+
     async def test_global_stop_fences_both_runtime_results_and_only_fresh_epoch_can_resume(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
