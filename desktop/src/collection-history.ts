@@ -7,6 +7,10 @@ const stages: Record<string, string> = {
   discovered: '자료 발견', parsed: '내용 읽음', validated: '형식 확인',
   stored: '저장 완료', indexed: '검색 반영', failed: '실패', paused: '중지',
 };
+const storedChanges: Record<string, string> = {
+  added: '새 자료 저장', revised: '기존 자료 수정', unchanged: '기존 자료 유지',
+  removed: '원본에서 제외', relations_changed: '관계 갱신',
+};
 const rows = (value: unknown): Row[] => Array.isArray(value)
   ? value.filter(v => v && typeof v === 'object' && !Array.isArray(v)) as Row[] : [];
 // The server delivers newest-first initial/older pages and oldest-first
@@ -107,7 +111,9 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     copy.append(make('strong', '', String(row.target_label ?? '대상')), make('span', '', String(row.document_label ?? '처리 기록')));
     const details = row.details && typeof row.details === 'object' ? row.details as Row : {};
     const unchanged = details.change === 'unchanged';
-    const label = unchanged && row.stage === 'stored' ? '기존 자료 유지' : stages[String(row.stage)] ?? '처리 기록';
+    const label = row.stage === 'stored'
+      ? storedChanges[String(details.change)] ?? stages.stored
+      : stages[String(row.stage)] ?? '처리 기록';
     const badge = make('span', 'collection-stage', label); badge.dataset.stage = String(row.stage);
     const more = document.createElement('details'); more.className = 'collection-event-detail';
     more.dataset.sequence = String(row.sequence); more.open = expanded.has(Number(row.sequence));
@@ -296,7 +302,10 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       totals.hidden = aggregate === null;
       if (aggregate) totals.textContent = '선택한 범위 · ' + aggregate.total.toLocaleString('ko-KR') + '개 단계 기록'
         + ' · 추가 ' + aggregate.changes.added.toLocaleString('ko-KR') + ' · 수정 ' + aggregate.changes.revised.toLocaleString('ko-KR')
-        + ' · 유지 ' + aggregate.changes.unchanged.toLocaleString('ko-KR') + ' · 실패 ' + aggregate.stages.failed.toLocaleString('ko-KR')
+        + ' · 유지 ' + aggregate.changes.unchanged.toLocaleString('ko-KR')
+        + ' · 제외 ' + aggregate.changes.removed.toLocaleString('ko-KR')
+        + ' · 관계 갱신 ' + aggregate.changes.relations_changed.toLocaleString('ko-KR')
+        + ' · 실패 ' + aggregate.stages.failed.toLocaleString('ko-KR')
         + ' · 중지 ' + aggregate.stages.paused.toLocaleString('ko-KR');
       status.textContent = result.state === 'not_configured' ? '아직 수집 대상을 연결하지 않았습니다.'
         : newCount ? '새 처리 이력 ' + newCount + '개 · 최신 이력 보기로 돌아갈 수 있습니다.'
