@@ -107,6 +107,19 @@ class ModelCompletionFences(unittest.TestCase):
             with self.subTest(extra=extra):
                 self.assert_rejected(json.dumps(response("보내면 안 됨", extra=extra)).encode())
 
+    def test_explicit_failed_response_cannot_sneak_in_with_successful_choice(self):
+        for fields in ({"error": {"message": "private provider error"}},
+                       {"status": "failed"}, {"status": "incomplete"},
+                       {"status": "cancelled"}):
+            with self.subTest(fields=fields):
+                forged = response("위장된 완료", finish="stop")
+                forged.update(fields)
+                self.assert_rejected(json.dumps(forged).encode())
+                forged_sse = chunk(content="위장된 완료", finish="stop")
+                forged_sse.update(fields)
+                self.assert_rejected(sse([forged_sse]), "text/event-stream",
+                                     "local_llm_generation_failed")
+
     def test_nonterminal_sse_and_poststop_injection_never_speak(self):
         cases = [
             (sse([chunk(content="끝나지 않은 발화")]), "local_llm_stream_incomplete"),
