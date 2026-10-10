@@ -182,7 +182,7 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       && proof.target_id === row.target_id && Array.isArray(proof.projects)
       && proof.projects.length === projects.length
       && proof.projects.every((project, index) => project === projects[index]);
-    if (!sameScope) { output.textContent = '저장 결과를 확인하지 못했습니다.'; return; }
+    if (!sameScope || proof === null) { output.textContent = '저장 결과를 확인하지 못했습니다.'; return; }
     const source = proof.source as Record<string, unknown> | undefined;
     const stages = proof.stages as Record<string, unknown> | undefined;
     const fts = proof.fts as Record<string, unknown> | undefined;
