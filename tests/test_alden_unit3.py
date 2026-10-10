@@ -975,7 +975,7 @@ class LocalMlxLlmRequestTests(unittest.TestCase):
             if request.get_method() == "GET":
                 return FakeJsonResponse(ready_model_catalog(QWEN38_27B_MODEL_ID))
             captured["body"] = json.loads(request.data.decode("utf-8"))
-            return FakeJsonResponse({"choices": [{"message": {"content": " 알겠습니다. "}}]})
+            return FakeJsonResponse({"choices": [{"message": {"content": " 알겠습니다. "}, "finish_reason": "stop"}]})
 
         with TemporaryDirectory() as temp_dir:
             token = AbortController(Path(temp_dir)).token()
@@ -1045,7 +1045,7 @@ class LocalMlxLlmRequestTests(unittest.TestCase):
             return FakeJsonResponse(
                 {
                     "model": FLASH_NEXT_MODEL_ID.removeprefix("mlx/"),
-                    "choices": [{"message": {"content": "flash reply"}}],
+                    "choices": [{"message": {"content": "flash reply"}, "finish_reason": "stop"}],
                 }
             )
 
@@ -1175,7 +1175,8 @@ class LocalMlxLlmRequestTests(unittest.TestCase):
                                     "message": {
                                         "content": "",
                                         "reasoning_content": "내부 추론을 음성으로 읽으면 안 됩니다.",
-                                    }
+                                    },
+                                    "finish_reason": "stop",
                                 }
                             ]
                         }
