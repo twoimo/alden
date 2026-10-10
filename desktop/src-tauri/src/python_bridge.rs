@@ -2329,7 +2329,7 @@ fn settings_action_args(
         | "db-sync-history"
         | "collection-history"
         | "collection-graph"
-                | "collection-trace"
+        | "collection-trace"
         | "collection-affinity"
         | "collection-projects"
         | "reply-history"
