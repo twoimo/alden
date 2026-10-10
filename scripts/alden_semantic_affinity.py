@@ -134,7 +134,12 @@ def _sql_errors(guard):
 def _json(raw):
     def reject(_):
         raise ValueError("affinity_nonfinite_json")
-    return json.loads(raw, parse_constant=reject)
+    try:
+        return json.loads(raw, parse_constant=reject)
+    except RecursionError as error:
+        # Malformed record data must not discard unrelated usable nodes.
+        # Keep resource/cancellation RuntimeErrors outside this conversion.
+        raise ValueError("affinity_json_nesting") from error
 
 
 def _regular_path(path):
@@ -242,7 +247,7 @@ def _load(db, cache, store, node, projects, profile, guard):
         expected = identity("version", encoded([node["id"], row["raw_sha256"], row["processing_version"], projection]).decode())
         if identity(row["platform"], row["original_id"]) != node["id"] or projection != row["projection_sha256"] or expected != node["source_version"]:
             return None, "current_version_hash_mismatch"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None, "malformed_current_version"
     vector_meta = cache.execute("""SELECT CASE WHEN typeof(text_hash)='text' AND length(text_hash)=64
         THEN text_hash END,model=? AND endpoint=? AND encoding=?,typeof(vector),length(vector)

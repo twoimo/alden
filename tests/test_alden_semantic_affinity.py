@@ -177,6 +177,49 @@ class SemanticAffinityTests(unittest.TestCase):
             db.execute("UPDATE versions SET body='tampered' WHERE id=?", (other["source_version"],))
         self.reason(self.run_affinity([other]), "current_version_hash_mismatch")
 
+    def test_deep_metadata_rejects_only_affected_node_and_preserves_valid_neighbors(self):
+        nodes = [self.make(name) for name in ("deep-metadata", "healthy-a", "healthy-b")]
+        nested = '{"nested":' + '[' * 2000 + '0' + ']' * 2000 + '}'
+        with self.store.database() as db:
+            db.execute("UPDATE versions SET metadata=? WHERE id=?", (nested, nodes[0]["source_version"]))
+            before = list(db.iterdump())
+        with patch("socket.socket", side_effect=AssertionError("network")):
+            report = self.run_affinity(nodes)
+        # Newer Python parsers can accept this depth; its changed projection
+        # must still be excluded. The pinned product runtime rejects nesting.
+        reasons = report["coverage"]["reasons"]
+        self.assertEqual(sum(reasons.values()), 1)
+        self.assertTrue(set(reasons) <= {"malformed_current_version", "current_version_hash_mismatch"})
+        self.assertEqual(report["state"], "bounded_partial")
+        self.assertEqual(report["coverage"]["usable_vector_nodes"], 2)
+        self.assertEqual({p["id"] for p in report["nodes"]}, {n["id"] for n in nodes[1:]})
+        self.assertEqual(len(report["candidates"]), 1)
+        with self.store.database() as db:
+            self.assertEqual(list(db.iterdump()), before)
+
+    def test_deep_canonical_source_is_a_data_error_without_changing_source(self):
+        raw = b'{"nested":' + b'[' * 2000 + b'0' + b']' * 2000 + b'}'
+        name = digest(raw) + ".json"
+        path = self.store.blobs / name
+        path.write_bytes(raw)
+        guard = sa._Guard(sa.Budgets(), lambda: False)
+        try:
+            json.loads(raw)
+        except RecursionError:
+            with self.assertRaisesRegex(ValueError, "affinity_json_nesting"):
+                sa._source(self.store.blobs, name, guard)
+        else:
+            self.assertIsInstance(sa._source(self.store.blobs, name, guard), dict)
+        self.assertEqual(path.read_bytes(), raw)
+
+    def test_source_budget_stop_is_not_reclassified_as_malformed_json(self):
+        raw = b'{"nested":' + b'[' * 2000 + b'0' + b']' * 2000 + b'}'
+        name = digest(raw) + ".json"
+        (self.store.blobs / name).write_bytes(raw)
+        guard = sa._Guard(replace(sa.Budgets(), max_source_bytes=1), lambda: False)
+        with self.assertRaisesRegex(sa.BudgetExceeded, "affinity_source_bytes_budget"):
+            sa._source(self.store.blobs, name, guard)
+
     def test_mixed_profile_dimension_malformed_nonfinite_and_zero_vectors_are_excluded(self):
         cases = [("model", "other", "different_profile"), ("endpoint", "0" * 64, "different_profile"),
                  ("encoding", "other", "different_profile"),
