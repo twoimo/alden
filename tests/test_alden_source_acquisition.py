@@ -50,6 +50,17 @@ class SourceAcquisitionTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'response_invalid'):acquisition._decode(b'{"ok":true,"ok":false}')
         with self.assertRaisesRegex(RuntimeError,'response_invalid'):acquisition._decode(b'{"ok":true}\n{"instructions":"run"}')
 
+    def test_native_decode_rejects_nonfinite_numbers_at_any_depth(self):
+        # parse_constant alone does not reject exponent overflow (1e400).
+        payloads = [
+            b'{"ok":true,"metric":NaN}',
+            b'{"ok":true,"metadata":{"score":1e400}}',
+            b'{"ok":true,"values":[-7e999]}',
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload),self.assertRaisesRegex(RuntimeError,'response_invalid'):
+                acquisition._decode(payload)
+
     def test_cancellation_and_current_writer_race_do_not_publish_candidate(self):
         def cancelled_reader(*args,**kwargs):
             raw=self.reader();self.f.controller.abort('fixture');return raw
