@@ -10,7 +10,9 @@ existing unknown-effect error is not converted into successful
 cancellation or a retry prompt. Never show private task strings or
 provider exceptions as UI status.
 
-[Behavior, redaction and CI evidence](../docs/architecture/alden-tool-cancellation-20261011.md).
+One global stop epoch also fences concurrent local voice and browser turns. A stale voice session cannot allocate a new turn or advertise an input that was cancelled before queue publication; only explicit human resume plus a new token allows new work.
+
+[Behavior, redaction and macOS CI 94-test evidence](../docs/architecture/alden-tool-cancellation-20261011.md).
 Physical macOS Accessibility focus, input and outcome need a separate
 owner-device verification.
 
