@@ -1,0 +1,47 @@
+name: Alden pipeline integration
+
+on:
+  push:
+    branches: [codex/alden-pipeline-ci-20261011]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-pipeline:
+    name: Collection MCP graph integration
+    runs-on: macos-14
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Bind source SHA
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Pipeline and regression Python tests
+        run: >-
+          python3 -B -m unittest -v
+          tests.test_alden_pipeline_trace
+          tests.test_alden_collection
+          tests.test_alden_collection_snapshots
+          tests.test_alden_collection_retrieval
+          tests.test_alden_osk_sources
+          tests.test_alden_osk_delta
+          tests.test_alden_source_acquisition
+          tests.test_verify_local_models
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install pinned UI dependencies
+        run: npm ci --prefix desktop --ignore-scripts
+      - name: Test node detail evidence and graph readback
+        run: npm test --prefix desktop -- --run src/__tests__/node-details.test.ts src/__tests__/collection-graph.test.ts src/__tests__/collection-activity.test.ts
+      - name: TypeScript and bundle check
+        run: npm run build --prefix desktop
