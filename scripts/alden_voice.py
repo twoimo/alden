@@ -1771,6 +1771,8 @@ class LocalMlxLlm:
             delta = choice["delta"]
             if delta.get("role") not in (None, "assistant"):
                 raise RuntimeError("local_llm_response_invalid")
+            if delta.get("tool_calls") or delta.get("function_call"):
+                raise RuntimeError("local_llm_reply_unconfirmed")
             if finished:
                 # Never append a later generation, duplicated terminal chunk
                 # or a second request to the already completed assistant turn.
