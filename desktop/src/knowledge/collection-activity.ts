@@ -111,11 +111,21 @@ export class CollectionActivity {
       }
       if (page.reset !== false || !integer(page.latest) || next.cursor > page.latest || !Array.isArray(page.items)
         || page.items.length > 200 || typeof page.has_more !== 'boolean' || page.has_more && next.cursor === before.cursor) return;
-      let previous = before.cursor, needsSnapshot = false;
+      // Validate the entire ordered page before consuming any receipt or
+      // moving the journal cursor. Otherwise a reversed/corrupt row can be
+      // silently skipped while a later cursor makes that loss permanent.
+      const staged: Array<NodeActivity | StructuralActivity> = [];
+      const pageIds = new Set<string>();
+      let previous = before.cursor;
       for (const raw of page.items) {
         const event = receipt(raw);
-        if (!event || event.sequence <= previous || event.sequence > next.cursor || this.seen.has(event.event_id)) continue;
-        previous = event.sequence; needsSnapshot ||= event.sequence > this.snapshotCursor; this.seen.add(event.event_id);
+        if (!event || event.sequence <= previous || event.sequence > next.cursor
+          || pageIds.has(event.event_id) || this.seen.has(event.event_id)) return;
+        staged.push(event); pageIds.add(event.event_id); previous = event.sequence;
+      }
+      let needsSnapshot = false;
+      for (const event of staged) {
+        needsSnapshot ||= event.sequence > this.snapshotCursor; this.seen.add(event.event_id);
         if (this.seen.size > 400) this.seen.delete(this.seen.values().next().value!);
         if (event.kind === 'removed' || event.kind === 'relations_changed') continue;
         const now = this.now(), at = event.at * 1000;
