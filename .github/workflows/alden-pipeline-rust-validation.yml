@@ -1,0 +1,52 @@
+name: Alden pipeline Tauri Rust validation
+
+on:
+  push:
+    branches: [codex/alden-pipeline-rust-ci-20261011]
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-rust:
+    name: Tauri source and bridge tests
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Verify source commit
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install pinned UI packages
+        run: npm ci --prefix desktop --ignore-scripts
+      - name: Build static UI for Tauri
+        run: npm run build --prefix desktop
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: cargo-desktop-root-v1-${{ github.repository }}-${{ runner.os }}-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: cargo-desktop-root-v1-${{ github.repository }}-${{ runner.os }}-
+      - name: Fetch locked dependencies
+        run: cargo fetch --manifest-path desktop/src-tauri/Cargo.toml --locked
+      - name: Test Tauri Rust bridge offline
+        env:
+          OPENKAKAO_TAURI_SOURCE_CHECK: '1'
+        run: cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --offline
+      - name: Strict lint desktop Rust bridge offline
+        env:
+          OPENKAKAO_TAURI_SOURCE_CHECK: '1'
+        run: cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --locked --offline -- -D warnings
