@@ -138,8 +138,11 @@ class SharedEmergencyBoundary(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(result.reply, "fresh confirmed answer")
                     self.assertEqual(new_speaker.calls, ["fresh confirmed answer"])
                     with database(root) as db:
-                        newer = db.execute("SELECT role FROM voice_messages WHERE session_id=?",
-                                           (renewed.conversation_id,)).fetchall()
+                        newer = db.execute(
+                            "SELECT role FROM voice_messages WHERE session_id=? "
+                            "ORDER BY turn_id, CASE role WHEN 'user' THEN 0 ELSE 1 END",
+                            (renewed.conversation_id,),
+                        ).fetchall()
                     self.assertEqual([row["role"] for row in newer], ["user", "assistant"])
                 finally:
                     renewed.close()
