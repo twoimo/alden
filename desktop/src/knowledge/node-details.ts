@@ -143,6 +143,21 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     receipt.append(element('p', '', `수집 기록 · ${text(selected.platform, 32)} · ${date(selected.collected_at)}${selected.truncated === true ? ' · 일부 발췌' : ''}`));
     receipt.append(element('p', '', `기록 버전: ${text(selected.version, 256)}`));
     receipt.append(element('p', '', `보존 기록 SHA-256: ${text(selected.raw_sha256, 64)}`));
+    // A trace belongs to this exact selected source version and target only.
+    // It reports stored proof; it never claims the GPU rendered this node or
+    // that a local model ran because a derived vector was found.
+    const trace = record(payload?.pipeline_trace);
+    const proof = trace?.ok === true && trace.state === 'available' && trace.document_id === node.id
+      && trace.version === node.sourceVersion && trace.target_id === node.sourceTarget ? trace : null;
+    if (proof) {
+      const stages = record(proof.stages), source = record(proof.source), fts = record(proof.fts), dense = record(proof.dense);
+      const stored = stages?.stored === true && source?.state === 'hash_verified';
+      const indexed = stored && stages?.indexed === true && fts?.state === 'verified';
+      const vector = dense?.state === 'stored_vector_binding_verified';
+      const status = stored ? '저장·원본 해시 확인' : '저장 상태 재확인 필요';
+      receipt.append(element('p', '', `처리 경로 · ${status} · FTS ${indexed ? '확인' : '미확인'} · 로컬 Dense ${vector ? '저장 바인딩 확인' : '미확인/대기'}`));
+      receipt.append(element('p', '', '검증 범위: 저장 기록과 파생 색인 · 실제 모델 로딩 및 화면 렌더링은 별도 확인'));
+    }
     const capture = record(selected.capture);
     if (capture?.status === 'manifest_verified') {
       receipt.append(element('p', '', `보존 파일: ${text(capture.byte_scope, 160)} · ${text(capture.json_pointer, 256)}`));

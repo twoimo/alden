@@ -28,9 +28,11 @@ def _scope(projects):
     return list(dict.fromkeys(projects))
 
 
-def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False):
+def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False, target_id=None):
     projects = _scope(projects)
     clauses, args = [], list(projects)
+    if target_id is not None:
+        args.append(target_id)
     for value, operator in [(time_from, '>='), (time_to, '<=')]:
         if value is not None:
             if type(value) not in (int, float) or not math.isfinite(value):
@@ -45,9 +47,9 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
             text_db = owned
     try:
         with store.database() as db:
-            rows = db.execute('''SELECT d.id,d.platform,d.original_id,v.id AS version,
+            rows = db.execute('''SELECT d.id,d.platform,d.original_id,s.target_id AS source_target,v.id AS version,
                 v.raw_sha256,v.raw_path,v.label,v.body,v.collected_at
-                FROM documents d JOIN (''' + store._scope_versions(projects) + ''') s
+                FROM documents d JOIN (''' + store._scope_versions(projects,target_id) + ''') s
                 ON s.document_id=d.id JOIN versions v ON v.id=s.current_version
                 WHERE d.availability='available' ''' + ''.join(' AND ' + c for c in clauses) + ' ORDER BY d.id', args)
             result, budget = [], 0
@@ -218,13 +220,162 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
             'embedded_windows': windows, 'reused_versions':reused, 'model': model, 'encoding': ENCODING}
 
 
+
+def trace_document(root, document_id, *, projects, expected_version=None, target_id=None):
+    """Bounded read-only proof of one scoped source -> storage -> search -> graph.
+
+    Journal stages establish confirmed producer work; FTS/vectors/graph are
+    checked independently. No search, embeddings, model loading or writes.
+    This is an observation across two independent SQLite snapshots, not proof
+    that a client rendered or cited the node or that an MLX model is resident.
+    """
+    import re
+    projects = _scope(projects)
+    if not isinstance(document_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,40}:[0-9a-f]{64}', document_id):
+        raise ValueError('collection_trace_document_id_invalid')
+    if expected_version is not None and (
+            not isinstance(expected_version, str) or
+            not re.fullmatch(r'version:[0-9a-f]{64}', expected_version)):
+        raise ValueError('collection_trace_expected_version_invalid')
+    if target_id is not None and (
+            not isinstance(target_id, str) or not 1 <= len(target_id) <= 256):
+        raise ValueError('collection_trace_target_invalid')
+    store = CollectionStore.open_existing(Path(root))
+    if store is None:
+        return {'ok': True, 'state': 'not_configured'}
+    placeholders = ','.join('?' for _ in projects)
+    with store.database() as db:
+        found = db.execute('''SELECT m.target_id,m.current_version,m.availability,
+             d.availability AS document_availability,v.label,v.body,v.raw_sha256,
+             v.raw_path,v.id AS version
+             FROM memberships m JOIN documents d ON d.id=m.document_id
+             JOIN versions v ON v.id=m.current_version
+             WHERE m.document_id=? AND (? IS NULL OR m.target_id=?)
+             AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+               AND p.permission!='denied' AND p.project IN (''' + placeholders + '''))
+             ORDER BY CASE WHEN m.availability='available' THEN 0 ELSE 1 END,
+               v.collected_at DESC,m.target_id LIMIT 1''',
+             (document_id,target_id,target_id,*projects)).fetchone()
+        if found is None:
+            # Do not disclose another project's existence, ID, or archived text.
+            return {'ok': True, 'state': 'not_in_scope'}
+        current = dict(found)
+        version = current['version']
+        if expected_version is not None and expected_version != version:
+            return {'ok': False, 'state': 'version_changed', 'document_id': document_id}
+        selected_target = current['target_id']
+        is_available = (current['availability'] == 'available'
+                        and current['document_availability'] == 'available')
+        stages = dict.fromkeys(('discovered','parsed','validated','stored','indexed'), False)
+        # A removed membership's last completed run may only have a stored
+        # tombstone. Do not interpret old completed parsing as current work.
+        latest = db.execute('''SELECT e.run_id,e.event_id,e.sequence,e.details
+           FROM events e JOIN runs r ON r.id=e.run_id
+           WHERE e.document_id=? AND e.target_id=? AND e.version=?
+           AND e.stage='stored' AND r.state='complete'
+           ORDER BY e.sequence DESC LIMIT 1''',
+           (document_id,selected_target,version)).fetchone()
+        change = None
+        if latest:
+            change = json.loads(latest['details']).get('change')
+            for row in db.execute('''SELECT stage FROM events WHERE run_id=?
+                 AND target_id=? AND document_id=? AND version=?''',
+                 (latest['run_id'],selected_target,document_id,version)):
+                if row['stage'] in stages:
+                    stages[row['stage']] = True
+        original = store._verified_source_blob(store.blobs, current['raw_path'], MAX_RECORD_BYTES)
+        if digest(original) != current['raw_sha256']:
+            raise RuntimeError('collection_source_integrity')
+        projected = db.execute('''SELECT label,body FROM version_search
+            WHERE document_id=? AND version_id=? LIMIT 2''',
+            (document_id,version)).fetchall()
+        fts = 'verified' if (len(projected) == 1 and
+            tuple(projected[0]) == (current['label'],current['body'])) else 'missing_or_mismatched'
+        # The bounded single-node graph check shares this collection snapshot.
+        edges = db.execute('''SELECT COUNT(*) FROM relations r
+           JOIN memberships sm ON sm.target_id=r.target_id AND sm.document_id=r.source
+           JOIN memberships tm ON tm.target_id=r.target_id AND tm.document_id=r.target
+           WHERE r.active=1 AND r.target_id=? AND (r.source=? OR r.target=?)
+             AND sm.availability='available' AND tm.availability='available'
+             AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
+                AND p.permission!='denied' AND p.project IN (''' + placeholders + '))',
+           (selected_target,document_id,document_id,*projects)).fetchone()[0] if is_available else 0
+        checkpoint, _, _, _ = store._activity_scope(db, projects, selected_target)
+        # Record/source integrity belongs to the committed collection DB. Dense
+        # is a separately versioned derived cache and can lag this snapshot.
+        output = {
+            'ok': True, 'state': 'available' if is_available else 'removed',
+            'document_id': document_id, 'target_id': selected_target, 'version': version,
+            'projects': projects, 'run_id': latest['run_id'] if latest else None,
+            'stored_change': change if change in ('added','revised','unchanged','removed') else None,
+            'stages': stages,
+            'last_stored_event': {'event_id': latest['event_id'], 'sequence': latest['sequence']} if latest else None,
+            'source': {'state': 'hash_verified', 'sha256': current['raw_sha256']},
+            'fts': {'state': fts, 'scope': 'current scoped version; SQLite FTS5'},
+            'graph': {'state': 'eligible' if is_available else 'retracted',
+                      'selected_target_relations': edges, 'displayed_in_client': False},
+            'activity_checkpoint': checkpoint,
+            'dense': {'state': 'not_indexed', 'model_residency_verified': False},
+            'snapshot_scope': 'collection transaction plus independent optional dense read',
+        }
+    if not is_available:
+        return output
+    cache_path = _path(store)
+    if not cache_path.is_file():
+        return output
+    with closing(sqlite3.connect(cache_path.as_uri() + '?mode=ro',uri=True,timeout=.15)) as cache:
+        cache.execute('PRAGMA query_only=ON')
+        cache.execute('BEGIN')
+        tables = {r[0] for r in cache.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('texts','vectors','text_fts')")}
+        if not {'texts','vectors','text_fts'} <= tables:
+            return output
+        indexed_text = cache.execute('''SELECT base_hash,raw_sha256,extraction,label,body,body_source
+            FROM texts WHERE document_id=? AND version=?''',(document_id,version)).fetchone()
+        indexed_fts = cache.execute('''SELECT label,body FROM text_fts
+            WHERE document_id=? AND version=? LIMIT 2''',(document_id,version)).fetchall()
+        vector = cache.execute('''SELECT text_hash,model,endpoint,encoding,vector
+            FROM vectors WHERE document_id=? AND version=?''',(document_id,version)).fetchone()
+        if indexed_text is None:
+            return output
+        base_hash = digest((current['label'] + '\n' + current['body']).encode())
+        text_ok = indexed_text[:4] == (base_hash,current['raw_sha256'],TEXT_VERSION,current['label'])
+        if indexed_text[5] == 'stored_body':
+            text_ok = text_ok and indexed_text[4] == current['body']
+        elif indexed_text[5] == 'retained_record.localOriginalText':
+            raw = json.loads(original)
+            text_ok = text_ok and isinstance(raw,dict) and raw.get('localOriginalText') == indexed_text[4]
+        else:
+            text_ok = False
+        if not text_ok or len(indexed_fts)!=1 or tuple(indexed_fts[0]) != (indexed_text[3],indexed_text[4]):
+            output['dense']['state'] = 'text_binding_invalid'
+        elif vector is None:
+            output['dense']['state'] = 'text_indexed_vector_pending'
+        else:
+            try:
+                raw_vector = vector[4]
+                values = struct.unpack('<'+'f'*(len(raw_vector)//4), raw_vector) if isinstance(raw_vector,bytes) and 4<=len(raw_vector)<=8192 and len(raw_vector)%4==0 else ()
+                norm = math.sqrt(sum(value*value for value in values))
+                verified = (vector[0] == digest((indexed_text[3]+'\n'+indexed_text[4]).encode())
+                            and all(isinstance(v,str) and v for v in vector[1:3])
+                            and vector[3] == ENCODING and values and
+                            all(math.isfinite(v) for v in values) and abs(norm-1.) <= .001)
+                output['dense']['state'] = 'stored_vector_binding_verified' if verified else 'vector_binding_invalid'
+            except (ValueError, TypeError, OverflowError, struct.error):
+                output['dense']['state'] = 'vector_binding_invalid'
+    return output
+
+
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              candidate_limit=40, max_context_chars=8000, rrf_k=60, rrf_weights=None,
-             cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None):
+             cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None, target_id=None):
     import auto_reply_knowledge_graph as kg
     projects = _scope(projects)
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1024:
         raise ValueError('collection_query_invalid')
+    if target_id is not None and (not isinstance(target_id,str) or not 1<=len(target_id)<=256):
+        raise ValueError('collection_target_scope_invalid')
+    scoped_args = (*projects,target_id) if target_id is not None else tuple(projects)
     if type(max_context_chars) is not int or not 256 <= max_context_chars <= 16000:
         raise ValueError('collection_context_budget')
     if type(candidate_limit) is not int or not 1 <= candidate_limit <= 100:
@@ -234,12 +385,12 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     store = CollectionStore.open_existing(Path(root))
     if store is None:
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
-    source_rows = _rows(store, projects, cancelled, time_from, time_to)
+    source_rows = _rows(store, projects, cancelled, time_from, time_to, target_id=target_id)
     rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
     eligible = {row['id']: row for row in rows}
     terms = kg._fts_query_terms([query])
     lexical = [(r['id'], float(r['rank'])) for r in store.search(terms, projects=projects,
-                limit=candidate_limit, time_from=time_from, time_to=time_to)] if terms else []
+                limit=candidate_limit, time_from=time_from, time_to=time_to, target_id=target_id)] if terms else []
     dense, mode = [], 'bm25_only'
     path = _path(store)
     if terms and path.is_file():
@@ -300,13 +451,13 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 aliases=metadata.get('aliases',[]);aliases=aliases if isinstance(aliases,list) else []
                 marks=','.join('?' for _ in projects)
                 publisher_scopes={}
-                for target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
-                    WHERE m.document_id=? AND m.availability='available' AND EXISTS(SELECT 1 FROM target_projects p
-                    WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,*projects)):
-                    publisher_scopes.setdefault(label,[]).append(target_id)
+                for publisher_target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
+                    WHERE m.document_id=? AND m.availability='available' AND (? IS NULL OR m.target_id=?) AND EXISTS(SELECT 1 FROM target_projects p
+                    WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,target_id,target_id,*projects)):
+                    publisher_scopes.setdefault(label,[]).append(publisher_target_id)
                 conflict=source.execute('''SELECT r.source,r.target FROM relations r WHERE r.active=1 AND r.type IN ('conflicts','contradicts')
-                    AND (r.source=? OR r.target=?) AND EXISTS(SELECT 1 FROM target_projects p
-                    WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,*projects))
+                    AND (r.source=? OR r.target=?) AND (? IS NULL OR r.target_id=?) AND EXISTS(SELECT 1 FROM target_projects p
+                    WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,target_id,target_id,*projects))
                 temporal_records.append({'id':identity,'name':row['label'],'aliases':aliases+list(publisher_scopes),'mention_scopes':publisher_scopes,
                     'has_conflict':any(a in eligible and b in eligible for a,b in conflict),
                     'observed_at':metadata.get('published_at'),'time_basis':'source_published_at',
@@ -332,8 +483,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         chosen = []
         for document_id, _score in ranked[:max(0, min(int(max_entities), 10))]:
             row = eligible[document_id]
-            current = db.execute("SELECT s.current_version FROM (" + store._scope_versions(projects) +
-                                 ") s JOIN documents d ON d.id=s.document_id WHERE d.id=? AND d.availability='available'", (*projects, document_id)).fetchone()
+            current = db.execute("SELECT s.current_version FROM (" + store._scope_versions(projects,target_id) +
+                                 ") s JOIN documents d ON d.id=s.document_id WHERE d.id=? AND d.availability='available'", (*scoped_args, document_id)).fetchone()
             if current is None or current[0] != row['version']:
                 raise RuntimeError('collection_graph_version_changed')
             raw = store._verified_source_blob(store.blobs, row['raw_path'], MAX_RECORD_BYTES)
@@ -347,7 +498,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             proof = {'fact_type': 'entity', 'entity_id': document_id, 'note_id': document_id,
                      'source_kind': 'collected_source', 'source_version': row['version'],
                      'note_hash': row['raw_sha256'], 'original_id': row['original_id'],
-                     'platform': row['platform'], 'projects': projects, 'updated_at': row['collected_at'],
+                     'platform': row['platform'], 'projects': projects, 'source_target': row['source_target'], 'updated_at': row['collected_at'],
                      'body_source': row['body_source'],
                      'derived_from': metadata.get('source', {}), 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
@@ -365,10 +516,10 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 tm.current_version AS target_version FROM relations r
                 JOIN memberships sm ON sm.target_id=r.target_id AND sm.document_id=r.source
                 JOIN memberships tm ON tm.target_id=r.target_id AND tm.document_id=r.target
-                WHERE r.active=1 AND r.source=?
+                WHERE r.active=1 AND r.source=? AND (? IS NULL OR r.target_id=?)
                 AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
                 AND p.permission!='denied' AND p.project IN (''' + marks + ')) ORDER BY r.id',
-                (chosen[0], *projects))
+                (chosen[0], target_id, target_id, *projects))
             for edge in edges:
                 _check(cancelled)
                 if edge['target'] not in eligible or edge['target'] in temporal_excluded:
@@ -383,13 +534,13 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                        {'fact_type': 'relation', 'source_kind': 'collected_source', 'relation': edge['type'],
                         'source_id': edge['source'], 'target_id': edge['target'], 'relation_id': edge['id'],
                         'source_version': eligible[edge['source']]['version'], 'target_version': target['version'],
-                        'projects': projects, 'source_evidence': json.loads(edge['evidence']),
+                        'projects': projects, 'source_target': edge['target_id'], 'source_evidence': json.loads(edge['evidence']),
                         'provenance_valid': True, 'retracted': False})
                 if sum(p['fact_type'] == 'relation' for p in provenance) >= min(int(max_relations), 10):
                     break
     _check(cancelled)
     return {'facts': facts, 'fact_provenance': provenance, 'search_mode': mode,
-            'projects': projects, 'eligible_documents': len(rows), 'context_chars': used,
+            'projects': projects, 'target_id': target_id, 'eligible_documents': len(rows), 'context_chars': used,
             'unsearchable_documents': len(source_rows) - len(rows),
             'pending_text_versions': sum(not r['text_ready'] for r in source_rows),
             'time_basis': 'collection_time',

@@ -450,7 +450,11 @@ class CollectionStore:
             projection = digest(encoded([
                 [{k:v for k,v in r.items() if k != 'source'} for r in records],
                 [{**r, 'evidence': {k:v for k,v in r.get('evidence',{}).items() if k != 'source'}} for r in relations]]))
-            run_id = run_id or identity('snapshot-run', encoded([target_id, source_revision, processing_version, projection]).decode())
+            # The same exact source revision can legitimately reappear after a
+            # different confirmed revision. Include observed monotonic order
+            # in the identity so A -> B -> A republishes A's membership and
+            # active relations, while a replay of the same order stays idempotent.
+            run_id = run_id or identity('snapshot-run', encoded([target_id, source_revision, source_order, processing_version, projection]).decode())
         else:
             projection = None
         run_id = run_id or uuid.uuid4().hex
@@ -638,7 +642,7 @@ class CollectionStore:
                                   "source_evidence": json.loads(row["evidence"])})
             return {"nodes": nodes, "edges": edges, "scope": projects, "canonical": "independent original sources; this is a derived projection"}
 
-    def search(self, query: str, *, projects: list[str], limit=10, time_from=None, time_to=None) -> list[dict]:
+    def search(self, query: str, *, projects: list[str], limit=10, time_from=None, time_to=None, target_id=None) -> list[dict]:
         if not projects:
             return []
         with self.database() as db:
@@ -648,21 +652,26 @@ class CollectionStore:
                     clauses.append('v.collected_at' + operator + '?');values.append(value)
             rows = db.execute("""SELECT d.id,v.label,v.body,v.metadata,bm25(version_search) AS rank
               FROM version_search JOIN documents d ON d.id=version_search.document_id
-              JOIN (""" + self._scope_versions(projects) + """) s ON s.document_id=d.id
+              JOIN (""" + self._scope_versions(projects, target_id) + """) s ON s.document_id=d.id
               AND s.current_version=version_search.version_id JOIN versions v ON v.id=s.current_version
               WHERE version_search MATCH ? AND d.availability='available' """ + ''.join(' AND ' + c for c in clauses) + ' ORDER BY rank,d.id LIMIT ?',
-              (*projects, query, *values, limit)).fetchall()
+              (*projects, *((target_id,) if target_id is not None else ()), query, *values, limit)).fetchall()
             return [{**dict(row), "metadata": json.loads(row["metadata"])} for row in rows]
 
-    def _scope_versions(self, projects: list[str]) -> str:
+    def _scope_versions(self, projects: list[str], target_id=None) -> str:
+        if target_id is not None and (not isinstance(target_id, str) or not 1 <= len(target_id) <= 256):
+            raise ValueError("collection_target_scope_invalid")
         marks = ",".join("?" for _ in projects)
         available = "m.availability='available' AND " if self.schema >= 3 else ""
-        return """SELECT document_id,current_version FROM (
-          SELECT m.document_id,m.current_version,ROW_NUMBER() OVER(
+        selected = " AND m.target_id=?" if target_id is not None else ""
+        # Choose the authorized source version only after the target filter.
+        # Stable original IDs can legitimately appear in several targets.
+        return """SELECT document_id,current_version,target_id FROM (
+          SELECT m.document_id,m.current_version,m.target_id,ROW_NUMBER() OVER(
             PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
           FROM memberships m JOIN versions v ON v.id=m.current_version
           WHERE """ + available + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
-            AND p.permission!='denied' AND p.project IN (""" + marks + "))) WHERE choice=1"
+            AND p.permission!='denied' AND p.project IN (""" + marks + "))" + selected + ") WHERE choice=1"
 
     def projects(self) -> list[dict]:
         with self.database() as db:
@@ -1057,7 +1066,7 @@ class CollectionStore:
 
 def read_action(state_root: Path, action: str, query: str | None = None) -> dict:
     """Bounded read-only application boundary; never creates a store on lookup."""
-    if action not in {"collection-projects", "collection-history", "collection-graph"}:
+    if action not in {"collection-projects", "collection-history", "collection-graph", "collection-trace"}:
         raise ValueError("collection_action_invalid")
     options = json.loads(query) if query else {}
     if not isinstance(options, dict):
@@ -1081,14 +1090,27 @@ def read_action(state_root: Path, action: str, query: str | None = None) -> dict
         result["projects"] = store.projects()
         result["targets"] = store.targets(projects)
         return result
+    if action == "collection-trace":
+        from alden_collection_retrieval import trace_document
+        return trace_document(state_root, options.get("document_id"),
+                              projects=projects, expected_version=options.get("expected_version"),
+                              target_id=options.get("target_id"))
     if action == "collection-graph":
         if options.get("activity") is True:
             return store.activity_page(projects=projects, after=options.get("after"), stream_id=options.get("stream_id"),
                                        limit=options.get("limit",200), target_id=options.get("target_id"), platform=options.get("platform"))
-        return store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
+        result = store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
                                 focus=options.get("focus"), hops=options.get("hops",1), query=str(options.get("search", ""))[:256],
                                 target_id=options.get("target_id"), platform=options.get("platform"),
                                 node_type=options.get("node_type"), relation=options.get("relation"),
                                 since=options.get("since"), until=options.get("until"),
                                 details=options.get("details",False), expected_version=options.get("expected_version"), overview=options.get("overview",False))
+        # Only a selected current source with verified detail binding receives
+        # a separate processing trace. A graph overview does no extra scans.
+        detail = result.get("details") if isinstance(result, dict) else None
+        if options.get("details") is True and isinstance(detail, dict) and detail.get("basis") == "source_record":
+            from alden_collection_retrieval import trace_document
+            result["pipeline_trace"] = trace_document(state_root, detail["node_id"],
+                projects=projects, expected_version=detail["version"], target_id=detail["target_id"])
+        return result
     raise ValueError("collection_action_invalid")

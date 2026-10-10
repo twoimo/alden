@@ -44,6 +44,52 @@ class CollectionRetrievalTests(unittest.TestCase):
     def profile(self):
         return patch.object(kg, '_active_dense_embedding_model', return_value='fixed-test-encoder')
 
+    def test_exact_target_graph_rag_fences_revisions_relations_and_mcp_scope(self):
+        # Two authorized sources may own the same original ID and versions
+        # inside one project. Filtering happens before selecting one version.
+        second=self.store.register(platform='graph',original_id='another-source',
+                                   kind='source',label='another',projects=['one'])
+        shared=self.add(self.allowed,'same','first source facts only')
+        self.add(second,'same','second source facts only')
+        self.store.ingest(second,[{'platform':'graph','original_id':'second-only',
+                                  'label':'unique adjacency','text':'other document'}])
+        relations=[{'source_platform':'graph','source_id':'same',
+                    'target_platform':'graph','target_id':'second-only',
+                    'type':'cites','evidence':{'explicit':True}}]
+        self.store.ingest(second,[],relations=relations)
+        base=retrieve(self.root,'shared',projects=['one'],target_id=self.allowed)
+        selected=retrieve(self.root,'shared',projects=['one'],target_id=second)
+        self.assertEqual(base['target_id'],self.allowed)
+        self.assertEqual(base['facts'],['shared term: first source facts only'])
+        self.assertEqual(base['eligible_documents'],1)
+        self.assertEqual(base['fact_provenance'][0]['source_target'],self.allowed)
+        self.assertEqual(selected['fact_provenance'][0]['source_target'],second)
+        self.assertIn('second source facts only',selected['facts'][0])
+        self.assertEqual(len([p for p in base['fact_provenance'] if p['fact_type']=='relation']),0)
+        self.assertEqual(len([p for p in selected['fact_provenance'] if p['fact_type']=='relation']),1)
+        self.assertNotEqual(base['fact_provenance'][0]['source_version'],
+                            selected['fact_provenance'][0]['source_version'])
+        self.assertEqual(self.store.search('shared',projects=['one'],
+                                           target_id=self.allowed)[0]['body'],'first source facts only')
+        self.assertEqual(self.store.search('shared',projects=['one'],
+                                           target_id=second)[0]['body'],'second source facts only')
+        out=retrieve(self.root,'shared',projects=['one'],target_id=self.other)
+        self.assertEqual(out['facts'],[])
+        self.assertEqual(out['eligible_documents'],0)
+        with self.assertRaisesRegex(ValueError,'target_scope_invalid'):
+            retrieve(self.root,'shared',projects=['one'],target_id=True)
+        mcp=KnowledgeServer(self.root,['one'])
+        selection={'name':'alden_knowledge_search','arguments':
+                   {'projects':['one'],'query':'shared','target_id':self.allowed}}
+        self.assertTrue(mcp.valid_call(selection))
+        observed=mcp.call_tool(selection,CallControl(timeout=5))
+        self.assertEqual(observed['fact_provenance'][0]['source_target'],self.allowed)
+        for invalid in (None,7,'','x'*257):
+            if invalid is None:
+                continue
+            self.assertFalse(mcp.valid_call({'name':'alden_knowledge_search','arguments':
+                             {'projects':['one'],'query':'shared','target_id':invalid}}))
+
     def test_visible_version_is_project_specific_and_hash_verified(self):
         self.add(self.allowed, 'same', 'original body');self.add(self.other, 'same', 'private other body')
         result = retrieve(self.root, 'shared', projects=['one'])

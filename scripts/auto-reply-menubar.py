@@ -2730,7 +2730,7 @@ def main():
         except (ValueError, RuntimeError, OSError) as error:
             _print_json({"ok": False, "reason": type(error).__name__, "targets": []})
         return 0
-    if action in {"collection-history", "collection-graph", "collection-projects"}:
+    if action in {"collection-history", "collection-graph", "collection-trace", "collection-projects"}:
         from alden_collection import read_action
         try:
             _print_json(read_action(_menubar_state_root(), action, _argv_flag_value("--history-query")))
