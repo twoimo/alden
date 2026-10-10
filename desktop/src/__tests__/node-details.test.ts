@@ -50,6 +50,28 @@ describe('selected-node explanations',()=>{
     const collection=parseKnowledgeGraph({nodes:[{id:'group',label:'대화 맥락',category:'collection',is_hub:true},...graph.nodes],edges:[{source:'group',target:id,relation:'linked',purpose:'navigation'}]});
     expect(nodeSummary(collection,collection.nodes[0])).toContain('입구 1개');
   });
+  it('shows stored source-to-index proof only for the exact selected source and target',()=>{
+    const documentId='youtube:'+'a'.repeat(64),version='version:'+'b'.repeat(64),target='target-one';
+    const view=parseKnowledgeGraph({nodes:[{id:documentId,label:'저장된 영상',category:'video',
+      source_version:version,source_target:target}],edges:[]});
+    const details={node_id:documentId,basis:'source_record',version,target_id:target,platform:'youtube',
+      raw_sha256:'c'.repeat(64),body:'원본에 접근한 본문'};
+    const pipeline_trace={ok:true,state:'available',document_id:documentId,version,target_id:target,
+      stages:{discovered:true,parsed:true,validated:true,stored:true,indexed:true},
+      source:{state:'hash_verified'},fts:{state:'verified'},
+      dense:{state:'stored_vector_binding_verified',model_residency_verified:false}};
+    renderNodeDetails(view,view.nodes[0],{details,pipeline_trace});
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).toContain('저장·원본 해시 확인');
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).toContain('로컬 Dense 저장 바인딩 확인');
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).toContain('실제 모델 로딩 및 화면 렌더링은 별도 확인');
+    expect(document.querySelector('script,img')).toBeNull();
+    renderNodeDetails(view,view.nodes[0],{details,pipeline_trace:{...pipeline_trace,target_id:'another'}});
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).not.toContain('저장·원본 해시 확인');
+    renderNodeDetails(view,view.nodes[0],{details,pipeline_trace:{...pipeline_trace,
+      fts:{state:'missing_or_mismatched'},dense:{state:'not_indexed'}}});
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).toContain('FTS 미확인');
+    expect(document.getElementById('knowledge-node-evidence')!.textContent).toContain('Dense 미확인/대기');
+  });
   it('keeps a room node scoped to its own account and room even without an explicit detail scope',()=>{
     const roomId=`chat:kakao:${account}:room:42`;
     const roomGraph=parseKnowledgeGraph({nodes:[{id:roomId,label:'회의',category:'채팅방'}],edges:[]});
