@@ -51,7 +51,8 @@ class CollectionRetrievalTests(unittest.TestCase):
                                    kind='source',label='another',projects=['one'])
         shared=self.add(self.allowed,'same','first source facts only')
         self.add(second,'same','second source facts only')
-        self.add(second,'second-only','other document')
+        self.store.ingest(second,[{'platform':'graph','original_id':'second-only',
+                                  'label':'unique adjacency','text':'other document'}])
         relations=[{'source_platform':'graph','source_id':'same',
                     'target_platform':'graph','target_id':'second-only',
                     'type':'cites','evidence':{'explicit':True}}]
