@@ -60,9 +60,12 @@ flowchart LR
   Python 60개, UI 470개, 타입·번들 빌드 통과. 최초 재검사에서
   TypeScript nullable guard 미비로 빌드 실패한 로그는 보존하고
   null 명시 검사 후 성공한 결과를 별도로 연결했다.
-- 최신 표시 및 집계 검증은 코드 해시가 고정된 CI 실행에
-  연결한 뒤 결과를 기록한다. UI DOM 검사와 사용자의 Mac 실물
-  화면/GPU/입력·전체 설치본은 독립 검증이다.
+- 최종 [macOS CI 38070713835](https://github.com/twoimo/alden/actions/runs/38070713835):
+  정확한 검증 브랜치 SHA `6250f436ccaa7d41b0f1a1cebf269d0967e50266`.
+  저장·스냅샷·근거 경로 Python **60/60**, UI 전체 **471/471**,
+  TypeScript/Vite 프로덕션 빌드 **성공**.
+  검증된 소스/테스트 blob SHA는 독립 구현 브랜치와 동일해야 한다.
+  사용자의 Mac 실물 화면/GPU/입력·전체 설치본은 독립 검증이다.
 - 자체 MCP `alden_knowledge_trace`의 저장 근거 경로는
   [이전 실제 stdio 테스트](alden-pipeline-readback-20261011.md)에서
   확인했다. 외부 `osk-system` 서버를 실제 조회한 증거가
