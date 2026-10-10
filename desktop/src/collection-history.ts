@@ -94,6 +94,7 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
   let stream: string | null = null, aggregate: Counts | null = null;
   let historical = false, newCount = 0;
   const expanded = new Set<number>();
+  const activeReadbacks = new Map<string, Promise<Record<string, unknown> | null>>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new AbortController();
   const virtual = new VirtualList<Row>(list as HTMLElement, row => String(row.sequence), row => {
@@ -123,6 +124,8 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       if (typeof value === 'string' && value) identifiers.append(make('dt', '', String(label)), make('dd', '', value));
     }
     more.append(identifiers);
+    const readback = make('p', 'collection-readback', ''); readback.hidden = true;
+    more.append(readback);
     if (typeof row.source_url === 'string') {
       try {
         const url = new URL(row.source_url);
@@ -134,11 +137,75 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     }
     article.append(time, copy, badge, more); return article;
   }, 82);
+  async function verifyExpanded(detail: HTMLDetailsElement, sequence: number): Promise<void> {
+    const row = items.find(entry => entry.sequence === sequence);
+    const projects = row?.projects;
+    if (!row || !['stored', 'indexed'].includes(String(row.stage))
+      || !Number.isSafeInteger(sequence) || !Array.isArray(projects)
+      || !projects.length || projects.length > 16
+      || !projects.every(project => typeof project === 'string' && project.length > 0 && project.length <= 128)
+      || !['document_id', 'version', 'target_id', 'run_id'].every(key =>
+        typeof row[key] === 'string' && (row[key] as string).length > 0 && (row[key] as string).length <= 256)) return;
+    const output = detail.querySelector<HTMLElement>('.collection-readback');
+    if (!output) return;
+    output.hidden = false; output.textContent = '현재 저장 상태를 다시 확인합니다.';
+    const ticket = epoch;
+    const params = { projects, document_id: row.document_id, expected_version: row.version, target_id: row.target_id };
+    const key = JSON.stringify(params);
+    let pending = activeReadbacks.get(key);
+    if (!pending) {
+      pending = load('collection-trace', { query: key });
+      activeReadbacks.set(key, pending);
+      void pending.finally(() => { if (activeReadbacks.get(key) === pending) activeReadbacks.delete(key); }).catch(() => {});
+    }
+    let proof: Record<string, unknown> | null = null;
+    try { proof = await pending; } catch { /* No raw provider exception is shown in the UI. */ }
+    if (dead || !visible || page !== 'history' || ticket !== epoch || !detail.open
+      || !list.contains(detail) || detail.dataset.sequence !== String(sequence)) return;
+    if (proof?.state === 'version_changed') {
+      output.textContent = '후속 개정으로 현재 버전이 달라졌습니다. 이 기록의 당시 처리 단계는 보존됩니다.';
+      return;
+    }
+    if (proof?.state === 'not_in_scope') {
+      output.textContent = '현재 권한에서 이 원본을 재확인할 수 없습니다.';
+      return;
+    }
+    const sameScope = proof?.ok === true && ['available', 'removed'].includes(String(proof.state))
+      && proof.document_id === row.document_id && proof.version === row.version
+      && proof.target_id === row.target_id && Array.isArray(proof.projects)
+      && proof.projects.length === projects.length
+      && proof.projects.every((project, index) => project === projects[index]);
+    if (!sameScope) { output.textContent = '저장 결과를 확인하지 못했습니다.'; return; }
+    const source = proof.source as Record<string, unknown> | undefined;
+    const stages = proof.stages as Record<string, unknown> | undefined;
+    const fts = proof.fts as Record<string, unknown> | undefined;
+    const dense = proof.dense as Record<string, unknown> | undefined;
+    const runMatches = proof.run_id === row.run_id;
+    if (!runMatches) {
+      output.textContent = '이후 처리 실행이 확인됐습니다. 현재 저장 상태가 이 이력의 결과를 대신하지 않습니다.';
+      return;
+    }
+    const sourceVerified = source?.state === 'hash_verified';
+    if (proof.state === 'removed') {
+      output.textContent = sourceVerified
+        ? '재조회 확인 · 원문 해시 보존 · 현재 그래프에서 제외됨'
+        : '원본 보존 상태를 다시 확인해야 합니다.';
+      return;
+    }
+    const stored = sourceVerified && stages?.stored === true;
+    const indexed = stored && stages?.indexed === true && fts?.state === 'verified';
+    const vector = dense?.state === 'stored_vector_binding_verified';
+    output.textContent = (stored ? '저장·원문 해시 확인' : '저장 상태 재확인 필요')
+      + ' · FTS ' + (indexed ? '확인' : '미확인')
+      + ' · Dense ' + (vector ? '저장 바인딩 확인' : '미확인/대기')
+      + ' · 모델 실행은 별도 검증';
+  }
   list.addEventListener('toggle', event => {
     const detail = event.target;
     if (!(detail instanceof HTMLDetailsElement) || !list.contains(detail)) return;
     const sequence = Number(detail.dataset.sequence);
-    if (detail.open) expanded.add(sequence); else expanded.delete(sequence);
+    if (detail.open) { expanded.add(sequence); void verifyExpanded(detail, sequence); }
+    else expanded.delete(sequence);
   }, { capture: true, signal: listeners.signal });
   virtual.setVisible(false);
   const stopTimer = () => { if (timer) clearTimeout(timer); timer = null; };
