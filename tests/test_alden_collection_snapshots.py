@@ -47,6 +47,37 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0],3)
             self.assertEqual(db.execute('PRAGMA foreign_key_check').fetchall(),[])
 
+    def test_reappearing_exact_revision_reactivates_sources_and_relations_once(self):
+        records=[self.record('a'),self.record('b')]
+        relation={'source_platform':'graph','source_id':'a','target_platform':'graph',
+                  'target_id':'b','type':'cites','evidence':{'source':'fixture'}}
+        first=self.snapshot(self.a,records,1,relations=[relation])
+        version=self.store.graph_page(projects=['one'])['nodes'][0]['source_version']
+        self.assertEqual(len(self.store.graph_page(projects=['one'])['edges']),1)
+        deleted=self.snapshot(self.a,[],2)
+        self.assertEqual(deleted['removed'],2)
+        self.assertEqual(self.store.graph_page(projects=['one'])['nodes'],[])
+        restored=self.snapshot(self.a,records,3,relations=[relation])
+        page=self.store.graph_page(projects=['one'])
+        self.assertEqual(restored['state'],'complete')
+        self.assertNotEqual(restored['run_id'],first['run_id'])
+        self.assertEqual(restored['added'],0)
+        self.assertEqual(restored['unchanged'],2)
+        self.assertEqual(len(page['nodes']),2)
+        self.assertEqual(len(page['edges']),1)
+        self.assertEqual(page['nodes'][0]['source_version'],version)
+        with self.store.database() as db:
+            runs=db.execute('SELECT COUNT(*) FROM runs WHERE target_id=?',(self.a,)).fetchone()[0]
+            stages=db.execute('SELECT COUNT(*) FROM events WHERE run_id=?',(restored['run_id'],)).fetchone()[0]
+        self.assertEqual(runs,3)
+        self.assertGreater(stages,0)
+        replay=self.snapshot(self.a,records,3,relations=[relation])
+        self.assertEqual(replay['state'],'unchanged')
+        self.assertEqual(replay['run_id'],restored['run_id'])
+        with self.store.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM runs WHERE target_id=?',(self.a,)).fetchone()[0],runs)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM events WHERE run_id=?',(restored['run_id'],)).fetchone()[0],stages)
+
     def test_older_and_conflicting_source_revisions_cannot_replace_current(self):
         self.snapshot(self.a,[self.record('same','new')],20)
         before=self.store.target(self.a)['cursor']
