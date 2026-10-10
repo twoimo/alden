@@ -272,6 +272,24 @@ class AldenToolRuntimeBrowserTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ax.status, ToolStatus.ABORTED)
             self.assertEqual(ax.error_code, AX_ABORT_GLOBAL)
 
+    async def test_global_abort_followed_by_browser_exception_reports_cancelled_turn(self):
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            controller = AbortController(root)
+            class ExplodeAfterStop:
+                async def run(self, _task):
+                    controller.abort("stop before result publication")
+                    raise RuntimeError("arbitrary provider payload must stay private")
+
+            runtime = AldenToolRuntime(
+                root, _browser_runner_factory=lambda _token: ExplodeAfterStop(),
+            )
+            result = await runtime.run_browser(BrowserToolJob("browser-exception-after-stop", "task"))
+            self.assertEqual(result.status, ToolStatus.ABORTED)
+            self.assertEqual(result.error_code, AX_ABORT_GLOBAL)
+            self.assertEqual(result.result, "")
+            self.assertTrue(read_abort_state(controller.path).latched)
+
     async def test_task_rect_and_result_bounds_fail_closed(self):
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -413,6 +431,29 @@ class AldenToolRuntimeAxTests(unittest.TestCase):
             self.assertEqual(result.error_code, AX_ERROR_EFFECT_UNKNOWN)
             self.assertEqual(len(adapter.resolve_calls), 1)
             self.assertEqual(len(adapter.perform_calls), 1)
+
+    def test_abort_while_resolving_exact_ax_does_not_press_or_misreport_failure(self):
+        errors = (FocusStealRequired(), BackgroundAxActionError(AX_ERROR_TARGET_AMBIGUOUS),
+                  RuntimeError("accessibility error after emergency stop"))
+        for raised in errors:
+            with self.subTest(error=type(raised).__name__), TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                controller = AbortController(root)
+                class AbortingResolver(FakeExactAxAdapter):
+                    def resolve_exact(self, target, *, timeout_seconds):
+                        self.resolve_calls.append((target, timeout_seconds))
+                        controller.abort("global stop during read-only resolution")
+                        raise raised
+
+                adapter = AbortingResolver()
+                runtime = AldenToolRuntime(root, _ax_adapter_factory=lambda: adapter)
+                result = runtime.run_exact_ax(
+                    ExactAxToolJob("ax-resolve-stopped", exact_target(), opt_in=True)
+                )
+                self.assertEqual(result.status, ToolStatus.ABORTED)
+                self.assertEqual(result.error_code, AX_ABORT_GLOBAL)
+                self.assertEqual(len(adapter.resolve_calls), 1)
+                self.assertEqual(adapter.perform_calls, [])
 
     def test_exact_ax_latched_abort_prevents_target_resolution(self):
         with TemporaryDirectory() as temp_dir:
