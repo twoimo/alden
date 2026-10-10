@@ -56,6 +56,35 @@ foreground/pointer 전환 금지 계약은 보존한다.
 전용 모의 Runner/AX adapter와 실제 AbortController를 사용했으나
 사용자 Mac의 Accessibility 승인·실제 창·물리 클릭 증거는 아니다.
 
+## 서로 다른 런타임의 전역 중단과 재개
+
+추가 통합에서 음성 파이프라인과 독립 브라우저가 **같은**
+`AbortController` epoch를 사용하는 동안 동시에 작업하도록
+재현했다. Global emergency stop이 발행되면 지연된 모델 응답,
+TTS/assistant 이력과 브라우저 결과를 모두 차단한다.
+이후 명시적 `resume_after_human_action`은 과거 epoch 토큰을
+되살리지 않고, 새 토큰으로 새롭게 시작한 세션만 성공한다.
+
+`scripts/alden_voice.py`의 `_begin_turn`은 유효하지 않은
+세션에서 새 사용자 입력·`turn_id`를 할당하지 않는다.
+동기 `process_text/process_utterance`는 해당 입력을
+`ABORTED`, `cancelled=true`로 정확히 반환한다.
+입력 수신과 작업 큐 등록 사이의 중단 경합도
+`_submit_turn`의 성공 boolean으로 연결해, 작업 큐에
+등록되지 않은 요청을 `submit_text`가 성공했다고
+보고하지 않도록 수정했다.
+
+[macOS CI #38073524156](https://github.com/twoimo/alden/actions/runs/38073524156),
+정확한 검증 SHA `80c8bc002404e9c77328ac9e1147dd3cf6a94dd4`:
+**Python 94/94 통과**. `tests/test_alden_cross_runtime_abort.py`는
+실제 `AldenVoicePipeline`, `AldenToolRuntime`,
+`alden_history.database`, `AbortController`를 함께 실행한다.
+네트워크 모델과 브라우저/스피커만 모의 객체이므로 이 결과는
+실물 macOS 장치의 모델·AX·마이크 효과를 증명하지 않는다.
+선행 실패 실행 `38073211690`은 테스트의 SQL 정렬 가정 오류로
+분리해 보존했고, `38073277534`에서 교차 턴 93개 통과한
+결과도 당시 커밋의 독립 증거로 남긴다.
+
 ## 실제 설치/릴리즈 게이트
 
 Mac 네이티브 Core/Computer Use가 아직 사용 가능한 유효한
