@@ -60,7 +60,7 @@ def _health(root):
             return {}
         value = json.loads(path.read_bytes())
         return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
 
 def _write(path, value):
@@ -129,13 +129,26 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
             if value in EFFORTS and value not in efforts:
                 efforts.append(value)
         observation = health.get(model, {})
-        fresh = 0 <= stamp - observation.get("at", 0) <= 300
+        # Health is optional persisted telemetry. A damaged row must not hide
+        # every model or alter the user's saved selection.
+        if not isinstance(observation, dict):
+            observation = {}
+        observed_at = observation.get("at")
+        # Reject booleans, non-numbers, NaN, future values and huge integers
+        # before subtraction; retain the existing inclusive five-minute TTL.
+        fresh = (type(observed_at) in (int, float) and 0 <= observed_at <= stamp
+                 and stamp - observed_at <= 300)
+        error = observation.get("error")
+        if not isinstance(error, str) or error not in {"quota", "authentication", "memory", "unavailable", "cancelled"}:
+            error = "unavailable"
         ready = any(str(item.get("id", "")).removeprefix("mlx/") == model.removeprefix("mlx/") for item in local_rows)
         status = ("running" if workspace == "ready" else workspace) if local and ready else "not_loaded" if local else "connected"
-        if fresh and observation.get("success") is True and (not local or ready and workspace == "ready"):
+        # Contradictory success/error telemetry is not verified availability.
+        if (fresh and observation.get("success") is True and observation.get("error") is None
+                and (not local or ready and workspace == "ready")):
             status = "available"
-        elif fresh and observation.get("success") is False and observation.get("error") != "cancelled":
-            status = observation.get("error") or "unavailable"
+        elif fresh and observation.get("success") is False and error != "cancelled":
+            status = error
         default = row.get("default_reasoning_level", row.get("reasoning_effort"))
         if "tts" in model.lower():
             status = "not_chat"
