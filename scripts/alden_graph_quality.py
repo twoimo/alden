@@ -18,7 +18,26 @@ from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded,
 def _json(value):
     def reject(value):
         raise ValueError("nonfinite_json")
-    return json.loads(value, parse_constant=reject)
+
+    def finite_float(value):
+        result = float(value)
+        if not math.isfinite(result):
+            raise ValueError("nonfinite_json")
+        return result
+
+    def unique_object(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("duplicate_json_key")
+            result[key] = item
+        return result
+
+    # A matching byte hash cannot make an ambiguous object authoritative.
+    # parse_constant alone also misses finite JSON literals such as 1e400
+    # that overflow the parser's float representation, including nested ones.
+    return json.loads(value, parse_constant=reject, parse_float=finite_float,
+                      object_pairs_hook=unique_object)
 
 
 def _blob(folder, name):

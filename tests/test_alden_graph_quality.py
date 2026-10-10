@@ -326,6 +326,71 @@ class QualityTests(unittest.TestCase):
         self.assertNotIn(identity('graph', 'secret'), json.dumps(report))
         self.assertEqual(self.files(), before)
 
+    def test_ambiguous_or_overflowed_source_json_is_not_counted_as_verified(self):
+        self.store.ingest(self.a, [self.record('bad'), self.record('healthy')])
+        bad = self.version('bad')
+        for payload in (
+                b'{"text":"first","text":"second"}',
+                b'{"nested":{"name":"first","na\\u006de":"second"}}',
+                b'{"score":1e400}',
+                b'{"nested":[{"score":-1e400}]}'):
+            with self.subTest(payload=payload):
+                sha = digest(payload)
+                (self.store.blobs / (sha + '.json')).write_bytes(payload)
+                with self.store.database() as db:
+                    db.execute('UPDATE versions SET raw_sha256=?,raw_path=? WHERE id=?',
+                               (sha, sha + '.json', bad['id']))
+                before = self.files()
+                report = audit(self.root, ['one'], verify_sources=True)
+                self.assertEqual(report['findings'].get('source_blob_invalid'), 1)
+                self.assertEqual(report['counts']['source_blobs_verified'], 1)
+                self.assertEqual(report['counts']['project_current_versions'], 2)
+                self.assertEqual(self.files(), before)
+
+    def test_ambiguous_or_overflowed_relation_json_is_reported_without_deletion(self):
+        self.store.ingest(self.a, [self.record('x'), self.record('y')], relations=[
+            {'source_platform': 'graph', 'source_id': 'x', 'target_platform': 'graph',
+             'target_id': 'y', 'type': 'reference', 'evidence': {'reason': 'reference'}}])
+        for evidence in ('{"reason":"first","reason":"second"}',
+                         '{"nested":[{"confidence":1e400}]}'):
+            with self.subTest(evidence=evidence):
+                with self.store.database() as db:
+                    db.execute('UPDATE relations SET evidence=?,version=?',
+                               (evidence, digest(evidence.encode())))
+                before = self.files()
+                report = audit(self.root, ['one'])
+                self.assertEqual(report['findings'].get('relation_evidence_invalid'), 1)
+                self.assertEqual(report['counts']['relations'], 1)
+                self.assertEqual(self.files(), before)
+
+    def test_duplicate_metadata_keys_are_reported_even_when_hashes_match_last_value(self):
+        self.store.ingest(self.a, [self.record('x')])
+        row = self.version('x')
+        metadata = json.loads(row['metadata'])
+        self.assertTrue(metadata)
+        name = next(iter(metadata))
+        ambiguous = '{' + json.dumps(name) + ':"discarded",' + row['metadata'][1:]
+        self.assertEqual(json.loads(ambiguous), metadata)
+        with self.store.database() as db:
+            db.execute('UPDATE versions SET metadata=? WHERE id=?', (ambiguous, row['id']))
+        before = self.files()
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['findings'].get('metadata_invalid'), 1)
+        self.assertEqual(self.files(), before)
+
+    def test_finite_exponents_and_repeated_keys_in_separate_objects_remain_valid(self):
+        evidence = {'parts': [{'name': 'first', 'score': 1e300},
+                              {'name': 'second', 'score': -1e-300}]}
+        self.store.ingest(self.a, [self.record('x', raw=evidence), self.record('y')], relations=[
+            {'source_platform': 'graph', 'source_id': 'x', 'target_platform': 'graph',
+             'target_id': 'y', 'type': 'reference', 'evidence': evidence}])
+        before = self.files()
+        report = audit(self.root, ['one'], verify_sources=True)
+        self.assertEqual(report['findings'], {})
+        self.assertEqual(report['counts']['source_blobs_verified'], 2)
+        self.assertEqual(report['counts']['relations'], 1)
+        self.assertEqual(self.files(), before)
+
 
 if __name__ == '__main__':
     unittest.main()
