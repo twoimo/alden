@@ -109,6 +109,36 @@ describe('durable collection history', () => {
     expect(vi.getTimerCount()).toBe(1);
   });
 
+  it('rejects a reversed forward page and retries it without losing earlier history', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce({ ...response([event(3)]), stream_id: 'stable', cursor: 3 })
+      .mockResolvedValueOnce({ ...response([event(5), event(4)]), stream_id: 'stable', cursor: 5 })
+      .mockResolvedValueOnce({ ...response([event(4), event(5)]), stream_id: 'stable', cursor: 5 });
+    setup(load); await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelector('.collection-event-list')!.textContent).toContain('자료 3');
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(query(load).after).toBe(3);
+    expect(document.querySelector('.collection-status')!.textContent).toContain('순서를 확인하지 못했습니다');
+    expect(document.querySelector('.collection-event-list')!.textContent).not.toContain('자료 5');
+    expect(document.querySelector('.collection-event-list')!.textContent).toContain('자료 3');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(query(load).after).toBe(3);
+    const history = document.querySelector('.collection-event-list')!.textContent!;
+    expect(history).toContain('자료 3'); expect(history).toContain('자료 4'); expect(history).toContain('자료 5');
+    expect(document.querySelectorAll('.collection-event-row')).toHaveLength(3);
+  });
+  it('keeps the entire initial page uncommitted when any item is invalid', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce(response([event(3), { ...event(2), sequence: 0 }, event(1)]))
+      .mockResolvedValueOnce(response([event(3), event(2), event(1)]));
+    setup(load); await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelector('.collection-event-list')!.textContent).not.toContain('자료 3');
+    expect(document.querySelector('.collection-status')!.textContent).toContain('순서를 확인하지 못했습니다');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(query(load).after).toBeUndefined();
+    expect(document.querySelector('.collection-event-list')!.textContent).toContain('자료 3');
+    expect(document.querySelectorAll('.collection-event-row')).toHaveLength(3);
+  });
   it('keeps the older view stable while announcing new durable stages and allows returning to latest', async () => {
     const load = vi.fn<typeof fetchSettingsAction>()
       .mockResolvedValueOnce(response([event(20)], 20))
