@@ -1,5 +1,21 @@
 # Alden desktop design contract
 
+## 2026-10-11 — Tool stop state is not an effect receipt
+
+Independent owned-browser jobs that are interrupted during a runner
+exception display aborted, not a fake provider failure. Exact-target
+background AX only reports aborted when cancellation is confirmed
+**before** the press. Once an AX action might have occurred, the
+existing unknown-effect error is not converted into successful
+cancellation or a retry prompt. Never show private task strings or
+provider exceptions as UI status.
+
+One global stop epoch also fences concurrent local voice and browser turns. A stale voice session cannot allocate a new turn or advertise an input that was cancelled before queue publication; only explicit human resume plus a new token allows new work.
+
+[Behavior, redaction and macOS CI 94-test evidence](../docs/architecture/alden-tool-cancellation-20261011.md).
+Physical macOS Accessibility focus, input and outcome need a separate
+owner-device verification.
+
 ## 2026-10-11 — Confirmed voice answer boundary
 
 A local MLX transport that emits partial text but does not confirm a

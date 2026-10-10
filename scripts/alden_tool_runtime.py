@@ -329,6 +329,17 @@ class AldenToolRuntime:
                 )
             raise
         except Exception:
+            # A local runner can throw while global stop closes its browser
+            # context. That turn is cancelled, not a new browser failure.
+            # The runner's own effect receipts remain authoritative; this
+            # status never asserts that an external page write was reverted.
+            if token.is_cancelled():
+                return self._finish(
+                    job_id=job_id,
+                    kind=kind,
+                    status=ToolStatus.ABORTED,
+                    error_code=AX_ABORT_GLOBAL,
+                )
             return self._finish(
                 job_id=job_id,
                 kind=kind,
@@ -577,6 +588,11 @@ class AldenToolRuntime:
             adapter = self._ax_adapter_factory()
             resolved = adapter.resolve_exact(job.target, timeout_seconds=timeout_seconds)
         except FocusStealRequired:
+            if token.is_cancelled():
+                return self._finish(
+                    job_id=job_id, kind=kind,
+                    status=ToolStatus.ABORTED, error_code=AX_ABORT_GLOBAL,
+                )
             return self._finish(
                 job_id=job_id,
                 kind=kind,
@@ -584,6 +600,11 @@ class AldenToolRuntime:
                 error_code=AX_ABORT_FOCUS_REQUIRED,
             )
         except BackgroundAxActionError as exc:
+            if token.is_cancelled():
+                return self._finish(
+                    job_id=job_id, kind=kind,
+                    status=ToolStatus.ABORTED, error_code=AX_ABORT_GLOBAL,
+                )
             status = (
                 ToolStatus.REJECTED
                 if exc.error_code
@@ -602,6 +623,11 @@ class AldenToolRuntime:
                 error_code=exc.error_code,
             )
         except Exception:
+            if token.is_cancelled():
+                return self._finish(
+                    job_id=job_id, kind=kind,
+                    status=ToolStatus.ABORTED, error_code=AX_ABORT_GLOBAL,
+                )
             return self._finish(
                 job_id=job_id,
                 kind=kind,

@@ -1235,6 +1235,11 @@ class AldenVoicePipeline:
         with self._lock:
             if self._closed or source not in {"microphone", "text"}:
                 return None
+            # An older, globally aborted session may not accept another input
+            # after human resume. The caller must create a fresh epoch token;
+            # otherwise a rejected ticket would falsely advance turn_id.
+            if self.token.is_cancelled():
+                return None
             if event_id is not None:
                 if not isinstance(event_id, str) or not event_id or len(event_id) > 256:
                     return None
@@ -1304,22 +1309,23 @@ class AldenVoicePipeline:
         if failure is not None:
             raise RuntimeError("voice_resource_cleanup_failed") from failure
 
-    def _submit_turn(self, turn: VoiceTurn, pcm16: bytes = b"", text: str | None = None) -> None:
+    def _submit_turn(self, turn: VoiceTurn, pcm16: bytes = b"", text: str | None = None) -> bool:
         future: Future[VoiceResult] = Future()
         self._latest_future = future
         if turn.token.is_cancelled():
             future.set_result(self._turn_end(turn, VoiceState.ABORTED, "global_abort"))
-            return
+            return False
         try:
             self._turn_state(turn, VoiceState.TRANSCRIBING if text is None else VoiceState.GENERATING)
         except AldenCancelled:
             future.set_result(self._turn_end(turn, VoiceState.ABORTED, "turn_cancelled"))
-            return
+            return False
         self._pending_turn = (turn, pcm16, text, future)
         if self._worker is None:
             self._worker = threading.Thread(target=self._work_loop, daemon=True, name="alden-voice")
             self._worker.start()
         self._work_ready.notify()
+        return True
 
     def _work_loop(self) -> None:
         while True:
@@ -1350,8 +1356,7 @@ class AldenVoicePipeline:
             turn = self._begin_turn(source, event_id)
             if turn is None:
                 return False
-            self._submit_turn(turn, text=text)
-            return True
+            return self._submit_turn(turn, text=text)
 
     def poll_result(self) -> VoiceResult | None:
         with self._lock:
@@ -1389,14 +1394,24 @@ class AldenVoicePipeline:
     def process_utterance(self, pcm16: bytes, *, source: str = "microphone", event_id: str | None = None) -> VoiceResult:
         turn = self._begin_turn(source, event_id)
         if turn is None:
-            return VoiceResult(VoiceState.ENDED, "input_ignored", conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version)
+            with self._lock:
+                cancelled = self.token.is_cancelled()
+                return VoiceResult(VoiceState.ABORTED if cancelled else VoiceState.ENDED,
+                                   "global_abort" if cancelled else "input_ignored",
+                                   conversation_id=self.conversation_id, turn_id=self.turn_id,
+                                   context_version=self.context_version, cancelled=cancelled)
         with self._processing_lock:
             return self._process_turn(turn, pcm16=pcm16)
 
     def process_text(self, text: str, *, source: str = "text", event_id: str | None = None) -> VoiceResult:
         turn = self._begin_turn(source, event_id)
         if turn is None:
-            return VoiceResult(VoiceState.ENDED, "input_ignored", conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version)
+            with self._lock:
+                cancelled = self.token.is_cancelled()
+                return VoiceResult(VoiceState.ABORTED if cancelled else VoiceState.ENDED,
+                                   "global_abort" if cancelled else "input_ignored",
+                                   conversation_id=self.conversation_id, turn_id=self.turn_id,
+                                   context_version=self.context_version, cancelled=cancelled)
         with self._processing_lock:
             return self._process_turn(turn, text=text)
 
