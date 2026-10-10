@@ -39,7 +39,7 @@ PR #27 HEAD `0509551b08b71a72778d7e24fa852ccb235e3f7e`로부터
 | 변경 파일 저장/즉시 재조회 | 실제 실행 검증됨 | GitHub write 후 각 파일 전체 문자열과 blob readback 일치 |
 | 완전 스냅샷 메타데이터 삭제 범위 SQL | 실제 실행 검증됨 (독립 Linux) | 서로 다른 계정 보존, 현재 계정 삭제 범위 가상 SQLite 검사 |
 | 중첩 JSON 무한대 거부 | 실제 실행 검증됨 (독립 Linux) | `json.loads(parse_float=...)`의 중첩 오버플로 검사 |
-| 수정 3개 모듈·회귀 테스트 3개 macOS 러너 실행 | 실제 실행 검증됨 | GitHub Actions macos-14, Python 3.11, 30 tests OK, run 38066178487. 원 사용자 설치 Mac과 구별 |
+| OSK 삭제·근거 보류, Aside, MLX macOS 러너 테스트 | 실제 실행 검증됨 | GitHub Actions macos-14, Python 3.11, 40 tests OK, run 38066589911. 원 사용자 설치 Mac과 구별 |
 | 지정 Mac 복제본, `outputs/STATUS.md`, 설치 앱 및 운영 데이터 검사 | 차단됨 | Mac-native 도구에 유효한 `turn_token` 미제공; Linux 런타임에 Mac 경로 없음 |
 | 설치 앱에서 수집→MCP→검색→이력→3D 실제 데이터 최종 검증 | 미착수 (이번 변경) | 이전 버전의 증거와 이번 브랜치의 배포 검증을 구분 |
 | 새 앱 설치·서명/공증·정식 배포 | 미착수 (이번 변경) | 원본 사용자 상태 변경이나 불명확한 릴리즈 대상 전환을 하지 않음 |
@@ -75,6 +75,19 @@ Python 3.11 CI [run 38066178487](https://github.com/twoimo/alden/actions/runs/38
 원본 PR27의 `codex/alden-local-runtime-20260927`에 **스택**으로 걸어,
 기존 1,169개 PR 차이를 다시 제출하지 않았다. PR #28 병합/릴리즈와
 프로덕션 스케줄/데이터 변경은 수행하지 않았다.
+
+추가 확인: `tests/test_alden_osk_sources.py`에서 실제 현재 스냅샷에
+방 메타데이터가 존재하면 근거 노드·연결이 표출되고, 같은 원본이
+삭제되면 해당 노드 및 연결이 보류되며 재등록 뒤 복원되는 테스트를 추가했다.
+기존 저장 좌표와 원본 raw 파일은 테스트 과정에서 보존된다.
+이 테스트는 OSK 엔진의 현재 근거 재조회 경로이며 운영 MCP의
+삭제 전파나 설치된 Three.js 화면에서 물리적으로 이를 본 증거는 아니다.
+
+후속 [CI run 38066589911](https://github.com/twoimo/alden/actions/runs/38066589911),
+검증 브랜치 SHA `a6c872c2de362f71540e20dbe6219d90839ada04`,
+macOS-14/Python3.11, 총 **40개 테스트 성공** 및 OSK 삭제·재등록
+신규 시나리오 성공을 실제 job 114255363711 로그에서 확인했다.
+이 비교의 40개 구현·테스트 부분은 검토 PR에서 해당 파일들과 동일하다.
 
 ## 2026-10-11 모델 배포처 교차 확인
 
