@@ -226,7 +226,7 @@ class CollectionStore:
         return store
 
     @contextmanager
-    def database(self, *, publication_guard=None):
+    def database(self, *, publication_guard=None, cancelled=None):
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
@@ -241,6 +241,8 @@ class CollectionStore:
         try:
             yield db
             with publication_guard() if publication_guard is not None else nullcontext():
+                if cancelled is not None and cancelled():
+                    raise RuntimeError('collection_cancelled')
                 db.commit()
         except BaseException:
             db.rollback()
@@ -466,7 +468,17 @@ class CollectionStore:
                     if prior and prior['source_revision'] != source_revision and source_order <= prior['source_order']:
                         raise RuntimeError('collection_source_revision_stale' if source_order < prior['source_order'] else 'collection_source_revision_conflict')
                     if prior and prior['source_revision'] == source_revision and prior['processing_version'] == processing_version and prior['projection_sha256'] == projection:
-                        db.execute('UPDATE targets SET next_run=?+interval_seconds WHERE id=?', (time.time(), target_id))
+                        # Unchanged content still confirms its source order;
+                        # retain the maximum so a delayed revision cannot win.
+                        # The outer connection has only read metadata. Publish
+                        # confirmation under the same fence as changed content,
+                        # without rewriting the completed run or its history.
+                        if cancelled():
+                            raise RuntimeError('collection_cancelled')
+                        with self.database(publication_guard=publication_guard, cancelled=cancelled) as confirmation:
+                            confirmation.execute('UPDATE target_snapshots SET source_order=? WHERE target_id=?',
+                                                 (effective_order, target_id))
+                            confirmation.execute('UPDATE targets SET next_run=?+interval_seconds WHERE id=?', (time.time(), target_id))
                         return {'run_id': prior['run_id'], 'target_id': target_id, 'state': 'unchanged',
                                 'added': 0, 'revised': 0, 'unchanged': len(records), 'removed': 0}
                 previous = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -478,7 +490,7 @@ class CollectionStore:
                 db.execute("INSERT OR REPLACE INTO runs(id,target_id,origin,state,started_at,cursor_before) VALUES(?,?,?,?,?,?)",
                            (run_id, target_id, origin, "running", time.time(), target["cursor"]))
             try:
-                with self.database(publication_guard=publication_guard) as db:
+                with self.database(publication_guard=publication_guard, cancelled=cancelled) as db:
                     db.execute('BEGIN IMMEDIATE')
                     # document_id is UNINDEXED in FTS5. Deleting once per input
                     # record scans the entire corpus each time. Stage each

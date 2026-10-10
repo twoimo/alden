@@ -8,9 +8,10 @@ import sys
 from tempfile import TemporaryDirectory
 import time
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from alden_collection import CollectionStore
+from alden_collection import CollectionStore, digest, encoded
 from alden_collection_scheduler import CollectionScheduler, schedule_definition, install_schedule, settings_action, AGENT_LABEL
 from alden_collection_retrieval import index_dense
 import auto_reply_knowledge_graph as kg
@@ -134,6 +135,40 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(second['attempts'],[])
         with self.scheduler.database() as db:self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts WHERE state='complete'").fetchone()[0],1)
         with self.scheduler.database() as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM cycles').fetchone()[0],1)
+
+    def test_pause_at_unchanged_confirmation_keeps_snapshot_and_manual_request_pending(self):
+        records=[{'original_id':'same','label':'current','text':'preserved'}]
+        revision=digest(encoded(records))
+        self.store.ingest(self.target,records,complete_snapshot=True,source_revision=revision,
+                          source_order=10,cursor={'source_revision':revision})
+        before=self.store.target(self.target)
+        with self.store.database() as db:prior=tuple(db.iterdump())
+        request='manual-pause-at-confirmation'
+        self.scheduler.request_run(self.target,request)
+        def collect_with_pause(store,target,**options):
+            @contextmanager
+            def guard():
+                self.scheduler.pause(True,target)
+                with options['publication_guard']():yield
+            return store.ingest(target,records,complete_snapshot=True,source_revision=revision,
+                                source_order=30,cursor={'source_revision':revision},
+                                cancelled=options['cancelled'],publication_guard=guard)
+        with patch.object(self,'capture',side_effect=AssertionError('capture after paused confirmation')), \
+             patch.object(self,'index',side_effect=AssertionError('index after paused confirmation')):
+            result=self.scheduler.cycle(collector=collect_with_pause,capturer=self.capture,indexer=self.index)
+        self.assertEqual(result['attempts'][0]['state'],'paused')
+        self.assertEqual(self.store.target(self.target),before)
+        with self.store.database() as db:self.assertEqual(tuple(db.iterdump()),prior)
+        self.assertIn(self.target,self.scheduler.status()['manual_pending'])
+        self.scheduler.pause(False,self.target)
+        def replay(store,target,**options):
+            return store.ingest(target,records,complete_snapshot=True,source_revision=revision,
+                                source_order=30,cursor={'source_revision':revision},**options)
+        resumed=self.scheduler.cycle(collector=replay,capturer=self.capture,indexer=self.index,now=time.time()+61)
+        self.assertEqual(resumed['attempts'][0]['state'],'complete')
+        self.assertEqual(self.scheduler.request_run(self.target,request)['state'],'complete')
+        with self.store.database() as db:
+            self.assertEqual(db.execute('SELECT source_order FROM target_snapshots WHERE target_id=?',(self.target,)).fetchone()[0],30)
 
     def test_failed_capture_after_stored_checkpoint_is_recovered_despite_future_source_due(self):
         def failed(*args,**kwargs):raise RuntimeError('source_capture_failed')

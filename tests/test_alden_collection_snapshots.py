@@ -23,11 +23,17 @@ class SnapshotTests(unittest.TestCase):
     def record(self, original, label='current'):
         return {'platform':'graph','original_id':original,'label':label,'text':label,'raw':{'id':original}}
 
-    def snapshot(self, target, records, order, *, processor='v1', relations=(), cancelled=lambda:False):
+    def snapshot(self, target, records, order, *, processor='v1', relations=(), cancelled=lambda:False,
+                 publication_guard=None):
         revision=digest(encoded([records,relations]))
         return self.store.ingest(target,records,relations=relations,complete_snapshot=True,
                                  source_revision=revision,source_order=order,processing_version=processor,
-                                 cursor={'source_revision':revision,'complete':True},cancelled=cancelled)
+                                 cursor={'source_revision':revision,'complete':True},cancelled=cancelled,
+                                 publication_guard=publication_guard)
+
+    def persisted_state(self):
+        with CollectionStore.open_existing(self.root).database() as db:
+            return tuple(db.iterdump())
 
     def test_target_deletion_preserves_another_targets_version_and_archive(self):
         self.snapshot(self.a,[self.record('shared','A'),self.record('removed')],1)
@@ -50,6 +56,49 @@ class SnapshotTests(unittest.TestCase):
         self.assertEqual(self.store.target(self.a)['cursor'],before)
         self.assertEqual(self.store.graph_page(projects=['one'])['nodes'][0]['label'],'new')
 
+    def test_unchanged_snapshot_preserves_latest_source_order_without_new_history(self):
+        records=[self.record('same')]
+        first=self.snapshot(self.a,records,10)
+        self.snapshot(self.b,[self.record('other')],7)
+        cursor=self.store.target(self.a)['cursor']
+        tables=['versions','runs','events']
+        with self.store.database() as db:
+            prior=dict(db.execute('SELECT * FROM target_snapshots WHERE target_id=?',(self.a,)).fetchone())
+            counts=[db.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in tables]
+        # A delayed replay must never lower the latest confirmed source order.
+        for order in (30,20,30):
+            report=self.snapshot(self.a,records,order)
+            self.assertEqual(report['state'],'unchanged')
+            self.assertEqual(report['run_id'],first['run_id'])
+        with CollectionStore.open_existing(self.root).database() as db:
+            current=dict(db.execute('SELECT * FROM target_snapshots WHERE target_id=?',(self.a,)).fetchone())
+            self.assertEqual(current,{**prior,'source_order':30})
+            self.assertEqual([db.execute('SELECT count(*) FROM '+table).fetchone()[0] for table in tables],counts)
+            self.assertEqual(db.execute('SELECT source_order FROM target_snapshots WHERE target_id=?',(self.b,)).fetchone()[0],7)
+        self.assertEqual(self.store.target(self.a)['cursor'],cursor)
+
+    def test_unchanged_snapshot_rejects_stale_and_conflicting_source_revisions(self):
+        for order,reason in [(20,'stale'),(30,'conflict')]:
+            with self.subTest(order=order,reason=reason):
+                target=self.target('replay-'+str(order),'one')
+                original='same-'+str(order)
+                records=[self.record(original,'current')]
+                self.snapshot(target,records,10)
+                self.snapshot(target,records,30)
+                cursor=self.store.target(target)['cursor']
+                doc_id=identity('graph',original)
+                before=self.store.graph_page(projects=['one'],focus=doc_id)['nodes'][0]
+                with self.assertRaisesRegex(RuntimeError,'collection_source_revision_'+reason):
+                    self.snapshot(target,[self.record(original,'outdated')],order)
+                self.assertEqual(self.store.target(target)['cursor'],cursor)
+                current=self.store.graph_page(projects=['one'],focus=doc_id)['nodes'][0]
+                self.assertEqual(current['source_version'],before['source_version'])
+                self.assertEqual(current['label'],'current')
+                self.assertEqual(self.store.search('outdated',projects=['one']),[])
+                report=self.snapshot(target,[self.record(original,'newer')],31)
+                self.assertEqual(report['state'],'complete')
+                self.assertEqual(self.store.graph_page(projects=['one'],focus=doc_id)['nodes'][0]['label'],'newer')
+
     def test_processing_rule_changes_keep_same_raw_bytes_and_prior_projection(self):
         record=self.record('same','first')
         self.snapshot(self.a,[record],10,processor='v1')
@@ -60,6 +109,64 @@ class SnapshotTests(unittest.TestCase):
             rows=db.execute('SELECT raw_sha256,processing_version,label FROM versions ORDER BY processing_version').fetchall()
             self.assertEqual([tuple(r) for r in rows],[(first['raw_sha256'],'v1','first'),(first['raw_sha256'],'v2','second')])
         self.assertEqual(self.store.graph_page(projects=['one'])['nodes'][0]['label'],'second')
+
+    def test_cancelled_unchanged_snapshot_preserves_all_persisted_state(self):
+        self.snapshot(self.b,[self.record('other')],7)
+        for records in ([self.record('same')],[]):
+            with self.subTest(empty=not records):
+                target=self.target('cancelled-'+str(bool(records)),'one')
+                self.snapshot(target,records,10)
+                before=self.persisted_state()
+                with self.assertRaisesRegex(RuntimeError,'collection_cancelled'):
+                    self.snapshot(target,records,30,cancelled=lambda:True)
+                self.assertEqual(self.persisted_state(),before)
+
+    def test_abort_at_unchanged_snapshot_publication_rolls_back_confirmation(self):
+        from alden_abort import AbortController, AldenCancelled
+        records=[self.record('same')]
+        first=self.snapshot(self.a,records,10)
+        before=self.persisted_state()
+        controller=AbortController(self.root);token=controller.token()
+        @contextmanager
+        def guard():
+            controller.abort('unchanged-snapshot-test')
+            with token.commit_guard():yield
+        with self.assertRaises(AldenCancelled):
+            self.snapshot(self.a,records,30,publication_guard=guard)
+        self.assertEqual(self.persisted_state(),before)
+        replay=self.snapshot(self.a,records,30)
+        self.assertEqual(replay['run_id'],first['run_id'])
+        self.assertEqual(replay['state'],'unchanged')
+
+    def test_cancellation_after_publication_guard_entry_rolls_back_confirmation(self):
+        records=[self.record('same')]
+        self.snapshot(self.a,records,10)
+        before=self.persisted_state();stopped=False
+        @contextmanager
+        def guard():
+            nonlocal stopped
+            stopped=True
+            yield
+        with self.assertRaisesRegex(RuntimeError,'collection_cancelled'):
+            self.snapshot(self.a,records,30,cancelled=lambda:stopped,publication_guard=guard)
+        self.assertTrue(stopped)
+        self.assertEqual(self.persisted_state(),before)
+
+    def test_unchanged_snapshot_confirmation_commits_once_inside_publication_guard(self):
+        records=[self.record('same')]
+        first=self.snapshot(self.a,records,10)
+        observations=[]
+        @contextmanager
+        def guard():
+            with CollectionStore.open_existing(self.root).database() as db:
+                observations.append(db.execute('SELECT source_order FROM target_snapshots WHERE target_id=?',(self.a,)).fetchone()[0])
+            yield
+            with CollectionStore.open_existing(self.root).database() as db:
+                observations.append(db.execute('SELECT source_order FROM target_snapshots WHERE target_id=?',(self.a,)).fetchone()[0])
+        replay=self.snapshot(self.a,records,30,publication_guard=guard)
+        self.assertEqual(observations,[10,30])
+        self.assertEqual(replay['run_id'],first['run_id'])
+        self.assertEqual(replay['state'],'unchanged')
 
     def test_relation_only_revision_retires_old_edge_and_retains_its_evidence(self):
         records=[self.record('x'),self.record('y')]
