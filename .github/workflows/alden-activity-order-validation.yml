@@ -1,0 +1,33 @@
+name: Alden committed activity and history integrity
+
+on:
+  push:
+    branches: [codex/alden-activity-order-ci-20261011]
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Full desktop UI and bundle integrity
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Bind exact triggering revision
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install pinned desktop dependencies
+        run: npm ci --prefix desktop --ignore-scripts
+      - name: Verify all desktop runtime and UI tests
+        run: npm test --prefix desktop -- --run
+      - name: Verify production TypeScript/Vite build
+        run: npm run build --prefix desktop
