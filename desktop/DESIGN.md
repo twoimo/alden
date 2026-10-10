@@ -1,5 +1,23 @@
 # Alden desktop design contract
 
+## 2026-10-11 — Confirmed voice answer boundary
+
+A local MLX transport that emits partial text but does not confirm a
+single assistant response with `finish_reason=stop` is not a completed
+answer. No partial text is spoken or persisted as assistant history when
+the response is truncated, tool-directed, filtered, failed, duplicated
+or cancelled. Confirmed user input remains in its existing conversation;
+the next turn is never replaced by the previous model's late output.
+
+This is a runtime publication rule, not a new visual "thinking" event.
+Voice state, cancellation feedback and aggregate engine telemetry retain
+their existing presentation. The model selector is not rewritten and
+never silently falls back to Gemini or another remote model.
+
+[Model response contract and macOS CI scope](../docs/architecture/alden-local-mlx-completion-20261011.md).
+Native microphone, TTS echo, latency, GPU residency and install
+remain independent physical-device release checks.
+
 ## 2026-10-11 — 저장 원본 재조회와 실시간 이벤트의 분리
 
 ‘기억 정리’의 한 행은 대상·항목·시각·확정 단계를 간결하게 표시합니다.
