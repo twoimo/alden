@@ -60,6 +60,8 @@ class KnowledgeServer(StdioServer):
                                            'idempotentHint': True, 'openWorldHint': False}})
             if name.endswith('search'):
                 result[-1]['inputSchema']['properties']['limit'] = {'type': 'integer', 'minimum': 1, 'maximum': 10}
+            if name.endswith('trace'):
+                result[-1]['inputSchema']['properties'].pop('limit')
         return result
 
     def valid_call(self, params):
