@@ -1746,6 +1746,8 @@ class LocalMlxLlm:
             if data == b"[DONE]":
                 break
             chunk = self._decode_completion_payload(data)
+            if chunk.get("error") is not None or chunk.get("status") in ("failed", "incomplete", "cancelled"):
+                raise RuntimeError("local_llm_generation_failed")
             request_id = chunk.get("id")
             if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", request_id):
                 previous_id = self.last_metrics.get("backend_request_id")
@@ -1934,6 +1936,8 @@ class LocalMlxLlm:
             raise RuntimeError("local_llm_response_too_large")
         try:
             body = self._decode_completion_payload(raw)
+            if body.get("error") is not None or body.get("status") in ("failed", "incomplete", "cancelled"):
+                raise ValueError("model reported a failed generation")
             choices = body["choices"]
             if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
                 raise ValueError("invalid choices")
