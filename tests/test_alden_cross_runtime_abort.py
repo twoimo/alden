@@ -88,7 +88,7 @@ class SharedEmergencyBoundary(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(browser_answer.status, ToolStatus.ABORTED)
                 self.assertFalse(browser_answer.ok)
                 self.assertEqual(browser_answer.result, "")
-                self.assertEqual(browser_answer.error_code, "abort_global")
+                self.assertEqual(browser_answer.error_code, "global_abort")
 
                 voice_answer: VoiceResult | None = None
                 for _ in range(100):
@@ -114,7 +114,13 @@ class SharedEmergencyBoundary(unittest.IsolatedAsyncioTestCase):
                 # voice token cannot be reused for a previously cancelled turn.
                 controller.resume_after_human_action()
                 self.assertTrue(voice.token.is_cancelled())
+                prior_turn = voice.turn_id
                 self.assertFalse(voice.submit_text("stale epoch ignored", event_id="old-token"))
+                ignored = voice.process_text("stale direct input", event_id="old-direct")
+                self.assertEqual(ignored.state, VoiceState.ABORTED)
+                self.assertTrue(ignored.cancelled)
+                self.assertEqual(ignored.error_code, "global_abort")
+                self.assertEqual(voice.turn_id, prior_turn)
                 # Begin a separate, freshly owned voice session after resume.
                 new_speaker = TextToSpeechSpy()
                 class ReadyAnswer:
