@@ -75,6 +75,15 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         if len(samples[kind]) < sample_cap:
             samples[kind].append(key)
 
+    def examine(*values):
+        # Count malformed BLOBs too, before any row can be skipped.
+        for value in values:
+            if isinstance(value, str):
+                counts['bytes_examined'] += len(value.encode())
+            elif isinstance(value, bytes):
+                counts['bytes_examined'] += len(value)
+        check()
+
     retrieval = store.root / 'retrieval.sqlite3'
     if any(p.is_symlink() for p in [retrieval, *retrieval.parents]):
         raise ValueError('quality_retrieval_symlink')
@@ -93,7 +102,11 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             WHERE p.permission!='denied' AND p.project IN (''' + marks + ''')
             AND m.availability='available' ORDER BY p.project,m.target_id,m.document_id''', projects)
         for row in rows:
-            counts['memberships'] += 1; check()
+            counts['memberships'] += 1; examine(*row)
+            if (not isinstance(row['document_id'], str)
+                    or row['current_version'] is not None and not isinstance(row['current_version'], str)):
+                flag('membership_identity_invalid', 'membership:' + str(counts['memberships']))
+                continue
             key = row['document_id'] + '/' + str(row['current_version'])
             if row['platform'] is None:
                 flag('missing_document', key); continue
@@ -113,12 +126,24 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             except (TypeError, ValueError):
                 flag('stable_identity_invalid', key)
             label, body = row['label'], row['body']
-            counts['bytes_examined'] += len(label.encode()) + len(body.encode()) + len(row['metadata'].encode())
+            if type(row['collected_at']) not in (int, float) or not math.isfinite(row['collected_at']):
+                flag('collection_time_invalid', key)
+            text_valid = isinstance(label, str) and isinstance(body, str)
+            binding_valid = all(isinstance(row[field], str) for field in
+                                ('raw_sha256', 'raw_path', 'processing_version', 'projection_sha256'))
+            if not text_valid:
+                flag('version_text_invalid', key)
+            if not binding_valid:
+                flag('version_binding_invalid', key)
+            if not text_valid or not binding_valid:
+                continue
             if label != normalized_text(label) or body != normalized_text(body):
                 flag('normalization_mismatch', key)
             if not body.strip():
                 counts['stored_body_empty'] += 1
             try:
+                if not isinstance(row['metadata'], str):
+                    raise ValueError('metadata_storage')
                 metadata = _json(row['metadata'])
                 if not isinstance(metadata, dict):
                     raise ValueError('metadata_shape')
@@ -128,25 +153,25 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 expected = identity('version', encoded([row['document_id'], row['raw_sha256'], row['processing_version'], projection]).decode())
                 if expected != row['current_version']:
                     flag('version_identity_mismatch', key)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, RecursionError):
                 flag('metadata_invalid', key)
-            if type(row['collected_at']) not in (int, float) or not math.isfinite(row['collected_at']):
-                flag('collection_time_invalid', key)
             blob_key = (row['raw_sha256'], row['raw_path'])
             if verify_sources and blob_key not in checked_blobs:
                 checked_blobs.add(blob_key)
                 try:
                     data = _blob(store.blobs, row['raw_path'])
-                    counts['bytes_examined'] += len(data)
+                    examine(data)
                     if digest(data) != row['raw_sha256']:
                         raise ValueError('raw_hash')
                     source = _json(data)
                     original = source.get('localOriginalText') if isinstance(source, dict) else None
                     originals[blob_key] = digest(original.encode()) if isinstance(original, str) and original.strip() else None
                     counts['source_blobs_verified'] += 1
-                except (OSError, ValueError, RuntimeError):
+                except (OSError, ValueError, RecursionError):
                     flag('source_blob_invalid', key)
             cached = cache.execute('SELECT base_hash,raw_sha256,extraction,body,body_source FROM texts WHERE document_id=? AND version=?', (row['document_id'], row['current_version'])).fetchone() if 'texts' in cache_tables else None
+            if cached is not None:
+                examine(*cached)
             valid = (cached is not None and isinstance(cached[3], str) and cached[:3] == (digest((label+'\n'+body).encode()), row['raw_sha256'], 'retained-local-original-text-v1')
                      and (cached[4] == 'stored_body' and cached[3] == body or cached[4] == 'retained_record.localOriginalText'))
             if cached is not None and not valid:
@@ -154,7 +179,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             if valid and verify_sources and cached[4] == 'retained_record.localOriginalText' and originals.get(blob_key) != digest(cached[3].encode()):
                 flag('retained_text_source_mismatch', key); valid = False
             text = label + '\n' + (cached[3] if valid else body)
-            counts['bytes_examined'] += len(text.encode()); check()
+            examine(text)
             if not text.strip():
                 counts['search_text_empty'] += 1
             else:
@@ -167,19 +192,20 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                     counts['nonempty_search_text_vector_missing'] += 1
             else:
                 counts['current_vectors'] += 1
+                examine(*vector)
                 if vector[0] != digest(text.encode()):
                     flag('vector_text_binding_invalid', key)
-                if any(not isinstance(v, str) or not v for v in vector[1:4]):
+                profile_valid = all(isinstance(v, str) and v for v in vector[1:4])
+                if not profile_valid:
                     flag('vector_profile_invalid', key)
-                profile = digest(encoded(vector[1:4]))
+                profile = digest(encoded(vector[1:4])) if profile_valid else None
                 raw = vector[4]
-                if isinstance(raw, bytes):
-                    counts['bytes_examined'] += len(raw)
                 if not isinstance(raw, bytes) or not 4 <= len(raw) <= 8192 or len(raw) % 4:
                     flag('vector_shape_invalid', key)
                 else:
                     values = struct.unpack('<' + 'f' * (len(raw)//4), raw)
-                    profiles[profile][len(values)] += 1
+                    if profile_valid:
+                        profiles[profile][len(values)] += 1
                     if any(not math.isfinite(v) for v in values):
                         flag('vector_nonfinite', key)
                     elif abs(math.sqrt(sum(v*v for v in values)) - 1) > .001:
@@ -188,20 +214,26 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 FROM target_projects p JOIN relations r ON r.target_id=p.target_id
                 WHERE p.permission!='denied' AND p.project IN (''' + marks + ''') AND r.active=1
                 ORDER BY p.project,r.id''', projects):
-            counts['relations'] += 1; counts['bytes_examined'] += len(row['evidence'].encode()); check()
+            counts['relations'] += 1; examine(*row)
+            key = row['id'] if isinstance(row['id'], str) else 'relation:' + str(counts['relations'])
+            if not isinstance(row['id'], str):
+                flag('relation_identity_invalid', key)
             if row['source'] not in allowed[row['project']] or row['target'] not in allowed[row['project']]:
-                flag('relation_endpoint_unavailable_in_scope', row['id'])
+                flag('relation_endpoint_unavailable_in_scope', key)
             else:
                 degree[row['project']][row['source']] += 1
                 degree[row['project']][row['target']] += 1
+            if not isinstance(row['evidence'], str):
+                flag('relation_evidence_invalid', key)
+                continue
             if digest(row['evidence'].encode()) != row['version']:
-                flag('relation_evidence_hash_mismatch', row['id'])
+                flag('relation_evidence_hash_mismatch', key)
             try:
                 evidence = _json(row['evidence'])
                 if evidence is None or evidence == {} or evidence == [] or isinstance(evidence, str) and not evidence.strip():
-                    flag('relation_evidence_empty', row['id'])
-            except (TypeError, ValueError):
-                flag('relation_evidence_invalid', row['id'])
+                    flag('relation_evidence_empty', key)
+            except (TypeError, ValueError, RecursionError):
+                flag('relation_evidence_invalid', key)
     candidates = {}
     for name, groups in [('same_raw_bytes', raw_groups), ('same_normalized_search_text', text_groups)]:
         duplicates = [(scope, sha, sorted(ids)) for (scope, sha), ids in sorted(groups.items()) if len(ids) > 1]
@@ -227,6 +259,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                    'source_blobs_verified', 'stored_body_empty', 'search_text_empty',
                    'current_vectors', 'current_vector_missing', 'nonempty_search_text_vector_missing'):
         counts.setdefault(metric, 0)
+    check()
     return {'schema': 1, 'mode': 'read_only_current_versions', 'projects': projects,
             'source_verification_requested': verify_sources, 'counts': dict(sorted(counts.items())),
             'findings': dict(sorted(findings.items())), 'samples': dict(sorted(samples.items())),
@@ -235,6 +268,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             'elapsed_s': time.monotonic()-started,
             'limits': ['Collection database uses one read transaction; retrieval has a separate read snapshot and version/hash bindings are checked.',
                        'Current permitted memberships only; denied, deleted and archived-only versions are excluded.',
+                       'Malformed scoped rows are reported; checks requiring their invalid fields are skipped.',
+                       'Byte counts include fetched text/BLOB fields, retained sources and derived search text; they are work accounting, not unique corpus size or peak memory.',
                        'Source verification covers retained canonical record JSON blobs, not full original exports, media bytes or source-capture manifests.',
                        'Identical text or bytes does not establish shared entity, independent sources, semantic truth or permission to merge.',
                        'Vector format/unit norm does not prove semantic quality, same force/direction or cluster validity.',
