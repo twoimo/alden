@@ -450,7 +450,11 @@ class CollectionStore:
             projection = digest(encoded([
                 [{k:v for k,v in r.items() if k != 'source'} for r in records],
                 [{**r, 'evidence': {k:v for k,v in r.get('evidence',{}).items() if k != 'source'}} for r in relations]]))
-            run_id = run_id or identity('snapshot-run', encoded([target_id, source_revision, processing_version, projection]).decode())
+            # The same exact source revision can legitimately reappear after a
+            # different confirmed revision. Include observed monotonic order
+            # in the identity so A -> B -> A republishes A's membership and
+            # active relations, while a replay of the same order stays idempotent.
+            run_id = run_id or identity('snapshot-run', encoded([target_id, source_revision, source_order, processing_version, projection]).decode())
         else:
             projection = None
         run_id = run_id or uuid.uuid4().hex
