@@ -451,10 +451,10 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 aliases=metadata.get('aliases',[]);aliases=aliases if isinstance(aliases,list) else []
                 marks=','.join('?' for _ in projects)
                 publisher_scopes={}
-                for target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
+                for publisher_target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
                     WHERE m.document_id=? AND m.availability='available' AND (? IS NULL OR m.target_id=?) AND EXISTS(SELECT 1 FROM target_projects p
                     WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,target_id,target_id,*projects)):
-                    publisher_scopes.setdefault(label,[]).append(target_id)
+                    publisher_scopes.setdefault(label,[]).append(publisher_target_id)
                 conflict=source.execute('''SELECT r.source,r.target FROM relations r WHERE r.active=1 AND r.type IN ('conflicts','contradicts')
                     AND (r.source=? OR r.target=?) AND (? IS NULL OR r.target_id=?) AND EXISTS(SELECT 1 FROM target_projects p
                     WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,target_id,target_id,*projects))
