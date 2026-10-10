@@ -50,6 +50,19 @@ describe('durable collection history', () => {
     expect(document.querySelector<HTMLButtonElement>('.history-older')!.hidden).toBe(true);
     expect(vi.getTimerCount()).toBe(1);
   });
+  it('separates successful storage, removal and relation changes in the saved ledger', async () => {
+    const history = [event(5,{details:{change:'relations_changed'}}),
+      event(4,{details:{change:'removed'}}), event(3,{details:{change:'unchanged'}}),
+      event(2,{details:{change:'revised'}}),event(1,{details:{change:'added'}})];
+    const totals = { total:5, stages:{ discovered:0,parsed:0,validated:0,stored:5,indexed:0,failed:0,paused:0 },
+      changes:{added:1,revised:1,unchanged:1,removed:1,relations_changed:1} };
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue({ ...response(history),summary:totals });
+    setup(load); await vi.advanceTimersByTimeAsync(0);
+    const labels = [...document.querySelectorAll('.collection-stage')].map(badge => badge.textContent);
+    expect(labels).toEqual(['관계 갱신','원본에서 제외','기존 자료 유지','기존 자료 수정','새 자료 저장']);
+    expect(document.querySelector('.collection-summary')!.textContent).toContain('제외 1 · 관계 갱신 1');
+    expect(load.mock.calls.filter(([action]) => action === 'collection-trace')).toHaveLength(0);
+  });
   it('describes validation and unchanged records truthfully and never links executable URLs', async () => {
     const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(response([
       event(3, { stage: 'validated', source_url: 'javascript:alert(1)' }),
