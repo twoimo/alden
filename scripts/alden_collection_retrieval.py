@@ -28,9 +28,11 @@ def _scope(projects):
     return list(dict.fromkeys(projects))
 
 
-def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False):
+def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False, target_id=None):
     projects = _scope(projects)
     clauses, args = [], list(projects)
+    if target_id is not None:
+        args.append(target_id)
     for value, operator in [(time_from, '>='), (time_to, '<=')]:
         if value is not None:
             if type(value) not in (int, float) or not math.isfinite(value):
@@ -45,9 +47,9 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
             text_db = owned
     try:
         with store.database() as db:
-            rows = db.execute('''SELECT d.id,d.platform,d.original_id,v.id AS version,
+            rows = db.execute('''SELECT d.id,d.platform,d.original_id,s.target_id AS source_target,v.id AS version,
                 v.raw_sha256,v.raw_path,v.label,v.body,v.collected_at
-                FROM documents d JOIN (''' + store._scope_versions(projects) + ''') s
+                FROM documents d JOIN (''' + store._scope_versions(projects,target_id) + ''') s
                 ON s.document_id=d.id JOIN versions v ON v.id=s.current_version
                 WHERE d.availability='available' ''' + ''.join(' AND ' + c for c in clauses) + ' ORDER BY d.id', args)
             result, budget = [], 0
@@ -366,11 +368,14 @@ def trace_document(root, document_id, *, projects, expected_version=None, target
 
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              candidate_limit=40, max_context_chars=8000, rrf_k=60, rrf_weights=None,
-             cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None):
+             cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None, target_id=None):
     import auto_reply_knowledge_graph as kg
     projects = _scope(projects)
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1024:
         raise ValueError('collection_query_invalid')
+    if target_id is not None and (not isinstance(target_id,str) or not 1<=len(target_id)<=256):
+        raise ValueError('collection_target_scope_invalid')
+    scoped_args = (*projects,target_id) if target_id is not None else tuple(projects)
     if type(max_context_chars) is not int or not 256 <= max_context_chars <= 16000:
         raise ValueError('collection_context_budget')
     if type(candidate_limit) is not int or not 1 <= candidate_limit <= 100:
@@ -380,12 +385,12 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     store = CollectionStore.open_existing(Path(root))
     if store is None:
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
-    source_rows = _rows(store, projects, cancelled, time_from, time_to)
+    source_rows = _rows(store, projects, cancelled, time_from, time_to, target_id=target_id)
     rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
     eligible = {row['id']: row for row in rows}
     terms = kg._fts_query_terms([query])
     lexical = [(r['id'], float(r['rank'])) for r in store.search(terms, projects=projects,
-                limit=candidate_limit, time_from=time_from, time_to=time_to)] if terms else []
+                limit=candidate_limit, time_from=time_from, time_to=time_to, target_id=target_id)] if terms else []
     dense, mode = [], 'bm25_only'
     path = _path(store)
     if terms and path.is_file():
@@ -446,13 +451,13 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 aliases=metadata.get('aliases',[]);aliases=aliases if isinstance(aliases,list) else []
                 marks=','.join('?' for _ in projects)
                 publisher_scopes={}
-                for target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
-                    WHERE m.document_id=? AND m.availability='available' AND EXISTS(SELECT 1 FROM target_projects p
-                    WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,*projects)):
-                    publisher_scopes.setdefault(label,[]).append(target_id)
+                for publisher_target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
+                    WHERE m.document_id=? AND m.availability='available' AND (? IS NULL OR m.target_id=?) AND EXISTS(SELECT 1 FROM target_projects p
+                    WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,target_id,target_id,*projects)):
+                    publisher_scopes.setdefault(label,[]).append(publisher_target_id)
                 conflict=source.execute('''SELECT r.source,r.target FROM relations r WHERE r.active=1 AND r.type IN ('conflicts','contradicts')
-                    AND (r.source=? OR r.target=?) AND EXISTS(SELECT 1 FROM target_projects p
-                    WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,*projects))
+                    AND (r.source=? OR r.target=?) AND (? IS NULL OR r.target_id=?) AND EXISTS(SELECT 1 FROM target_projects p
+                    WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,target_id,target_id,*projects))
                 temporal_records.append({'id':identity,'name':row['label'],'aliases':aliases+list(publisher_scopes),'mention_scopes':publisher_scopes,
                     'has_conflict':any(a in eligible and b in eligible for a,b in conflict),
                     'observed_at':metadata.get('published_at'),'time_basis':'source_published_at',
@@ -478,8 +483,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         chosen = []
         for document_id, _score in ranked[:max(0, min(int(max_entities), 10))]:
             row = eligible[document_id]
-            current = db.execute("SELECT s.current_version FROM (" + store._scope_versions(projects) +
-                                 ") s JOIN documents d ON d.id=s.document_id WHERE d.id=? AND d.availability='available'", (*projects, document_id)).fetchone()
+            current = db.execute("SELECT s.current_version FROM (" + store._scope_versions(projects,target_id) +
+                                 ") s JOIN documents d ON d.id=s.document_id WHERE d.id=? AND d.availability='available'", (*scoped_args, document_id)).fetchone()
             if current is None or current[0] != row['version']:
                 raise RuntimeError('collection_graph_version_changed')
             raw = store._verified_source_blob(store.blobs, row['raw_path'], MAX_RECORD_BYTES)
@@ -493,7 +498,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             proof = {'fact_type': 'entity', 'entity_id': document_id, 'note_id': document_id,
                      'source_kind': 'collected_source', 'source_version': row['version'],
                      'note_hash': row['raw_sha256'], 'original_id': row['original_id'],
-                     'platform': row['platform'], 'projects': projects, 'updated_at': row['collected_at'],
+                     'platform': row['platform'], 'projects': projects, 'source_target': row['source_target'], 'updated_at': row['collected_at'],
                      'body_source': row['body_source'],
                      'derived_from': metadata.get('source', {}), 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
@@ -511,10 +516,10 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 tm.current_version AS target_version FROM relations r
                 JOIN memberships sm ON sm.target_id=r.target_id AND sm.document_id=r.source
                 JOIN memberships tm ON tm.target_id=r.target_id AND tm.document_id=r.target
-                WHERE r.active=1 AND r.source=?
+                WHERE r.active=1 AND r.source=? AND (? IS NULL OR r.target_id=?)
                 AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
                 AND p.permission!='denied' AND p.project IN (''' + marks + ')) ORDER BY r.id',
-                (chosen[0], *projects))
+                (chosen[0], target_id, target_id, *projects))
             for edge in edges:
                 _check(cancelled)
                 if edge['target'] not in eligible or edge['target'] in temporal_excluded:
@@ -529,13 +534,13 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                        {'fact_type': 'relation', 'source_kind': 'collected_source', 'relation': edge['type'],
                         'source_id': edge['source'], 'target_id': edge['target'], 'relation_id': edge['id'],
                         'source_version': eligible[edge['source']]['version'], 'target_version': target['version'],
-                        'projects': projects, 'source_evidence': json.loads(edge['evidence']),
+                        'projects': projects, 'source_target': edge['target_id'], 'source_evidence': json.loads(edge['evidence']),
                         'provenance_valid': True, 'retracted': False})
                 if sum(p['fact_type'] == 'relation' for p in provenance) >= min(int(max_relations), 10):
                     break
     _check(cancelled)
     return {'facts': facts, 'fact_provenance': provenance, 'search_mode': mode,
-            'projects': projects, 'eligible_documents': len(rows), 'context_chars': used,
+            'projects': projects, 'target_id': target_id, 'eligible_documents': len(rows), 'context_chars': used,
             'unsearchable_documents': len(source_rows) - len(rows),
             'pending_text_versions': sum(not r['text_ready'] for r in source_rows),
             'time_basis': 'collection_time',

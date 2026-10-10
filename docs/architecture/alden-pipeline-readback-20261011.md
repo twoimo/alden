@@ -64,13 +64,51 @@ flowchart LR
 
 | 범위 | 결과 | 검증 의미 |
 | --- | --- | --- |
-| Python 수집·스냅샷·GraphRAG·MCP·원본·OSK·모델 관련 | 112/112 통과 | 실제 저장소 코드 + 격리 fixture, 원 사용자 운영 자료 아님 |
+| Python 수집·스냅샷·GraphRAG·MCP·원본·OSK·모델 관련 | 113/113 통과 | 격리 fixture + 별도 stdio MCP subprocess, 운영 원본 아님 |
 | 3D 선택 근거·CollectionGraph·활동 소비 Vitest | 30/30 통과 | DOM·컨트롤러 검증, 물리 GPU 입력 아님 |
 | `npm run build --prefix desktop` | 성공 | TypeScript 확인 및 Vite 번들 |
 | 동일 저장 순서 replay·A→삭제→A·부정확한 원본 해시 | 통과 | 중복 억제·복원·fail closed |
 | 권한 없는 프로젝트·다른 대상·오래된 버전 | 통과 | 문서 상세 및 MCP 혼입 차단 |
 | 로컬 임베딩 서버 실물 로딩 | 미검증 | 테스트에만 고정 벡터를 사용 |
 | 지정 사용자의 Alden 설치본·외부 osk-system | 미검증 | 유효한 Mac Core 세션 토큰 없음 |
+
+### 후속 실행 검증
+
+추가된 MCP stdio 실제 프로세스 테스트는 초기화·도구 목록·허용 프로젝트 조회,
+거부된 프로젝트 요청 및 조회 전후 수집 실행/이력 건수가 같음을 확인한다.
+[macOS CI 38068189206](https://github.com/twoimo/alden/actions/runs/38068189206)
+검증 SHA `c227accdf2b20af46c8f816ace8332016214eb2f`:
+**Python 113/113, UI 30/30, TypeScript/Vite production build 성공(이전 통합 체크포인트).**
+프로세스 테스트는 로컬 격리 자료이며 외부 osk-system MCP와는 별개다.
+
+Tauri의 `collection-trace` 요청도 읽기 전용 allowlist에서
+바운드된 JSON만 라우팅하며, 부정확한 JSON·배열·4096바이트 초과를
+거부하는 Rust 회귀를 추가했다.
+[macOS CI 38068129119](https://github.com/twoimo/alden/actions/runs/38068129119)
+검증 SHA `2a2eb4e9d71a31b2c5632411472b8e3c6c5bd1fb`에서
+**Tauri Rust 120개 통과, strict Clippy 성공**을 확인했다.
+Tauri 소스 검증은 실제 소유자 Mac에서 설치된 실행 번들의 인수 전달 성공과
+실제 마우스 입력/GPU 가시성 증거를 대신하지 않는다.
+
+### 2026-10-11: 다중 대상 안의 동일 원본 GraphRAG 격리
+
+기존 GraphRAG가 같은 프로젝트에 여러 수집 대상을 포함할 때
+최신 한 개의 공통 문서 버전을 선정하므로 `target_id`만의 정확한 버전/관계
+조회 계약이 없었다. `CollectionStore._scope_versions`가 접근 허용·가용
+멤버십을 **대상으로 먼저 제한한 뒤** 현재 원본 버전을 선택하게
+보완했다. `CollectionStore.search`, `retrieve`의 BM25/로컬 Dense 및
+원문 근거 확인·최신성/관계 경로·MCP `alden_knowledge_search`가
+같은 명시적 `target_id`를 지원한다. 기본 검색은 종전처럼 승인된
+프로젝트 전체를 사용한다. 한 프로젝트의 같은 원본 ID가 여러 대상의
+다른 현재 버전을 가진 테스트와 대상 밖 후보·관계 혼입 차단을 검증한다.
+
+초기 [CI 38068771022](https://github.com/twoimo/alden/actions/runs/38068771022)는
+최신성 조회의 게시자 반복문 변수가 외부 `target_id`를 덮어쓰는
+SQL 바인딩 오류를 발견했다. 내부 변수를 `publisher_target_id`로
+분리해 동일 범위를 모든 단계에 보존하도록 고쳤다.
+[macOS CI 38068930145](https://github.com/twoimo/alden/actions/runs/38068930145),
+SHA `a9858eba635ef82a2c894b218e8de13215bba387`:
+**Python 114/114, UI 30/30, TS/Vite 성공**. 중간 실패도 보존된다.
 
 ## 설치 Mac에서 남은 수행 절차
 
