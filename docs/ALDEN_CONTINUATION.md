@@ -1,3 +1,10 @@
+> 2026-10-11 추가 통합: [스냅샷 A→삭제→A 복원 및 수집→색인→이력→그래프/MCP 일치 검사](architecture/alden-pipeline-readback-20261011.md).
+> 별도 `codex/alden-pipeline-readback-20261011` 브랜치에 소스와 회귀가 구현되었다.
+> macOS CI `38067729712`: Python 112/112, UI 30/30, TypeScript/Vite build 성공(격리 fixture).
+> 상태: **구현됨 / GitHub macOS 테스트 실제 실행 검증됨**, 소유자 Mac의 설치본·osk-system·물리 음성·운영 자료 E2E 및 서명/공증은 **미착수(이번 변경)**.
+> 원본 `outputs/STATUS.md`는 Mac의 유효한 실행 연결이 확보되기 전까지 수정할 수 없었다.
+> PR #27·#28, 운영 설정, 원본 DB, 메시지 전송 큐는 변경하지 않았다.
+
 > 2026-10-11 원격 독립 구현 기록: [source integrity, OSK 삭제 이력과 MLX 검증](architecture/alden-remote-integrity-20261011.md). 이 링크는 Mac 설치 상태를 갱신했다는 의미가 아니다. 아래 날짜별 설치 버전과 검증 수치는 각 당시의 기록이며 새 브랜치의 실행 성과로 재사용하지 않는다. 로컬 `outputs/STATUS.md` 원문은 Mac 연결 복구 후 이어 갱신한다.
 
 # 현재 이어받기 상태 — 2026-10-05
