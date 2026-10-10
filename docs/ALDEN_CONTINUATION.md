@@ -1,3 +1,8 @@
+> 2026-10-11 신규: [로컬 MLX 응답 완결성/오발화 방지와 음성 이력 실제 경로](architecture/alden-local-mlx-completion-20261011.md).
+> `codex/alden-voice-completion-fence-20261011`는 PR #30 다음의 별도 독립 소스 브랜치다.
+> [macOS CI 38072362981](https://github.com/twoimo/alden/actions/runs/38072362981): 175개 중 169개 통과·6개 NumPy skip. 메모리·TTS/SQLite는 고정 모델 전송의 실제 제품 코드 테스트.
+> 제품 구성·모델·활성 데이터·운영 프로세스는 원격에서 변경하지 않았다. 사용자 Mac `outputs/STATUS.md`는 유효한 Core 세션 토큰이 없어 갱신하지 못했으며 로컬 모델 로딩/실물 사용은 미검증.
+
 > 2026-10-11 신규: [영속 수집 이벤트 순서·재연결 보호, 변경 전후 버전, 기억 정리 원본 재조회](architecture/alden-activity-readback-20261011.md).
 > 분리 브랜치 `codex/alden-activity-order-20261011`; macOS CI `38070713835`: Python 60개, UI 471개, TS/Vite 빌드 통과.
 > **구현됨 / GitHub macOS 실제 실행 검증됨**, 소유자 Mac의 설치·osk-system·실제 음성·서명·공증은 미검증.

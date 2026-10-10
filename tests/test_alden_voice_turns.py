@@ -504,7 +504,9 @@ class LocalStreamTests(unittest.TestCase):
     def test_truncated_or_reasoning_only_stream_is_not_an_answer(self):
         with self.assertRaisesRegex(RuntimeError, "stream_incomplete"):
             self.generate([{"choices": [{"delta": {"content": "부분 응답"}}]}], done=False)
-        with self.assertRaisesRegex(RuntimeError, "reply_empty"):
+        # A reasoning-only reply with [DONE] but no stop finish is an
+        # unconfirmed stream, not a completed empty assistant message.
+        with self.assertRaisesRegex(RuntimeError, "stream_incomplete"):
             self.generate([{"choices": [{"delta": {"reasoning_content": "내부 추론"}}]}])
         with self.assertRaisesRegex(RuntimeError, "reply_truncated"):
             self.generate([{"choices": [{"delta": {"content": "요점은 다음과"}, "finish_reason": "length"}]}])

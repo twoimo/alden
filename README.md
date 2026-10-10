@@ -1,5 +1,21 @@
 # Alden
 
+## 2026-10-11 — 로컬 MLX 응답 확정 후에만 TTS·기억 저장
+
+기존 27B·Flash-Next 로컬 음성 LLM의 종료 사유가 누락됐거나
+`length`·`content_filter`·`tool_calls`여도 일부 문장을 말하고 저장할 수 있던 경계를
+수정했습니다. 완성된 단일 assistant 답변에 대해서만 `finish_reason=stop`을
+확인한 다음 취소 경계를 거쳐 TTS/영속 assistant 이력을 확정합니다.
+SSE [DONE]만 온 응답, 종료 후 추가 텍스트, 중복·손상 JSON, 비정상 수치와
+모델 실패 상태는 완료로 승격하지 않습니다. 확인된 사용자 발화만 보존하고
+다음 유효한 턴으로 이어집니다.
+
+[실제 소스·시험·배포 전 복구 계약](docs/architecture/alden-local-mlx-completion-20261011.md).
+[macOS CI #38072362981](https://github.com/twoimo/alden/actions/runs/38072362981):
+175개 실행 중 169개 통과, NumPy 미설치 조건 6개 skip.
+이는 실제 Mac 가중치 로딩·마이크/스피커·성능·서명/공증 증거가 아닙니다.
+Alden Tauri·Three.js 구성, 사용자 모델 선택 및 라우팅은 변경하지 않았습니다.
+
 ## 2026-10-11 — 이벤트 순서 복구 및 ‘기억 정리’ 재조회 (미설치 검토 브랜치)
 
 PR #29의 통합 그래프 위에서 영속 수집 이벤트의 손상·역전·중복 페이지를

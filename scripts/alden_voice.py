@@ -1698,12 +1698,40 @@ class LocalMlxLlm:
         sample["observed_at_unix"] = time.time()
         return sample
 
+    @staticmethod
+    def _decode_completion_payload(raw: bytes) -> dict[str, Any]:
+        """Fail closed on ambiguous local completion JSON, not just its framing."""
+        def finite_float(value: str) -> float:
+            parsed = float(value)
+            if not math.isfinite(parsed):
+                raise ValueError("nonfinite")
+            return parsed
+
+        def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate key")
+                result[key] = value
+            return result
+
+        try:
+            data = json.loads(raw, parse_float=finite_float,
+                              parse_constant=lambda _value: (_ for _ in ()).throw(ValueError("nonfinite")),
+                              object_pairs_hook=unique_pairs)
+        except (ValueError, UnicodeError, TypeError, OverflowError) as error:
+            raise RuntimeError("local_llm_response_invalid") from error
+        if not isinstance(data, dict):
+            raise RuntimeError("local_llm_response_invalid")
+        return data
+
     def _read_stream(self, response, token: AbortToken, started: float) -> dict[str, Any]:
         total = 0
         parts: list[str] = []
         model = None
         usage = None
         finish_reason = None
+        finished = False
         while True:
             token.raise_if_cancelled()
             line = response.readline(LOCAL_LLM_MAX_RESPONSE_BYTES + 1)
@@ -1717,9 +1745,9 @@ class LocalMlxLlm:
             data = line[5:].strip()
             if data == b"[DONE]":
                 break
-            chunk = json.loads(data)
-            if not isinstance(chunk, dict):
-                raise RuntimeError("local_llm_response_invalid")
+            chunk = self._decode_completion_payload(data)
+            if chunk.get("error") is not None or chunk.get("status") in ("failed", "incomplete", "cancelled"):
+                raise RuntimeError("local_llm_generation_failed")
             request_id = chunk.get("id")
             if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", request_id):
                 previous_id = self.last_metrics.get("backend_request_id")
@@ -1736,11 +1764,25 @@ class LocalMlxLlm:
             if not isinstance(choices, list):
                 raise RuntimeError("local_llm_response_invalid")
             if not choices:
-                continue
+                continue  # A trailing usage-only frame after finish is valid.
+            if len(choices) != 1:
+                raise RuntimeError("local_llm_response_invalid")
             choice = choices[0]
             if not isinstance(choice, dict) or not isinstance(choice.get("delta"), dict):
                 raise RuntimeError("local_llm_response_invalid")
             delta = choice["delta"]
+            if delta.get("role") not in (None, "assistant"):
+                raise RuntimeError("local_llm_response_invalid")
+            if delta.get("tool_calls") or delta.get("function_call"):
+                raise RuntimeError("local_llm_reply_unconfirmed")
+            if finished:
+                # Never append a later generation, duplicated terminal chunk
+                # or a second request to the already completed assistant turn.
+                if (delta.get("content") not in (None, "") or
+                    delta.get("reasoning_content") not in (None, "") or
+                    choice.get("finish_reason") is not None):
+                    raise RuntimeError("local_llm_stream_post_completion")
+                continue
             content = delta.get("content")
             if content or delta.get("reasoning_content"):
                 self.last_metrics.setdefault("first_model_token_seconds", time.perf_counter() - started)
@@ -1752,6 +1794,11 @@ class LocalMlxLlm:
                     parts.append(content)
             if choice.get("finish_reason") is not None:
                 finish_reason = choice["finish_reason"]
+                if not isinstance(finish_reason, str):
+                    raise RuntimeError("local_llm_response_invalid")
+                finished = True
+        if not finished:
+            raise RuntimeError("local_llm_stream_incomplete")
         elapsed = time.perf_counter() - started
         self.last_metrics.update({"elapsed_seconds": elapsed, "usage": usage, "finish_reason": finish_reason})
         return {"id": self.last_metrics.get("backend_request_id"), "model": model, "usage": usage, "choices": [{"finish_reason": finish_reason, "message": {"content": "".join(parts)}}]}
@@ -1888,8 +1935,15 @@ class LocalMlxLlm:
         if len(raw) > LOCAL_LLM_MAX_RESPONSE_BYTES:
             raise RuntimeError("local_llm_response_too_large")
         try:
-            body = json.loads(raw.decode("utf-8", "replace"))
-            message = body["choices"][0]["message"]
+            body = self._decode_completion_payload(raw)
+            if body.get("error") is not None or body.get("status") in ("failed", "incomplete", "cancelled"):
+                raise ValueError("model reported a failed generation")
+            choices = body["choices"]
+            if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
+                raise ValueError("invalid choices")
+            message = choices[0]["message"]
+            if not isinstance(message, dict) or message.get("role") not in (None, "assistant"):
+                raise ValueError("not an assistant message")
             content = message.get("content")
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise RuntimeError("local_llm_response_invalid") from exc
@@ -1905,6 +1959,13 @@ class LocalMlxLlm:
             # A transport-complete stream can still contain an unfinished
             # answer. Do not speak or commit that partial answer as completion.
             raise RuntimeError("local_llm_reply_truncated")
+        if finish_reason != "stop":
+            # content_filter, tool_calls, function_call, unknown/missing status
+            # and a transport [DONE] without model completion are not consent
+            # to speak or persist the partial assistant text.
+            raise RuntimeError("local_llm_reply_unconfirmed")
+        if message.get("tool_calls") or message.get("function_call"):
+            raise RuntimeError("local_llm_reply_unconfirmed")
         if not isinstance(content, str) or not content.strip():
             # Never speak a model's private reasoning channel as if it were a
             # user-facing answer. A reasoning-only response ends this turn.
