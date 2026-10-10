@@ -74,6 +74,27 @@ describe('committed graph activity consumption', () => {
     await vi.advanceTimersByTimeAsync(2500); consumer.snapshot(point(16), nodes());
     expect(show).not.toHaveBeenCalled(); expect(consumer.diagnostics().pending).toBe(0);
   });
+  it('retries a reversed, failed or duplicate page without consuming its cursor or pulsing', async () => {
+    const read = vi.fn(async (_: Record<string, unknown>) => page(12, [event(11), event(12)]))
+      .mockResolvedValueOnce(page(12, [event(12), event(11)]))
+      .mockResolvedValueOnce(page(12, [event(11, { success: false } as never), event(12)]))
+      .mockResolvedValueOnce(page(12, [event(11), event(12, { event_id: 'event-11' })]));
+    const { consumer, refresh, show } = setup(read);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(consumer.diagnostics().cursor).toBe(10);
+      expect(consumer.diagnostics().seen).toBe(0);
+      expect(consumer.diagnostics().pending).toBe(0);
+      expect(refresh).not.toHaveBeenCalled();
+      expect(show).not.toHaveBeenCalled();
+      expect(read.mock.calls.at(-1)![0]).toMatchObject({ after: 10, stream_id: 'stream-a' });
+    }
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(consumer.diagnostics().cursor).toBe(12);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    consumer.snapshot(point(12), nodes());
+    expect(show).toHaveBeenCalledExactlyOnceWith(event(12));
+  });
   it('fences hidden replies and resumes the old cursor without lighting hidden history', async () => {
     let resolve!: (value: ReturnType<typeof page>) => void;
     const read = vi.fn((_options: Record<string, unknown>) => new Promise<ReturnType<typeof page>>(done => { resolve = done; }));

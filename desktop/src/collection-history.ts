@@ -7,10 +7,30 @@ const stages: Record<string, string> = {
   discovered: '자료 발견', parsed: '내용 읽음', validated: '형식 확인',
   stored: '저장 완료', indexed: '검색 반영', failed: '실패', paused: '중지',
 };
+const storedChanges: Record<string, string> = {
+  added: '새 자료 저장', revised: '기존 자료 수정', unchanged: '기존 자료 유지',
+  removed: '원본에서 제외', relations_changed: '관계 갱신',
+};
 const rows = (value: unknown): Row[] => Array.isArray(value)
   ? value.filter(v => v && typeof v === 'object' && !Array.isArray(v)) as Row[] : [];
-const validEvents = (value: unknown): Row[] => rows(value).filter(row =>
-  Number.isSafeInteger(row.sequence) && Number(row.sequence) > 0);
+// The server delivers newest-first initial/older pages and oldest-first
+// forward pages. A malformed or reordered page is retried intact; dropping a
+// row and then committing the newer cursor would erase durable history from
+// this view until a manual reset.
+const validEvents = (value: unknown, ascending: boolean): Row[] | null => {
+  if (!Array.isArray(value) || value.length > 200) return null;
+  const result: Row[] = [];
+  let previous: number | null = null;
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const row = item as Row, sequence = row.sequence;
+    if (!Number.isSafeInteger(sequence) || Number(sequence) <= 0) return null;
+    const current = Number(sequence);
+    if (previous !== null && (ascending ? current <= previous : current >= previous)) return null;
+    result.push(row); previous = current;
+  }
+  return result;
+};
 const WINDOW_LIMIT = 1000;
 const changes = ['added', 'revised', 'unchanged', 'removed', 'relations_changed'] as const;
 type Counts = { total: number; stages: Record<string, number>; changes: Record<string, number> };
@@ -78,6 +98,7 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
   let stream: string | null = null, aggregate: Counts | null = null;
   let historical = false, newCount = 0;
   const expanded = new Set<number>();
+  const activeReadbacks = new Map<string, Promise<Record<string, unknown> | null>>();
   let timer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new AbortController();
   const virtual = new VirtualList<Row>(list as HTMLElement, row => String(row.sequence), row => {
@@ -90,7 +111,9 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     copy.append(make('strong', '', String(row.target_label ?? '대상')), make('span', '', String(row.document_label ?? '처리 기록')));
     const details = row.details && typeof row.details === 'object' ? row.details as Row : {};
     const unchanged = details.change === 'unchanged';
-    const label = unchanged && row.stage === 'stored' ? '기존 자료 유지' : stages[String(row.stage)] ?? '처리 기록';
+    const label = row.stage === 'stored'
+      ? storedChanges[String(details.change)] ?? stages.stored
+      : stages[String(row.stage)] ?? '처리 기록';
     const badge = make('span', 'collection-stage', label); badge.dataset.stage = String(row.stage);
     const more = document.createElement('details'); more.className = 'collection-event-detail';
     more.dataset.sequence = String(row.sequence); more.open = expanded.has(Number(row.sequence));
@@ -103,10 +126,15 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       : String(details.reason ?? '원문 ID와 저장 버전을 연결한 기록입니다.');
     more.append(make('p', '', explanation));
     const identifiers = document.createElement('dl');
-    for (const [label, value] of [['실행', row.run_id], ['원문 항목', row.document_id], ['저장 버전', row.version]]) {
+    const previousVersion = typeof details.previous_version === 'string'
+      && /^version:[0-9a-f]{64}$/.test(details.previous_version) ? details.previous_version : null;
+    for (const [label, value] of [['실행', row.run_id], ['원문 항목', row.document_id],
+      ['변경 전 버전', previousVersion], ['저장 버전', row.version]]) {
       if (typeof value === 'string' && value) identifiers.append(make('dt', '', String(label)), make('dd', '', value));
     }
     more.append(identifiers);
+    const readback = make('p', 'collection-readback', ''); readback.hidden = true;
+    more.append(readback);
     if (typeof row.source_url === 'string') {
       try {
         const url = new URL(row.source_url);
@@ -118,11 +146,79 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     }
     article.append(time, copy, badge, more); return article;
   }, 82);
+  async function verifyExpanded(detail: HTMLDetailsElement, sequence: number): Promise<void> {
+    const row = items.find(entry => entry.sequence === sequence);
+    const projects = row?.projects;
+    if (!row || !['stored', 'indexed'].includes(String(row.stage))
+      || !Number.isSafeInteger(sequence) || !Array.isArray(projects)
+      || !projects.length || projects.length > 16
+      || !projects.every(project => typeof project === 'string' && project.length > 0 && project.length <= 128)
+      || !['document_id', 'version', 'target_id', 'run_id'].every(key =>
+        typeof row[key] === 'string' && (row[key] as string).length > 0 && (row[key] as string).length <= 256)) return;
+    const output = detail.querySelector<HTMLElement>('.collection-readback');
+    if (!output) return;
+    output.hidden = false; output.textContent = '현재 저장 상태를 다시 확인합니다.';
+    const ticket = epoch, currentStream = stream;
+    const params = { projects, document_id: row.document_id, expected_version: row.version, target_id: row.target_id };
+    const key = JSON.stringify(params);
+    let pending = activeReadbacks.get(key);
+    if (!pending) {
+      pending = load('collection-trace', { query: key });
+      activeReadbacks.set(key, pending);
+      void pending.finally(() => { if (activeReadbacks.get(key) === pending) activeReadbacks.delete(key); }).catch(() => {});
+    }
+    let proof: Record<string, unknown> | null = null;
+    try { proof = await pending; } catch { /* No raw provider exception is shown in the UI. */ }
+    const stillSelected = items.find(item => item.sequence === sequence);
+    if (dead || !visible || page !== 'history' || ticket !== epoch || stream !== currentStream || !detail.open
+      || !list.contains(detail) || detail.dataset.sequence !== String(sequence)
+      || !stillSelected || stillSelected.document_id !== row.document_id
+      || stillSelected.version !== row.version || stillSelected.target_id !== row.target_id
+      || stillSelected.run_id !== row.run_id) return;
+    if (proof?.state === 'version_changed') {
+      output.textContent = '후속 개정으로 현재 버전이 달라졌습니다. 이 기록의 당시 처리 단계는 보존됩니다.';
+      return;
+    }
+    if (proof?.state === 'not_in_scope') {
+      output.textContent = '현재 권한에서 이 원본을 재확인할 수 없습니다.';
+      return;
+    }
+    const sameScope = proof?.ok === true && ['available', 'removed'].includes(String(proof.state))
+      && proof.document_id === row.document_id && proof.version === row.version
+      && proof.target_id === row.target_id && Array.isArray(proof.projects)
+      && proof.projects.length === projects.length
+      && proof.projects.every((project, index) => project === projects[index]);
+    if (!sameScope || proof === null) { output.textContent = '저장 결과를 확인하지 못했습니다.'; return; }
+    const source = proof.source as Record<string, unknown> | undefined;
+    const stages = proof.stages as Record<string, unknown> | undefined;
+    const fts = proof.fts as Record<string, unknown> | undefined;
+    const dense = proof.dense as Record<string, unknown> | undefined;
+    const runMatches = proof.run_id === row.run_id;
+    if (!runMatches) {
+      output.textContent = '이후 처리 실행이 확인됐습니다. 현재 저장 상태가 이 이력의 결과를 대신하지 않습니다.';
+      return;
+    }
+    const sourceVerified = source?.state === 'hash_verified';
+    if (proof.state === 'removed') {
+      output.textContent = sourceVerified
+        ? '재조회 확인 · 원문 해시 보존 · 현재 그래프에서 제외됨'
+        : '원본 보존 상태를 다시 확인해야 합니다.';
+      return;
+    }
+    const stored = sourceVerified && stages?.stored === true;
+    const indexed = stored && stages?.indexed === true && fts?.state === 'verified';
+    const vector = dense?.state === 'stored_vector_binding_verified';
+    output.textContent = (stored ? '저장·원문 해시 확인' : '저장 상태 재확인 필요')
+      + ' · FTS ' + (indexed ? '확인' : '미확인')
+      + ' · Dense ' + (vector ? '저장 바인딩 확인' : '미확인/대기')
+      + ' · 모델 실행은 별도 검증';
+  }
   list.addEventListener('toggle', event => {
     const detail = event.target;
     if (!(detail instanceof HTMLDetailsElement) || !list.contains(detail)) return;
     const sequence = Number(detail.dataset.sequence);
-    if (detail.open) expanded.add(sequence); else expanded.delete(sequence);
+    if (detail.open) { expanded.add(sequence); void verifyExpanded(detail, sequence); }
+    else expanded.delete(sequence);
   }, { capture: true, signal: listeners.signal });
   virtual.setVisible(false);
   const stopTimer = () => { if (timer) clearTimeout(timer); timer = null; };
@@ -162,16 +258,23 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       const result = await load('collection-history', { query: JSON.stringify(options) });
       if (dead || ticket !== epoch || !visible || page !== 'history') return;
       if (result?.ok !== true) { section.dataset.state = 'error'; status.textContent = '수집 이력을 불러오지 못했습니다.'; delay = 5000; return; }
-      section.dataset.state = result.state === 'not_configured' ? 'not_configured' : 'ready';
-      populate(project, result.projects, 'project', 'project'); populate(target, result.targets, 'id', 'label');
       const nextStream = typeof result.stream_id === 'string' && result.stream_id.length <= 128 ? result.stream_id : null;
       const restarting = result.reset === true || nextStream !== null && stream !== null && stream !== nextStream;
+      const verified = validEvents(result.items, forward && !restarting);
+      if (verified === null) {
+        section.dataset.state = 'error';
+        status.textContent = '수집 이력의 순서를 확인하지 못했습니다. 같은 범위를 다시 조회합니다.';
+        delay = 5000;
+        return;
+      }
+      section.dataset.state = result.state === 'not_configured' ? 'not_configured' : 'ready';
+      populate(project, result.projects, 'project', 'project'); populate(target, result.targets, 'id', 'label');
       if (restarting) {
         items = []; newest = before = null; historical = false; newCount = 0; expanded.clear(); aggregate = null;
       }
       if (nextStream) stream = nextStream;
       const append = forward && !restarting;
-      const incoming = validEvents(result.items).filter(row => !append || Number(row.sequence) > (newest ?? 0));
+      const incoming = verified.filter(row => !append || Number(row.sequence) > (newest ?? 0));
       const snapshotCounts = counts(result.summary);
       if (snapshotCounts) aggregate = snapshotCounts;
       else if (append && aggregate) for (const row of incoming) {
@@ -199,7 +302,10 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       totals.hidden = aggregate === null;
       if (aggregate) totals.textContent = '선택한 범위 · ' + aggregate.total.toLocaleString('ko-KR') + '개 단계 기록'
         + ' · 추가 ' + aggregate.changes.added.toLocaleString('ko-KR') + ' · 수정 ' + aggregate.changes.revised.toLocaleString('ko-KR')
-        + ' · 유지 ' + aggregate.changes.unchanged.toLocaleString('ko-KR') + ' · 실패 ' + aggregate.stages.failed.toLocaleString('ko-KR')
+        + ' · 유지 ' + aggregate.changes.unchanged.toLocaleString('ko-KR')
+        + ' · 제외 ' + aggregate.changes.removed.toLocaleString('ko-KR')
+        + ' · 관계 갱신 ' + aggregate.changes.relations_changed.toLocaleString('ko-KR')
+        + ' · 실패 ' + aggregate.stages.failed.toLocaleString('ko-KR')
         + ' · 중지 ' + aggregate.stages.paused.toLocaleString('ko-KR');
       status.textContent = result.state === 'not_configured' ? '아직 수집 대상을 연결하지 않았습니다.'
         : newCount ? '새 처리 이력 ' + newCount + '개 · 최신 이력 보기로 돌아갈 수 있습니다.'

@@ -146,6 +146,26 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(self.store.events(projects=["two"])["items"], [])
         self.assertEqual(len(self.store.search("검색", projects=["one"])), 1)
 
+    def test_revision_history_uses_previous_version_from_its_own_target_only(self):
+        primary=self.target()
+        secondary=self.target('channel-B','one')
+        self.store.ingest(primary,[self.record('shared',text='target A revision one')])
+        before=self.store.graph_page(projects=['one'],target_id=primary)['nodes'][0]['source_version']
+        self.store.ingest(secondary,[self.record('shared',text='target B different revision')])
+        foreign=self.store.graph_page(projects=['one'],target_id=secondary)['nodes'][0]['source_version']
+        self.assertNotEqual(before,foreign)
+        self.store.ingest(primary,[self.record('shared',text='target A revision two')])
+        after=self.store.graph_page(projects=['one'],target_id=primary)['nodes'][0]['source_version']
+        history=self.store.recent_events(projects=['one'],target_id=primary,stage='stored')
+        recent=next(row for row in history['items'] if row['version']==after)
+        self.assertEqual(recent['details']['change'],'revised')
+        self.assertEqual(recent['details']['previous_version'],before)
+        self.assertNotEqual(recent['details']['previous_version'],foreign)
+        secondary_history=self.store.recent_events(projects=['one'],target_id=secondary,stage='stored')
+        self.assertNotIn('previous_version',secondary_history['items'][0]['details'])
+        with self.store.database() as db:
+            self.assertGreaterEqual(db.execute('SELECT COUNT(*) FROM versions').fetchone()[0],3)
+
     def test_busy_target_does_not_block_another_target(self):
         a, b = self.target(), self.target("channel-B")
         with self.store.target_lock(a):

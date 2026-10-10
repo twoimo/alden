@@ -1,5 +1,23 @@
 # Alden desktop design contract
 
+## 2026-10-11 — 저장 원본 재조회와 실시간 이벤트의 분리
+
+‘기억 정리’의 한 행은 대상·항목·시각·확정 단계를 간결하게 표시합니다.
+저장 항목을 펼쳐 사용자 요청으로만 현재 원본 SHA-256·FTS·Dense 저장
+바인딩을 조회하며, 선택한 `project + document + version + target + run`이
+일치한 결과에만 확인 문구를 부여합니다. 개정 전 버전과 원본 제외,
+관계 갱신·미확인·대기 상태는 저장 완료와 시각적으로 구분합니다.
+
+3D 활동 이벤트는 유효한 journal stream/cursor의 오름차순 저장
+이벤트만 소비합니다. 역전/손상 페이지는 앞선 장면/커서를 보존하며 재조회하고
+과거 저장·클라우드 추론·사용자 조회를 새로운 지식 신호로 꾸미지 않습니다.
+숨김/재연결 때 늦은 결과는 현재 화면에 반영하지 않습니다. 기존
+검은 은하형 그래프 색·위치·에너지 표현과 목록의 평온한 디자인은 유지합니다.
+
+[정확한 실행·UI·원문 확인 계약](../docs/architecture/alden-activity-readback-20261011.md).
+macOS CI의 UI 471개는 DOM·로직 검증이며 실제 사용자 설치본의
+GPU 프레임·물리 입력·서명/공증 증거는 아닙니다.
+
 ## 2026-10-11 — Evidence in the real 3D note view (source branch)
 
 The selected source detail retains the calm existing note layout and a single
