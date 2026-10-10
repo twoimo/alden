@@ -1,5 +1,24 @@
 # Alden desktop design contract
 
+## 2026-10-11 — Evidence in the real 3D note view (source branch)
+
+The selected source detail retains the calm existing note layout and a single
+plain-text proof line inside its established original-evidence disclosure.
+It checks the selected node ID, current source version and source target against
+a new read-only backend receipt before showing stored source hash, committed
+journal stage, FTS5 binding or derived local Dense vector binding. Missing or
+lagging stages say "미확인/대기". The line never claims a rendered GPU frame,
+a loaded MLX model, or a strengthened fact relationship. Collection events and
+visual pulses still originate exclusively in persisted successful journal
+activity; opening a note or reading trace produces none.
+
+[Scoped pipeline proof and bounded test receipts](../docs/architecture/alden-pipeline-readback-20261011.md)
+include the A→removal→A rollback defect and its fixed run identity. This UI
+source integration is validated on a macOS CI DOM/Vite harness, not yet the
+owner's physical installed Alden window. The nine existing Archify diagrams
+remain dated descriptions of their own verified source versions; a new Archify
+render of this extension is pending a supported local Archify host.
+
 ## 0.3.49 구현 경로 도식
 
 [현재 9개 Archify 도식](../docs/architecture/alden-0.3.49/README.md)은 프로세스·음성/취소·수집·계보·MCP·정규화/검색·이력/활동·복구·평가 경로를 설명합니다. 작성 문구는 한국어이며 고정 Viewer UI는 영어입니다. 9/9 구성 검사, 네 데스크톱 크기의 브라우저 검사와 밝은/어두운 이미지 검토를 제품의 실제 실행 증거와 구분합니다.
