@@ -109,6 +109,39 @@ class OskSourcesTests(unittest.TestCase):
         updated=sources.ground_graph(state,graph,lambda text:(text,[]));self.assertNotEqual(updated['nodes'][0]['raw_sources'],derived['nodes'][0]['raw_sources'])
         for path,content in files.items():self.assertEqual(path.read_bytes(),content)
 
+    def test_removed_room_metadata_retracts_grounded_node_and_edge_until_restored(self):
+        with sqlite3.connect(self.snapshot) as db:
+            db.execute('CREATE TABLE alden_rooms(chat_id TEXT PRIMARY KEY,label TEXT)')
+            db.execute("INSERT INTO alden_rooms VALUES('42','보관된 방')")
+        state,source=self.ground_fixture()
+        room_key=f'kakao:{self.account}:room:42'
+        message_key=f'kakao:{self.account}:room:42:log:2'
+        graph={
+            'nodes':[
+                {'id':'room-node','evidence':{'source_event_ids':[room_key]}},
+                {'id':'message-node','evidence':{'source_event_ids':[message_key]}},
+            ],
+            'edges':[{'source':'room-node','target':'message-node','type':'linked'}],
+        }
+        initial=sources.ground_graph(state,graph,lambda text:(text,[]))
+        self.assertEqual({node['id'] for node in initial['nodes']},{'room-node','message-node'})
+        self.assertEqual(initial['edge_count'],1)
+        retained={path:path.read_bytes() for path in
+                  (state/'knowledge/osk/vault/_sources/kakao/current').glob('*.txt')}
+        with sqlite3.connect(source) as db:
+            db.execute("DELETE FROM alden_rooms WHERE chat_id='42'")
+        removed=sources.ground_graph(state,graph,lambda text:(text,[]))
+        self.assertEqual([node['id'] for node in removed['nodes']],['message-node'])
+        self.assertEqual(removed['edges'],[])
+        self.assertEqual(removed['raw_grounding']['withheld_nodes'],1)
+        with sqlite3.connect(source) as db:
+            db.execute("INSERT INTO alden_rooms VALUES('42','보관된 방')")
+        restored=sources.ground_graph(state,graph,lambda text:(text,[]))
+        self.assertEqual({node['id'] for node in restored['nodes']},{'room-node','message-node'})
+        self.assertEqual(restored['edge_count'],1)
+        for path,original in retained.items():
+            self.assertEqual(path.read_bytes(),original)
+
     def test_conflicting_source_identity_is_archived_but_withheld_from_learning(self):
         state,source=self.ground_fixture()
         with sqlite3.connect(source) as db:db.execute("UPDATE alden_messages SET log_id='2' WHERE id=3")
