@@ -7,7 +7,7 @@ import time
 
 from alden_abort import ABORT_STATE_NAME, AbortToken
 from alden_collection import CollectionStore, read_action
-from alden_collection_retrieval import retrieve
+from alden_collection_retrieval import retrieve, trace_document
 from alden_status_mcp import StdioServer, _check
 
 
@@ -46,10 +46,15 @@ class KnowledgeServer(StdioServer):
             ('alden_knowledge_graph', {'focus': {'type': 'string', 'maxLength': 256}},
              'Read bounded stored graph nodes and explicit relationships in the allowed project scope.'),
             ('alden_knowledge_history', {'after': {'type': 'integer', 'minimum': 0}},
-             'Read persisted collection stages after a cursor; reading does not create activity.')]:
+             'Read persisted collection stages after a cursor; reading does not create activity.'),
+            ('alden_knowledge_trace', {
+                'document_id': {'type': 'string', 'minLength': 1, 'maxLength': 256},
+                'expected_version': {'type': 'string', 'minLength': 1, 'maxLength': 256},
+                'target_id': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
+             'Read a scoped, hash-verified source-to-storage/FTS/dense/graph receipt. Never runs an LLM or writes.')]:
             result.append({'name': name, 'description': description,
                            'inputSchema': {'type': 'object', 'properties': {**common, **extras},
-                                           'required': ['projects'] + (['query'] if name.endswith('search') else []),
+                                           'required': ['projects'] + (['query'] if name.endswith('search') else ['document_id'] if name.endswith('trace') else []),
                                            'additionalProperties': False},
                            'annotations': {'readOnlyHint': True, 'destructiveHint': False,
                                            'idempotentHint': True, 'openWorldHint': False}})
@@ -60,7 +65,8 @@ class KnowledgeServer(StdioServer):
     def valid_call(self, params):
         name, args = params.get('name'), params.get('arguments')
         options = {'alden_knowledge_search': {'query'}, 'alden_knowledge_graph': {'focus'},
-                   'alden_knowledge_history': {'after'}}
+                   'alden_knowledge_history': {'after'},
+                   'alden_knowledge_trace': {'document_id','expected_version','target_id'}}
         if not isinstance(name, str) or name not in options or not isinstance(args, dict) or set(args) - ({'projects', 'limit'} | options[name]):
             return False
         projects = args.get('projects')
@@ -73,6 +79,10 @@ class KnowledgeServer(StdioServer):
             return False
         if name.endswith('search'):
             return isinstance(args.get('query'), str) and 1 <= len(args['query'].strip()) <= 256
+        if name.endswith('trace'):
+            return (isinstance(args.get('document_id'), str) and 1 <= len(args['document_id']) <= 256
+                    and all(key not in args or isinstance(args[key], str) and 1 <= len(args[key]) <= 256
+                            for key in ('expected_version','target_id')) and 'limit' not in args)
         if name.endswith('graph'):
             return 'focus' not in args or isinstance(args['focus'], str) and 1 <= len(args['focus']) <= 256
         return type(args.get('after', 0)) is int and args.get('after', 0) >= 0
@@ -87,6 +97,9 @@ class KnowledgeServer(StdioServer):
             with kg.embedding_abort_scope(token):
                 result = retrieve(self.root, args['query'], projects=args['projects'],
                                   max_entities=args.get('limit', 6), cancelled=cancelled)
+        elif name.endswith('trace'):
+            result = trace_document(self.root, args['document_id'], projects=args['projects'],
+                                    target_id=args.get('target_id'), expected_version=args.get('expected_version'))
         else:
             action = 'collection-graph' if name.endswith('graph') else 'collection-history'
             options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
