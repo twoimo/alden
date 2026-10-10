@@ -5470,6 +5470,44 @@ mod tests {
     }
 
     #[test]
+    fn collection_trace_dispatches_as_read_only_bounded_action() {
+        let query = r#"{"projects":["research"],"document_id":"youtube:document-hash","target_id":"declared-target"}"#;
+        let args = settings_action_args(
+            "collection-trace",
+            Some(query),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--history-query", query]));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--action", "collection-trace"]));
+        assert!(!args.iter().any(|arg| {
+            matches!(arg.as_str(), "--explicit-opt-in" | "--model" | "--catalog-delete")
+        }));
+        for invalid in ["[]".to_owned(), "{broken".to_owned(), "x".repeat(4097)] {
+            assert!(matches!(
+                settings_action_args(
+                    "collection-trace",
+                    Some(&invalid),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None
+                ),
+                Err(BridgeError::ActionNotAllowed)
+            ));
+        }
+    }
+
+    #[test]
     fn room_upsert_action_args_and_sanitization() {
         let args = settings_action_args(
             "room-upsert",
