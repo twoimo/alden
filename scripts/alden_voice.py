@@ -1235,6 +1235,11 @@ class AldenVoicePipeline:
         with self._lock:
             if self._closed or source not in {"microphone", "text"}:
                 return None
+            # An older, globally aborted session may not accept another input
+            # after human resume. The caller must create a fresh epoch token;
+            # otherwise a rejected ticket would falsely advance turn_id.
+            if self.token.is_cancelled():
+                return None
             if event_id is not None:
                 if not isinstance(event_id, str) or not event_id or len(event_id) > 256:
                     return None
@@ -1389,14 +1394,24 @@ class AldenVoicePipeline:
     def process_utterance(self, pcm16: bytes, *, source: str = "microphone", event_id: str | None = None) -> VoiceResult:
         turn = self._begin_turn(source, event_id)
         if turn is None:
-            return VoiceResult(VoiceState.ENDED, "input_ignored", conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version)
+            with self._lock:
+                cancelled = self.token.is_cancelled()
+                return VoiceResult(VoiceState.ABORTED if cancelled else VoiceState.ENDED,
+                                   "global_abort" if cancelled else "input_ignored",
+                                   conversation_id=self.conversation_id, turn_id=self.turn_id,
+                                   context_version=self.context_version, cancelled=cancelled)
         with self._processing_lock:
             return self._process_turn(turn, pcm16=pcm16)
 
     def process_text(self, text: str, *, source: str = "text", event_id: str | None = None) -> VoiceResult:
         turn = self._begin_turn(source, event_id)
         if turn is None:
-            return VoiceResult(VoiceState.ENDED, "input_ignored", conversation_id=self.conversation_id, turn_id=self.turn_id, context_version=self.context_version)
+            with self._lock:
+                cancelled = self.token.is_cancelled()
+                return VoiceResult(VoiceState.ABORTED if cancelled else VoiceState.ENDED,
+                                   "global_abort" if cancelled else "input_ignored",
+                                   conversation_id=self.conversation_id, turn_id=self.turn_id,
+                                   context_version=self.context_version, cancelled=cancelled)
         with self._processing_lock:
             return self._process_turn(turn, text=text)
 

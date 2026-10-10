@@ -28,3 +28,4 @@ jobs:
           tests.test_alden_browser_runtime_payload
           tests.test_alden_voice_turns
           tests.test_alden_voice_completion
+          tests.test_alden_cross_runtime_abort
