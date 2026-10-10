@@ -15,6 +15,7 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
   let chatBusy=false,voiceBusy=false,dbBusy=false,dbBefore:number|null=null,timer:ReturnType<typeof setTimeout>|null=null;
   const listeners=new AbortController();const lists:VirtualList<Row>[]=[];
   let visible=true,viewEpoch=0;
+  const catalogRequests = { conversation: 0, voice: 0 };
   const get=(id:string)=>document.getElementById(id)!;
   const status=(id:string,text:string)=>{const node=get(id);if(node)node.textContent=text;};
   const bubble=(item:Row):HTMLElement=>{
@@ -56,8 +57,45 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
     const q=(get('conversation-search') as HTMLInputElement).value.trim().toLocaleLowerCase();chatRail.set(rooms.filter(r=>String(r.chat_name??'').toLocaleLowerCase().includes(q)),{preserve:true});
     const v=(get('voice-search') as HTMLInputElement).value.trim().toLocaleLowerCase();voiceRail.set(sessions.filter(r=>String(r.title??'').toLocaleLowerCase().includes(v)),{preserve:true});
   }
-  async function roomData():Promise<void> {const epoch=viewEpoch;const data=await load('history-rooms');if(dead||!visible||epoch!==viewEpoch)return;if(data?.ok!==true){status('conversation-history-status','기록을 불러오지 못했습니다.');placeholder('conversation','기록을 불러오지 못했습니다','기억 정리에서 수집 상태를 확인하세요.',true);return;}rooms=rows(data.rooms);filterRails();if(!chatId&&rooms.length)pickRoom(rooms[0],false);else if(!rooms.length)placeholder('conversation','저장된 대화가 없습니다','기억 정리에서 수집 상태를 확인하세요.');}
-  async function voiceData():Promise<void> {const epoch=viewEpoch;const data=await load('voice-history-sessions');if(dead||!visible||epoch!==viewEpoch)return;if(data?.ok!==true){status('voice-history-status','기록을 불러오지 못했습니다.');placeholder('voice','기록을 불러오지 못했습니다','다시 불러오거나 새 음성 대화를 시작하세요.',true);return;}sessions=rows(data.items);filterRails();if(!sessionId&&sessions.length)pickRoom(sessions[0],true);else if(!sessions.length)placeholder('voice','지난 음성 대화가 없습니다','음성으로 나눈 대화가 여기에 남습니다.');else if(sessionId&&voiceItems.length)void readVoice(false,true);}
+  async function readCatalog(kind: 'conversation' | 'voice'): Promise<void> {
+    if (dead || !visible || page !== kind) return;
+    const epoch = viewEpoch;
+    const request = ++catalogRequests[kind];
+    const current = () => !dead && visible && page === kind
+      && epoch === viewEpoch && request === catalogRequests[kind];
+    const failure = () => {
+      status(`${kind}-history-status`, '기록을 불러오지 못했습니다.');
+      placeholder(kind, '기록을 불러오지 못했습니다', kind === 'conversation'
+        ? '기억 정리에서 수집 상태를 확인하세요.'
+        : '다시 불러오거나 새 음성 대화를 시작하세요.', true);
+    };
+    try {
+      const data = await load(kind === 'conversation' ? 'history-rooms' : 'voice-history-sessions');
+      if (!current()) return;
+      if (data?.ok !== true) { failure(); return; }
+      if (kind === 'conversation') {
+        rooms = rows(data.rooms);
+        filterRails();
+        if (!chatId && rooms.length) pickRoom(rooms[0], false);
+        else if (!rooms.length) {
+          status('conversation-history-status', '저장된 대화가 없습니다');
+          placeholder('conversation', '저장된 대화가 없습니다', '기억 정리에서 수집 상태를 확인하세요.');
+        }
+      } else {
+        sessions = rows(data.items);
+        filterRails();
+        if (!sessionId && sessions.length) pickRoom(sessions[0], true);
+        else if (!sessions.length) {
+          status('voice-history-status', '지난 음성 대화가 없습니다');
+          placeholder('voice', '지난 음성 대화가 없습니다', '음성으로 나눈 대화가 여기에 남습니다.');
+        }
+        else if (sessionId && voiceItems.length) void readVoice(false, true);
+      }
+    } catch {
+      // Rejected reads must respect the same view/request ownership as success.
+      if (current()) failure();
+    }
+  }
   async function readChat(first=false):Promise<void> {
     if(!visible||page!=='conversation'||!chatId||chatBusy)return;chatBusy=true;const epoch=chatEpoch,id=chatId;status('conversation-history-status','불러오는 중');if(first)placeholder('conversation','대화를 불러옵니다');
     const query:Row={limit:100};if(anchor!==null)query.anchor=anchor;if(before!==null)query.before=before;
@@ -87,11 +125,11 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
     }catch{if(!dead&&epoch===viewEpoch)status('db-current-title','갱신 기록을 불러오지 못했습니다.');}finally{dbBusy=false;}
   }
   for(const id of ['conversation-search','voice-search'])get(id).addEventListener('input',filterRails,{signal:listeners.signal});
-  get('conversation-retry').addEventListener('click',()=>{if(chatId)void readChat(true);else void roomData().catch(()=>placeholder('conversation','기록을 불러오지 못했습니다','기억 정리에서 수집 상태를 확인하세요.',true));},{signal:listeners.signal});
-  get('voice-retry').addEventListener('click',()=>{if(sessionId)void readVoice(true);else void voiceData().catch(()=>placeholder('voice','기록을 불러오지 못했습니다','',true));},{signal:listeners.signal});
+  get('conversation-retry').addEventListener('click',()=>{if(chatId)void readChat(true);else void readCatalog('conversation');},{signal:listeners.signal});
+  get('voice-retry').addEventListener('click',()=>{if(sessionId)void readVoice(true);else void readCatalog('voice');},{signal:listeners.signal});
   get('conversation-history-older').addEventListener('click',()=>void readChat(),{signal:listeners.signal});get('voice-history-older').addEventListener('click',()=>void readVoice(),{signal:listeners.signal});get('db-history-older').addEventListener('click',()=>void readDb(true),{signal:listeners.signal});
   get('chat-message-list').addEventListener('scroll',()=>{if(visible&&page==='conversation'&&before!==null&&get('chat-message-list').scrollTop<70)void readChat();},{passive:true,signal:listeners.signal});
   get('voice-message-list').addEventListener('scroll',()=>{if(visible&&page==='voice'&&voiceBefore!==null&&get('voice-message-list').scrollTop<70)void readVoice();},{passive:true,signal:listeners.signal});
-  function select(next:Page):void {if(page!==next){viewEpoch++;chatEpoch++;voiceEpoch++;}page=next;chatList.setVisible(visible&&page==='conversation');chatRail.setVisible(visible&&page==='conversation');voiceList.setVisible(visible&&page==='voice');voiceRail.setVisible(visible&&page==='voice');dbList.setVisible(visible&&page==='history');if(timer!==null)clearTimeout(timer);timer=null;if(!visible||dead)return;if(next==='conversation'){if(!rooms.length)void roomData().catch(()=>{if(!dead)placeholder('conversation','기록을 불러오지 못했습니다','기억 정리에서 수집 상태를 확인하세요.',true);});else if(chatId&&!chatItems.length)void readChat(true);}if(next==='voice'){void voiceData().catch(()=>{if(!dead)placeholder('voice','기록을 불러오지 못했습니다','',true);});if(sessionId&&!voiceItems.length)void readVoice(true);}if(next==='history'){void readDb();timer=setTimeout(()=>{if(!dead&&visible&&page==='history')select('history');},5000);}}
+  function select(next:Page):void {if(page!==next){viewEpoch++;chatEpoch++;voiceEpoch++;}page=next;chatList.setVisible(visible&&page==='conversation');chatRail.setVisible(visible&&page==='conversation');voiceList.setVisible(visible&&page==='voice');voiceRail.setVisible(visible&&page==='voice');dbList.setVisible(visible&&page==='history');if(timer!==null)clearTimeout(timer);timer=null;if(!visible||dead)return;if(next==='conversation'){if(!rooms.length)void readCatalog('conversation');else if(chatId&&!chatItems.length)void readChat(true);}if(next==='voice'){void readCatalog('voice');if(sessionId&&!voiceItems.length)void readVoice(true);}if(next==='history'){void readDb();timer=setTimeout(()=>{if(!dead&&visible&&page==='history')select('history');},5000);}}
   return {select,visible:(flag)=>{visible=flag;if(!flag){viewEpoch++;chatEpoch++;voiceEpoch++;}select(page);},dispose:()=>{dead=true;chatEpoch++;voiceEpoch++;listeners.abort();if(timer!==null)clearTimeout(timer);lists.forEach(l=>l.dispose());}};
 }

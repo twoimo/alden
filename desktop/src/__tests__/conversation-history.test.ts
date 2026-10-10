@@ -8,6 +8,140 @@ beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('complete local histories', () => {
+  it.each(['conversation', 'voice'] as const)('ignores a late rejected %s catalog after a newer view has loaded', async kind => {
+    let rejectOld!: (error: Error) => void;
+    let catalogCalls = 0;
+    const catalog = kind === 'conversation' ? 'history-rooms' : 'voice-history-sessions';
+    const load = vi.fn<typeof fetchSettingsAction>(async action => {
+      if (action === catalog) {
+        if (++catalogCalls === 1) return new Promise((_, reject) => { rejectOld = reject; });
+        return kind === 'conversation'
+          ? { ok: true, rooms: [{ chat_id: 'current', chat_name: '현재 대화' }] }
+          : { ok: true, items: [{ id: 'current', title: '현재 음성' }] };
+      }
+      return kind === 'conversation'
+        ? { ok: true, anchor_log_id: '1', next_before: null, total: 1, messages: [{ id: '1', text: '현재 원문' }] }
+        : { ok: true, next: null, items: [{ turn_id: 1, role: 'user', content: '현재 원문' }] };
+    });
+    const views = wireConversationViews(load);
+    try {
+      views.select(kind);
+      await settle();
+      views.select('settings');
+      views.select(kind);
+      await settle();
+      const placeholder = document.getElementById(`${kind}-placeholder`)!;
+      const messages = document.getElementById(kind === 'conversation' ? 'chat-message-list' : 'voice-message-list')!;
+      expect(placeholder.hidden).toBe(true);
+      expect(messages.textContent).toContain('현재 원문');
+      rejectOld(new Error('old request disconnected'));
+      await settle();
+      expect(placeholder.hidden).toBe(true);
+      expect(messages.hidden).toBe(false);
+      expect(messages.textContent).toContain('현재 원문');
+      expect(catalogCalls).toBe(2);
+    } finally {
+      views.dispose();
+    }
+  });
+
+  it.each(['conversation', 'voice'] as const)('keeps the latest %s catalog when same-view responses arrive out of order', async kind => {
+    let releaseOld!: (data: Record<string, unknown>) => void;
+    let catalogCalls = 0;
+    const catalog = kind === 'conversation' ? 'history-rooms' : 'voice-history-sessions';
+    const catalogData = (name: string) => kind === 'conversation'
+      ? { ok: true, rooms: [{ chat_id: name, chat_name: name }] }
+      : { ok: true, items: [{ id: name, title: name }] };
+    const load = vi.fn<typeof fetchSettingsAction>(async action => {
+      if (action === catalog) {
+        if (++catalogCalls === 1) return new Promise(resolve => { releaseOld = resolve; });
+        return catalogData('CURRENT');
+      }
+      return kind === 'conversation'
+        ? { ok: true, anchor_log_id: '1', next_before: null, total: 1, messages: [{ id: '1', text: '현재 원문' }] }
+        : { ok: true, next: null, items: [{ turn_id: 1, role: 'user', content: '현재 원문' }] };
+    });
+    const views = wireConversationViews(load);
+    try {
+      views.select(kind);
+      await settle();
+      views.select(kind);
+      await settle();
+      releaseOld(catalogData('STALE'));
+      await settle();
+      const rail = document.getElementById(kind === 'conversation' ? 'chat-room-list' : 'voice-session-list')!;
+      expect(rail.textContent).toContain('CURRENT');
+      expect(rail.textContent).not.toContain('STALE');
+      expect(load.mock.calls.filter(([action]) => action !== catalog)).toHaveLength(1);
+    } finally {
+      views.dispose();
+    }
+  });
+
+  it.each(['conversation', 'voice'] as const)('shows a current rejected %s catalog and permits retry', async kind => {
+    let catalogCalls = 0;
+    const catalog = kind === 'conversation' ? 'history-rooms' : 'voice-history-sessions';
+    const load = vi.fn<typeof fetchSettingsAction>(async action => {
+      if (action === catalog) {
+        if (++catalogCalls === 1) throw new Error('current reader unavailable');
+        return kind === 'conversation'
+          ? { ok: true, rooms: [{ chat_id: '1', chat_name: '현재 대화' }] }
+          : { ok: true, items: [{ id: '1', title: '현재 음성' }] };
+      }
+      return kind === 'conversation'
+        ? { ok: true, anchor_log_id: '1', next_before: null, total: 1, messages: [{ id: '1', text: '다시 읽은 원문' }] }
+        : { ok: true, next: null, items: [{ turn_id: 1, role: 'user', content: '다시 읽은 원문' }] };
+    });
+    const views = wireConversationViews(load);
+    try {
+      views.select(kind);
+      await settle();
+      const placeholder = document.getElementById(`${kind}-placeholder`)!;
+      const retry = document.getElementById(`${kind}-retry`)!;
+      expect(placeholder.hidden).toBe(false);
+      expect(placeholder.textContent).toContain('불러오지 못했습니다');
+      expect(retry.hidden).toBe(false);
+      retry.click();
+      await settle();
+      expect(placeholder.hidden).toBe(true);
+      expect(document.getElementById(kind === 'conversation' ? 'chat-message-list' : 'voice-message-list')!.textContent).toContain('다시 읽은 원문');
+      expect(catalogCalls).toBe(2);
+    } finally {
+      views.dispose();
+    }
+  });
+
+  it.each(['conversation', 'voice'] as const)('clears the failure status when a rejected %s catalog retries to an empty result', async kind => {
+    let catalogCalls = 0;
+    const catalog = kind === 'conversation' ? 'history-rooms' : 'voice-history-sessions';
+    const heading = kind === 'conversation' ? '저장된 대화가 없습니다' : '지난 음성 대화가 없습니다';
+    const load = vi.fn<typeof fetchSettingsAction>(async action => {
+      if (action !== catalog) throw new Error('An empty catalog must not request messages');
+      if (++catalogCalls === 1) throw new Error('current reader unavailable');
+      return kind === 'conversation' ? { ok: true, rooms: [] } : { ok: true, items: [] };
+    });
+    const views = wireConversationViews(load);
+    try {
+      views.select(kind);
+      await settle();
+      const status = document.getElementById(`${kind}-history-status`)!;
+      const placeholder = document.getElementById(`${kind}-placeholder`)!;
+      const retry = document.getElementById(`${kind}-retry`)!;
+      expect(status.textContent).toContain('불러오지 못했습니다');
+      expect(retry.hidden).toBe(false);
+      retry.click();
+      await settle();
+      expect(status.textContent).toBe(heading);
+      expect(placeholder.hidden).toBe(false);
+      expect(placeholder.querySelector('strong')!.textContent).toBe(heading);
+      expect(retry.hidden).toBe(true);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(load.mock.calls.every(([action]) => action === catalog)).toBe(true);
+    } finally {
+      views.dispose();
+    }
+  });
+
   it('collapses system metadata while preserving its original and a user JSON message', async () => {
     const text='{"feedType":2,"member":{"nickName":"예시"}}';
     const load=vi.fn<typeof fetchSettingsAction>(async action=>action==='history-rooms'

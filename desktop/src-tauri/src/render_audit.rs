@@ -507,6 +507,110 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
             )
 }
 
+fn wait_for_workspace(
+    page: &str,
+    size: &str,
+    deadline: Instant,
+    mut sample: impl FnMut() -> Result<Value, String>,
+    mut paint: impl FnMut() -> Result<(), String>,
+) -> Result<Value, String> {
+    let started = Instant::now();
+    let mut last_state = Value::Null;
+    let mut paint_after_data = false;
+    let result = (|| loop {
+        live(deadline)?;
+        last_state = sample()?;
+        live(deadline)?;
+        if last_state["page"] == page && last_state["settled"] == true {
+            if !paint_after_data {
+                paint()?;
+                live(deadline)?;
+                paint_after_data = true;
+                continue;
+            }
+            return Ok(last_state.clone());
+        }
+        std::thread::sleep(
+            Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    })();
+    result.map_err(|error: String| {
+        format!(
+            "workspace {page}/{size} readiness failed after {:.0}ms: {error}; last observed state={last_state}",
+            started.elapsed().as_secs_f64() * 1000.0
+        )
+    })
+}
+
+// Capture geometry includes every clipping ancestor, not only the browser viewport.
+// This is audit-only: normal navigation keeps its per-page scroll restoration.
+const WORKSPACE_TITLE_LAYOUT: &str = r#"(()=>{
+  const page=document.querySelector('.settings-shell')?.dataset.settingsPage;
+  const panel=document.querySelector(`#settings-page-${page}`);
+  const title=panel?.querySelector('h1');
+  const rect=title?.getBoundingClientRect();
+  const clip={top:0,bottom:innerHeight,left:0,right:innerWidth};
+  const offsets=[];
+  for(let node=panel;node;node=node.parentElement){
+    offsets.push({tag:node.tagName,id:node.id,top:node.scrollTop,left:node.scrollLeft});
+  }
+  for(let node=title?.parentElement;node;node=node.parentElement){
+    const style=getComputedStyle(node),box=node.getBoundingClientRect();
+    if(/^(auto|scroll|hidden|clip)$/.test(style.overflowY)){
+      clip.top=Math.max(clip.top,box.top+node.clientTop);
+      clip.bottom=Math.min(clip.bottom,box.top+node.clientTop+node.clientHeight);
+    }
+    if(/^(auto|scroll|hidden|clip)$/.test(style.overflowX)){
+      clip.left=Math.max(clip.left,box.left+node.clientLeft);
+      clip.right=Math.min(clip.right,box.left+node.clientLeft+node.clientWidth);
+    }
+  }
+  return {title:rect?{top:rect.top,bottom:rect.bottom,left:rect.left,right:rect.right,
+    width:rect.width,height:rect.height}:null,clip,offsets,windowX:scrollX,windowY:scrollY};
+})()"#;
+
+fn validate_workspace_title(state: &Value, size: &str) -> Result<(), String> {
+    let layout = &state["titleLayout"];
+    let number = |value: &Value| value.as_f64().filter(|number| number.is_finite());
+    let at_origin = layout["offsets"].as_array().is_some_and(|offsets| {
+        !offsets.is_empty()
+            && offsets.iter().all(|offset| {
+                ["top", "left"]
+                    .iter()
+                    .all(|key| number(&offset[key]).is_some_and(|value| value.abs() <= 0.5))
+            })
+    }) && ["windowX", "windowY"]
+        .iter()
+        .all(|key| number(&layout[key]).is_some_and(|value| value.abs() <= 0.5));
+    let title = &layout["title"];
+    let clip = &layout["clip"];
+    let visible = ["width", "height"]
+        .iter()
+        .all(|key| number(&title[key]).is_some_and(|value| value > 0.0))
+        && [("top", "bottom"), ("left", "right")]
+            .iter()
+            .all(|(start, end)| {
+                match (
+                    number(&title[start]),
+                    number(&title[end]),
+                    number(&clip[start]),
+                    number(&clip[end]),
+                ) {
+                    (Some(a), Some(b), Some(c), Some(d)) => {
+                        b > a && d > c && a >= c - 0.5 && b <= d + 0.5
+                    }
+                    _ => false,
+                }
+            });
+    if !at_origin || !visible {
+        return Err(format!(
+            "workspace {}/{size} title capture invalid: at_origin={at_origin}, fully_visible={visible}; observed={layout}",
+            state["page"].as_str().unwrap_or("unknown")
+        ));
+    }
+    Ok(())
+}
+
 fn capture_workspaces(
     window: &tauri::WebviewWindow,
     output: &Output,
@@ -523,10 +627,29 @@ fn capture_workspaces(
         "history",
         "settings",
     ] {
-        collect_script(window,format!("JSON.stringify((()=>{{const clickedAtMs=performance.now();document.querySelector('#settings-tab-{page}').click();const paint=window.__aldenAuditWorkspacePaint={{page:'{page}',ready:false,clickedAtMs,firstFrameAtMs:null}};requestAnimationFrame(()=>{{paint.firstFrameAtMs=performance.now();requestAnimationFrame(()=>{{paint.ready=true;}});}});return {{selected:true}};}})())"),deadline)?;
-        let mut paint_after_data = false;
-        let mut state = loop {
-            let state=collect_script(window,r#"JSON.stringify((()=>{
+        collect_script(
+            window,
+            format!(
+                r#"JSON.stringify((()=>{{
+          const clickedAtMs=performance.now();document.querySelector('#settings-tab-{page}').click();
+          const before={WORKSPACE_TITLE_LAYOUT};
+          for(let node=document.querySelector('#settings-page-{page}');node;node=node.parentElement){{
+            node.scrollTop=0;node.scrollLeft=0;
+          }}
+          const paint=window.__aldenAuditWorkspacePaint={{page:'{page}',ready:false,clickedAtMs,
+            firstFrameAtMs:null,captureOrigin:{{before,after:{WORKSPACE_TITLE_LAYOUT}}}}};
+          requestAnimationFrame(()=>{{paint.firstFrameAtMs=performance.now();requestAnimationFrame(()=>{{paint.ready=true;}});}});
+          return {{selected:true}};
+        }})())"#
+            ),
+            deadline,
+        )?;
+        let mut state = wait_for_workspace(
+            page,
+            size,
+            deadline,
+            || {
+                collect_script(window,r#"JSON.stringify((()=>{
               const p=document.querySelector('.settings-shell')?.dataset.settingsPage;
               const prompt=(p==='voice'||p==='conversation')?document.querySelector(`#${p}-placeholder`):null;
               const pending=(p==='voice'||p==='conversation')&&prompt&&!prompt.hidden&&prompt.querySelector('strong')?.textContent.includes('불러옵니다');
@@ -545,8 +668,12 @@ fn capture_workspaces(
               const statusId={memory:'knowledge-summary',conversation:'conversation-history-status',reply:'reply-status',geeknews:'geeknews-status',voice:'voice-history-status',history:'db-current-title',settings:'automation-status'}[p];
               const status=panel?.querySelector('#'+statusId)?.textContent??'';
               const paint=window.__aldenAuditWorkspacePaint;
+              const pendingReasons=[pending&&'messages',loadingSettings&&'settings',loadingHistory&&'history',
+                loadingCollection&&'collection',loadingSchedule&&'schedule',loadingGraph&&'graph',
+                loadingAutomation&&'automation',listPending&&'message-layout',
+                (paint?.page!==p||paint?.ready!==true)&&'paint'].filter(Boolean);
               return {page:p,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,
-                settled:!pending&&!loadingSettings&&!loadingHistory&&!loadingCollection&&!loadingSchedule&&!loadingGraph&&!loadingAutomation&&!listPending&&paint?.page===p&&paint?.ready===true,
+                settled:pendingReasons.length===0,pendingReasons,
                 graphProject:p==='memory'?document.querySelector('#knowledge-project')?.value:null,
                 graphScope:p==='memory'?document.querySelector('#knowledge-scope')?.textContent:null,
                 graphDisplayedNodes:p==='memory'?window.__knowledgeRenderDiagnostics?.nodeCount:null,
@@ -561,23 +688,19 @@ fn capture_workspaces(
                 fullyVisibleMessages:r?rows.filter(n=>n.top>=r.top-.5&&n.bottom<=r.bottom+.5).length:0,
                 errorVisible:/불러오지 못|접근 확인 필요|확인하지 못/.test(status),
                 placeholderVisible:!!prompt&&!prompt.hidden,
-                graphRenders:window.__knowledgeRenderCount??0};
-            })())"#.into(),deadline)?;
-            if state["page"] == page && state["settled"] == true {
-                if !paint_after_data {
-                    collect_script(window,"JSON.stringify((()=>{const paint=window.__aldenAuditWorkspacePaint;paint.ready=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{paint.ready=true;}));return {armed:true};})())".into(),deadline)?;
-                    paint_after_data = true;
-                    continue;
-                }
-                break state;
-            }
-            live(deadline)?;
-            std::thread::sleep(Duration::from_millis(50));
-        };
+                graphRenders:window.__knowledgeRenderCount??0,
+                captureOrigin:paint?.captureOrigin,titleLayout:__AUDIT_TITLE_LAYOUT__};
+            })())"#.replace("__AUDIT_TITLE_LAYOUT__",WORKSPACE_TITLE_LAYOUT),deadline)
+            },
+            || {
+                collect_script(window,"JSON.stringify((()=>{const paint=window.__aldenAuditWorkspacePaint;paint.ready=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{paint.ready=true;}));return {armed:true};})())".into(),deadline).map(|_| ())
+            },
+        )?;
         if state["scrollWidth"].as_u64().unwrap_or(u64::MAX) > state["width"].as_u64().unwrap_or(0)
         {
             return Err(format!("workspace overflow: {page}"));
         }
+        validate_workspace_title(&state, size)?;
         if page == "memory" {
             state["physicsObservation"] = observe_graph_rest(window, deadline)?;
         }
@@ -1485,6 +1608,154 @@ mod tests {
         assert!(!super::resumed_graph(&state, 11));
     }
     use super::*;
+    fn title_capture_state() -> Value {
+        json!({"page":"history","width":640,"scrollWidth":640,"titleLayout":{
+            "title":{"top":25,"bottom":55,"left":170,"right":300,"width":130,"height":30},
+            "clip":{"top":0,"bottom":648,"left":155,"right":640},
+            "offsets":[{"tag":"DIV","top":0,"left":0}],"windowX":0,"windowY":0
+        }})
+    }
+
+    #[test]
+    fn workspace_title_accepts_visible_origin_capture() {
+        validate_workspace_title(&title_capture_state(), "compact").unwrap();
+    }
+
+    #[test]
+    fn workspace_title_rejects_vertical_clipping_despite_no_horizontal_overflow() {
+        let mut state = title_capture_state();
+        state["titleLayout"]["title"]["top"] = json!(-5);
+        state["titleLayout"]["title"]["bottom"] = json!(25);
+        let error = validate_workspace_title(&state, "compact").unwrap_err();
+        assert!(error.contains("workspace history/compact title capture invalid"));
+        assert!(error.contains("fully_visible=false"));
+        assert_eq!(state["width"], state["scrollWidth"]);
+    }
+
+    #[test]
+    fn workspace_title_rejects_clipping_ancestor_and_bottom_edge() {
+        let mut state = title_capture_state();
+        state["titleLayout"]["clip"]["top"] = json!(26);
+        assert!(validate_workspace_title(&state, "compact").is_err());
+        state["titleLayout"]["clip"]["top"] = json!(0);
+        state["titleLayout"]["clip"]["bottom"] = json!(54);
+        assert!(validate_workspace_title(&state, "compact").is_err());
+    }
+
+    #[test]
+    fn workspace_title_rejects_restored_scroll_even_when_title_is_visible() {
+        for key in ["top", "left"] {
+            let mut state = title_capture_state();
+            state["titleLayout"]["offsets"][0][key] = json!(5);
+            let error = validate_workspace_title(&state, "compact").unwrap_err();
+            assert!(error.contains("at_origin=false"));
+        }
+        for key in ["windowX", "windowY"] {
+            let mut state = title_capture_state();
+            state["titleLayout"][key] = json!(1);
+            assert!(validate_workspace_title(&state, "compact").is_err());
+        }
+    }
+
+    #[test]
+    fn workspace_title_requires_complete_nonempty_geometry() {
+        for field in ["title", "clip", "offsets", "windowY"] {
+            let mut state = title_capture_state();
+            state["titleLayout"][field] = Value::Null;
+            assert!(validate_workspace_title(&state, "compact").is_err());
+        }
+        let mut state = title_capture_state();
+        state["titleLayout"]["title"]["height"] = json!(0);
+        assert!(validate_workspace_title(&state, "compact").is_err());
+        state["titleLayout"]["title"]["height"] = json!("30");
+        assert!(validate_workspace_title(&state, "compact").is_err());
+    }
+
+    #[test]
+    fn workspace_readiness_requires_a_post_data_paint_and_second_observation() {
+        let mut samples = 0;
+        let mut paints = 0;
+        let state = wait_for_workspace(
+            "conversation",
+            "default",
+            Instant::now() + Duration::from_secs(2),
+            || {
+                samples += 1;
+                Ok(json!({"page":"conversation","settled":true,"pendingReasons":[]}))
+            },
+            || {
+                paints += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(samples, 2);
+        assert_eq!(paints, 1);
+        assert_eq!(state["settled"], true);
+    }
+
+    #[test]
+    fn expired_workspace_does_not_sample_or_arm_a_late_paint() {
+        let error = wait_for_workspace(
+            "voice",
+            "compact",
+            Instant::now() - Duration::from_millis(1),
+            || panic!("expired audit must not query WebKit"),
+            || panic!("expired audit must not arm WebKit"),
+        )
+        .unwrap_err();
+        assert!(error.contains("workspace voice/compact readiness failed"));
+        assert!(error.contains("native audit deadline exceeded"));
+        assert!(error.contains("last observed state=null"));
+    }
+
+    #[test]
+    fn workspace_callback_failure_retains_the_last_pending_conditions() {
+        let mut samples = 0;
+        let error = wait_for_workspace(
+            "conversation",
+            "default",
+            Instant::now() + Duration::from_secs(2),
+            || {
+                samples += 1;
+                if samples == 1 {
+                    Ok(json!({"page":"conversation","settled":false,"pendingReasons":["messages"]}))
+                } else {
+                    Err("native callback deadline exceeded".into())
+                }
+            },
+            || panic!("unsettled data must not arm the final paint"),
+        )
+        .unwrap_err();
+        assert_eq!(samples, 2);
+        assert!(error.contains("native callback deadline exceeded"));
+        assert!(error.contains("\"pendingReasons\":[\"messages\"]"));
+        assert!(error.contains("workspace conversation/default"));
+    }
+
+    #[test]
+    fn workspace_paint_failure_is_not_converted_to_success_or_retried() {
+        let mut samples = 0;
+        let mut paints = 0;
+        let error = wait_for_workspace(
+            "history",
+            "default",
+            Instant::now() + Duration::from_secs(2),
+            || {
+                samples += 1;
+                Ok(json!({"page":"history","settled":true}))
+            },
+            || {
+                paints += 1;
+                Err("WebKit dispatch failed".into())
+            },
+        )
+        .unwrap_err();
+        assert_eq!((samples, paints), (1, 1));
+        assert!(error.contains("WebKit dispatch failed"));
+        assert!(error.contains("\"page\":\"history\""));
+    }
+
     #[test]
     fn workspace_capture_admits_reads_but_never_commands() {
         for action in [
