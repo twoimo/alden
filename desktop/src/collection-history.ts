@@ -120,7 +120,10 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
       : String(details.reason ?? '원문 ID와 저장 버전을 연결한 기록입니다.');
     more.append(make('p', '', explanation));
     const identifiers = document.createElement('dl');
-    for (const [label, value] of [['실행', row.run_id], ['원문 항목', row.document_id], ['저장 버전', row.version]]) {
+    const previousVersion = typeof details.previous_version === 'string'
+      && /^version:[0-9a-f]{64}$/.test(details.previous_version) ? details.previous_version : null;
+    for (const [label, value] of [['실행', row.run_id], ['원문 항목', row.document_id],
+      ['변경 전 버전', previousVersion], ['저장 버전', row.version]]) {
       if (typeof value === 'string' && value) identifiers.append(make('dt', '', String(label)), make('dd', '', value));
     }
     more.append(identifiers);
@@ -149,7 +152,7 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     const output = detail.querySelector<HTMLElement>('.collection-readback');
     if (!output) return;
     output.hidden = false; output.textContent = '현재 저장 상태를 다시 확인합니다.';
-    const ticket = epoch;
+    const ticket = epoch, currentStream = stream;
     const params = { projects, document_id: row.document_id, expected_version: row.version, target_id: row.target_id };
     const key = JSON.stringify(params);
     let pending = activeReadbacks.get(key);
@@ -160,8 +163,12 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     }
     let proof: Record<string, unknown> | null = null;
     try { proof = await pending; } catch { /* No raw provider exception is shown in the UI. */ }
-    if (dead || !visible || page !== 'history' || ticket !== epoch || !detail.open
-      || !list.contains(detail) || detail.dataset.sequence !== String(sequence)) return;
+    const stillSelected = items.find(item => item.sequence === sequence);
+    if (dead || !visible || page !== 'history' || ticket !== epoch || stream !== currentStream || !detail.open
+      || !list.contains(detail) || detail.dataset.sequence !== String(sequence)
+      || !stillSelected || stillSelected.document_id !== row.document_id
+      || stillSelected.version !== row.version || stillSelected.target_id !== row.target_id
+      || stillSelected.run_id !== row.run_id) return;
     if (proof?.state === 'version_changed') {
       output.textContent = '후속 개정으로 현재 버전이 달라졌습니다. 이 기록의 당시 처리 단계는 보존됩니다.';
       return;
