@@ -4,7 +4,9 @@ Uses the genuine collection writer, exact hashed source files, SQLite FTS,
 real retrieval cache and owned read-only MCP. No LLM or network requests.
 """
 import json
+import select
 import sqlite3
+import subprocess
 import sys
 import unittest
 from unittest.mock import patch
@@ -159,6 +161,55 @@ class PipelineReadbackTests(unittest.TestCase):
         self.assertEqual(restored['state'],'complete')
         self.assertEqual(back['state'],'available')
         self.assertEqual(back['graph']['selected_target_relations'],1)
+
+    def test_real_owned_mcp_stdio_trace_uses_scope_and_never_writes(self):
+        self.ingest(records=[self.a],relations=[])
+        version=self.version()
+        script=Path(__file__).resolve().parents[1]/'scripts/alden_knowledge_mcp.py'
+        with self.store.database() as db:
+            before=(db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
+                    db.execute('SELECT COUNT(*) FROM runs').fetchone()[0])
+        child=subprocess.Popen([sys.executable,'-B',str(script),'--state-root',str(self.root),
+                               '--allow-project','research'],stdin=subprocess.PIPE,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        replies=[]
+        def request(identifier,method,params=None):
+            frame={'jsonrpc':'2.0','id':identifier,'method':method}
+            if params is not None:frame['params']=params
+            child.stdin.write(json.dumps(frame).encode()+b'\n')
+            child.stdin.flush()
+            self.assertTrue(select.select([child.stdout],[],[],5)[0],
+                            'owned MCP timeout for '+method)
+            return json.loads(child.stdout.readline())
+        try:
+            init=request(1,'initialize',{'protocolVersion':'2025-11-25',
+                                         'capabilities':{},'clientInfo':{}})
+            self.assertEqual(init['id'],1)
+            child.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+            child.stdin.flush()
+            catalog=request(2,'tools/list')
+            self.assertIn('alden_knowledge_trace',[tool['name'] for tool in catalog['result']['tools']])
+            tool=request(3,'tools/call',{'name':'alden_knowledge_trace',
+                'arguments':{'projects':['research'],'document_id':self.first,
+                             'expected_version':version,'target_id':self.target}})
+            self.assertFalse(tool['result']['isError'])
+            proof=json.loads(tool['result']['content'][0]['text'])
+            self.assertEqual(proof['version'],version)
+            self.assertEqual(proof['source']['state'],'hash_verified')
+            self.assertEqual(proof['fts']['state'],'verified')
+            self.assertEqual(proof['graph']['state'],'eligible')
+            denied=request(4,'tools/call',{'name':'alden_knowledge_trace',
+                'arguments':{'projects':['private'],'document_id':self.first}})
+            self.assertTrue(denied.get('error') is not None or denied.get('result',{}).get('isError'))
+        finally:
+            child.stdin.close()
+            try:child.wait(timeout=3)
+            except subprocess.TimeoutExpired:child.kill();child.wait(timeout=3)
+            child.stdout.close();child.stderr.close()
+        with self.store.database() as db:
+            after=(db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
+                   db.execute('SELECT COUNT(*) FROM runs').fetchone()[0])
+        self.assertEqual(before,after)
 
     def test_corrupt_raw_does_not_produce_a_false_success_receipt(self):
         self.ingest(records=[self.a],relations=[])
