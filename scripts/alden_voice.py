@@ -1309,22 +1309,23 @@ class AldenVoicePipeline:
         if failure is not None:
             raise RuntimeError("voice_resource_cleanup_failed") from failure
 
-    def _submit_turn(self, turn: VoiceTurn, pcm16: bytes = b"", text: str | None = None) -> None:
+    def _submit_turn(self, turn: VoiceTurn, pcm16: bytes = b"", text: str | None = None) -> bool:
         future: Future[VoiceResult] = Future()
         self._latest_future = future
         if turn.token.is_cancelled():
             future.set_result(self._turn_end(turn, VoiceState.ABORTED, "global_abort"))
-            return
+            return False
         try:
             self._turn_state(turn, VoiceState.TRANSCRIBING if text is None else VoiceState.GENERATING)
         except AldenCancelled:
             future.set_result(self._turn_end(turn, VoiceState.ABORTED, "turn_cancelled"))
-            return
+            return False
         self._pending_turn = (turn, pcm16, text, future)
         if self._worker is None:
             self._worker = threading.Thread(target=self._work_loop, daemon=True, name="alden-voice")
             self._worker.start()
         self._work_ready.notify()
+        return True
 
     def _work_loop(self) -> None:
         while True:
@@ -1355,8 +1356,7 @@ class AldenVoicePipeline:
             turn = self._begin_turn(source, event_id)
             if turn is None:
                 return False
-            self._submit_turn(turn, text=text)
-            return True
+            return self._submit_turn(turn, text=text)
 
     def poll_result(self) -> VoiceResult | None:
         with self._lock:
