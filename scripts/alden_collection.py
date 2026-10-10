@@ -1057,7 +1057,7 @@ class CollectionStore:
 
 def read_action(state_root: Path, action: str, query: str | None = None) -> dict:
     """Bounded read-only application boundary; never creates a store on lookup."""
-    if action not in {"collection-projects", "collection-history", "collection-graph"}:
+    if action not in {"collection-projects", "collection-history", "collection-graph", "collection-trace"}:
         raise ValueError("collection_action_invalid")
     options = json.loads(query) if query else {}
     if not isinstance(options, dict):
@@ -1081,14 +1081,27 @@ def read_action(state_root: Path, action: str, query: str | None = None) -> dict
         result["projects"] = store.projects()
         result["targets"] = store.targets(projects)
         return result
+    if action == "collection-trace":
+        from alden_collection_retrieval import trace_document
+        return trace_document(state_root, options.get("document_id"),
+                              projects=projects, expected_version=options.get("expected_version"),
+                              target_id=options.get("target_id"))
     if action == "collection-graph":
         if options.get("activity") is True:
             return store.activity_page(projects=projects, after=options.get("after"), stream_id=options.get("stream_id"),
                                        limit=options.get("limit",200), target_id=options.get("target_id"), platform=options.get("platform"))
-        return store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
+        result = store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
                                 focus=options.get("focus"), hops=options.get("hops",1), query=str(options.get("search", ""))[:256],
                                 target_id=options.get("target_id"), platform=options.get("platform"),
                                 node_type=options.get("node_type"), relation=options.get("relation"),
                                 since=options.get("since"), until=options.get("until"),
                                 details=options.get("details",False), expected_version=options.get("expected_version"), overview=options.get("overview",False))
+        # Only a selected current source with verified detail binding receives
+        # a separate processing trace. A graph overview does no extra scans.
+        detail = result.get("details") if isinstance(result, dict) else None
+        if options.get("details") is True and isinstance(detail, dict) and detail.get("basis") == "source_record":
+            from alden_collection_retrieval import trace_document
+            result["pipeline_trace"] = trace_document(state_root, detail["node_id"],
+                projects=projects, expected_version=detail["version"], target_id=detail["target_id"])
+        return result
     raise ValueError("collection_action_invalid")
