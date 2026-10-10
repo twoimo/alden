@@ -27,5 +27,6 @@ jobs:
         run: >-
           python3 -B -m unittest
           tests.test_alden_osk_delta
+          tests.test_alden_osk_sources
           tests.test_alden_source_acquisition
           tests.test_verify_local_models -v
