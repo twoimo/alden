@@ -27,12 +27,14 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::io::FromRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use chrono::TimeZone;
@@ -54,6 +56,11 @@ const SELF_CLASSIFICATION_RETRY_MAX_SECONDS: i64 = 5;
 // retry window deliberately short and fixed: context sync owns no delivery
 // capability, and it must not advance its durable checkpoint from a gap page.
 const CONTEXT_SYNC_LOCAL_POLL_RETRY_DELAYS_MS: [u64; 3] = [250, 500, 1_000];
+const CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER: &str = "context_sync_snapshot_retry_exhausted";
+
+#[derive(Debug, thiserror::Error)]
+#[error("context_sync_snapshot_retry_exhausted")]
+struct ContextSyncPollGapRetryExhausted;
 
 fn local_message_snapshot_eq(
     left: &local_db::LocalMessage,
@@ -193,7 +200,8 @@ where
         .map(Some)
         .chain(std::iter::once(None))
     {
-        let envelope = poll(expected_chat_id, expected_checkpoint)?;
+        let envelope =
+            poll(expected_chat_id, expected_checkpoint).map_err(context_sync_cli_error)?;
         let retriable_gap = validate_context_sync_local_poll_page(
             &envelope,
             expected_chat_id,
@@ -222,11 +230,33 @@ where
         if !retriable_gap {
             return Ok(envelope);
         }
-        let retry_delay_ms = retry_delay_ms.context("context_sync_snapshot_retry_exhausted")?;
+        let retry_delay_ms =
+            retry_delay_ms.ok_or_else(|| anyhow::Error::new(ContextSyncPollGapRetryExhausted))?;
         previous_gap = Some(envelope);
         sleep(Duration::from_millis(retry_delay_ms));
     }
     unreachable!("bounded context-sync retry loop must return or fail")
+}
+
+fn context_sync_cli_error(error: anyhow::Error) -> anyhow::Error {
+    if error.is::<context_sync_replica::SnapshotRetryExhausted>() {
+        error.context(CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER)
+    } else {
+        error
+    }
+}
+
+fn write_cli_termination_error(mut stderr: impl Write, error: &anyhow::Error) -> io::Result<()> {
+    if error.is::<context_sync_replica::SnapshotRetryExhausted>()
+        || error.is::<ContextSyncPollGapRetryExhausted>()
+    {
+        writeln!(
+            stderr,
+            "Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}"
+        )
+    } else {
+        writeln!(stderr, "Error: {error:?}")
+    }
 }
 
 /// Return a short caller-managed retry delay while a fresh outgoing row may
@@ -695,6 +725,14 @@ enum Commands {
             help = "Require the exact local row to belong to this numeric author"
         )]
         expected_author_id: Option<i64>,
+        #[arg(long, requires_all = ["local", "expected_author_id", "expected_attachment_sha256"], help = "Download an exact non-image file without LOCO")]
+        file: bool,
+        #[arg(
+            long,
+            requires = "file",
+            help = "Require the polled attachment SHA-256 before fetching any bytes"
+        )]
+        expected_attachment_sha256: Option<String>,
     },
     /// Sync messages to local SQLite cache for offline search
     Cache {
@@ -807,6 +845,13 @@ enum Commands {
         limit: usize,
         #[arg(long, help = "List KakaoTalk group chat titles only")]
         groups: bool,
+        #[arg(
+            long,
+            requires = "json",
+            conflicts_with = "groups",
+            help = "Include this DB reader's account fingerprint, observation time and name provenance"
+        )]
+        with_source: bool,
     },
     /// Read messages from local KakaoTalk database (no server contact, safe)
     LocalRead {
@@ -815,6 +860,27 @@ enum Commands {
         count: usize,
         #[arg(long, help = "Filter messages after this date (YYYY-MM-DD)")]
         since: Option<String>,
+    },
+    /// All local chat rooms for the history browser; no registration or server contact.
+    LocalHistoryRooms,
+    /// Collect a consistent isolated DB+WAL snapshot summary; never alters Kakao.
+    LocalDbCollect {
+        #[arg(long)]
+        index_dir: Option<std::path::PathBuf>,
+        #[arg(long, default_value_t = 100_000)]
+        max_rows: usize,
+        #[arg(long)]
+        abort_state: Option<std::path::PathBuf>,
+    },
+    /// Browse the entire available local room history with stable keyset cursors.
+    LocalHistory {
+        chat_id: i64,
+        #[arg(long)]
+        anchor: Option<i64>,
+        #[arg(long)]
+        before: Option<i64>,
+        #[arg(short = 'n', long, default_value_t = 100)]
+        count: usize,
     },
     #[command(name = "local-poll", hide = true)]
     /// Stream bounded local database polls as versioned JSONL (no server contact).
@@ -1180,6 +1246,9 @@ fn is_local_only_command(command: &Commands) -> bool {
         command,
         Commands::LocalChats { .. }
             | Commands::LocalRead { .. }
+            | Commands::LocalHistoryRooms
+            | Commands::LocalDbCollect { .. }
+            | Commands::LocalHistory { .. }
             | Commands::LocalPoll { .. }
             | Commands::LocalSearch { .. }
             | Commands::LocalSchema
@@ -1564,16 +1633,18 @@ enum AutoReplyLlmChoice {
     MlxQwen38FlashNext,
     MlxQwen38TwentySevenB,
     GjcGemini37Flash,
+    GjcGemini38Flash,
     GjcOpencodeDeepseek41Flash,
     CodexGpt56Luna,
 }
 
 impl AutoReplyLlmChoice {
-    fn all() -> [Self; 5] {
+    fn all() -> [Self; 6] {
         [
             Self::MlxQwen38FlashNext,
             Self::MlxQwen38TwentySevenB,
             Self::GjcGemini37Flash,
+            Self::GjcGemini38Flash,
             Self::GjcOpencodeDeepseek41Flash,
             Self::CodexGpt56Luna,
         ]
@@ -1586,18 +1657,19 @@ impl AutoReplyLlmChoice {
             _ => {}
         }
         match model.trim() {
-            "google-antigravity/gemini-3.8-flash"
-            | "google-antigravity/gemini-3.7-flash-high"
+            "google-antigravity/gemini-3.7-flash-high"
             | "google-antigravity/gemini-3.7-flash-tiered"
-            | "google-antigravity/gemini-3.8-flash-tiered"
-            | "google-antigravity/gemini-3.8-flash-high"
             | "google-antigravity/gemini-3.6-flash-tiered"
             | "gjc"
             | "gemini"
             | "gemini-3.7-flash"
+            | "gemini-3.6-flash" => Some(Self::GjcGemini37Flash),
+            "google-antigravity/gemini-3.8-flash"
+            | "google-antigravity/gemini-3.8-flash-tiered"
+            | "google-antigravity/gemini-3.8-flash-high"
             | "gemini-3.8-flash"
             | "gemini-3.8-flash-high"
-            | "gemini-3.6-flash" => Some(Self::GjcGemini37Flash),
+            | "agy/gemini-3.8-flash" => Some(Self::GjcGemini38Flash),
             "opencode-go-session/deepseek-v4.1-flash"
             | "opencode-go/deepseek-v4.1-flash"
             | "deepseek-v4.1-flash"
@@ -1612,6 +1684,7 @@ impl AutoReplyLlmChoice {
             Self::MlxQwen38FlashNext => "Local MLX Qwen3.8 Flash-Next",
             Self::MlxQwen38TwentySevenB => "Local MLX Qwen3.8 27B",
             Self::GjcGemini37Flash => "Gajae-Code Gemini 3.7 Flash (high)",
+            Self::GjcGemini38Flash => "Gemini 3.8 Flash (high)",
             Self::GjcOpencodeDeepseek41Flash => "OpenCode Go DeepSeek V4.1 Flash",
             Self::CodexGpt56Luna => "Codex GPT-5.6 Luna",
         }
@@ -1622,6 +1695,7 @@ impl AutoReplyLlmChoice {
             Self::MlxQwen38FlashNext => config::MLX_FLASH_NEXT_MODEL_ID,
             Self::MlxQwen38TwentySevenB => config::MLX_27B_MODEL_ID,
             Self::GjcGemini37Flash => "google-antigravity/gemini-3.7-flash-tiered",
+            Self::GjcGemini38Flash => "google-antigravity/gemini-3.8-flash",
             Self::GjcOpencodeDeepseek41Flash => "opencode-go-session/deepseek-v4.1-flash",
             Self::CodexGpt56Luna => "gpt-5.6-luna",
         }
@@ -1658,7 +1732,7 @@ impl AutoReplyLlmChoice {
         match self {
             Self::MlxQwen38FlashNext => unreachable!("local MLX choice returns above"),
             Self::MlxQwen38TwentySevenB => unreachable!("local MLX choice returns above"),
-            Self::GjcGemini37Flash | Self::GjcOpencodeDeepseek41Flash => {
+            Self::GjcGemini37Flash | Self::GjcGemini38Flash | Self::GjcOpencodeDeepseek41Flash => {
                 config.model.privacy_mode = Some("remote_explicit".into());
                 config.model.allow_egress = true;
                 config.model.provider = Some(
@@ -1707,7 +1781,7 @@ fn select_auto_reply_llm(
 ) -> Result<AutoReplyLlmChoice> {
     if let Some(requested) = requested {
         return AutoReplyLlmChoice::from_model(requested).with_context(|| {
-            format!("unknown reply model {requested:?}; use the exact local Qwen3.8 Flash-Next or Qwen3.8 27B ID, gemini-3.7-flash, deepseek-v4.1-flash or gpt-5.6-luna")
+            format!("unknown reply model {requested:?}; use the exact local Qwen3.8 Flash-Next or Qwen3.8 27B ID, gemini-3.8-flash, gemini-3.7-flash, deepseek-v4.1-flash or gpt-5.6-luna")
         });
     }
     if json_output || !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
@@ -1926,6 +2000,53 @@ fn probe_local_mlx_auto_reply(
     Ok(())
 }
 
+fn opencodex_probe_payload(model: &str, effort: &str) -> serde_json::Value {
+    serde_json::json!({"model": model, "input": [{"role":"user","content":"Reply with exactly OK"}],
+        "reasoning":{"effort":effort}, "max_output_tokens":512, "stream":false, "store":false})
+}
+
+fn validate_opencodex_probe(status: u16, bytes: &[u8], expected_model: &str) -> Result<()> {
+    if status != 200 || bytes.len() > 65536 {
+        anyhow::bail!("selected OpenCodex model probe failed (HTTP {status})");
+    }
+    let response: serde_json::Value =
+        serde_json::from_slice(bytes).context("selected-model probe returned invalid JSON")?;
+    let returned = response["model"].as_str().unwrap_or("");
+    if ![
+        expected_model,
+        expected_model
+            .split_once('/')
+            .map(|(_, tail)| tail)
+            .unwrap_or(expected_model),
+    ]
+    .contains(&returned)
+        || response["status"] != "completed"
+    {
+        anyhow::bail!("selected OpenCodex model identity or completion was not verified");
+    }
+    let mut text = response["output_text"].as_str().unwrap_or("").to_owned();
+    if text.is_empty() {
+        if let Some(output) = response["output"].as_array() {
+            for message in output {
+                if message["type"] != "message" || message["role"] != "assistant" {
+                    continue;
+                }
+                if let Some(parts) = message["content"].as_array() {
+                    for part in parts {
+                        if part["type"] == "output_text" {
+                            text.push_str(part["text"].as_str().unwrap_or(""));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if text.trim() != "OK" {
+        anyhow::bail!("selected OpenCodex model did not return the probe response");
+    }
+    Ok(())
+}
+
 fn probe_auto_reply_llm(
     config: &config::OpenKakaoConfig,
     choice: AutoReplyLlmChoice,
@@ -1945,47 +2066,37 @@ fn probe_auto_reply_llm_with_local_transport(
         return probe_local_mlx_auto_reply(config, local_transport);
     }
 
-    // Remote choices retain the existing OpenCodex authentication-gateway probe.
-    if let Ok(client) = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
-        .build()
-    {
-        let ocx_model = match choice {
-            AutoReplyLlmChoice::GjcGemini37Flash => "google-antigravity/gemini-3.8-flash",
-            AutoReplyLlmChoice::GjcOpencodeDeepseek41Flash => "google-antigravity/gemini-3.8-flash",
-            _ => "",
-        };
-        if !ocx_model.is_empty() {
-            if let Ok(resp) = client
-                .post("http://127.0.0.1:10100/v1/chat/completions")
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer not-needed")
-                .json(&serde_json::json!({
-                    "model": ocx_model,
-                    "messages": [{"role": "user", "content": "Reply with exactly OK"}]
-                }))
-                .send()
-            {
-                if resp.status().is_success() {
-                    eprintln!("advisory: OpenCodex authentication gateway verified OK ({})", ocx_model);
-                    return Ok(());
-                }
-            }
-        }
-    }
-
     let runner = validate_auto_reply_runner(config)?;
     if runner.kind == "opencodex" {
-        let output = Command::new(&runner.path)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .output()
-            .context("probe opencodex reply runner")?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if output.status.success() && stdout.contains("opencodex") {
-            return Ok(());
-        }
-        anyhow::bail!("opencodex runner failed probe: {}", stdout.trim());
+        let model = config
+            .auto_reply
+            .reply_model
+            .as_deref()
+            .unwrap_or(choice.model());
+        let effort = config
+            .auto_reply
+            .reply_reasoning_effort
+            .as_deref()
+            .unwrap_or("high");
+        let client = reqwest::blocking::Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(2))
+            .timeout(Duration::from_secs(45))
+            .build()
+            .context("build OpenCodex selected-model probe")?;
+        let response = client
+            .post("http://127.0.0.1:10101/v1/responses")
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer not-needed")
+            .json(&opencodex_probe_payload(model, effort))
+            .send()
+            .context("probe selected OpenCodex model")?;
+        let status = response.status().as_u16();
+        let mut bytes = Vec::new();
+        response.take(65537).read_to_end(&mut bytes)?;
+        validate_opencodex_probe(status, &bytes, model)?;
+        return Ok(());
     }
     match choice {
         AutoReplyLlmChoice::MlxQwen38FlashNext => {
@@ -1994,7 +2105,7 @@ fn probe_auto_reply_llm_with_local_transport(
         AutoReplyLlmChoice::MlxQwen38TwentySevenB => {
             unreachable!("local MLX choice returns before remote probes")
         }
-        AutoReplyLlmChoice::GjcGemini37Flash => {
+        AutoReplyLlmChoice::GjcGemini37Flash | AutoReplyLlmChoice::GjcGemini38Flash => {
             let output = Command::new(&runner.path)
                 .args([
                     "-p",
@@ -2017,9 +2128,6 @@ fn probe_auto_reply_llm_with_local_transport(
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             if output.status.success() && stdout.contains("OK") {
-                return Ok(());
-            }
-            if stderr.to_ascii_lowercase().contains("no api key") {
                 return Ok(());
             }
             anyhow::bail!(
@@ -2079,7 +2187,6 @@ fn probe_auto_reply_llm_with_local_transport(
             }
             let stdout_str = String::from_utf8_lossy(&stdout);
             let stderr_str = String::from_utf8_lossy(&stderr);
-            let stderr_lower = stderr_str.to_ascii_lowercase();
 
             if let Some(status) = status {
                 if status.success() && stdout_str.contains("OK") {
@@ -2087,38 +2194,8 @@ fn probe_auto_reply_llm_with_local_transport(
                 }
             }
 
-            if timed_out
-                || stderr_lower.contains("usage limit")
-                || stderr_lower.contains("rate limit")
-                || stderr_lower.contains("quota")
-                || stderr_lower.contains("429")
-                || stderr_lower.contains("no api key")
-            {
-                eprintln!("advisory: OpenCode Go usage limit/auth issue detected; probing Antigravity Gemini Flash high fallback");
-                let fallback_output = Command::new(&runner.path)
-                    .args([
-                        "-p",
-                        "--no-session",
-                        "--no-rules",
-                        "--no-lsp",
-                        "--no-title",
-                        "--no-tools",
-                        "--mode",
-                        "text",
-                        "--model",
-                        "google-antigravity/gemini-3.7-flash-tiered",
-                        "--thinking",
-                        "high",
-                        "Reply with exactly OK",
-                    ])
-                    .stdin(Stdio::null())
-                    .output()
-                    .context("probe Antigravity Gemini fallback model")?;
-                let fb_stdout = String::from_utf8_lossy(&fallback_output.stdout);
-                if fallback_output.status.success() && fb_stdout.contains("OK") {
-                    eprintln!("advisory: Antigravity Gemini Flash high fallback verified OK");
-                    return Ok(());
-                }
+            if timed_out {
+                anyhow::bail!("selected OpenCode model probe timed out");
             }
             anyhow::bail!(
                 "selected LLM {} did not respond; runner={} stdout={} stderr={}",
@@ -2225,7 +2302,9 @@ fn validate_auto_reply_runner(config: &config::OpenKakaoConfig) -> Result<AutoRe
             let codex_prefix = Path::new("/opt/homebrew/lib/node_modules/@openai/codex/");
             let ocx_prefix = Path::new("/opt/homebrew/lib/node_modules/@bitkyc08/opencodex/");
             if kind == "opencodex" {
-                if !resolved_path.starts_with(ocx_prefix) && !resolved_path.starts_with("/opt/homebrew/") {
+                if !resolved_path.starts_with(ocx_prefix)
+                    && !resolved_path.starts_with("/opt/homebrew/")
+                {
                     anyhow::bail!(
                         "AutoReply reply_runner for opencodex must be in Homebrew prefix"
                     );
@@ -2822,6 +2901,7 @@ fn write_auto_reply_aggregate(
     targets: &[local_db::LocalChat],
     children: &[Child],
     state: &str,
+    last_unexpected_exit: Option<&serde_json::Value>,
 ) -> Result<()> {
     let now = chrono::Utc::now();
     let now_unix = now.timestamp_millis() as f64 / 1_000.0;
@@ -2884,6 +2964,7 @@ fn write_auto_reply_aggregate(
         "room_count": summaries.len(),
         "ready_room_count": ready_count,
         "targets": summaries,
+        "last_unexpected_exit": last_unexpected_exit,
     });
     let path = root.join("aggregate-status.json");
     let tmp = root.join(format!(".aggregate-status.{}.tmp", std::process::id()));
@@ -2906,6 +2987,51 @@ fn write_auto_reply_aggregate(
     fs::rename(tmp, path)?;
     fs::File::open(root)?.sync_all()?;
     Ok(())
+}
+
+fn auto_reply_unexpected_exit_evidence(
+    target: &local_db::LocalChat,
+    pid: u32,
+    status: &ExitStatus,
+    elapsed: Duration,
+) -> serde_json::Value {
+    #[cfg(unix)]
+    let signal = status.signal();
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let failure_class = if status.success() {
+        "unexpected_clean_exit"
+    } else if status.code().is_some() {
+        "process_exit_nonzero"
+    } else {
+        "process_signaled"
+    };
+    serde_json::json!({
+        "observed_at_unix_ms": chrono::Utc::now().timestamp_millis(),
+        "monotonic_elapsed_seconds": elapsed.as_secs_f64(),
+        "worker_kind": "room_supervisor",
+        "room_selector": format!("id:{}", target.chat_id),
+        "pid": pid,
+        "exit_code": status.code(),
+        "signal": signal,
+        "failure_class": failure_class,
+    })
+}
+
+fn capture_first_auto_reply_unexpected_exit(
+    slot: &mut Option<serde_json::Value>,
+    target: &local_db::LocalChat,
+    pid: u32,
+    status: &ExitStatus,
+    elapsed: Duration,
+) -> bool {
+    if slot.is_some() {
+        return false;
+    }
+    *slot = Some(auto_reply_unexpected_exit_evidence(
+        target, pid, status, elapsed,
+    ));
+    true
 }
 
 fn is_empty_json_array(value: Option<&serde_json::Value>) -> bool {
@@ -4064,9 +4190,8 @@ fn enrollment_cursor_authority_for_target(
         });
     } else if let Err(error) = fs::symlink_metadata(&state_path) {
         if error.kind() != std::io::ErrorKind::NotFound {
-            return Err(error).with_context(|| {
-                format!("inspect AutoReply room state {}", state_path.display())
-            });
+            return Err(error)
+                .with_context(|| format!("inspect AutoReply room state {}", state_path.display()));
         }
     }
 
@@ -4610,8 +4735,7 @@ fn resolve_auto_reply_author_bindings(
 /// flapping). Each attempt re-reads both sides and re-runs the same read-only
 /// match, so the safety property is unchanged.
 const AUTO_REPLY_ATTEST_ATTEMPTS: usize = 3;
-const AUTO_REPLY_ATTEST_RETRY_PAUSE: std::time::Duration =
-    std::time::Duration::from_millis(500);
+const AUTO_REPLY_ATTEST_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Run one bounded operation until it succeeds or the attempt budget is spent.
 ///
@@ -4643,9 +4767,11 @@ fn auto_reply_attest_explicit_bindings(
     selectors: &[local_db::ChatSelector],
     targets: &[local_db::LocalChat],
 ) -> Result<Vec<AutoReplyBindingEvidence>> {
-    retry_bounded(AUTO_REPLY_ATTEST_ATTEMPTS, AUTO_REPLY_ATTEST_RETRY_PAUSE, || {
-        auto_reply_attest_explicit_bindings_once(reader, selectors, targets)
-    })
+    retry_bounded(
+        AUTO_REPLY_ATTEST_ATTEMPTS,
+        AUTO_REPLY_ATTEST_RETRY_PAUSE,
+        || auto_reply_attest_explicit_bindings_once(reader, selectors, targets),
+    )
 }
 
 fn auto_reply_attest_explicit_bindings_once(
@@ -5163,6 +5289,7 @@ fn run_auto_reply(
 
     install_auto_reply_signal_handlers();
     let mut children = AutoReplyChildrenGuard::new(targets.len());
+    let mut child_started_at = Vec::with_capacity(targets.len());
     for (target, enrollment_floor) in targets.iter().zip(enrollment_floors.iter()) {
         if AUTO_REPLY_STOP.load(Ordering::Relaxed) {
             anyhow::bail!("auto-reply activation interrupted before worker startup");
@@ -5265,7 +5392,10 @@ fn run_auto_reply(
         }
         configure_auto_reply_process_group(&mut command);
         match command.spawn() {
-            Ok(child) => children.children.push(child),
+            Ok(child) => {
+                child_started_at.push(Instant::now());
+                children.children.push(child);
+            }
             Err(error) => {
                 anyhow::bail!("start AutoReply worker for {}: {error}", target.chat_name);
             }
@@ -5275,10 +5405,13 @@ fn run_auto_reply(
     if AUTO_REPLY_STOP.load(Ordering::Relaxed) {
         anyhow::bail!("auto-reply activation interrupted during worker startup");
     }
-    write_auto_reply_aggregate(&root, &targets, &children.children, "running")?;
+    // Aggregate status is diagnostic only. A write failure must not tear down
+    // otherwise healthy room supervisors.
+    let _ = write_auto_reply_aggregate(&root, &targets, &children.children, "running", None);
     emit_auto_reply_preflight(json_output, false, &targets, &root, true, None, true);
 
     let mut failed = false;
+    let mut first_unexpected_exit: Option<serde_json::Value> = None;
     let mut next_aggregate_update = std::time::Instant::now();
     loop {
         if AUTO_REPLY_STOP.load(Ordering::Relaxed) {
@@ -5288,18 +5421,44 @@ fn run_auto_reply(
         if std::time::Instant::now() >= next_aggregate_update {
             // Aggregate status is observational only; a transient dashboard
             // write must not stop otherwise healthy per-room safety workers.
-            let _ = write_auto_reply_aggregate(&root, &targets, &children.children, "running");
+            let _ = write_auto_reply_aggregate(
+                &root,
+                &targets,
+                &children.children,
+                "running",
+                first_unexpected_exit.as_ref(),
+            );
             next_aggregate_update = std::time::Instant::now() + Duration::from_secs(1);
         }
         let mut child_exited = false;
-        for child in &mut children.children {
-            if child.try_wait()?.is_some() {
+        let mut captured_unexpected_exit = false;
+        for (index, child) in children.children.iter_mut().enumerate() {
+            let pid = child.id();
+            if let Some(status) = child.try_wait()? {
                 // A room supervisor is persistent. Any exit before the parent
                 // receives its own stop signal means that room lost coverage,
                 // even when the child happened to return status 0.
                 failed = true;
                 child_exited = true;
+                captured_unexpected_exit |= capture_first_auto_reply_unexpected_exit(
+                    &mut first_unexpected_exit,
+                    &targets[index],
+                    pid,
+                    &status,
+                    child_started_at[index].elapsed(),
+                );
             }
+        }
+        if captured_unexpected_exit {
+            // Persist the first observed cause before terminating sibling
+            // process groups. Diagnostic I/O remains observational only.
+            let _ = write_auto_reply_aggregate(
+                &root,
+                &targets,
+                &children.children,
+                "stopping",
+                first_unexpected_exit.as_ref(),
+            );
         }
         if child_exited {
             children.stop();
@@ -5314,7 +5473,13 @@ fn run_auto_reply(
             failed = true;
         }
     }
-    write_auto_reply_aggregate(&root, &targets, &children.children, "stopped")?;
+    let _ = write_auto_reply_aggregate(
+        &root,
+        &targets,
+        &children.children,
+        "stopped",
+        first_unexpected_exit.as_ref(),
+    );
     children.disarm();
     if AUTO_REPLY_GUARDIAN_LOST.load(Ordering::Acquire) {
         anyhow::bail!("session guardian liveness was lost; all AutoReply workers were stopped");
@@ -6093,7 +6258,7 @@ fn finish_worker_bound_local_send_setup<T>(
     }
 }
 
-fn main() -> Result<()> {
+fn run() -> Result<()> {
     let cli = Cli::parse();
     // The record window's data source must work while the config is broken:
     // "the config is invalid" is exactly one of the facts it has to report.
@@ -6570,12 +6735,15 @@ fn main() -> Result<()> {
             output_dir,
             local,
             expected_author_id,
+            file,
+            expected_attachment_sha256,
         } => commands::download::cmd_download(
             chat_id,
             log_id,
             output_dir.as_deref(),
             local,
             expected_author_id,
+            expected_attachment_sha256.as_deref().filter(|_| file),
             json,
         )?,
         Commands::Cache { chat_id, limit } => commands::analytics::cmd_cache(chat_id, limit, json)?,
@@ -6649,8 +6817,12 @@ fn main() -> Result<()> {
             eprintln!("[deprecated] 'loco-probe' is now hidden. Prefer 'probe'.");
             commands::probe::cmd_loco_probe(&method, body.as_deref(), json, false)?
         }
-        Commands::LocalChats { limit, groups } => {
-            let reader = local_db::LocalDbReader::open()?;
+        Commands::LocalChats {
+            limit,
+            groups,
+            with_source,
+        } => {
+            let reader = local_db::LocalDbReader::open_no_mutation()?;
             if groups {
                 let chats = reader.list_group_chats(limit)?;
                 if json {
@@ -6671,10 +6843,14 @@ fn main() -> Result<()> {
                 }
                 return Ok(());
             }
-            let chats = reader.list_chats(limit)?;
             if json {
-                println!("{}", serde_json::to_string_pretty(&chats)?);
+                let capture = reader.list_chats_with_source(limit)?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&capture.into_json(with_source)?)?
+                );
             } else {
+                let chats = reader.list_chats(limit)?;
                 if chats.is_empty() {
                     println!("No chats found in local database.");
                 } else {
@@ -6709,6 +6885,59 @@ fn main() -> Result<()> {
                     println!("\n{} chats (local DB, no server contact)", chats.len());
                 }
             }
+        }
+        Commands::LocalHistoryRooms => {
+            let reader = local_db::LocalDbReader::open_no_mutation()?;
+            println!(
+                "{}",
+                serde_json::to_string(
+                    &serde_json::json!({"ok":true,"account":reader.account_fingerprint(),"rooms":local_db::history_room_items(reader.list_all_chats()?)?})
+                )?
+            );
+        }
+        Commands::LocalDbCollect {
+            index_dir,
+            max_rows,
+            abort_state,
+        } => {
+            let source = context_sync_replica::ContextSyncReplicaSource::discover()?;
+            if let Some(root) = index_dir {
+                let (snapshot, id, at) = source.open_corpus_snapshot(&root)?;
+                let mut report = snapshot.reader().collection_summary()?;
+                let index = snapshot.reader().synchronize_corpus(
+                    &root,
+                    &id,
+                    at,
+                    max_rows,
+                    abort_state.as_deref(),
+                )?;
+                if index.complete {
+                    let path = root
+                        .join(source.account_fingerprint())
+                        .join("snapshot-complete");
+                    drop(openkakao_cli::alden_corpus::private_file(&path)?);
+                }
+                report["index"] = serde_json::to_value(index)?;
+                println!("{}", serde_json::to_string(&report)?);
+            } else {
+                let snapshot = source.open_fresh()?;
+                println!(
+                    "{}",
+                    serde_json::to_string(&snapshot.reader().collection_summary()?)?
+                );
+            }
+        }
+        Commands::LocalHistory {
+            chat_id,
+            anchor,
+            before,
+            count,
+        } => {
+            let reader = local_db::LocalDbReader::open_no_mutation()?;
+            println!(
+                "{}",
+                serde_json::to_string(&reader.history_page(chat_id, anchor, before, count)?)?
+            );
         }
         Commands::LocalRead {
             chat_id,
@@ -7406,17 +7635,23 @@ fn main() -> Result<()> {
             require_auto_reply_worker_preflight(preflight, worker_identity)?;
             let is_auto_reply_worker = !dry_run && worker_identity;
             let setup = (|| -> Result<_> {
+                let alden_abort_fence =
+                    openkakao_cli::alden_abort::AldenAbortFence::from_worker_env(
+                        worker_identity,
+                        || auto_reply_state_root(&config),
+                    )?;
                 let _generation_lock = if is_auto_reply_worker && !preflight {
                     let home = dirs::home_dir().context("cannot resolve home directory")?;
                     let lock_path = std::env::var_os("OPENKAKAO_AUTO_REPLY_GENERATION_LOCK")
-                    .or_else(|| std::env::var_os("OPENKAKAO_AUTO_REPLY_LOCK"))
-                    .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_GENERATION_LOCK"))
-                    .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_LOCK"))
-                    .filter(|value| !value.is_empty())
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|| {
-                        auto_reply_service::default_state_root(&home).join(".owner-generation.lock")
-                    });
+                        .or_else(|| std::env::var_os("OPENKAKAO_AUTO_REPLY_LOCK"))
+                        .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_GENERATION_LOCK"))
+                        .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_LOCK"))
+                        .filter(|value| !value.is_empty())
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| {
+                            auto_reply_service::default_state_root(&home)
+                                .join(".owner-generation.lock")
+                        });
                     let lock = fs::OpenOptions::new()
                         .create(true)
                         .truncate(false)
@@ -7590,6 +7825,7 @@ fn main() -> Result<()> {
                             chat_id: target_chat_id,
                             expected_source_log_id: expected_last_observed,
                             local_tail,
+                            abort_fence: alden_abort_fence.clone(),
                         });
                     }
                 }
@@ -7781,6 +8017,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn terminate_cli(result: Result<()>, mut stderr: impl Write) -> std::process::ExitCode {
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            let _ = write_cli_termination_error(&mut stderr, &error);
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn main() -> std::process::ExitCode {
+    terminate_cli(run(), io::stderr().lock())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -7892,12 +8142,16 @@ mod tests {
                 output_dir,
                 local,
                 expected_author_id,
+                file,
+                expected_attachment_sha256,
             } => {
                 assert_eq!(chat_id, 42);
                 assert_eq!(log_id, 100);
                 assert_eq!(output_dir.as_deref(), Some("/tmp/private-media"));
                 assert!(local);
                 assert_eq!(expected_author_id, Some(700));
+                assert!(!file);
+                assert!(expected_attachment_sha256.is_none());
             }
             other => panic!("expected download command, got {other:?}"),
         }
@@ -7920,6 +8174,56 @@ mod tests {
             "0",
         ])
         .is_err());
+    }
+
+    #[test]
+    fn download_file_requires_local_author_and_attachment_binding() {
+        let digest = "a".repeat(64);
+        let base = ["openkakao-cli", "download", "42", "100"];
+        let flags = [
+            "--local",
+            "--file",
+            "--expected-author-id",
+            "700",
+            "--expected-attachment-sha256",
+            digest.as_str(),
+        ];
+        let parsed = Cli::try_parse_from(base.iter().chain(flags.iter()).copied()).unwrap();
+        match parsed.command {
+            Commands::Download {
+                local,
+                file,
+                expected_author_id,
+                expected_attachment_sha256,
+                ..
+            } => {
+                assert!(local && file);
+                assert_eq!(expected_author_id, Some(700));
+                assert_eq!(expected_attachment_sha256.as_deref(), Some(digest.as_str()));
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+        for omitted in [
+            "--local",
+            "--file",
+            "--expected-author-id",
+            "--expected-attachment-sha256",
+        ] {
+            let mut args = base.to_vec();
+            let mut index = 0;
+            while index < flags.len() {
+                let count = if flags[index].starts_with("--expected-") {
+                    2
+                } else {
+                    1
+                };
+                if flags[index] != omitted {
+                    args.extend_from_slice(&flags[index..index + count]);
+                }
+                index += count;
+            }
+            assert!(Cli::try_parse_from(args).is_err(), "missing {omitted}");
+        }
     }
     #[cfg(unix)]
     use crate::auto_reply_runtime::acquire_worker_setup_lock_nonblocking;
@@ -8081,9 +8385,167 @@ mod tests {
         )
         .expect_err("a persistent source gap must remain fail-closed");
 
-        assert_eq!(error.to_string(), "context_sync_snapshot_retry_exhausted");
+        assert_eq!(
+            error.to_string(),
+            CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER
+        );
+        assert!(error.is::<ContextSyncPollGapRetryExhausted>());
         assert_eq!(calls, [(42, 100); 4]);
         assert_eq!(sleeps, [250, 500, 1_000]);
+
+        let mut stderr = Vec::new();
+        let _ = terminate_cli(Err(error), &mut stderr);
+        assert_eq!(
+            stderr,
+            format!("Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}\n").as_bytes(),
+        );
+    }
+
+    #[test]
+    fn context_sync_local_replica_retry_exhaustion_emits_exact_cli_marker() {
+        let mut calls = 0;
+        let error = context_sync_local_poll_page_with_bounded_retry(
+            42,
+            "부자멘토멘티",
+            100,
+            |_chat_id, _checkpoint| {
+                calls += 1;
+                Err(context_sync_replica::SnapshotRetryExhausted.into())
+            },
+            |_delay| panic!("replica copy exhaustion must not enter poll-gap sleep"),
+        )
+        .expect_err("replica retry exhaustion must surface through the CLI marker");
+
+        assert_eq!(calls, 1);
+        assert_eq!(
+            error.to_string(),
+            CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER
+        );
+        assert!(error.is::<context_sync_replica::SnapshotRetryExhausted>());
+
+        let mut stderr = Vec::new();
+        write_cli_termination_error(&mut stderr, &error).expect("write CLI termination fixture");
+        assert_eq!(
+            stderr,
+            format!("Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}\n").as_bytes(),
+        );
+    }
+
+    #[test]
+    fn context_sync_cli_error_does_not_substring_reclassify_terminal_errors() {
+        let terminal = anyhow::anyhow!(
+            "permission denied while reading context_sync_snapshot_retry_exhausted fixture"
+        );
+        let error = context_sync_cli_error(terminal);
+        assert_eq!(
+            error.to_string(),
+            "permission denied while reading context_sync_snapshot_retry_exhausted fixture",
+        );
+        assert!(!error.is::<context_sync_replica::SnapshotRetryExhausted>());
+        let mut stderr = Vec::new();
+        write_cli_termination_error(&mut stderr, &error)
+            .expect("write terminal diagnostic fixture");
+        assert_eq!(stderr, format!("Error: {error:?}\n").as_bytes());
+
+        let io_error = context_sync_cli_error(
+            std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture permission denied",
+            )
+            .into(),
+        );
+        assert_eq!(io_error.to_string(), "fixture permission denied");
+    }
+
+    #[test]
+    #[ignore = "subprocess fixture entry"]
+    fn context_sync_cli_termination_subprocess_fixture() {
+        let scenario = std::env::var("OPENKAKAO_CONTEXT_SYNC_TERMINATION_FIXTURE")
+            .expect("subprocess fixture scenario");
+        let error = match scenario.as_str() {
+            "replica" => context_sync_local_poll_page_with_bounded_retry(
+                42,
+                "부자멘토멘티",
+                100,
+                |_chat_id, _checkpoint| Err(context_sync_replica::SnapshotRetryExhausted.into()),
+                |_delay| panic!("replica exhaustion must not sleep"),
+            )
+            .expect_err("replica exhaustion fixture must fail"),
+            "poll-gap" => {
+                let gap = transient_local_source_gap(42, 100, 101, &[]);
+                context_sync_local_poll_page_with_bounded_retry(
+                    42,
+                    "부자멘토멘티",
+                    100,
+                    |_chat_id, _checkpoint| Ok(gap.clone()),
+                    |_delay| {},
+                )
+                .expect_err("persistent gap fixture must fail")
+            }
+            "permission-substring" => context_sync_cli_error(anyhow::anyhow!(
+                "permission denied while reading context_sync_snapshot_retry_exhausted fixture"
+            )),
+            other => panic!("unknown subprocess fixture scenario {other}"),
+        };
+
+        let _ = terminate_cli(Err(error), io::stderr().lock());
+    }
+
+    #[test]
+    fn context_sync_cli_termination_is_backtrace_independent_in_subprocesses() {
+        let current_exe = std::env::current_exe().expect("resolve current test binary");
+        let expected = format!("Error: {CONTEXT_SYNC_SNAPSHOT_RETRY_EXHAUSTED_MARKER}\n");
+
+        for scenario in ["replica", "poll-gap"] {
+            for rust_backtrace in ["0", "1", "full"] {
+                for rust_lib_backtrace in ["0", "1"] {
+                    let output = Command::new(&current_exe)
+                        .args([
+                            "--exact",
+                            "tests::context_sync_cli_termination_subprocess_fixture",
+                            "--ignored",
+                            "--nocapture",
+                        ])
+                        .env("OPENKAKAO_CONTEXT_SYNC_TERMINATION_FIXTURE", scenario)
+                        .env("RUST_BACKTRACE", rust_backtrace)
+                        .env("RUST_LIB_BACKTRACE", rust_lib_backtrace)
+                        .output()
+                        .expect("run isolated termination fixture");
+                    assert!(
+                        output.status.success(),
+                        "{scenario} fixture failed for RUST_BACKTRACE={rust_backtrace} RUST_LIB_BACKTRACE={rust_lib_backtrace}: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    assert_eq!(
+                        output.stderr,
+                        expected.as_bytes(),
+                        "{scenario} stderr changed for RUST_BACKTRACE={rust_backtrace} RUST_LIB_BACKTRACE={rust_lib_backtrace}"
+                    );
+                }
+            }
+        }
+
+        let output = Command::new(&current_exe)
+            .args([
+                "--exact",
+                "tests::context_sync_cli_termination_subprocess_fixture",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(
+                "OPENKAKAO_CONTEXT_SYNC_TERMINATION_FIXTURE",
+                "permission-substring",
+            )
+            .env("RUST_BACKTRACE", "1")
+            .env("RUST_LIB_BACKTRACE", "1")
+            .output()
+            .expect("run rich terminal diagnostic fixture");
+        assert!(output.status.success());
+        let stderr = String::from_utf8(output.stderr).expect("fixture stderr is UTF-8");
+        assert!(stderr.starts_with(
+            "Error: permission denied while reading context_sync_snapshot_retry_exhausted fixture"
+        ));
+        assert!(stderr.contains("Stack backtrace:"));
     }
 
     #[test]
@@ -9188,12 +9650,47 @@ mod tests {
         let cli = Cli::try_parse_from(["openkakao-cli", "local-chats", "-n", "10"])
             .expect("local-chats should parse");
         match cli.command {
-            Commands::LocalChats { limit, groups } => {
+            Commands::LocalChats {
+                limit,
+                groups,
+                with_source,
+            } => {
                 assert_eq!(limit, 10);
                 assert!(!groups);
+                assert!(!with_source);
             }
             other => panic!("expected local-chats, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn local_chats_source_observation_is_explicit_and_requires_json() {
+        let cli = Cli::try_parse_from([
+            "openkakao-cli",
+            "local-chats",
+            "-n",
+            "2000",
+            "--json",
+            "--with-source",
+        ])
+        .expect("source observation option should parse");
+        assert!(matches!(
+            cli.command,
+            Commands::LocalChats {
+                limit: 2000,
+                groups: false,
+                with_source: true
+            }
+        ));
+        assert!(Cli::try_parse_from(["openkakao-cli", "local-chats", "--with-source"]).is_err());
+        assert!(Cli::try_parse_from([
+            "openkakao-cli",
+            "local-chats",
+            "--json",
+            "--groups",
+            "--with-source"
+        ])
+        .is_err());
     }
 
     #[test]
@@ -9247,6 +9744,71 @@ mod tests {
     }
 
     #[test]
+    fn gemini_38_cli_selection_preserves_requested_version_and_opencodex_effort() {
+        for model in [
+            "google-antigravity/gemini-3.8-flash",
+            "google-antigravity/gemini-3.8-flash-high",
+            "google-antigravity/gemini-3.8-flash-tiered",
+            "agy/gemini-3.8-flash",
+            "gemini-3.8-flash",
+        ] {
+            let mut config = config::OpenKakaoConfig::default();
+            config.auto_reply.reply_runner_kind = Some("opencodex".into());
+            let choice = select_auto_reply_llm(&mut config, Some(model), true).unwrap();
+            assert_eq!(choice, AutoReplyLlmChoice::GjcGemini38Flash);
+            choice.apply(&mut config);
+            assert_eq!(
+                config.auto_reply.reply_model.as_deref(),
+                Some("google-antigravity/gemini-3.8-flash")
+            );
+            assert_eq!(
+                config.auto_reply.reply_reasoning_effort.as_deref(),
+                Some("high")
+            );
+            assert_eq!(
+                config.auto_reply.reply_runner_kind.as_deref(),
+                Some("opencodex")
+            );
+            assert_eq!(
+                config.model.privacy_mode.as_deref(),
+                Some("remote_explicit")
+            );
+        }
+        let mut config = config::OpenKakaoConfig::default();
+        config.auto_reply.reply_model = Some("google-antigravity/gemini-3.8-flash".into());
+        assert_eq!(
+            select_auto_reply_llm(&mut config, None, true).unwrap(),
+            AutoReplyLlmChoice::GjcGemini38Flash
+        );
+    }
+
+    #[test]
+    fn selected_opencodex_probe_requires_the_selected_model_and_completed_text() {
+        let model = "google-antigravity/gemini-3.8-flash";
+        let request = opencodex_probe_payload(model, "high");
+        assert_eq!(request["model"], model);
+        assert_eq!(request["reasoning"]["effort"], "high");
+        assert_eq!(request["store"], false);
+        assert_eq!(request["input"][0]["content"], "Reply with exactly OK");
+        let mut value = serde_json::json!({"model":model,"status":"completed",
+            "output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]});
+        assert!(validate_opencodex_probe(200, &serde_json::to_vec(&value).unwrap(), model).is_ok());
+        assert!(
+            validate_opencodex_probe(429, &serde_json::to_vec(&value).unwrap(), model).is_err()
+        );
+        value["model"] = serde_json::json!("google-antigravity/gemini-3.7-flash-tiered");
+        assert!(
+            validate_opencodex_probe(200, &serde_json::to_vec(&value).unwrap(), model).is_err()
+        );
+        value["model"] = serde_json::json!(model);
+        value["status"] = serde_json::json!("incomplete");
+        assert!(
+            validate_opencodex_probe(200, &serde_json::to_vec(&value).unwrap(), model).is_err()
+        );
+        assert!(validate_opencodex_probe(200, b"{}", model).is_err());
+    }
+
+    #[test]
     fn auto_reply_llm_aliases_map_to_attested_models() {
         for exact in [
             config::MLX_FLASH_NEXT_MODEL_ID,
@@ -9262,10 +9824,7 @@ mod tests {
             None,
             "the local model allowlist must remain exact"
         );
-        for exact in [
-            config::MLX_27B_MODEL_ID,
-            config::MLX_27B_PREFIXED_MODEL_ID,
-        ] {
+        for exact in [config::MLX_27B_MODEL_ID, config::MLX_27B_PREFIXED_MODEL_ID] {
             assert_eq!(
                 AutoReplyLlmChoice::from_model(exact),
                 Some(AutoReplyLlmChoice::MlxQwen38TwentySevenB)
@@ -9305,7 +9864,7 @@ mod tests {
             Some("opencode-go-session")
         );
         assert_eq!(config.auto_reply.reply_runner_kind.as_deref(), Some("gjc"));
-        assert_eq!(AutoReplyLlmChoice::all().len(), 5);
+        assert_eq!(AutoReplyLlmChoice::all().len(), 6);
     }
 
     #[test]
@@ -9441,9 +10000,10 @@ mod tests {
         .is_err());
         assert_eq!(malformed.requests.borrow().len(), 1);
 
-        let redirected = FakeLocalMlxProbeTransport::new(vec![
-            FakeLocalMlxProbeTransport::json(302, serde_json::json!({"redirect": true})),
-        ]);
+        let redirected = FakeLocalMlxProbeTransport::new(vec![FakeLocalMlxProbeTransport::json(
+            302,
+            serde_json::json!({"redirect": true}),
+        )]);
         let redirect_error = probe_auto_reply_llm_with_local_transport(
             &config,
             AutoReplyLlmChoice::MlxQwen38FlashNext,
@@ -9471,12 +10031,12 @@ mod tests {
             "https://models.example.invalid/v1/models",
         ] {
             let error = match ReqwestLocalMlxProbeTransport.send(LocalMlxProbeRequest {
-                    method: LocalMlxProbeMethod::Get,
-                    url,
-                    body: None,
-                    timeout: LOCAL_MLX_PROBE_TIMEOUT,
-                    max_response_bytes: LOCAL_MLX_MAX_RESPONSE_BYTES,
-                }) {
+                method: LocalMlxProbeMethod::Get,
+                url,
+                body: None,
+                timeout: LOCAL_MLX_PROBE_TIMEOUT,
+                max_response_bytes: LOCAL_MLX_MAX_RESPONSE_BYTES,
+            }) {
                 Ok(_) => panic!("non-fixed endpoint must be rejected before transport"),
                 Err(error) => error,
             };
@@ -11269,6 +11829,7 @@ connection.close()
             std::slice::from_ref(&target),
             std::slice::from_ref(&child),
             "running",
+            None,
         )
         .expect("write live aggregate");
         let aggregate: serde_json::Value =
@@ -11280,6 +11841,7 @@ connection.close()
         assert_eq!(aggregate["room_count"], 1);
         assert_eq!(aggregate["ready_room_count"], 1);
         assert_eq!(aggregate["targets"][0]["ready"], true);
+        assert!(aggregate["last_unexpected_exit"].is_null());
         assert_eq!(
             fs::metadata(root.path().join("aggregate-status.json"))
                 .unwrap()
@@ -11288,8 +11850,88 @@ connection.close()
                 & 0o777,
             0o600
         );
+        let exit_evidence = serde_json::json!({
+            "worker_kind": "room_supervisor",
+            "room_selector": "id:42",
+            "pid": child.id(),
+            "exit_code": 7,
+            "failure_class": "process_exit_nonzero",
+        });
+        write_auto_reply_aggregate(
+            root.path(),
+            std::slice::from_ref(&target),
+            std::slice::from_ref(&child),
+            "stopping",
+            Some(&exit_evidence),
+        )
+        .expect("persist exit evidence");
+        let stopping: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.path().join("aggregate-status.json")).unwrap())
+                .unwrap();
+        assert_eq!(stopping["last_unexpected_exit"], exit_evidence);
         child.kill().ok();
         child.wait().ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn auto_reply_exit_evidence_preserves_first_room_and_clean_exit_failure() {
+        fn target(chat_id: i64, name: &str) -> local_db::LocalChat {
+            local_db::LocalChat {
+                chat_id,
+                chat_type: 0,
+                chat_name: name.to_string(),
+                database_chat_name: Some(name.to_string()),
+                active_members_count: 4,
+                last_log_id: 100,
+                last_updated_at: 0,
+                unread_count: 0,
+                display_name: name.to_string(),
+            }
+        }
+
+        let first_target = target(42, "first room");
+        let second_target = target(43, "second room");
+        let mut first_child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn clean-exit fake supervisor");
+        let first_pid = first_child.id();
+        let first_status = first_child.wait().expect("wait clean-exit fake supervisor");
+        let mut second_child = Command::new("/bin/sh")
+            .args(["-c", "exit 9"])
+            .spawn()
+            .expect("spawn failing fake supervisor");
+        let second_pid = second_child.id();
+        let second_status = second_child.wait().expect("wait failing fake supervisor");
+
+        let mut evidence = None;
+        assert!(capture_first_auto_reply_unexpected_exit(
+            &mut evidence,
+            &first_target,
+            first_pid,
+            &first_status,
+            Duration::from_millis(125),
+        ));
+        assert!(!capture_first_auto_reply_unexpected_exit(
+            &mut evidence,
+            &second_target,
+            second_pid,
+            &second_status,
+            Duration::from_millis(250),
+        ));
+
+        let evidence = evidence.expect("first exit evidence");
+        assert_eq!(evidence["worker_kind"], "room_supervisor");
+        assert_eq!(evidence["room_selector"], "id:42");
+        assert_eq!(evidence["pid"], first_pid);
+        assert_eq!(evidence["exit_code"], 0);
+        assert_eq!(evidence["failure_class"], "unexpected_clean_exit");
+        assert_eq!(evidence["signal"], serde_json::Value::Null);
+        assert_eq!(evidence["monotonic_elapsed_seconds"], 0.125);
+        assert!(evidence["observed_at_unix_ms"]
+            .as_i64()
+            .is_some_and(|value| value > 0));
     }
 
     #[cfg(unix)]
@@ -11887,7 +12529,11 @@ connection.close()
         config.safety.allow_loco_write = true;
         assert!(require_loco_write(&config).is_ok());
     }
-    fn bound_source_message(log_id: i64, author_id: i64, sender_name: &str) -> local_db::LocalMessage {
+    fn bound_source_message(
+        log_id: i64,
+        author_id: i64,
+        sender_name: &str,
+    ) -> local_db::LocalMessage {
         local_db::LocalMessage {
             log_id,
             chat_id: 417_780_809_780_519,
@@ -11939,15 +12585,18 @@ connection.close()
             .contains("scheduled reply source row is unavailable"));
     }
 
-        #[test]
-        fn bound_source_message_reports_a_lookup_failure() {
-            let windowed: Vec<local_db::LocalMessage> = Vec::new();
-            let error = resolve_bound_source_message(&windowed, 7, |_| anyhow::bail!("database gone"))
-                .expect_err("a read failure must surface instead of a silent miss");
-            // The context wraps the read error, so the cause is on the chain
-            // rather than in the outermost message.
-            let chain = format!("{error:#}");
-            assert!(chain.contains("database gone"), "{chain}");
-            assert!(chain.contains("read the scheduled reply source row"), "{chain}");
-        }
+    #[test]
+    fn bound_source_message_reports_a_lookup_failure() {
+        let windowed: Vec<local_db::LocalMessage> = Vec::new();
+        let error = resolve_bound_source_message(&windowed, 7, |_| anyhow::bail!("database gone"))
+            .expect_err("a read failure must surface instead of a silent miss");
+        // The context wraps the read error, so the cause is on the chain
+        // rather than in the outermost message.
+        let chain = format!("{error:#}");
+        assert!(chain.contains("database gone"), "{chain}");
+        assert!(
+            chain.contains("read the scheduled reply source row"),
+            "{chain}"
+        );
+    }
 }

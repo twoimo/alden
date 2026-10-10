@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "version": "0.3.31",
+  "state": "source_and_controlled_native_test",
+  "installed_version_at_test": "0.3.30",
+  "scope": "private fixture file import to collection SQLite journal to bounded IPC consumer to actual debug WKWebView; not live production source mutation or full skill/MCP/GraphRAG chain",
+  "tests": {
+    "ui_passed": 385,
+    "collection_passed": 29,
+    "native_audit_passed": 9,
+    "desktop_suite_passed": 108,
+    "desktop_clippy_passed": true
+  },
+  "controlled_native": {
+    "success": true,
+    "records": 12,
+    "explicit_test_relationships": 11,
+    "revised_records": 1,
+    "committed_candidates": 1,
+    "admitted_saved_receipts": 1,
+    "producer_consumer_receipt_equal": true,
+    "detail_read_confirmed": true,
+    "source_start_to_capture_upper_bound_ms": 2881.56,
+    "latency_samples": 1,
+    "default_pixels_inspected": true,
+    "synthetic_hidden_samples": [
+      {
+        "signal": "display-sleep",
+        "hidden_render_delta": 0,
+        "sample_ms": 350,
+        "stop_observation_upper_bound_ms": 19.05
+      },
+      {
+        "signal": "session-inactive",
+        "hidden_render_delta": 0,
+        "sample_ms": 350,
+        "stop_observation_upper_bound_ms": 14.91
+      }
+    ],
+    "runtime_source_commit": "58e05129589cc29c3da60321cdf7aaa45176f586"
+  },
+  "actual_read_only_sql_pairs": {
+    "n": 5,
+    "equal_response": true,
+    "before_median_ms": 72.57,
+    "after_median_ms": 32.15,
+    "reduction_percent": 55.7,
+    "cursor": 133115,
+    "historical_candidates": 0,
+    "power_and_ambient_load_controlled": false,
+    "scope": "activity baseline SQL operation; no quota, quality or whole-app efficiency claim"
+  },
+  "first_candidate_attempt": {
+    "version": "0.3.31",
+    "runtime_source_commit": "58e05129589cc29c3da60321cdf7aaa45176f586",
+    "success": false,
+    "captured_workspace_views": 14,
+    "reason": "synthetic hide note could not distinguish prior paused timestamp after first resumed frame; observed loop and activity consumer stopped",
+    "repair": "require consumer active with a new rendered frame for 100ms before issuing the hide note; stale timestamps remain rejected"
+  },
+  "candidate_at_2efc7cd": {
+    "success": true,
+    "version": "0.3.31",
+    "source_commit": "2efc7cd5944b36687045e2904faa27a19186a6e6",
+    "workspace_views": 14,
+    "source_read_confirmed": true,
+    "hidden_render_delta": 0,
+    "scope": "owned native read-only window; compact legend clipping found by visual inspection and repaired afterwards; current delivery report remains separate"
+  }
+}

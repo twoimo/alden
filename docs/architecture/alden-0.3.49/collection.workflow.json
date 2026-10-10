@@ -1,0 +1,129 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.49 · 다중 대상 수집",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "collection_main",
+      "label": "다중 대상 수집"
+    },
+    {
+      "id": "collection_finish",
+      "label": "저장·확인·재개"
+    }
+  ],
+  "mainPath": [
+    "collection_0",
+    "collection_1",
+    "collection_2",
+    "collection_3",
+    "collection_4",
+    "collection_5"
+  ],
+  "nodes": [
+    {
+      "id": "collection_0",
+      "lane": "collection_main",
+      "col": 0,
+      "type": "backend",
+      "label": "등록한 대상",
+      "sublabel": "target ID·플랫폼·프로젝트",
+      "width": 170
+    },
+    {
+      "id": "collection_1",
+      "lane": "collection_finish",
+      "col": 0,
+      "type": "security",
+      "label": "범위·실행 게이트",
+      "sublabel": "권한·중지·음성·단일 소유",
+      "width": 170
+    },
+    {
+      "id": "collection_2",
+      "lane": "collection_main",
+      "col": 1,
+      "type": "backend",
+      "label": "수집·파싱",
+      "sublabel": "선언한 자료·지원 어댑터",
+      "width": 170
+    },
+    {
+      "id": "collection_3",
+      "lane": "collection_finish",
+      "col": 1,
+      "type": "backend",
+      "label": "버전 저장",
+      "sublabel": "트랜잭션·멱등·체크포인트",
+      "width": 170
+    },
+    {
+      "id": "collection_4",
+      "lane": "collection_main",
+      "col": 2,
+      "type": "security",
+      "label": "원문·검색 반영",
+      "sublabel": "실제 원문 보관·FTS·E5",
+      "width": 170
+    },
+    {
+      "id": "collection_5",
+      "lane": "collection_finish",
+      "col": 2,
+      "type": "backend",
+      "label": "결과·다음 실행",
+      "sublabel": "영속 요청·재시도·주기",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "id": "collection_e0",
+      "from": "collection_0",
+      "to": "collection_1",
+      "label": "예정·수동 요청",
+      "role": "main"
+    },
+    {
+      "id": "collection_e1",
+      "from": "collection_1",
+      "to": "collection_2",
+      "label": "허용된 대상",
+      "role": "main"
+    },
+    {
+      "id": "collection_e2",
+      "from": "collection_2",
+      "to": "collection_3",
+      "label": "원문 ID·SHA",
+      "role": "main"
+    },
+    {
+      "id": "collection_e3",
+      "from": "collection_3",
+      "to": "collection_4",
+      "label": "확정 저장",
+      "role": "main"
+    },
+    {
+      "id": "collection_e4",
+      "from": "collection_4",
+      "to": "collection_5",
+      "label": "완료 대사",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "확인된 경로와 남은 검증",
+      "items": [
+        "영속 요청·재시도·주기",
+        "계정·채널 live 전수 취득 미완료"
+      ]
+    }
+  ]
+}

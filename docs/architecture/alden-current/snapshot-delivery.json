@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "workflow",
+  "input": "/private/tmp/alden-current-diagrams-20261005/snapshot.workflow.json",
+  "output": "/private/tmp/alden-current-diagrams-20261005/snapshot.html",
+  "specification": {
+    "sha256": "d8e3438245fd47cf96b28c6261737084ed04e2d0b7ae850d02c5b286a078f90b",
+    "bytes": 3653
+  },
+  "artifact": {
+    "sha256": "f20d9391d60ccbbc9eca06b740a1ea4e4eb0e6f40e0241a6c1135663bbce1bf1",
+    "bytes": 808160
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  }
+}

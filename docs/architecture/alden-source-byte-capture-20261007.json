@@ -1,0 +1,53 @@
+{
+  "declared_sources": [
+    {
+      "label": "취업 지식 그래프",
+      "state": "complete",
+      "sha256": "57779526a4665b30648316859f0a9287a57b554006f980b522af887b90340760",
+      "byte_scope": "exact original JSON file bytes",
+      "bytes": 17001144,
+      "references_replayed": 12561,
+      "seconds": 0.5662386249750853,
+      "sample_count": 1
+    },
+    {
+      "label": "Spark 파일 지식 그래프",
+      "state": "complete",
+      "sha256": "c49a39bb7438ed90987883312b72676e847540cddbfb2fb3174949a4dd0c7ede",
+      "byte_scope": "exact bytes of privacy-filtered metadata export; body/protected originals excluded",
+      "bytes": 14140514,
+      "references_replayed": 12536,
+      "seconds": 1.7063611659687012,
+      "sample_count": 1
+    },
+    {
+      "label": "쯔양",
+      "state": "complete",
+      "sha256": "88791a074a1d808100e3c186fcdff145f30e7db1b58891ad6c52230c520a79cc",
+      "byte_scope": "exact original JSON file bytes",
+      "bytes": 1031157,
+      "references_replayed": 1118,
+      "seconds": 0.03234883304685354,
+      "sample_count": 1
+    },
+    {
+      "label": "장사의 신",
+      "state": "complete",
+      "sha256": "09e77d1d2e5b7797b36c05be9f135bf02dca1357ddd95b600a35f68259cf9805",
+      "byte_scope": "exact original JSON file bytes",
+      "bytes": 377432,
+      "references_replayed": 407,
+      "seconds": 0.012855166103690863,
+      "sample_count": 1
+    }
+  ],
+  "documents_relations_indexes_unchanged": true,
+  "total_references_replayed": 26622,
+  "replay_states": [
+    "unchanged",
+    "unchanged",
+    "unchanged",
+    "unchanged"
+  ],
+  "scope": "three original JSON files and one metadata-only Spark export; no protected original bodies; not a broader live account survey"
+}

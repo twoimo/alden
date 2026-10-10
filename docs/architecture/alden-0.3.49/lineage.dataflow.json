@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Alden 0.3.49 · 원본에서 통합 탐색까지",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      502
+    ]
+  },
+  "stages": [
+    {
+      "label": "독립 원본"
+    },
+    {
+      "label": "출처와 권한"
+    },
+    {
+      "label": "파생 조회 계약"
+    },
+    {
+      "label": "통합 탐색"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "lin_graph",
+      "type": "external",
+      "label": "기존 프로젝트 그래프",
+      "sublabel": "취업·Spark·장사의 신",
+      "stage": 0,
+      "row": 0,
+      "width": 150,
+      "height": 72
+    },
+    {
+      "id": "lin_media",
+      "type": "external",
+      "label": "선언한 수집 자료",
+      "sublabel": "Threads·YouTube·파일",
+      "stage": 0,
+      "row": 1,
+      "width": 150,
+      "height": 72
+    },
+    {
+      "id": "lin_vault",
+      "type": "database",
+      "label": "OSK SDK 정본",
+      "sublabel": "원문·허브·출처 좌표",
+      "stage": 0,
+      "row": 2,
+      "width": 150,
+      "height": 72
+    },
+    {
+      "id": "lin_capture",
+      "type": "database",
+      "label": "버전·원문 보관",
+      "sublabel": "원본 ID·SHA·target 소속",
+      "stage": 1,
+      "row": 0,
+      "width": 150,
+      "height": 72
+    },
+    {
+      "id": "lin_lookup",
+      "type": "backend",
+      "label": "권한별 정본 조회",
+      "sublabel": "허용 범위·정본 SHA",
+      "stage": 1,
+      "row": 2,
+      "width": 150,
+      "height": 72
+    },
+    {
+      "id": "lin_collection",
+      "type": "backend",
+      "label": "수집 검색·투영",
+      "sublabel": "명시 관계·버전별 색인",
+      "stage": 2,
+      "row": 0,
+      "width": 150,
+      "height": 72
+    },
+    {
+      "id": "lin_oskview",
+      "type": "backend",
+      "label": "OSK 검색·투영",
+      "sublabel": "원문 참조·정본 기준",
+      "stage": 2,
+      "row": 2,
+      "width": 150,
+      "height": 72
+    },
+    {
+      "id": "lin_view",
+      "type": "frontend",
+      "label": "하나의 논리 그래프",
+      "sublabel": "출처·권한·탐색 위치 유지",
+      "stage": 3,
+      "row": 1,
+      "width": 150,
+      "height": 72
+    }
+  ],
+  "flows": [
+    {
+      "id": "lin_e0",
+      "from": "lin_graph",
+      "to": "lin_capture",
+      "label": "범위 대사",
+      "route": "straight"
+    },
+    {
+      "id": "lin_e1",
+      "from": "lin_media",
+      "to": "lin_capture",
+      "label": "원문·계보"
+    },
+    {
+      "id": "lin_e2",
+      "from": "lin_vault",
+      "to": "lin_lookup",
+      "label": "정본 읽기"
+    },
+    {
+      "id": "lin_e3",
+      "from": "lin_capture",
+      "to": "lin_collection",
+      "label": "ID·버전"
+    },
+    {
+      "id": "lin_e4",
+      "from": "lin_lookup",
+      "to": "lin_oskview",
+      "label": "확인된 참조"
+    },
+    {
+      "id": "lin_e5",
+      "from": "lin_collection",
+      "to": "lin_view",
+      "label": "허용 투영"
+    },
+    {
+      "id": "lin_e6",
+      "from": "lin_oskview",
+      "to": "lin_view",
+      "label": "허용 기억"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "통합의 경계",
+      "items": [
+        "정본과 파생 저장소는 분리됩니다. 공간적 근접성이 사실 관계를 만들지 않습니다.",
+        "공유 OSK의 전체 호스트 연동·충돌/병합·전체 자료 이관은 미완료 범위를 유지합니다."
+      ]
+    }
+  ]
+}

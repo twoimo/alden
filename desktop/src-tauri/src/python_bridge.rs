@@ -5,12 +5,13 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -31,25 +32,53 @@ const BROWSER_TOOL_TASK_LIMIT_BYTES: usize = 16 * 1024;
 const BROWSER_TOOL_JOB_ID_LIMIT: usize = 64;
 const JOB_EVENT_CAP: usize = 8;
 const JOB_EVENT_MAX_AGE_SECS: f64 = 300.0;
-const ABORT_STATE_NAME: &str = "jarvis-abort.json";
-const VOICE_STATUS_NAME: &str = "jarvis-voice-status.json";
+const ABORT_STATE_NAME: &str = "alden-abort.json";
+const VOICE_STATUS_NAME: &str = "alden-voice-status.json";
 const VOICE_STATUS_MAX_AGE_SECS: u64 = 5 * 60;
 const STATE_FILE_LIMIT_BYTES: u64 = 4096;
-const WAKE_PHRASE: &str = "헤이 자비스";
+const ABORT_EPOCH_MAX: u64 = 9_007_199_254_740_991;
+const ABORT_LOCK_NAME: &str = "alden-abort.lock";
+const ABORT_LOCK_TIMEOUT: Duration = Duration::from_millis(250);
+const WAKE_PHRASE: &str = "올든";
 const WAKE_THRESHOLD: f64 = 0.65;
-const CUSTOM_WAKE_MODEL_MAX_BYTES: u64 = 64 * 1024 * 1024;
-const BUNDLED_CUSTOM_WAKE_MODEL: &str = resource_layout::WAKE_MODEL;
-const RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
+const RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw";
+const LEGACY_RESIDENT_MODEL_ID: &str = "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
 const SWAP_MODEL_ID: &str = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit";
 // The on-disk directory names the app-owned server publishes in /v1/models.
-const RESIDENT_MODEL_NAME: &str = "Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
+const RESIDENT_MODEL_NAME: &str = "Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw";
+const LEGACY_RESIDENT_MODEL_NAME: &str = "Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit";
 const SWAP_MODEL_NAME: &str = "Qwen3.8-27B-MLX-Serve-4bit";
 const MLX_SERVER_STATUS_ACTION: &str = "mlx-server-status";
 const MLX_SERVER_LAUNCH_ACTION: &str = "mlx-server-launch";
 const MLX_SERVER_STOP_ACTION: &str = "mlx-server-stop";
 const MODEL_SWAP_OPT_IN: &str = "qwen38-27b-explicit-v1";
 const MODEL_SWAP_CANCEL_DIR: &str = "model-swap-cancel";
-const VOICE_TTS_OUT_NAME: &str = "jarvis-voice-out.wav";
+
+fn is_resident_model_id(candidate: &str) -> bool {
+    candidate == RESIDENT_MODEL_ID || candidate == LEGACY_RESIDENT_MODEL_ID
+}
+
+fn is_local_model_id(candidate: &str) -> bool {
+    is_resident_model_id(candidate) || candidate == SWAP_MODEL_ID
+}
+
+fn is_model_set_id(candidate: &str) -> bool {
+    candidate == RESIDENT_MODEL_ID || candidate == SWAP_MODEL_ID
+}
+
+fn is_resident_model_name(candidate: &str) -> bool {
+    candidate == RESIDENT_MODEL_NAME || candidate == LEGACY_RESIDENT_MODEL_NAME
+}
+
+fn is_local_model_name(candidate: &str) -> bool {
+    is_resident_model_name(candidate) || candidate == SWAP_MODEL_NAME
+}
+
+fn is_snapshot_model_id(candidate: &str) -> bool {
+    is_local_model_id(candidate.strip_prefix("mlx/").unwrap_or(candidate))
+}
+
+const VOICE_TTS_OUT_NAME: &str = "alden-voice-out.wav";
 static VOICE_SESSION_START_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Error)]
@@ -82,14 +111,20 @@ pub enum BridgeError {
     DevelopmentDisabled,
     #[error("python_environment_missing_or_unsafe")]
     PythonEnv,
+    #[error("browser_environment_missing_or_unsafe")]
+    BrowserEnv,
+    #[cfg_attr(not(test), allow(dead_code))]
     #[error("voice_environment_missing")]
     VoiceEnv,
+    #[cfg_attr(not(test), allow(dead_code))]
     #[error("voice_script_missing")]
     VoiceScript,
     #[error("voice_session_already_running")]
     VoiceSessionAlreadyRunning,
     #[error("voice_session_process_check_failed")]
     VoiceProcessCheck,
+    #[error("alden_wake_model_unavailable")]
+    WakeModelUnavailable,
 }
 
 #[derive(Clone)]
@@ -125,6 +160,7 @@ struct PythonRun<'a> {
     output_limit: usize,
     stdin_payload: Option<&'a [u8]>,
     global_abort_grace: Option<Duration>,
+    browser_runtime: bool,
 }
 
 impl Default for PythonRun<'_> {
@@ -137,6 +173,7 @@ impl Default for PythonRun<'_> {
             output_limit: OUTPUT_LIMIT_BYTES,
             stdin_payload: None,
             global_abort_grace: None,
+            browser_runtime: false,
         }
     }
 }
@@ -144,7 +181,8 @@ impl Default for PythonRun<'_> {
 #[derive(Debug)]
 struct BridgeConfig {
     python: PathBuf,
-    voice_python: PathBuf,
+    browser_python: PathBuf,
+    browser_browsers_path: PathBuf,
     resources: Result<ResourceLayout, ResourceError>,
     state_root: PathBuf,
     logs_dir: PathBuf,
@@ -164,6 +202,8 @@ pub struct SafeRoom {
     live: bool,
     auto_reply: bool,
     open_jobs: u64,
+    #[serde(rename = "replyReadiness")]
+    reply_readiness: String,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq, Clone)]
@@ -186,6 +226,35 @@ pub struct SafeJobEvent {
     error_code: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SafeEmergencyState {
+    schema_version: u64,
+    epoch: u64,
+    latched: bool,
+    reason: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiskEmergencyState {
+    schema_version: u64,
+    epoch: u64,
+    latched: bool,
+    reason: String,
+}
+
+impl Default for SafeEmergencyState {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            epoch: 0,
+            latched: false,
+            reason: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct TerminalCounts {
     sent: u64,
@@ -202,9 +271,11 @@ pub struct ContextSync {
 
 #[derive(Debug, Serialize, Clone)]
 pub struct SafeVoiceStatus {
+    manual_running: bool,
     available: bool,
     state: String,
     rms: f64,
+    output_rms: f64,
     error_code: Option<String>,
     wake_source: String,
     updated_at: u64,
@@ -216,9 +287,11 @@ pub struct SafeVoiceStatus {
 impl Default for SafeVoiceStatus {
     fn default() -> Self {
         Self {
+            manual_running: false,
             available: false,
             state: "unavailable".to_string(),
             rms: 0.0,
+            output_rms: 0.0,
             error_code: None,
             wake_source: "none".to_string(),
             updated_at: 0,
@@ -379,6 +452,505 @@ impl SafeBrowserToolResult {
     }
 }
 
+// OSK v4.1.2 (vendor commit 9bbf08f): epoch.py fingerprints engine code;
+// core.mutation_lock opens/truncates its lock BEFORE a write, even a failed one.
+// Neither is a persisted-note commit counter. core.atomic_write replaces notes,
+// and human edits need not use that function, so fingerprint metadata instead.
+mod knowledge_revision_probe {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::ffi::{CStr, CString};
+    use std::hash::{Hash, Hasher};
+    use std::path::Component;
+
+    const MAX_ENTRIES: usize = 8192;
+    const MAX_DEPTH: usize = 32;
+    const MAX_TIME: Duration = Duration::from_millis(100);
+
+    struct Budget {
+        remaining: usize,
+        deadline: Instant,
+    }
+
+    impl Budget {
+        fn check(&self) -> Option<()> {
+            (Instant::now() < self.deadline).then_some(())
+        }
+
+        fn entry(&mut self) -> Option<()> {
+            self.check()?;
+            self.remaining = self.remaining.checked_sub(1)?;
+            Some(())
+        }
+    }
+
+    // Descriptor-relative traversal keeps every ancestor pinned. A concurrent
+    // directory/symlink replacement cannot redirect the probe outside its vault.
+    // No regular file is opened, so FIFOs/devices cannot block a content read.
+    struct Directory(*mut libc::DIR);
+
+    impl Drop for Directory {
+        fn drop(&mut self) {
+            unsafe { libc::closedir(self.0) };
+        }
+    }
+
+    impl Directory {
+        fn open_at(parent: i32, name: &CStr) -> Option<Self> {
+            let fd = unsafe {
+                libc::openat(
+                    parent,
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return None;
+            }
+            let stream = unsafe { libc::fdopendir(fd) };
+            if stream.is_null() {
+                unsafe { libc::close(fd) };
+                return None;
+            }
+            Some(Self(stream))
+        }
+
+        fn fd(&self) -> i32 {
+            unsafe { libc::dirfd(self.0) }
+        }
+
+        fn child(&self, name: &CStr) -> Option<Self> {
+            Self::open_at(self.fd(), name)
+        }
+
+        fn stat(&self, name: &CStr) -> std::io::Result<libc::stat> {
+            let mut meta = std::mem::MaybeUninit::uninit();
+            if unsafe {
+                libc::fstatat(
+                    self.fd(),
+                    name.as_ptr(),
+                    meta.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(unsafe { meta.assume_init() })
+        }
+
+        fn names(&self, budget: &mut Budget) -> Option<Vec<CString>> {
+            let mut names = Vec::new();
+            loop {
+                budget.check()?;
+                // readdir uses NULL for both EOF and error. Never accept a
+                // truncated directory as a complete, unchanged fingerprint.
+                #[cfg(target_os = "macos")]
+                let errno = unsafe { libc::__error() };
+                #[cfg(not(target_os = "macos"))]
+                let errno = unsafe { libc::__errno_location() };
+                unsafe { *errno = 0 };
+                let entry = unsafe { libc::readdir(self.0) };
+                if entry.is_null() {
+                    return (unsafe { *errno } == 0).then_some(names);
+                }
+                let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+                if name.to_bytes() == b"." || name.to_bytes() == b".." {
+                    continue;
+                }
+                budget.entry()?;
+                names.push(name.to_owned());
+            }
+        }
+    }
+
+    fn hash_metadata(meta: &libc::stat, hash: &mut DefaultHasher) {
+        // Inode detects atomic replacement even with restored size/mtime;
+        // ctime also detects ordinary in-place edits whose mtime is restored.
+        (
+            meta.st_dev,
+            meta.st_ino,
+            meta.st_mode,
+            meta.st_size,
+            meta.st_mtime,
+            meta.st_mtime_nsec,
+            meta.st_ctime,
+            meta.st_ctime_nsec,
+        )
+            .hash(hash);
+    }
+
+    fn scan(
+        dir: &Directory,
+        relative: &Path,
+        depth: usize,
+        workbench: bool,
+        transit: bool,
+        budget: &mut Budget,
+        hash: &mut DefaultHasher,
+    ) -> Option<()> {
+        budget.check()?;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let mut names = dir.names(budget)?;
+        names.sort_unstable();
+        for name in names {
+            budget.check()?;
+            let bytes = name.to_bytes();
+            let markdown =
+                bytes.len() >= 3 && bytes[bytes.len() - 3..].eq_ignore_ascii_case(b".md");
+            // SDK graph._off_node: dot-prefixed files and dot/underscore
+            // directories are not notes. In particular never descend into Raw.
+            if bytes.starts_with(b".") || (bytes.starts_with(b"_") && !markdown) {
+                continue;
+            }
+            let meta = dir.stat(&name).ok()?;
+            let kind = meta.st_mode & libc::S_IFMT;
+            let path = relative.join(OsStr::from_bytes(bytes));
+            if kind == libc::S_IFDIR {
+                if bytes.starts_with(b"_") {
+                    continue;
+                }
+                let child = dir.child(&name)?;
+                scan(
+                    &child,
+                    &path,
+                    depth + 1,
+                    workbench
+                        || (depth == 0
+                            && relative == Path::new("00_Scope")
+                            && bytes == b"Workbench"),
+                    transit || bytes == b"transit",
+                    budget,
+                    hash,
+                )?;
+            } else if kind == libc::S_IFLNK || (markdown && kind != libc::S_IFREG) {
+                return None;
+            } else if markdown && depth > 0 && (!workbench || transit) {
+                path.hash(hash);
+                hash_metadata(&meta, hash);
+            }
+        }
+        Some(())
+    }
+
+    pub(super) fn probe(state_root: &Path) -> Option<String> {
+        probe_with_budget(state_root, MAX_ENTRIES, MAX_TIME)
+    }
+
+    fn probe_with_budget(state_root: &Path, entries: usize, timeout: Duration) -> Option<String> {
+        let mut budget = Budget {
+            remaining: entries,
+            deadline: Instant::now() + timeout,
+        };
+        if !state_root.is_absolute() {
+            return None;
+        }
+        let mut home = Directory::open_at(libc::AT_FDCWD, c"/")?;
+        for part in state_root.join("knowledge/osk").components() {
+            budget.check()?;
+            match part {
+                Component::RootDir => (),
+                Component::Normal(name) => {
+                    home = home.child(&CString::new(name.as_bytes()).ok()?)?
+                }
+                _ => return None,
+            }
+        }
+        let checkpoint = home.stat(c"sync.json").ok()?;
+        if checkpoint.st_mode & libc::S_IFMT != libc::S_IFREG
+            || checkpoint.st_size <= 0
+            || checkpoint.st_mode & 0o444 == 0
+        {
+            return None;
+        }
+        let mut hash = DefaultHasher::new();
+        hash_metadata(&checkpoint, &mut hash);
+        match home.stat(c"vault") {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => "no-vault".hash(&mut hash),
+            Err(_) => return None,
+            Ok(_) => {
+                let vault = home.child(c"vault")?;
+                // Alden _load_engine creates these three 00_ roots. SDK
+                // layout.py also accepts legacy aliases: defer to the normal
+                // graph read on such layouts rather than guess which is active.
+                for alias in [
+                    c"= Scope",
+                    c"Scope",
+                    c"= Domain",
+                    c"Domain",
+                    c"= Person",
+                    c"Person",
+                ] {
+                    match vault.stat(alias) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                        _ => return None,
+                    }
+                }
+                for space in [c"00_Scope", c"00_Domain", c"00_Person"] {
+                    budget.check()?;
+                    match vault.stat(space) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                        Err(_) => return None,
+                        Ok(_) => scan(
+                            &vault.child(space)?,
+                            Path::new(OsStr::from_bytes(space.to_bytes())),
+                            0,
+                            false,
+                            false,
+                            &mut budget,
+                            &mut hash,
+                        )?,
+                    }
+                }
+            }
+        }
+        budget.check()?;
+        // A hint, not a content digest or transaction fence. None on incomplete
+        // scans preserves KnowledgeRefresh's existing 15-second read fallback.
+        // Coarse/unchanged stat timestamps and multi-file writes still need it.
+        Some(format!("osk-stat-v1:{:016x}", hash.finish()))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::os::unix::fs::{symlink, PermissionsExt};
+
+        struct Fixture(PathBuf);
+
+        impl Fixture {
+            fn new() -> Self {
+                static NEXT: std::sync::atomic::AtomicUsize =
+                    std::sync::atomic::AtomicUsize::new(0);
+                let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+                    "alden-osk-revision-{}-{}-{}",
+                    std::process::id(),
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos(),
+                    NEXT.fetch_add(1, Ordering::Relaxed),
+                ));
+                fs::create_dir_all(root.join("knowledge/osk/vault")).unwrap();
+                fs::write(root.join("knowledge/osk/sync.json"), b"{}").unwrap();
+                Self(root)
+            }
+
+            fn path(&self, relative: &str) -> PathBuf {
+                self.0.join("knowledge/osk/vault").join(relative)
+            }
+
+            fn write(&self, relative: &str, text: &[u8]) -> PathBuf {
+                let path = self.path(relative);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(&path, text).unwrap();
+                path
+            }
+
+            fn revision(&self) -> String {
+                probe(&self.0).expect("complete temp vault metadata")
+            }
+        }
+
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                fs::remove_dir_all(&self.0).unwrap();
+            }
+        }
+
+        #[test]
+        fn knowledge_revision_detects_note_lifecycle_without_checkpoint_changes() {
+            let f = Fixture::new();
+            let checkpoint = fs::metadata(f.0.join("knowledge/osk/sync.json")).unwrap();
+            let empty = f.revision();
+            let note = f.write("00_Scope/Alden/nested/Note.MD", b"first");
+            let created = f.revision();
+            assert_ne!(created, empty);
+            assert_eq!(created, f.revision());
+
+            // The SDK's atomic_write is temp + replace. Restore mtime and keep
+            // length identical so the test specifically exercises inode/ctime.
+            let before = fs::metadata(&note).unwrap();
+            let stage = f.write("00_Scope/Alden/nested/.stage", b"other");
+            File::open(&stage)
+                .unwrap()
+                .set_modified(before.modified().unwrap())
+                .unwrap();
+            fs::rename(stage, &note).unwrap();
+            assert_ne!(before.ino(), fs::metadata(&note).unwrap().ino());
+            let replaced = f.revision();
+            assert_ne!(replaced, created);
+
+            // Manual in-place correction with size AND mtime preserved.
+            thread::sleep(Duration::from_millis(20));
+            fs::write(&note, b"third").unwrap();
+            File::open(&note)
+                .unwrap()
+                .set_modified(before.modified().unwrap())
+                .unwrap();
+            let edited = f.revision();
+            assert_ne!(edited, replaced);
+            let destination = f.path("00_Person/Test/renamed.md");
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::rename(&note, &destination).unwrap();
+            let moved = f.revision();
+            assert_ne!(moved, edited);
+            fs::remove_file(destination).unwrap();
+            assert_ne!(f.revision(), moved);
+            let after = fs::metadata(f.0.join("knowledge/osk/sync.json")).unwrap();
+            assert_eq!(
+                (
+                    checkpoint.ino(),
+                    checkpoint.mtime(),
+                    checkpoint.mtime_nsec()
+                ),
+                (after.ino(), after.mtime(), after.mtime_nsec())
+            );
+        }
+
+        #[test]
+        fn knowledge_revision_tracks_hubs_domains_and_workbench_transit() {
+            let f = Fixture::new();
+            let mut previous = f.revision();
+            for path in [
+                "00_Scope/Alden/Alden.md",
+                "00_Domain/Concept/Concept.md",
+                "00_Person/Person/Person.md",
+                "00_Scope/Workbench/transit/Note.md",
+                "00_Scope/Alden/_ordinary-note.md",
+            ] {
+                f.write(path, b"note");
+                let next = f.revision();
+                assert_ne!(next, previous, "{path}");
+                previous = next;
+            }
+        }
+
+        #[test]
+        fn knowledge_revision_ignores_raw_bodies_and_unrelated_scopes() {
+            let f = Fixture::new();
+            let other = Fixture::new();
+            let note = f.write("00_Scope/Alden/Note.md", b"note");
+            fs::set_permissions(&note, fs::Permissions::from_mode(0o000)).unwrap();
+            // Even a huge unreadable note is metadata-only; no SDK or body I/O.
+            let huge = f.write("00_Domain/Test/Huge.md", b"");
+            File::options()
+                .write(true)
+                .open(&huge)
+                .unwrap()
+                .set_len(2 * 1024 * 1024 * 1024)
+                .unwrap();
+            let initial = f.revision();
+            for path in [
+                "00_Scope/Alden/_raw/day.jsonl",
+                "00_Scope/Alden/_raw/fake.md",
+                "00_Scope/Alden/.hidden/note.md",
+                "00_Scope/Alden/_archive/note.md",
+                "00_Scope/Workbench/Workbench.md",
+                "00_Scope/Alden/.hidden.md",
+                "00_Scope/loose.md",
+                "_governance/Constitution.md",
+                "_sources/Raw.md",
+                "unrelated/Note.md",
+            ] {
+                let path = f.write(path, b"ignored");
+                fs::write(path, b"ignored again").unwrap();
+            }
+            let raw = f.path("00_Scope/Alden/_raw");
+            fs::set_permissions(&raw, fs::Permissions::from_mode(0o000)).unwrap();
+            other.write("00_Scope/Alden/Note.md", b"other state root");
+            assert_eq!(initial, f.revision());
+            fs::set_permissions(raw, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+
+        #[test]
+        fn knowledge_revision_rejects_symlinks_at_every_boundary() {
+            for relative in [
+                "knowledge",
+                "knowledge/osk",
+                "knowledge/osk/vault",
+                "knowledge/osk/vault/00_Scope",
+                "knowledge/osk/vault/00_Scope/Alden",
+            ] {
+                let f = Fixture::new();
+                f.write("00_Scope/Alden/Note.md", b"inside");
+                let original = f.0.join(relative);
+                let moved = f.0.join("displaced");
+                fs::rename(&original, &moved).unwrap();
+                symlink(&moved, &original).unwrap();
+                assert_eq!(probe(&f.0), None, "{relative}");
+            }
+            let f = Fixture::new();
+            let note = f.write("00_Scope/Alden/Note.md", b"inside");
+            fs::remove_file(&note).unwrap();
+            symlink(f.path("missing.md"), &note).unwrap();
+            assert_eq!(probe(&f.0), None);
+            let alias = f.0.with_extension("link");
+            symlink(&f.0, &alias).unwrap();
+            assert_eq!(probe(&alias), None);
+            fs::remove_file(alias).unwrap();
+        }
+
+        #[test]
+        fn knowledge_revision_rejects_special_files_without_opening_them() {
+            let f = Fixture::new();
+            let note = f.write("00_Scope/Alden/Note.md", b"inside");
+            fs::remove_file(&note).unwrap();
+            let name = CString::new(note.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            assert_eq!(probe(&f.0), None);
+            fs::remove_file(note).unwrap();
+            let checkpoint = f.0.join("knowledge/osk/sync.json");
+            fs::remove_file(&checkpoint).unwrap();
+            let name = CString::new(checkpoint.as_os_str().as_bytes()).unwrap();
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+            assert_eq!(probe(&f.0), None);
+            fs::remove_file(&checkpoint).unwrap();
+            fs::create_dir(checkpoint).unwrap();
+            assert_eq!(probe(&f.0), None);
+        }
+
+        #[test]
+        fn knowledge_revision_directory_replacement_stays_pinned() {
+            let f = Fixture::new();
+            let other = Fixture::new();
+            f.write("00_Scope/Alden/Note.md", b"inside");
+            other.write("00_Scope/Alden/Foreign.md", b"outside");
+            let name = CString::new(f.path("00_Scope/Alden").as_os_str().as_bytes()).unwrap();
+            let pinned = Directory::open_at(libc::AT_FDCWD, &name).unwrap();
+            fs::rename(f.path("00_Scope/Alden"), f.path("00_Scope/old")).unwrap();
+            symlink(other.path("00_Scope/Alden"), f.path("00_Scope/Alden")).unwrap();
+            let mut budget = Budget {
+                remaining: 10,
+                deadline: Instant::now() + Duration::from_secs(1),
+            };
+            assert_eq!(
+                pinned.names(&mut budget).unwrap(),
+                vec![CString::new("Note.md").unwrap()]
+            );
+            assert_eq!(probe(&f.0), None);
+        }
+
+        #[test]
+        fn knowledge_revision_falls_back_on_limits_and_unsupported_layouts() {
+            let f = Fixture::new();
+            f.write("00_Scope/Alden/A.md", b"a");
+            f.write("00_Scope/Alden/B.md", b"b");
+            assert!(probe_with_budget(&f.0, 3, Duration::from_secs(1)).is_some());
+            assert_eq!(probe_with_budget(&f.0, 2, Duration::from_secs(1)), None);
+            assert_eq!(probe_with_budget(&f.0, 3, Duration::ZERO), None);
+            fs::create_dir(f.path("Scope")).unwrap();
+            assert_eq!(probe(&f.0), None);
+            fs::remove_dir(f.path("Scope")).unwrap();
+            let deep = format!("00_Scope/{}Note.md", "nested/".repeat(MAX_DEPTH + 1));
+            f.write(&deep, b"deep");
+            assert_eq!(probe(&f.0), None);
+        }
+    }
+}
+
 impl PythonBridge {
     pub fn new() -> Self {
         Self {
@@ -388,6 +960,130 @@ impl PythonBridge {
         }
     }
 
+    /// Read-only, bounded metadata probe of the checkpoint and persisted notes.
+    pub fn knowledge_revision(&self) -> Option<String> {
+        knowledge_revision_probe::probe(&self.config.state_root)
+    }
+
+    /// App-owned, local, bounded background tick. It shares the emergency latch
+    /// and never registers hooks, creates a service or adopts another worker.
+    pub fn synchronize_knowledge(&self) -> Result<(), BridgeError> {
+        if global_abort_is_latched(&self.config.state_root)? {
+            return Ok(());
+        }
+        let resources = self.config.resources()?;
+        resources.validate()?;
+        let runtime = select_python_runtime(
+            &self.config.python,
+            &self.config.browser_python,
+            &self.config.browser_browsers_path,
+            resources.installed,
+            false,
+        )?;
+        let script = resources.root.join("scripts/alden_osk.py");
+        let hard = Arc::new(AtomicBool::new(false));
+        let abort = Arc::new(AtomicBool::new(false));
+        let key = "alden-osk-sync";
+        {
+            let mut map = self
+                .cancellations
+                .lock()
+                .map_err(|_| BridgeError::StateIo)?;
+            if map.contains_key(key) {
+                return Ok(());
+            }
+            map.insert(
+                key.into(),
+                CancellationHandle {
+                    flag: hard.clone(),
+                    cooperative_marker: None,
+                    global_abort_flag: Some(abort.clone()),
+                },
+            );
+        }
+        let args = vec![
+            "-E".into(),
+            "-B".into(),
+            "-s".into(),
+            script.to_str().ok_or(BridgeError::ResourceUnsafe)?.into(),
+            "--state-root".into(),
+            self.config.state_root.to_string_lossy().into_owned(),
+            "--sync".into(),
+            "--bin".into(),
+            resources
+                .root
+                .join("bin/openkakao-cli")
+                .to_string_lossy()
+                .into_owned(),
+        ];
+        let result = run_process_with_recovery_env(
+            &runtime.executable,
+            &args,
+            Duration::from_secs(120),
+            OUTPUT_LIMIT_BYTES,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: hard,
+                global_abort: Some((abort, Duration::from_secs(2))),
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+            &runtime.env,
+        );
+        if let Ok(mut map) = self.cancellations.lock() {
+            map.remove(key);
+        }
+        let payload = parse_json_output(&result?)?;
+        if payload.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(BridgeError::StateIo);
+        }
+        Ok(())
+    }
+
+    /// Native settings audit only: bypass the general dispatcher and read the
+    /// existing OSK graph without bootstrap, source indexing or inference.
+    #[cfg(target_os = "macos")]
+    pub fn fetch_persisted_graph(&self) -> Result<Value, BridgeError> {
+        let resources = self.config.resources()?;
+        resources.validate()?;
+        let runtime = select_python_runtime(
+            &self.config.python,
+            &self.config.browser_python,
+            &self.config.browser_browsers_path,
+            resources.installed,
+            false,
+        )?;
+        let script = resources.root.join("scripts/alden_osk.py");
+        let args = vec![
+            "-E".into(),
+            "-B".into(),
+            "-s".into(),
+            script.to_str().ok_or(BridgeError::ResourceUnsafe)?.into(),
+            "--state-root".into(),
+            self.config
+                .state_root
+                .to_str()
+                .ok_or(BridgeError::StateIo)?
+                .into(),
+            "--read-only".into(),
+        ];
+        let bytes = run_process_with_recovery_env(
+            &runtime.executable,
+            &args,
+            DEFAULT_TIMEOUT,
+            OUTPUT_LIMIT_BYTES,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: Arc::new(AtomicBool::new(false)),
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+            &[],
+        )?;
+        Ok(sanitize_knowledge_graph(&parse_json_output(&bytes)?))
+    }
+
     pub fn fetch_snapshot(
         &self,
         token_id: Option<&str>,
@@ -395,9 +1091,36 @@ impl PythonBridge {
         let bytes = self.run_python(&[], SNAPSHOT_TIMEOUT, token_id, false)?;
         let value = parse_json_output(&bytes)?;
         let mut snapshot = sanitize_snapshot(&value);
-        snapshot.voice = read_voice_status(&self.config.state_root, &self.config.resources()?.root);
+        snapshot.voice = self.voice_status();
         self.merge_jobs(&mut snapshot);
         Ok(snapshot)
+    }
+
+    /// Read only the app's bounded status/latch files; no Python or models.
+    pub fn voice_status(&self) -> SafeVoiceStatus {
+        let mut status = read_voice_status(&self.config.state_root);
+        status.manual_running = self
+            .cancellations
+            .lock()
+            .is_ok_and(|map| map.contains_key("voice-session"));
+        if status.manual_running && !status.available {
+            status.available = true;
+            status.state = "idle".to_string();
+        }
+        match global_abort_is_latched(&self.config.state_root) {
+            Ok(false) => {}
+            latch => {
+                status.rms = 0.0;
+                status.output_rms = 0.0;
+                status.state = "aborted".to_string();
+                status.error_code = Some(if matches!(latch, Ok(true)) {
+                    "global_abort".to_string()
+                } else {
+                    "voice_status_latch_invalid".to_string()
+                });
+            }
+        }
+        status
     }
 
     // Every argument is a settings-action payload field the frontend sends, so
@@ -424,6 +1147,10 @@ impl PythonBridge {
         )?;
         let is_swap = action == "model-swap";
         let is_mlx_launch = action == MLX_SERVER_LAUNCH_ACTION;
+        let is_history = matches!(
+            action,
+            "history-rooms" | "history-messages" | "collection-affinity"
+        );
         let swap_job_id = token_id.unwrap_or("model-swap");
         if is_swap {
             self.begin_job(swap_job_id, "model_swap", "swap", 0.9);
@@ -435,6 +1162,8 @@ impl PythonBridge {
                     MODEL_SWAP_TIMEOUT
                 } else if is_mlx_launch {
                     MLX_LAUNCH_TIMEOUT
+                } else if is_history {
+                    SNAPSHOT_TIMEOUT
                 } else {
                     DEFAULT_TIMEOUT
                 },
@@ -447,15 +1176,36 @@ impl PythonBridge {
                 "dream-rsi-status" => sanitize_dream_rsi(&value),
                 "knowledge-graph-status" => sanitize_knowledge_status(&value),
                 "knowledge-graph" => sanitize_knowledge_graph(&value),
-                "knowledge-graph-focus" => sanitize_knowledge_focus(&value),
+                "knowledge-graph-focus" => sanitize_knowledge_focus(&value, node_id.unwrap_or("")),
                 "model-owner-status" => sanitize_model_owner_status(&value),
                 MLX_SERVER_STATUS_ACTION => sanitize_mlx_server_status(&value),
                 MLX_SERVER_LAUNCH_ACTION => sanitize_mlx_lifecycle(&value, true),
                 MLX_SERVER_STOP_ACTION => sanitize_mlx_lifecycle(&value, false),
-                "model-set" => sanitize_model_action(&value, action, RESIDENT_MODEL_ID),
+                "model-set" => sanitize_model_action(
+                    &value,
+                    action,
+                    model.ok_or(BridgeError::ActionNotAllowed)?,
+                ),
                 "model-prepare" => sanitize_model_action(&value, action, SWAP_MODEL_ID),
                 "model-swap" => sanitize_model_swap_action(&value),
                 "room-upsert" => sanitize_room_upsert(&value),
+                "routed-models"
+                | "routed-model-set"
+                | "history-rooms"
+                | "history-messages"
+                | "voice-history-sessions"
+                | "voice-history-messages"
+                | "db-sync-history"
+                | "collection-history"
+                | "collection-graph"
+                | "collection-affinity"
+                | "collection-projects"
+                | "collection-scheduler-status"
+                | "collection-scheduler-control"
+                | "reply-history"
+                | "geeknews-history"
+                | "room-catalog"
+                | "room-delete" => value,
                 _ => return Err(BridgeError::ActionNotAllowed),
             })
         })();
@@ -486,6 +1236,7 @@ impl PythonBridge {
                 output_limit: BROWSER_TOOL_OUTPUT_LIMIT_BYTES,
                 stdin_payload: Some(task.as_bytes()),
                 global_abort_grace: Some(BROWSER_TOOL_ABORT_GRACE),
+                browser_runtime: true,
                 ..PythonRun::default()
             })?;
             let value = parse_json_output(&bytes)?;
@@ -643,6 +1394,7 @@ impl PythonBridge {
             if let Some(marker) = handle.cooperative_marker.as_deref() {
                 if write_model_swap_cancel_marker(marker).is_err() {
                     marker_failed = true;
+                    handle.flag.store(true, Ordering::SeqCst);
                 }
             } else if latch_result.is_ok() {
                 if let Some(global_abort_flag) = handle.global_abort_flag.as_ref() {
@@ -664,20 +1416,137 @@ impl PythonBridge {
         Ok(())
     }
 
+    pub fn emergency_state(&self) -> Result<SafeEmergencyState, BridgeError> {
+        read_global_abort_state(&self.config.state_root)
+    }
+
+    pub fn operator_resume(
+        &self,
+        explicit_opt_in: bool,
+    ) -> Result<SafeEmergencyState, BridgeError> {
+        if !explicit_opt_in {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        let _map = self
+            .cancellations
+            .lock()
+            .map_err(|_| BridgeError::StateIo)?;
+        let _state_lock = lock_global_abort(&self.config.state_root)?;
+        let current = read_global_abort_state(&self.config.state_root)?;
+        if !current.latched {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        let next = SafeEmergencyState {
+            schema_version: 1,
+            epoch: current
+                .epoch
+                .checked_add(1)
+                .filter(|epoch| *epoch <= ABORT_EPOCH_MAX)
+                .ok_or(BridgeError::StateIo)?,
+            latched: false,
+            reason: "human_resume".to_string(),
+        };
+        write_global_abort_state(&self.config.state_root, &next)?;
+        if read_global_abort_state(&self.config.state_root)? != next {
+            return Err(BridgeError::StateIo);
+        }
+        Ok(next)
+    }
+
     pub fn start_voice_session(&self) -> Result<(), BridgeError> {
         start_voice_session_if_absent(&self.config.state_root, voice_session_is_running, || {
+            Err(BridgeError::WakeModelUnavailable)
+        })
+    }
+
+    pub fn start_manual_voice_session(
+        &self,
+        conversation_id: Option<&str>,
+    ) -> Result<(), BridgeError> {
+        start_voice_session_if_absent(&self.config.state_root, voice_session_is_running, || {
+            if global_abort_is_latched(&self.config.state_root)? {
+                return Err(BridgeError::Cancelled);
+            }
             let resources = self.config.resources()?;
-            resources.validate().map_err(BridgeError::from)?;
+            resources.validate()?;
+            let support = dirs::home_dir()
+                .ok_or(BridgeError::VoiceEnv)?
+                .join("Library/Application Support/openkakao");
             let plan = plan_voice_session(
                 &resources.root,
                 &self.config.state_root,
-                &self.config.voice_python,
+                &support.join("runtimes/voice/bin/python3.11"),
             )?;
-            voice_session_command(&plan, &self.config.state_root)?
-                .spawn()
-                .map(|_| ())
-                .map_err(|_| BridgeError::Spawn)
+            validate_path(
+                &resources.root.join(resource_layout::VOICE_AUDIO_LIBRARY),
+                Kind::Data,
+            )
+            .map_err(|_| BridgeError::VoiceScript)?;
+            let mut command = voice_session_command(&plan, &self.config.state_root)?;
+            command.args([
+                "--manual-listen",
+                "--parent-pid",
+                &std::process::id().to_string(),
+            ]);
+            if let Some(id) = conversation_id {
+                if id.len() != 32
+                    || !id
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+                {
+                    return Err(BridgeError::ActionNotAllowed);
+                }
+                command.args(["--conversation-id", id]);
+            }
+            let mut map = self
+                .cancellations
+                .lock()
+                .map_err(|_| BridgeError::StateIo)?;
+            if map.contains_key("voice-session") {
+                return Err(BridgeError::VoiceSessionAlreadyRunning);
+            }
+            let child = command.spawn().map_err(|_| BridgeError::Spawn)?;
+            let hard = Arc::new(AtomicBool::new(false));
+            map.insert(
+                "voice-session".into(),
+                CancellationHandle {
+                    flag: hard.clone(),
+                    cooperative_marker: None,
+                    global_abort_flag: None,
+                },
+            );
+            let bridge = self.clone();
+            thread::spawn(move || {
+                supervise_manual_voice(child, &hard, Duration::from_secs(300), || {
+                    global_abort_is_latched(&bridge.config.state_root).unwrap_or(true)
+                });
+                if let Ok(mut map) = bridge.cancellations.lock() {
+                    map.remove("voice-session");
+                }
+            });
+            Ok(())
         })
+    }
+
+    pub fn stop_manual_voice_session(&self) -> bool {
+        let Ok(_guard) = VOICE_SESSION_START_LOCK.lock() else {
+            return false;
+        };
+        if !self.cancel("voice-session") {
+            return false;
+        }
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if self
+                .cancellations
+                .lock()
+                .is_ok_and(|map| !map.contains_key("voice-session"))
+            {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        false
     }
 
     fn run_python(
@@ -705,16 +1574,17 @@ impl PythonBridge {
             output_limit,
             stdin_payload,
             global_abort_grace,
+            browser_runtime,
         } = run;
         let resources = self.config.resources()?;
         resources.validate().map_err(BridgeError::from)?;
-        let python = if !resources.installed && self.config.python == Path::new("python3") {
-            "python3"
-        } else {
-            validate_path(&self.config.python, Kind::Executable)
-                .map_err(|_| BridgeError::PythonEnv)?;
-            self.config.python.to_str().ok_or(BridgeError::PythonEnv)?
-        };
+        let runtime = select_python_runtime(
+            &self.config.python,
+            &self.config.browser_python,
+            &self.config.browser_browsers_path,
+            resources.installed,
+            browser_runtime,
+        )?;
         let script = resources
             .script
             .to_str()
@@ -747,7 +1617,7 @@ impl PythonBridge {
                     return Err(BridgeError::ActionNotAllowed);
                 }
                 if let Some(flag) = global_abort_flag.as_ref() {
-                    if global_abort_is_latched(&self.config.state_root) {
+                    if global_abort_is_latched(&self.config.state_root)? {
                         // The child still starts so Python can return its fixed
                         // aborted envelope; Rust enforces the hard deadline.
                         flag.store(true, Ordering::SeqCst);
@@ -778,8 +1648,8 @@ impl PythonBridge {
         args.push(bin.to_string());
         args.extend(extra.iter().cloned());
 
-        let result = run_process_with_recovery(
-            python,
+        let result = run_process_with_recovery_env(
+            &runtime.executable,
             &args,
             timeout,
             output_limit,
@@ -790,6 +1660,7 @@ impl PythonBridge {
                 cooperative_marker: cooperative_marker.as_deref(),
                 recovery_timeout: MODEL_SWAP_RECOVERY_TIMEOUT,
             },
+            &runtime.env,
         );
         if let Some(token) = token_id {
             if let Ok(mut map) = self.cancellations.lock() {
@@ -870,46 +1741,86 @@ impl BridgeConfig {
         });
         let logs_dir = get_override("OPENKAKAO_LOGS_DIR")
             .unwrap_or_else(|| home.join("Library/Logs/AutoReplyMenu"));
-        let (python, voice_python) = if dev
-            && resources.as_ref().is_ok_and(|layout| !layout.installed)
-        {
-            let root = resources
-                .as_ref()
-                .map(|r| r.root.as_path())
-                .unwrap_or(checkout);
-            (
-                get_override("OPENKAKAO_PYTHON").unwrap_or_else(|| {
-                    let uv = home.join(
-                        ".local/share/uv/python/cpython-3.11-macos-aarch64-none/bin/python3.11",
-                    );
-                    if uv.is_file() {
-                        return uv;
-                    }
-                    let homebrew = PathBuf::from("/opt/homebrew/opt/python@3.11/bin/python3.11");
-                    if homebrew.is_file() {
-                        homebrew
-                    } else {
-                        PathBuf::from("python3")
-                    }
-                }),
-                get_override("OPENKAKAO_VOICE_PYTHON")
-                    .unwrap_or_else(|| root.join(".venv-voice/bin/python")),
-            )
+        let python = if dev && resources.as_ref().is_ok_and(|layout| !layout.installed) {
+            get_override("OPENKAKAO_PYTHON").unwrap_or_else(|| {
+                let uv = home
+                    .join(".local/share/uv/python/cpython-3.11-macos-aarch64-none/bin/python3.11");
+                if uv.is_file() {
+                    return uv;
+                }
+                let homebrew = PathBuf::from("/opt/homebrew/opt/python@3.11/bin/python3.11");
+                if homebrew.is_file() {
+                    homebrew
+                } else {
+                    PathBuf::from("python3")
+                }
+            })
         } else {
             // Provisioned separately; never copy or inspect a checkout .venv.
-            (
-                support.join("runtimes/menubar/bin/python3.11"),
-                support.join("runtimes/voice/bin/python3.11"),
-            )
+            support.join("runtimes/menubar/bin/python3.11")
         };
+        let browser_python = support.join("runtimes/browser/bin/python3.11");
+        let browser_browsers_path = support.join("runtimes/browser/ms-playwright");
         Self {
             python,
-            voice_python,
+            browser_python,
+            browser_browsers_path,
             resources,
             state_root,
             logs_dir,
         }
     }
+}
+
+struct PythonRuntimeSelection {
+    executable: String,
+    env: Vec<(OsString, OsString)>,
+}
+
+fn select_python_runtime(
+    menubar_python: &Path,
+    browser_python: &Path,
+    browser_browsers_path: &Path,
+    installed_resources: bool,
+    browser_runtime: bool,
+) -> Result<PythonRuntimeSelection, BridgeError> {
+    if browser_runtime {
+        validate_path(browser_python, Kind::Executable).map_err(|_| BridgeError::BrowserEnv)?;
+        validate_path(browser_browsers_path, Kind::Directory)
+            .map_err(|_| BridgeError::BrowserEnv)?;
+        let executable = browser_python
+            .to_str()
+            .ok_or(BridgeError::BrowserEnv)?
+            .to_string();
+        return Ok(PythonRuntimeSelection {
+            executable,
+            env: vec![
+                (
+                    OsString::from("PLAYWRIGHT_BROWSERS_PATH"),
+                    browser_browsers_path.as_os_str().to_owned(),
+                ),
+                (
+                    OsString::from("ANONYMIZED_TELEMETRY"),
+                    OsString::from("false"),
+                ),
+            ],
+        });
+    }
+
+    if !installed_resources && menubar_python == Path::new("python3") {
+        return Ok(PythonRuntimeSelection {
+            executable: "python3".to_string(),
+            env: Vec::new(),
+        });
+    }
+    validate_path(menubar_python, Kind::Executable).map_err(|_| BridgeError::PythonEnv)?;
+    Ok(PythonRuntimeSelection {
+        executable: menubar_python
+            .to_str()
+            .ok_or(BridgeError::PythonEnv)?
+            .to_string(),
+        env: Vec::new(),
+    })
 }
 
 #[cfg(test)]
@@ -935,12 +1846,24 @@ fn run_process(
     )
 }
 
+#[cfg(test)]
 fn run_process_with_recovery(
     executable: &str,
     args: &[String],
     timeout: Duration,
     output_limit: usize,
     control: ProcessControl<'_>,
+) -> Result<Vec<u8>, BridgeError> {
+    run_process_with_recovery_env(executable, args, timeout, output_limit, control, &[])
+}
+
+fn run_process_with_recovery_env(
+    executable: &str,
+    args: &[String],
+    timeout: Duration,
+    output_limit: usize,
+    control: ProcessControl<'_>,
+    env_overrides: &[(OsString, OsString)],
 ) -> Result<Vec<u8>, BridgeError> {
     let ProcessControl {
         stdin_payload,
@@ -952,6 +1875,7 @@ fn run_process_with_recovery(
     let mut command = Command::new(executable);
     command
         .args(args)
+        .envs(env_overrides.iter().cloned())
         .stdin(if stdin_payload.is_some() {
             Stdio::piped()
         } else {
@@ -1302,21 +2226,138 @@ fn settings_action_args(
     let mut args = vec!["--action".to_string(), action.to_string()];
     let opt_in_allowed = matches!(
         action,
-        "model-swap" | MLX_SERVER_LAUNCH_ACTION | MLX_SERVER_STOP_ACTION
+        "model-swap"
+            | MLX_SERVER_LAUNCH_ACTION
+            | MLX_SERVER_STOP_ACTION
+            | "collection-scheduler-control"
     );
     if !opt_in_allowed && (explicit_opt_in.is_some() || token_id.is_some()) {
         return Err(BridgeError::ActionNotAllowed);
     }
     match action {
-        "models"
+        "collection-scheduler-status" => {
+            if query.is_some() || node_id.is_some() || chat_id.is_some() || model.is_some() {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+        }
+        "collection-scheduler-control" => {
+            if explicit_opt_in != Some(true)
+                || token_id.is_some()
+                || node_id.is_some()
+                || chat_id.is_some()
+                || model.is_some()
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            let value = bounded_arg(query, 1024).ok_or(BridgeError::ActionNotAllowed)?;
+            let parsed: Value =
+                serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
+            let object = parsed.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+            let operation = parsed["operation"]
+                .as_str()
+                .ok_or(BridgeError::ActionNotAllowed)?;
+            let fields: &[&str] = match operation {
+                "pause" | "resume" => &["operation", "target_id"],
+                "interval" => &[
+                    "operation",
+                    "target_id",
+                    "interval_seconds",
+                    "expected_interval",
+                ],
+                "run" => &["operation", "target_id", "request_id"],
+                "acquisition" => &["operation", "target_id", "enabled", "expected_revision"],
+                _ => return Err(BridgeError::ActionNotAllowed),
+            };
+            if object.keys().any(|key| !fields.contains(&key.as_str()))
+                || object.get("target_id").is_some_and(|target| {
+                    !target.is_null()
+                        && target
+                            .as_str()
+                            .is_none_or(|value| value.is_empty() || value.len() > 128)
+                })
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if matches!(operation, "interval" | "run" | "acquisition")
+                && parsed["target_id"].as_str().is_none()
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if operation == "interval"
+                && ["interval_seconds", "expected_interval"].iter().any(|key| {
+                    parsed[key]
+                        .as_u64()
+                        .is_none_or(|value| !(60..=2_592_000).contains(&value))
+                })
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if operation == "run"
+                && parsed["request_id"].as_str().is_none_or(|value| {
+                    !(16..=64).contains(&value.len())
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                })
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if operation == "acquisition"
+                && (parsed["enabled"].as_bool().is_none()
+                    || parsed["expected_revision"]
+                        .as_u64()
+                        .is_none_or(|value| value >= 9_007_199_254_740_991))
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            args.extend(["--history-query".into(), value, "--explicit-opt-in".into()]);
+        }
+        "routed-models"
+        | "models"
         | "dream-rsi-status"
         | "knowledge-graph-status"
         | "knowledge-graph"
         | "model-owner-status"
         | MLX_SERVER_STATUS_ACTION => {}
+        "room-catalog" => {}
+        "routed-model-set"
+        | "history-rooms"
+        | "history-messages"
+        | "voice-history-sessions"
+        | "voice-history-messages"
+        | "db-sync-history"
+        | "collection-history"
+        | "collection-graph"
+        | "collection-affinity"
+        | "collection-projects"
+        | "reply-history"
+        | "geeknews-history" => {
+            // Read-only history requests; no worker or send action is exposed.
+            if query.is_some() && bounded_arg(query, 4096).is_none() {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if let Some(value) = bounded_arg(query, 4096) {
+                let parsed: Value =
+                    serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
+                if !parsed.is_object() {
+                    return Err(BridgeError::ActionNotAllowed);
+                }
+                args.extend(["--history-query".into(), value.to_owned()]);
+            }
+            if let Some(value) = bounded_arg(chat_id, 128) {
+                args.extend(["--history-chat".into(), value.to_owned()]);
+            }
+        }
+        "room-delete" => {
+            let id = chat_id
+                .and_then(|s| s.parse::<i64>().ok())
+                .filter(|v| *v > 0)
+                .ok_or(BridgeError::ActionNotAllowed)?;
+            args.extend(["--catalog-delete".into(), id.to_string()]);
+        }
         MLX_SERVER_LAUNCH_ACTION => {
             // Starting a resident model needs a deliberate opt-in and one of
-            // the two fixed local models; the app supplies the binary, models
+            // the fixed local models; the app supplies the binary, models
             // directory, and log path itself so no path crosses this boundary.
             if token_id.is_some() {
                 return Err(BridgeError::ActionNotAllowed);
@@ -1325,7 +2366,7 @@ fn settings_action_args(
                 return Err(BridgeError::ActionNotAllowed);
             }
             let candidate = model
-                .filter(|value| *value == RESIDENT_MODEL_ID || *value == SWAP_MODEL_ID)
+                .filter(|value| is_local_model_id(value))
                 .ok_or(BridgeError::ActionNotAllowed)?;
             args.push("--model".to_string());
             args.push(candidate.to_string());
@@ -1356,10 +2397,13 @@ fn settings_action_args(
                 args.push(value);
             }
         }
-        "model-set" if model == Some(RESIDENT_MODEL_ID) => {
+        "model-set" => {
+            let candidate = model
+                .filter(|value| is_model_set_id(value))
+                .ok_or(BridgeError::ActionNotAllowed)?;
             args.extend([
                 "--model".to_string(),
-                RESIDENT_MODEL_ID.to_string(),
+                candidate.to_string(),
                 "--no-wait".to_string(),
             ]);
         }
@@ -1385,13 +2429,25 @@ fn settings_action_args(
                 .and_then(|v| v.parse::<i64>().ok())
                 .filter(|id| *id > 0)
                 .ok_or(BridgeError::ActionNotAllowed)?;
-            let title = bounded_arg(query, 128).unwrap_or_default();
-            let payload = serde_json::json!({
+            let title = bounded_arg(query, 4096).unwrap_or_default();
+            let mut payload = serde_json::json!({
                 "chat_id": id,
                 "title": title,
                 "auto_reply": true,
                 "geeknews": false,
             });
+            if title.starts_with('{') {
+                let edited: Value =
+                    serde_json::from_str(&title).map_err(|_| BridgeError::ActionNotAllowed)?;
+                for key in ["auto_reply", "geeknews"] {
+                    let flag = edited
+                        .get(key)
+                        .and_then(Value::as_bool)
+                        .ok_or(BridgeError::ActionNotAllowed)?;
+                    payload[key] = Value::Bool(flag);
+                }
+                payload["title"] = Value::String(bounded_json_string(edited.get("title"), 128));
+            }
             args.extend(["--catalog-upsert".to_string(), payload.to_string()]);
         }
         _ => return Err(BridgeError::ActionNotAllowed),
@@ -1426,6 +2482,45 @@ fn start_voice_session_if_absent(
         return Err(BridgeError::VoiceSessionAlreadyRunning);
     }
     spawn()
+}
+
+fn supervise_manual_voice(
+    mut child: Child,
+    hard: &AtomicBool,
+    timeout: Duration,
+    global_stop: impl Fn() -> bool,
+) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if hard.load(Ordering::SeqCst) || Instant::now() >= deadline || global_stop() {
+            // This unreaped Child is the only permitted signal target.
+            let _ = Command::new("/bin/kill")
+                .args(["-TERM", &child.id().to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            let grace = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < grace {
+                if child.try_wait().is_ok_and(|status| status.is_some()) {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
 }
 
 type VoiceProcessArgs = (PathBuf, Vec<OsString>);
@@ -1760,50 +2855,91 @@ fn safe_small_json(path: &Path) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn global_abort_is_latched(state_root: &Path) -> bool {
-    safe_small_json(&state_root.join(ABORT_STATE_NAME))
-        .and_then(|value| value.get("latched").and_then(Value::as_bool))
-        .unwrap_or(false)
-}
-
-fn bundled_custom_wake_model_selected(repo_root: &Path) -> bool {
-    let path = repo_root.join(BUNDLED_CUSTOM_WAKE_MODEL);
-    if validate_path(&path, Kind::Data).is_err() {
-        return false;
+fn read_global_abort_state(state_root: &Path) -> Result<SafeEmergencyState, BridgeError> {
+    match fs::symlink_metadata(state_root) {
+        Ok(metadata) if !private_abort_root(&metadata) => return Err(BridgeError::StateIo),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SafeEmergencyState::default())
+        }
+        Err(_) => return Err(BridgeError::StateIo),
     }
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
-        return false;
+    let path = state_root.join(ABORT_STATE_NAME);
+    let file = match OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SafeEmergencyState::default())
+        }
+        Err(_) => return Err(BridgeError::StateIo),
     };
-    let extension_valid = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("onnx") || value.eq_ignore_ascii_case("tflite"))
-        .unwrap_or(false);
-    metadata.is_file()
-        && !metadata.file_type().is_symlink()
-        && extension_valid
-        && metadata.len() > 0
-        && metadata.len() <= CUSTOM_WAKE_MODEL_MAX_BYTES
+    let metadata = file.metadata().map_err(|_| BridgeError::StateIo)?;
+    if !metadata.is_file()
+        || metadata.len() > STATE_FILE_LIMIT_BYTES
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
+    {
+        return Err(BridgeError::StateIo);
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(STATE_FILE_LIMIT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| BridgeError::StateIo)?;
+    if bytes.len() as u64 > STATE_FILE_LIMIT_BYTES {
+        return Err(BridgeError::StateIo);
+    }
+    // Struct deserialization rejects duplicate, missing and extra fields.
+    let value: DiskEmergencyState =
+        serde_json::from_slice(&bytes).map_err(|_| BridgeError::StateIo)?;
+    if value.schema_version != 1 {
+        return Err(BridgeError::StateIo);
+    }
+    let epoch = value.epoch;
+    if epoch > ABORT_EPOCH_MAX {
+        return Err(BridgeError::StateIo);
+    }
+    let latched = value.latched;
+    let reason = value.reason;
+    if reason.chars().count() > 96
+        || reason.chars().any(char::is_control)
+        || (latched && reason.is_empty())
+        || (!latched && reason != "human_resume" && !(epoch == 0 && reason.is_empty()))
+    {
+        return Err(BridgeError::StateIo);
+    }
+    Ok(SafeEmergencyState {
+        schema_version: 1,
+        epoch,
+        latched,
+        reason,
+    })
 }
 
-fn default_voice_status(repo_root: &Path) -> SafeVoiceStatus {
+fn global_abort_is_latched(state_root: &Path) -> Result<bool, BridgeError> {
+    read_global_abort_state(state_root).map(|state| state.latched)
+}
+
+fn default_voice_status() -> SafeVoiceStatus {
     SafeVoiceStatus {
-        custom_model_selected: bundled_custom_wake_model_selected(repo_root),
+        custom_model_selected: false,
         ..SafeVoiceStatus::default()
     }
 }
 
-fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
+fn read_voice_status(state_root: &Path) -> SafeVoiceStatus {
     let Some(value) = safe_small_json(&state_root.join(VOICE_STATUS_NAME)) else {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     };
     let Some(root) = value.as_object() else {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     };
     if root.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     }
-    let bundled_model_selected = bundled_custom_wake_model_selected(repo_root);
     let state = root
         .get("state")
         .and_then(Value::as_str)
@@ -1827,12 +2963,18 @@ fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
         || updated_at > now.saturating_add(5)
         || now.saturating_sub(updated_at) > VOICE_STATUS_MAX_AGE_SECS
     {
-        return default_voice_status(repo_root);
+        return default_voice_status();
     }
     SafeVoiceStatus {
+        manual_running: false,
         available: true,
         state,
         rms: clamp01(root.get("rms").and_then(Value::as_f64).unwrap_or(0.0)),
+        output_rms: clamp01(
+            root.get("output_rms")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0),
+        ),
         error_code,
         wake_source: wake_source.to_string(),
         updated_at,
@@ -1848,45 +2990,137 @@ fn read_voice_status(state_root: &Path, repo_root: &Path) -> SafeVoiceStatus {
             .and_then(Value::as_f64)
             .unwrap_or(WAKE_THRESHOLD)
             .clamp(WAKE_THRESHOLD, 0.95),
-        custom_model_selected: root
-            .get("custom_model_selected")
-            .and_then(Value::as_bool)
-            .unwrap_or(bundled_model_selected),
+        // Persisted status from older builds must not re-enable an unverified
+        // wake model in the current desktop UI.
+        custom_model_selected: false,
     }
 }
 
 fn write_global_abort(state_root: &Path) -> Result<(), BridgeError> {
-    fs::create_dir_all(state_root).map_err(|_| BridgeError::StateIo)?;
-    let path = state_root.join(ABORT_STATE_NAME);
-    if fs::symlink_metadata(&path)
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false)
+    let _state_lock = lock_global_abort(state_root)?;
+    let current = read_global_abort_state(state_root)?;
+    let next = SafeEmergencyState {
+        schema_version: 1,
+        epoch: current
+            .epoch
+            .checked_add(1)
+            .filter(|epoch| *epoch <= ABORT_EPOCH_MAX)
+            .ok_or(BridgeError::StateIo)?,
+        latched: true,
+        reason: "global_abort".to_string(),
+    };
+    write_global_abort_state(state_root, &next)?;
+    if read_global_abort_state(state_root)? != next {
+        return Err(BridgeError::StateIo);
+    }
+    Ok(())
+}
+
+fn private_abort_root(metadata: &fs::Metadata) -> bool {
+    metadata.is_dir()
+        && !metadata.file_type().is_symlink()
+        && metadata.uid() == unsafe { libc::geteuid() }
+        && metadata.mode() & 0o777 == 0o700
+}
+
+fn lock_global_abort(state_root: &Path) -> Result<File, BridgeError> {
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(state_root)
+        .map_err(|_| BridgeError::StateIo)?;
+    if !private_abort_root(&fs::symlink_metadata(state_root).map_err(|_| BridgeError::StateIo)?) {
+        return Err(BridgeError::StateIo);
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(state_root.join(ABORT_LOCK_NAME))
+        .map_err(|_| BridgeError::StateIo)?;
+    let metadata = file.metadata().map_err(|_| BridgeError::StateIo)?;
+    if !metadata.is_file()
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o777 != 0o600
+        || metadata.nlink() != 1
     {
         return Err(BridgeError::StateIo);
     }
-    let epoch = safe_small_json(&path)
-        .and_then(|value| value.get("epoch").and_then(Value::as_u64))
-        .unwrap_or(0)
-        .saturating_add(1);
-    let payload = json!({
-        "schema_version": 1,
-        "epoch": epoch,
-        "latched": true,
-        "reason": "global_abort"
-    });
-    let temp = state_root.join(format!(".{ABORT_STATE_NAME}.{}.tmp", std::process::id()));
+    let deadline = Instant::now() + ABORT_LOCK_TIMEOUT;
+    loop {
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            return Ok(file); // Closing this descriptor releases the flock.
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ) || Instant::now() >= deadline
+        {
+            return Err(BridgeError::StateIo);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn write_global_abort_state(
+    state_root: &Path,
+    state: &SafeEmergencyState,
+) -> Result<(), BridgeError> {
+    fs::create_dir_all(state_root).map_err(|_| BridgeError::StateIo)?;
+    let root_metadata = fs::symlink_metadata(state_root).map_err(|_| BridgeError::StateIo)?;
+    if !private_abort_root(&root_metadata) {
+        return Err(BridgeError::StateIo);
+    }
+    let path = state_root.join(ABORT_STATE_NAME);
+    match fs::symlink_metadata(&path) {
+        Ok(_) => {
+            read_global_abort_state(state_root)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(BridgeError::StateIo),
+    }
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| BridgeError::StateIo)?
+        .as_nanos();
+    let temp = state_root.join(format!(
+        ".{ABORT_STATE_NAME}.{}.{}.tmp",
+        std::process::id(),
+        unique
+    ));
     let mut file = OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&temp)
         .map_err(|_| BridgeError::StateIo)?;
-    serde_json::to_writer(&mut file, &payload).map_err(|_| BridgeError::StateIo)?;
-    file.flush().map_err(|_| BridgeError::StateIo)?;
-    file.sync_all().map_err(|_| BridgeError::StateIo)?;
-    fs::rename(&temp, &path).map_err(|_| BridgeError::StateIo)?;
-    Ok(())
+    let result = (|| {
+        let payload = json!({
+            "schema_version": 1,
+            "epoch": state.epoch,
+            "latched": state.latched,
+            "reason": state.reason,
+        });
+        serde_json::to_writer(&mut file, &payload).map_err(|_| BridgeError::StateIo)?;
+        file.flush().map_err(|_| BridgeError::StateIo)?;
+        file.sync_all().map_err(|_| BridgeError::StateIo)?;
+        let metadata = file.metadata().map_err(|_| BridgeError::StateIo)?;
+        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o777 != 0o600 {
+            return Err(BridgeError::StateIo);
+        }
+        drop(file);
+        fs::rename(&temp, &path).map_err(|_| BridgeError::StateIo)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 fn write_model_swap_cancel_marker(path: &Path) -> Result<(), BridgeError> {
@@ -2044,6 +3278,33 @@ fn sanitize_recent_receipts(
         .collect()
 }
 
+fn exact_room_reply_readiness(value: &Value) -> Option<&'static str> {
+    match value.as_str()? {
+        "ready" => Some("ready"),
+        "blocked" => Some("blocked"),
+        "unknown" => Some("unknown"),
+        _ => None,
+    }
+}
+
+fn sanitize_room_reply_readiness(room: &serde_json::Map<String, Value>) -> &'static str {
+    let snake = room.get("reply_readiness");
+    let camel = room.get("replyReadiness");
+    match (snake, camel) {
+        (Some(left), Some(right)) => match (
+            exact_room_reply_readiness(left),
+            exact_room_reply_readiness(right),
+        ) {
+            (Some(left), Some(right)) if left == right => left,
+            _ => "unknown",
+        },
+        (Some(value), None) | (None, Some(value)) => {
+            exact_room_reply_readiness(value).unwrap_or("unknown")
+        }
+        (None, None) => "unknown",
+    }
+}
+
 fn sanitize_snapshot(value: &Value) -> SafeRuntimeSnapshot {
     let Some(root) = value.as_object() else {
         return SafeRuntimeSnapshot {
@@ -2125,6 +3386,7 @@ fn sanitize_snapshot(value: &Value) -> SafeRuntimeSnapshot {
                             .and_then(Value::as_bool)
                             .unwrap_or(false),
                         open_jobs: as_u64(obj.get("open_jobs")),
+                        reply_readiness: sanitize_room_reply_readiness(obj).to_string(),
                     })
                 })
                 .collect::<Vec<_>>()
@@ -2178,7 +3440,20 @@ fn sanitize_snapshot(value: &Value) -> SafeRuntimeSnapshot {
         .and_then(Value::as_object)
         .and_then(|obj| obj.get("id"))
         .and_then(Value::as_str)
-        .map(|id| id.chars().take(256).collect::<String>());
+        .filter(|id| {
+            is_snapshot_model_id(id)
+                || (root
+                    .get("reply_model")
+                    .and_then(|value| value.get("transport"))
+                    .and_then(Value::as_str)
+                    == Some("opencodex")
+                    && id.len() <= 200
+                    && !id.is_empty()
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"._/:-".contains(&byte)))
+        })
+        .map(str::to_string);
 
     SafeRuntimeSnapshot {
         available: true,
@@ -2279,7 +3554,7 @@ fn sanitize_model_owner_status(value: &Value) -> Value {
     let current = value
         .get("current_model")
         .and_then(Value::as_str)
-        .filter(|candidate| *candidate == RESIDENT_MODEL_ID || *candidate == SWAP_MODEL_ID);
+        .filter(|candidate| is_local_model_id(candidate));
     json!({
         "ok": value.get("ok").and_then(Value::as_bool).unwrap_or(false),
         "action": "model-owner-status",
@@ -2315,7 +3590,7 @@ fn sanitize_mlx_server_status(value: &Value) -> Value {
     let model = value
         .get("model")
         .and_then(Value::as_str)
-        .filter(|candidate| *candidate == RESIDENT_MODEL_NAME || *candidate == SWAP_MODEL_NAME);
+        .filter(|candidate| is_local_model_name(candidate));
     json!({
         "ok": value.get("ok").and_then(Value::as_bool).unwrap_or(false),
         "action": MLX_SERVER_STATUS_ACTION,
@@ -2390,7 +3665,7 @@ fn sanitize_mlx_lifecycle(value: &Value, launch: bool) -> Value {
     let model = value
         .get("model")
         .and_then(Value::as_str)
-        .filter(|candidate| *candidate == RESIDENT_MODEL_NAME || *candidate == SWAP_MODEL_NAME);
+        .filter(|candidate| is_local_model_name(candidate));
     let stage = value
         .get("stage")
         .and_then(Value::as_str)
@@ -2582,6 +3857,7 @@ fn sanitize_knowledge_evidence(value: Option<&Value>) -> Value {
         .and_then(Value::as_str)
     {
         Some("ledger") => "ledger",
+        Some("snapshot") => "snapshot",
         _ => "seed",
     };
     json!({
@@ -2597,6 +3873,21 @@ fn sanitize_knowledge_evidence(value: Option<&Value>) -> Value {
             .and_then(Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+fn knowledge_space(value: Option<&Value>) -> String {
+    let space = bounded_json_string(value, 320);
+    let parts = space.split('/').collect::<Vec<_>>();
+    if parts.len() < 2
+        || !matches!(parts[0], "00_Scope" | "00_Domain" | "00_Person")
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || *part == "." || *part == ".." || part.contains('\\'))
+    {
+        String::new()
+    } else {
+        space
+    }
 }
 
 fn sanitize_knowledge_graph(value: &Value) -> Value {
@@ -2617,9 +3908,14 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
                         "id": id,
                         "label": bounded_json_string(node.get("label"), 160),
                         "category": bounded_json_string(node.get("category"), 96),
+                        "space": knowledge_space(node.get("space")),
+                        "osk_id": bounded_json_string(node.get("osk_id"), 96),
+                        "is_hub": node.get("is_hub").and_then(Value::as_bool).unwrap_or(false),
                         "importance": node.get("importance").and_then(Value::as_i64).unwrap_or(0).clamp(0, 100),
                         "updated_at": as_u64(node.get("updated_at")),
                         "evidence": sanitize_knowledge_evidence(node.get("evidence")),
+                        "description": bounded_json_string(node.get("description"), 2400),
+                        "facts": bounded_string_list(node.get("facts"), 6, 600),
                     }))
                 })
                 .collect::<Vec<_>>()
@@ -2641,6 +3937,11 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
                     Some(json!({
                         "source": source,
                         "relation": bounded_json_string(edge.get("relation"), 128),
+                        "purpose": match edge.get("purpose").and_then(Value::as_str) {
+                            Some("navigation") => "navigation",
+                            Some("reference") => "reference",
+                            _ => "semantic",
+                        },
                         "target": target,
                         "context": bounded_json_string(edge.get("context"), 320),
                         "weight": edge.get("weight").and_then(Value::as_i64).unwrap_or(0).clamp(0, 1000),
@@ -2661,14 +3962,56 @@ fn sanitize_knowledge_graph(value: &Value) -> Value {
         "edges": edges,
         "node_count": node_ids.len(),
         "edge_count": edges.len(),
+        "next_transition_at": value.get("next_transition_at").and_then(Value::as_f64)
+            .filter(|at| at.is_finite() && *at > 0.0 && *at < 253_402_300_800.0).unwrap_or(0.0),
         "grounded_nodes": as_u64(value.get("grounded_nodes")),
         "indexed_at": as_u64(value.get("indexed_at")),
         "indexed_count": as_u64(value.get("indexed_count")),
         "stale": value.get("stale").and_then(Value::as_bool).unwrap_or(true),
+        "osk": {
+            "state": bounded_json_string(value.get("osk").and_then(|v| v.get("state")), 32),
+            "engine": bounded_json_string(value.get("osk").and_then(|v| v.get("engine")), 32),
+            "synced_at": as_u64(value.get("osk").and_then(|v| v.get("synced_at"))),
+            "pending": as_u64(value.get("osk").and_then(|v| v.get("pending"))),
+            "conflicts": as_u64(value.get("osk").and_then(|v| v.get("conflicts"))),
+            "layout_pending": as_u64(value.get("osk").and_then(|v| v.get("layout_pending"))),
+            "organization_version": as_u64(value.get("osk").and_then(|v| v.get("organization_version"))),
+        },
     })
 }
 
-fn sanitize_knowledge_focus(value: &Value) -> Value {
+fn bounded_string_list(value: Option<&Value>, count: usize, chars: usize) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .take(count)
+                .map(|item| item.chars().take(chars).collect())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn source_number(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text))
+            if text.bytes().all(|byte| byte.is_ascii_digit())
+                && text.parse::<u64>().is_ok_and(|id| id < i64::MAX as u64) =>
+        {
+            text.clone()
+        }
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .filter(|id| *id < i64::MAX as u64)
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
+fn sanitize_knowledge_focus(value: &Value, expected_node: &str) -> Value {
     let facts = value
         .get("facts")
         .and_then(Value::as_array)
@@ -2681,6 +4024,90 @@ fn sanitize_knowledge_focus(value: &Value) -> Value {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let details = value.get("details").filter(|details| {
+        !expected_node.is_empty()
+            && details.get("node_id").and_then(Value::as_str) == Some(expected_node)
+    });
+    let scope = source_number(details.and_then(|details| details.get("scope_room_id")));
+    let identity: Vec<_> = expected_node.split(':').collect();
+    let mut sources = Vec::new();
+    let mut seen = HashSet::new();
+    let mut quote_budget = 4800;
+    if details.is_some() && value.get("ok").and_then(Value::as_bool) == Some(true) {
+        for source in value
+            .get("sources")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(12)
+        {
+            let id = bounded_json_string(source.get("source_id"), 192);
+            let parts: Vec<_> = id.split(':').collect();
+            let actor = source_number(source.get("author_id"));
+            if parts.len() != 6
+                || parts[0] != "kakao"
+                || parts[1].len() != 64
+                || !parts[1].bytes().all(|byte| byte.is_ascii_hexdigit())
+                || parts[2] != "room"
+                || parts[4] != "log"
+                || !parts[3].bytes().all(|byte| byte.is_ascii_digit())
+                || !parts[5].bytes().all(|byte| byte.is_ascii_digit())
+                || parts[3].parse::<i64>().unwrap_or(0) <= 0
+                || parts[5].parse::<i64>().unwrap_or(0) <= 0
+                || actor.is_empty()
+                || source.get("source_kind").and_then(Value::as_str) != Some("local_db_snapshot")
+                || (!scope.is_empty() && scope != parts[3])
+                || (identity.len() == 5
+                    && matches!(identity[0], "person" | "chat")
+                    && (identity[2] != parts[1]
+                        || (identity[0] == "person" && identity[4] != actor)
+                        || (identity[0] == "chat" && identity[4] != parts[3])))
+                || seen.contains(&id)
+            {
+                continue;
+            }
+            let role = source
+                .get("source_role")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !matches!(
+                role,
+                "peer_history" | "system_history" | "outgoing_unclassified"
+            ) {
+                continue;
+            }
+            let content = bounded_json_string(source.get("content"), quote_budget.min(1000));
+            if content.is_empty() {
+                continue;
+            }
+            quote_budget -= content.chars().count();
+            seen.insert(id.clone());
+            sources.push(json!({"source_id":id,"source_kind":"local_db_snapshot","source_role":role,
+                "chat_id":parts[3],"author_id":actor,"content":content,
+                "sender":bounded_json_string(source.get("sender"),128),
+                "room_title":bounded_json_string(source.get("room_title"),128),
+                "room_title_source":source.get("room_title_source").and_then(Value::as_str)
+                    .filter(|kind| matches!(*kind,"observed_title" | "observed_display" | "snapshot" | "catalog" | "catalog_history"
+                        | "activity_alias" | "topic_alias" | "unresolved" | "saved_graph" | "unavailable"))
+                    .unwrap_or("unavailable"),
+                "date":bounded_json_string(source.get("date"),64),
+                "truncated":source.get("truncated").and_then(Value::as_bool).unwrap_or(false)
+                    || content.chars().count() < source.get("content").and_then(Value::as_str).map(|value|value.chars().count()).unwrap_or(0)}));
+            if sources.len() == 6 || quote_budget == 0 {
+                break;
+            }
+        }
+    }
+    let safe_details = details.map(|details|json!({
+        "node_id":expected_node,"summary":bounded_json_string(details.get("summary"),1200),
+        "body":if scope.is_empty() && !(identity.len()==5 && identity[1]=="kakao") {
+            bounded_json_string(details.get("body"),12000)
+        } else { String::new() },
+        "kind":bounded_json_string(details.get("kind"),96),"basis":bounded_json_string(details.get("basis"),32),
+        "key_facts":bounded_string_list(details.get("key_facts"),6,600),"scope_room_id":scope,
+        "source_updated_at":as_u64(details.get("source_updated_at")),"note_updated_at":as_u64(details.get("note_updated_at")),
+        "source_unavailable":details.get("source_unavailable").and_then(Value::as_bool).unwrap_or(false)
+    }));
     json!({
         "ok": value.get("ok").and_then(Value::as_bool).unwrap_or(false),
         "facts": facts,
@@ -2692,12 +4119,79 @@ fn sanitize_knowledge_focus(value: &Value) -> Value {
         "search_mode": bounded_json_string(value.get("search_mode"), 64),
         "index_version": bounded_json_string(value.get("index_version"), 64),
         "watermark": bounded_json_string(value.get("watermark"), 96),
+        "details": safe_details,
+        "sources": sources,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manual_voice_stop_signals_only_its_child_and_preserves_cleanup() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "alden-owned-voice-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let ready = root.join("ready");
+        let ended = root.join("ended");
+        let script = format!("import signal,time,sys\nfrom pathlib import Path\ndef end(*args):\n Path({:?}).write_text('closed')\n sys.exit(0)\nsignal.signal(signal.SIGTERM,end)\nPath({:?}).write_text('ready')\ntime.sleep(10)", ended.to_str().unwrap(), ready.to_str().unwrap());
+        let mut other = Command::new("python3")
+            .args(["-E", "-B", "-s", "-c", "import time; time.sleep(10)"])
+            .spawn()
+            .unwrap();
+        let child = Command::new("python3")
+            .args(["-E", "-B", "-s", "-c", &script])
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.is_file() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.is_file());
+        let hard = AtomicBool::new(true);
+        supervise_manual_voice(child, &hard, Duration::from_secs(5), || false);
+        assert_eq!(fs::read_to_string(ended).unwrap(), "closed");
+        assert!(other.try_wait().unwrap().is_none());
+        other.kill().unwrap();
+        other.wait().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn manual_voice_timeout_bounds_an_uncooperative_owned_child() {
+        use std::io::BufRead;
+        let mut child = Command::new("python3")
+            .args([
+                "-E",
+                "-B",
+                "-s",
+                "-c",
+                "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(10)",
+            ])
+            .stdout(Stdio::piped()).spawn()
+            .unwrap();
+        let mut ready = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut ready)
+            .unwrap();
+        assert_eq!(ready.trim(), "ready");
+        let started = Instant::now();
+        supervise_manual_voice(
+            child,
+            &AtomicBool::new(false),
+            Duration::from_millis(150),
+            || false,
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
     use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
 
     fn receipt(event_id: &str, recorded_at: &str, outcome: &str, reason_code: &str) -> Value {
         let outcome_text = match outcome {
@@ -2776,6 +4270,69 @@ mod tests {
         assert!(!valid_browser_tool_job_id(
             &"a".repeat(BROWSER_TOOL_JOB_ID_LIMIT + 1)
         ));
+    }
+
+    #[test]
+    fn browser_runtime_selector_is_fixed_and_action_specific() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "openkakao-browser-runtime-selector-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let menubar_python = root.join("menubar/bin/python3.11");
+        let browser_python = root.join("browser/bin/python3.11");
+        let browsers = root.join("browser/ms-playwright");
+        fs::create_dir_all(menubar_python.parent().unwrap()).unwrap();
+        fs::create_dir_all(browser_python.parent().unwrap()).unwrap();
+        fs::create_dir_all(&browsers).unwrap();
+        for python in [&menubar_python, &browser_python] {
+            fs::write(python, b"fixture interpreter").unwrap();
+            fs::set_permissions(python, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let normal =
+            select_python_runtime(&menubar_python, &browser_python, &browsers, true, false)
+                .unwrap();
+        assert_eq!(normal.executable, menubar_python.to_string_lossy());
+        assert!(normal.env.is_empty());
+
+        let browser =
+            select_python_runtime(&menubar_python, &browser_python, &browsers, true, true).unwrap();
+        assert_eq!(browser.executable, browser_python.to_string_lossy());
+        let env = browser.env.into_iter().collect::<HashMap<_, _>>();
+        assert_eq!(
+            env.get(OsStr::new("PLAYWRIGHT_BROWSERS_PATH")),
+            Some(&browsers.clone().into_os_string())
+        );
+        assert_eq!(
+            env.get(OsStr::new("ANONYMIZED_TELEMETRY")),
+            Some(&OsString::from("false"))
+        );
+        assert_eq!(env.len(), 2);
+
+        let linked = root.join("browser-link");
+        symlink(root.join("browser"), &linked).unwrap();
+        assert!(matches!(
+            select_python_runtime(
+                &menubar_python,
+                &linked.join("bin/python3.11"),
+                &linked.join("ms-playwright"),
+                true,
+                true,
+            ),
+            Err(BridgeError::BrowserEnv)
+        ));
+        assert!(matches!(
+            select_python_runtime(
+                &menubar_python,
+                &root.join("missing/python3.11"),
+                &browsers,
+                true,
+                true,
+            ),
+            Err(BridgeError::BrowserEnv)
+        ));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -2926,26 +4483,23 @@ mod tests {
 
     #[test]
     fn local_model_actions_are_exactly_allowlisted() {
-        let set_args = settings_action_args(
-            "model-set",
-            None,
-            None,
-            None,
-            Some(RESIDENT_MODEL_ID),
-            None,
-            None,
-        )
-        .unwrap();
         assert_eq!(
-            set_args,
-            vec![
-                "--action",
-                "model-set",
-                "--model",
-                RESIDENT_MODEL_ID,
-                "--no-wait",
-            ]
+            RESIDENT_MODEL_ID,
+            "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-3.3bpw"
         );
+        assert_eq!(
+            LEGACY_RESIDENT_MODEL_ID,
+            "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit"
+        );
+        for model in [RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            let set_args =
+                settings_action_args("model-set", None, None, None, Some(model), None, None)
+                    .unwrap();
+            assert_eq!(
+                set_args,
+                vec!["--action", "model-set", "--model", model, "--no-wait",]
+            );
+        }
 
         let prepare_args = settings_action_args(
             "model-prepare",
@@ -2963,7 +4517,7 @@ mod tests {
         );
 
         for (action, model) in [
-            ("model-set", SWAP_MODEL_ID),
+            ("model-set", LEGACY_RESIDENT_MODEL_ID),
             ("model-prepare", RESIDENT_MODEL_ID),
             ("model-set", "../../tmp/model"),
             ("model-prepare", "remote/arbitrary --flag"),
@@ -3079,6 +4633,17 @@ mod tests {
         assert!(safe.get("argv").is_none());
         assert!(safe.get("path").is_none());
 
+        let legacy = sanitize_model_owner_status(&json!({
+            "ok": true,
+            "action": "model-owner-status",
+            "owner_state": "app_owned",
+            "owner_verified": true,
+            "drain_verified": true,
+            "current_model": LEGACY_RESIDENT_MODEL_ID,
+        }));
+        assert_eq!(legacy["owner_verified"], true);
+        assert_eq!(legacy["current_model"], LEGACY_RESIDENT_MODEL_ID);
+
         // A claim of verified ownership is only honoured for the app-owned code.
         let coerced = sanitize_model_owner_status(&json!({
             "ok": true,
@@ -3101,6 +4666,7 @@ mod tests {
     #[test]
     fn fixed_model_names_match_served_ids() {
         assert!(RESIDENT_MODEL_ID.ends_with(RESIDENT_MODEL_NAME));
+        assert!(LEGACY_RESIDENT_MODEL_ID.ends_with(LEGACY_RESIDENT_MODEL_NAME));
         assert!(SWAP_MODEL_ID.ends_with(SWAP_MODEL_NAME));
     }
 
@@ -3140,6 +4706,21 @@ mod tests {
         assert!(safe.get("executable").is_none());
         assert!(safe.get("pid").is_none());
 
+        for known in [
+            RESIDENT_MODEL_NAME,
+            LEGACY_RESIDENT_MODEL_NAME,
+            SWAP_MODEL_NAME,
+        ] {
+            let known_status = sanitize_mlx_server_status(&json!({
+                "ok": true,
+                "action": "mlx-server-status",
+                "owner_state": "app_owned",
+                "app_owned": true,
+                "model": known,
+            }));
+            assert_eq!(known_status["model"], known);
+        }
+
         // A verified claim is only honoured when the code says app_owned.
         let coerced = sanitize_mlx_server_status(&json!({
             "ok": true,
@@ -3160,25 +4741,27 @@ mod tests {
 
     #[test]
     fn mlx_server_launch_requires_opt_in_and_a_fixed_model() {
-        assert_eq!(
-            settings_action_args(
-                MLX_SERVER_LAUNCH_ACTION,
-                None,
-                None,
-                None,
-                Some(SWAP_MODEL_ID),
-                Some(true),
-                None,
-            )
-            .unwrap(),
-            vec![
-                "--action",
-                "mlx-server-launch",
-                "--model",
-                SWAP_MODEL_ID,
-                "--explicit-opt-in"
-            ]
-        );
+        for model in [RESIDENT_MODEL_ID, LEGACY_RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            assert_eq!(
+                settings_action_args(
+                    MLX_SERVER_LAUNCH_ACTION,
+                    None,
+                    None,
+                    None,
+                    Some(model),
+                    Some(true),
+                    None,
+                )
+                .unwrap(),
+                vec![
+                    "--action",
+                    "mlx-server-launch",
+                    "--model",
+                    model,
+                    "--explicit-opt-in"
+                ]
+            );
+        }
         for (model, opt_in, token) in [
             (Some(SWAP_MODEL_ID), None, None),
             (Some(SWAP_MODEL_ID), Some(false), None),
@@ -3287,6 +4870,12 @@ mod tests {
             true,
         );
         assert_eq!(named["model"], SWAP_MODEL_NAME);
+
+        let legacy_named = sanitize_mlx_lifecycle(
+            &json!({"ok": true, "reason": "launch_ready", "model": LEGACY_RESIDENT_MODEL_NAME}),
+            true,
+        );
+        assert_eq!(legacy_named["model"], LEGACY_RESIDENT_MODEL_NAME);
 
         let stop = sanitize_mlx_lifecycle(
             &json!({"ok": true, "reason": "stop_stopped", "pid": 4242}),
@@ -3545,28 +5134,30 @@ mod tests {
 
     #[test]
     fn model_action_response_is_sanitized_and_fail_closed() {
-        let safe = sanitize_model_action(
-            &json!({
-                "ok": true,
-                "action": "model-set",
-                "model": RESIDENT_MODEL_ID,
-                "stored": true,
-                "prepared": true,
-                "needs_prepare": false,
-                "prompt": "private",
-                "body": "private",
-                "secret": "private",
-                "warnings": ["untrusted"],
-            }),
-            "model-set",
-            RESIDENT_MODEL_ID,
-        );
-        assert_eq!(safe["ok"], true);
-        assert_eq!(safe["model"], RESIDENT_MODEL_ID);
-        assert!(safe.get("prompt").is_none());
-        assert!(safe.get("body").is_none());
-        assert!(safe.get("secret").is_none());
-        assert!(safe.get("warnings").is_none());
+        for model in [RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            let safe = sanitize_model_action(
+                &json!({
+                    "ok": true,
+                    "action": "model-set",
+                    "model": model,
+                    "stored": true,
+                    "prepared": true,
+                    "needs_prepare": false,
+                    "prompt": "private",
+                    "body": "private",
+                    "secret": "private",
+                    "warnings": ["untrusted"],
+                }),
+                "model-set",
+                model,
+            );
+            assert_eq!(safe["ok"], true);
+            assert_eq!(safe["model"], model);
+            assert!(safe.get("prompt").is_none());
+            assert!(safe.get("body").is_none());
+            assert!(safe.get("secret").is_none());
+            assert!(safe.get("warnings").is_none());
+        }
 
         let mismatched = sanitize_model_action(
             &json!({
@@ -3630,6 +5221,29 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_preserves_only_known_local_model_ids_including_legacy_resident() {
+        for model in [RESIDENT_MODEL_ID, LEGACY_RESIDENT_MODEL_ID, SWAP_MODEL_ID] {
+            let bare = sanitize_snapshot(&json!({"reply_model": {"id": model}}));
+            assert_eq!(bare.reply_model_id.as_deref(), Some(model));
+
+            let prefixed = format!("mlx/{model}");
+            let with_prefix = sanitize_snapshot(&json!({"reply_model": {"id": prefixed}}));
+            assert_eq!(
+                with_prefix.reply_model_id.as_deref(),
+                Some(prefixed.as_str())
+            );
+        }
+
+        for model in [
+            "remote/arbitrary",
+            "ddalcu/Qwen3.8-Flash-Next-MLX-Serve-mixed-4-8bit/extra",
+        ] {
+            let safe = sanitize_snapshot(&json!({"reply_model": {"id": model}}));
+            assert!(safe.reply_model_id.is_none());
+        }
+    }
+
+    #[test]
     fn snapshot_parses_and_bounds_available_chats() {
         let safe = sanitize_snapshot(&json!({
             "available_chats": [
@@ -3646,6 +5260,211 @@ mod tests {
         assert_eq!(safe.available_chats[1].chat_id, 999);
         assert_eq!(safe.available_chats[1].title, "새로운 방");
         assert!(!safe.available_chats[1].catalog);
+    }
+
+    #[test]
+    fn snapshot_room_reply_readiness_accepts_aliases_and_fails_closed() {
+        fn sanitized_readiness(room: Value) -> String {
+            let safe = sanitize_snapshot(&json!({"rooms": [room]}));
+            assert_eq!(safe.rooms.len(), 1);
+            safe.rooms[0].reply_readiness.clone()
+        }
+
+        let cases = [
+            (json!({"chat_id": 1, "reply_readiness": "ready"}), "ready"),
+            (
+                json!({"chat_id": 1, "replyReadiness": "blocked"}),
+                "blocked",
+            ),
+            (
+                json!({
+                    "chat_id": 1,
+                    "reply_readiness": "unknown",
+                    "replyReadiness": "unknown"
+                }),
+                "unknown",
+            ),
+            (
+                json!({
+                    "chat_id": 1,
+                    "reply_readiness": "ready",
+                    "replyReadiness": "blocked"
+                }),
+                "unknown",
+            ),
+            (
+                json!({
+                    "chat_id": 1,
+                    "reply_readiness": "ready",
+                    "replyReadiness": 7
+                }),
+                "unknown",
+            ),
+            (json!({"chat_id": 1}), "unknown"),
+            (json!({"chat_id": 1, "reply_readiness": "READY"}), "unknown"),
+            (json!({"chat_id": 1, "replyReadiness": true}), "unknown"),
+            (json!({"chat_id": 1, "replyReadiness": "paused"}), "unknown"),
+        ];
+
+        for (room, expected) in cases {
+            assert_eq!(sanitized_readiness(room), expected);
+        }
+    }
+
+    #[test]
+    fn snapshot_room_serializes_only_the_safe_readiness_enum() {
+        let safe = sanitize_snapshot(&json!({
+            "rooms": [{
+                "chat_id": 42,
+                "selector": "id:42",
+                "live": true,
+                "auto_reply": true,
+                "open_jobs": 3,
+                "reply_readiness": "ready",
+                "replyReadiness": "ready",
+                "raw_state": {"delivery_enabled": true},
+                "private_message": "must-not-escape",
+                "error": "private-error"
+            }]
+        }));
+        let serialized = serde_json::to_value(&safe.rooms[0]).unwrap();
+        let room = serialized.as_object().unwrap();
+        assert_eq!(
+            room.keys().map(String::as_str).collect::<HashSet<_>>(),
+            HashSet::from([
+                "chat_id",
+                "title",
+                "live",
+                "auto_reply",
+                "open_jobs",
+                "replyReadiness",
+            ])
+        );
+        assert_eq!(room["replyReadiness"], "ready");
+        let text = serde_json::to_string(room).unwrap();
+        for forbidden in [
+            "reply_readiness",
+            "raw_state",
+            "delivery_enabled",
+            "private_message",
+            "must-not-escape",
+            "private-error",
+        ] {
+            assert!(!text.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn collection_schedule_controls_are_explicit_and_bounded() {
+        assert!(settings_action_args(
+            "collection-scheduler-status",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None
+        )
+        .is_ok());
+        let query = r#"{"operation":"pause","target_id":"declared-target"}"#;
+        assert!(settings_action_args(
+            "collection-scheduler-control",
+            Some(query),
+            None,
+            None,
+            None,
+            None,
+            None
+        )
+        .is_err());
+        let args = settings_action_args(
+            "collection-scheduler-control",
+            Some(query),
+            None,
+            None,
+            None,
+            Some(true),
+            None,
+        )
+        .unwrap();
+        assert_eq!(args.last().unwrap(), "--explicit-opt-in");
+        for invalid in [
+            r#"{"operation":"send"}"#,
+            r#"{"operation":"pause","target_id":1}"#,
+            r#"{"operation":"pause","command":"launch"}"#,
+            r#"{"operation":"interval","target_id":"declared-target","interval_seconds":true,"expected_interval":60}"#,
+            r#"{"operation":"interval","target_id":"declared-target","interval_seconds":59,"expected_interval":60}"#,
+            r#"{"operation":"run","target_id":null,"request_id":"manual-request-123"}"#,
+            r#"{"operation":"run","target_id":"declared-target","request_id":"../../bad/request"}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":1,"expected_revision":0}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":true}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":9007199254740991}"#,
+            r#"{"operation":"acquisition","target_id":null,"enabled":true,"expected_revision":0}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":0,"host":"other"}"#,
+        ] {
+            assert!(settings_action_args(
+                "collection-scheduler-control",
+                Some(invalid),
+                None,
+                None,
+                None,
+                Some(true),
+                None
+            )
+            .is_err());
+        }
+        for query in [
+            r#"{"operation":"interval","target_id":"declared-target","interval_seconds":3600,"expected_interval":21600}"#,
+            r#"{"operation":"run","target_id":"declared-target","request_id":"manual-request-123"}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":true,"expected_revision":0}"#,
+            r#"{"operation":"acquisition","target_id":"declared-target","enabled":false,"expected_revision":7}"#,
+        ] {
+            assert!(settings_action_args(
+                "collection-scheduler-control",
+                Some(query),
+                None,
+                None,
+                None,
+                Some(true),
+                None
+            )
+            .is_ok());
+        }
+    }
+
+    #[test]
+    fn collection_affinity_read_rejects_invalid_query_without_broadening_scope() {
+        let query = r#"{"projects":["one"],"limit":1984,"overview":true}"#;
+        let args = settings_action_args(
+            "collection-affinity",
+            Some(query),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--history-query", query]));
+        assert!(!args
+            .iter()
+            .any(|arg| arg == "--explicit-opt-in" || arg == "--model"));
+        for invalid in ["[]".to_owned(), "{broken".to_owned(), "x".repeat(4097)] {
+            assert!(matches!(
+                settings_action_args(
+                    "collection-affinity",
+                    Some(&invalid),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None
+                ),
+                Err(BridgeError::ActionNotAllowed)
+            ));
+        }
     }
 
     #[test]
@@ -4266,7 +6085,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_voice_status_selects_valid_bundled_wake_model() {
+    fn missing_voice_status_never_selects_an_unverified_wake_model() {
         let temp = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "openkakao-voice-status-valid-bundle-{}",
             std::process::id()
@@ -4274,21 +6093,21 @@ mod tests {
         let _ = fs::remove_dir_all(&temp);
         let state_root = temp.join("state");
         let repo_root = temp.join("repo");
-        let bundled_model = repo_root.join(BUNDLED_CUSTOM_WAKE_MODEL);
+        let bundled_model = repo_root.join("voice/models/alden_ko_ridge.onnx");
         fs::create_dir_all(bundled_model.parent().unwrap()).unwrap();
         fs::write(&bundled_model, b"onnx").unwrap();
 
-        let status = read_voice_status(&state_root, &repo_root);
+        let status = read_voice_status(&state_root);
         assert!(!status.available);
         assert_eq!(status.wake_phrase, WAKE_PHRASE);
         assert_eq!(status.threshold, WAKE_THRESHOLD);
-        assert!(status.custom_model_selected);
+        assert!(!status.custom_model_selected);
 
         let _ = fs::remove_dir_all(&temp);
     }
 
     #[test]
-    fn missing_voice_status_rejects_missing_or_invalid_bundled_wake_model() {
+    fn missing_or_invalid_legacy_wake_model_stays_disabled() {
         let temp = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "openkakao-voice-status-invalid-bundle-{}",
             std::process::id()
@@ -4297,13 +6116,13 @@ mod tests {
         let state_root = temp.join("state");
         let repo_root = temp.join("repo");
 
-        let missing = read_voice_status(&state_root, &repo_root);
+        let missing = read_voice_status(&state_root);
         assert!(!missing.custom_model_selected);
 
-        let bundled_model = repo_root.join(BUNDLED_CUSTOM_WAKE_MODEL);
+        let bundled_model = repo_root.join("voice/models/alden_ko_ridge.onnx");
         fs::create_dir_all(bundled_model.parent().unwrap()).unwrap();
         fs::write(&bundled_model, b"").unwrap();
-        let invalid = read_voice_status(&state_root, &repo_root);
+        let invalid = read_voice_status(&state_root);
         assert!(!invalid.custom_model_selected);
 
         let _ = fs::remove_dir_all(&temp);
@@ -4325,12 +6144,13 @@ mod tests {
                 "rms": 2.0,
                 "error_code": "",
                 "wake_source": "stock",
+                "custom_model_selected": true,
                 "updated_at": epoch_seconds() as u64
             })
             .to_string(),
         )
         .unwrap();
-        let status = read_voice_status(&temp, &temp.join("repo-without-bundle"));
+        let status = read_voice_status(&temp);
         assert!(status.available);
         assert_eq!(status.state, "speaking");
         assert_eq!(status.rms, 1.0);
@@ -4364,12 +6184,50 @@ mod tests {
         )
         .unwrap();
 
-        let status = read_voice_status(&temp, &temp.join("repo-without-bundle"));
+        let status = read_voice_status(&temp);
         assert!(!status.available);
         assert_eq!(status.state, "unavailable");
         assert_eq!(status.updated_at, 0);
 
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn clicked_node_details_preserve_quotes_and_reject_foreign_evidence() {
+        let account = "1".repeat(64);
+        let node = format!("person:kakao:{account}:actor:7");
+        let valid = json!({"source_id":format!("kakao:{account}:room:42:log:1"),"source_kind":"local_db_snapshot",
+            "source_role":"outgoing_unclassified","author_id":"7","sender":"same name","room_title":"meeting",
+            "date":"2026-10-01T15:00:00+09:00","content":"Friday at 3","private_path":"must drop"});
+        let mut wrong_room = valid.clone();
+        wrong_room["source_id"] = json!(format!("kakao:{account}:room:84:log:2"));
+        let mut wrong_actor = valid.clone();
+        wrong_actor["author_id"] = json!("8");
+        let mut wrong_account = valid.clone();
+        wrong_account["source_id"] = json!(format!("kakao:{}:room:42:log:3", "2".repeat(64)));
+        let safe = sanitize_knowledge_focus(
+            &json!({"ok":true,"details":{"node_id":node,"scope_room_id":"42",
+            "summary":"a recorded participant","body":"unscoped other-room body","token":"drop"},"sources":[valid.clone(), valid, wrong_room, wrong_actor, wrong_account]}),
+            &node,
+        );
+        assert_eq!(safe["sources"].as_array().unwrap().len(), 1);
+        assert_eq!(safe["sources"][0]["source_role"], "outgoing_unclassified");
+        assert_eq!(safe["sources"][0]["content"], "Friday at 3");
+        assert!(safe["sources"][0].get("private_path").is_none());
+        assert!(safe["details"].get("token").is_none());
+        assert_eq!(safe["details"]["body"], "");
+        let note = sanitize_knowledge_focus(
+            &json!({"ok":true,"details":{"node_id":"osk:261005-012a-abcdefgh","basis":"note","body":"saved body [[261005-012a-ijklmnop]]","token":"drop"}}),
+            "osk:261005-012a-abcdefgh",
+        );
+        assert_eq!(
+            note["details"]["body"],
+            "saved body [[261005-012a-ijklmnop]]"
+        );
+        assert!(note["details"].get("token").is_none());
+        let rejected = sanitize_knowledge_focus(&safe, "another-node");
+        assert!(rejected["details"].is_null());
+        assert!(rejected["sources"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -4393,6 +6251,33 @@ mod tests {
         assert_eq!(safe["edges"][0]["target"], "ent:b");
         assert_eq!(safe["edges"][0]["room_id"], "room-1");
         assert_eq!(safe["edges"][0]["evidence_message_id"], "db:1");
+    }
+
+    #[test]
+    fn knowledge_bridge_preserves_real_hub_membership_and_reference_purpose() {
+        let safe = sanitize_knowledge_graph(&json!({
+            "ok":true,
+            "nodes":[
+                {"id":"hub","label":"入口","is_hub":true,"space":"00_Scope/Alden/맥락","osk_id":"stable-hub"},
+                {"id":"leaf","label":"기억","is_hub":"true","space":"/Users/private"},
+                {"id":"other","label":"다른 기억","space":"00_Scope/Alden/../other"}],
+            "edges":[
+                {"source":"hub","target":"leaf","relation":"linked","purpose":"navigation"},
+                {"source":"leaf","target":"other","relation":"USES","purpose":"invented"}],
+            "osk":{"organization_version":2,"layout_pending":3},
+            "next_transition_at":1791072000.125
+        }));
+        assert_eq!(safe["nodes"][0]["is_hub"], true);
+        assert_eq!(safe["nodes"][0]["space"], "00_Scope/Alden/맥락");
+        assert_eq!(safe["nodes"][0]["osk_id"], "stable-hub");
+        assert_eq!(safe["nodes"][1]["is_hub"], false);
+        assert_eq!(safe["nodes"][1]["space"], "");
+        assert_eq!(safe["nodes"][2]["space"], "");
+        assert_eq!(safe["edges"][0]["purpose"], "navigation");
+        assert_eq!(safe["edges"][1]["purpose"], "semantic");
+        assert_eq!(safe["osk"]["organization_version"], 2);
+        assert_eq!(safe["osk"]["layout_pending"], 3);
+        assert_eq!(safe["next_transition_at"], 1791072000.125);
     }
 
     #[test]
@@ -4433,6 +6318,246 @@ mod tests {
             value.get("reason").and_then(Value::as_str),
             Some("global_abort")
         );
+        let metadata = fs::metadata(temp.join(ABORT_STATE_NAME)).unwrap();
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    fn bridge_with_state_root(state_root: PathBuf) -> PythonBridge {
+        let mut config = BridgeConfig::discover();
+        config.state_root = state_root;
+        PythonBridge {
+            config: Arc::new(config),
+            cancellations: Arc::new(Mutex::new(HashMap::new())),
+            jobs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    #[test]
+    fn knowledge_revision_tracks_atomic_replacements_and_rejects_links() {
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("alden-revision-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bridge = bridge_with_state_root(root.clone());
+        assert_eq!(bridge.knowledge_revision(), None);
+        let home = root.join("knowledge/osk");
+        fs::create_dir_all(&home).unwrap();
+        let checkpoint = home.join("sync.json");
+        fs::write(&checkpoint, b"{}").unwrap();
+        let first = bridge.knowledge_revision().unwrap();
+        assert_eq!(bridge.knowledge_revision().as_deref(), Some(first.as_str()));
+        let replacement = home.join("replacement.json");
+        fs::write(&replacement, b"{}").unwrap();
+        fs::rename(&replacement, &checkpoint).unwrap();
+        assert_ne!(bridge.knowledge_revision().unwrap(), first);
+        fs::remove_file(&checkpoint).unwrap();
+        std::os::unix::fs::symlink("replacement.json", &checkpoint).unwrap();
+        fs::write(&replacement, b"{}").unwrap();
+        assert_eq!(bridge.knowledge_revision(), None);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn lightweight_voice_status_reads_pcm_without_python_and_masks_the_emergency_latch() {
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("alden-voice-level-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut bridge = bridge_with_state_root(root.clone());
+        Arc::get_mut(&mut bridge.config).unwrap().python = root.join("python-must-not-run");
+        fs::write(
+            root.join(VOICE_STATUS_NAME),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1, "state": "speaking", "rms": 0.9, "output_rms": 0.25,
+                "updated_at": epoch_seconds() as u64, "custom_model_selected": true
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let status = bridge.voice_status();
+        assert!(status.available);
+        assert_eq!(status.output_rms, 0.25);
+        assert!(!status.custom_model_selected);
+        assert!(bridge.jobs.lock().unwrap().is_empty());
+        assert!(bridge.cancellations.lock().unwrap().is_empty());
+        write_global_abort_state(
+            &root,
+            &SafeEmergencyState {
+                schema_version: 1,
+                epoch: 1,
+                latched: true,
+                reason: "operator_pause".into(),
+            },
+        )
+        .unwrap();
+        let paused = bridge.voice_status();
+        assert_eq!(paused.state, "aborted");
+        assert_eq!(paused.rms, 0.0);
+        assert_eq!(paused.output_rms, 0.0);
+        assert_eq!(paused.custom_model_selected, status.custom_model_selected);
+        fs::write(root.join(ABORT_STATE_NAME), b"invalid").unwrap();
+        assert_eq!(bridge.voice_status().output_rms, 0.0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn operator_resume_requires_opt_in_increments_epoch_and_keeps_old_token_cancelled() {
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-resume-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        let bridge = bridge_with_state_root(temp.clone());
+        let old_cancel = Arc::new(AtomicBool::new(false));
+        bridge.cancellations.lock().unwrap().insert(
+            "old-job".to_string(),
+            CancellationHandle {
+                flag: old_cancel.clone(),
+                cooperative_marker: None,
+                global_abort_flag: None,
+            },
+        );
+
+        bridge.global_abort().unwrap();
+        assert!(old_cancel.load(Ordering::SeqCst));
+        let latched = bridge.emergency_state().unwrap();
+        assert_eq!(latched.epoch, 1);
+        assert!(latched.latched);
+        assert!(matches!(
+            bridge.operator_resume(false),
+            Err(BridgeError::ActionNotAllowed)
+        ));
+
+        let resumed = bridge.operator_resume(true).unwrap();
+        assert_eq!(resumed.epoch, 2);
+        assert!(!resumed.latched);
+        assert_eq!(resumed.reason, "human_resume");
+        assert!(old_cancel.load(Ordering::SeqCst));
+        assert!(!global_abort_is_latched(&temp).unwrap());
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn corrupt_abort_state_is_rejected_and_not_overwritten_by_resume() {
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-corrupt-resume-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o700)).unwrap();
+        let path = temp.join(ABORT_STATE_NAME);
+        fs::write(&path, b"{bad").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let bridge = bridge_with_state_root(temp.clone());
+
+        assert!(matches!(
+            bridge.emergency_state(),
+            Err(BridgeError::StateIo)
+        ));
+        assert!(matches!(
+            bridge.operator_resume(true),
+            Err(BridgeError::StateIo)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"{bad");
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    #[test]
+    fn abort_reader_checks_duplicate_fields_custom_reason_hardlinks_and_fifo() {
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-strict-abort-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        write_global_abort(&temp).unwrap();
+        let path = temp.join(ABORT_STATE_NAME);
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"epoch":1,"latched":true,"reason":"operator stop"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_global_abort_state(&temp).unwrap().reason,
+            "operator stop"
+        );
+        let bridge = bridge_with_state_root(temp.clone());
+        assert_eq!(bridge.operator_resume(true).unwrap().epoch, 2);
+        fs::write(
+            &path,
+            br#"{"schema_version":1,"epoch":1,"epoch":2,"latched":true,"reason":"stop"}"#,
+        )
+        .unwrap();
+        assert!(read_global_abort_state(&temp).is_err());
+        write_private_test_json(
+            &path,
+            &json!({"schema_version":1,"epoch":2,"latched":true,"reason":"stop"}),
+        );
+        fs::hard_link(&path, temp.join("linked")).unwrap();
+        assert!(read_global_abort_state(&temp).is_err());
+        fs::remove_file(&path).unwrap();
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        let started = Instant::now();
+        assert!(read_global_abort_state(&temp).is_err());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let _ = fs::remove_dir_all(&temp);
+    }
+
+    fn write_private_test_json(path: &Path, value: &Value) {
+        fs::write(path, serde_json::to_vec(value).unwrap()).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    #[test]
+    fn abort_writers_share_python_flock_and_refuse_busy_or_unsafe_lock() {
+        let temp = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "openkakao-python-abort-lock-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp);
+        write_global_abort(&temp).unwrap();
+        let state_before = fs::read(temp.join(ABORT_STATE_NAME)).unwrap();
+        let held = lock_global_abort(&temp).unwrap();
+        assert!(write_global_abort(&temp).is_err());
+        let scripts = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("scripts");
+        let output = Command::new("python3").args(["-E", "-B", "-s", "-c"])
+            .arg("import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from alden_abort import AbortController,AbortStateError\ntry: AbortController(Path(sys.argv[2])).abort('python stop')\nexcept AbortStateError as e: assert 'lock_timeout' in str(e); print('locked')\nelse: raise SystemExit('lock ignored')")
+            .arg(&scripts).arg(&temp).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "locked");
+        assert_eq!(fs::read(temp.join(ABORT_STATE_NAME)).unwrap(), state_before);
+        drop(held);
+        let output = Command::new("python3").args(["-E", "-B", "-s", "-c"])
+            .arg("import sys; from pathlib import Path; sys.path.insert(0,sys.argv[1]); from alden_abort import AbortController; print(AbortController(Path(sys.argv[2])).abort('python stop').epoch)")
+            .arg(&scripts).arg(&temp).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(read_global_abort_state(&temp).unwrap().epoch, 2);
+        let bridge = bridge_with_state_root(temp.clone());
+        assert_eq!(bridge.operator_resume(true).unwrap().epoch, 3);
+        let lock_path = temp.join(ABORT_LOCK_NAME);
+        fs::remove_file(&lock_path).unwrap();
+        let cpath = std::ffi::CString::new(lock_path.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) }, 0);
+        assert!(write_global_abort(&temp).is_err());
         let _ = fs::remove_dir_all(&temp);
     }
 
@@ -4455,8 +6580,7 @@ mod tests {
     #[test]
     fn voice_process_matching_preserves_script_and_state_root_argument_boundaries() {
         let root = "/Users/listener/Library/Application Support/openkakao/auto-reply";
-        let script =
-            "/Applications/OpenKakao Jarvis.app/Contents/Resources/scripts/jarvis_voice.py";
+        let script = "/Applications/Alden.app/Contents/Resources/scripts/alden_voice.py";
         for argv in [
             vec!["python3", script, "--state-root", root],
             vec!["python3", "-E", "-B", "-s", script, "--state-root", root],
@@ -4464,7 +6588,7 @@ mod tests {
                 "python3",
                 "-Iu",
                 "--",
-                "scripts/jarvis_voice.py",
+                "scripts/alden_voice.py",
                 "--state-root",
                 root,
             ],
@@ -4499,7 +6623,7 @@ mod tests {
             vec!["python3", &script_suffix, "--state-root", root],
             vec![
                 "python3",
-                "/repo/not-scripts/jarvis_voice.py",
+                "/repo/not-scripts/alden_voice.py",
                 "--state-root",
                 root,
             ],
@@ -4583,7 +6707,7 @@ mod tests {
                 "-E",
                 "-B",
                 "-s",
-                "/Applications/OpenKakao Jarvis.app/Contents/Resources/scripts/jarvis_voice.py",
+                "/Applications/Alden.app/Contents/Resources/scripts/alden_voice.py",
                 "--state-root",
                 root,
             ]
@@ -4663,7 +6787,7 @@ mod tests {
         );
         let valid = voice_process_fixture(&[
             "python3",
-            "scripts/jarvis_voice.py",
+            "scripts/alden_voice.py",
             "--state-root",
             "/state",
         ]);
@@ -4695,7 +6819,7 @@ mod tests {
         let spawned = std::cell::Cell::new(0);
         let args = voice_process_fixture(&[
             "python3",
-            "/another checkout/scripts/jarvis_voice.py",
+            "/another checkout/scripts/alden_voice.py",
             "--state-root",
             root.to_str().unwrap(),
         ]);
@@ -4802,7 +6926,7 @@ mod tests {
     fn voice_process_native_arguments_preserve_spaces_empty_args_and_omit_environment() {
         let argv = [
             "python3",
-            "/bundle with spaces/scripts/jarvis_voice.py",
+            "/bundle with spaces/scripts/alden_voice.py",
             "--state-root",
             "/state with spaces",
             "",
@@ -4837,7 +6961,7 @@ mod tests {
         use std::io::BufRead;
         let root =
             std::env::temp_dir().join(format!("openkakao native voice {}", std::process::id()));
-        let script = root.join("scripts/jarvis_voice.py");
+        let script = root.join("scripts/alden_voice.py");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(
             &script,
@@ -4912,7 +7036,7 @@ mod tests {
             Err(BridgeError::VoiceScript)
         ));
 
-        let script = temp.join("scripts/jarvis_voice.py");
+        let script = temp.join("scripts/alden_voice.py");
         fs::create_dir_all(script.parent().unwrap()).unwrap();
         fs::write(&script, b"# fake voice script").unwrap();
         let plan = plan_voice_session(&temp, &state_root, &python).unwrap();

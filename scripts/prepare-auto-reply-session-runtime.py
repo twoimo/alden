@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Stage an immutable Terminal-hosted AutoReply session runtime.
 
-This command only writes a new private runtime directory.  It never invokes
-KakaoTalk, the local Kakao database, Terminal, or launchctl.  The generated
-watchdog and dashboard ``.command`` files are static, digest-addressed inputs
-for the separately installed session monitor.
+This command writes a new private runtime directory and may atomically refresh
+the fixed, signed CLI path when the supplied CLI is a different binary.  It
+never invokes KakaoTalk, the local Kakao database, Terminal, or launchctl.  The
+generated watchdog and dashboard ``.command`` files are static,
+digest-addressed inputs for the separately installed session monitor.
 """
 
 from __future__ import annotations
@@ -66,17 +67,41 @@ RUNTIME_SCRIPT_NAMES = (
     "auto-reply-rerank.py",
     "auto_reply_knowledge_graph.py",
     "auto_reply_ondevice.py",
+    "alden_local_vision.py",
+    "mlx_serve_lifecycle.py",
+    "verify_model_provenance.py",
     "auto_reply_reference_search.py",
     "auto_reply_reference_store.py",
     "auto_reply_transition_journal.py",
-    "jarvis_abort.py",
+    "alden_abort.py",
+    "alden_local_http.py",
+    "alden_model_routes.py",
+    "alden_routed_llm.py",
+    "alden_voice.py",
+    "local_mlx_model_readiness.py",
+    "alden_corpus.py",
+    "alden_collection.py",
+    "alden_semantic_affinity.py",
+    "alden_layout_affinity.py",
+    "alden_collection_retrieval.py",
+    "alden_retrieval_time.py",
+    "alden_corpus_topics.py",
+    "alden_osk.py",
+    "alden_osk_retrieval.py",
+    "alden_osk_sources.py",
+    "alden_osk_delta.py",
+    "alden_history.py",
+    "alden_automation_history.py",
+    "alden_file_content.py",
+    "alden_link_content.py",
     "local_mlx_gateway.py",
     "auto-reply-apple-watch.py",
     "auto_reply_ax_ui.py",
     "auto_reply_metrics.py",
     "auto-reply-tui.py",
 )
-RUNTIME_DATA_NAMES = ("auto-reply-schema.json",)
+RUNTIME_DATA_NAMES = ("auto-reply-schema.json", "alden-vision-core-manifest.json",
+                      "vendor/osk-v4.1.2.zip", "vendor/osk-v4.1.2.json")
 
 
 class PackagingError(RuntimeError):
@@ -295,7 +320,36 @@ def _clear_quarantine(path: Path) -> None:
         return
 
 
-def _stage_stable_binary(runtime: Path, state_root: Path) -> Path:
+def _stable_binary_metadata(path: Path) -> os.stat_result | None:
+    """Return safe metadata for an existing stable CLI, or None if absent."""
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise PackagingError("cannot inspect the stable CLI") from exc
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or metadata.st_size <= 0
+        or metadata.st_size > MAX_ASSET_BYTES
+        or mode & 0o022
+        or not mode & stat.S_IXUSR
+    ):
+        raise PackagingError("stable binary path is unsafe")
+    return metadata
+
+
+def _stage_stable_binary(
+    runtime: Path,
+    state_root: Path,
+    *,
+    source_binary: Path,
+    source_identity: tuple[int, int, int, int, str],
+) -> Path:
     """Keep one signed CLI at a fixed path and return it.
 
     TCC keys Full Disk Access on a file path, so a copy per bake forces the
@@ -315,8 +369,22 @@ def _stage_stable_binary(runtime: Path, state_root: Path) -> Path:
     source = runtime / "openkakao-cli"
     if not source.is_file():
         raise PackagingError("packaged CLI copy is missing before staging")
+    stable_metadata = _stable_binary_metadata(stable)
+    if source_binary == stable:
+        if stable_metadata is None:
+            raise PackagingError("stable CLI source disappeared during staging")
+        current_identity = (
+            stable_metadata.st_dev,
+            stable_metadata.st_ino,
+            stable_metadata.st_size,
+            stable_metadata.st_mtime_ns,
+            _sha256(stable),
+        )
+        if current_identity != source_identity:
+            raise PackagingError("stable CLI source changed during staging")
+        return stable
     try:
-        current = stable.read_bytes() if stable.is_file() else b""
+        current = stable.read_bytes() if stable_metadata is not None else b""
         wanted = source.read_bytes()
     except OSError as exc:
         raise PackagingError("cannot compare the stable CLI") from exc
@@ -504,6 +572,14 @@ def stage_runtime(
     if not source_dir.is_dir():
         raise PackagingError("runtime source directory is unsafe")
     binary = _owned_source(binary, executable=True)
+    binary_metadata = binary.lstat()
+    binary_identity = (
+        binary_metadata.st_dev,
+        binary_metadata.st_ino,
+        binary_metadata.st_size,
+        binary_metadata.st_mtime_ns,
+        _sha256(binary),
+    )
     python = _owned_source(python, executable=True, allow_homebrew_python_keg=True)
     config = _owned_source(config, maximum_bytes=MAX_CONFIG_BYTES)
     validated_config_sha256 = _config_selectors(config, selectors)
@@ -550,6 +626,7 @@ def stage_runtime(
     if runtime.exists() or runtime.is_symlink():
         raise PackagingError(f"runtime release already exists: {runtime}")
     created: list[Path] = []
+    created_directories: list[Path] = []
     try:
         runtime.mkdir(mode=0o700)
         os.chmod(runtime, 0o700)
@@ -569,6 +646,11 @@ def stage_runtime(
                 if name in {"openkakao-cli", "config.toml"}
                 else scripts_runtime / name
             )
+            if destination.parent != scripts_runtime and name not in {"openkakao-cli", "config.toml"}:
+                fresh_directory = not destination.parent.exists()
+                _private_directory(destination.parent, create=True)
+                if fresh_directory:
+                    created_directories.append(destination.parent)
             created.append(destination)
             assets[name] = _copy_exclusive(source, destination, mode)
         if assets["config.toml"]["sha256"] != validated_config_sha256:
@@ -587,7 +669,14 @@ def stage_runtime(
         # under runtime/<stamp>/ would need a new grant every time, so the host
         # runs the signed binary from a fixed location and the runtime keeps its
         # own copy only as the digest-pinned asset.
-        staged_binary = str(_stage_stable_binary(runtime, state_root))
+        staged_binary = str(
+            _stage_stable_binary(
+                runtime,
+                state_root,
+                source_binary=binary,
+                source_identity=binary_identity,
+            )
+        )
         staged_config = str(runtime / "config.toml")
         watchdog_argv = [
             staged_python,
@@ -771,6 +860,11 @@ def stage_runtime(
             try:
                 path.unlink()
             except FileNotFoundError:
+                pass
+        for directory in reversed(created_directories):
+            try:
+                directory.rmdir()
+            except OSError:
                 pass
         try:
             (runtime / "scripts").rmdir()

@@ -107,101 +107,6 @@ EXPLAIN_MARKERS = (
     "이해가 안가",
 )
 
-TOPIC_LABELS = {
-    "contact": "연락처",
-    "a11y": "손쉬운 사용",
-    "computer": "컴퓨터 조작",
-    "tools": "도구·모델",
-    "kakao": "카톡 자동",
-    "business": "사업",
-    "infra": "인프라",
-    "news": "긱뉴스",
-    "identity": "신원",
-    "stocks": "주식",
-    "coins": "코인",
-    "investing": "투자",
-    "real_estate": "부동산",
-    "auction": "경매",
-    "ai": "인공지능",
-}
-
-TOPIC_LEXICON = {
-    "contact": ("연락처", "번호", "전화번호", "카톡아이디"),
-    "a11y": ("손쉬운 사용", "보이스오버", "접근성"),
-    "computer": ("컴퓨터", "맥북", "윈도우", "단축키"),
-    "tools": ("도구", "모델", "프롬프트", "에이전트"),
-    "kakao": ("카톡", "오픈채팅", "자동답변", "openkakao"),
-    "business": ("사업", "창업", "매출", "영업", "법인", "스타트업"),
-    "infra": ("리눅스", "linux", "가상머신"),
-    "news": ("긱뉴스", "geeknews", "hada.io"),
-    "identity": ("나임", "연우지", "사람이지"),
-    "stocks": (
-        "주식",
-        "증권",
-        "코스피",
-        "코스닥",
-        "나스닥",
-        "다우",
-        "배당",
-        "상장",
-        "공모주",
-        "etf",
-        "양도세",
-        "매수",
-        "매도",
-        "주가",
-        "macd",
-        "차트",
-        "일선",
-    ),
-    "coins": (
-        "코인",
-        "비트코인",
-        "이더리움",
-        "알트",
-        "업비트",
-        "빗썸",
-        "바이낸스",
-        "김치프리미엄",
-        "김프",
-        "btc",
-        "eth",
-        "blockchain",
-        "블록체인",
-    ),
-    "investing": ("투자", "수익률", "포트폴리오", "자산배분", "적립", "펀드", "재테크", "시드"),
-    "real_estate": (
-        "부동산",
-        "아파트",
-        "전세",
-        "월세",
-        "매매",
-        "청약",
-        "분양",
-        "등기",
-        "전세사기",
-        "집값",
-    ),
-    "auction": ("경매", "공매", "낙찰", "입찰", "경매물건"),
-    "ai": (
-        "인공지능",
-        "챗gpt",
-        "chatgpt",
-        "지피티",
-        "llm",
-        "그록",
-        "grok",
-        "클로드",
-        "claude",
-        "제미니",
-        "gemini",
-        "머신러닝",
-        "딥러닝",
-        "openai",
-        "anthropic",
-    ),
-}
-
 
 class ReferenceStoreError(RuntimeError):
     pass
@@ -259,25 +164,6 @@ def vector_preview(blob: object, dim: int = VECTOR_DIM) -> str:
     values = struct.unpack("<" + "f" * dim, bytes(blob)[: dim * 4])
     head = ", ".join(f"{value:.3f}" for value in values[:6])
     return f"{dim}차원 [{head}…]"
-
-
-def classify_topics(message: str) -> list[str]:
-    text = message.strip()
-    lowered = text.lower()
-    topics: list[str] = []
-    for topic, needles in TOPIC_LEXICON.items():
-        matched = any(
-            (needle.lower() in lowered) if needle.isascii() else (needle in text)
-            for needle in needles
-        )
-        if matched:
-            topics.append(topic)
-    return topics
-
-
-def topics_label(topics: Iterable[str]) -> str:
-    labels = [TOPIC_LABELS.get(topic, topic) for topic in topics]
-    return ", ".join(label for label in labels if label)
 
 
 def _is_bot(name: str) -> bool:
@@ -440,8 +326,6 @@ def quality_score(
         score += 2
     if _has_explain_marker(joined):
         score += 2
-    if classify_topics(joined):
-        score += 2
     total = author_chars + other_speaker_chars
     if total > 0 and author_chars / total < 0.7:
         score -= 4
@@ -474,14 +358,13 @@ def describe_why(texts: list[str]) -> str:
 
 
 def describe_what(texts: list[str], topics: list[str]) -> str:
-    labels = topics_label(topics)
+    # Keep the historical argument for callers, without putting old taxonomy
+    # labels into summaries or the text used for retrieval.
     claims = _claim_lines(texts)
     thesis = claims[0] if claims else ""
-    if labels and thesis:
-        return f"{labels} · {thesis}"[:400]
     if thesis:
         return thesis[:400]
-    return labels or "설명 자료"
+    return "설명 자료"
 
 
 def format_pack_message(pack: dict[str, Any]) -> str:
@@ -641,12 +524,11 @@ def _pack_from_cluster(
         return None
     if image_count < 1:
         return None
-    topics = classify_topics("\n".join(texts))
     start_log = int(cluster[0]["log_id"])
     end_log = int(cluster[-1]["log_id"])
     started = str(cluster[0].get("date") or "")
     ended = str(cluster[-1].get("date") or started)
-    what_text = describe_what(texts, topics)
+    what_text = describe_what(texts, [])
     how_text = describe_how(image_count, texts)
     why_text = describe_why(texts)
     body = synthesize_pack_body(
@@ -669,7 +551,7 @@ def _pack_from_cluster(
         "message_count": len(cluster),
         "image_count": image_count,
         "quality_score": score,
-        "topics": topics,
+        "topics": [],
         "what_text": what_text,
         "how_text": how_text,
         "why_text": why_text,
@@ -688,7 +570,6 @@ def _upsert_pack(
     now: str,
 ) -> int:
     blob = encode_blob(format_pack_message(pack))
-    topics_csv = ",".join(pack["topics"])
     connection.execute(
         f"""
         INSERT INTO {PACK_TABLE}(
@@ -720,7 +601,7 @@ def _upsert_pack(
             pack["message_count"],
             pack["image_count"],
             pack["quality_score"],
-            topics_csv,
+            "",
             pack["what_text"],
             pack["how_text"],
             pack["why_text"],
@@ -781,14 +662,6 @@ def _upsert_pack(
                 "DELETE FROM context_message_topics WHERE message_id = ?",
                 (context_id,),
             )
-            for topic in pack["topics"]:
-                connection.execute(
-                    """
-                    INSERT OR IGNORE INTO context_message_topics(message_id, topic)
-                    VALUES (?, ?)
-                    """,
-                    (context_id, topic),
-                )
     return pack_id
 
 def _load_live_events(
@@ -1318,9 +1191,8 @@ def _rebuild_stale_v1_packs(
             texts = [item for item in texts if item]
         if not texts:
             continue
-        topics = [part for part in str(row[12] or "").split(",") if part]
         image_count = int(row[10] or 0)
-        what_text = describe_what(texts, topics)
+        what_text = describe_what(texts, [])
         how_text = describe_how(image_count, texts)
         why_text = describe_why(texts)
         pack = {
@@ -1336,7 +1208,7 @@ def _rebuild_stale_v1_packs(
             "message_count": int(row[9] or 0),
             "image_count": image_count,
             "quality_score": int(row[11] or 0),
-            "topics": topics,
+            "topics": [],
             "what_text": what_text,
             "how_text": how_text,
             "why_text": why_text,
@@ -1812,10 +1684,8 @@ def collect_reference_list(
         if wanted_chat and wanted_chat not in {"전체", "*"}:
             clauses.append("chat = ?")
             params.append(wanted_chat)
-        topic_key = topic.strip()
-        if topic_key and topic_key not in {"전체", "*"}:
-            clauses.append("(',' || topics || ',') LIKE ?")
-            params.append("%," + topic_key + ",%")
+        # Legacy topic arguments and stored tags are inert. Content and room
+        # filters continue to work without reintroducing the old taxonomy.
         needle = query.strip()
         if needle:
             like = (
@@ -1849,11 +1719,7 @@ def collect_reference_list(
         rows = rows[:bounded_limit]
         preview_fn = preview or vector_preview
         items: list[dict[str, Any]] = []
-        topic_counts: dict[str, int] = {}
         for row in rows:
-            topics = [item for item in str(row[10] or "").split(",") if item]
-            for key in topics:
-                topic_counts[key] = topic_counts.get(key, 0) + 1
             pack = {
                 "user_name": row[4],
                 "what_text": row[5],
@@ -1879,8 +1745,8 @@ def collect_reference_list(
                     "vector_dim": dim if isinstance(blob, (bytes, bytearray)) and len(blob) == dim * 4 else 0,
                     "vector_preview": preview_fn(blob),
                     "kind": PACK_SOURCE_KIND,
-                    "topics": topics,
-                    "topics_label": topics_label(topics),
+                    "topics": [],
+                    "topics_label": "",
                     "row_key": str(row[14]),
                     "decision": "",
                     "decision_label": "",
@@ -1897,14 +1763,6 @@ def collect_reference_list(
                     "deletable": False,
                 }
             )
-        catalog = [
-            {
-                "id": key,
-                "label": TOPIC_LABELS.get(key, key),
-                "count": count,
-            }
-            for key, count in sorted(topic_counts.items())
-        ]
         return {
             "ok": True,
             "action": "vector-list",
@@ -1918,7 +1776,7 @@ def collect_reference_list(
             "truncated": truncated,
             "rows": items,
             "topic": topic,
-            "topics": catalog,
+            "topics": [],
         }
     finally:
         connection.close()
@@ -1938,4 +1796,9 @@ def search_reference_packs(
     """
     from auto_reply_reference_search import search_reference_packs as search
 
-    return search(db_path, query=query, **kwargs)
+    result = search(db_path, query=query, **kwargs)
+    # Retrieval still ranks the original reference text and vectors. Legacy
+    # stored classifications must not be exposed as current topic evidence.
+    for row in result.get("rows", []):
+        row["topics"] = []
+    return result

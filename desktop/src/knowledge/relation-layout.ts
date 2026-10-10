@@ -1,0 +1,127 @@
+import { ON_SCREEN_NODE_CAP, type KnowledgeGraph, type KnowledgeView } from './graph-model';
+import { connectedComponents, selectSynapses, synapseRestLength, type Point3 } from './plasticity';
+import { contextRegions } from './context-regions';
+
+function seedPoint(id: string): Point3 {
+  let seed = 2166136261;
+  for (let i = 0; i < id.length; i++) seed = Math.imul(seed ^ id.charCodeAt(i), 16777619);
+  seed = Math.imul(seed ^ (seed >>> 16), 0x7feb352d);
+  seed = Math.imul(seed ^ (seed >>> 15), 0x846ca68b);
+  seed ^= seed >>> 16;
+  const y = ((seed >>> 0) + .5) / 4294967296 * 2 - 1;
+  const ring = Math.sqrt(Math.max(0, 1 - y * y));
+  const phi = (Math.imul(seed ^ 0x9e3779b9, 1664525) >>> 0) / 4294967296 * Math.PI * 2;
+  return { x: Math.cos(phi) * ring * 1.3, y: y * 1.05, z: Math.sin(phi) * ring * .65 };
+}
+
+/** A bounded projection of real references, not an OSK cluster writer.
+ * Entity labels/types have no spatial authority. Source navigation is a weak
+ * spring; real ERE links determine proximity. Only the current 24-node view is
+ * solved, once on graph/navigation changes, never on each animation frame.
+ */
+export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = view, nodeCap=ON_SCREEN_NODE_CAP): Map<string, Point3> {
+  if (view.nodes.length > 120 && nodeCap > 120) return overviewAnchors(view, nodeCap);
+  const nodes = [...view.nodes].filter(n => !n.evidence.retracted)
+    .sort((a, b) => a.id.localeCompare(b.id)).slice(0, Math.min(120,Math.max(1,nodeCap)));
+  const points = nodes.map(n => seedPoint(n.id));
+  // The global volume is deeper; z is a layout coordinate, never a confidence,
+  // category or user-importance tier. Springs still follow only actual links.
+  const depth = nodeCap > ON_SCREEN_NODE_CAP ? 1.8 : 1;
+  for (const point of points) point.z *= depth;
+  const index = new Map(nodes.map((n, i) => [n.id, i]));
+  const edges = selectSynapses(view.edges, new Set(index.keys()),Date.now(),nodeCap>ON_SCREEN_NODE_CAP?512:144);
+  const components = connectedComponents(nodes.map(n => n.id), edges);
+  const members = new Map<number, string[]>();
+  nodes.forEach((n, i) => { const ids = members.get(components[i]) ?? []; ids.push(n.id); members.set(components[i], ids); });
+  const centers = new Map([...members].map(([group, ids]) => [group, seedPoint(ids.join('\0'))]));
+  for (const point of centers.values()) point.z *= depth;
+  const regions = nodeCap>ON_SCREEN_NODE_CAP?[]:contextRegions(view, graph);
+  const regionalOrigins = new Map<string, Point3>();
+  for (const [group, ids] of members) {
+    const contexts = regions.filter(region => region.id.startsWith('space:') && region.nodeIds.some(id => ids.includes(id))).sort((a, b) => a.id.localeCompare(b.id));
+    if (contexts.length < 2) continue;
+    const center = centers.get(group)!;
+    const phase = Math.atan2(center.y, center.x);
+    for (const id of ids) {
+      let x = 0, y = 0, z = 0, count = 0;
+      contexts.forEach((region, i) => {
+        if (!region.nodeIds.includes(id)) return;
+        const angle = phase + Math.PI * 2 * i / contexts.length;
+        x += .95 * Math.cos(angle); y += .78 * Math.sin(angle); z += .18 * Math.sin(angle * 2); count++;
+      });
+      if (count) regionalOrigins.set(id, { x: center.x * .2 + x / count, y: center.y * .2 + y / count, z: center.z * .2 + z / count });
+    }
+  }
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i], center = regionalOrigins.get(nodes[i].id) ?? centers.get(components[i])!;
+    p.x = center.x + p.x * .32; p.y = center.y + p.y * .32; p.z = center.z + p.z * .32;
+  }
+  const initial = points.map(p => ({ ...p }));
+  const links = edges.map(e => ({ a: index.get(e.source)!, b: index.get(e.target)!, strength: e.strength }));
+  const forces = new Float64Array(nodes.length * 3);
+  for (let step = 0; step < 96; step++) {
+    forces.fill(0);
+    for (let a = 0; a < nodes.length; a++) {
+      const p = points[a], origin = initial[a];
+      const affinity = regionalOrigins.has(nodes[a].id) ? .3 : .06;
+      forces[a * 3] += affinity * (origin.x - p.x);
+      forces[a * 3 + 1] += affinity * (origin.y - p.y);
+      forces[a * 3 + 2] += affinity * (origin.z - p.z);
+      for (let b = a + 1; b < nodes.length; b++) {
+        if (components[a] !== components[b]) continue;
+        const q = points[b];
+        const dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
+        const gain = .016 / ((dx * dx + dy * dy + dz * dz + .04) ** 1.5);
+        forces[a * 3] -= gain * dx; forces[a * 3 + 1] -= gain * dy; forces[a * 3 + 2] -= gain * dz;
+        forces[b * 3] += gain * dx; forces[b * 3 + 1] += gain * dy; forces[b * 3 + 2] += gain * dz;
+      }
+    }
+    for (const { a, b, strength } of links) {
+      const p = points[a], q = points[b];
+      const dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
+      const distance = Math.max(.001, Math.hypot(dx, dy, dz));
+      const gain = strength * (distance - synapseRestLength(strength)) / distance;
+      forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz;
+      forces[b * 3] -= gain * dx; forces[b * 3 + 1] -= gain * dy; forces[b * 3 + 2] -= gain * dz;
+    }
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i], at = i * 3;
+      const gain = .045 / Math.max(1, Math.hypot(forces[at], forces[at + 1], forces[at + 2]));
+      p.x += gain * forces[at]; p.y += gain * forces[at + 1]; p.z += gain * forces[at + 2];
+      const envelope = Math.max(1, Math.hypot(p.x / 2.15, p.y / 1.4, p.z / (nodeCap > ON_SCREEN_NODE_CAP ? 1.35 : 1)));
+      p.x /= envelope; p.y /= envelope; p.z /= envelope;
+    }
+  }
+  return new Map(nodes.map((node, i) => [node.id, points[i]]));
+}
+
+/** Source grouping is visual navigation, never a stored relationship. A large
+ * overview uses bounded O(V+E) anchors, leaving the 120-node dynamic solver
+ * budget unchanged. IDs keep their positions when another source is refreshed. */
+function overviewAnchors(view: KnowledgeView, cap: number): Map<string, Point3> {
+  const nodes = view.nodes.filter(node => !node.evidence.retracted).slice(0, Math.min(2048, cap));
+  const groups = [...new Set(nodes.map(node => node.sourceTarget || node.space || 'memory'))].sort();
+  const points = new Map<string, Point3>();
+  const scale = Math.min(1.1, 2.4 / Math.sqrt(Math.max(1, groups.length)));
+  for (const node of nodes) {
+    const group = node.sourceTarget || node.space || 'memory';
+    const center = seedPoint(group);
+    const point = seedPoint(node.id);
+    // A deterministic radial distribution makes a volume, not a sphere shell.
+    const radial = .85 * Math.cbrt(Math.abs(seedPoint(node.id + ':radius').y));
+    points.set(node.id, { x: center.x * 1.65 + point.x * radial * scale,
+      y: center.y * 1.65 + point.y * radial * scale,
+      z: center.z + point.z * radial * scale });
+  }
+  return points;
+}
+
+export function relationCenterId(view: KnowledgeView): string {
+  if (view.focusId) return view.focusId;
+  const scores = new Map(view.nodes.map(n => [n.id, n.importance / 100]));
+  for (const edge of selectSynapses(view.edges.filter(e => e.purpose !== 'navigation'), new Set(scores.keys()))) {
+    scores.set(edge.source, (scores.get(edge.source) ?? 0) + edge.strength);
+    scores.set(edge.target, (scores.get(edge.target) ?? 0) + edge.strength);
+  }
+  return [...scores].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] ?? '';
+}

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-10-07T05:52:24Z",
+  "model": "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+  "adapter_sha256": "ccecc2fc86329659e4ea0f9bb5d35e5bfd930d5fa4e1957d299013cd233827af",
+  "adapter_source_unchanged": true,
+  "case_sha256": "1237a28987757c44aafa6098f4dda15586a7307ebc9bdc64e3382b84bf392aa2",
+  "architecture": "arm64",
+  "power": "Now drawing from 'AC Power'\n -InternalBattery-0 (id=22937699)\t80%; AC attached; not charging present: true",
+  "condition": "existing resident model; prefix cache and other host jobs remain active",
+  "samples": 15,
+  "correct_fact_count": 15,
+  "adapter_error_count": 0,
+  "first_visible_token_seconds": {
+    "samples": 15,
+    "p50": 0.179553,
+    "p95_nearest_rank": 0.428445
+  },
+  "full_answer_seconds": {
+    "p50": 0.439304,
+    "p95_nearest_rank": 0.602961
+  },
+  "observed_decode_tokens_per_second": {
+    "samples": 15,
+    "p50": 38.393847,
+    "p95_nearest_rank": 42.336136,
+    "scope": "reported completion tokens minus first over adapter-observed decode window; includes reported reasoning; excludes prompt tokens"
+  },
+  "interrupted": "",
+  "requested_samples": 15,
+  "drain_timeout_seconds": 10.0,
+  "limits": [
+    "Public synthetic cases; no natural microphone trial",
+    "Fact-presence checks are not a general language-quality score",
+    "Full-answer and first-visible-token latency include catalog/admission",
+    "First visible content excludes a private reasoning channel",
+    "Small-sample p95 is descriptive only",
+    "Different cache state or concurrent host load can confound before/after speed comparisons"
+  ],
+  "network": {
+    "hosts": [
+      "127.0.0.1"
+    ],
+    "ports": [
+      11234
+    ],
+    "connections": 116,
+    "scope": "Python client connections only; no whole-process capture"
+  }
+}

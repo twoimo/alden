@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "scope": "Eight new constructed queries over four reviewed research/design notes; not broad or externally independently labeled corpus quality. No policy tuning. Not the DPO final test.",
+  "judgments_sha256": "68e5e1dd14f13b4b2f5da0bf4cd60ed7a2861f935ca158e70b5a35b0e4e86c71",
+  "canonical_snapshot": "223decedc568429f24d5d628b0fca30ae38a6e0376e47761362524583d8f51c5",
+  "canonical_notes": 104,
+  "policy": {
+    "rrf_k": 60,
+    "rrf_weights": [
+      1,
+      1
+    ],
+    "candidate_limit": 40,
+    "max_entities": 5,
+    "max_context_chars": 16000
+  },
+  "policy_tuned": false,
+  "source_hash_preserved": true,
+  "summary": {
+    "dev": {
+      "n": 4,
+      "median_seconds": 0.2976452085422352,
+      "metrics": {
+        "1": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        },
+        "3": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        },
+        "5": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        }
+      }
+    },
+    "heldout": {
+      "n": 4,
+      "median_seconds": 0.3248172499006614,
+      "metrics": {
+        "1": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        },
+        "3": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        },
+        "5": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        }
+      }
+    },
+    "all": {
+      "n": 8,
+      "median_seconds": 0.3201822079718113,
+      "metrics": {
+        "1": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        },
+        "3": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        },
+        "5": {
+          "macro_recall": 1.0,
+          "macro_ndcg": 1.0
+        }
+      }
+    }
+  },
+  "queries": [
+    {
+      "id": "source-query-1",
+      "split": "dev",
+      "ranked_note_ids": [
+        "osk:261005-03xh-d2rb92kp",
+        "osk:261005-03xi-b6m8qslq",
+        "osk:261005-03xh-26nfgfbi",
+        "osk:261005-03xi-natl2svt",
+        "osk:261002-0gnn-lwn0whkw"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.31578020798042417,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    },
+    {
+      "id": "source-query-2",
+      "split": "dev",
+      "ranked_note_ids": [
+        "osk:261005-03xh-26nfgfbi",
+        "osk:261005-03xi-b6m8qslq",
+        "osk:261002-0gnn-ygwzbs2s",
+        "osk:261002-0gnp-h6dmd1df",
+        "osk:261002-0gnl-ngfitye6"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.2768362918868661,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    },
+    {
+      "id": "source-query-3",
+      "split": "dev",
+      "ranked_note_ids": [
+        "osk:261005-03xi-natl2svt",
+        "osk:261002-0gno-egheumwd",
+        "osk:261002-0gnl-ngfitye6",
+        "osk:261002-0gnl-idhlfqo5",
+        "osk:261002-0gnn-lwn0whkw"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.2795102091040462,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    },
+    {
+      "id": "source-query-4",
+      "split": "dev",
+      "ranked_note_ids": [
+        "osk:261005-03xi-b6m8qslq",
+        "osk:261005-03xh-d2rb92kp",
+        "osk:261005-03xi-natl2svt",
+        "osk:261005-03xh-26nfgfbi",
+        "osk:261002-0gnn-ygwzbs2s"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.34028079081326723,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    },
+    {
+      "id": "source-query-5",
+      "split": "heldout",
+      "ranked_note_ids": [
+        "osk:261005-03xh-d2rb92kp",
+        "osk:261004-17mu-u14qmakp",
+        "osk:261002-0gnq-j1op64e6",
+        "osk:261002-0gno-ymqqnii1",
+        "osk:261002-0gnl-ngfitye6"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.30813991697505116,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    },
+    {
+      "id": "source-query-6",
+      "split": "heldout",
+      "ranked_note_ids": [
+        "osk:261005-03xh-26nfgfbi",
+        "osk:261005-03xi-b6m8qslq",
+        "osk:261005-03xi-natl2svt",
+        "osk:261005-03xh-d2rb92kp",
+        "osk:261002-0gno-ihlvsuf0"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.36585745797492564,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    },
+    {
+      "id": "source-query-7",
+      "split": "heldout",
+      "ranked_note_ids": [
+        "osk:261005-03xi-natl2svt",
+        "osk:261005-03xh-26nfgfbi",
+        "osk:261005-03xi-b6m8qslq",
+        "osk:261002-0gnn-ygwzbs2s",
+        "osk:261002-0gno-ihlvsuf0"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.3245842079631984,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    },
+    {
+      "id": "source-query-8",
+      "split": "heldout",
+      "ranked_note_ids": [
+        "osk:261005-03xi-b6m8qslq",
+        "osk:261005-03xh-d2rb92kp",
+        "osk:261005-03xh-26nfgfbi",
+        "osk:261002-0gnp-h6dmd1df",
+        "osk:261002-0gno-ihlvsuf0"
+      ],
+      "search_mode": "rrf",
+      "seconds": 0.3250502918381244,
+      "metrics": {
+        "1": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "3": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        },
+        "5": {
+          "recall": 1.0,
+          "ndcg": 1.0
+        }
+      }
+    }
+  ],
+  "retrieval_module_sha256": "e9b14599ff7b729faebd233d61f2ff22c255d13865f26de20e9614c1799d0773"
+}

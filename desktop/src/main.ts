@@ -1,12 +1,30 @@
+import { RoutedModels } from './routed-models';
+let routedModels: RoutedModels | null = null;
+import { CollectionGraphController, type GraphAction } from './knowledge/collection-graph';
+import { KnowledgeRefresh } from './knowledge/refresh';
+import { knowledgeSignature } from './knowledge/changes';
+import { OrbSurfaces } from './orbs/surfaces';
+import { renderNodeDetails } from './knowledge/node-details';
+import type { VoiceStatus } from './contracts';
+import { wireConversationViews } from './conversations';
+import { wireCollectionHistory } from './collection-history';
+import { wireCollectionSchedule } from './collection-schedule';
+import { wireAutomationHistory } from './automation-history';
+import { wireSettingsPreferences } from './settings-preferences';
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from '@tauri-apps/api/app';
 import "./styles.css";
+import "./settings.css";
+import { renderSettingsIcons, wireSettingsNavigation } from "./settings-navigation";
 import {
   createCancellationToken,
   unavailableSnapshot,
   type CancellationToken,
+  type EmergencyState,
   type RuntimeSnapshot,
 } from "./contracts";
 import type { SourceLoads } from "./core/load-mapping";
+import type { AnimationLoopDiagnostics } from "./core/animation-loop";
 import { RenderLifecycle } from "./core/lifecycle";
 import {
   tauriVisibilitySubscriber,
@@ -15,23 +33,31 @@ import {
   type VisibilityReader,
   type VisibilitySubscriber,
 } from "./core/lifecycle-wiring";
-import type { KnowledgeHologram } from "./knowledge/hologram";
+import type { KnowledgeFocusEvent, KnowledgeHologram } from "./knowledge/hologram";
 import {
   MAX_FOCUS_HOPS,
-  ON_SCREEN_NODE_CAP,
+  OVERVIEW_NODE_CAP,
   parseKnowledgeGraph,
   type KnowledgeEdge,
   type KnowledgeGraph,
   type KnowledgeNode,
-  type KnowledgeView,
 } from "./knowledge/graph-model";
 import {
   cancelRuntimeRequest,
   cancelModelSwap,
+  fetchEmergencyState,
+  fetchKnowledgeRevision,
   fetchRuntimeSnapshot,
   fetchSettingsAction,
-  setResidentModel,
+  normalizeLocalModelId,
+  operatorResume,
+  operatorPause,
+  selectResidentModel,
+  setSwapModel,
+  subscribeEmergencyState,
   swapToLargeModel,
+  type EmergencyStateSubscriber,
+  type SettingsInvoke,
 } from "./runtime";
 import {
   RuntimeSnapshotPoller,
@@ -40,9 +66,10 @@ import {
   type SnapshotCanceller,
   type SnapshotLoader,
 } from "./runtime-poller";
-import { mainPanelMarkup, renderBackground, renderHistory, renderRooms, settingsMarkup, voiceErrorMessage } from "./ui";
+import { mainPanelMarkup, renderBackground, renderEmergencyState,  renderRooms, settingsMarkup, voiceErrorMessage } from "./ui";
 import { RESIDENT_MODEL_ID, SWAP_MODEL_ID } from "./tokens";
 import { wireVoiceStart } from "./voice-controls";
+import { freshInputRms } from "./voice-amplitude";
 
 export { RuntimeSnapshotPoller, type PollTimerScheduler } from "./runtime-poller";
 
@@ -52,22 +79,26 @@ if (!app) throw new Error("app_root_missing");
 const isSettings = new URLSearchParams(window.location.search).get("view") === "settings";
 document.body.classList.add(isSettings ? "settings-view" : "panel-view");
 
-interface JarvisCoreControl {
+interface AldenCoreControl {
   readonly renderCount: number;
   start(): void;
   stop(): void;
+  diagnostics(): AnimationLoopDiagnostics;
   setSignals(jobLoad: number, voiceRms: number, sources?: SourceLoads): void;
   dispose(): void;
 }
 
 function setText(id: string, value: string): void {
   const element = document.getElementById(id);
-  if (element) element.textContent = value;
+  if (element) {
+    if (element.textContent !== value) element.textContent = value;
+    if (id === 'knowledge-mode') element.hidden = value === '연결된 주제';
+  }
 }
 
 function showPanelUnavailable(message: string): void {
   app.dataset.state = "unavailable";
-  const panel = document.querySelector<HTMLElement>(".jarvis-panel");
+  const panel = document.querySelector<HTMLElement>(".alden-panel");
   if (!panel) return;
   let status = document.getElementById("panel-status");
   if (!status) {
@@ -83,40 +114,9 @@ function showPanelUnavailable(message: string): void {
 
 function renderPanelUnavailable(): void {
   app.innerHTML = mainPanelMarkup();
-  document.querySelector<HTMLCanvasElement>(".jarvis-core")
-    ?.setAttribute("aria-label", "Jarvis core 확인 불가");
-  showPanelUnavailable("Jarvis 상태를 확인할 수 없습니다.");
-}
-
-function wireRoomAdd(loadSnapshot: SnapshotLoader, loadAction: typeof fetchSettingsAction): void {
-  const addBtn = document.querySelector<HTMLButtonElement>("#settings-add-room-button");
-  const addSelect = document.querySelector<HTMLSelectElement>("#settings-add-room-select");
-  if (!addBtn || !addSelect) return;
-  addBtn.addEventListener("click", async () => {
-    const selectedId = addSelect.value;
-    if (!selectedId) return;
-    const selectedTitle = addSelect.selectedOptions[0]?.textContent || "";
-    addBtn.disabled = true;
-    setText("room-summary", "채팅방을 등록하는 중...");
-    try {
-      const res = await loadAction("room-upsert", {
-        chatId: selectedId,
-        query: selectedTitle,
-      });
-      if (res && res.ok === true) {
-        setText("room-summary", `채팅방이 등록되었습니다: ${selectedTitle}`);
-        const token = createCancellationToken();
-        const updatedSnapshot = await loadSnapshot(token);
-        renderRooms(updatedSnapshot);
-      } else {
-        setText("room-summary", "채팅방을 등록하지 못했습니다. 확인 후 다시 시도해 주세요.");
-      }
-    } catch {
-      setText("room-summary", "채팅방 등록 중 오류가 발생했습니다.");
-    } finally {
-      addBtn.disabled = false;
-    }
-  });
+  document.querySelector<HTMLCanvasElement>(".alden-core")
+    ?.setAttribute("aria-label", "올든 지식 그래프 확인 불가");
+  showPanelUnavailable("지식의 연결을 불러오지 못했습니다.");
 }
 
 function modelButton(modelId: string): HTMLButtonElement | null {
@@ -146,11 +146,15 @@ function clearModelFailures(): void {
 }
 
 function renderModels(snapshot: RuntimeSnapshot): void {
+  if (!snapshot.available) {
+    setModelSelection(null);
+    setModelBusy(true);
+    setText("model-status", "AI 답변 설정을 확인할 수 없습니다.");
+    return;
+  }
   const current = snapshot.replyModelId;
-  const normalized = current?.replace(/^mlx\//, "") ?? null;
-  const selected = normalized === RESIDENT_MODEL_ID || normalized === SWAP_MODEL_ID
-    ? normalized
-    : normalized === null ? RESIDENT_MODEL_ID : null;
+  const normalized = normalizeLocalModelId(current);
+  const selected = current === null ? RESIDENT_MODEL_ID : normalized;
   setModelSelection(selected);
   setText("model-status", selected === RESIDENT_MODEL_ID
     ? "빠른 대화가 선택되어 있습니다."
@@ -181,7 +185,7 @@ export function modelSwapFailureText(reason: string): string {
   return "깊은 분석을 준비하지 못했습니다. 기존 설정을 유지했습니다.";
 }
 
-function wireModelSelection(): void {
+function wireModelSelection(invokeFn: SettingsInvoke): void {
   const resident = modelButton(RESIDENT_MODEL_ID);
   const swap = modelButton(SWAP_MODEL_ID);
   if (!resident || !swap) return;
@@ -189,7 +193,7 @@ function wireModelSelection(): void {
   window.addEventListener("pagehide", () => {
     const token = activeSwap;
     activeSwap = null;
-    if (token) void cancelModelSwap(token);
+    if (token) void cancelModelSwap(token, invokeFn);
   }, { once: true });
   setModelBusy(false);
 
@@ -199,12 +203,20 @@ function wireModelSelection(): void {
       setModelBusy(true);
       resident.setAttribute("aria-busy", "true");
       setText("model-status", "빠른 대화를 선택하고 있습니다…");
-      const result = await setResidentModel();
+      const result = await selectResidentModel(invokeFn, (phase) => {
+        setText("model-status", phase === "launching"
+          ? "빠른 대화를 준비하고 있습니다…"
+          : "빠른 대화를 적용하고 있습니다…");
+      });
       resident.removeAttribute("aria-busy");
       setModelBusy(false);
       if (!result.ok) {
         resident.classList.add("model-failed");
-        setText("model-status", "빠른 대화를 선택하지 못했습니다. 기존 설정을 유지했습니다.");
+        setText("model-status", result.outcome === "launch_failed"
+          ? "빠른 대화를 준비하지 못했습니다. 기존 설정을 유지했습니다."
+          : result.outcome === "retry_failed"
+            ? "빠른 대화를 준비했지만 선택을 완료하지 못했습니다. 기존 설정을 유지했습니다."
+            : "빠른 대화를 선택하지 못했습니다. 기존 설정을 유지했습니다.");
         return;
       }
       setModelSelection(RESIDENT_MODEL_ID);
@@ -217,10 +229,27 @@ function wireModelSelection(): void {
       clearModelFailures();
       setModelBusy(true);
       swap.setAttribute("aria-busy", "true");
+      setText("model-status", "깊은 분석을 선택하고 있습니다…");
+      const direct = await setSwapModel(invokeFn);
+      if (direct.ok) {
+        swap.removeAttribute("aria-busy");
+        setModelBusy(false);
+        setModelSelection(SWAP_MODEL_ID);
+        setText("model-status", "깊은 분석을 사용할 준비가 되었습니다.");
+        return;
+      }
+      if (!direct.needsPrepare) {
+        swap.removeAttribute("aria-busy");
+        setModelBusy(false);
+        swap.classList.add("model-failed");
+        setText("model-status", "깊은 분석을 선택하지 못했습니다. 기존 설정을 유지했습니다.");
+        return;
+      }
+
       setText("model-status", "깊은 분석을 준비하고 있습니다…");
       const token = createCancellationToken();
       activeSwap = token;
-      const result = await swapToLargeModel(token);
+      const result = await swapToLargeModel(token, invokeFn);
       if (activeSwap === token) activeSwap = null;
       swap.removeAttribute("aria-busy");
       setModelBusy(false);
@@ -237,8 +266,17 @@ function wireModelSelection(): void {
 
 function renderVoice(snapshot: RuntimeSnapshot): void {
   const voice = snapshot.voice;
+  const previewOnly = document.getElementById("voice-status")?.dataset.previewOnly === "true";
+  const startButton = document.getElementById("voice-start") as HTMLButtonElement | null;
+  if (startButton) {
+    const active = voice.manualRunning === true || (voice.available && ['wake_listen','user_listen','transcribing','generating','speaking'].includes(voice.state));
+    if (!startButton.hasAttribute("aria-busy")) startButton.disabled = false;
+    startButton.dataset.voiceActive = String(active);
+    startButton.textContent = active ? '마이크 끄기' : '마이크 켜기';
+  }
+  if (previewOnly) return;
   if (!voice.available) {
-    setText("voice-status", "음성 상태를 확인할 수 없습니다.");
+    setText("voice-status", "마이크가 꺼져 있습니다.");
     return;
   }
   const labels: Record<string, string> = {
@@ -258,19 +296,75 @@ function renderVoice(snapshot: RuntimeSnapshot): void {
 function renderSettingsUnavailable(): void {
   app.innerHTML = settingsMarkup();
   app.dataset.state = "unavailable";
+  renderSettingsIcons();
+  void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
+  const navigation = wireSettingsNavigation();
+  window.addEventListener("pagehide", navigation.dispose, { once: true });
   const snapshot = unavailableSnapshot("desktop_boot_failed");
   renderRooms(snapshot);
   renderModels(snapshot);
   renderVoice(snapshot);
-  renderHistory(snapshot);
   renderBackground(snapshot);
   setText("model-status", "AI 답변 설정을 확인할 수 없습니다.");
   setText("settings-sync-source", "대화 준비 상태를 확인할 수 없습니다.");
   setText("knowledge-summary", "대화에서 찾은 연결 정보를 확인할 수 없습니다.");
   setText("knowledge-mode", "확인 필요");
-  document.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+  document.querySelectorAll<HTMLButtonElement>("button:not([data-settings-view])").forEach((button) => {
     button.disabled = true;
   });
+}
+
+type EmergencyResumeAction = (explicitOptIn: boolean) => Promise<EmergencyState | null>;
+
+export function wireEmergencyResume(
+  resumeAction: EmergencyResumeAction,
+  root: Document = document,
+  pauseAction: typeof operatorPause = operatorPause,
+  onChange: (state: EmergencyState) => void = () => undefined,
+): { update: (state: EmergencyState) => void } {
+  const button = root.querySelector<HTMLButtonElement>("#emergency-resume");
+  let current: EmergencyState | null = null;
+  let busy = false;
+
+  const renderCurrent = (): void => {
+    if (current) renderEmergencyState(current, root);
+    if (button) button.disabled = busy || current === null;
+  };
+  const update = (state: EmergencyState): void => {
+    if (current && state.epoch <= current.epoch) {
+      renderCurrent();
+      return;
+    }
+    current = state;
+    onChange(state);
+    renderCurrent();
+  };
+
+  button?.addEventListener("click", async () => {
+    const before = current;
+    if (!before || busy) return;
+    busy = true;
+    renderCurrent();
+    let resumed: EmergencyState | null = null;
+    try {
+      resumed = before.latched ? await resumeAction(true) : await pauseAction();
+    } catch {
+      resumed = null;
+    }
+    busy = false;
+    if (
+      resumed
+      && resumed.epoch > before.epoch
+      && resumed.latched !== before.latched
+      && (resumed.latched || resumed.reason === "human_resume")
+    ) {
+      update(resumed);
+      return;
+    }
+    renderCurrent();
+  });
+
+  return { update };
 }
 
 function relationLabel(relation: string): string {
@@ -282,32 +376,35 @@ function relationLabel(relation: string): string {
     case "OCCURRED_IN": return "발생";
     case "RELATED_TO":
     case "ABOUT": return "관련";
+    case "CONTAINS": return "모음";
     default: return "연결";
   }
 }
 
-function relationMeta(edge: KnowledgeEdge, snapshot: RuntimeSnapshot): string {
+function relationMeta(edge: KnowledgeEdge, snapshot: RuntimeSnapshot, collected = false): string {
+  if (collected) return '출처에 저장된 관계';
+  if (edge.relation === 'contains') return '그래프의 분류 구조';
   const roomId = edge.roomId || edge.evidence.chatId;
   const room = snapshot.rooms.find((candidate) => String(candidate.chatId) === roomId)?.title;
-  return room ? `대화방 · ${room}` : "대화에서 확인한 관계";
+  return room ? `대화방 · ${room}` : edge.evidence.kind === 'seed' ? '저장된 연결' : '대화 기록 기반';
 }
 
 function renderKnowledgeRelations(
   graph: KnowledgeGraph,
   node: KnowledgeNode,
-  view: KnowledgeView,
   snapshot: RuntimeSnapshot,
 ): void {
   const container = document.getElementById("knowledge-relations");
   if (!container) return;
   container.replaceChildren();
   const labels = new Map(graph.nodes.map((candidate) => [candidate.id, candidate.label]));
-  const related = view.edges
+  const related = graph.edges
     .filter((edge) => edge.source === node.id || edge.target === node.id)
-    .sort((left, right) => right.weight - left.weight)
-    .slice(0, 6);
+    .sort((left, right) => right.weight - left.weight);
+  const seen=new Set<string>();
+  const unique=related.filter(edge=>{const other=edge.source===node.id?edge.target:edge.source;if(seen.has(other)||!labels.has(other))return false;seen.add(other);return true;}).slice(0,120);
 
-  if (related.length === 0) {
+  if (unique.length === 0) {
     const empty = document.createElement("p");
     empty.className = "knowledge-empty";
     empty.textContent = "아직 연결된 항목이 없습니다.";
@@ -315,93 +412,163 @@ function renderKnowledgeRelations(
     return;
   }
 
-  related.forEach((edge) => {
-    const row = document.createElement("div");
+  unique.forEach((edge) => {
+    const other=edge.source===node.id?edge.target:edge.source;
+    const row = document.createElement("button");
+    row.type='button';row.dataset.knowledgeNode=other;
+    row.setAttribute('aria-label',`${labels.get(other)} 노트 열기`);
     row.className = "knowledge-relation-row";
     const triple = document.createElement("strong");
-    triple.textContent = `${labels.get(edge.source) ?? "항목"} —${relationLabel(edge.relation)}→ ${labels.get(edge.target) ?? "항목"}`;
+    triple.textContent = labels.get(other)??'노트';
+    row.title=`${node.label} · ${relationLabel(edge.relation)} · ${labels.get(other)}`;
     const meta = document.createElement("span");
-    meta.textContent = relationMeta(edge, snapshot);
+    meta.textContent = relationMeta(edge, snapshot, Boolean(node.sourceVersion));
     row.append(triple, meta);
     container.append(row);
   });
 }
 
-async function setupKnowledgeGraph(
+function renderKnowledgeSync(payload: Record<string, unknown> | null): void {
+  const raw = payload?.osk;
+  const state = raw && typeof raw === "object" ? raw as Record<string, unknown> : null;
+  if (!state || state.state !== "ready") {
+    setText("knowledge-sync", state?.state === "paused" ? "갱신 중지" : state?.state === "preparing" ? "첫 기억 정리 중" : "갱신 확인 필요");
+    return;
+  }
+  const at = typeof state.synced_at === "number" ? new Date(state.synced_at * 1000).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12:false }) : "";
+  setText("knowledge-sync", Number(state.conflicts) > 0 ? "직접 편집 보존" : Number(state.pending) > 0 ? "기억 정리 중" : at ? `${at} 갱신` : "자동 갱신");
+}
+
+interface KnowledgeGraphHooks {
+  selected(event: KnowledgeFocusEvent): void;
+  navigate(action: GraphAction): boolean;
+  focus(node: KnowledgeNode, legacy: () => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown> | null>;
+}
+
+export async function setupKnowledgeGraph(
   payload: Record<string, unknown> | null,
   snapshot: RuntimeSnapshot,
+  loadAction: typeof fetchSettingsAction = fetchSettingsAction,
+  allowEmpty = false,
+  onVoice: (voice: VoiceStatus | null) => void = () => undefined,
+  hooks?: KnowledgeGraphHooks,
 ): Promise<KnowledgeHologram | null> {
   const graph = parseKnowledgeGraph(payload);
+  renderKnowledgeSync(payload);
   const canvas = document.querySelector<HTMLCanvasElement>("#knowledge-graph-canvas");
   const expand = document.querySelector<HTMLButtonElement>("#knowledge-expand-hop");
-  if (!canvas || !expand || graph.nodes.length === 0) {
-    setText("knowledge-summary", "아직 연결된 대화가 없습니다.");
-    setText("knowledge-mode", "준비 중");
-    return null;
-  }
+  const back = document.querySelector<HTMLButtonElement>("#knowledge-back");
+  const overview = document.querySelector<HTMLButtonElement>("#knowledge-overview");
+  if (!canvas || !expand) return null;
+  if (graph.nodes.length === 0) {
+    document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open','false');
+    const empty = payload?.ok !== false && Array.isArray(payload?.nodes) && payload.nodes.length === 0;
+    setText("knowledge-summary", empty ? "아직 연결된 대화가 없습니다." : "대화의 연결 정보를 확인할 수 없습니다.");
+    setText("knowledge-mode", empty ? "준비 중" : "확인 필요");
+    const shell = document.querySelector<HTMLElement>(".knowledge-hologram-shell");
+    const detail = document.querySelector<HTMLElement>(".knowledge-focus-card");
+    if (shell) shell.hidden = false;
+    if (canvas) canvas.hidden = true;
+    if (detail) detail.hidden = true;
+    if (!allowEmpty) return null;
+  } else {
 
   setText(
     "knowledge-summary",
-    `대화에서 찾은 연결 항목 ${graph.nodes.length}개`,
+    `${graph.nodes.filter(node=>!node.isHub).length||graph.nodes.length}개`,
   );
   setText("knowledge-mode", payload?.stale === true ? "자료 확인 필요" : "연결된 주제");
+  renderKnowledgeSync(payload);
 
-  const a11yContainer = document.querySelector<HTMLDivElement>("#knowledge-accessible-nodes");
+  }
+  canvas.hidden = graph.nodes.length === 0;
+  const detailPanel = document.querySelector<HTMLElement>(".knowledge-focus-card");
 
-  let activeNodeId = "";
+  let selectionEpoch = 0;
+  let disposed = false;
+  const controls = new AbortController();
   const { KnowledgeHologram } = await import("./knowledge/hologram");
-  const hologram = new KnowledgeHologram(canvas, graph, ({ node, view }) => {
-    activeNodeId = node.id;
+  const hologram = new KnowledgeHologram(canvas, graph, ({ node, view, previousCamera }) => {
+    if (disposed) return;
+    const epoch = ++selectionEpoch;
+    if (detailPanel) detailPanel.hidden = node === null;
+    document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open',String(node!==null));
+    if (back) back.disabled = !hologram.canGoBack;
+    if (overview) overview.disabled = view.focusId === null && (view.overviewOffset??0)===0;
+    const cameraReset = document.getElementById('knowledge-camera-reset') as HTMLButtonElement | null;
+    if (cameraReset) cameraReset.disabled = view.nodes.length === 0;
+    expand.disabled = view.focusId === null ? !view.hasMoreContexts : view.hops >= MAX_FOCUS_HOPS;
+    expand.textContent=view.focusId===null?'다음 보기':view.hops===0?'연결 보기':'더 보기';
+    hooks?.selected({ node, view, previousCamera });
+    if (!node) {
+      if (detailPanel) delete detailPanel.dataset.focusState;
+      setText("knowledge-focus-title", "항목을 선택하면 관련 정보를 보여드립니다.");
+      document.getElementById("knowledge-relations")?.replaceChildren();
+      setText("knowledge-retrieve", "항목을 선택하면 관련 대화를 찾아 보여드립니다.");
+      return;
+    }
     setText("knowledge-focus-title", node.label);
-    expand.disabled = view.hops >= MAX_FOCUS_HOPS;
-    renderKnowledgeRelations(graph, node, view, snapshot);
+    if (detailPanel) detailPanel.dataset.focusState = 'loading';
+    const currentGraph = hologram.currentGraph;
+    renderNodeDetails(currentGraph, node);
+    renderKnowledgeRelations(currentGraph, node, snapshot);
     setText("knowledge-retrieve", "관련 대화를 찾고 있습니다…");
 
-    const localRoom = view.edges.find((edge) => edge.source === node.id || edge.target === node.id)?.roomId
-      || node.evidence.chatId
-      || String(snapshot.rooms[0]?.chatId ?? "");
-    void fetchSettingsAction("knowledge-graph-focus", {
+    const localRoom = node.evidence.chatId
+      || view.edges.find((edge) => edge.source === node.id || edge.target === node.id)?.roomId || '';
+    const legacyFocus = () => loadAction("knowledge-graph-focus", {
       query: node.label,
-      nodeId: node.id,
+      nodeId: node.canonicalId || node.id,
       chatId: localRoom,
-    }).then((focus) => {
-      if (activeNodeId !== node.id) return;
+    });
+    void (hooks ? hooks.focus(node, legacyFocus) : legacyFocus()).then((focus) => {
+      // A → B → A and overview/back are different selections even when the
+      // node ID repeats. Earlier retrievals cannot overwrite the current one.
+      if (selectionEpoch !== epoch || focus?.discarded === true) return;
       if (!focus || focus.ok !== true) {
+        if (detailPanel) detailPanel.dataset.focusState = 'unavailable';
+        renderNodeDetails(currentGraph, node, focus ?? { ok: false });
         setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
         return;
       }
+      const detail = focus.details as Record<string, unknown> | undefined;
+      if (detail?.node_id === node.id && typeof detail.display_label === 'string' && detail.display_label.trim()) {
+        setText('knowledge-focus-title', detail.display_label);
+      }
+      renderNodeDetails(currentGraph, node, focus);
+      if (detailPanel) detailPanel.dataset.focusState = 'ready';
       const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
       const firstFact = facts[0]?.slice(0, 180);
-      setText("knowledge-retrieve", facts.length
+      setText("knowledge-retrieve", focus.details ? '이 기기에 수집된 기록과 저장된 근거를 기준으로 합니다.' : facts.length
         ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
         : "관련 대화를 찾지 못했습니다.");
+    }).catch(() => {
+      if (selectionEpoch === epoch) { if (detailPanel) detailPanel.dataset.focusState = 'unavailable'; renderNodeDetails(currentGraph, node, { ok: false }); setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다."); }
     });
-  });
+  }, () => {
+    disposed = true;
+    selectionEpoch += 1;
+    controls.abort();
+  }, 'workspace', undefined, onVoice);
 
   expand.addEventListener("click", () => {
-    const view = hologram.expandOneHop();
-    if (!view.focusId) return;
-    const node = graph.nodes.find((candidate) => candidate.id === view.focusId);
-    if (!node) return;
-    expand.disabled = view.hops >= MAX_FOCUS_HOPS;
-    renderKnowledgeRelations(graph, node, view, snapshot);
-  });
-
-  if (a11yContainer) {
-    a11yContainer.replaceChildren();
-    graph.nodes.slice(0, ON_SCREEN_NODE_CAP).forEach((node) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "knowledge-a11y-node";
-      btn.dataset.nodeId = node.id;
-      btn.textContent = node.label;
-      btn.setAttribute("aria-label", `${node.label} 선택`);
-      btn.addEventListener("click", () => {
-        hologram.clickNode(node.id);
-      });
-      a11yContainer.append(btn);
-    });
+    if (hooks?.navigate('expand')) return;
+    hologram.expandOneHop();
+  }, { signal: controls.signal });
+  document.getElementById('knowledge-note-pane')?.addEventListener('click',event=>{
+    const target=event.target instanceof Element?event.target.closest<HTMLButtonElement>('button[data-knowledge-node]'):null;
+    if(target?.dataset.knowledgeNode)hologram.clickNode(target.dataset.knowledgeNode);
+  },{signal:controls.signal});
+  back?.addEventListener("click", () => { if (!hooks?.navigate('back')) hologram.back(); }, { signal: controls.signal });
+  overview?.addEventListener("click", () => { if (!hooks?.navigate('reset')) hologram.reset(); }, { signal: controls.signal });
+  document.getElementById('knowledge-focus-close')?.addEventListener('click', () => { if (!hooks?.navigate('clear')) hologram.reset(); }, { signal: controls.signal });
+  document.getElementById('knowledge-camera-reset')?.addEventListener('click', () => hologram.resetCamera(), { signal: controls.signal });
+  const reduceMotion = document.getElementById('knowledge-reduce-motion') as HTMLInputElement | null;
+  if (reduceMotion) {
+    reduceMotion.checked = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    reduceMotion.addEventListener('change', () => hologram.setReducedMotion(reduceMotion.checked), { signal: controls.signal });
   }
+  expand.disabled=!hologram.currentView.hasMoreContexts;
 
   return hologram;
 }
@@ -409,8 +576,12 @@ async function setupKnowledgeGraph(
 interface SettingsBootDependencies {
   loadSnapshot: SnapshotLoader;
   loadAction: typeof fetchSettingsAction;
+  loadEmergency: typeof fetchEmergencyState;
+  resumeEmergency: EmergencyResumeAction;
+  pauseEmergency: typeof operatorPause;
+  subscribeEmergency: EmergencyStateSubscriber | null;
   wireVoice: typeof wireVoiceStart;
-  invokeCommand: typeof invoke;
+  invokeCommand: SettingsInvoke;
   subscribeVisibility: VisibilitySubscriber | null;
   /** Boot handshake: the shell's current visibility decides the first state. */
   readVisibility: VisibilityReader | null;
@@ -422,6 +593,10 @@ export async function bootSettings(
   const dependencies: SettingsBootDependencies = {
     loadSnapshot: fetchRuntimeSnapshot,
     loadAction: fetchSettingsAction,
+    loadEmergency: fetchEmergencyState,
+    resumeEmergency: operatorResume,
+    pauseEmergency: operatorPause,
+    subscribeEmergency: subscribeEmergencyState,
     wireVoice: wireVoiceStart,
     invokeCommand: invoke,
     subscribeVisibility: tauriVisibilitySubscriber,
@@ -430,29 +605,75 @@ export async function bootSettings(
   };
   app.innerHTML = settingsMarkup();
   app.dataset.state = "loading";
+  renderSettingsIcons();
+  const orbs = new OrbSurfaces();
+  Object.defineProperty(window, '__orbRenderDiagnostics', { configurable: true, get: () => orbs.diagnostics() });
+  window.addEventListener('pagehide', () => orbs.dispose(), { once: true });
+  void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
+  const archives=wireConversationViews(dependencies.loadAction);
+  const collectionHistory=wireCollectionHistory(dependencies.loadAction);
+  const collectionSchedule=wireCollectionSchedule(dependencies.loadAction);
+  const automationHistory=wireAutomationHistory(dependencies.loadAction);
+  const preferences=wireSettingsPreferences(dependencies.loadAction);
+  window.addEventListener('pagehide',()=>{archives.dispose();collectionHistory.dispose();collectionSchedule.dispose();automationHistory.dispose();preferences.dispose();},{once:true});
+  let graphLifecycle: RenderLifecycle | null = null;
+  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');collectionHistory.visible(state==='visible');collectionSchedule.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility});
+  window.addEventListener('pagehide',detachArchiveVisibility,{once:true});
+  const navigation = wireSettingsNavigation(document, (page) => {
+    archives.select(page);
+    collectionHistory.select(page);
+    collectionSchedule.select(page);
+    automationHistory.select(page);
+    preferences.select(page);
+    orbs.refresh();
+    graphLifecycle?.setSurfaceVisible(page === "memory");
+    if (page === "memory") window.dispatchEvent(new Event("resize"));
+  });
+  window.addEventListener("pagehide", navigation.dispose, { once: true });
   let hologram: KnowledgeHologram | null = null;
+  let collectionGraph: CollectionGraphController | null = null;
+  let emergencyState: EmergencyState | null = null;
   try {
+    const emergency = wireEmergencyResume(dependencies.resumeEmergency,document,dependencies.pauseEmergency, state => {
+      emergencyState = state; orbs.setEmergency(state); hologram?.setEmergency(state);
+    });
+    if (dependencies.subscribeEmergency) {
+      try {
+        const unsubscribe = await dependencies.subscribeEmergency(emergency.update);
+        window.addEventListener("pagehide", unsubscribe, { once: true });
+      } catch {
+        // Initial readback below remains authoritative when event subscription is unavailable.
+      }
+    }
     const token = createCancellationToken();
     const results = await Promise.allSettled([
       dependencies.loadSnapshot(token),
       dependencies.loadAction("knowledge-graph-status"),
       dependencies.loadAction("knowledge-graph"),
+      dependencies.loadEmergency(),
     ] as const);
-    const [snapshotResult, knowledgeResult, graphResult] = results;
+    const [snapshotResult, knowledgeResult, graphResult, emergencyResult] = results;
     const snapshot = snapshotResult.status === "fulfilled"
       ? snapshotResult.value
       : unavailableSnapshot("settings_snapshot_unavailable");
     const knowledge = knowledgeResult.status === "fulfilled" ? knowledgeResult.value : null;
     const graphPayload = graphResult.status === "fulfilled" ? graphResult.value : null;
-    const degraded = results.some((result) => result.status === "rejected") || !snapshot.available;
+    const degraded = [snapshotResult, knowledgeResult, graphResult]
+      .some((result) => result.status === "rejected") || !snapshot.available;
+
+    if (emergencyResult.status === "fulfilled" && emergencyResult.value) {
+      emergency.update(emergencyResult.value);
+    }
 
     renderRooms(snapshot);
-    wireRoomAdd(dependencies.loadSnapshot, dependencies.loadAction);
     renderModels(snapshot);
-    wireModelSelection();
+    if (snapshot.available) wireModelSelection(dependencies.invokeCommand);
+    routedModels?.dispose();
+    routedModels = new RoutedModels(dependencies.loadAction);
+    void routedModels.refresh();
+    window.addEventListener('pagehide', () => routedModels?.dispose(), { once: true });
     renderVoice(snapshot);
-    renderHistory(snapshot);
-    renderBackground(snapshot);
+      renderBackground(snapshot);
     dependencies.wireVoice(document, dependencies.invokeCommand);
 
     if (knowledge) {
@@ -463,12 +684,58 @@ export async function bootSettings(
       setText("settings-sync-source", "대화 준비 상태를 확인하지 못했습니다.");
     }
 
-    hologram = await setupKnowledgeGraph(graphPayload, snapshot);
+    try {
+      hologram = await setupKnowledgeGraph(graphPayload, snapshot, dependencies.loadAction, true, voice => orbs.setVoice(voice), {
+        selected: event => collectionGraph?.selected(event),
+        navigate: action => collectionGraph?.navigate(action) ?? false,
+        focus: (node, legacy) => collectionGraph ? collectionGraph.focus(node, legacy) : legacy(),
+      });
+    } catch {
+      setText("knowledge-summary", "지식 그래프 화면을 준비하지 못했습니다.");
+      // A graphics failure must not disable the other already-confirmed settings.
+    }
     app.dataset.state = degraded ? "unavailable" : "ready";
+    orbs.setSnapshot(snapshot);
+    hologram?.setActivity(snapshot);
+    if (emergencyState) hologram?.setEmergency(emergencyState);
+    const polling = new RuntimeSnapshotPoller({ setSignals: (load, rms) => hologram?.setSignals(load, rms) },
+      dependencies.loadSnapshot, undefined, undefined, undefined, 2500, current => {
+        orbs.setSnapshot(current); hologram?.setActivity(current);
+        if (current && !document.getElementById("voice-start")?.hasAttribute("aria-busy")) renderVoice(current);
+      });
+    const orbLifecycle = new RenderLifecycle(orbs, () => polling.stop(), () => polling.start());
+    Object.defineProperty(window, '__orbRenderPause', { configurable: true, get: () => orbLifecycle.lastPauseMeasurement() });
+    wireRenderLifecycle(orbLifecycle, { subscribeVisibility: dependencies.subscribeVisibility,
+      readVisibility: dependencies.readVisibility, onClosed: () => orbs.dispose() });
     if (hologram) {
       const graph = hologram;
+      graph.setSignals(snapshot.jobLoad, freshInputRms(snapshot));
+      const focusSlots = new Map(parseKnowledgeGraph(graphPayload).nodes.map((node, index) => [node.id, index]));
       Object.defineProperty(window, "__knowledgeRenderCount", { configurable: true, get: () => graph.renderCount });
-      const lifecycle = new RenderLifecycle(graph, () => undefined, () => undefined);
+      collectionGraph = new CollectionGraphController(dependencies.loadAction, graph, document, fetchKnowledgeRevision);
+      window.addEventListener('pagehide', () => collectionGraph?.dispose(), { once: true });
+      const lifecycle = new RenderLifecycle(graph,
+        () => collectionGraph?.stop(),
+        () => collectionGraph?.start());
+      graphLifecycle = lifecycle;
+      lifecycle.setSurfaceVisible(navigation.current() === "memory");
+      Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({
+        ...graph.diagnostics(), nodeCount: graph.currentView.nodes.length, edgeCount: graph.currentView.edges.length,
+        hops: graph.currentView.hops, focused: graph.currentView.focusId !== null,
+        overviewLimit:graph.currentView.overviewLimit??OVERVIEW_NODE_CAP,overviewOffset:collectionGraph?.collection?collectionGraph.offset:graph.currentView.overviewOffset??0,
+        hasMoreContexts:collectionGraph?.collection?collectionGraph.hasMore:!!graph.currentView.hasMoreContexts,
+        focusId: graph.currentView.focusId,
+        source: collectionGraph?.collection ? 'collection' : 'legacy',
+        nodeActivity: graph.nodeActivityDiagnostics,
+        activityJournal: collectionGraph?.activityDiagnostics,
+        graphRead: collectionGraph?.readDiagnostics,
+        semanticLayout: graph.semanticDiagnostics,
+        motionReduced: graph.reducedMotionEnabled,
+        focusSlot: graph.currentView.focusId === null ? -1 : focusSlots.get(graph.currentView.focusId) ?? graph.currentGraph.nodes.findIndex(node => node.id === graph.currentView.focusId),
+        canGoBack: collectionGraph?.collection ? collectionGraph.canGoBack : graph.canGoBack,
+        targets: graph.navigationTargets,
+      }) });
+      Object.defineProperty(window, "__knowledgeRenderPause", { configurable: true, get: () => lifecycle.lastPauseMeasurement() });
       wireRenderLifecycle(lifecycle, {
         subscribeVisibility: dependencies.subscribeVisibility,
         readVisibility: dependencies.readVisibility,
@@ -487,6 +754,8 @@ export async function bootSettings(
     } catch {
       // Rendering the fixed unavailable state takes precedence over cleanup errors.
     }
+    navigation.dispose();
+    orbs.dispose();
     renderSettingsUnavailable();
   }
 }
@@ -494,7 +763,8 @@ export async function bootSettings(
 type CommandInvoker = (command: string) => Promise<unknown>;
 
 interface PanelBootDependencies {
-  createCore: (canvas: HTMLCanvasElement) => JarvisCoreControl | Promise<JarvisCoreControl>;
+  loadKnowledge: typeof fetchSettingsAction;
+  createCore: (canvas: HTMLCanvasElement) => AldenCoreControl | Promise<AldenCoreControl>;
   loadSnapshot: SnapshotLoader;
   cancelSnapshot: SnapshotCanceller;
   makeToken: () => CancellationToken;
@@ -503,15 +773,25 @@ interface PanelBootDependencies {
   subscribeVisibility: VisibilitySubscriber | null;
   /** Boot handshake: the shell's current visibility decides the first state. */
   readVisibility: VisibilityReader | null;
+  subscribeEmergency: EmergencyStateSubscriber | null;
+  loadEmergency: typeof fetchEmergencyState;
 }
 
 export async function bootPanel(
   overrides: Partial<PanelBootDependencies> = {},
 ): Promise<void> {
   const dependencies: PanelBootDependencies = {
+    loadKnowledge: fetchSettingsAction,
     createCore: async (canvas) => {
-      const { JarvisCore } = await import("./core/jarvis-core");
-      return new JarvisCore(canvas);
+      const payload=await dependencies.loadKnowledge('knowledge-graph');
+      const parsed=parseKnowledgeGraph(payload);
+      if(!payload||payload.ok!==true)throw new Error('graph_unavailable');
+      const {KnowledgeHologram}=await import('./knowledge/hologram');
+      const graph=new KnowledgeHologram(canvas,parsed,({node})=>setText('panel-knowledge-title',node?.label??'카카오톡'),()=>undefined,'popover',undefined,voice=>panelOrbs?.setVoice(voice));
+      let graphVersion=knowledgeSignature(parsed);
+      const refresh=new KnowledgeRefresh(()=>dependencies.loadKnowledge('knowledge-graph'),next=>{if(next?.ok===true){const updated=parseKnowledgeGraph(next),version=knowledgeSignature(updated);if(version!==graphVersion){graphVersion=version;graph.replaceGraph(updated);}}},15000,fetchKnowledgeRevision);
+      panelGraph = graph;
+      return {get renderCount(){return graph.renderCount;},start:()=>{graph.start();refresh.start();panelOrbs?.start();},stop:()=>{refresh.stop();graph.stop();panelOrbs?.stop();},diagnostics:()=>graph.diagnostics(),setSignals:(load,rms)=>graph.setSignals(load,rms),dispose:()=>{refresh.stop();graph.dispose();panelOrbs?.dispose();}};
     },
     loadSnapshot: fetchRuntimeSnapshot,
     cancelSnapshot: cancelRuntimeRequest,
@@ -520,37 +800,61 @@ export async function bootPanel(
     invokeCommand: invoke,
     subscribeVisibility: tauriVisibilitySubscriber,
     readVisibility: tauriVisibilityReader,
+    subscribeEmergency: subscribeEmergencyState,
+    loadEmergency: fetchEmergencyState,
     ...overrides,
   };
   app.innerHTML = mainPanelMarkup();
+  const panelOrbs = new OrbSurfaces();
+  let panelGraph: KnowledgeHologram | null = null;
   app.dataset.state = "loading";
-  const canvas = document.querySelector<HTMLCanvasElement>(".jarvis-core");
+  const canvas = document.querySelector<HTMLCanvasElement>(".alden-core");
   if (!canvas) {
+    panelOrbs.dispose();
     renderPanelUnavailable();
     return;
   }
 
-  let core: JarvisCoreControl | null = null;
+  let core: AldenCoreControl | null = null;
   let closePanel: (() => void) | null = null;
   try {
     core = await dependencies.createCore(canvas);
     const activeCore = core;
-    Object.defineProperty(window, "__jarvisRenderCount", { configurable: true, get: () => activeCore.renderCount });
+    Object.defineProperty(window, "__aldenRenderCount", { configurable: true, get: () => activeCore.renderCount });
+    Object.defineProperty(window, "__aldenRenderDiagnostics", { configurable: true, get: () => activeCore.diagnostics() });
     const polling = new RuntimeSnapshotPoller(
       activeCore,
       dependencies.loadSnapshot,
       dependencies.cancelSnapshot,
       dependencies.makeToken,
       dependencies.pollScheduler,
+      2500,
+      snapshot => { panelGraph?.setActivity(snapshot); panelOrbs.setSnapshot(snapshot); },
     );
     const lifecycle = new RenderLifecycle(activeCore, () => polling.stop(), () => polling.start());
+    Object.defineProperty(window, "__aldenRenderPause", {
+      configurable: true,
+      get: () => lifecycle.lastPauseMeasurement(),
+    });
     let disposed = false;
     let detachLifecycle: (() => void) | null = null;
+    let detachEmergency: (() => void) | null = null;
+    let emergencyEpoch = -1;
+    const applyEmergency = (state: EmergencyState): void => {
+      if (disposed || state.epoch <= emergencyEpoch) return;
+      emergencyEpoch = state.epoch;
+      panelOrbs.setEmergency(state); panelGraph?.setEmergency(state);
+    };
+    if (dependencies.subscribeEmergency) {
+      try { detachEmergency = await dependencies.subscribeEmergency(applyEmergency); } catch { /* Initial read remains available. */ }
+    }
+    void dependencies.loadEmergency().then(state => { if (state) applyEmergency(state); }).catch(() => undefined);
 
     const close = (): void => {
       if (disposed) return;
       disposed = true;
       detachLifecycle?.();
+      detachEmergency?.();
       // Stopping is idempotent, so this also stops the loop and the poller on
       // the teardown path that never reaches the pagehide handler.
       try {
@@ -579,6 +883,7 @@ export async function bootPanel(
 
     app.dataset.state = "ready";
   } catch {
+    panelOrbs.dispose();
     if (closePanel) closePanel();
     else {
       try {
@@ -609,4 +914,10 @@ export async function startDesktopApp(
   }
 }
 
-void startDesktopApp().catch(() => undefined);
+if(import.meta.env.DEV&&new URLSearchParams(location.search).has('demo')) {
+  void import('./dev-fixture').then(async fixture=>{
+    if(isSettings)await bootSettings({loadSnapshot:fixture.snapshot,loadAction:fixture.action,loadEmergency:async()=>fixture.emergency,pauseEmergency:fixture.pause,resumeEmergency:fixture.resume,subscribeEmergency:null,subscribeVisibility:null,readVisibility:null,wireVoice:(root)=>wireVoiceStart(root,async()=>{throw new Error("voice_preview_only");}),invokeCommand:fixture.invokeCommand});
+    else await bootPanel({loadKnowledge:fixture.action,loadSnapshot:fixture.snapshot,subscribeVisibility:null,readVisibility:null,subscribeEmergency:null,loadEmergency:async()=>fixture.emergency});
+    const label=document.createElement('span');label.className='development-preview-label';label.textContent='예시 데이터 · 개발 미리보기';document.body.append(label);
+  });
+}else void startDesktopApp().catch(() => undefined);
