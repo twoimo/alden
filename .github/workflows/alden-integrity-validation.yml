@@ -1,0 +1,31 @@
+name: Alden isolated integrity regression
+
+on:
+  push:
+    branches: [codex/alden-integrity-ci-20261011]
+
+permissions:
+  contents: read
+
+jobs:
+  macos-integrity:
+    name: Focused Python macOS integrity
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Verify exact triggering commit
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run focused OSK, acquisition, and MLX regression
+        run: >-
+          python3 -B -m unittest
+          tests.test_alden_osk_delta
+          tests.test_alden_source_acquisition
+          tests.test_verify_local_models -v
