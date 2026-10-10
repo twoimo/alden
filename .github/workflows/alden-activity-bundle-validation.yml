@@ -1,0 +1,96 @@
+name: Alden memory continuity unsigned bundle proof
+
+on:
+  push:
+    branches: [codex/alden-activity-bundle-ci-20261011]
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-package:
+    name: Build and verify arm64 Alden package
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Verify exact source and arm64 host
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(/usr/bin/uname -m)" = arm64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            desktop/src-tauri/target
+          key: alden-pr-release-root-v2-${{ github.repository }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'desktop/src-tauri/Cargo.lock') }}
+          restore-keys: alden-pr-release-root-v2-${{ github.repository }}-${{ runner.os }}-${{ runner.arch }}-
+      - name: Build unsigned Tauri release bundle
+        run: |
+          set -euo pipefail
+          unset OPENKAKAO_SIGN_IDENTITY APPLE_SIGNING_IDENTITY
+          /bin/sh scripts/build-alden-desktop.sh
+      - name: Verify runtime resource provenance and bundle identifiers
+        run: |
+          set -euo pipefail
+          app="desktop/src-tauri/target/release/bundle/macos/Alden.app"
+          main="$app/Contents/MacOS/openkakao-alden-desktop"
+          embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
+          release_cli="target/release/openkakao-cli"
+          test -x "$main"
+          test -x "$embedded_cli"
+          test -x "$release_cli"
+          test "$(/usr/bin/lipo -archs "$main")" = arm64
+          test "$(/usr/bin/lipo -archs "$embedded_cli")" = arm64
+          test ! -e "$app/Contents/_CodeSignature"
+          /usr/bin/cmp -s "$embedded_cli" "$release_cli"
+          APP_PATH="$app" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import plistlib
+          app=Path(os.environ['APP_PATH'])
+          configuration=json.loads(Path('desktop/src-tauri/tauri.conf.json').read_text())
+          info=plistlib.loads((app/'Contents/Info.plist').read_bytes())
+          assert info.get('CFBundleIdentifier') == configuration['identifier']
+          assert info.get('CFBundleShortVersionString') == configuration['version']
+          assert info.get('CFBundleExecutable') == 'openkakao-alden-desktop'
+          for source,dest in configuration['bundle']['resources'].items():
+              entry=app/'Contents/Resources'/dest
+              assert entry.is_file() and not entry.is_symlink() and entry.stat().st_size>0, (source,dest)
+          print('ALDEN_ARM64_UNSIGNED_BUNDLE_RESOURCES_VERIFIED')
+          PY
+      - name: Package reproducible source-bound unsigned artifact
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/alden-unsigned"
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent \
+            desktop/src-tauri/target/release/bundle/macos/Alden.app \
+            "$RUNNER_TEMP/alden-unsigned/Alden-unsigned-macos-arm64.zip"
+          (cd "$RUNNER_TEMP/alden-unsigned" && /usr/bin/shasum -a 256 Alden-unsigned-macos-arm64.zip > SHA256SUMS)
+          printf '%s\n' "${{ github.sha }}" > "$RUNNER_TEMP/alden-unsigned/SOURCE_SHA.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Alden-unsigned-macos-arm64-memory-continuity
+          path: ${{ runner.temp }}/alden-unsigned/
+          if-no-files-found: error
+          retention-days: 7
