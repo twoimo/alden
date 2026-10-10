@@ -1,5 +1,5 @@
 > 2026-10-11 추가: [로컬 브라우저·exact AX 비상 중단 귀속과 눌림 효과 미확인 유지](architecture/alden-tool-cancellation-20261011.md).
-> `codex/alden-tool-cancel-attribution-20261011`: [macOS CI 38072772583](https://github.com/twoimo/alden/actions/runs/38072772583) Python 92/92 통과(분리 fixture와 실제 AbortController).
+> `codex/alden-tool-cancel-attribution-20261011`: 기존 [macOS CI 38072772583](https://github.com/twoimo/alden/actions/runs/38072772583) Python 92/92, 통합 [CI 38073524156](https://github.com/twoimo/alden/actions/runs/38073524156) Python 94/94 통과(실제 Alden 음성·브라우저·DB 코드와 모의 하드웨어). 과거 세션 취소 후 신규 입력 성공 오보고와 pre-dispatch 등록 경합을 수정했고 explicit resume는 새 토큰만 허용.
 > PR #31 다음 단계로 검토하되 원본 운영 사용자 Mac의 GUI, 중단 이벤트, 권한, STATUS는 직접 검증하지 못했으며 병합·설치를 수행하지 않았다.
 
 > 2026-10-11 신규: [로컬 MLX 응답 완결성/오발화 방지와 음성 이력 실제 경로](architecture/alden-local-mlx-completion-20261011.md).
