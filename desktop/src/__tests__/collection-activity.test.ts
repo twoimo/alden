@@ -75,12 +75,11 @@ describe('committed graph activity consumption', () => {
     expect(show).not.toHaveBeenCalled(); expect(consumer.diagnostics().pending).toBe(0);
   });
   it('retries a reversed, failed or duplicate page without consuming its cursor or pulsing', async () => {
-    const read = vi.fn(async () => page(12, [event(11), event(12)]))
+    const read = vi.fn(async (_: Record<string, unknown>) => page(12, [event(11), event(12)]))
       .mockResolvedValueOnce(page(12, [event(12), event(11)]))
       .mockResolvedValueOnce(page(12, [event(11, { success: false } as never), event(12)]))
       .mockResolvedValueOnce(page(12, [event(11), event(12, { event_id: 'event-11' })]));
     const { consumer, refresh, show } = setup(read);
-    vi.setSystemTime(12000);
     for (let attempt = 0; attempt < 3; attempt++) {
       await vi.advanceTimersByTimeAsync(2500);
       expect(consumer.diagnostics().cursor).toBe(10);
