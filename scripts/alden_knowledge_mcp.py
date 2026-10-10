@@ -41,7 +41,8 @@ class KnowledgeServer(StdioServer):
                   'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}
         result = []
         for name, extras, description in [
-            ('alden_knowledge_search', {'query': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
+            ('alden_knowledge_search', {'query': {'type': 'string', 'minLength': 1, 'maxLength': 256},
+                                       'target_id': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
              'Retrieve retained collection versions and explicit relations with exact provenance. No writes, model loads or account access.'),
             ('alden_knowledge_graph', {'focus': {'type': 'string', 'maxLength': 256}},
              'Read bounded stored graph nodes and explicit relationships in the allowed project scope.'),
@@ -66,7 +67,7 @@ class KnowledgeServer(StdioServer):
 
     def valid_call(self, params):
         name, args = params.get('name'), params.get('arguments')
-        options = {'alden_knowledge_search': {'query'}, 'alden_knowledge_graph': {'focus'},
+        options = {'alden_knowledge_search': {'query','target_id'}, 'alden_knowledge_graph': {'focus'},
                    'alden_knowledge_history': {'after'},
                    'alden_knowledge_trace': {'document_id','expected_version','target_id'}}
         if not isinstance(name, str) or name not in options or not isinstance(args, dict) or set(args) - ({'projects', 'limit'} | options[name]):
@@ -80,7 +81,9 @@ class KnowledgeServer(StdioServer):
         if type(limit) is not int or not 1 <= limit <= (10 if name.endswith('search') else 50):
             return False
         if name.endswith('search'):
-            return isinstance(args.get('query'), str) and 1 <= len(args['query'].strip()) <= 256
+            return (isinstance(args.get('query'), str) and 1 <= len(args['query'].strip()) <= 256
+                    and ('target_id' not in args or isinstance(args['target_id'],str)
+                         and 1 <= len(args['target_id']) <= 256))
         if name.endswith('trace'):
             return (isinstance(args.get('document_id'), str) and 1 <= len(args['document_id']) <= 256
                     and all(key not in args or isinstance(args[key], str) and 1 <= len(args[key]) <= 256
@@ -98,7 +101,8 @@ class KnowledgeServer(StdioServer):
             import auto_reply_knowledge_graph as kg
             with kg.embedding_abort_scope(token):
                 result = retrieve(self.root, args['query'], projects=args['projects'],
-                                  max_entities=args.get('limit', 6), cancelled=cancelled)
+                                  max_entities=args.get('limit', 6), cancelled=cancelled,
+                                  target_id=args.get('target_id'))
         elif name.endswith('trace'):
             result = trace_document(self.root, args['document_id'], projects=args['projects'],
                                     target_id=args.get('target_id'), expected_version=args.get('expected_version'))
