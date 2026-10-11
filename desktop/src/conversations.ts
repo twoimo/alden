@@ -82,7 +82,26 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
           placeholder('conversation', '저장된 대화가 없습니다', '기억 정리에서 수집 상태를 확인하세요.');
         }
       } else {
-        sessions = rows(data.items);
+        // A failed/malformed/partial read is not evidence that a selected
+        // conversation vanished. This endpoint normally returns all sessions.
+        if (!Array.isArray(data.items) || data.items.some(item => !item || typeof item !== 'object'
+          || typeof (item as Row).id !== 'string' || !(item as Row).id)) { failure(); return; }
+        const incomingSessions = rows(data.items);
+        const complete = data.next == null && data.partial !== true && data.truncated !== true;
+        if (!complete && !incomingSessions.length) {
+          status('voice-history-status', '대화 목록을 모두 불러오지 못했습니다.');
+          if (!sessionId) placeholder('voice', '대화 목록을 모두 불러오지 못했습니다', '다시 불러오기를 누르세요.', true);
+          return;
+        }
+        sessions = incomingSessions;
+        if (complete && sessionId && !sessions.some(row => row.id === sessionId)) {
+          // Retire the history/input selection together before any late message
+          // read can return. This does not stop or switch an owned live listener.
+          sessionId = ''; voiceEpoch++; voiceBefore = null; voiceItems = [];
+          voiceList.set([]); delete get('voice-start').dataset.conversationId;
+          get('voice-history-older').hidden = true;
+          status('voice-history-title', '대화를 선택하세요');
+        }
         filterRails();
         if (!sessionId && sessions.length) pickRoom(sessions[0], true);
         else if (!sessions.length) {
