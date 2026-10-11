@@ -1,5 +1,9 @@
 # Alden desktop design contract
 
+## 0.3.66 — conversation history and input ownership
+
+Retire a missing selection only after a successful complete catalog. Clear its messages, cursor, input ID and response generation together. An incomplete empty catalog preserves the known conversation and visible content; an initial incomplete read offers retry. Late catalog/message results keep request, view and selection ownership fences. History retirement does not change an active microphone listener. [Source tests, installed empty-history rendering and remaining input paths](../docs/architecture/alden-conversation-target-20261011.md).
+
 ## 0.3.65 — measured label dimensions
 
 Measure width and height after resize, mode changes or explicit inline typography changes. Cache measurements across unchanged frames and ignore transform changes. Keep15 placement candidates, preserve focus/hover priority and keyboard targets, and suppress boxes that cannot fit. The private native audit observes at most24 actual element rectangles without emitting label contents or performing per-frame inspection. [Reproduction and delivery scope](../docs/architecture/alden-label-geometry-20261011.md).
