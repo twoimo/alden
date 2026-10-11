@@ -128,7 +128,13 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
                   <details id="knowledge-list"><summary title="목록" aria-label="목록"><i data-lucide="List" aria-hidden="true"></i></summary><div id="knowledge-result-list" role="list" aria-label="현재 표시한 지식 목록"></div></details>
                 </form>
                 <details id="knowledge-info" class="knowledge-info"><summary aria-label="그래프 정보" title="그래프 정보"><i data-lucide="Info" aria-hidden="true"></i></summary><div class="knowledge-scope-block"><p id="knowledge-scope" class="knowledge-scope" role="status" aria-live="polite"></p>
-                <p>색은 선택한 지식에서 현재 표시된 연결을 따라간 최단 거리입니다. 관계 방향은 연결된 노트에서 확인할 수 있습니다.</p><p class="knowledge-activity-key"><span>● 선택</span><span>● 저장 변경</span><span>● 원문 읽기</span></p></div></details></div>
+                <p>색은 선택한 지식에서 현재 표시된 연결을 따라간 최단 거리입니다. 관계 방향은 연결된 노트에서 확인할 수 있습니다.</p><p class="knowledge-activity-key"><span>● 선택</span><span>● 저장 변경</span><span>● 원문 읽기</span></p>
+                <section id="knowledge-quality" class="knowledge-quality" aria-label="수집 기록 품질">
+                  <div class="knowledge-quality-heading"><strong>수집 기록 품질</strong><button id="knowledge-quality-run" type="button">품질 확인</button></div>
+                  <p id="knowledge-quality-scope">허용된 전체 현재 수집 기록이 대상입니다. 화면의 노드와 다른 필터는 반영하지 않습니다.</p>
+                  <p id="knowledge-quality-status" role="status" aria-live="polite">아직 요청하지 않았습니다.</p>
+                  <div id="knowledge-quality-report" class="knowledge-quality-report" aria-label="수집 기록 품질 결과" data-state="idle" hidden></div>
+                </section></div></details></div>
                 <div class="knowledge-hologram-shell"><canvas id="knowledge-graph-canvas" width="1600" height="1200" tabindex="0" aria-label="대화 속 이름과 주제의 연결 그림" aria-controls="knowledge-note-pane"></canvas><div class="knowledge-depth-legend" role="group" aria-label="선택한 지식에서의 연결 거리" hidden></div><div class="knowledge-node-labels" aria-hidden="true"></div><div id="knowledge-accessible-nodes" class="sr-only" role="region" aria-label="대화 검색 항목 목록"></div></div>
                 <div class="knowledge-hologram-toolbar"><button id="knowledge-back" type="button" disabled>이전</button><button id="knowledge-overview" type="button" disabled>전체 보기</button><button id="knowledge-expand-hop" type="button" disabled>더 보기</button><button id="knowledge-camera-reset" type="button">시점 초기화</button></div>
               </div>

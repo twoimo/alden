@@ -7,6 +7,7 @@ import { KnowledgeRefresh } from './refresh';
 import { unifiedGraph } from './unified-graph';
 import { CollectionActivity } from './collection-activity';
 import { affinityInput, affinityMatches, parseLayoutAffinity, type LayoutAffinity } from './layout-affinity';
+import { KnowledgeQualityPanel } from './quality-panel';
 
 type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode' | 'showNodeActivity' | 'clearNodeActivity'>
   & { setLayoutAffinity?: (value: LayoutAffinity | null) => void };
@@ -49,10 +50,12 @@ export class CollectionGraphController {
   private debounce: ReturnType<typeof setTimeout> | null = null;
   private totals = { nodes: 0, edges: 0 };
   private readonly source: HTMLSelectElement;
+  private readonly quality: KnowledgeQualityPanel;
 
   constructor(private readonly load: typeof fetchSettingsAction, private readonly graph: GraphPort,
     private readonly root: Document = document, revision?: () => Promise<string | null>) {
     this.source = root.getElementById('knowledge-project') as HTMLSelectElement;
+    this.quality = new KnowledgeQualityPanel(load, root);
     this.refresh = new KnowledgeRefresh(() => this.read(), payload => this.apply(payload), 15000,
       () => this.collection ? Promise.resolve(null) : revision?.() ?? Promise.resolve(null));
     this.journal = new CollectionActivity(options => {
@@ -95,6 +98,7 @@ export class CollectionGraphController {
   start(): void {
     if (this.active || this.disposed) return;
     this.active = true; this.epoch++;
+    this.quality.start();
     if (this.collection) this.journal.start();
     this.root.getElementById('knowledge-filter-form')?.setAttribute('aria-busy', 'true');
     void this.initialize().then(() => { if (this.active && !this.disposed) this.refresh.start(); });
@@ -103,12 +107,13 @@ export class CollectionGraphController {
   stop(): void {
     this.affinityPending = null;
     this.active = false; this.epoch++; this.refresh.stop(); this.journal.stop();
+    this.quality.stop();
     if (this.debounce !== null) clearTimeout(this.debounce);
     this.debounce = null;
     this.root.getElementById('knowledge-filter-form')?.removeAttribute('aria-busy');
   }
 
-  dispose(): void { this.stop(); this.disposed = true; this.controls.abort(); }
+  dispose(): void { this.stop(); this.disposed = true; this.controls.abort(); this.quality.dispose(); }
 
   private initialize(): Promise<void> {
     if (this.initialization) return this.initialization;
@@ -146,6 +151,7 @@ export class CollectionGraphController {
 
   private changeScope(): void {
     if (this.disposed) return;
+    this.quality.syncSelection();
     this.epoch++; this.refresh.stop(); this.journal.reset(); this.history = [];
     this.affinity = null; this.affinityPending = null; this.affinityRequestKey = '';
     this.affinityDiagnostic = { state: 'not_requested' };

@@ -1,0 +1,299 @@
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { KnowledgeQualityPanel, parseCollectionQuality, qualityQueryFromSelection,
+  type QualityQuery } from '../knowledge/quality-panel';
+import { settingsMarkup } from '../ui';
+import type { fetchSettingsAction } from '../runtime';
+
+const owned: KnowledgeQualityPanel[] = [];
+const all = { scope: 'all' } as const;
+
+function success(query: QualityQuery = all) {
+  return {
+    ok: true, schema: 1,
+    scope: {
+      requested_scope: query.scope,
+      requested_project: query.scope === 'project' ? query.project : null,
+      projects: query.scope === 'project' ? [query.project] : ['one', 'all'],
+      coverage: 'permitted_current_collection_memberships', filters: 'project_only',
+      source_verification: 'hash_references_only',
+    },
+    checked_at: 1_791_768_900.125, elapsed_ms: 25.125,
+    counts: { memberships: 42, project_current_versions: 39, relations: 11,
+      distinct_current_documents: 30, bytes_examined: 8000 },
+    findings: { normalization_mismatch: 2, relation_evidence_invalid: 3 },
+    duplicate_candidates: {
+      same_raw_bytes: { groups: 4, status: 'hash_references_only' },
+      same_normalized_search_text: { groups: 5, status: 'review_candidate' },
+      cross_context_search_text: { groups: 6, status: 'review_candidate' },
+    },
+    numeric_review_candidates: { mixed_vector_dimensions: { profiles: 7, status: 'review_candidate' } },
+    normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
+  };
+}
+
+function pending() {
+  let resolve!: (value: Record<string, unknown> | null) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<Record<string, unknown> | null>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function setup(load: typeof fetchSettingsAction) {
+  const panel = new KnowledgeQualityPanel(load);
+  owned.push(panel);
+  panel.start();
+  return panel;
+}
+
+const button = () => document.getElementById('knowledge-quality-run') as HTMLButtonElement;
+const info = () => document.getElementById('knowledge-info') as HTMLDetailsElement;
+const report = () => document.getElementById('knowledge-quality-report') as HTMLElement;
+const status = () => document.getElementById('knowledge-quality-status') as HTMLElement;
+const calls = (load: ReturnType<typeof vi.fn<typeof fetchSettingsAction>>) =>
+  load.mock.calls.filter(([action]) => action === 'collection-quality');
+const state = () => report().dataset.state;
+async function settle() { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); }
+
+function select(panel: KnowledgeQualityPanel, value: string) {
+  const selector = document.getElementById('knowledge-project') as HTMLSelectElement;
+  if (![...selector.options].some(option => option.value === value)) {
+    const option = document.createElement('option');
+    option.value = value; option.textContent = value;
+    selector.append(option);
+  }
+  selector.value = value;
+  panel.syncSelection(); // CollectionGraphController calls this on project changes.
+}
+
+function metric(label: string) {
+  return [...report().querySelectorAll('dt')].find(node => node.textContent === label)?.nextElementSibling?.textContent;
+}
+
+beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(); });
+afterEach(() => { for (const panel of owned) panel.dispose(); owned.length = 0; vi.useRealTimers(); });
+
+describe('manual collection-quality report and fixed native selectors', () => {
+  it('starts idle, has stable IDs and makes no request on open, visibility start or time passing', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(success());
+    setup(load);
+    expect(button().id).toBe('knowledge-quality-run');
+    expect(status().id).toBe('knowledge-quality-status');
+    expect(report().id).toBe('knowledge-quality-report');
+    expect(state()).toBe('idle');
+    expect(report().hidden).toBe(true);
+    expect(status().textContent).toContain('아직 요청하지');
+    info().open = true;
+    await vi.advanceTimersByTimeAsync(90_000);
+    expect(calls(load)).toHaveLength(0);
+    expect(state()).toBe('idle');
+  });
+
+  it('sends only the explicit union scope or literal project ID all despite visual filters', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>(async (_action, input) =>
+      success(JSON.parse(input!.query!) as QualityQuery));
+    const panel = setup(load);
+    info().open = true;
+    (document.getElementById('knowledge-search') as HTMLInputElement).value = 'ignored filter';
+    (document.getElementById('knowledge-platform') as HTMLSelectElement).value = 'youtube';
+    button().click();
+    expect(state()).toBe('loading');
+    await settle();
+    expect(state()).toBe('complete');
+    expect(JSON.parse(calls(load)[0][1]!.query!)).toEqual({ scope: 'all' });
+    expect(report().textContent).toContain('모든 프로젝트');
+    select(panel, 'project:all');
+    expect(state()).toBe('idle');
+    button().click(); await settle();
+    expect(state()).toBe('complete');
+    expect(JSON.parse(calls(load)[1][1]!.query!)).toEqual({ scope: 'project', project: 'all' });
+    expect(report().textContent).toContain('선택한 프로젝트');
+    expect(qualityQueryFromSelection('legacy')).toBeNull();
+    expect(qualityQueryFromSelection('project:')).toBeNull();
+  });
+
+  it('reports only observed totals, vetted Korean labels and candidates, without leaking response data', async () => {
+    const value = {
+      ...success(),
+      findings: { normalization_mismatch: 2, relation_evidence_invalid: 3, secret_document_identity: 9 },
+      samples: { source_url: 'https://private.example/secret', document_id: 'sensitive-123' },
+    };
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(value);
+    setup(load); info().open = true; button().click(); await settle();
+    expect(state()).toBe('complete');
+    expect(report().hidden).toBe(false);
+    expect(metric('정규화 차이')).toBe('2');
+    expect(metric('그 밖의 무결성 발견')).toBe('12');
+    expect(metric('동일 원본 해시 참조 그룹')).toBe('4');
+    expect(metric('동일 정규화 검색 텍스트 그룹')).toBe('5');
+    expect(metric('교차 맥락 검색 텍스트 그룹')).toBe('6');
+    expect(metric('벡터 차원 혼합 프로필')).toBe('7');
+    expect(report().textContent).toContain('문서 30개');
+    expect(report().textContent).toContain('NFC·줄바꿈 차이는 관찰만');
+    expect(report().textContent).toContain('원문 바이트를 다시 읽지 않았습니다');
+    expect(report().textContent).toContain('수정하지 않습니다');
+    expect(report().textContent).toContain('의미상 중복');
+    expect(report().textContent).not.toContain('확인한 바이트');
+    expect(report().textContent).not.toContain('프로젝트별 현재 버전');
+    expect(report().textContent).not.toContain('secret_document_identity');
+    expect(report().textContent).not.toContain('sensitive-123');
+    expect(report().textContent).not.toContain('https://private.example');
+    const details = report().querySelector<HTMLDetailsElement>('details.knowledge-quality-findings')!;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain('NFC·줄바꿈 정규화 차이');
+    expect(details.textContent).toContain('관계 근거 형식 오류');
+    expect(details.textContent).toContain('그 밖의 세부 항목');
+    expect(report().getAttributeNames().filter(name => name.startsWith('data-'))).toEqual(['data-state']);
+    expect(report().querySelector('img, a, script')).toBeNull();
+  });
+
+  it('allows a fully valid empty observation, but never invents a zero result from a missing report', async () => {
+    const empty = success();
+    empty.findings = {} as typeof empty.findings;
+    empty.counts = { memberships: 0, project_current_versions: 0, relations: 0,
+      distinct_current_documents: 0, bytes_examined: 0 };
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce(empty).mockResolvedValueOnce({ ok: true, schema: 1, scope: empty.scope });
+    setup(load); info().open = true;
+    button().click(); await settle();
+    expect(state()).toBe('complete');
+    expect(metric('정규화 차이')).toBe('0');
+    expect(metric('그 밖의 무결성 발견')).toBe('0');
+    expect(report().textContent).toContain('수집 소속 0건');
+    button().click(); await settle();
+    expect(state()).toBe('unavailable');
+    expect(report().hidden).toBe(true);
+    expect(metric('정규화 차이')).toBeUndefined();
+    expect(status().textContent).toContain('다시 요청');
+  });
+
+  it('prevents concurrent clicks, and fences late results from another project', async () => {
+    const old = pending(), next = pending();
+    const load = vi.fn<typeof fetchSettingsAction>().mockImplementationOnce(() => old.promise)
+      .mockImplementationOnce(() => next.promise);
+    const panel = setup(load); info().open = true; button().click();
+    expect(state()).toBe('loading');
+    expect(button().disabled).toBe(true);
+    button().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(calls(load)).toHaveLength(1);
+    select(panel, 'project:two');
+    expect(state()).toBe('idle');
+    button().click();
+    expect(calls(load)).toHaveLength(2);
+    const earlier = success(); earlier.counts.memberships = 999;
+    old.resolve(earlier); await settle();
+    expect(state()).toBe('loading');
+    expect(report().textContent).not.toContain('999');
+    next.resolve(success({ scope: 'project', project: 'two' })); await settle();
+    expect(state()).toBe('complete');
+    expect(report().textContent).toContain('수집 소속 42건');
+    expect(report().textContent).not.toContain('999');
+  });
+
+  it('clears a pending result on details close and stays idle after its late return', async () => {
+    const delayed = pending();
+    const load = vi.fn<typeof fetchSettingsAction>().mockImplementationOnce(() => delayed.promise)
+      .mockResolvedValueOnce(success());
+    setup(load); info().open = true; button().click();
+    info().open = false;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state()).toBe('idle');
+    delayed.resolve(success()); await settle();
+    expect(state()).toBe('idle');
+    expect(report().hidden).toBe(true);
+    info().open = true; button().click(); await settle();
+    expect(state()).toBe('complete');
+  });
+
+  it('resets on hidden lifecycle, excludes legacy, and disables listeners on disposal', async () => {
+    const delayed = pending();
+    const load = vi.fn<typeof fetchSettingsAction>().mockImplementationOnce(() => delayed.promise)
+      .mockResolvedValueOnce(success());
+    const panel = setup(load); info().open = true; button().click();
+    panel.stop();
+    expect(state()).toBe('idle');
+    delayed.resolve(success()); await settle();
+    expect(state()).toBe('idle');
+    panel.start(); select(panel, 'legacy');
+    expect(button().disabled).toBe(true);
+    expect(status().textContent).toContain('제외');
+    button().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(calls(load)).toHaveLength(1);
+    select(panel, 'all'); button().click(); await settle();
+    expect(state()).toBe('complete');
+    panel.dispose();
+    expect(state()).toBe('idle');
+    expect(button().disabled).toBe(true);
+    button().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(calls(load)).toHaveLength(2);
+  });
+
+  it('exposes known errors and transport failures as unavailable, then allows retry', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce({ ok: false, schema: 1, reason: 'quality_time_budget',
+        scope: { requested_scope: 'all', requested_project: null } })
+      .mockRejectedValueOnce(new Error('network error'))
+      .mockResolvedValueOnce(success());
+    setup(load); info().open = true;
+    button().click(); await settle();
+    expect(state()).toBe('unavailable');
+    expect(report().hidden).toBe(true);
+    expect(status().textContent).toContain('시간 제한');
+    expect(button().disabled).toBe(false);
+    button().click(); await settle();
+    expect(state()).toBe('unavailable');
+    expect(status().textContent).toContain('가져오지 못했습니다');
+    button().click(); await settle();
+    expect(state()).toBe('complete');
+  });
+});
+
+describe('schema and scope validation must fail closed', () => {
+  it('separates a project literally named all from the union and handles scoped errors', () => {
+    const one = { scope: 'project', project: 'all' } as const;
+    expect(parseCollectionQuality(success(one), one)).toMatchObject({ ok: true });
+    expect(parseCollectionQuality(success(one), all)).toBeNull();
+    expect(parseCollectionQuality(success(all), one)).toBeNull();
+    expect(parseCollectionQuality({ ok: false, schema: 1, reason: 'quality_query_invalid',
+      scope: { requested_scope: null, requested_project: null } }, one)).toMatchObject({ ok: false });
+    expect(parseCollectionQuality({ ok: false, schema: 1, reason: 'quality_query_invalid',
+      scope: { requested_scope: 'all', requested_project: null } }, one)).toBeNull();
+    expect(parseCollectionQuality({ ok: false, schema: 1, reason: 'unknown_error',
+      scope: { requested_scope: null, requested_project: null } }, one)).toBeNull();
+  });
+
+  it.each([
+    ['epoch milliseconds', (item: any) => { item.checked_at = 1_791_768_900_125; }],
+    ['implausible epoch seconds', (item: any) => { item.checked_at = 42; }],
+    ['string time', (item: any) => { item.checked_at = '1791768900'; }],
+    ['missing count', (item: any) => { delete item.counts.memberships; }],
+    ['negative count', (item: any) => { item.counts.relations = -1; }],
+    ['fractional count', (item: any) => { item.counts.project_current_versions = 3.14; }],
+    ['missing findings', (item: any) => { delete item.findings; }],
+    ['negative finding', (item: any) => { item.findings.relation_evidence_invalid = -7; }],
+    ['bad finding key', (item: any) => { item.findings['<img src=x>'] = 1; }],
+    ['missing candidate status', (item: any) => { delete item.duplicate_candidates.same_raw_bytes.status; }],
+    ['wrong candidate status', (item: any) => { item.duplicate_candidates.same_normalized_search_text.status = 'confirmed'; }],
+    ['bad numeric status', (item: any) => { item.numeric_review_candidates.mixed_vector_dimensions.status = 'outlier'; }],
+    ['bad normalization method', (item: any) => { item.normalization.method = 'aggressive_trim'; }],
+    ['semantics claimed confirmed', (item: any) => { item.normalization.semantic_validity = 'verified'; }],
+    ['missing coverage', (item: any) => { delete item.scope.coverage; }],
+    ['wrong project echo', (item: any) => { item.scope.requested_project = 'foreign'; }],
+    ['non-array project coverage', (item: any) => { item.scope.projects = 'one'; }],
+    ['empty union coverage', (item: any) => { item.scope.projects = []; }],
+    ['duplicate union coverage', (item: any) => { item.scope.projects = ['one', 'one']; }],
+    ['over-budget union coverage', (item: any) => { item.scope.projects = Array.from({ length: 17 }, (_, i) => `project-${i}`); }],
+    ['not project-only', (item: any) => { item.scope.filters = 'graph_filters'; }],
+  ] as Array<[string, (item: any) => void]>)('rejects %s without showing an all-clear', (_name, alter) => {
+    const item: any = success();
+    alter(item);
+    expect(parseCollectionQuality(item, all)).toBeNull();
+  });
+
+  it('rejects a wrong project list even with a matching requested project echo', () => {
+    const query = { scope: 'project', project: 'all' } as const;
+    const item = success(query);
+    item.scope.projects = ['another-project'];
+    expect(parseCollectionQuality(item, query)).toBeNull();
+  });
+});

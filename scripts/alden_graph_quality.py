@@ -76,7 +76,7 @@ def _blob(folder, name):
 
 
 def audit(root, projects, *, verify_sources=False, max_rows=100000,
-          max_bytes=512 * 1024 * 1024, timeout=120, sample_cap=5):
+          max_bytes=512 * 1024 * 1024, timeout=120, sample_cap=5, cancelled=None):
     if (not isinstance(projects, (list, tuple)) or not 1 <= len(projects) <= 16
             or any(not isinstance(p, str) or not p or len(p) > 128 for p in projects)):
         raise ValueError("quality_project_scope_required")
@@ -89,6 +89,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     if store is None or store.schema != 3:
         raise ValueError("quality_existing_v3_store_required")
     started = time.monotonic()
+    next_cancel_check = started
     projects = sorted(set(projects))
     counts, findings, samples = Counter(), Counter(), defaultdict(list)
     raw_groups, raw_entries = defaultdict(set), defaultdict(set)
@@ -98,7 +99,13 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     degree, directed_relations = defaultdict(Counter), Counter()
 
     def check():
-        if time.monotonic() - started > timeout:
+        nonlocal next_cancel_check
+        now = time.monotonic()
+        if cancelled is not None and now >= next_cancel_check:
+            next_cancel_check = now + .05
+            if cancelled():
+                raise RuntimeError('quality_cancelled')
+        if now - started > timeout:
             raise RuntimeError("quality_time_budget")
         if counts['memberships'] + counts['relations'] > max_rows or counts['bytes_examined'] > max_bytes:
             raise RuntimeError("quality_scan_budget")

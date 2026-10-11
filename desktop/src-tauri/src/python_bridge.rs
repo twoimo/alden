@@ -1174,7 +1174,7 @@ impl PythonBridge {
         let is_mlx_launch = action == MLX_SERVER_LAUNCH_ACTION;
         let is_history = matches!(
             action,
-            "history-rooms" | "history-messages" | "collection-affinity"
+            "history-rooms" | "history-messages" | "collection-affinity" | "collection-quality"
         );
         let swap_job_id = token_id.unwrap_or("model-swap");
         if is_swap {
@@ -1224,6 +1224,7 @@ impl PythonBridge {
                 | "collection-history"
                 | "collection-graph"
                 | "collection-affinity"
+                | "collection-quality"
                 | "collection-projects"
                 | "collection-scheduler-status"
                 | "collection-scheduler-control"
@@ -2409,6 +2410,23 @@ fn settings_action_args(
         | "model-owner-status"
         | MLX_SERVER_STATUS_ACTION => {}
         "room-catalog" => {}
+        "collection-quality" => {
+            if node_id.is_some() || chat_id.is_some() || model.is_some() || explicit_opt_in == Some(true) {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            let value=bounded_arg(query,4096).ok_or(BridgeError::ActionNotAllowed)?;
+            let parsed:Value=serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
+            let object=parsed.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+            let valid=match object.get("scope").and_then(Value::as_str) {
+                Some("all") => object.len()==1,
+                Some("project") => object.len()==2 && object.get("project").and_then(Value::as_str).is_some_and(|project| {
+                    !project.is_empty() && project.chars().count()<=128 && project==project.trim() && !project.chars().any(char::is_control)
+                }),
+                _ => false,
+            };
+            if !valid {return Err(BridgeError::ActionNotAllowed);}
+            args.extend(["--history-query".into(),value]);
+        }
         "routed-model-set"
         | "history-rooms"
         | "history-messages"
@@ -5685,6 +5703,20 @@ mod tests {
                 Err(BridgeError::ActionNotAllowed)
             ));
         }
+    }
+
+    #[test]
+    fn collection_quality_read_preserves_explicit_scope_and_never_admits_controls() {
+        for query in [r#"{"scope":"all"}"#,r#"{"scope":"project","project":"all"}"#] {
+            let args=settings_action_args("collection-quality",Some(query),None,None,None,None,None).unwrap();
+            assert!(args.windows(2).any(|p|p==["--history-query",query]));
+            assert!(!args.iter().any(|a|a=="--explicit-opt-in" || a=="--model"));
+        }
+        for query in [None,Some("{}"),Some("[]"),Some(r#"{"scope":"all","project":"private"}"#),Some(r#"{"scope":"project","project":""}"#),Some(r#"{"scope":"all","verify_sources":true}"#)] {
+            assert!(settings_action_args("collection-quality",query,None,None,None,None,None).is_err());
+        }
+        assert!(settings_action_args("collection-quality",Some(r#"{"scope":"all"}"#),Some("node"),None,None,None,None).is_err());
+        assert!(settings_action_args("collection-quality",Some(r#"{"scope":"all"}"#),None,None,None,Some(true),None).is_err());
     }
 
     #[test]

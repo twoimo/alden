@@ -240,6 +240,8 @@ impl Output {
                 | "workspace-settings-compact.png"
                 | "settings-layout.json"
                 | "workspace-readback.json"
+                | "knowledge-quality-default.png"
+                | "knowledge-quality-compact.png"
                 | "activity-ready.json"
                 | "render-audit.json"
         ) || bytes.len() > MAX_BYTES
@@ -545,6 +547,7 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
                     | "routed-models"
                     | "collection-graph"
                     | "collection-affinity"
+                    | "collection-quality"
                     | "reply-history"
                     | "geeknews-history"
                     | "room-catalog"
@@ -756,6 +759,37 @@ fn capture_workspaces(
             &snapshot(window, deadline)?,
             deadline,
         )?;
+        if page == "memory" {
+            collect_script(window,r#"JSON.stringify((()=>{
+                document.querySelector('#knowledge-info').open=true;
+                const button=document.querySelector('#knowledge-quality-run');
+                if(!button||button.disabled)throw new Error('quality control unavailable');
+                button.click();return {requested:true};})())"#.into(),deadline)?;
+            let quality=loop {
+                let state=collect_script(window,r#"JSON.stringify((()=>{
+                    const panel=document.querySelector('#knowledge-quality-report');
+                    return {state:panel.dataset.state,status:document.querySelector('#knowledge-quality-status').textContent,
+                        hidden:panel.hidden,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
+                if state["state"]=="complete" {break state;}
+                if state["state"]=="unavailable" {return Err(format!("quality inspection unavailable: {state}"));}
+                live(deadline)?;std::thread::sleep(Duration::from_millis(100));
+            };
+            if quality["hidden"]!=false || quality["width"]!=quality["scrollWidth"] {
+                return Err("quality report hidden or horizontal overflow".into());
+            }
+            collect_script(window,r#"JSON.stringify((()=>{
+                const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                box.scrollTop=document.querySelector('#knowledge-quality').offsetTop-box.offsetTop;
+                window.__aldenQualityPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenQualityPaint=true;}));
+                return {scrolled:true};})())"#.into(),deadline)?;
+            loop {
+                let state=collect_script(window,"JSON.stringify({ready:window.__aldenQualityPaint===true})".into(),deadline)?;
+                if state["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+            }
+            publish(output,&format!("knowledge-quality-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+            collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-info').open=false;return {closed:true};})())".into(),deadline)?;
+            state["qualityObservation"]=quality;
+        }
         if page == "history" {
             collect_script(window, r#"JSON.stringify((()=>{
               const schedule=document.querySelector('.collection-schedule');
@@ -2074,6 +2108,7 @@ mod tests {
             "collection-projects",
             "collection-graph",
             "collection-affinity",
+            "collection-quality",
             "collection-scheduler-status",
         ] {
             assert!(audit_read_action(action, true));

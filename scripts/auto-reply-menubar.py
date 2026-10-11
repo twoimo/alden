@@ -2683,6 +2683,14 @@ def _mlx_lifecycle_payload(action: str, state_root: Path) -> dict:
 
 def main():
     routed_action = _argv_flag_value("--action")
+    if routed_action == "collection-quality":
+        from alden_graph_quality_action import read_action
+        from alden_abort import read_abort_state
+        root_raw = _argv_flag_value("--state-root")
+        root = Path(root_raw).expanduser() if root_raw else _DEFAULT_STATE_ROOT
+        _print_json(read_action(root, _argv_flag_value("--history-query"),
+            cancelled=lambda: read_abort_state(root / "alden-abort.json").latched))
+        return 0
     if routed_action == "collection-affinity":
         from alden_layout_affinity import read_action
         from alden_abort import read_abort_state
