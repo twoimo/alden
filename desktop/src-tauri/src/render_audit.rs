@@ -1654,6 +1654,18 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
     // Reannounce the verified native visibility after the frontend installed
     // its lifecycle listeners and completed the initial status handshake.
     visibility(&window,true,deadline)?;
+    let target = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window.run_on_main_thread(move || {
+        let result = live(deadline).and_then(|_| {
+            // This explicit input audit uses the production show/focus path on
+            // only its own window. Never fake document visibility to admit input.
+            super::set_window_visible(&target, true);
+            target.set_focus().map_err(|_| "owned assistant window focus failed".into())
+        });
+        let _ = tx.try_send(result);
+    }).map_err(|_| "assistant focus dispatch failed")?;
+    receive(rx,deadline)?;
     let mut first_probe = true;
     loop {
         let s=collect_script(&window,r#"JSON.stringify({mounted:!!document.querySelector('#assistant-composer-text'),
