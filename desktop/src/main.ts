@@ -617,7 +617,7 @@ export async function bootSettings(
   const preferences=wireSettingsPreferences(dependencies.loadAction);
   window.addEventListener('pagehide',()=>{archives.dispose();collectionHistory.dispose();collectionSchedule.dispose();automationHistory.dispose();preferences.dispose();},{once:true});
   let graphLifecycle: RenderLifecycle | null = null;
-  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');collectionHistory.visible(state==='visible');collectionSchedule.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility});
+  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');collectionHistory.visible(state==='visible');collectionSchedule.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility,pauseOnBlur:false});
   window.addEventListener('pagehide',detachArchiveVisibility,{once:true});
   const navigation = wireSettingsNavigation(document, (page) => {
     archives.select(page);

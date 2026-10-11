@@ -150,7 +150,8 @@ class OpenCodexLlm:
             self.last_metrics.update(stage=stage, error_code=reason)
             # A missing image, bad prompt or context failure says nothing about
             # provider readiness and must not poison the model picker indicator.
-            if stage in {"transport", "response"}:
+            # User cancellation is not a provider health observation.
+            if stage in {"transport", "response"} and not cancelled:
                 record_result(self.state_root, self.model, success=False, error=code)
             token.raise_if_cancelled()
             if isinstance(error, RoutedGenerationError):

@@ -46,6 +46,8 @@ export interface LifecycleWiringOptions {
   documentRef?: Document;
   subscribeVisibility?: VisibilitySubscriber | null;
   readVisibility?: VisibilityReader | null;
+  /** Data views may remain active in a visible window that is not focused. */
+  pauseOnBlur?: boolean;
   /** Runs once after the closed transition, while the page is going away. */
   onClosed?: () => void;
 }
@@ -62,6 +64,7 @@ export function wireRenderLifecycle(
 ): () => void {
   const win = options.windowRef ?? window;
   const doc = options.documentRef ?? document;
+  const pauseOnBlur = options.pauseOnBlur !== false;
   let closed = false;
   let detached = false;
   let release: (() => void) | null = null;
@@ -95,8 +98,10 @@ export function wireRenderLifecycle(
     // Blocks every later transition: a teardown that is not `pagehide` must not
     // let a late visibility event restart a renderer that is being disposed.
     detached = true;
-    win.removeEventListener("blur", hide);
-    win.removeEventListener("focus", show);
+    if (pauseOnBlur) {
+      win.removeEventListener("blur", hide);
+      win.removeEventListener("focus", show);
+    }
     win.removeEventListener("pagehide", close);
     doc.removeEventListener("visibilitychange", visibilityChanged);
     const unsubscribe = release;
@@ -125,8 +130,10 @@ export function wireRenderLifecycle(
     }
   };
 
-  win.addEventListener("blur", hide);
-  win.addEventListener("focus", show);
+  if (pauseOnBlur) {
+    win.addEventListener("blur", hide);
+    win.addEventListener("focus", show);
+  }
   win.addEventListener("pagehide", close);
   doc.addEventListener("visibilitychange", visibilityChanged);
 

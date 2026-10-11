@@ -4,10 +4,64 @@ import { settingsMarkup } from '../ui';
 import { wireConversationViews } from '../conversations';
 import { VirtualList } from '../virtual-list';
 import type { fetchSettingsAction } from '../runtime';
+import { wireRenderLifecycle, type VisibilityHandler } from '../core/lifecycle-wiring';
 beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('complete local histories', () => {
+  it('loads an unfocused visible window and still obeys native hide and restore', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>(async action => action === 'history-rooms'
+      ? { ok: true, rooms: [{ chat_id: '1', chat_name: '확인된 방' }] }
+      : { ok: true, anchor_log_id: '1', next_before: null, total: 1,
+          messages: [{ id: '1', text: '확인된 원문' }] });
+    const views = wireConversationViews(load);
+    let signal!: VisibilityHandler;
+    const detach = wireRenderLifecycle({ transition: state => views.visible(state === 'visible') }, {
+      pauseOnBlur: false,
+      subscribeVisibility: async handler => { signal = handler; return () => {}; },
+      readVisibility: async () => true,
+    });
+    try {
+      await settle();
+      window.dispatchEvent(new Event('blur'));
+      views.select('conversation');
+      await settle();
+      expect(document.getElementById('conversation-placeholder')!.hidden).toBe(true);
+      expect(document.getElementById('chat-message-list')!.textContent).toContain('확인된 원문');
+      signal(false);
+      load.mockClear();
+      views.select('voice');
+      await settle();
+      expect(load).not.toHaveBeenCalled();
+      signal(true);
+      await settle();
+      expect(load.mock.calls.some(([action]) => action === 'voice-history-sessions')).toBe(true);
+    } finally { detach(); views.dispose(); }
+  });
+
+  it('accepts confirmed history after focus leaves a still visible window', async () => {
+    let release!: (value: Record<string, unknown>) => void;
+    const load = vi.fn<typeof fetchSettingsAction>(async action => action === 'history-rooms'
+      ? new Promise(resolve => { release = resolve; })
+      : { ok: true, anchor_log_id: '1', next_before: null, total: 1,
+          messages: [{ id: '1', text: '확인된 원문' }] });
+    const views = wireConversationViews(load);
+    const detach = wireRenderLifecycle({ transition: state => views.visible(state === 'visible') }, {
+      pauseOnBlur: false,
+      subscribeVisibility: async () => () => {},
+      readVisibility: async () => true,
+    });
+    try {
+      await settle();
+      views.select('conversation');
+      window.dispatchEvent(new Event('blur'));
+      release({ ok: true, rooms: [{ chat_id: '1', chat_name: '확인된 방' }] });
+      await settle();
+      expect(document.getElementById('conversation-placeholder')!.hidden).toBe(true);
+      expect(document.getElementById('chat-message-list')!.textContent).toContain('확인된 원문');
+    } finally { detach(); views.dispose(); }
+  });
+
   it.each(['conversation', 'voice'] as const)('ignores a late rejected %s catalog after a newer view has loaded', async kind => {
     let rejectOld!: (error: Error) => void;
     let catalogCalls = 0;
