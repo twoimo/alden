@@ -22,7 +22,7 @@ export interface SemanticLayoutDiagnostics {
   affectedNodes: number; dirtyNodes: number; pinnedNodes: number; clusters: number;
   communityPasses: number; communityMoves: number; communityVisits: number;
   solverIterations: number; springEvaluations: number; collisionTests: number;
-  densityEvaluations: number; crowdedCells: number; collisionBudgetExhausted: boolean; collisionCandidatesTruncated: boolean;
+  densityEvaluations: number; neighborhoodDensityEvaluations: number; crowdedCells: number; collisionBudgetExhausted: boolean; collisionCandidatesTruncated: boolean;
   cachedNodes: number; cachedPairs: number; cachedClusters: number; reflow: boolean;
 }
 export interface SemanticLayoutResult {
@@ -32,6 +32,22 @@ export interface SemanticLayoutResult {
   diagnostics: SemanticLayoutDiagnostics;
 }
 interface Pair { key: string; source: string; target: string; r: number; s: number; weight: number; rest: number }
+interface CollisionCell {
+  x: number; y: number; z: number; members: number[]; sample: number[];
+  sumX: number; sumY: number; sumZ: number;
+}
+interface CollisionNeighborhood {
+  samples: number[][]; ends: number[]; total: number;
+  density: { x: number; y: number; z: number; pressure: number } | null;
+}
+function sampledMember(neighborhood: CollisionNeighborhood, offset: number): number {
+  let low = 0, high = neighborhood.ends.length - 1;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (offset < neighborhood.ends[middle]) high = middle; else low = middle + 1;
+  }
+  return neighborhood.samples[low][offset - (low ? neighborhood.ends[low - 1] : 0)];
+}
 export interface SemanticLayoutCheckpoint {
   positions: Array<[string, Point3]>; labels: Array<[string, string]>;
   centers: Array<[string, Point3]>; pairs: Array<[string, Pair]>; pins: string[];
@@ -106,7 +122,7 @@ export class SemanticLayoutEngine {
       inputTruncated: view.nodes.length > limits.inputNodes || view.edges.length > limits.inputEdges || validatedPairs.length > limits.inputAffinities,
       affectedNodes: 0, dirtyNodes: 0, pinnedNodes: 0, clusters: 0,
       communityPasses: 0, communityMoves: 0, communityVisits: 0, solverIterations: 0,
-      springEvaluations: 0, collisionTests: 0, densityEvaluations: 0, crowdedCells: 0,
+      springEvaluations: 0, collisionTests: 0, densityEvaluations: 0, neighborhoodDensityEvaluations: 0, crowdedCells: 0,
       collisionBudgetExhausted: false, collisionCandidatesTruncated: false,
       cachedNodes: 0, cachedPairs: 0, cachedClusters: 0, reflow: options.reflow === true,
     };
@@ -272,8 +288,9 @@ export class SemanticLayoutEngine {
     const forces = new Float64Array(ids.length * 3);
     // Bounded 32^3 cell keys. Reuse direct slots during this snapshot rather
     // than hashing 27 neighbor keys per occupied cell on every solver pass.
-    const sampleSlots: Array<number[] | undefined> = movableCount ? new Array(32768) : [];
-    const neighborSlots: Array<number[] | undefined> = movableCount ? new Array(32768) : [];
+    const sampleSlots: Array<CollisionCell | undefined> = movableCount ? new Array(32768) : [];
+    const neighborSlots: Array<CollisionNeighborhood | undefined> = movableCount ? new Array(32768) : [];
+    const neighborhoodCrowdThreshold = 24;
     if (movable.some(Boolean)) for (let iteration = 0; iteration < limits.solverIterations; iteration++) {
       d.solverIterations++; forces.fill(0);
       ids.forEach((_, i) => {
@@ -289,8 +306,15 @@ export class SemanticLayoutEngine {
         d.springEvaluations++;
         const p = points[a], q = points[b];
         let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
-        if (Math.hypot(dx, dy, dz) < 1e-9) { const v = seed(pair.key); dx = v.x * .001; dy = v.y * .001; dz = v.z * .001; }
-        const length = Math.max(1e-9, Math.hypot(dx, dy, dz));
+        // Solver points are bounded before each pass. Their squared distance
+        // cannot overflow, so one square root avoids two general hypot calls
+        // per spring while retaining the exact-coincidence fallback.
+        let length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (length < 1e-9) {
+          const v = seed(pair.key); dx = v.x * .001; dy = v.y * .001; dz = v.z * .001;
+          length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        length = Math.max(1e-9, length);
         const gain = 2 * pair.weight * (length - pair.rest) / length;
         if (movable[a]) { forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz; }
         if (movable[b]) { forces[b * 3] -= gain * dx; forces[b * 3 + 1] -= gain * dy; forces[b * 3 + 2] -= gain * dz; }
@@ -300,12 +324,12 @@ export class SemanticLayoutEngine {
         // 27 string lookups for every node. Rotate crowded representatives and
         // reserve a share of the snapshot budget for every pass and movable ID.
         const cellKey = (x: number, y: number, z: number) => ((x + 16) * 32 + y + 16) * 32 + z + 16;
-        const cells = new Map<number, { x: number; y: number; z: number; members: number[]; sumX: number; sumY: number; sumZ: number }>();
+        const cells = new Map<number, CollisionCell>();
         const nodeCells = new Int32Array(ids.length);
         const shiftX = iteration * .061 % .16 - .08, shiftY = iteration * .043 % .16 - .08, shiftZ = iteration * .097 % .16 - .08;
         points.forEach((p, i) => {
           const x = Math.floor((p.x + shiftX) / .16), y = Math.floor((p.y + shiftY) / .16), z = Math.floor((p.z + shiftZ) / .16), key = cellKey(x, y, z);
-          const cell = cells.get(key) ?? { x, y, z, members: [], sumX: 0, sumY: 0, sumZ: 0 };
+          const cell = cells.get(key) ?? { x, y, z, members: [], sample: [], sumX: 0, sumY: 0, sumZ: 0 };
           cell.members.push(i); cell.sumX += p.x; cell.sumY += p.y; cell.sumZ += p.z; cells.set(key, cell); nodeCells[i] = key;
         });
         // One coarse density evaluation per crowded movable ID, not an
@@ -320,7 +344,7 @@ export class SemanticLayoutEngine {
             if (!movable[a]) continue;
             d.densityEvaluations++;
             const p = points[a]; let dx = p.x - x, dy = p.y - y, dz = p.z - z;
-            const separation = Math.hypot(dx, dy, dz); let length = separation;
+            const separation = Math.sqrt(dx * dx + dy * dy + dz * dz); let length = separation;
             if (length < 1e-9) {
               const v = seed(ids[a]); dx = v.x; dy = v.y; dz = v.z;
               length = Math.max(1e-9, Math.hypot(dx, dy, dz));
@@ -337,29 +361,59 @@ export class SemanticLayoutEngine {
           }
           const start = iteration * limits.cellOccupancy % members.length;
           for (let i = 0; i < Math.min(members.length, limits.cellOccupancy); i++) sample.push(members[(start + i) % members.length]);
-          sampleSlots[key] = sample;
+          cell.sample = sample;
+          sampleSlots[key] = cell;
         }
         for (const [key, cell] of cells) {
-          const candidates: number[] = [];
+          // Keep at most 27 sample references and cumulative lengths. Copying
+          // all sampled IDs into every neighboring cell dominated snapshot CPU;
+          // binary lookup retains the exact flattened order and rotated quota.
+          const samples: number[][] = [], ends: number[] = [];
+          let total = 0;
+          let count = 0, sumX = 0, sumY = 0, sumZ = 0;
           for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
-            const sample = sampleSlots[cellKey(cell.x + x, cell.y + y, cell.z + z)];
-            if (sample) for (const b of sample) candidates.push(b);
+            const neighborKey = cellKey(cell.x + x, cell.y + y, cell.z + z);
+            const neighbor = sampleSlots[neighborKey];
+            if (neighbor) {
+              samples.push(neighbor.sample); total += neighbor.sample.length; ends.push(total);
+              count += neighbor.members.length;
+              sumX += neighbor.sumX; sumY += neighbor.sumY; sumZ += neighbor.sumZ;
+            }
           }
-          neighborSlots[key] = candidates;
+          // A locally crowded neighborhood can straddle many lightly filled
+          // cells. Pressure its centroid only above 24 nodes in the 3x3x3
+          // neighborhood, without changing the cloud's global scale or pins.
+          neighborSlots[key] = { samples, ends, total, density: count > neighborhoodCrowdThreshold
+            ? { x: sumX / count, y: sumY / count, z: sumZ / count,
+              pressure: .4 * Math.min(1, (count - neighborhoodCrowdThreshold) / neighborhoodCrowdThreshold) }
+            : null };
         }
         const passBudget = Math.floor((limits.collisionTests - d.collisionTests) / (limits.solverIterations - iteration));
         const perNode = Math.max(1, Math.floor(passBudget / movableCount));
         let passTests = 0;
         for (let a = 0; a < ids.length; a++) {
           if (!movable[a]) continue;
-          const candidates = neighborSlots[nodeCells[a]]!, total = candidates.length, p = points[a];
+          const neighborhood = neighborSlots[nodeCells[a]]!;
+          const total = neighborhood.total, p = points[a];
+          const density = neighborhood.density;
+          if (density) {
+            d.neighborhoodDensityEvaluations++;
+            let dx = p.x - density.x, dy = p.y - density.y, dz = p.z - density.z;
+            let length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (length < 1e-9) {
+              const v = seed(ids[a]), scale = .14 / Math.max(1e-9, Math.hypot(v.x, v.y, v.z));
+              dx = v.x * scale; dy = v.y * scale; dz = v.z * scale; length = .14;
+            }
+            const gain = density.pressure / Math.max(.14, length);
+            forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz;
+          }
           if (total > perNode) d.collisionCandidatesTruncated = true;
           const start = (collisionSeeds[a] + iteration * 17) % total;
           let tests = 0;
           // A directed sample updates only this movable node. Every movable ID
           // owns its quota; a popular early representative cannot absorb it.
           for (let trial = 0; trial < Math.min(total, perNode + 1) && tests < perNode && passTests < passBudget; trial++) {
-            const b = candidates[(start + trial) % total];
+            const b = sampledMember(neighborhood, (start + trial) % total);
             if (a === b) continue;
             tests++; passTests++; d.collisionTests++;
             const q = points[b];

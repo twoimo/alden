@@ -1,5 +1,9 @@
 # Alden desktop design contract
 
+## 0.3.64 — neighborhood density and sampled references
+
+Apply capped centroid pressure only to crowded3×3×3 neighborhoods during snapshot layout. Retain exact pins, unchanged components and R/S/source authority. Keep at most27 sample references per neighborhood with cumulative lengths; preserve the previous flattened order and rotation rather than increasing collision budgets. Count the new pressure evaluations separately. Measure raw and scale-normalized density together: expansion alone must not be reported as better semantic clustering. [Paired geometry, CPU costs and delivery gates](../docs/architecture/alden-central-density-20261011.md).
+
 ## 0.3.63 — restored camera and render-idle observation
 
 A saved camera pose must be reachable by the current OrbitControls limits. Preserve the exact valid pose while admitting its radius; reject too-close or overflowing restored radii. Diagnostics expose the actual camera, transition, bridge, region, orbit and voice motion gates. The owned native audit now waits for the render loop to stop within its original bounded deadline, records both loop states and distinguishes physics rest from render idle. It does not stop the renderer to obtain a passing result. See [source checks and remaining delivery gates](../docs/architecture/alden-camera-stream-20261011.md).
