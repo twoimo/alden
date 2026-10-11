@@ -115,7 +115,9 @@
       "bundle-resources/scripts/alden_collection_scheduler.py": "scripts/alden_collection_scheduler.py",
       "bundle-resources/scripts/alden_source_acquisition.py": "scripts/alden_source_acquisition.py",
       "bundle-resources/scripts/alden_model_routes.py": "scripts/alden_model_routes.py",
-      "bundle-resources/scripts/alden_routed_llm.py": "scripts/alden_routed_llm.py"
+      "bundle-resources/scripts/alden_routed_llm.py": "scripts/alden_routed_llm.py",
+      "bundle-resources/scripts/alden_chat.py": "scripts/alden_chat.py",
+      "bundle-resources/scripts/alden_chat_turns.py": "scripts/alden_chat_turns.py"
     }
   }
 }

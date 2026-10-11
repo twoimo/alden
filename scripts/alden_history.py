@@ -151,9 +151,15 @@ def read(state_root: Path, binary: Path, action: str, query: str | None = None, 
             if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='voice_sources'").fetchone():
                 sources={row['turn_id']:json.loads(row['provenance']) for row in db.execute('SELECT * FROM voice_sources WHERE session_id=? AND turn_id BETWEEN ? AND ?',(chat_id,low,high))}
             items=[]
+            attachments={}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='alden_chat_requests'").fetchone():
+                attachments={row['turn_id']:json.loads(row['attachments_json']) for row in db.execute(
+                    "SELECT turn_id,attachments_json FROM alden_chat_requests WHERE conversation_id=? AND turn_id BETWEEN ? AND ? AND state!='retracted'",(chat_id,low,high))}
             for row in rows:
                 item=dict(row)
                 if row['role']=='assistant' and row['turn_id'] in sources:item['retrieval_provenance']=sources[row['turn_id']]
+                if row['role']=='user' and row['turn_id'] in attachments:
+                    item['attachments']=attachments[row['turn_id']]
                 items.append(item)
             return {'ok':True,'items':items,'next':low if more else None}
         if action=='db-sync-history':

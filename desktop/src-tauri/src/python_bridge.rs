@@ -161,6 +161,7 @@ struct PythonRun<'a> {
     stdin_payload: Option<&'a [u8]>,
     global_abort_grace: Option<Duration>,
     browser_runtime: bool,
+    assistant_runtime: bool,
 }
 
 impl Default for PythonRun<'_> {
@@ -174,6 +175,7 @@ impl Default for PythonRun<'_> {
             stdin_payload: None,
             global_abort_grace: None,
             browser_runtime: false,
+            assistant_runtime: false,
         }
     }
 }
@@ -952,6 +954,21 @@ mod knowledge_revision_probe {
 }
 
 impl PythonBridge {
+    pub fn for_assistant_audit(state_root: PathBuf) -> Result<Self, BridgeError> {
+        let mut config = BridgeConfig::discover();
+        let source = config.state_root.join("reply-model.json");
+        if source.is_symlink() { return Err(BridgeError::StateIo); }
+        let bytes = fs::read(&source).map_err(|_| BridgeError::StateIo)?;
+        if bytes.len() > 4096 { return Err(BridgeError::StateIo); }
+        fs::DirBuilder::new().mode(0o700).create(&state_root).map_err(|_| BridgeError::StateIo)?;
+        let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(state_root.join("reply-model.json")).map_err(|_| BridgeError::StateIo)?;
+        file.write_all(&bytes).map_err(|_| BridgeError::StateIo)?;
+        config.state_root = state_root.clone();
+        config.logs_dir = state_root.join("logs");
+        Ok(Self { config: Arc::new(config), cancellations: Arc::new(Mutex::new(HashMap::new())),
+                  jobs: Arc::new(Mutex::new(HashMap::new())) })
+    }
     pub fn new() -> Self {
         Self {
             config: Arc::new(BridgeConfig::discover()),
@@ -1463,6 +1480,11 @@ impl PythonBridge {
         &self,
         conversation_id: Option<&str>,
     ) -> Result<(), BridgeError> {
+        let inputs: Vec<String> = self.cancellations.lock().map_err(|_| BridgeError::StateIo)?
+            .iter().filter(|(_, handle)| handle.cooperative_marker.as_ref().is_some_and(|p|
+                p.parent() == Some(self.config.state_root.join("assistant-input-cancel").as_path())))
+            .map(|(id, _)| id.clone()).collect();
+        for id in inputs { if !self.cancel_assistant_input(&id) { return Err(BridgeError::StateIo); } }
         start_voice_session_if_absent(&self.config.state_root, voice_session_is_running, || {
             if global_abort_is_latched(&self.config.state_root)? {
                 return Err(BridgeError::Cancelled);
@@ -1549,6 +1571,55 @@ impl PythonBridge {
         false
     }
 
+    pub fn cancel_assistant_input(&self, token_id: &str) -> bool {
+        if !valid_model_swap_token(token_id) { return false; }
+        let Ok(map) = self.cancellations.lock() else { return false; };
+        let Ok(_abort_lock) = lock_global_abort(&self.config.state_root) else { return false; };
+        let directory = self.config.state_root.join("assistant-input-cancel");
+        if fs::DirBuilder::new().mode(0o700).create(&directory).is_err() && !directory.exists() { return false; }
+        if !fs::symlink_metadata(&directory).is_ok_and(|meta| private_abort_root(&meta)) { return false; }
+        if let Some(handle) = map.get(token_id) {
+            if handle.cooperative_marker.as_ref().is_none_or(|p| p.parent() != Some(directory.as_path())) { return false; }
+        }
+        write_model_swap_cancel_marker(&directory.join(format!("{token_id}.json"))).is_ok()
+    }
+
+    pub fn submit_assistant_input(&self, input: Value, token_id: &str) -> Result<Value, BridgeError> {
+        let payload = validate_assistant_input(&input, token_id)?;
+        let owned_mic = self.cancellations.lock().map_err(|_| BridgeError::StateIo)?.contains_key("voice-session");
+        if owned_mic && !self.stop_manual_voice_session() { return Err(BridgeError::VoiceProcessCheck); }
+        let _admission = VOICE_SESSION_START_LOCK.lock().map_err(|_| BridgeError::VoiceProcessCheck)?;
+        if voice_session_is_running(&self.config.state_root)? { return Err(BridgeError::VoiceSessionAlreadyRunning); }
+        self.begin_job(token_id, "assistant_input", "receiving", 0.8);
+        let result = (|| {
+            let raw = self.run_python_with_output_limit(PythonRun {
+                extra: &["--token-id".into(), token_id.into()],
+                timeout: Duration::from_secs(135), token_id: Some(token_id), cooperative_cancel: true,
+                stdin_payload: Some(&payload), output_limit: 256 * 1024,
+                assistant_runtime: true, ..PythonRun::default()
+            })?;
+            let receipt = parse_json_output(&raw)?;
+            if receipt["request_id"] != input["request_id"] || !receipt["ok"].is_boolean()
+                || !matches!(receipt["state"].as_str(), Some("completed"|"cancelled"|"failed"|"superseded"|"running")) {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if receipt["state"] == "completed" && (receipt["ok"] != true
+                || receipt["reply"].as_str().is_none_or(|s| s.is_empty() || s.len() > 64000)
+                || receipt["conversation_id"].as_str().is_none_or(|s| !valid_conversation_id(s))
+                || receipt["turn_id"].as_u64().is_none_or(|n| n == 0 || n > 9_007_199_254_740_991)
+                || receipt["context_version"].as_u64().is_none_or(|n| n == 0 || n > 9_007_199_254_740_991)) {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if !input["conversation_id"].is_null() && receipt["conversation_id"] != input["conversation_id"] {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            Ok(receipt)
+        })();
+        if let Err(error) = &result { self.set_job_error(token_id, Some(&error.to_string())); }
+        self.finish_job(token_id);
+        result
+    }
+
     fn run_python(
         &self,
         extra: &[String],
@@ -1575,6 +1646,7 @@ impl PythonBridge {
             stdin_payload,
             global_abort_grace,
             browser_runtime,
+            assistant_runtime,
         } = run;
         let resources = self.config.resources()?;
         resources.validate().map_err(BridgeError::from)?;
@@ -1585,8 +1657,8 @@ impl PythonBridge {
             resources.installed,
             browser_runtime,
         )?;
-        let script = resources
-            .script
+        let selected_script = if assistant_runtime { resources.root.join(resource_layout::ASSISTANT_SCRIPT) } else { resources.script.clone() };
+        let script = selected_script
             .to_str()
             .ok_or(BridgeError::ResourceUnsafe)?;
         let bin = resources.bin.to_str().ok_or(BridgeError::ResourceUnsafe)?;
@@ -1597,8 +1669,12 @@ impl PythonBridge {
             let Some(token) = token else {
                 return Err(BridgeError::ActionNotAllowed);
             };
-            let directory = self.config.state_root.join(MODEL_SWAP_CANCEL_DIR);
-            fs::create_dir_all(&directory).map_err(|_| BridgeError::StateIo)?;
+            let directory = self.config.state_root.join(if assistant_runtime { "assistant-input-cancel" } else { MODEL_SWAP_CANCEL_DIR });
+            if assistant_runtime {
+                fs::DirBuilder::new().mode(0o700).create(&directory).or_else(|e|
+                    if e.kind() == std::io::ErrorKind::AlreadyExists { Ok(()) } else { Err(e) }).map_err(|_| BridgeError::StateIo)?;
+                if !private_abort_root(&fs::symlink_metadata(&directory).map_err(|_| BridgeError::StateIo)?) { return Err(BridgeError::StateIo); }
+            } else { fs::create_dir_all(&directory).map_err(|_| BridgeError::StateIo)?; }
             let marker = directory.join(format!("{token}.json"));
             if marker.is_symlink() {
                 return Err(BridgeError::StateIo);
@@ -2453,6 +2529,47 @@ fn settings_action_args(
         _ => return Err(BridgeError::ActionNotAllowed),
     }
     Ok(args)
+}
+
+fn valid_conversation_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+}
+
+fn validate_assistant_input(input: &Value, token_id: &str) -> Result<Vec<u8>, BridgeError> {
+    if !valid_model_swap_token(token_id) || token_id.as_bytes()[14] != b'4' { return Err(BridgeError::ActionNotAllowed); }
+    let obj = input.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+    if obj.len() != 4 || !["request_id", "conversation_id", "text", "images"].iter().all(|k| obj.contains_key(*k)) {
+        return Err(BridgeError::ActionNotAllowed);
+    }
+    if input["request_id"].as_str().is_none_or(|s| !valid_conversation_id(s))
+        || (!input["conversation_id"].is_null() && input["conversation_id"].as_str().is_none_or(|s| !valid_conversation_id(s))) {
+        return Err(BridgeError::ActionNotAllowed);
+    }
+    let text = input["text"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
+    if (text.trim().is_empty() && input["images"].as_array().is_none_or(Vec::is_empty)) || text.len() > 16000 || text.chars().count() > 4000
+        || text.chars().any(|c| c.is_control() && !matches!(c, '\n'|'\t')) {
+        return Err(BridgeError::ActionNotAllowed);
+    }
+    let images = input["images"].as_array().ok_or(BridgeError::ActionNotAllowed)?;
+    if images.len() > 4 { return Err(BridgeError::ActionNotAllowed); }
+    let mut total = 0;
+    for image in images {
+        let row = image.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+        if row.len() != 3 || !["name", "mime", "data"].iter().all(|k| row.contains_key(*k)) {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        let name = image["name"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
+        let data = image["data"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
+        if name.is_empty() || name.chars().count() > 128 || name.chars().any(|c| c.is_control() || matches!(c, '/'|'\\'))
+            || !matches!(image["mime"].as_str(), Some("image/png"|"image/jpeg"|"image/gif"|"image/webp"))
+            || data.is_empty() || data.len() > (8 * 1024 * 1024 + 2) / 3 * 4
+            || data.len() % 4 != 0 || !data.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+'|b'/'|b'=')) {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        total += data.len();
+    }
+    if total > (20 * 1024 * 1024 + 2) / 3 * 4 + 12 { return Err(BridgeError::ActionNotAllowed); }
+    serde_json::to_vec(input).map_err(|_| BridgeError::ActionNotAllowed)
 }
 
 fn valid_model_swap_token(value: &str) -> bool {
@@ -4126,6 +4243,49 @@ fn sanitize_knowledge_focus(value: &Value, expected_node: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn assistant_input_validator_rejects_roles_paths_controls_and_bad_tokens() {
+        let token = "00000000-0000-4000-8000-000000000001";
+        let input = json!({"request_id":"11111111111111111111111111111111", "conversation_id":null,"text":"질문\n42","images":[]});
+        assert!(validate_assistant_input(&input, token).is_ok());
+        for changed in [json!({"role":"system"}), json!({"conversation_id":"foreign"}),
+            json!({"text":"\u{0000}"}), json!({"text":"x".repeat(4001)}),
+            json!({"images":[{"name":"../private.png","mime":"image/png","data":"AAAA"}]})] {
+            let mut invalid = input.clone();
+            for (key,value) in changed.as_object().unwrap() { invalid[key] = value.clone(); }
+            assert!(validate_assistant_input(&invalid, token).is_err());
+        }
+        assert!(validate_assistant_input(&input,"00000000-0000-1000-8000-000000000001").is_err());
+        assert!(validate_assistant_input(&input,"../private").is_err());
+    }
+
+    #[test]
+    fn assistant_cancellation_startup_marker_uses_private_namespace_and_not_global_latch() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!("alden-input-cancel-{}",std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let bridge = bridge_with_state_root(root.clone());
+        let token = "00000000-0000-4000-8000-000000000001";
+        assert!(bridge.cancel_assistant_input(token));
+        assert!(root.join("assistant-input-cancel").join(format!("{token}.json")).is_file());
+        assert!(!root.join(ABORT_STATE_NAME).exists());
+        assert_eq!(fs::metadata(root.join("assistant-input-cancel")).unwrap().permissions().mode() & 0o777,0o700);
+        assert!(!bridge.cancel_assistant_input("foreign"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn assistant_cancellation_refuses_symlink_namespace_without_writing_target() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!("alden-input-link-{}",std::process::id()));
+        let outside = root.with_extension("outside");
+        let _ = fs::remove_dir_all(&root); let _ = fs::remove_dir_all(&outside);
+        fs::DirBuilder::new().mode(0o700).create(&root).unwrap(); fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside,root.join("assistant-input-cancel")).unwrap();
+        let bridge = bridge_with_state_root(root.clone());
+        assert!(!bridge.cancel_assistant_input("00000000-0000-4000-8000-000000000001"));
+        assert_eq!(fs::read_dir(&outside).unwrap().count(),0);
+        fs::remove_dir_all(root).unwrap();fs::remove_dir_all(outside).unwrap();
+    }
+
     #[test]
     fn manual_voice_stop_signals_only_its_child_and_preserves_cleanup() {
         let root = std::env::temp_dir().canonicalize().unwrap().join(format!(

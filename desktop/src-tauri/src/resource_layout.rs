@@ -6,6 +6,7 @@ use std::path::{Component, Path, PathBuf};
 pub const MENUBAR_SCRIPT: &str = "scripts/auto-reply-menubar.py";
 pub const LOCAL_MLX_READINESS_SCRIPT: &str = "scripts/local_mlx_model_readiness.py";
 pub const VOICE_SCRIPT: &str = "scripts/alden_voice.py";
+pub const ASSISTANT_SCRIPT: &str = "scripts/alden_chat.py";
 pub const VOICE_AUDIO_LIBRARY: &str = "scripts/libalden_audio.dylib";
 pub const TOOL_RUNTIME_SCRIPT: &str = "scripts/alden_tool_runtime.py";
 pub const AX_UI_SCRIPT: &str = "scripts/auto_reply_ax_ui.py";
@@ -40,6 +41,8 @@ pub const DATA_FILES: &[&str] = &[
     BROWSER_USE_SCRIPT,
     TOOL_RUNTIME_SCRIPT,
     VOICE_SCRIPT,
+    ASSISTANT_SCRIPT,
+    "scripts/alden_chat_turns.py",
     VOICE_AUDIO_LIBRARY,
     "scripts/alden_abort.py",
     "scripts/alden_local_http.py",

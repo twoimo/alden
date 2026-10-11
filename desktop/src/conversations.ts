@@ -8,7 +8,7 @@ const element=(tag:string,className:string,text=''):HTMLElement=>{const e=docume
 const date=(value:unknown):string=>{const n=Number(value);return Number.isFinite(n)&&n>0?new Date(n*1000).toLocaleString('ko-KR',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';};
 const phases:Record<string,string>={collecting:'대화를 가져오는 중',graphing:'기억을 정리하는 중',complete:'수집된 대화 정리 완료',pending:'다음 갱신에서 이어서 정리',paused:'갱신 일시 중지',failed:'갱신하지 못했습니다',interrupted:'이전 갱신 중단'};
 
-export function wireConversationViews(load:typeof fetchSettingsAction=fetchSettingsAction):{select:(page:Page)=>void;visible:(flag:boolean)=>void;dispose:()=>void} {
+export function wireConversationViews(load:typeof fetchSettingsAction=fetchSettingsAction):{select:(page:Page)=>void;visible:(flag:boolean)=>void;refreshConversation:(id:string)=>void;dispose:()=>void} {
   let page:Page='memory',dead=false,rooms:Row[]=[],sessions:Row[]=[],chatId='',sessionId='',chatEpoch=0,voiceEpoch=0;
   let chatItems:Row[]=[],voiceItems:Row[]=[],anchor:string|null=null,before:string|null=null,voiceBefore:number|null=null;
   let dbItems:Row[]=[],dbLoaded=false;
@@ -28,6 +28,9 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
     if(notice){const original=element('details','message-notice');original.append(element('summary','','대화방 알림'),element('div','message-text',text));body.append(original);}
     else body.append(element('div','message-text',text));
     if(item.attachment){let note='첨부';try{const a=JSON.parse(String(item.attachment));note=String(a.name??a.filename??a.title??'첨부 메시지');}catch{note=String(item.attachment);}body.append(element('div','message-attachment',note));}
+    if(Array.isArray(item.attachments))for(const attachment of item.attachments.slice(0,4)){
+      if(attachment&&typeof attachment==='object'&&typeof attachment.filename==='string')body.append(element('div','message-attachment','이미지 · '+attachment.filename));
+    }
     body.append(element('time','message-date',date(item.sent_at??item.created_at)));row.append(body);return row;
   };
   const chatList=new VirtualList(get('chat-message-list'),r=>String(r.id),bubble,112);lists.push(chatList);
@@ -150,5 +153,10 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
   get('chat-message-list').addEventListener('scroll',()=>{if(visible&&page==='conversation'&&before!==null&&get('chat-message-list').scrollTop<70)void readChat();},{passive:true,signal:listeners.signal});
   get('voice-message-list').addEventListener('scroll',()=>{if(visible&&page==='voice'&&voiceBefore!==null&&get('voice-message-list').scrollTop<70)void readVoice();},{passive:true,signal:listeners.signal});
   function select(next:Page):void {if(page!==next){viewEpoch++;chatEpoch++;voiceEpoch++;}page=next;chatList.setVisible(visible&&page==='conversation');chatRail.setVisible(visible&&page==='conversation');voiceList.setVisible(visible&&page==='voice');voiceRail.setVisible(visible&&page==='voice');dbList.setVisible(visible&&page==='history');if(timer!==null)clearTimeout(timer);timer=null;if(!visible||dead)return;if(next==='conversation'){if(!rooms.length)void readCatalog('conversation');else if(chatId&&!chatItems.length)void readChat(true);}if(next==='voice'){void readCatalog('voice');if(sessionId&&!voiceItems.length)void readVoice(true);}if(next==='history'){void readDb();timer=setTimeout(()=>{if(!dead&&visible&&page==='history')select('history');},5000);}}
-  return {select,visible:(flag)=>{visible=flag;if(!flag){viewEpoch++;chatEpoch++;voiceEpoch++;}select(page);},dispose:()=>{dead=true;chatEpoch++;voiceEpoch++;listeners.abort();if(timer!==null)clearTimeout(timer);lists.forEach(l=>l.dispose());}};
+  return {select,refreshConversation:(id)=>{
+    if(dead||!visible||page!=='voice'||!/^[0-9a-f]{32}$/.test(id))return;
+    if(sessionId!==id)pickRoom({id,title:'올든 대화'},true);
+    else{voiceEpoch++;voiceBefore=null;void readVoice(false,true);}
+    void readCatalog('voice');
+  },visible:(flag)=>{visible=flag;if(!flag){viewEpoch++;chatEpoch++;voiceEpoch++;}select(page);},dispose:()=>{dead=true;chatEpoch++;voiceEpoch++;listeners.abort();if(timer!==null)clearTimeout(timer);lists.forEach(l=>l.dispose());}};
 }

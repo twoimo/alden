@@ -1640,7 +1640,14 @@ class LocalMlxLlm:
         state_root: Path | None = None,
         catalog_selected: bool = False,
         reasoning_effort: str | None = None,
+        system_prompt: str = VOICE_PERSONA_PROMPT,
+        max_tokens: int = 128,
     ):
+        if not isinstance(system_prompt, str) or not system_prompt.strip() or len(system_prompt.encode('utf-8')) > 16000:
+            raise ValueError('local_llm_prompt_invalid')
+        if type(max_tokens) is not int or not 1 <= max_tokens <= 2048:
+            raise ValueError('local_llm_output_budget_invalid')
+        self.system_prompt, self.max_tokens = system_prompt, max_tokens
         self.catalog_selected, self.reasoning_effort = catalog_selected, reasoning_effort
         fixed = canonical_fixed_local_mlx_model_id(model)
         self.model = "mlx/" + fixed if fixed else model
@@ -1839,7 +1846,7 @@ class LocalMlxLlm:
             {
                 "model": self.model.removeprefix("mlx/"),
                 "messages": [
-                    {"role": "system", "content": VOICE_PERSONA_PROMPT},
+                    {"role": "system", "content": self.system_prompt},
                     *([{'role':'system','content':reference}] if reference else []),
                     *[
                         {
@@ -1854,7 +1861,7 @@ class LocalMlxLlm:
                 ],
                 **({"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}),
                 "temperature": 0.3,
-                "max_tokens": 128,
+                "max_tokens": self.max_tokens,
                 "stream": True,
                 "stream_options": {"include_usage": True},
             },

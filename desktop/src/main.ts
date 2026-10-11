@@ -7,6 +7,7 @@ import { OrbSurfaces } from './orbs/surfaces';
 import { renderNodeDetails } from './knowledge/node-details';
 import type { VoiceStatus } from './contracts';
 import { wireConversationViews } from './conversations';
+import { wireAssistantComposer } from './assistant-composer';
 import { wireCollectionHistory } from './collection-history';
 import { wireCollectionSchedule } from './collection-schedule';
 import { wireAutomationHistory } from './automation-history';
@@ -611,16 +612,18 @@ export async function bootSettings(
   window.addEventListener('pagehide', () => orbs.dispose(), { once: true });
   void getVersion().then(version=>{if(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+].*)?$/.test(version))setText('app-version','v'+version);}).catch(()=>{});
   const archives=wireConversationViews(dependencies.loadAction);
+  const composer=wireAssistantComposer(document,dependencies.invokeCommand,id=>archives.refreshConversation(id));
   const collectionHistory=wireCollectionHistory(dependencies.loadAction);
   const collectionSchedule=wireCollectionSchedule(dependencies.loadAction);
   const automationHistory=wireAutomationHistory(dependencies.loadAction);
   const preferences=wireSettingsPreferences(dependencies.loadAction);
-  window.addEventListener('pagehide',()=>{archives.dispose();collectionHistory.dispose();collectionSchedule.dispose();automationHistory.dispose();preferences.dispose();},{once:true});
+  window.addEventListener('pagehide',()=>{composer.dispose();archives.dispose();collectionHistory.dispose();collectionSchedule.dispose();automationHistory.dispose();preferences.dispose();},{once:true});
   let graphLifecycle: RenderLifecycle | null = null;
-  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{archives.visible(state==='visible');collectionHistory.visible(state==='visible');collectionSchedule.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility,pauseOnBlur:false});
+  const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{composer.visible(state==='visible');archives.visible(state==='visible');collectionHistory.visible(state==='visible');collectionSchedule.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility,pauseOnBlur:false});
   window.addEventListener('pagehide',detachArchiveVisibility,{once:true});
   const navigation = wireSettingsNavigation(document, (page) => {
     archives.select(page);
+    composer.select(page);
     collectionHistory.select(page);
     collectionSchedule.select(page);
     automationHistory.select(page);

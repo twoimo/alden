@@ -221,6 +221,20 @@ async fn stop_manual_voice_session(bridge: tauri::State<'_, PythonBridge>) -> Re
 }
 
 #[tauri::command]
+async fn submit_assistant_input(bridge: tauri::State<'_, PythonBridge>, input: serde_json::Value, token_id: String) -> Result<serde_json::Value, String> {
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || bridge.submit_assistant_input(input, &token_id))
+        .await.map_err(|_| "assistant_input_failed".to_string())?.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn cancel_assistant_input(bridge: tauri::State<'_, PythonBridge>, token_id: String) -> Result<bool, String> {
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || bridge.cancel_assistant_input(&token_id))
+        .await.map_err(|_| "assistant_input_cancel_failed".to_string())
+}
+
+#[tauri::command]
 fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("settings")
@@ -344,6 +358,8 @@ fn main() {
             cancel_python,
             cancel_model_swap,
             open_settings,
+            submit_assistant_input,
+            cancel_assistant_input,
             start_voice_session,
             start_manual_voice_session,
             stop_manual_voice_session,

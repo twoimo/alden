@@ -27,10 +27,12 @@ use tauri::Manager;
 const FLAG: &str = "--audit-own-webview";
 const SETTINGS_FLAG: &str = "--audit-own-settings";
 const WORKSPACES_FLAG: &str = "--audit-own-workspaces";
+const ASSISTANT_FLAG: &str = "--audit-own-assistant-input";
 pub struct Request {
     pub directory: PathBuf,
     pub settings: bool,
     pub workspaces: bool,
+    pub assistant: bool,
     pub focus_node: Option<String>,
 }
 struct AuditPolicy {
@@ -62,7 +64,7 @@ const COLLECT: &str = r#"JSON.stringify((() => {
 pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request>, String> {
     let args: Vec<_> = args.collect();
     if !args.iter().any(|arg| {
-        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG]
+        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG]
             .iter()
             .any(|flag| arg.to_string_lossy().starts_with(flag))
     }) {
@@ -101,7 +103,7 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
         None
     };
     if (args.len() != 2 && focus_node.is_none())
-        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG]
+        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG]
             .iter()
             .any(|flag| args[0] == *flag)
     {
@@ -109,8 +111,9 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     }
     Ok(Some(Request {
         directory: PathBuf::from(&args[1]),
-        settings: args[0] == SETTINGS_FLAG || args[0] == WORKSPACES_FLAG,
-        workspaces: args[0] == WORKSPACES_FLAG,
+        settings: args[0] == SETTINGS_FLAG || args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG,
+        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG,
+        assistant: args[0] == ASSISTANT_FLAG,
         focus_node,
     }))
 }
@@ -1593,6 +1596,56 @@ fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<V
         "monitorScaleFactors":monitors.iter().map(|monitor|monitor.scale_factor()).collect::<Vec<_>>()}))
 }
 
+fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<Value,String> {
+    let window = app.get_webview_window("settings").ok_or("settings window missing")?;
+    visibility(&window,true,deadline)?;
+    loop {
+        let s=collect_script(&window,"JSON.stringify({mounted:!!document.querySelector('#assistant-composer-text')})".into(),deadline)?;
+        if s["mounted"]==true { break; }
+        live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+    }
+    collect_script(&window,"JSON.stringify((()=>{document.querySelector('#settings-tab-voice').click();return {selected:true};})())".into(),deadline)?;
+    collect_script(&window,r#"JSON.stringify((()=>{
+        const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#ff0000';ctx.fillRect(0,0,128,128);
+        const data=atob(canvas.toDataURL('image/png').split(',')[1]);const bytes=Uint8Array.from(data,c=>c.charCodeAt(0));
+        const transfer=new DataTransfer();transfer.items.add(new File([bytes],'audit-public.png',{type:'image/png'}));
+        const picker=document.querySelector('#assistant-composer-images');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
+        return {started:true};})())"#.into(),deadline)?;
+    loop {
+        let s=collect_script(&window,"JSON.stringify({ready:document.querySelector('#assistant-composer-status').textContent.includes('1개 이미지를 첨부')})".into(),deadline)?;
+        if s["ready"]==true {break;} live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut receipts=Vec::new();
+    for (index,text) in [(1,"검수 번호는 42입니다. 이 사진의 색을 한국어로 짧게 말해주세요."),(2,"내가 말한 검수 번호는 무엇인가요? 숫자만 답해주세요.")] {
+        let text=serde_json::to_string(text).map_err(|_| "audit text encoding")?;
+        collect_script(&window,format!(r#"JSON.stringify((()=>{{
+            const text=document.querySelector('#assistant-composer-text');text.value={text};text.dispatchEvent(new Event('input'));
+            document.querySelector('#assistant-composer').requestSubmit();return {{submitted:true}};}})())"#),deadline)?;
+        let s=loop {
+            let s=collect_script(&window,r#"JSON.stringify((()=>{
+                const status=document.querySelector('#assistant-composer-status').textContent;
+                const replies=[...document.querySelectorAll('#voice-message-list .message-row[data-self="false"] .message-text')].map(x=>x.textContent);
+                return {status,reply:replies.at(-1)??'',replies:replies.length,conversationId:document.querySelector('#voice-start').dataset.conversationId,
+                    busy:document.querySelector('#assistant-composer').getAttribute('aria-busy'),width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
+            if s["status"]=="답변이 저장되었습니다." && s["replies"].as_u64()==Some(index) {break s;}
+            if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("못했")||t.contains("취소")) {
+                return Err(format!("assistant input did not complete: {s}"));
+            }
+            live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+        };
+        let reply=s["reply"].as_str().ok_or("missing assistant reply")?;
+        if index==1 && !["빨간","빨강","붉","red"].iter().any(|word|reply.contains(word)) { return Err("configured model did not identify the red fixture".into()); }
+        if index==2 && !reply.contains("42") {return Err("followup did not retain confirmed input".into());}
+        if s["width"]!=s["scrollWidth"] {return Err("assistant viewport horizontal overflow".into());}
+        publish(output,&format!("assistant-turn-{index}.png"),&snapshot(&window,deadline)?,deadline)?;
+        receipts.push(s);
+    }
+    if receipts[0]["conversationId"]!=receipts[1]["conversationId"] {return Err("assistant conversation changed on followup".into());}
+    visibility(&window,false,deadline)?;
+    Ok(json!({"turns":receipts,"scope":"two explicit programmatic WKWebView inputs, public red PNG and contextual followup; private isolated history with copied saved model selection; no microphone/TTS/send, original source-store or physical input proof"}))
+}
+
 pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let output = Output::open(&request.directory).unwrap_or_else(|error| {
         eprintln!("Alden render audit: {error}");
@@ -1602,14 +1655,21 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let worker_status = Arc::clone(&status);
     let settings_mode = request.settings;
     let workspaces_mode = request.workspaces;
+    let assistant_mode = request.assistant;
+    let bridge = if assistant_mode { super::PythonBridge::for_assistant_audit(request.directory.join("input-state"))
+        .unwrap_or_else(|error|{eprintln!("Alden assistant audit: {error}");std::process::exit(2);}) } else {super::PythonBridge::new()};
     let builder = {
         let builder = tauri::Builder::default()
-            .manage(super::PythonBridge::new())
+            .manage(bridge)
             .manage(AuditPolicy {
                 workspaces: workspaces_mode,
                 focus_node: request.focus_node.clone(),
             });
-        if workspaces_mode {
+        if assistant_mode {
+            builder.invoke_handler(tauri::generate_handler![super::window_is_visible,super::fetch_runtime_snapshot,
+                super::fetch_voice_status,super::fetch_knowledge_revision,super::fetch_emergency_state,
+                fetch_settings_action,super::submit_assistant_input,super::cancel_assistant_input])
+        } else if workspaces_mode {
             builder.invoke_handler(tauri::generate_handler![
                 super::window_is_visible,
                 super::fetch_runtime_snapshot,
@@ -1632,15 +1692,15 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let started = Instant::now();
-                let deadline = started + Duration::from_secs(if workspaces_mode {96}else{40});
-                let result = if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
+                let deadline = started + Duration::from_secs(if assistant_mode {180} else if workspaces_mode {96}else{40});
+                let result = if assistant_mode {audit_assistant(&handle,&output,deadline)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
-                    "mode":if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
+                    "mode":if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();
