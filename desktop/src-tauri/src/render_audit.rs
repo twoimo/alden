@@ -1679,9 +1679,15 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
         live(deadline)?;std::thread::sleep(Duration::from_millis(50));
     }
     collect_script(&window,"JSON.stringify((()=>{document.querySelector('#settings-tab-voice').click();return {selected:true};})())".into(),deadline)?;
-    let selected = collect_script(&window,r#"JSON.stringify({page:document.querySelector('.settings-shell')?.dataset.settingsPage,
-        hidden:document.querySelector('#assistant-composer').hidden,disabled:document.querySelector('#assistant-composer-images').disabled,
-        documentVisible:document.visibilityState})"#.into(),deadline)?;
+    let activation_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+    let selected = loop {
+        let selected = collect_script(&window,r#"JSON.stringify({page:document.querySelector('.settings-shell')?.dataset.settingsPage,
+            hidden:document.querySelector('#assistant-composer').hidden,disabled:document.querySelector('#assistant-composer-images').disabled,
+            documentVisible:document.visibilityState})"#.into(),activation_deadline)?;
+        if selected["page"] == "voice" && selected["hidden"] == false && selected["disabled"] == false {break selected;}
+        if Instant::now() >= activation_deadline {return Err(format!("assistant composer is not active: {selected}"));}
+        std::thread::sleep(Duration::from_millis(20));
+    };
     eprintln!("Alden assistant selection: {selected}");
     if selected["page"] != "voice" || selected["hidden"] != false || selected["disabled"] != false {
         return Err(format!("assistant composer is not active: {selected}"));
