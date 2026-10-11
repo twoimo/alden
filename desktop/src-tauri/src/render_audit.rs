@@ -41,6 +41,24 @@ struct AuditPolicy {
     workspaces: bool,
     focus_node: Option<String>,
 }
+struct AssistantPageReady(Arc<AtomicBool>);
+
+#[tauri::command]
+fn audit_assistant_ready(window: tauri::WebviewWindow, ready: tauri::State<'_, AssistantPageReady>) {
+    if window.url().is_ok_and(|url| audit_settings_page(window.label(), &url)) {
+        ready.0.store(true, Ordering::Release);
+    }
+}
+
+const ASSISTANT_READY_SCRIPT: &str = r#"(() => {
+  const ready = () => {
+    if (document.getElementById('assistant-composer-text'))
+      window.__TAURI_INTERNALS__.invoke('audit_assistant_ready').catch(() => {});
+  };
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', ready, {once:true});
+  else queueMicrotask(ready);
+})()"#;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const COLLECT: &str = r#"JSON.stringify((() => {
   const c = document.querySelector('canvas.alden-core');
@@ -1615,7 +1633,7 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
     // Do not evaluate JavaScript in WKWebView's initial about:blank while the
     // owned asset navigation is starting. Its callback can be lost on navigation.
     while !loaded.load(Ordering::Acquire) {
-        if Instant::now() >= mount_deadline {return Err("assistant asset page did not finish loading".into());}
+        if Instant::now() >= mount_deadline {return Err("assistant asset modules and composer did not finish loading".into());}
         std::thread::sleep(Duration::from_millis(20));
     }
     let mut first_probe = true;
@@ -1718,12 +1736,13 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let builder = {
         let builder = tauri::Builder::default()
             .manage(bridge)
+            .manage(AssistantPageReady(Arc::clone(&settings_loaded)))
             .manage(AuditPolicy {
                 workspaces: workspaces_mode,
                 focus_node: request.focus_node.clone(),
             });
         if assistant_mode {
-            builder.invoke_handler(tauri::generate_handler![super::window_is_visible,super::fetch_runtime_snapshot,
+            builder.append_invoke_initialization_script(ASSISTANT_READY_SCRIPT).invoke_handler(tauri::generate_handler![audit_assistant_ready,super::window_is_visible,super::fetch_runtime_snapshot,
                 super::fetch_voice_status,super::fetch_knowledge_revision,super::fetch_emergency_state,
                 fetch_settings_action,super::submit_assistant_input,super::cancel_assistant_input])
         } else if workspaces_mode {
@@ -1745,8 +1764,9 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     };
     let app = builder
         .on_page_load(move |view, payload| {
-            if audit_settings_page(view.label(), payload.url()) {
-                page_loaded.store(payload.event() == tauri::webview::PageLoadEvent::Finished, Ordering::Release);
+            if audit_settings_page(view.label(), payload.url())
+                && payload.event() == tauri::webview::PageLoadEvent::Started {
+                page_loaded.store(false, Ordering::Release);
             }
         })
         .on_window_event(super::handle_window_event)
