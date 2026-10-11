@@ -1,5 +1,9 @@
 # Alden desktop design contract
 
+## 0.3.67 — 실제 연결 거리와 분기 배치
+
+참조3이미지의 검은 배경, 작은 점과 가는 선을 실제 지식 그래프에 적용한다. 색은 선택으로부터 표시된 유효 참조/의미 관계의 최단 거리이며0흰색/1보라/2청록/3분홍/4+노랑이다. 탐색용 연결·숨겨진 노드·철회/만료/미래 관계는 거리에 포함하지 않는다. 기존 글꼴·한 줄 상단, 통합 개요의 의미 배치·ID/관계/가중치와 위치 보존을 유지한다. 연결 보기의 spanning fan은 임시 표시 좌표다. 상세 glyph는 실제 확대에서 생성·재사용하고 CPU 선택 구는공유한다. 화면 기준1 CSS pixel 선과 전체 이웃 경계에 맞춘 카메라를 쓴다. [팔레트·전후 조건·실제 화면과 미결](../docs/architecture/alden-graph-reference-20261012.md).
+
 ## 0.3.66 — conversation history and input ownership
 
 Retire a missing selection only after a successful complete catalog. Clear its messages, cursor, input ID and response generation together. An incomplete empty catalog preserves the known conversation and visible content; an initial incomplete read offers retry. Late catalog/message results keep request, view and selection ownership fences. History retirement does not change an active microphone listener. [Source tests, installed empty-history rendering and remaining input paths](../docs/architecture/alden-conversation-target-20261011.md).
