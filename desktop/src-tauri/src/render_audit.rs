@@ -179,6 +179,8 @@ impl Output {
                 | "alden-note-compact.png"
                 | "alden-connections-default.png"
                 | "alden-connections-compact.png"
+                | "assistant-turn-1.png"
+                | "assistant-turn-2.png"
                 | "alden-model-menu-default.png"
                 | "alden-model-menu-compact.png"
                 | "workspace-memory-default.png"
