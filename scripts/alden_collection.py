@@ -25,6 +25,7 @@ SCHEMA = 3
 SNAPSHOT_RECORD_BUDGET = 100000
 MAX_RECORD_BYTES = 2 * 1024 * 1024
 MAX_BATCH_RECORDS = 2000
+BODY_NORMALIZATION_VERSION = "body-nfc-lines-v2"
 STAGES = {"discovered", "parsed", "validated", "stored", "indexed", "failed", "paused"}
 
 
@@ -45,6 +46,13 @@ def encoded(value) -> bytes:
 
 def normalized_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFC", value).split())
+
+
+def normalized_body(value: str) -> str:
+    # Indentation, tabs, blank lines and Markdown hard breaks carry meaning.
+    # Original bytes stay in the source blob; only Unicode composition and
+    # platform line endings are normalized in the searchable projection.
+    return unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def safe_directory(path: Path) -> Path:
@@ -435,6 +443,7 @@ class CollectionStore:
                run_id: str | None = None, relations=(), cancelled=lambda: False,
                complete_snapshot=False, source_revision=None, source_order=None,
                processing_version="collection-record-v1", publication_guard=None) -> dict:
+        automatic_snapshot_run = complete_snapshot and not run_id
         if not isinstance(processing_version, str) or not 1 <= len(processing_version) <= 128:
             raise ValueError("collection_processing_version_invalid")
         if complete_snapshot:
@@ -449,7 +458,11 @@ class CollectionStore:
                 raise ValueError("collection_duplicate_original_id")
             projection = digest(encoded([
                 [{k:v for k,v in r.items() if k != 'source'} for r in records],
-                [{**r, 'evidence': {k:v for k,v in r.get('evidence',{}).items() if k != 'source'}} for r in relations]]))
+                [{**r, 'evidence': {k:v for k,v in r.get('evidence',{}).items() if k != 'source'}} for r in relations],
+                BODY_NORMALIZATION_VERSION]))
+            # Bind the store's projection policy independently of the caller's
+            # parser version. Old unchanged snapshots must be visited once;
+            # document versions still change only with their actual projection.
             run_id = run_id or identity('snapshot-run', encoded([target_id, source_revision, processing_version, projection]).decode())
         else:
             projection = None
@@ -481,6 +494,11 @@ class CollectionStore:
                             confirmation.execute('UPDATE targets SET next_run=?+interval_seconds WHERE id=?', (time.time(), target_id))
                         return {'run_id': prior['run_id'], 'target_id': target_id, 'state': 'unchanged',
                                 'added': 0, 'revised': 0, 'unchanged': len(records), 'removed': 0}
+                    if automatic_snapshot_run and prior:
+                        # A -> B -> A is a new transition, not a replay of A's
+                        # completed run. The locked predecessor also keeps a
+                        # failed/cancelled transition's retry identity stable.
+                        run_id = identity('snapshot-transition', encoded([run_id, prior['run_id']]).decode())
                 previous = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
                 if previous:
                     if previous["target_id"] != target_id or previous["origin"] != origin:
@@ -511,7 +529,7 @@ class CollectionStore:
                         raw = encoded(record.get("raw", record))
                         raw_sha, raw_path = self._blob(raw)
                         label = normalized_text(str(record.get("label", original_id)))[:1024]
-                        body = normalized_text(str(record.get("text", "")))
+                        body = normalized_body(str(record.get("text", "")))
                         metadata = {k: v for k, v in record.items() if k not in {"raw", "text"}}
                         projection_sha = digest(encoded([label, body, {k:v for k,v in metadata.items() if k != 'source'}]))
                         version = identity("version", encoded([doc_id, raw_sha, processing_version, projection_sha]).decode())

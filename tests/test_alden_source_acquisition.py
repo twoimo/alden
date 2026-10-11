@@ -1,7 +1,7 @@
 """Native reacquisition boundaries and durable scheduler recovery; fake host only."""
 from contextlib import contextmanager
 from pathlib import Path
-import copy,json,sys,time,unittest
+import copy,json,shlex,sys,time,unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import tests.test_alden_acquisition_input as fixtures
@@ -126,14 +126,35 @@ class SourceAcquisitionTests(unittest.TestCase):
         result=self.scheduler.cycle(acquirer=self.acquire,collector=collect_target,capturer=self.capture,indexer=self.index)
         self.assertEqual(result['attempts'][0]['state'],'complete');self.assertEqual(self.calls,1)
 
-    def test_owned_host_client_timeout_and_output_budget_are_bounded(self):
+    def assert_owned_host_failure(self, body, expected, *, timeout):
         executable=self.f.root/'fake-aside';children=[];real=acquisition.subprocess.Popen
+        script=self.f.root/'fake_host.py'
+        script.write_text(body+'\n')
+        # Use this test's interpreter, including paths containing spaces, and
+        # keep the real child process/pipe/termination path under test.
+        executable.write_text('#!/bin/sh\nexec '+shlex.quote(sys.executable)+' -B '+shlex.quote(str(script))+' "$@"\n')
+        executable.chmod(0o700)
         def spawn(*args,**kwargs):
             child=real(*args,**kwargs);children.append(child);return child
-        for body,budget,expected in [('import time\ntime.sleep(30)',1024,'timeout'),('import sys\nsys.stdout.write("x"*16384)\nsys.stdout.flush()',1024,'output_budget')]:
-            executable.write_text('#!/usr/bin/env python3\n'+body+'\n');executable.chmod(0o700)
-            with patch('alden_source_acquisition.host_cli',return_value=executable),patch('alden_source_acquisition.MAX_OUTPUT_BYTES',budget),patch('alden_source_acquisition.subprocess.Popen',side_effect=spawn):
-                with self.assertRaisesRegex(RuntimeError,expected):acquisition._native_read('ignored',cancelled=lambda:False,timeout=.2)
+        with patch('alden_source_acquisition.host_cli',return_value=executable),patch('alden_source_acquisition.MAX_OUTPUT_BYTES',1024),patch('alden_source_acquisition.subprocess.Popen',side_effect=spawn):
+            with self.assertRaisesRegex(RuntimeError,expected):acquisition._native_read('ignored',cancelled=lambda:False,timeout=timeout)
+        self.assertEqual(len(children),1)
+        try:
             self.assertIsNotNone(children[-1].poll())
+            self.assertTrue(children[-1].stdout.closed)
+            self.assertTrue(children[-1].stderr.closed)
+        finally:
+            if children[-1].poll() is None:
+                children[-1].kill();children[-1].wait(timeout=5)
+
+    def test_owned_host_client_timeout_is_bounded(self):
+        self.assert_owned_host_failure('import time\ntime.sleep(30)',
+                                       'collection_acquisition_timeout',timeout=.2)
+
+    def test_owned_host_client_output_budget_is_bounded_after_startup(self):
+        # Output must be checked even when startup takes longer than the
+        # separate timeout test's deadline. Product limits stay unchanged.
+        self.assert_owned_host_failure('import sys,time\ntime.sleep(.3)\nsys.stdout.write("x"*16384)\nsys.stdout.flush()',
+                                       'collection_acquisition_output_budget',timeout=5)
 
 if __name__=='__main__':unittest.main()

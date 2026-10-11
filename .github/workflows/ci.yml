@@ -182,8 +182,10 @@ jobs:
           tests.test_alden_routed_llm
           tests.test_alden_voice_model_selection
           tests.test_alden_collection
+          tests.test_alden_collection_structure
           tests.test_alden_collection_retrieval
           tests.test_alden_collection_snapshots
+          tests.test_alden_snapshot_return
           tests.test_alden_acquisition_input
           tests.test_alden_source_acquisition
           tests.test_alden_graph_quality
