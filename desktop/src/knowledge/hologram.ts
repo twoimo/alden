@@ -602,6 +602,7 @@ export class KnowledgeHologram {
       if (labelLayer && (!global || this.globalLabels.has(node.id) || focused)) {
         const label = document.createElement("span");
         label.className = "knowledge-node-label";
+        label.hidden = true;
         label.textContent = node.label;
         label.title = node.label;
         label.dataset.focused = String(focused);
@@ -656,6 +657,7 @@ export class KnowledgeHologram {
       if(this.labels.has(id)||!layer)continue;
       const node=this.view.nodes.find(node=>node.id===id);if(!node)continue;
       const label=document.createElement('span');label.className='knowledge-node-label';
+      label.hidden=true;
       label.textContent=node.label;label.title=node.label;label.dataset.view='overview';
       label.dataset.focused=String(id===this.view.focusId);layer.append(label);this.labels.set(id,label);
     }

@@ -785,7 +785,7 @@ const LABEL_GEOMETRY_COLLECT: &str = r#"JSON.stringify((()=>{
   const all=[...document.querySelectorAll('.knowledge-node-label')];
   const boxes=all.slice(0,24).map((el,index)=>{
     const r=el.getBoundingClientRect(),s=getComputedStyle(el);
-    return {index,visible:!el.hidden&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0,
+    return {index,positioned:!!el.style.transform,visible:!el.hidden&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0,
       focused:el.dataset.focused==='true',view:el.dataset.view??null,
       left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height,
       fontSize:s.fontSize,lineHeight:s.lineHeight,fontWeight:s.fontWeight};
@@ -801,6 +801,9 @@ const LABEL_GEOMETRY_COLLECT: &str = r#"JSON.stringify((()=>{
   }
   return {scope:'audit-only bounded element rectangles; no label text/IDs or physical/font-ink proof',
     totalLabels:all.length,sampledLabels:boxes.length,truncated:all.length>24,visibleLabels:visible.length,
+    unpositionedLabels:boxes.filter(b=>!b.positioned).length,
+    visibleUnpositionedLabels:visible.filter(b=>!b.positioned).length,
+    framePending:window.__knowledgeRenderDiagnostics?.pendingFrame??null,
     overlapPairs,clippedLabels:clipped,boxes,devicePixelRatio};
 })())"#;
 
