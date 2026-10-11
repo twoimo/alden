@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { KnowledgeEdge, KnowledgeNode } from './graph-model';
 import type { Point3 } from './plasticity';
 import { ACTIVITY_TTL_MS, type NodeActivity } from './collection-activity';
+import { GRAPH_CONNECTED_COLOR, GRAPH_ISOLATED_COLOR, GRAPH_UNRELATED_COLOR, RELATION_DEPTH_COLORS } from './graph-palette';
 
 const CAPACITY = 120;
 const MIN_RADIUS = .018;
@@ -14,6 +15,10 @@ const SELECTED = new THREE.Color('#d8c19d');
 const PINK = new THREE.Color('#ec83a8');
 const STORED = new THREE.Color('#8ac5a6');
 const READ = new THREE.Color('#8ab9e0');
+const DEPTH_COLORS = RELATION_DEPTH_COLORS.map(value => new THREE.Color(value));
+const CONNECTED = new THREE.Color(GRAPH_CONNECTED_COLOR);
+const ISOLATED = new THREE.Color(GRAPH_ISOLATED_COLOR);
+const UNRELATED = new THREE.Color(GRAPH_UNRELATED_COLOR);
 
 /**
  * Overview stars only. The owner supplies positions, links and sphere picking;
@@ -35,6 +40,8 @@ export class ConstellationNodes extends THREE.Group {
   private selectedId: string | null = null;
   private readonly activity = new Map<string, NodeActivity>();
   private readonly activityColor = new THREE.Color();
+  private referenceStyle = false;
+  private readonly relationDepths = new Map<string, number>();
 
   constructor(private readonly capacity = CAPACITY) {
     super();
@@ -45,7 +52,7 @@ export class ConstellationNodes extends THREE.Group {
     const dense = this.capacity > CAPACITY;
     this.stars = new THREE.InstancedMesh(
       dense ? new THREE.PlaneGeometry(2,2) : new THREE.SphereGeometry(1,12,8),
-      dense ? new THREE.ShaderMaterial({transparent:true,depthWrite:false,toneMapped:false,
+      dense ? new THREE.ShaderMaterial({transparent:true,depthWrite:false,toneMapped:false,uniforms:{uReference:{value:0}},
         vertexShader:`varying vec2 vPoint; varying vec3 vTint;
           void main(){
             vec4 eye=modelViewMatrix*instanceMatrix*vec4(0.,0.,0.,1.);
@@ -54,11 +61,13 @@ export class ConstellationNodes extends THREE.Group {
             gl_Position=projectionMatrix*eye;vPoint=position.xy;
             vTint=instanceColor;
           }`,
-        fragmentShader:`varying vec2 vPoint; varying vec3 vTint;
+        fragmentShader:`uniform float uReference; varying vec2 vPoint; varying vec3 vTint;
           void main(){float r=length(vPoint);if(r>1.)discard;
             float core=1.-smoothstep(.16,.38,r);
             float glow=exp(-7.*r*r)*(1.-smoothstep(.75,1.,r));
-            gl_FragColor=vec4(mix(vTint,vec3(1.),core*.35),core*.85+glow*.35);
+            gl_FragColor= uReference>.5
+              ? vec4(vTint,1.-smoothstep(.32,.65,r))
+              : vec4(mix(vTint,vec3(1.),core*.35),core*.85+glow*.35);
             #include <colorspace_fragment>
           }`,
       }) : new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x35475a, emissiveIntensity: .18, metalness: .12, roughness: .56, toneMapped: false }),
@@ -115,8 +124,10 @@ export class ConstellationNodes extends THREE.Group {
 
     this.radii.fill(0);
     const nodesById = new Map(nodes.map(node => [node.id, node]));
+    if ([...this.relationDepths].some(([id, depth]) => depth === 0 && !nextIds.has(id))) this.relationDepths.clear();
+    else for (const id of this.relationDepths.keys()) if (!nextIds.has(id)) this.relationDepths.delete(id);
     this.sourceColors.clear();
-    if (this.capacity > CAPACITY) for (const node of nodes) {
+    if (this.capacity > CAPACITY && !this.referenceStyle) for (const node of nodes) {
       const group = node.sourceTarget || node.space || 'memory';
       let hash = 0;
       for (const letter of group) hash = (Math.imul(hash, 31) + letter.charCodeAt(0)) >>> 0;
@@ -175,6 +186,18 @@ export class ConstellationNodes extends THREE.Group {
     this.paint(Date.now(), false);
   }
 
+  /** Call after set. The supplied depths come only from visible real links. */
+  setRelationDepths(depths: ReadonlyMap<string, number>): void {
+    this.referenceStyle = true;
+    this.sourceColors.clear();
+    if (this.stars.material instanceof THREE.ShaderMaterial) this.stars.material.uniforms.uReference.value = 1;
+    this.relationDepths.clear();
+    for (const [id, depth] of depths) {
+      if (this.slots.has(id) && Number.isSafeInteger(depth) && depth >= 0) this.relationDepths.set(id, depth);
+    }
+    this.paint(Date.now(), false);
+  }
+
   showActivity(event: NodeActivity): void {
     if (this.slots.has(event.document_id)) this.activity.set(event.document_id, event);
   }
@@ -199,9 +222,16 @@ export class ConstellationNodes extends THREE.Group {
       if (nodeId !== null) {
         color = nodeId === this.selectedId ? (this.capacity > CAPACITY ? PINK : SELECTED) : neighbours?.has(nodeId) ? (this.capacity > CAPACITY ? CYAN : NEIGHBOUR)
           : this.sourceColors.get(nodeId) ?? (this.adjacency.get(nodeId)!.size > 0 ? ICE : SILVER);
+        if (this.referenceStyle) {
+          const depth = this.relationDepths.get(nodeId);
+          color = depth !== undefined ? DEPTH_COLORS[Math.min(4, depth)]
+            : this.relationDepths.size > 0 ? UNRELATED
+            : this.adjacency.get(nodeId)!.size > 0 ? CONNECTED : ISOLATED;
+          if (nodeId === this.selectedId && depth === undefined) color = DEPTH_COLORS[0];
+        }
       }
       const event = nodeId === null ? undefined : this.activity.get(nodeId);
-      if (event && nodeId !== this.selectedId) {
+      if (event && nodeId !== this.selectedId && this.relationDepths.get(nodeId!) !== 0) {
         const intensity = staticColor ? .65 : .85 * Math.exp(-(now - event.at * 1000) / 1500);
         this.activityColor.copy(color).lerp(event.kind === 'read' ? READ : STORED, intensity);
         this.stars.setColorAt(slot, this.activityColor);

@@ -11,6 +11,8 @@ import { pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
 import { PlasticityLayout, selectSynapses } from './plasticity';
 import { relationAnchors, relationCenterId } from './relation-layout';
+import { relationDepths } from './relation-depth';
+import { RELATION_DEPTH_COLORS } from './graph-palette';
 import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
 import { PositionTransition } from './position-transition';
@@ -183,7 +185,7 @@ export class KnowledgeHologram {
       : new ResizeObserver(() => this.resize());
     this.resizeObserver?.observe(canvas);
     const workspace = canvas.closest('.knowledge-section, .alden-panel');
-    for (const selector of ['.knowledge-heading, .mini-graph-heading', '.knowledge-focus-card', '.knowledge-hologram-toolbar, .mini-graph-title']) {
+    for (const selector of ['.knowledge-heading, .mini-graph-heading', '.knowledge-focus-card', '.knowledge-hologram-toolbar, .mini-graph-title', '.knowledge-depth-legend']) {
       const overlay = workspace?.querySelector<HTMLElement>(selector);
       if (overlay) { this.labelOverlays.push(overlay); this.excludedLabelBounds.push({left:0,top:0,right:0,bottom:0}); this.resizeObserver?.observe(overlay); }
     }
@@ -528,6 +530,9 @@ export class KnowledgeHologram {
     this.hoveredId=null;this.globalLabels.clear();this.globalLabelRanks.clear();
     this.constellationNodes.set(this.view.nodes,this.view.edges);
     this.constellationNodes.highlight(focusId);
+    const depths = relationDepths(this.view);
+    this.constellationNodes.setRelationDepths(depths);
+    this.updateDepthLegend(depths);
     this.constellationNodes.visible=true;this.neuronDetail=false;
     this.orbit.enableRotate=true;this.orbit.mouseButtons.LEFT=THREE.MOUSE.ROTATE;
     const labelledGroups = new Set<string>();
@@ -545,8 +550,8 @@ export class KnowledgeHologram {
     this.canvas.title = global ? '' : regions.map(region => region.label).join(' · ');
     this.nebulae.update(0, this.positions, this.reducedMotionEnabled);
 
-    const sharedPickGeometry=global?new THREE.SphereGeometry(1,8,6):null;
-    const sharedPickMaterial=global?new THREE.MeshBasicMaterial({visible:false}):null;
+    const sharedPickGeometry=new THREE.SphereGeometry(1,8,6);
+    const sharedPickMaterial=new THREE.MeshBasicMaterial({visible:false});
     this.pickGeometry=sharedPickGeometry;this.pickMaterial=sharedPickMaterial;
     for (const node of this.view.nodes) {
       const position = this.positions.get(node.id);
@@ -555,40 +560,20 @@ export class KnowledgeHologram {
       const focused = node.id === focusId;
       const kind=node.category==='collection'?node.label:node.category;
       const token=/인물|사람|대화 상대|화자/.test(kind)?'--cosmos-person':/대화방/.test(kind)?'--cosmos-room':/주제/.test(kind)?'--cosmos-topic':'--accent';
-      const color=global?new THREE.Color('#cad8e9'):cssColor(this.canvas,token,"#dde7ef");
+      const depth = depths.get(node.id);
+      const color=depth !== undefined ? new THREE.Color(RELATION_DEPTH_COLORS[Math.min(4,depth)])
+        : global?new THREE.Color('#cad8e9'):cssColor(this.canvas,token,"#dde7ef");
       const isOrb = !global&&(node.isHub || node.category === 'collection');
       const diameter = node.id === this.rootNodeId ? 0.64 : node.category === 'collection' ? 0.4 : 0.3;
       const radius = global?this.constellationNodes.radius(node.id):isOrb ? diameter * 0.44 : (.04 + (node.importance / 100) * .025) * (focused ? 1.2 : 1);
-      const geometry = sharedPickGeometry??new THREE.SphereGeometry(radius, 18, 12);
-      const material = sharedPickMaterial??new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: focused ? 0.28 : 0.12,
-        roughness: 0.55,
-        metalness: 0.12,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      if(global) mesh.scale.setScalar(radius);
-      else if (isOrb) {
-        material.visible = false;
-        const state: OrbState = /인물|사람|대화 상대|화자/.test(kind) ? 'listening' : /대화방/.test(kind) ? 'connecting' : /주제/.test(kind) ? 'composing' : 'solving';
-        const orb = new ThinkingOrbMesh(state, diameter, color);
-        orb.position.copy(position);
-        orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
-        this.orbMeshes.set(node.id, orb);
-        this.graphRoot.add(orb);
-      } else {
-        material.visible = false;
-        const neuron = createNeuronGlyph(radius, color, node.id);
-        neuron.position.copy(position); this.neuronMeshes.set(node.id, neuron); this.graphRoot.add(neuron);
-        this.neuronPorts.set(node.id, neuron.ports);
-      }
+      const mesh = new THREE.Mesh(sharedPickGeometry, sharedPickMaterial);
+      mesh.scale.setScalar(this.constellationNodes.radius(node.id));
+      mesh.userData.glyph = { radius, diameter, color, isOrb, kind };
       mesh.position.copy(position);
       mesh.userData.nodeId = node.id;
       this.nodeMeshes.set(node.id, mesh);
       // Global pick spheres are CPU targets. Keeping thousands of invisible
       // objects in the rendered scene needlessly traverses them each frame.
-      if (!global) this.graphRoot.add(mesh);
       if (accessible) {
         const button = document.createElement("button");
         button.type = "button";
@@ -617,9 +602,54 @@ export class KnowledgeHologram {
     this.synapses.set(global?[]:selectSynapses(this.view.edges,activeIds),focusId,true,this.neuronPorts,this.anchors);
     this.synapses.update(0,this.positions,this.reducedMotionEnabled);
     this.overviewSynapses.set(selectSynapses(this.view.edges,activeIds,Date.now(),global?4096:144,global),focusId,this.reducedMotionEnabled);
+    this.overviewSynapses.setRelationDepths(depths);
     this.overviewSynapses.update(0,this.positions,this.reducedMotionEnabled);
     this.constellationNodes.update(this.positions);
     this.applyDetailMode(false,true);
+  }
+
+  private updateDepthLegend(depths: ReadonlyMap<string, number>): void {
+    const legend = this.canvas.parentElement?.querySelector<HTMLElement>('.knowledge-depth-legend');
+    if (!legend) return;
+    legend.hidden = depths.size === 0;
+    legend.replaceChildren();
+    if (legend.hidden) return;
+    const title = document.createElement('span');
+    title.textContent = '연결 거리';
+    legend.append(title);
+    const present = new Set([...depths.values()].map(depth => Math.min(4, depth)));
+    for (let depth = 0; depth < RELATION_DEPTH_COLORS.length; depth++) {
+      if (!present.has(depth)) continue;
+      const entry = document.createElement('span');
+      const marker = document.createElement('i');
+      marker.style.backgroundColor = RELATION_DEPTH_COLORS[depth];
+      marker.setAttribute('aria-hidden', 'true');
+      entry.append(marker, depth === 0 ? '선택' : depth === 4 ? '4단계 이상' : `${depth}단계`);
+      legend.append(entry);
+    }
+  }
+
+  /** Detail is paid for once, only after zooming into the real local view. */
+  private ensureDetailGlyphs(): void {
+    if (this.view.hops === 0) return;
+    for (const node of this.view.nodes) {
+      if (this.neuronMeshes.has(node.id) || this.orbMeshes.has(node.id)) continue;
+      const mesh = this.nodeMeshes.get(node.id), position = this.positions.get(node.id);
+      if (!mesh || !position) continue;
+      const glyph = mesh.userData.glyph as { radius:number; diameter:number; color:THREE.Color; isOrb:boolean; kind:string };
+      if (glyph.isOrb) {
+        const state: OrbState = /인물|사람|대화 상대|화자/.test(glyph.kind) ? 'listening' : /대화방/.test(glyph.kind) ? 'connecting' : /주제/.test(glyph.kind) ? 'composing' : 'solving';
+        const orb = new ThinkingOrbMesh(state, glyph.diameter, glyph.color);
+        orb.position.copy(position);
+        orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
+        this.orbMeshes.set(node.id, orb); this.graphRoot.add(orb);
+      } else {
+        const neuron = createNeuronGlyph(glyph.radius, glyph.color, node.id);
+        neuron.position.copy(position);
+        this.neuronMeshes.set(node.id, neuron); this.neuronPorts.set(node.id, neuron.ports);
+        this.graphRoot.add(neuron);
+      }
+    }
   }
 
   private focusCamera(nodeId: string): void {
@@ -687,11 +717,12 @@ export class KnowledgeHologram {
   }
   private applyDetailMode(detail:boolean,force=false):void {
     if(!force&&detail===this.neuronDetail)return;
+    if(detail)this.ensureDetailGlyphs();
     this.neuronDetail=detail;
     this.constellationNodes.visible=!detail;this.nebulae.visible=detail;
     for(const [id,mesh] of this.nodeMeshes){
       const radius=mesh.geometry instanceof THREE.SphereGeometry?mesh.geometry.parameters.radius:1;
-      mesh.scale.setScalar(detail?1:this.constellationNodes.radius(id)/radius);
+      mesh.scale.setScalar(detail ? (mesh.userData.glyph?.radius ?? radius) / radius : this.constellationNodes.radius(id)/radius);
     }
     for(const neuron of this.neuronMeshes.values())neuron.visible=detail;
     for(const orb of this.orbMeshes.values())orb.visible=detail;
@@ -802,7 +833,7 @@ export class KnowledgeHologram {
     this.plasticity.forEachPoint(this.syncPoint);
     this.constellationNodes.setMinimumRadius(this.camera.position.distanceTo(this.lookAt)
       * 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) / Math.max(1, this.viewport.height) * .6);
-    if (this.view.hops === 0) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
+    if (!this.neuronDetail) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
       if(base&&position){

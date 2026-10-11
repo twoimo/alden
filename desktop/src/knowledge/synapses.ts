@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { SYNAPSE_CAP, type Point3, type Synapse } from './plasticity';
+import { RELATION_DEPTH_COLORS } from './graph-palette';
 
 interface Bridge extends Synapse { goal: number; growth: number; active: boolean; opacityScale: number; color: THREE.Color; ax: number; ay: number; az: number; bx: number; by: number; bz: number;
   portA: number; portB: number; dockAx: number; dockAy: number; dockAz: number; dockBx: number; dockBy: number; dockBz: number }
@@ -34,6 +35,9 @@ export class SynapticBridges {
   private readonly index = new Map<string, Bridge>();
   private readonly neutral = new THREE.Color('#90a9bc');
   private readonly selected = new THREE.Color('#d5bf81');
+  private referenceStyle = false;
+  private readonly relationDepths = new Map<string, number>();
+  private readonly depthColors = RELATION_DEPTH_COLORS.map(value => new THREE.Color(value));
   moving = false;
   private dirty = true;
   private disposed = false;
@@ -165,6 +169,7 @@ export class SynapticBridges {
     }
     this.dirty = true; this.moving = !reducedMotion && this.records.some(record => !record.active || record.growth < 1 || Math.abs(record.strength - record.goal) > .001);
     this.geometry.instanceCount = this.records.length; this.mesh.visible = this.records.length > 0;
+    if (this.referenceStyle) this.highlight(focus);
   }
 
   update(dt: number, points: ReadonlyMap<string, Point3>, reducedMotion: boolean, positionsChanged = true): boolean {
@@ -208,8 +213,21 @@ export class SynapticBridges {
   highlight(id:string|null):void {
     if(this.disposed)return;
     this.focus = id;
-    for(const record of this.records)record.color.copy(id&&(record.source===id||record.target===id)?this.selected:this.neutral);
+    for(const record of this.records) {
+      const a = this.relationDepths.get(record.source), b = this.relationDepths.get(record.target);
+      const depth = a === undefined || b === undefined ? undefined : Math.max(a, b);
+      record.color.copy(this.referenceStyle
+        ? depth !== undefined && record.purpose !== 'navigation' ? this.depthColors[Math.min(4, depth)] : this.depthColors[1]
+        : id&&(record.source===id||record.target===id)?this.selected:this.neutral);
+    }
     this.dirty=true;
+  }
+
+  setRelationDepths(depths: ReadonlyMap<string, number>): void {
+    this.referenceStyle = true;
+    this.relationDepths.clear();
+    for (const [id, depth] of depths) if (Number.isSafeInteger(depth) && depth >= 0) this.relationDepths.set(id, depth);
+    this.highlight(this.focus);
   }
 
   diagnostics(): { active: number; retiring: number; forming: number; formed: number; dockedEndpoints: number; capacity: number; bufferBytes: number; moving: boolean } {

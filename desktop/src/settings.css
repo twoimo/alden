@@ -565,9 +565,22 @@ body.settings-view {
 }
 
 /* The graph is a quiet black field; source colours belong to real data. */
-.settings-shell[data-settings-page="memory"] .knowledge-hologram-shell { background:#030405; }
+.settings-shell[data-settings-page="memory"] .knowledge-hologram-shell { background:#09090b; }
 .settings-shell[data-settings-page="memory"] { --canvas:#07090c; --surface:#0e1218; --border:#26303b; }
-.knowledge-node-label[data-focused="true"] { color:#ed8bab; border-color:#ed8bab70; }
+.knowledge-node-label[data-focused="true"] { color:#f4f2f7; border-color:#f4f2f740; }
+
+.knowledge-depth-legend {
+  position:absolute; top:12px; left:16px; right:16px; z-index:2;
+  display:flex; align-items:center; flex-wrap:wrap; gap:7px 14px;
+  width:fit-content; max-width:calc(100% - 32px); box-sizing:border-box;
+  padding:7px 10px; border:1px solid #ffffff12; border-radius:6px;
+  background:#09090be8; color:#b8b6c0; font:11px/1.4 var(--font-ui);
+  pointer-events:none;
+}
+.knowledge-depth-legend[hidden] { display:none; }
+.knowledge-depth-legend > span { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.knowledge-depth-legend i { width:6px; height:6px; flex:0 0 6px; border-radius:50%; }
+.knowledge-activity-key span:nth-child(1) { color:#f4f2f7; }
 
 /* One graph toolbar; explanatory detail stays available on demand. */
 .knowledge-graph-pane { grid-template-rows:auto minmax(0,1fr) auto; }

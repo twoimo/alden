@@ -1,6 +1,7 @@
 import { ON_SCREEN_NODE_CAP, type KnowledgeGraph, type KnowledgeView } from './graph-model';
 import { connectedComponents, selectSynapses, synapseRestLength, type Point3 } from './plasticity';
 import { contextRegions } from './context-regions';
+import { relationDepths } from './relation-depth';
 
 function seedPoint(id: string): Point3 {
   let seed = 2166136261;
@@ -14,6 +15,70 @@ function seedPoint(id: string): Point3 {
   return { x: Math.cos(phi) * ring * 1.3, y: y * 1.05, z: Math.sin(phi) * ring * .65 };
 }
 
+/** A deterministic spanning fan of the visible real-reference neighbourhood.
+ * Additional/cross links remain in the spring solver; they are not asserted
+ * as parentage. Depth and branch sectors are temporary display coordinates.
+ */
+function focusedBranchOrigins(view: KnowledgeView, visibleIds: ReadonlySet<string>, nowMs: number): Map<string, Point3> {
+  const root = view.focusId;
+  if (!root || view.hops <= 0 || !visibleIds.has(root)) return new Map();
+  const visibleView = { ...view, nodes: view.nodes.filter(node => visibleIds.has(node.id)) };
+  const depths = relationDepths(visibleView, nowMs);
+  if (!depths.has(root)) return new Map();
+
+  const parents = new Map<string, string>();
+  for (const edge of view.edges) {
+    if (edge.purpose === 'navigation' || edge.evidence.retracted || edge.source === edge.target) continue;
+    if (!visibleIds.has(edge.source) || !visibleIds.has(edge.target)) continue;
+    const from = Date.parse(edge.validFrom), until = Date.parse(edge.validTo);
+    if (Number.isFinite(from) && from > nowMs || Number.isFinite(until) && until <= nowMs) continue;
+    for (const [child, parent] of [[edge.source, edge.target], [edge.target, edge.source]]) {
+      const hop = depths.get(child);
+      if (hop === undefined || hop === 0 || depths.get(parent) !== hop - 1) continue;
+      if (!parents.has(child) || parent < parents.get(child)!) parents.set(child, parent);
+    }
+  }
+
+  const children = new Map([...depths.keys()].map(id => [id, [] as string[]]));
+  for (const [child, parent] of parents) children.get(parent)!.push(child);
+  for (const siblings of children.values()) siblings.sort();
+  const byDepth = [...depths].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  const span = new Map<string, number>();
+  for (const [id] of byDepth) {
+    span.set(id, Math.max(1, children.get(id)!.reduce((sum, child) => sum + span.get(child)!, 0)));
+  }
+
+  const phasePoint = seedPoint(root), phase = Math.atan2(phasePoint.y, phasePoint.x);
+  const rootChildren = children.get(root)!;
+  const crowdedRoot = rootChildren.length > 10;
+  const branchLanes = new Map(rootChildren.map((id, i) => [id, i % 2]));
+  // A single branch needs a forward fan, not an artificial circle around the focus.
+  const halfArc = rootChildren.length === 1 ? Math.PI * .39 : Math.PI;
+  const intervals = new Map([[root, { start: phase - halfArc, end: phase + halfArc }]]);
+  const origins = new Map<string, Point3>([[root, { x: 0, y: 0, z: 0 }]]);
+  for (const [id] of [...byDepth].reverse()) {
+    const interval = intervals.get(id);
+    if (!interval) continue;
+    let start = interval.start;
+    for (const child of children.get(id)!) {
+      const end = start + (interval.end - interval.start) * (span.get(child)! / span.get(id)!);
+      const angle = (start + end) / 2, hop = depths.get(child)!;
+      const lane = branchLanes.get(child) ?? branchLanes.get(id) ?? 0;
+      branchLanes.set(child, lane);
+      // Many first-hop spokes need staggered radial room for readable labels.
+      // The lanes are local display spacing, not extra relationship depth.
+      const radius = crowdedRoot ? Math.min(1.82, .97 + .48 * (hop - 1) + .64 * lane)
+        : Math.min(1.78, .56 + .57 * (hop - 1));
+      const jitter = seedPoint(child).z;
+      origins.set(child, { x: radius * Math.cos(angle) * 1.06,
+        y: radius * Math.sin(angle) * .72, z: .13 * Math.sin(angle * 2 + hop) + .10 * jitter });
+      intervals.set(child, { start, end });
+      start = end;
+    }
+  }
+  return origins;
+}
+
 /** A bounded projection of real references, not an OSK cluster writer.
  * Entity labels/types have no spatial authority. Source navigation is a weak
  * spring; real ERE links determine proximity. Only the current 24-node view is
@@ -24,18 +89,20 @@ export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = vie
   const nodes = [...view.nodes].filter(n => !n.evidence.retracted)
     .sort((a, b) => a.id.localeCompare(b.id)).slice(0, Math.min(120,Math.max(1,nodeCap)));
   const points = nodes.map(n => seedPoint(n.id));
+  const nowMs = Date.now();
   // The global volume is deeper; z is a layout coordinate, never a confidence,
   // category or user-importance tier. Springs still follow only actual links.
   const depth = nodeCap > ON_SCREEN_NODE_CAP ? 1.8 : 1;
   for (const point of points) point.z *= depth;
   const index = new Map(nodes.map((n, i) => [n.id, i]));
-  const edges = selectSynapses(view.edges, new Set(index.keys()),Date.now(),nodeCap>ON_SCREEN_NODE_CAP?512:144);
+  const edges = selectSynapses(view.edges, new Set(index.keys()),nowMs,nodeCap>ON_SCREEN_NODE_CAP?512:144);
+  const branches = focusedBranchOrigins(view, new Set(index.keys()), nowMs);
   const components = connectedComponents(nodes.map(n => n.id), edges);
   const members = new Map<number, string[]>();
   nodes.forEach((n, i) => { const ids = members.get(components[i]) ?? []; ids.push(n.id); members.set(components[i], ids); });
   const centers = new Map([...members].map(([group, ids]) => [group, seedPoint(ids.join('\0'))]));
   for (const point of centers.values()) point.z *= depth;
-  const regions = nodeCap>ON_SCREEN_NODE_CAP?[]:contextRegions(view, graph);
+  const regions = nodeCap>ON_SCREEN_NODE_CAP?[]:contextRegions(view, graph, nowMs);
   const regionalOrigins = new Map<string, Point3>();
   for (const [group, ids] of members) {
     const contexts = regions.filter(region => region.id.startsWith('space:') && region.nodeIds.some(id => ids.includes(id))).sort((a, b) => a.id.localeCompare(b.id));
@@ -53,8 +120,17 @@ export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = vie
     }
   }
   for (let i = 0; i < points.length; i++) {
-    const p = points[i], center = regionalOrigins.get(nodes[i].id) ?? centers.get(components[i])!;
-    p.x = center.x + p.x * .32; p.y = center.y + p.y * .32; p.z = center.z + p.z * .32;
+    const p = points[i], id = nodes[i].id, branch = branches.get(id);
+    const region = regionalOrigins.get(id);
+    if (branch) {
+      const sourceWeight = id === view.focusId || !region ? 0 : .16;
+      p.x = branch.x * (1 - sourceWeight) + (region?.x ?? 0) * sourceWeight;
+      p.y = branch.y * (1 - sourceWeight) + (region?.y ?? 0) * sourceWeight;
+      p.z = branch.z * (1 - sourceWeight) + (region?.z ?? 0) * sourceWeight;
+    } else {
+      const center = region ?? centers.get(components[i])!;
+      p.x = center.x + p.x * .32; p.y = center.y + p.y * .32; p.z = center.z + p.z * .32;
+    }
   }
   const initial = points.map(p => ({ ...p }));
   const links = edges.map(e => ({ a: index.get(e.source)!, b: index.get(e.target)!, strength: e.strength }));
@@ -63,7 +139,7 @@ export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = vie
     forces.fill(0);
     for (let a = 0; a < nodes.length; a++) {
       const p = points[a], origin = initial[a];
-      const affinity = regionalOrigins.has(nodes[a].id) ? .3 : .06;
+      const affinity = branches.has(nodes[a].id) ? 1.2 : regionalOrigins.has(nodes[a].id) ? .3 : .06;
       forces[a * 3] += affinity * (origin.x - p.x);
       forces[a * 3 + 1] += affinity * (origin.y - p.y);
       forces[a * 3 + 2] += affinity * (origin.z - p.z);
@@ -86,6 +162,10 @@ export function relationAnchors(view: KnowledgeView, graph: KnowledgeGraph = vie
     }
     for (let i = 0; i < points.length; i++) {
       const p = points[i], at = i * 3;
+      if (nodes[i].id === view.focusId && branches.has(nodes[i].id)) {
+        p.x = p.y = p.z = 0;
+        continue;
+      }
       const gain = .045 / Math.max(1, Math.hypot(forces[at], forces[at + 1], forces[at + 2]));
       p.x += gain * forces[at]; p.y += gain * forces[at + 1]; p.z += gain * forces[at + 2];
       const envelope = Math.max(1, Math.hypot(p.x / 2.15, p.y / 1.4, p.z / (nodeCap > ON_SCREEN_NODE_CAP ? 1.35 : 1)));
