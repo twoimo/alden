@@ -59,12 +59,13 @@ const ASSISTANT_READY_SCRIPT: &str = r#"
   const signal = phase => window.__TAURI_INTERNALS__.invoke('audit_assistant_ready', {phase}).catch(() => {});
   let sent = false;
   const ready = () => {
-    if (!sent && document.getElementById('assistant-composer-text')) {
+    const state = document.getElementById('app')?.dataset.state;
+    if (!sent && (state === 'ready' || state === 'unavailable') && document.getElementById('assistant-composer-text')) {
       sent = true; observer.disconnect(); signal('composer');
     }
   };
   const observer = new MutationObserver(ready);
-  observer.observe(document, {childList:true, subtree:true});
+  observer.observe(document, {childList:true, subtree:true, attributes:true, attributeFilter:['data-state']});
   signal('dom'); ready();
   };
   // append_invoke_initialization_script runs before Tauri's metadata/core
@@ -1643,13 +1644,16 @@ fn audit_settings_page(label: &str, url: &tauri::Url) -> bool {
 fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, invalid_only: bool, loaded: &AtomicBool, asset: &AtomicBool, phase: &AtomicU8) -> Result<Value,String> {
     let window = app.get_webview_window("settings").ok_or("settings window missing")?;
     visibility(&window,true,deadline)?;
-    let mount_deadline = deadline.min(Instant::now() + Duration::from_secs(8));
+    let mount_deadline = deadline.min(Instant::now() + Duration::from_secs(30));
     // Do not evaluate JavaScript in WKWebView's initial about:blank while the
     // owned asset navigation is starting. Its callback can be lost on navigation.
     while !loaded.load(Ordering::Acquire) || !asset.load(Ordering::Acquire) {
         if Instant::now() >= mount_deadline {return Err(format!("assistant asset modules and composer did not finish loading: phase {}, asset {}",phase.load(Ordering::Acquire),asset.load(Ordering::Acquire)));}
         std::thread::sleep(Duration::from_millis(20));
     }
+    // Reannounce the verified native visibility after the frontend installed
+    // its lifecycle listeners and completed the initial status handshake.
+    visibility(&window,true,deadline)?;
     let mut first_probe = true;
     loop {
         let s=collect_script(&window,r#"JSON.stringify({mounted:!!document.querySelector('#assistant-composer-text'),
@@ -1663,6 +1667,13 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
         live(deadline)?;std::thread::sleep(Duration::from_millis(50));
     }
     collect_script(&window,"JSON.stringify((()=>{document.querySelector('#settings-tab-voice').click();return {selected:true};})())".into(),deadline)?;
+    let selected = collect_script(&window,r#"JSON.stringify({page:document.querySelector('.settings-shell')?.dataset.settingsPage,
+        hidden:document.querySelector('#assistant-composer').hidden,disabled:document.querySelector('#assistant-composer-images').disabled,
+        documentVisible:document.visibilityState})"#.into(),deadline)?;
+    eprintln!("Alden assistant selection: {selected}");
+    if selected["page"] != "voice" || selected["hidden"] != false || selected["disabled"] != false {
+        return Err(format!("assistant composer is not active: {selected}"));
+    }
     if invalid_only {
         let mut receipts = Vec::new();
         for index in 0..12 {
