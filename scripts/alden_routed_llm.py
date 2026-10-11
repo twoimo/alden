@@ -36,7 +36,7 @@ class OpenCodexLlm:
     def generate_messages(self, system_prompt, text, token, *, image_paths=(), timeout=120):
         return self._generate(text, token, history=(), system_prompt=system_prompt, image_paths=image_paths, timeout=timeout)
 
-    def _generate(self, text, token, *, history, turn=None, system_prompt=None, image_paths=(), timeout=120):
+    def _generate(self, text, token, *, history, turn=None, system_prompt=None, image_paths=(), image_evidence=None, timeout=120):
         from alden_voice import VOICE_PERSONA_PROMPT, _voice_knowledge_reference, VOICE_CONTEXT_ITEM_MAX_CHARS, VOICE_CONTEXT_TURNS
         request_id = uuid.uuid4().hex
         context = {} if turn is None else {"conversation_id": turn.conversation_id, "turn_id": turn.turn_id,
@@ -64,19 +64,26 @@ class OpenCodexLlm:
             if len(text.encode()) > 256 * 1024 or system_prompt is not None and len(system_prompt.encode()) > 64 * 1024:
                 raise RoutedGenerationError("routed_llm_prompt_budget")
             user = text[:4000] if system_prompt is None else text
+            if image_evidence is not None and (not isinstance(image_evidence,(list,tuple)) or len(image_evidence) != len(image_paths)):
+                raise RoutedGenerationError("image_input_provenance_changed")
             if image_paths:
                 parts = [{"type":"input_text", "text":user}]
                 if len(image_paths) > 4:
                     raise RoutedGenerationError("image_input_budget")
                 total_image_bytes = 0
                 self.last_metrics["images"] = []
-                for path in image_paths:
+                for index,path in enumerate(image_paths):
                     token.raise_if_cancelled()
                     data, mime = self._image_snapshot(path)
+                    digest = hashlib.sha256(data).hexdigest()
+                    if image_evidence is not None:
+                        evidence = image_evidence[index]
+                        if not isinstance(evidence,dict) or (digest,mime,len(data)) != (evidence.get('sha256'),evidence.get('mime'),evidence.get('size')):
+                            raise RoutedGenerationError("image_input_provenance_changed")
                     total_image_bytes += len(data)
                     if total_image_bytes > MAX_IMAGE_BATCH_BYTES:
                         raise RoutedGenerationError("image_input_budget")
-                    self.last_metrics["images"].append({"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "mime": mime})
+                    self.last_metrics["images"].append({"sha256": digest, "bytes": len(data), "mime": mime})
                     parts.append({"type":"input_image","image_url":"data:"+mime+";base64,"+base64.b64encode(data).decode()})
                 user = parts
             messages.append({"role": "user", "content": user})

@@ -360,9 +360,10 @@ def cancel_turn(state_root: Path, ticket: dict, *, reason: str = 'cancelled') ->
     with _write(state_root) as db:
         row = _ticket(db, ticket)
         if row['state'] == 'pending':
-            db.execute('''UPDATE alden_chat_requests SET state='cancelled',reason=?,updated_at=?
+            state = 'superseded' if reason == 'superseded' else 'cancelled'
+            db.execute('''UPDATE alden_chat_requests SET state=?,reason=?,updated_at=?
                           WHERE request_id=? AND state='pending' AND owner_id=?''',
-                       (reason, time.time(), row['request_id'], row['owner_id']))
+                       (state, reason, time.time(), row['request_id'], row['owner_id']))
         elif row['state'] == 'completed' and reason == 'retracted':
             db.execute('''UPDATE alden_chat_requests SET state='retracted',reason=?,updated_at=?
                           WHERE request_id=? AND state='completed' AND owner_id=?''',

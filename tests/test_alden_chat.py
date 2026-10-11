@@ -4,7 +4,11 @@ import hashlib
 from pathlib import Path
 import sys
 import tempfile
+import json
+import subprocess
 import threading
+import struct
+import zlib
 import unittest
 from unittest.mock import patch
 
@@ -20,6 +24,13 @@ def request(n=1, cid=None, text='질문 42', images=None):
     return {'request_id': f'{n:032x}', 'conversation_id': cid, 'text': text, 'images': images or []}
 
 
+def png(rgb=(255,0,0)):
+    def chunk(kind, data):
+        return struct.pack('!I',len(data))+kind+data+struct.pack('!I',zlib.crc32(kind+data)&0xffffffff)
+    return (b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!IIBBBBB',1,1,8,2,0,0,0))
+            +chunk(b'IDAT',zlib.compress(b'\0'+bytes(rgb)))+chunk(b'IEND',b''))
+
+
 class AssistantInputTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -30,6 +41,41 @@ class AssistantInputTests(unittest.TestCase):
     def tearDown(self): self.temp.cleanup()
 
     def select(self, root): return {'transport': 'opencodex', 'model': 'selected/model', 'reasoning_effort': 'high'}
+
+    def cli(self, value, token_id='00000000-0000-4000-8000-000000000001'):
+        result = subprocess.run([sys.executable,'-B',str(ROOT/'scripts/alden_chat.py'),
+                                 '--state-root',str(self.root),'--token-id',token_id],
+                                input=json.dumps(value),text=True,capture_output=True,timeout=5,check=True)
+        return json.loads(result.stdout)
+
+    def test_cli_invalid_media_preserves_specific_failure_and_request_identity(self):
+        value=request(images=[{'name':'photo.png','mime':'image/png','data':'%%%'}])
+        result=self.cli(value)
+        self.assertEqual(result['error_code'],'assistant_image_invalid')
+        self.assertEqual(result['request_id'],value['request_id'])
+        self.assertIsNone(result['conversation_id'])
+        self.assertFalse((self.root/'alden-history.sqlite3').exists())
+
+    def test_cli_startup_cancellation_is_not_reported_as_malformed_input(self):
+        token_id='00000000-0000-4000-8000-000000000001'
+        folder=self.root/'assistant-input-cancel';folder.mkdir(mode=0o700)
+        (folder/(token_id+'.json')).write_text('{}')
+        value=request()
+        result=self.cli(value,token_id)
+        self.assertEqual(result['state'],'cancelled')
+        self.assertEqual(result['error_code'],'assistant_input_cancelled')
+        self.assertEqual(result['request_id'],value['request_id'])
+        self.assertFalse((self.root/'alden-history.sqlite3').exists())
+
+    def test_newer_turn_supersedes_late_answer_without_generic_failure(self):
+        def superseded(root,ticket,text,token,paths,selection):
+            reserve_turn(root,'f'*32,ticket['conversation_id'],'더 최신 질문')
+            return '이전 답변',{}
+        result=self.run_input(request(),generate=superseded)
+        self.assertEqual(result['state'],'superseded')
+        self.assertEqual(result['error_code'],'assistant_input_superseded')
+        with database(self.root) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
 
     def generate(self, root, ticket, text, token, paths, selection):
         self.calls.append((ticket, text, paths, selection))
@@ -95,8 +141,7 @@ class AssistantInputTests(unittest.TestCase):
         self.assertFalse((self.root / 'alden-history.sqlite3').exists()); self.assertEqual(self.calls, [])
 
     def test_image_bytes_bound_to_hash_and_same_conversation_followup(self):
-        # Signature-only fixture. This is intake proof, not a provider pixel decode.
-        data = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0dIHDR' + b'\x00'*8
+        data = png()
         image = {'name':'fixture.png','mime':'image/png','data':base64.b64encode(data).decode()}
         first = self.run_input(request(images=[image]))
         self.assertTrue(first['ok']); path = self.calls[0][2][0]
@@ -132,8 +177,21 @@ class AssistantInputTests(unittest.TestCase):
         with self.assertRaises(AldenCancelled): self.run_input(request(),token=token)
         self.assertFalse((self.root/'alden-history.sqlite3').exists())
 
+    def test_isolated_input_token_respects_original_abort_during_generation(self):
+        with tempfile.TemporaryDirectory() as shared:
+            original=Path(shared);controller=AbortController(original)
+            token=chat.InputToken(self.root,'00000000-0000-4000-8000-000000000001',original)
+            def stop(*args):
+                controller.abort('global_abort')
+                return '취소 뒤 응답',{}
+            result=self.run_input(request(),token=token,generate=stop)
+            self.assertEqual(result['state'],'cancelled')
+            self.assertFalse((self.root/'alden-abort.json').exists())
+            with database(self.root) as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
+
     def test_image_only_and_unicode_text_keep_original_content_and_safe_file_names(self):
-        data = b'\x89PNG\r\n\x1a\n' + b'\x00\x00\x00\x0dIHDR' + b'\x00'*8
+        data = png()
         image = {'name':'한글 $(data).png','mime':'image/png','data':base64.b64encode(data).decode()}
         first = self.run_input(request(text='',images=[image]))
         self.assertTrue(first['ok'])
@@ -144,6 +202,25 @@ class AssistantInputTests(unittest.TestCase):
         message = '가족 👨‍👩‍👧‍👦와 فارسی می\u200cشود'
         second = self.run_input(request(2,text=message))
         self.assertTrue(second['ok']); self.assertEqual(self.calls[-1][1],message)
+
+    def test_changed_image_between_intake_and_transport_never_reaches_provider(self):
+        from tests.test_alden_routed_llm import JsonResponse
+        original=png();image={'name':'photo.png','mime':'image/png','data':base64.b64encode(original).decode()}
+        def retrieve(*args):
+            path=next((self.root/'assistant-input-images').glob('*.png'))
+            path.write_bytes(png((0,0,255)))
+            return '',{}
+        response={'status':'completed','model':'selected/model','output':[{'type':'message','role':'assistant',
+                  'content':[{'type':'output_text','text':'바뀐 사진의 답변'}]}]}
+        catalog={'models':[{'id':'selected/model','selectable':True,'local':False,'efforts':['high']}]}
+        with patch('alden_voice._voice_knowledge_reference',side_effect=retrieve), \
+             patch('alden_routed_llm.catalog',return_value=catalog), \
+             patch('alden_routed_llm.CancellableLocalResponse',return_value=JsonResponse(response)) as transport:
+            result=self.run_input(request(images=[image]),generate=chat.generate_input)
+            self.assertEqual(result['error_code'],'image_input_provenance_changed')
+            transport.assert_not_called()
+        with database(self.root) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
 
     def test_real_loopback_responses_transport_binds_history_images_and_completed_model(self):
         from tests.test_alden_route_http import RealHttpMediaFollowupTest, IMAGE, ROUTE

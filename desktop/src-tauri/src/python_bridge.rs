@@ -130,6 +130,7 @@ pub enum BridgeError {
 #[derive(Clone)]
 pub struct PythonBridge {
     config: Arc<BridgeConfig>,
+    audit_abort_root: Option<Arc<PathBuf>>,
     cancellations: Arc<Mutex<HashMap<String, CancellationHandle>>>,
     jobs: Arc<Mutex<HashMap<String, SafeJobEvent>>>,
 }
@@ -954,8 +955,14 @@ mod knowledge_revision_probe {
 }
 
 impl PythonBridge {
+    fn shared_abort_state_root(&self) -> &Path {
+        self.audit_abort_root.as_deref().map(|p|p.as_path()).unwrap_or(self.config.state_root.as_path())
+    }
     pub fn for_assistant_audit(state_root: PathBuf) -> Result<Self, BridgeError> {
         let mut config = BridgeConfig::discover();
+        let original = config.state_root.clone();
+        if global_abort_is_latched(&original)? { return Err(BridgeError::Cancelled); }
+        if voice_session_is_running(&original)? { return Err(BridgeError::VoiceSessionAlreadyRunning); }
         let source = config.state_root.join("reply-model.json");
         if source.is_symlink() { return Err(BridgeError::StateIo); }
         let bytes = fs::read(&source).map_err(|_| BridgeError::StateIo)?;
@@ -966,12 +973,13 @@ impl PythonBridge {
         file.write_all(&bytes).map_err(|_| BridgeError::StateIo)?;
         config.state_root = state_root.clone();
         config.logs_dir = state_root.join("logs");
-        Ok(Self { config: Arc::new(config), cancellations: Arc::new(Mutex::new(HashMap::new())),
+        Ok(Self { config: Arc::new(config), audit_abort_root: Some(Arc::new(original)), cancellations: Arc::new(Mutex::new(HashMap::new())),
                   jobs: Arc::new(Mutex::new(HashMap::new())) })
     }
     pub fn new() -> Self {
         Self {
             config: Arc::new(BridgeConfig::discover()),
+            audit_abort_root: None,
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             jobs: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -1574,7 +1582,7 @@ impl PythonBridge {
     pub fn cancel_assistant_input(&self, token_id: &str) -> bool {
         if !valid_model_swap_token(token_id) { return false; }
         let Ok(map) = self.cancellations.lock() else { return false; };
-        let Ok(_abort_lock) = lock_global_abort(&self.config.state_root) else { return false; };
+        let Ok(_abort_lock) = lock_global_abort(self.shared_abort_state_root()) else { return false; };
         let directory = self.config.state_root.join("assistant-input-cancel");
         if fs::DirBuilder::new().mode(0o700).create(&directory).is_err() && !directory.exists() { return false; }
         if !fs::symlink_metadata(&directory).is_ok_and(|meta| private_abort_root(&meta)) { return false; }
@@ -1693,7 +1701,7 @@ impl PythonBridge {
                     return Err(BridgeError::ActionNotAllowed);
                 }
                 if let Some(flag) = global_abort_flag.as_ref() {
-                    if global_abort_is_latched(&self.config.state_root)? {
+                    if global_abort_is_latched(self.shared_abort_state_root())? {
                         // The child still starts so Python can return its fixed
                         // aborted envelope; Rust enforces the hard deadline.
                         flag.store(true, Ordering::SeqCst);
@@ -1722,6 +1730,11 @@ impl PythonBridge {
         ];
         args.push("--bin".to_string());
         args.push(bin.to_string());
+        if assistant_runtime {
+            if let Some(root) = &self.audit_abort_root {
+                args.extend(["--abort-state-root".into(),root.to_string_lossy().into_owned()]);
+            }
+        }
         args.extend(extra.iter().cloned());
 
         let result = run_process_with_recovery_env(
@@ -2562,13 +2575,13 @@ fn validate_assistant_input(input: &Value, token_id: &str) -> Result<Vec<u8>, Br
         let data = image["data"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
         if name.is_empty() || name.chars().count() > 128 || name.chars().any(|c| c.is_control() || matches!(c, '/'|'\\'))
             || !matches!(image["mime"].as_str(), Some("image/png"|"image/jpeg"|"image/gif"|"image/webp"))
-            || data.is_empty() || data.len() > (8 * 1024 * 1024 + 2) / 3 * 4
+            || data.is_empty() || data.len() > (8_usize * 1024 * 1024).div_ceil(3) * 4
             || data.len() % 4 != 0 || !data.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+'|b'/'|b'=')) {
             return Err(BridgeError::ActionNotAllowed);
         }
         total += data.len();
     }
-    if total > (20 * 1024 * 1024 + 2) / 3 * 4 + 12 { return Err(BridgeError::ActionNotAllowed); }
+    if total > (20_usize * 1024 * 1024).div_ceil(3) * 4 + 12 { return Err(BridgeError::ActionNotAllowed); }
     serde_json::to_vec(input).map_err(|_| BridgeError::ActionNotAllowed)
 }
 
@@ -6488,6 +6501,7 @@ mod tests {
         config.state_root = state_root;
         PythonBridge {
             config: Arc::new(config),
+            audit_abort_root: None,
             cancellations: Arc::new(Mutex::new(HashMap::new())),
             jobs: Arc::new(Mutex::new(HashMap::new())),
         }

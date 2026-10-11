@@ -1617,7 +1617,7 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant) -
         if s["ready"]==true {break;} live(deadline)?;std::thread::sleep(Duration::from_millis(50));
     }
     let mut receipts=Vec::new();
-    for (index,text) in [(1,"검수 번호는 42입니다. 이 사진의 색을 한국어로 짧게 말해주세요."),(2,"내가 말한 검수 번호는 무엇인가요? 숫자만 답해주세요.")] {
+    for (index,text) in [(1,"검수 번호는 42입니다. 이 사진의 색상 이름만 한국어로 답해주세요."),(2,"내가 말한 검수 번호는 무엇인가요? 숫자만 답해주세요.")] {
         let text=serde_json::to_string(text).map_err(|_| "audit text encoding")?;
         collect_script(&window,format!(r#"JSON.stringify((()=>{{
             const text=document.querySelector('#assistant-composer-text');text.value={text};text.dispatchEvent(new Event('input'));
@@ -1635,8 +1635,9 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant) -
             live(deadline)?;std::thread::sleep(Duration::from_millis(50));
         };
         let reply=s["reply"].as_str().ok_or("missing assistant reply")?;
-        if index==1 && !["빨간","빨강","붉","red"].iter().any(|word|reply.contains(word)) { return Err("configured model did not identify the red fixture".into()); }
-        if index==2 && !reply.contains("42") {return Err("followup did not retain confirmed input".into());}
+        let answer = reply.trim().trim_matches(['*','`']).trim().to_lowercase();
+        if index==1 && !["빨간색","빨강","빨강색","붉은색","red"].contains(&answer.as_str()) { return Err("configured model did not identify the red fixture".into()); }
+        if index==2 && answer!="42" {return Err("followup did not retain confirmed input".into());}
         if s["width"]!=s["scrollWidth"] {return Err("assistant viewport horizontal overflow".into());}
         publish(output,&format!("assistant-turn-{index}.png"),&snapshot(&window,deadline)?,deadline)?;
         receipts.push(s);

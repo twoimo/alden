@@ -6,6 +6,8 @@ confirmed text only. No microphone audio, messages or credentials are sent.
 from __future__ import annotations
 import json
 import os
+import fcntl
+import stat
 import sqlite3
 import subprocess
 import time
@@ -26,11 +28,26 @@ def database(state_root: Path, *, write: bool = False):
         raise RuntimeError('history_path_unsafe')
     if write:
         state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not path.exists():
-            fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600);os.close(fd)
-        db=sqlite3.connect(path, timeout=0.15)
-        db.execute('PRAGMA journal_mode=WAL')  # Only this derived history DB.
-        db.executescript('''
+        init_fd=os.open(state_root/'alden-history-init.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+        db=None
+        try:
+            info=os.fstat(init_fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1:
+                raise RuntimeError('history_path_unsafe')
+            fcntl.flock(init_fd,fcntl.LOCK_EX)
+            try:
+                fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600)
+            except FileExistsError:
+                fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)
+            try:
+                info=os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid!=os.geteuid() or stat.S_IMODE(info.st_mode)!=0o600 or info.st_nlink!=1:
+                    raise RuntimeError('history_path_unsafe')
+            finally:
+                os.close(fd)
+            db=sqlite3.connect(path, timeout=0.15)
+            db.execute('PRAGMA journal_mode=WAL')  # Only this derived history DB.
+            db.executescript('''
         CREATE TABLE IF NOT EXISTS voice_sessions(id TEXT PRIMARY KEY,started_at REAL,title TEXT,source TEXT);
         CREATE TABLE IF NOT EXISTS voice_messages(session_id TEXT,turn_id INTEGER,role TEXT,content TEXT,created_at REAL,context_version INTEGER,state TEXT,PRIMARY KEY(session_id,turn_id,role));
         CREATE TABLE IF NOT EXISTS voice_sources(session_id TEXT,turn_id INTEGER,provenance TEXT,PRIMARY KEY(session_id,turn_id));
@@ -38,9 +55,15 @@ def database(state_root: Path, *, write: bool = False):
         CREATE TABLE IF NOT EXISTS db_steps(id INTEGER PRIMARY KEY,cycle_id TEXT,at REAL,phase TEXT,details TEXT);
         CREATE INDEX IF NOT EXISTS voice_message_page ON voice_messages(session_id,turn_id);
         CREATE INDEX IF NOT EXISTS db_step_page ON db_steps(id);
-        ''')
-        if 'pid_start' not in {row[1] for row in db.execute('PRAGMA table_info(db_cycles)')}:
-            db.execute('ALTER TABLE db_cycles ADD COLUMN pid_start TEXT NOT NULL DEFAULT ""')
+            ''')
+            if 'pid_start' not in {row[1] for row in db.execute('PRAGMA table_info(db_cycles)')}:
+                db.execute('ALTER TABLE db_cycles ADD COLUMN pid_start TEXT NOT NULL DEFAULT ""')
+            db.commit()
+        except BaseException:
+            if db is not None: db.close()
+            raise
+        finally:
+            os.close(init_fd)
     else:
         if not path.exists():
             yield None

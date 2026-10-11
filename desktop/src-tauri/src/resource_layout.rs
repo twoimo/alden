@@ -43,6 +43,7 @@ pub const DATA_FILES: &[&str] = &[
     VOICE_SCRIPT,
     ASSISTANT_SCRIPT,
     "scripts/alden_chat_turns.py",
+    "scripts/alden_input_images.py",
     VOICE_AUDIO_LIBRARY,
     "scripts/alden_abort.py",
     "scripts/alden_local_http.py",

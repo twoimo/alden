@@ -88,6 +88,28 @@ describe('uncertain input reconciliation and strict receipts', () => {
     expect(input(app.submitted[1]).text).toBe('새로운 요청');
   });
 
+  it('does not reuse an uncertain request ID after editing and restoring the same text', async () => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('same payload'); app.submit();
+    const first = app.submitted[0]; first.reject(new Error('transport unavailable'));
+    await tick();
+    app.write('edited'); app.write('same payload'); app.submit();
+    expect(input(app.submitted[1]).request_id).not.toBe(input(first).request_id);
+  });
+
+  it('does not reuse an uncertain request ID after leaving and returning to a conversation', async () => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('same payload'); app.submit();
+    const first = app.submitted[0]; first.reject(new Error('transport unavailable'));
+    await tick();
+    app.microphone.dataset.conversationId = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    await tick();
+    app.microphone.dataset.conversationId = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    await tick();
+    app.submit();
+    expect(input(app.submitted[1]).request_id).not.toBe(input(first).request_id);
+  });
+
   it.each([{turn_id:0},{turn_id:'42'},{context_version:0},{context_version:Number.MAX_SAFE_INTEGER+1},
     {conversation_id:'not-a-session'},{reply:''},{reply:'x'.repeat(64001)}])('rejects an invalid completed receipt %j', async invalid => {
       const app = fixture(); app.write('확인 대상'); app.submit();
@@ -242,6 +264,30 @@ describe('assistant composer native ownership', () => {
     expect(app.invokeMock).toHaveBeenCalledWith('cancel_assistant_input', { tokenId: stale.args.tokenId });
   });
 
+  it('fences a pending reply immediately when text is edited, even if the original text returns', async () => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('이전 입력'); app.submit();
+    const old = app.submitted[0];
+    app.write('수정 입력'); app.write('이전 입력');
+    expect(app.invokeMock).toHaveBeenCalledWith('cancel_assistant_input', { tokenId: old.args.tokenId });
+    old.resolve(receipt(old)); await tick();
+    expect(app.committed).not.toHaveBeenCalled();
+    expect(app.text.value).toBe('이전 입력');
+    app.submit();
+    expect(input(app.submitted[1]).request_id).not.toBe(input(old).request_id);
+  });
+
+  it('fences pending replies on the DOM pagehide lifecycle', async () => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('페이지 전환 전 입력'); app.submit();
+    const old = app.submitted[0];
+    window.dispatchEvent(new Event('pagehide'));
+    expect(app.invokeMock).toHaveBeenCalledWith('cancel_assistant_input', { tokenId: old.args.tokenId });
+    old.resolve(receipt(old)); await tick();
+    expect(app.committed).not.toHaveBeenCalled();
+    expect(app.text.value).toBe('페이지 전환 전 입력');
+  });
+
   it('cancels on native hide and preserves the draft across restore', async () => {
     const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     app.write('다시 쓸 수 있는 초안');
@@ -278,6 +324,22 @@ describe('assistant composer native ownership', () => {
     expect(app.committed).not.toHaveBeenCalled();
   });
 
+  it('Cancel targets only the current owned token and leaves a later request active', async () => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('이전 요청'); app.submit();
+    const first = app.submitted[0];
+    app.cancel.click();
+    app.write('새 요청'); app.submit();
+    const second = app.submitted[1];
+    first.resolve(receipt(first)); await tick();
+    expect(app.committed).not.toHaveBeenCalled();
+    expect(app.cancel.hidden).toBe(false);
+    expect(app.invokeMock.mock.calls.filter(([command]) => command === 'cancel_assistant_input'))
+      .toEqual([['cancel_assistant_input', { tokenId: first.args.tokenId }]]);
+    second.resolve(receipt(second)); await tick();
+    expect(app.committed).toHaveBeenCalledExactlyOnceWith('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  });
+
   it('honors IME composition, Shift+Enter, and Enter keyboard semantics', () => {
     const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     app.write('한국어');
@@ -285,6 +347,11 @@ describe('assistant composer native ownership', () => {
     app.text.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(app.submitted).toHaveLength(0);
     app.text.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+    const settling = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    app.text.dispatchEvent(settling); // Some IMEs end composition before the confirming Enter keydown.
+    expect(settling.defaultPrevented).toBe(true);
+    expect(app.submitted).toHaveLength(0);
+    app.text.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
     app.text.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true }));
     expect(app.submitted).toHaveLength(0);
     app.text.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true, bubbles: true }));
@@ -297,7 +364,7 @@ describe('assistant composer native ownership', () => {
     expect(app.submitted).toHaveLength(1);
   });
 
-  it('keeps newer edits, including identical text typed again, after a valid older receipt', async () => {
+  it('discards older responses after edits, including identical text typed again', async () => {
     const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     app.write('첫 초안');
     app.submit();
@@ -305,7 +372,7 @@ describe('assistant composer native ownership', () => {
     app.write('첫 초안');
     app.submitted[0].resolve(receipt(app.submitted[0]));
     await tick();
-    expect(app.committed).toHaveBeenCalledTimes(1);
+    expect(app.committed).not.toHaveBeenCalled();
     expect(app.text.value).toBe('첫 초안');
   });
 
@@ -343,7 +410,7 @@ describe('assistant composer native ownership', () => {
   });
 
   it.each([
-    { state: 'failed', ok: false, error_code: 'assistant_image_invalid', status: '이미지를 처리할 수 없습니다.' },
+    { state: 'failed', ok: false, error_code: 'assistant_image_invalid', status: 'assistant_image_invalid' },
     { state: 'cancelled', ok: false, status: '요청이 취소되었습니다.' },
     { state: 'superseded', ok: false, status: '새 요청으로 이전 요청이 종료되었습니다.' },
     { state: 'running', ok: true, status: '답변을 확인하지 못했습니다.' },
@@ -368,6 +435,54 @@ describe('assistant composer native ownership', () => {
     expect(document.querySelector('#assistant-composer img')).toBeNull();
     expect(app.text.value).toContain('<img');
     expect(app.committed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['assistant_image_budget', '이미지'],
+    ['assistant_image_invalid', '이미지'],
+    ['assistant_image_decoder_unavailable', '이미지'],
+    ['assistant_image_pixel_budget', '픽셀'],
+    ['assistant_image_store_unavailable', '저장'],
+    ['assistant_image_model_unsupported', '모델'],
+    ['assistant_input_cancelled', '취소'],
+    ['assistant_input_superseded', '종료'],
+    ['voice_model_configuration_invalid', '설정'],
+    ['local_llm_model_not_ready', '로컬 모델'],
+    ['routed_llm_incomplete_response', '답변'],
+  ])('shows the exact backend failure code %s', async (code, hint) => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('초안'); app.submit();
+    app.submitted[0].resolve(receipt(app.submitted[0], { state: 'failed', ok: false, error_code: code }));
+    await tick();
+    expect(app.status.textContent).toContain(hint);
+    expect(app.status.textContent).toContain(code);
+    expect(app.text.value).toBe('초안');
+    expect(app.committed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { state: 'cancelled', error_code: 'assistant_input_cancelled' },
+    { state: 'superseded', error_code: 'assistant_input_superseded' },
+  ])('keeps actual cancellation/supersession error codes (%j)', async ({ state, error_code }) => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('초안'); app.submit();
+    app.submitted[0].resolve(receipt(app.submitted[0], { state, ok: false, error_code }));
+    await tick();
+    expect(app.status.textContent).toContain(error_code);
+    expect(app.text.value).toBe('초안');
+    expect(app.committed).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: new Error('assistant_image_store_unavailable'), code: 'assistant_image_store_unavailable' },
+    { reason: 'Error: local_llm_model_not_ready', code: 'local_llm_model_not_ready' },
+    { reason: { error_code: 'routed_llm_incomplete_response' }, code: 'routed_llm_incomplete_response' },
+  ])('shows known rejected native error codes without leaking raw errors (%s)', async ({ reason, code }) => {
+    const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+    app.write('초안'); app.submit();
+    app.submitted[0].reject(reason); await tick();
+    expect(app.status.textContent).toContain(code);
+    expect(app.text.value).toBe('초안');
   });
 
   it('enforces the character boundary and permits 4,000 emoji within 16,000 UTF-8 bytes', () => {
@@ -454,7 +569,7 @@ describe('assistant composer native ownership', () => {
     expect(app.submitted).toHaveLength(0);
   });
 
-  it('preserves newly selected images when an older pending turn commits', async () => {
+  it('fences an older pending turn when a new image is selected', async () => {
     vi.stubGlobal('FileReader', ControlledReader);
     const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     app.pick(new File(['A'], 'first.png', { type: 'image/png' }));
@@ -468,7 +583,8 @@ describe('assistant composer native ownership', () => {
     await tick();
     call.resolve(receipt(call));
     await tick();
-    expect(app.committed).toHaveBeenCalledTimes(1);
+    expect(app.committed).not.toHaveBeenCalled();
+    expect(app.invokeMock).toHaveBeenCalledWith('cancel_assistant_input', { tokenId: call.args.tokenId });
     expect(app.preview.textContent).toContain('second.png');
     expect(app.preview.textContent).not.toContain('first.png');
   });

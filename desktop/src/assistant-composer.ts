@@ -20,40 +20,55 @@ const MAX_BATCH_BYTES = 20 * 1024 * 1024;
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const HEX_32 = /^[a-f0-9]{32}$/;
 const UUID_V4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const NATIVE_CODE = /^(?:Error:\s*)?([a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?::\s.*)?$/;
+const ERROR_DETAILS: Readonly<Record<string, string>> = {
+  assistant_text_too_long: '메시지 크기가 허용 범위를 넘었습니다. 내용을 줄여 주세요.',
+  assistant_input_too_large: '메시지 크기가 허용 범위를 넘었습니다. 내용을 줄여 주세요.',
+  input_too_large: '메시지 크기가 허용 범위를 넘었습니다. 내용을 줄여 주세요.',
+  assistant_image_budget: '이미지 처리 용량 한도를 넘었습니다. 이미지 개수나 크기를 줄여 주세요.',
+  assistant_image_invalid: '이미지 형식이나 내용이 유효하지 않습니다. 다른 이미지를 선택해 주세요.',
+  image_invalid: '이미지 형식이나 내용이 유효하지 않습니다. 다른 이미지를 선택해 주세요.',
+  unsupported_image_type: '이미지 형식을 지원하지 않습니다. PNG, JPEG, WebP 또는 GIF를 선택해 주세요.',
+  assistant_image_decoder_unavailable: '이미지 해독 기능을 사용할 수 없습니다. 이미지 처리 환경을 확인해 주세요.',
+  assistant_image_decoder_timeout: '이미지 해독 시간이 초과됐습니다. 작은 이미지로 다시 시도해 주세요.',
+  image_input_provenance_changed: '받은 이미지 내용이 바뀌었습니다. 같은 사진을 다시 첨부해 주세요.',
+  assistant_image_pixel_budget: '이미지 픽셀 수 한도를 넘었습니다. 해상도를 줄여 주세요.',
+  assistant_image_store_unavailable: '이미지를 저장할 수 없습니다. 저장소 상태를 확인해 주세요.',
+  assistant_image_model_unsupported: '선택한 모델이 이미지 입력을 지원하지 않습니다. 모델 설정을 확인해 주세요.',
+  assistant_model_unavailable: '대화 모델에 연결할 수 없습니다. 설정을 확인해 주세요.',
+  model_unavailable: '대화 모델에 연결할 수 없습니다. 설정을 확인해 주세요.',
+  voice_model_configuration_invalid: '대화 모델 설정이 올바르지 않습니다. 모델 설정을 확인해 주세요.',
+  local_llm_model_not_ready: '선택한 로컬 모델이 준비되지 않았습니다. 준비 상태를 확인해 주세요.',
+  routed_llm_incomplete_response: '모델 답변이 완결되지 않았습니다. 작성한 내용은 남아 있습니다.',
+  assistant_conversation_missing: '선택한 대화를 찾지 못했습니다. 대화를 다시 선택해 주세요.',
+  conversation_not_found: '선택한 대화를 찾지 못했습니다. 대화를 다시 선택해 주세요.',
+  assistant_input_busy: '다른 요청을 처리하고 있습니다. 완료된 뒤 다시 시도해 주세요.',
+  runtime_busy: '다른 요청을 처리하고 있습니다. 완료된 뒤 다시 시도해 주세요.',
+  assistant_input_cancelled: '요청이 취소되었습니다. 작성한 내용은 남아 있습니다.',
+  assistant_input_superseded: '새 요청으로 이전 요청이 종료되었습니다. 작성한 내용은 남아 있습니다.',
+};
+const UNCERTAIN_MESSAGE = '답변을 확인하지 못했습니다. 작성한 내용은 그대로 남아 있습니다.';
 
 const mounted = new WeakMap<Document, ReturnType<typeof wireAssistantComposer>>();
 
-function safeFailure(code: unknown): string {
-  switch (code) {
-    case 'assistant_text_too_long':
-    case 'assistant_input_too_large':
-    case 'input_too_large':
-      return '메시지 크기가 허용 범위를 넘었습니다. 내용을 줄여 주세요.';
-    case 'assistant_image_invalid':
-    case 'image_invalid':
-    case 'unsupported_image_type':
-      return '이미지를 처리할 수 없습니다. PNG, JPEG, WebP 또는 GIF를 선택해 주세요.';
-    case 'assistant_model_unavailable':
-    case 'model_unavailable':
-      return '대화 모델에 연결할 수 없습니다. 설정을 확인해 주세요.';
-    case 'assistant_conversation_missing':
-    case 'conversation_not_found':
-      return '선택한 대화를 찾지 못했습니다. 대화를 다시 선택해 주세요.';
-    case 'assistant_input_busy':
-    case 'runtime_busy':
-      return '다른 요청을 처리하고 있습니다. 완료된 뒤 다시 시도해 주세요.';
-    default:
-      return '답변을 확인하지 못했습니다. 작성한 내용은 그대로 남아 있습니다.';
+function receivedCode(error: unknown, depth = 0): string | null {
+  if (depth > 2) return null;
+  if (typeof error === 'string') {
+    const code = NATIVE_CODE.exec(error.trim())?.[1];
+    return code && Object.hasOwn(ERROR_DETAILS, code) ? code : null;
   }
-}
-
-function knownError(error: unknown): unknown {
-  if (typeof error === 'string') return error;
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === 'object' && 'error_code' in error) {
-    return (error as { error_code: unknown }).error_code;
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>;
+    return receivedCode(record.error_code,depth+1) ?? receivedCode(record.code,depth+1)
+      ?? (error instanceof Error ? receivedCode(error.message,depth+1) : receivedCode(record.message,depth+1));
   }
   return null;
+}
+
+function safeFailure(error: unknown): string {
+  const code = receivedCode(error);
+  if (!code) return UNCERTAIN_MESSAGE;
+  return `${ERROR_DETAILS[code] ?? UNCERTAIN_MESSAGE} (오류 코드: ${code})`;
 }
 
 function isReceipt(value: unknown, owner: OwnedRequest): value is Record<string, unknown> {
@@ -182,6 +197,7 @@ export function wireAssistantComposer(
   let selectedPage = '';
   let shown = true;
   let composing = false;
+  let finishingComposition = false;
   let pending: OwnedRequest | null = null;
   let uncertain: OwnedRequest | null = null;
   let superseding = false;
@@ -197,6 +213,7 @@ export function wireAssistantComposer(
   let selectedConversation = conversationId();
   const active = () => !disposed && shown && selectedPage === 'voice';
   const samePayload = (owner: OwnedRequest) => owner.conversationId === conversationId()
+    && owner.textRevision === textRevision && owner.imageRevision === imageRevision
     && owner.text === text.value && JSON.stringify(owner.images) === JSON.stringify(images);
 
   function updateControls(): void {
@@ -248,6 +265,7 @@ export function wireAssistantComposer(
     contextEpoch++;
     if (pending) retirePending('대화가 바뀌어 요청을 취소했습니다. 작성한 내용은 남아 있습니다.');
     if (reading) abortRead();
+    uncertain = null;
     selectedConversation = current;
     updateControls();
   }
@@ -266,6 +284,8 @@ export function wireAssistantComposer(
       remove.setAttribute('aria-label', `${image.name} 첨부 제거`);
       remove.addEventListener('click', () => {
         if (!active()) return;
+        retirePending('입력이 바뀌어 이전 요청을 취소했습니다.');
+        uncertain = null;
         images.splice(index, 1);
         imageRevision++;
         renderImages();
@@ -293,6 +313,8 @@ export function wireAssistantComposer(
       status.textContent = 'PNG, JPEG, WebP, GIF 이미지 4개까지 선택할 수 있습니다. 개별 8MiB, 합계 20MiB 이하로 해 주세요.';
       return;
     }
+    retirePending('입력이 바뀌어 이전 요청을 취소했습니다.');
+    uncertain = null;
     reading = true;
     status.textContent = '선택한 이미지를 준비하고 있습니다…';
     updateControls();
@@ -385,7 +407,8 @@ export function wireAssistantComposer(
         tokenId,
       });
       syncSelection();
-      if (pending !== owned || !active() || selectedConversation !== owned.conversationId) return;
+      if (pending !== owned || !active() || selectedConversation !== owned.conversationId
+        || textRevision !== owned.textRevision || imageRevision !== owned.imageRevision) return;
       pending = null;
       updateControls();
       if (!isReceipt(result, owned)) {
@@ -417,10 +440,10 @@ export function wireAssistantComposer(
         cancelUncertain(tokenId);
       } else if (result.state === 'cancelled') {
         uncertain = null;
-        status.textContent = '요청이 취소되었습니다. 작성한 내용은 남아 있습니다.';
+        status.textContent = safeFailure('assistant_input_cancelled');
       } else if (result.state === 'superseded') {
         uncertain = null;
-        status.textContent = '새 요청으로 이전 요청이 종료되었습니다. 작성한 내용은 남아 있습니다.';
+        status.textContent = safeFailure('assistant_input_superseded');
       } else {
         status.textContent = safeFailure(result.error_code);
         if (result.state === 'running') {
@@ -435,21 +458,36 @@ export function wireAssistantComposer(
       pending = null;
       uncertain = owned;
       updateControls();
-      status.textContent = safeFailure(knownError(error));
+      status.textContent = safeFailure(error);
     }
   }
 
   form.addEventListener('submit', event => { event.preventDefault(); void submit(); }, { signal: listeners.signal });
-  text.addEventListener('input', () => { textRevision++; updateControls(); }, { signal: listeners.signal });
+  text.addEventListener('input', () => {
+    retirePending('입력이 바뀌어 이전 요청을 취소했습니다.');
+    uncertain = null;
+    textRevision++;
+    updateControls();
+  }, { signal: listeners.signal });
   text.addEventListener('compositionstart', () => { composing = true; }, { signal: listeners.signal });
-  text.addEventListener('compositionend', () => { composing = false; }, { signal: listeners.signal });
+  text.addEventListener('compositionend', () => { composing = false; finishingComposition = true; }, { signal: listeners.signal });
   text.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') finishingComposition = false;
     if (event.key !== 'Enter' || event.shiftKey || event.isComposing || composing || event.keyCode === 229) return;
     event.preventDefault();
+    if (finishingComposition) return;
     void submit();
   }, { signal: listeners.signal });
+  text.addEventListener('keyup', () => { finishingComposition = false; }, { signal: listeners.signal });
+  text.addEventListener('pointerup', () => { finishingComposition = false; }, { signal: listeners.signal });
   imagePicker.addEventListener('change', () => { void pickImages(); }, { signal: listeners.signal });
   cancel.addEventListener('click', () => retirePending('요청 취소를 보냈습니다. 작성한 내용은 남아 있습니다.'), { signal: listeners.signal });
+  root.defaultView?.addEventListener('pagehide', () => {
+    contextEpoch++;
+    retirePending();
+    if (reading) abortRead();
+    updateControls();
+  }, { signal: listeners.signal });
 
   const controller = {
     select(next: string): void {
