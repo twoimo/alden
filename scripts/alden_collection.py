@@ -404,19 +404,28 @@ class CollectionStore:
             sha, name = self._blob(raw, folder=folder, budget=32 * 1024 * 1024)
             receipt = {**manifest, "source_sha256": sha, "source_bytes": len(raw), "source_file": name}
             manifest_sha, manifest_name = self._blob(encoded(receipt), folder=folder, budget=16 * 1024 * 1024)
-            run_id = identity("source-capture", target_id + ":" + manifest_sha)
             with self.database() as db:
                 current = db.execute("SELECT cursor FROM targets WHERE id=?", (target_id,)).fetchone()
                 if current[0] != expected_cursor:
                     raise RuntimeError("collection_source_checkpoint_changed")
-                previous = db.execute("SELECT 1 FROM runs WHERE id=? AND state='complete'", (run_id,)).fetchone()
-                if previous:
-                    return {"state": "unchanged", "run_id": run_id, "manifest": manifest_name, "sha256": sha}
+                snapshot = db.execute("SELECT run_id FROM target_snapshots WHERE target_id=?",
+                                      (target_id,)).fetchone()
+                # A repeated source is new evidence for the current committed
+                # transition. Archive bytes/manifests remain content-addressed.
+                run_id = identity("source-capture", encoded([
+                    target_id, manifest_sha, snapshot[0] if snapshot else None]).decode())
                 if cancelled():
                     raise RuntimeError("collection_cancelled")
                 cursor = json.loads(expected_cursor)
                 cursor["source_capture"] = {"schema": 1, "manifest": manifest_name,
                                             "sha256": sha, "byte_scope": manifest["byte_scope"]}
+                previous = db.execute("SELECT 1 FROM runs WHERE id=? AND state='complete'", (run_id,)).fetchone()
+                if previous:
+                    # Repair an absent reference using already verified archive
+                    # evidence without rewriting the original run or its event.
+                    db.execute("UPDATE targets SET cursor=? WHERE id=?", (encoded(cursor).decode(), target_id))
+                    return {"state": "unchanged", "run_id": run_id, "manifest": manifest_name,
+                            "sha256": sha, "checkpoint_restored": True}
                 now = time.time()
                 db.execute("""INSERT INTO runs(id,target_id,origin,state,started_at,ended_at,cursor_before,cursor_after)
                   VALUES(?,?,?,?,?,?,?,?)""", (run_id, target_id, "alden-source-capture", "complete", now, now,

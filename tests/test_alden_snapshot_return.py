@@ -1,11 +1,14 @@
 """A newer snapshot may restore old content without replaying its old run."""
 from pathlib import Path
+import json
+import os
 import sys
 from tempfile import TemporaryDirectory
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from alden_collection import CollectionStore, digest, encoded
+from alden_collect import capture_source, collect_target
 
 
 class SnapshotReturnTests(unittest.TestCase):
@@ -160,6 +163,104 @@ class SnapshotReturnTests(unittest.TestCase):
         with self.store.database() as db:
             self.assertEqual(tuple(db.execute('SELECT * FROM memberships WHERE target_id=?',
                 (other,)).fetchone()), other_before)
+
+
+class CaptureReturnTests(unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.source = self.root / 'source.json'
+        self.store = CollectionStore(self.root / 'state')
+        self.target = self.store.register(platform='graph', original_id='capture-return',
+            kind='graph', label='capture return', projects=['one'],
+            config={'adapter': 'source-graph', 'path': str(self.source)})
+
+    def collect(self, text, order):
+        raw = encoded({'nodes': [{'id': 'x', 'label': 'source', 'summary': text}],
+                       'edges': []})
+        self.source.write_bytes(raw)
+        os.utime(self.source, ns=(1700000000000000000 + order,) * 2)
+        collect_target(self.store, self.target)
+        return raw
+
+    def rows(self, table):
+        with self.store.database() as db:
+            return {tuple(row) for row in db.execute('SELECT * FROM ' + table)}
+
+    def test_each_return_reconnects_current_evidence_without_rewriting_history(self):
+        ids, manifests, archived = [], {}, set()
+        for order, text in enumerate(['alpha', 'beta', 'alpha', 'beta', 'alpha'], 1):
+            raw = self.collect(text, order)
+            result = capture_source(self.store, self.target)
+            cursor = json.loads(self.store.target(self.target)['cursor'])
+            self.assertEqual(cursor['source_capture']['manifest'], result['manifest'])
+            self.assertEqual(cursor['source_capture']['sha256'], digest(raw))
+            self.assertEqual(self.source.read_bytes(), raw)
+            self.assertTrue(archived <= self.rows('runs'))
+            archived = self.rows('runs')
+            ids.append(result['run_id'])
+            if text in manifests:
+                self.assertEqual(result['manifest'], manifests[text])
+            manifests[text] = result['manifest']
+        self.assertEqual(len(set(ids)), 5)
+        self.assertEqual(len(self.rows('versions')), 2)
+        before = {table: self.rows(table) for table in ['runs', 'events', 'versions']}
+        replay = capture_source(self.store, self.target)
+        self.assertEqual(replay['state'], 'unchanged')
+        self.assertEqual({table: self.rows(table) for table in before}, before)
+
+    def test_cancelled_return_keeps_checkpoint_and_attaches_evidence_on_retry(self):
+        for order, text in [(1, 'alpha'), (2, 'beta')]:
+            self.collect(text, order)
+            capture_source(self.store, self.target)
+        self.collect('alpha', 3)
+        cursor = self.store.target(self.target)['cursor']
+        before = {table: self.rows(table) for table in ['runs', 'events', 'versions']}
+        # Cancel after validation and archive preparation, before publication.
+        calls = 0
+        def cancelled():
+            nonlocal calls
+            calls += 1
+            return calls == 3
+        with self.assertRaisesRegex(RuntimeError, 'collection_cancelled'):
+            capture_source(self.store, self.target, cancelled=cancelled)
+        self.assertEqual(self.store.target(self.target)['cursor'], cursor)
+        self.assertEqual({table: self.rows(table) for table in before}, before)
+        result = capture_source(self.store, self.target)
+        self.assertEqual(json.loads(self.store.target(self.target)['cursor'])[
+            'source_capture']['manifest'], result['manifest'])
+
+    def test_old_capture_cursor_cannot_replace_a_new_projection(self):
+        raw = self.collect('alpha', 1)
+        first = capture_source(self.store, self.target)
+        old_cursor = self.store.target(self.target)['cursor']
+        manifest = json.loads((self.store.root / 'source-captures' /
+                               first['manifest']).read_bytes())
+        self.collect('beta', 2)
+        current = self.store.target(self.target)['cursor']
+        with self.assertRaisesRegex(RuntimeError, 'collection_source_checkpoint_changed'):
+            self.store.retain_source_capture(self.target, raw, manifest,
+                                            expected_cursor=old_cursor)
+        self.assertEqual(self.store.target(self.target)['cursor'], current)
+
+    def test_verified_completed_capture_repairs_missing_reference_without_new_counts(self):
+        self.collect('alpha', 1)
+        first = capture_source(self.store, self.target)
+        cursor = json.loads(self.store.target(self.target)['cursor'])
+        del cursor['source_capture']
+        # Simulate loss of the reference; archive, snapshot and capture history
+        # remain intact. Recovery must reconnect them rather than duplicate them.
+        with self.store.database() as db:
+            db.execute('UPDATE targets SET cursor=? WHERE id=?',
+                       (encoded(cursor).decode(), self.target))
+        before = {table: self.rows(table) for table in ['runs', 'events', 'versions']}
+        repaired = capture_source(self.store, self.target)
+        self.assertTrue(repaired['checkpoint_restored'])
+        self.assertEqual(repaired['run_id'], first['run_id'])
+        self.assertEqual(json.loads(self.store.target(self.target)['cursor'])[
+            'source_capture']['manifest'], first['manifest'])
+        self.assertEqual({table: self.rows(table) for table in before}, before)
 
 
 if __name__ == '__main__':
