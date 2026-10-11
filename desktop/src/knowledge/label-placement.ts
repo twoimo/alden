@@ -3,7 +3,7 @@
  * Nodes, edges, semantic positions and keyboard targets are never filtered.
  * The caller projects/measures labels once and invokes this with cached widths.
  */
-export type LabelBox = { width: number; left: number; top: number; visible: boolean };
+export type LabelBox = { width: number; height?: number; left: number; top: number; visible: boolean };
 export type LabelViewport = { x: number; y: number; width: number; height: number };
 export type LabelExclusion = { left: number; top: number; right: number; bottom: number };
 
@@ -41,21 +41,24 @@ export function placeOverviewLabel(
   earlierCount: number,
 ): void {
   box.visible = false;
-  if (!(box.width > 0) || !Number.isFinite(box.left) || !Number.isFinite(box.top) ||
-      !(viewport.width > 0) || viewport.height < LABEL_HEIGHT) return;
+  const height = box.height ?? LABEL_HEIGHT;
+  if (!Number.isFinite(box.width) || !Number.isFinite(height) || !Number.isFinite(box.left) || !Number.isFinite(box.top) ||
+      !Number.isFinite(viewport.x) || !Number.isFinite(viewport.y) || !Number.isFinite(viewport.width) || !Number.isFinite(viewport.height) ||
+      !(box.width > 0) || !(height > 0) || box.width > viewport.width || height > viewport.height) return;
 
   const preferredLeft = box.left, preferredTop = box.top;
   const maxLeft = viewport.x + Math.max(0, viewport.width - box.width);
-  const maxTop = viewport.y + viewport.height - LABEL_HEIGHT;
+  const maxTop = viewport.y + viewport.height - height;
+  const verticalStep = Math.max(VERTICAL_STEP, height + LABEL_GAP + 1);
 
   for (const [horizontal, row] of OFFSETS) {
     const left = Math.max(viewport.x, Math.min(maxLeft, preferredLeft + horizontal * (box.width + 10)));
-    const top = Math.max(viewport.y, Math.min(maxTop, preferredTop + row * VERTICAL_STEP));
+    const top = Math.max(viewport.y, Math.min(maxTop, preferredTop + row * verticalStep));
     let blocked = false;
     for (const exclusion of exclusions) {
       if (exclusion.right > exclusion.left &&
           left < exclusion.right && left + box.width > exclusion.left &&
-          top < exclusion.bottom && top + LABEL_HEIGHT > exclusion.top) {
+          top < exclusion.bottom && top + height > exclusion.top) {
         blocked = true;
         break;
       }
@@ -66,8 +69,8 @@ export function placeOverviewLabel(
       if (other.visible &&
           left < other.left + other.width + LABEL_GAP &&
           left + box.width + LABEL_GAP > other.left &&
-          top < other.top + LABEL_HEIGHT + LABEL_GAP &&
-          top + LABEL_HEIGHT + LABEL_GAP > other.top) {
+          top < other.top + (other.height ?? LABEL_HEIGHT) + LABEL_GAP &&
+          top + height + LABEL_GAP > other.top) {
         blocked = true;
         break;
       }

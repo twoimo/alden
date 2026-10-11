@@ -703,6 +703,8 @@ fn capture_workspaces(
         validate_workspace_title(&state, size)?;
         if page == "memory" {
             state["physicsObservation"] = observe_graph_rest(window, deadline)?;
+            state["labelGeometryObservation"] =
+                collect_script(window, LABEL_GEOMETRY_COLLECT.into(), deadline)?;
         }
         publish(
             output,
@@ -775,6 +777,33 @@ fn capture_workspaces(
     Ok(states)
 }
 
+// Audit-only DOM measurements. Never emit label text, record IDs or bodies, and
+// never run this from a frame loop. Element boxes are not font-ink geometry.
+const LABEL_GEOMETRY_COLLECT: &str = r#"JSON.stringify((()=>{
+  const canvas=document.querySelector('#knowledge-graph-canvas');
+  const area=canvas?.getBoundingClientRect();
+  const all=[...document.querySelectorAll('.knowledge-node-label')];
+  const boxes=all.slice(0,24).map((el,index)=>{
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return {index,visible:!el.hidden&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0,
+      focused:el.dataset.focused==='true',view:el.dataset.view??null,
+      left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height,
+      fontSize:s.fontSize,lineHeight:s.lineHeight,fontWeight:s.fontWeight};
+  });
+  const visible=boxes.filter(b=>b.visible);let overlapPairs=0,clipped=0;
+  for(let a=0;a<visible.length;a++){
+    const r=visible[a];
+    if(area&&(r.left<area.left-.5||r.top<area.top-.5||r.right>area.right+.5||r.bottom>area.bottom+.5))clipped++;
+    for(let b=a+1;b<visible.length;b++){
+      const q=visible[b];
+      if(Math.min(r.right,q.right)-Math.max(r.left,q.left)>.5&&Math.min(r.bottom,q.bottom)-Math.max(r.top,q.top)>.5)overlapPairs++;
+    }
+  }
+  return {scope:'audit-only bounded element rectangles; no label text/IDs or physical/font-ink proof',
+    totalLabels:all.length,sampledLabels:boxes.length,truncated:all.length>24,visibleLabels:visible.length,
+    overlapPairs,clippedLabels:clipped,boxes,devicePixelRatio};
+})())"#;
+
 const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
   const d=window.__knowledgeRenderDiagnostics, p=window.__knowledgeRenderPause;
   const c=document.querySelector('#knowledge-graph-canvas'), r=c?.getBoundingClientRect();
@@ -795,8 +824,13 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     clearedDetail:document.querySelector('#knowledge-relations')?.children.length===0
       &&document.querySelector('#knowledge-focus-title')?.textContent==='항목을 선택하면 관련 정보를 보여드립니다.',
     accessibleNodes:document.querySelectorAll('.knowledge-a11y-node').length,
+    labelGeometryObservation:JSON.parse(__AUDIT_LABEL_GEOMETRY__),
     pause:p?{state:p.state,eventAtMs:p.eventAtMs,rendersAfterEvent:p.rendersAfterEvent}:null};
 })())"#;
+
+fn graph_collect_script() -> String {
+    GRAPH_COLLECT.replace("__AUDIT_LABEL_GEOMETRY__", LABEL_GEOMETRY_COLLECT)
+}
 
 fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
     let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
@@ -875,12 +909,12 @@ fn graph_step(
         _ => return Err("unknown internal graph action".into()),
         }.to_string(),
     };
-    collect_script(window, format!("{script};{GRAPH_COLLECT}"), deadline)?;
+    collect_script(window, format!("{script};{}", graph_collect_script()), deadline)?;
     std::thread::sleep(Duration::from_millis(250));
     // Match bounded source-read budgets; readiness is observed, never forced.
     let settle = deadline.min(Instant::now() + Duration::from_secs(25));
     loop {
-        let state = collect_script(window, GRAPH_COLLECT.into(), deadline)?;
+        let state = collect_script(window, graph_collect_script(), deadline)?;
         let graph_pending = collect_script(window,"JSON.stringify({pending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중'})".into(),deadline)?;
         if graph_pending["pending"] != true
             && state["graphRead"]["navigationPending"] != true
@@ -980,7 +1014,7 @@ fn audit_settings(
     }
     graph_step(&window, "memory-page", deadline)?;
     let initial = loop {
-        let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+        let state = collect_script(&window, graph_collect_script(), deadline)?;
         if rendered_since(&state, 0) && state["graphPending"] != true {
             break state;
         }
@@ -1002,7 +1036,7 @@ fn audit_settings(
             publish(output, "activity-ready.json", b"{\"ready\":true}", deadline)?;
             let waited_by = deadline.min(Instant::now() + Duration::from_secs(15));
             loop {
-                let state = collect_script(&window, GRAPH_COLLECT.into(), waited_by)?;
+                let state = collect_script(&window, graph_collect_script(), waited_by)?;
                 if state["nodeActivity"]["last"]["run_id"] == expected
                     && state["nodeActivity"]["last"]["success"] == true
                     && state["nodeActivity"]["active"].as_u64().unwrap_or(0) > 0
@@ -1024,7 +1058,7 @@ fn audit_settings(
     )?;
     // The native capture flushes layout/ResizeObserver work. Navigation must
     // restore the pose actually shown at click time, not a pre-layout sample.
-    let initial = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+    let initial = collect_script(&window, graph_collect_script(), deadline)?;
     let overview_more = if initial["expandDisabled"] == false {
         let more = graph_step(&window, "expand", deadline)?;
         if more["navigation"]["focused"] != false
@@ -1166,7 +1200,7 @@ fn audit_settings(
     let native_compact = {
         let settled_by = deadline.min(Instant::now() + Duration::from_secs(2));
         loop {
-            let compact = collect_script(&window, GRAPH_COLLECT.into(), settled_by)?;
+            let compact = collect_script(&window, graph_collect_script(), settled_by)?;
             let native = native_settings_size(&window, settled_by)?;
             if compact["width"].as_f64() == native["layoutWidth"].as_f64()
                 && compact["height"].as_f64() == native["layoutHeight"].as_f64()
@@ -1233,7 +1267,7 @@ fn audit_settings(
         // a baseline taken before the renderer acknowledged the previous hide.
         let hide_by = Instant::now() + Duration::from_secs(2);
         let hidden_baseline = loop {
-            let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+            let state = collect_script(&window, graph_collect_script(), deadline)?;
             if state["pause"]["state"] == "hidden"
                 && state["loop"]["running"] == false
                 && state["loop"]["pendingFrame"] == false
@@ -1251,7 +1285,7 @@ fn audit_settings(
         let resume_deadline = Instant::now() + Duration::from_secs(2);
         let mut visible_since = None;
         let before = loop {
-            let sample = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+            let sample = collect_script(&window, graph_collect_script(), deadline)?;
             // A queued DOM hide can follow the first resumed frame. Observe a
             // stable active consumer before measuring a new native hide note.
             if resumed_graph(&sample, show_baseline) && window.is_visible().ok() == Some(true) {
@@ -1289,7 +1323,7 @@ fn audit_settings(
         receive(rx, deadline)?;
         let stopped_by = Instant::now() + Duration::from_secs(2);
         let stopped = loop {
-            let state = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+            let state = collect_script(&window, graph_collect_script(), deadline)?;
             if counters.count(note) > seen
                 && fresh_pause(&state, previous)
                 && window.is_visible().ok() == Some(false)
@@ -1305,7 +1339,7 @@ fn audit_settings(
         };
         let latency = started.elapsed().as_secs_f64() * 1000.0;
         std::thread::sleep(Duration::from_millis(350));
-        let hidden = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+        let hidden = collect_script(&window, graph_collect_script(), deadline)?;
         if count(&hidden) != count(&stopped)
             || hidden["pause"]["rendersAfterEvent"] != 0
             || hidden["nodeActivity"]["active"] != 0
@@ -1318,7 +1352,7 @@ fn audit_settings(
     }
     visibility(&window, true, deadline)?;
     std::thread::sleep(Duration::from_millis(250));
-    let reopened = collect_script(&window, GRAPH_COLLECT.into(), deadline)?;
+    let reopened = collect_script(&window, graph_collect_script(), deadline)?;
     if !rendered_since(&reopened, last_hidden_count) {
         return Err("settings graph did not resume".into());
     }

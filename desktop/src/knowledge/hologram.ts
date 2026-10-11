@@ -14,7 +14,7 @@ import { relationAnchors, relationCenterId } from './relation-layout';
 import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
 import { PositionTransition } from './position-transition';
-import { compareOverviewLabelPriority, placeOverviewLabel } from './label-placement';
+import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
@@ -42,6 +42,10 @@ export interface KnowledgeFocusEvent {
 }
 
 type FocusHandler = (event: KnowledgeFocusEvent) => void;
+
+const LABEL_TYPOGRAPHY = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle',
+  'fontStretch', 'fontVariant', 'letterSpacing', 'lineHeight'] as const;
+type CachedLabelBox = LabelBox & { typography?: string[] };
 
 function cssColor(surface: Element, name: string, fallback: string): THREE.Color {
   const value = getComputedStyle(surface).getPropertyValue(name).trim();
@@ -109,7 +113,7 @@ export class KnowledgeHologram {
   private activity: OrbActivity = QUIET_ORB;
   private rootNodeId = '';
   private readonly labels = new Map<string, HTMLSpanElement>();
-  private readonly labelBounds: Array<{ width: number; left: number; top: number; visible: boolean }> = [];
+  private readonly labelBounds: CachedLabelBox[] = [];
   private readonly labelOverlays: HTMLElement[] = [];
   private readonly excludedLabelBounds: Array<{ left:number; top:number; right:number; bottom:number }> = [];
   private readonly projected = new THREE.Vector3();
@@ -690,6 +694,9 @@ export class KnowledgeHologram {
     for(const neuron of this.neuronMeshes.values())neuron.visible=detail;
     for(const orb of this.orbMeshes.values())orb.visible=detail;
     for(const label of this.labels.values())label.dataset.view=detail?'local':'overview';
+    // This switches CSS padding as well as visual mode. The next frame must
+    // measure the new box, even when its text and projected anchor are unchanged.
+    for(const box of this.labelBounds)box.width=0;
     if(detail){
       this.synapses.set([],null,true);
       this.synapses.set(selectSynapses(this.view.edges,new Set(this.view.nodes.map(n=>n.id))),this.view.focusId,this.reducedMotionEnabled,this.neuronPorts,this.anchors);
@@ -834,25 +841,37 @@ export class KnowledgeHologram {
       this.projected.copy(position).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
       const outside = Math.abs(this.projected.x) > 1 || Math.abs(this.projected.y) > 1 || this.projected.z > 1 || this.projected.z < -1;
       if (outside) { if (!label.hidden) label.hidden = true; continue; }
-      // Measure only after a rebuild/resize. Reuse at most 24 collision boxes.
-      if (!box.width) { label.hidden = false; box.width = label.offsetWidth || Math.min(156, label.textContent!.length * 11 + 12); }
+      // Inline typography reads do not request layout. Re-measure only after
+      // rebuild/resize/mode or an explicit typography change; transforms never
+      // invalidate the metric cache. Keep at most 24 measured collision boxes.
+      let metricsChanged = !box.width || !box.typography;
+      if (!metricsChanged) for (let key = 0; key < LABEL_TYPOGRAPHY.length; key++) {
+        if (box.typography![key] !== label.style[LABEL_TYPOGRAPHY[key]]) { metricsChanged = true; break; }
+      }
+      if (metricsChanged) {
+        label.hidden = false;
+        box.width = label.offsetWidth || Math.min(156, label.textContent!.length * 11 + 12);
+        box.height = label.offsetHeight || 24;
+        box.typography = LABEL_TYPOGRAPHY.map(key => label.style[key]);
+      }
+      const labelHeight = box.height ?? 24;
       box.left = Math.max(x, Math.min(x + width - box.width, x + (this.projected.x + 1) * width / 2 - box.width / 2));
       const mesh = this.nodeMeshes.get(id);
       const radius = mesh?.geometry instanceof THREE.SphereGeometry ? mesh.geometry.parameters.radius*mesh.scale.x : 0;
       const extent = this.neuronDetail&&this.neuronMeshes.has(id) ? radius * NEURON_EXTENT_RATIO : radius;
       const offset = Math.min(54, extent * height / (2 * Math.tan(this.camera.fov * Math.PI / 360) * Math.max(.1, this.camera.position.distanceTo(position))) + 8);
-      box.top = Math.min(y + height - 24, y + (1 - this.projected.y) * height / 2 + offset);
+      box.top = Math.min(y + height - labelHeight, y + (1 - this.projected.y) * height / 2 + offset);
       if (this.view.hops === 0) {
         placeOverviewLabel(box, this.viewport, this.excludedLabelBounds, this.labelBounds, index - 1);
       } else {
         // Keep local/drilldown collision behavior unchanged.
-        let collision = false;
+        let collision = box.width > width || labelHeight > height;
         for (const overlay of this.excludedLabelBounds) {
-          if (overlay.right > overlay.left && box.left < overlay.right && box.left + box.width > overlay.left && box.top < overlay.bottom && box.top + 24 > overlay.top) { collision = true; break; }
+          if (overlay.right > overlay.left && box.left < overlay.right && box.left + box.width > overlay.left && box.top < overlay.bottom && box.top + labelHeight > overlay.top) { collision = true; break; }
         }
         for (let previous = 0; previous < index - 1; previous++) {
           const other = this.labelBounds[previous];
-          if (other.visible && box.left < other.left + other.width + 5 && box.left + box.width + 5 > other.left && box.top < other.top + 24 && box.top + 24 > other.top) {
+          if (other.visible && box.left < other.left + other.width + 5 && box.left + box.width + 5 > other.left && box.top < other.top + (other.height ?? 24) && box.top + labelHeight > other.top) {
             collision = true;
             break;
           }
