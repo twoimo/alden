@@ -2822,14 +2822,18 @@ fn read_voice_process_args(pid: i32) -> Result<Option<VoiceProcessArgs>, BridgeE
         )
     };
     if result != 0 {
-        return if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        return if errno == Some(libc::ESRCH) {
             Ok(None) // Exited since ps; permission/parse failures still block spawn.
         } else {
+            eprintln!("Alden voice process check: args unavailable for pid {pid}, errno {errno:?}");
             Err(BridgeError::VoiceProcessCheck)
         };
     }
     bytes.truncate(size);
-    parse_voice_process_args(&bytes).map(Some)
+    parse_voice_process_args(&bytes).map(Some).inspect_err(|_| {
+        eprintln!("Alden voice process check: invalid args for pid {pid}, returned bytes {size}");
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
