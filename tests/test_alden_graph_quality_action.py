@@ -41,6 +41,17 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
+    def test_union_project_added_during_scan_cannot_return_partial_all_scope(self):
+        target=self.target();self.store.ingest(target,[self.record('healthy')])
+        real_audit=action.audit
+        def concurrent_registration(*args,**kwargs):
+            report=real_audit(*args,**kwargs)
+            self.target('new-project',name='new-target')
+            return report
+        with patch.object(action,'audit',side_effect=concurrent_registration):
+            self.assert_error(action.read_action(self.root,self.union_query()),
+                'quality_scope_unavailable',mode='all')
+
     def test_impossible_or_boolean_coverage_cannot_become_completed_observation(self):
         target=self.target();self.store.ingest(target,[self.record('healthy')])
         base=quality.audit(self.root,['one'],verify_sources=False,sample_cap=0)

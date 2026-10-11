@@ -41,6 +41,12 @@ def _bindings(store,projects):
         raise ValueError('quality_scope_unavailable')
     return rows
 
+def _projects(store,mode,project):
+    with store.database() as db:
+        if mode=='all':
+            return [r[0] for r in db.execute("SELECT DISTINCT project FROM target_projects WHERE permission!='denied' ORDER BY project LIMIT 17")]
+        return [r[0] for r in db.execute("SELECT DISTINCT project FROM target_projects WHERE permission!='denied' AND project=? LIMIT 1",(project,))]
+
 def _summary(report,projects):
     if (not isinstance(report,dict) or report.get('schema')!=2 or report.get('mode')!='read_only_current_versions'
             or report.get('projects')!=projects or report.get('source_verification_requested') is not False):
@@ -92,8 +98,7 @@ def read_action(state_root,query_raw,cancelled=None):
         store=CollectionStore.open_existing(Path(state_root))
         if store is None or store.schema!=3:raise ValueError('quality_scope_unavailable')
         before=store.path.stat()
-        with store.database() as db:
-            available=[r[0] for r in db.execute("SELECT DISTINCT project FROM target_projects WHERE permission!='denied' ORDER BY project LIMIT 17")] if mode=='all' else [r[0] for r in db.execute("SELECT DISTINCT project FROM target_projects WHERE permission!='denied' AND project=? LIMIT 1",(project,))]
+        available=_projects(store,mode,project)
         if not available or len(available)>16 or any(not isinstance(p,str) or not p or len(p)>128 for p in available):
             raise ValueError('quality_scope_unavailable')
         projects=available if mode=='all' else [project]
@@ -104,7 +109,8 @@ def read_action(state_root,query_raw,cancelled=None):
         summary=_summary(report,projects)
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         after=store.path.stat()
-        if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino) or permissions!=_bindings(store,projects):
+        if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)
+                or available!=_projects(store,mode,project) or permissions!=_bindings(store,projects)):
             raise ValueError('quality_scope_unavailable')
         checked=time.time();elapsed=(time.monotonic()-started)*1000
         if not math.isfinite(checked) or checked<=0 or not math.isfinite(elapsed) or elapsed<0:
