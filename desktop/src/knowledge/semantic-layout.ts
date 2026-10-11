@@ -253,21 +253,37 @@ export class SemanticLayoutEngine {
       anchors.set(id, prior ? copy(base.get(id)!) : bound({ x: c.x + offset.x * .2, y: c.y + offset.y * .2, z: c.z + offset.z * .2 }));
     }
     const movable = ids.map((id, i) => active[i] && !pinned.has(id));
+    // Imported coincident coordinates carry no ordering authority. Give each
+    // affected movable identity a deterministic direction before solving; pins
+    // and unchanged components remain exact.
+    const coincident = new Map<string, number>();
+    for (const id of ids) { const p = anchors.get(id)!, key = `${p.x},${p.y},${p.z}`; coincident.set(key, (coincident.get(key) ?? 0) + 1); }
+    ids.forEach((id, i) => {
+      const p = anchors.get(id)!, key = `${p.x},${p.y},${p.z}`;
+      if (!movable[i] || (coincident.get(key) ?? 0) < 2) return;
+      const v = seed(id), gain = .14 / Math.max(1e-9, Math.hypot(v.x, v.y, v.z));
+      anchors.set(id, bound({ x: p.x + v.x * gain, y: p.y + v.y * gain, z: p.z + v.z * gain }));
+    });
+    const movableCount = movable.filter(Boolean).length, collisionSeeds = ids.map(id => hash(id));
+    const points = ids.map(id => bound(anchors.get(id)!));
+    const origins = ids.map(id => bound(base.get(id)!));
+    const clusterCenters = ids.map(id => centers.get(clusterIds.get(id)!)!);
+    const indexedPairs = pairs.map(pair => ({ ...pair, a: index.get(pair.source)!, b: index.get(pair.target)! }));
     const forces = new Float64Array(ids.length * 3);
     if (movable.some(Boolean)) for (let iteration = 0; iteration < limits.solverIterations; iteration++) {
       d.solverIterations++; forces.fill(0);
-      ids.forEach((id, i) => {
+      ids.forEach((_, i) => {
         if (!movable[i]) return;
-        const p = bound(anchors.get(id)!), origin = bound(base.get(id)!), c = centers.get(clusterIds.get(id)!)!;
+        const p = points[i], origin = origins[i], c = clusterCenters[i];
         forces[i * 3] = .12 * (c.x - p.x) + .08 * (origin.x - p.x);
         forces[i * 3 + 1] = .12 * (c.y - p.y) + .08 * (origin.y - p.y);
         forces[i * 3 + 2] = .12 * (c.z - p.z) + .08 * (origin.z - p.z);
       });
-      for (const pair of pairs) {
-        const a = index.get(pair.source)!, b = index.get(pair.target)!;
+      for (const pair of indexedPairs) {
+        const { a, b } = pair;
         if (!movable[a] && !movable[b]) continue;
         d.springEvaluations++;
-        const p = bound(anchors.get(pair.source)!), q = bound(anchors.get(pair.target)!);
+        const p = points[a], q = points[b];
         let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
         if (Math.hypot(dx, dy, dz) < 1e-9) { const v = seed(pair.key); dx = v.x * .001; dy = v.y * .001; dz = v.z * .001; }
         const length = Math.max(1e-9, Math.hypot(dx, dy, dz));
@@ -277,40 +293,87 @@ export class SemanticLayoutEngine {
         }
       }
       if (d.collisionTests < limits.collisionTests) {
-        const cells = new Map<string, number[]>(), cellAt = (p: Point3) => [Math.floor(p.x / .16), Math.floor(p.y / .16), Math.floor(p.z / .16)];
-        ids.forEach((id, i) => {
-          const key = cellAt(bound(anchors.get(id)!)).join(','), bucket = cells.get(key) ?? [];
-          if (bucket.length < limits.cellOccupancy) bucket.push(i);
-          else { d.crowdedCells++; d.collisionCandidatesTruncated = true; }
-          cells.set(key, bucket);
+        // Numeric cells and one candidate list per occupied cell avoid repeating
+        // 27 string lookups for every node. Rotate crowded representatives and
+        // reserve a share of the snapshot budget for every pass and movable ID.
+        const cellKey = (x: number, y: number, z: number) => ((x + 16) * 32 + y + 16) * 32 + z + 16;
+        const cells = new Map<number, { x: number; y: number; z: number; members: number[] }>();
+        const nodeCells = new Int32Array(ids.length);
+        points.forEach((p, i) => {
+          const x = Math.floor(p.x / .16), y = Math.floor(p.y / .16), z = Math.floor(p.z / .16), key = cellKey(x, y, z);
+          const cell = cells.get(key) ?? { x, y, z, members: [] };
+          cell.members.push(i); cells.set(key, cell); nodeCells[i] = key;
         });
-        collisionLoop: for (let a = 0; a < ids.length; a++) {
-          if (!movable[a]) continue;
-          const p = bound(anchors.get(ids[a])!), cell = cellAt(p);
+        const samples = new Map<number, number[]>();
+        for (const [key, cell] of cells) {
+          const members = cell.members, sample: number[] = [];
+          if (members.length > limits.cellOccupancy) {
+            d.crowdedCells += members.length - limits.cellOccupancy; d.collisionCandidatesTruncated = true;
+          }
+          const start = iteration * limits.cellOccupancy % members.length;
+          for (let i = 0; i < Math.min(members.length, limits.cellOccupancy); i++) sample.push(members[(start + i) % members.length]);
+          samples.set(key, sample);
+        }
+        const neighbors = new Map<number, number[]>();
+        for (const [key, cell] of cells) {
+          const candidates: number[] = [];
           for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
-            for (const b of cells.get([cell[0] + x, cell[1] + y, cell[2] + z].join(',')) ?? []) {
-              if (a === b || movable[b] && a > b) continue;
-              if (d.collisionTests >= limits.collisionTests) { d.collisionBudgetExhausted = true; break collisionLoop; }
-              d.collisionTests++;
-              const q = bound(anchors.get(ids[b])!);
-              let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
-              let length = Math.hypot(dx, dy, dz);
-              if (length >= .14) continue;
-              if (length < 1e-9) { const v = seed(pairKey(ids[a], ids[b])); dx = v.x; dy = v.y; dz = v.z; length = Math.max(1e-9, Math.hypot(dx, dy, dz)); }
-              const gain = 1.5 * (.14 - Math.min(.14, Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z))) / length;
-              forces[a * 3] -= gain * dx; forces[a * 3 + 1] -= gain * dy; forces[a * 3 + 2] -= gain * dz;
-              if (movable[b]) { forces[b * 3] += gain * dx; forces[b * 3 + 1] += gain * dy; forces[b * 3 + 2] += gain * dz; }
+            const sample = samples.get(cellKey(cell.x + x, cell.y + y, cell.z + z));
+            if (sample) for (const b of sample) candidates.push(b);
+          }
+          neighbors.set(key, candidates);
+        }
+        const passBudget = Math.floor((limits.collisionTests - d.collisionTests) / (limits.solverIterations - iteration));
+        const perNode = Math.max(1, Math.floor(passBudget / movableCount));
+        let passTests = 0;
+        for (let a = 0; a < ids.length; a++) {
+          if (!movable[a]) continue;
+          const candidates = neighbors.get(nodeCells[a])!, total = candidates.length, p = points[a];
+          if (total > perNode) d.collisionCandidatesTruncated = true;
+          const start = (collisionSeeds[a] + iteration * 17) % total;
+          let tests = 0;
+          // A directed sample updates only this movable node. Every movable ID
+          // owns its quota; a popular early representative cannot absorb it.
+          for (let trial = 0; trial < Math.min(total, perNode + 1) && tests < perNode && passTests < passBudget; trial++) {
+            const b = candidates[(start + trial) % total];
+            if (a === b) continue;
+            tests++; passTests++; d.collisionTests++;
+            const q = points[b];
+            let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
+            const square = dx * dx + dy * dy + dz * dz;
+            if (square >= .0196) continue;
+            const separation = Math.sqrt(square);
+            let length = separation;
+            if (length < 1e-9) {
+              const v = seed(ids[a]); dx = -v.x; dy = -v.y; dz = -v.z;
+              length = Math.max(1e-9, Math.hypot(dx, dy, dz));
             }
+            const densityScale = Math.min(4, Math.max(1, total / perNode));
+            const gain = 1.5 * densityScale * (.14 - separation) / length;
+            forces[a * 3] -= gain * dx; forces[a * 3 + 1] -= gain * dy; forces[a * 3 + 2] -= gain * dz;
           }
         }
       } else d.collisionBudgetExhausted = true;
       ids.forEach((id, i) => {
         if (!movable[i]) return;
-        const p = bound(anchors.get(id)!), at = i * 3;
+        const p = points[i], at = i * 3;
         const gain = .08 / Math.max(1, Math.hypot(forces[at], forces[at + 1], forces[at + 2]));
-        anchors.set(id, bound({ x: p.x + gain * forces[at], y: p.y + gain * forces[at + 1], z: p.z + gain * forces[at + 2] }));
+        const next = bound({ x: p.x + gain * forces[at], y: p.y + gain * forces[at + 1], z: p.z + gain * forces[at + 2] });
+        points[i] = next; anchors.set(id, next);
       });
     }
+    // Approximate crowded samples can cancel at an imported exact coincidence.
+    // Keep a half-clearance exclusion around that shared origin, without moving
+    // a pin or giving coincident identities any semantic/merge authority.
+    ids.forEach((id, i) => {
+      if (!movable[i]) return;
+      const origin = base.get(id)!, key = `${origin.x},${origin.y},${origin.z}`;
+      if ((coincident.get(key) ?? 0) < 2) return;
+      const p = anchors.get(id)!;
+      if (Math.hypot(p.x - origin.x, p.y - origin.y, p.z - origin.z) >= .07) return;
+      const v = seed(id), gain = .14 / Math.max(1e-9, Math.hypot(v.x, v.y, v.z));
+      anchors.set(id, bound({x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain}));
+    });
     const dirtyIds = new Set<string>();
     for (const id of ids) {
       const prior = previousPositions.get(id), p = anchors.get(id)!;

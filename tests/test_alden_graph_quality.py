@@ -52,7 +52,8 @@ class QualityTests(unittest.TestCase):
         self.store.ingest(self.a, [self.record('x')])
         with self.store.database() as db:
             row = db.execute('SELECT * FROM versions').fetchone()
-            db.execute("UPDATE versions SET body='  unnormalized  '")
+            # NFC and platform line endings are required; indentation is allowed.
+            db.execute("UPDATE versions SET body=?", ('cafe\u0301\r\nline',))
         (self.store.blobs / row['raw_path']).write_text('{}')
         report = audit(self.root, ['one'], verify_sources=True)
         for kind in ('source_blob_invalid', 'normalization_mismatch', 'projection_hash_mismatch', 'version_identity_mismatch'):
@@ -390,6 +391,185 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(report['counts']['source_blobs_verified'], 2)
         self.assertEqual(report['counts']['relations'], 1)
         self.assertEqual(self.files(), before)
+
+
+    def test_indentation_tabs_and_blank_lines_are_valid_distinct_content(self):
+        originals = ['  item: 1 kg\n\tunit: box\n\nend',
+                     ' item: 1 kg\n\tunit: box\n\nend',
+                     '  item: 1 kg\n  unit: box\n\nend']
+        self.store.ingest(self.a, [self.record(str(i), body) for i, body in enumerate(originals)])
+        before = self.files()
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['findings'], {})
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(report['counts']['project_current_versions'], 3)
+        self.assertEqual(self.files(), before)
+
+    def test_blank_or_incomplete_fields_do_not_establish_semantic_duplicates(self):
+        records = [dict(self.record(name, ''), label='Untitled') for name in ('empty1', 'empty2')]
+        records += [dict(self.record(name, '5 kg'), label='') for name in ('no-label1', 'no-label2')]
+        self.store.ingest(self.a, records)
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(report['counts']['duplicate_text_ineligible'], 4)
+        # Identical retained serialized input still counts as byte-only evidence.
+        self.assertEqual(report['duplicate_candidates']['same_raw_bytes']['groups'], 2)
+        self.assertEqual(report['findings'], {})
+
+    def test_nfc_line_endings_equivalence_preserves_dates_units_and_indentation(self):
+        self.store.ingest(self.a, [
+            self.record('a', 'caf\u00e9\n2026-10-01: 5 kg'),
+            self.record('b', 'cafe\u0301\r\n2026-10-01: 5 kg'),
+            self.record('date', 'caf\u00e9\n2026-10-02: 5 kg'),
+            self.record('unit', 'caf\u00e9\n2026-10-01: 5 g'),
+            self.record('space', 'caf\u00e9\n2026-10-01: 5kg')])
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['findings'], {})
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 1)
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['distinct_document_members'], 2)
+        self.assertEqual(report['duplicate_candidates']['same_raw_bytes']['groups'], 0)
+
+    def test_cross_target_or_provenance_matches_remain_separate_review_class(self):
+        other = self.store.register(platform='graph', original_id='independent',
+            kind='source', label='independent', projects=['one'], permission='review')
+        self.store.ingest(self.a, [
+            dict(self.record('same-a'), source={'author': 'A', 'revision': 1}),
+            dict(self.record('same-b'), source={'author': 'A', 'revision': 1})])
+        self.store.ingest(other, [
+            dict(self.record('separate'), source={'author': 'B', 'revision': 2})])
+        report = audit(self.root, ['one'])
+        direct = report['duplicate_candidates']['same_normalized_search_text']
+        across = report['duplicate_candidates']['cross_context_search_text']
+        self.assertEqual(direct['groups'], 1)
+        self.assertEqual(direct['distinct_document_members'], 2)
+        self.assertEqual(across['groups'], 1)
+        self.assertEqual(across['distinct_document_members'], 3)
+        self.assertEqual(across['samples'][0]['context_count'], 2)
+        self.assertEqual(report['findings'], {})
+
+    def test_same_document_current_versions_are_scope_revisions_not_duplicates(self):
+        other = self.store.register(platform='graph', original_id='independent',
+            kind='source', label='independent', projects=['one'])
+        self.store.ingest(self.a, [self.record('shared', 'revision A')])
+        self.store.ingest(other, [self.record('shared', 'revision B')])
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['counts']['project_current_versions'], 2)
+        self.assertEqual(report['counts']['distinct_current_documents'], 1)
+        self.assertEqual(report['scoped_revision_variants']['groups'], 1)
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(report['duplicate_candidates']['cross_context_search_text']['groups'], 0)
+        self.assertEqual(report['findings'], {})
+
+    def test_wrong_raw_reference_is_structural_anomaly_not_byte_proof(self):
+        self.store.ingest(self.a, [self.record('x'), self.record('y')])
+        with self.store.database() as db:
+            db.execute("UPDATE versions SET raw_path='0000.json' WHERE document_id=?",
+                       (identity('graph', 'x'),))
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['findings']['source_reference_invalid'], 1)
+        self.assertEqual(report['duplicate_candidates']['same_raw_bytes']['groups'], 0)
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 1)
+
+    def test_relation_direction_is_independent_and_invalid_type_is_detected(self):
+        self.store.ingest(self.a, [self.record('x'), self.record('y')], relations=[
+            {'source_platform':'graph','source_id':'x','target_platform':'graph',
+             'target_id':'y','type':'references','evidence':{'v':'x-to-y'}},
+            {'source_platform':'graph','source_id':'y','target_platform':'graph',
+             'target_id':'x','type':'references','evidence':{'v':'y-to-x'}}])
+        good = audit(self.root, ['one'])
+        self.assertEqual(good['counts']['relations'], 2)
+        self.assertEqual(good['counts']['reciprocal_relation_pairs'], 1)
+        self.assertEqual(good['findings'], {})
+        with self.store.database() as db:
+            db.execute("UPDATE relations SET type='' WHERE source=?", (identity('graph', 'x'),))
+        bad = audit(self.root, ['one'])
+        self.assertEqual(bad['findings']['relation_type_invalid'], 1)
+        self.assertEqual(bad['counts']['reciprocal_relation_pairs'], 0)
+
+    def test_vector_profile_mixed_dimensions_are_numeric_review_candidates(self):
+        self.store.ingest(self.a, [self.record('x'), self.record('y')])
+        self.add_vector(self.version('x'), raw=struct.pack('<f', 1.0))
+        self.add_vector(self.version('y'), raw=struct.pack('<ff', 0.0, 1.0))
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['counts']['vector_profiles_mixed_dimensions'], 1)
+        self.assertEqual(report['findings'], {})
+        self.assertEqual(report['coverage']['status'], 'complete')
+        self.assertEqual(report['coverage']['memberships_scanned'], 2)
+        self.assertEqual(report['coverage']['max_rows'], 100000)
+
+    def test_raw_byte_groups_report_verified_vs_hash_only_evidence(self):
+        self.store.ingest(self.a, [self.record('a'), self.record('b')])
+        fast = audit(self.root, ['one'])
+        verified = audit(self.root, ['one'], verify_sources=True)
+        raw = fast['duplicate_candidates']['same_raw_bytes']
+        self.assertEqual(raw['groups'], 1)
+        self.assertEqual(raw['verified_groups'], 0)
+        self.assertEqual(raw['hash_only_groups'], 1)
+        self.assertEqual(raw['classification'], 'identical_canonical_record_hash_only')
+        self.assertEqual(verified['duplicate_candidates']['same_raw_bytes']['classification'],
+                         'identical_canonical_record_bytes_verified')
+        self.assertEqual(verified['duplicate_candidates']['same_raw_bytes']['verified_groups'], 1)
+        self.assertEqual(verified['duplicate_candidates']['same_raw_bytes']['hash_only_groups'], 0)
+        self.assertEqual(verified['findings'], {})
+
+
+
+    def test_distinct_authors_and_revisions_share_text_but_not_identity(self):
+        self.store.ingest(self.a, [
+            dict(self.record('author-1'), source={'author': 'writer 1', 'revision': 1}),
+            dict(self.record('author-2'), source={'author': 'writer 2', 'revision': 2})])
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(report['duplicate_candidates']['cross_context_search_text']['groups'], 1)
+        self.assertEqual(report['duplicate_candidates']['same_raw_bytes']['groups'], 1)
+        self.assertEqual(report['findings'], {})
+
+    def test_bad_permission_storage_is_reported_without_collapsing_contexts(self):
+        self.store.ingest(self.a, [self.record('x'), self.record('y')])
+        with self.store.database() as db:
+            db.execute("UPDATE target_projects SET permission=? WHERE target_id=?", (b'review', self.a))
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['counts']['memberships'], 2)
+        self.assertEqual(report['findings']['membership_context_invalid'], 2)
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+
+
+    def test_corrupted_identical_raw_blob_drops_verified_duplicate_candidate(self):
+        self.store.ingest(self.a, [self.record('a'), self.record('b')])
+        raw_name = self.version('a')['raw_path']
+        (self.store.blobs / raw_name).write_bytes(b'invalid source replacement')
+        before = self.files()
+        unchecked = audit(self.root, ['one'])
+        verified = audit(self.root, ['one'], verify_sources=True)
+        self.assertEqual(unchecked['duplicate_candidates']['same_raw_bytes']['groups'], 1)
+        self.assertEqual(unchecked['duplicate_candidates']['same_raw_bytes']['hash_only_groups'], 1)
+        self.assertEqual(verified['duplicate_candidates']['same_raw_bytes']['groups'], 0)
+        self.assertEqual(verified['findings']['source_blob_invalid'], 1)
+        self.assertEqual(self.files(), before)
+
+    def test_nonpositive_collection_time_is_numeric_integrity_finding(self):
+        self.store.ingest(self.a, [self.record('timestamp')])
+        with self.store.database() as db:
+            db.execute("UPDATE versions SET collected_at=-1")
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['findings']['collection_time_invalid'], 1)
+        self.assertEqual(report['duplicate_candidates']['same_raw_bytes']['groups'], 0)
+
+
+    def test_placeholder_titles_and_bodies_do_not_form_meaning_candidates(self):
+        incomplete = [
+            dict(self.record('u1', 'same detail'), label='Untitled'),
+            dict(self.record('u2', 'same detail'), label='Untitled'),
+            dict(self.record('ellipsis1', '...'), label='named item'),
+            dict(self.record('ellipsis2', '...'), label='named item'),
+            dict(self.record('unavailable1', 'N/A'), label='named item'),
+            dict(self.record('unavailable2', 'N/A'), label='named item')]
+        self.store.ingest(self.a, incomplete)
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['counts']['duplicate_text_ineligible'], 6)
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(report['duplicate_candidates']['same_raw_bytes']['groups'], 3)
+        self.assertEqual(report['findings'], {})
 
 
 if __name__ == '__main__':

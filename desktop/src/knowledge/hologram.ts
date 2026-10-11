@@ -14,6 +14,7 @@ import { relationAnchors, relationCenterId } from './relation-layout';
 import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
 import { PositionTransition } from './position-transition';
+import { compareOverviewLabelPriority, placeOverviewLabel } from './label-placement';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
@@ -88,6 +89,7 @@ export class KnowledgeHologram {
   private readonly overviewSynapses = new SynapticBridges(4096,false);
   private readonly constellationNodes = new ConstellationNodes(OVERVIEW_LOD_CAP);
   private readonly globalLabels = new Set<string>();
+  private readonly globalLabelRanks = new Map<string, number>();
   private hoveredId:string|null=null;
   private hoverFrame: number | null = null;
   private hoverX = 0;
@@ -497,7 +499,7 @@ export class KnowledgeHologram {
     accessible?.replaceChildren();
     const focusId = this.view.focusId;
     const global=this.view.hops===0;
-    this.hoveredId=null;this.globalLabels.clear();
+    this.hoveredId=null;this.globalLabels.clear();this.globalLabelRanks.clear();
     this.constellationNodes.set(this.view.nodes,this.view.edges);
     this.constellationNodes.highlight(focusId);
     this.constellationNodes.visible=true;this.neuronDetail=false;
@@ -505,7 +507,7 @@ export class KnowledgeHologram {
     const labelledGroups = new Set<string>();
     for (const node of [...this.view.nodes].sort((a,b)=>this.constellationNodes.radius(b.id)-this.constellationNodes.radius(a.id)||a.id.localeCompare(b.id))) {
       const group = node.sourceTarget || node.space || node.category;
-      if (!labelledGroups.has(group)) { this.globalLabels.add(node.id); labelledGroups.add(group); }
+      if (!labelledGroups.has(group)) { this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id,this.globalLabelRanks.size); labelledGroups.add(group); }
       if (this.globalLabels.size >= 8) break;
     }
     this.rootNodeId = relationCenterId(this.view);
@@ -583,6 +585,7 @@ export class KnowledgeHologram {
         this.labelBounds.push({ width: 0, left: 0, top: 0, visible: false });
       }
     }
+    this.prioritizeOverviewLabels();
     const activeIds=new Set(this.view.nodes.map(node=>node.id));
     this.synapses.set(global?[]:selectSynapses(this.view.edges,activeIds),focusId,true,this.neuronPorts,this.anchors);
     this.synapses.update(0,this.positions,this.reducedMotionEnabled);
@@ -605,6 +608,17 @@ export class KnowledgeHologram {
     if(typeof this.hoverFrame==='number')cancelAnimationFrame(this.hoverFrame);
     this.hoverFrame=null;
   }
+  // Refresh the collision order only on graph rebuild or hover change.
+  // Selection stays ahead of hover; representative ranks follow node radius.
+  private prioritizeOverviewLabels(): void {
+    if (this.view.hops !== 0) return;
+    const ordered = [...this.labels].sort(([first], [second]) =>
+      compareOverviewLabelPriority(first, second, this.view.focusId, this.hoveredId, this.globalLabelRanks));
+    this.labels.clear();
+    for (const [id, label] of ordered) this.labels.set(id, label);
+    this.labelBounds.length = 0;
+    for (const _ of this.labels) this.labelBounds.push({width:0,left:0,top:0,visible:false});
+  }
   private refreshOverviewLabels(): void {
     if(this.view.hops!==0)return;
     const wanted=new Set(this.globalLabels);
@@ -619,8 +633,7 @@ export class KnowledgeHologram {
       label.textContent=node.label;label.title=node.label;label.dataset.view='overview';
       label.dataset.focused=String(id===this.view.focusId);layer.append(label);this.labels.set(id,label);
     }
-    this.labelBounds.length=0;
-    for(const _ of this.labels)this.labelBounds.push({width:0,left:0,top:0,visible:false});
+    this.prioritizeOverviewLabels();
   }
   private readonly clearHover=():void=>{
     this.cancelHover();
@@ -807,18 +820,23 @@ export class KnowledgeHologram {
       const extent = this.neuronDetail&&this.neuronMeshes.has(id) ? radius * NEURON_EXTENT_RATIO : radius;
       const offset = Math.min(54, extent * height / (2 * Math.tan(this.camera.fov * Math.PI / 360) * Math.max(.1, this.camera.position.distanceTo(position))) + 8);
       box.top = Math.min(y + height - 24, y + (1 - this.projected.y) * height / 2 + offset);
-      let collision = false;
-      for (const overlay of this.excludedLabelBounds) {
-        if (overlay.right > overlay.left && box.left < overlay.right && box.left + box.width > overlay.left && box.top < overlay.bottom && box.top + 24 > overlay.top) { collision = true; break; }
-      }
-      for (let previous = 0; previous < index - 1; previous++) {
-        const other = this.labelBounds[previous];
-        if (other.visible && box.left < other.left + other.width + 5 && box.left + box.width + 5 > other.left && box.top < other.top + 24 && box.top + 24 > other.top) {
-          collision = true;
-          break;
+      if (this.view.hops === 0) {
+        placeOverviewLabel(box, this.viewport, this.excludedLabelBounds, this.labelBounds, index - 1);
+      } else {
+        // Keep local/drilldown collision behavior unchanged.
+        let collision = false;
+        for (const overlay of this.excludedLabelBounds) {
+          if (overlay.right > overlay.left && box.left < overlay.right && box.left + box.width > overlay.left && box.top < overlay.bottom && box.top + 24 > overlay.top) { collision = true; break; }
         }
+        for (let previous = 0; previous < index - 1; previous++) {
+          const other = this.labelBounds[previous];
+          if (other.visible && box.left < other.left + other.width + 5 && box.left + box.width + 5 > other.left && box.top < other.top + 24 && box.top + 24 > other.top) {
+            collision = true;
+            break;
+          }
+        }
+        box.visible = !collision;
       }
-      box.visible = !collision;
       if (label.hidden === box.visible) label.hidden = !box.visible;
       if (box.visible && (!wasVisible || previousLeft !== box.left || previousTop !== box.top)) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }

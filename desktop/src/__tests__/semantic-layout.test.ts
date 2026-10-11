@@ -221,6 +221,30 @@ describe('bounded semantic overview layout', () => {
     expect(d.diagnostics.cachedNodes).toBe(1); expect(d.diagnostics.removedNodes).toBe(0);
   });
 
+  it('separates late IDs in a crowded coincident snapshot without dropping their identities', () => {
+    const view = scene(2048), previous = new Map(view.nodes.map(n => [n.id, {x:0,y:0,z:0}]));
+    const original=JSON.stringify(view), result=new SemanticLayoutEngine().layout(view,previous);
+    for(const node of view.nodes.slice(1024)) {
+      const p=result.anchors.get(node.id)!;
+      expect(Math.hypot(p.x,p.y,p.z)).toBeGreaterThan(.015);
+    }
+    expect(result.anchors.size).toBe(2048);
+    expect(new Set(result.clusterIds.values()).size).toBe(2048);
+    expect(JSON.stringify(view)).toBe(original);
+    expect(result.diagnostics.collisionTests).toBeLessThanOrEqual(limits.collisionTests);
+  });
+
+  it('keeps crowded pins exact while giving late movable nodes separation work', () => {
+    const view=scene(2048), previous=new Map(view.nodes.map(n=>[n.id,{x:0,y:0,z:0}]));
+    const pinned=new Set(view.nodes.slice(1024,1040).map(n=>n.id));
+    const result=new SemanticLayoutEngine().layout(view,previous,[],{pinnedIds:pinned});
+    for(const id of pinned) expect(result.anchors.get(id)).toEqual(previous.get(id));
+    for(const node of view.nodes.slice(1040)) {
+      const p=result.anchors.get(node.id)!;
+      expect(Math.hypot(p.x,p.y,p.z)).toBeGreaterThan(.015);
+    }
+  });
+
   it('takes the parent validated channel by default without changing fact edges', () => {
     const view = scene(2);
     view.layoutAffinity = { state: 'bounded_ready', inputKey: 'validated', profileKey: 'existing', inputNodes: [],

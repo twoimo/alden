@@ -1,5 +1,12 @@
 # Alden desktop design contract
 
+## 0.3.61 — bounded crowd separation and label placement
+
+Snapshot collision work is reserved per iteration and movable identity. Numeric spatial cells cache their neighboring candidates; crowded representatives rotate instead of permanently favoring early IDs. Imported exact coincidences receive deterministic geometry offsets while pins, unchanged components and fact identities are retained. The overview label pass prioritizes focus, hover and representative rank and tests at most15 cached screen-space slots. No extra per-frame DOM measurements are introduced.
+
+The separate schema2 developer quality audit preserves body structure and distinguishes context, scoped revisions and verified record bytes. Current source tests and the actual permitted corpus audit passed; installation, native and CI remain separate delivery gates. See [measurements and limits](../docs/architecture/alden-graph-hardening-20261011.md).
+
+
 ## 0.3.60 — 가시 데이터 화면과 취소 상태
 
 보이는 대화·이력·설정 화면은 포커스 상실과 별개로 조회를 유지합니다. native/document 숨김·복원·닫힘이 데이터 화면의 수명주기를 결정하며, 시각화 렌더러의 기존 blur 동작은 유지합니다. 사용자가 취소한 추론은 모델 제공자 장애로 표시하지 않습니다.
