@@ -174,6 +174,8 @@ impl Output {
                 | "alden-settings-compact.png"
                 | "alden-note-default.png"
                 | "alden-note-compact.png"
+                | "alden-connections-default.png"
+                | "alden-connections-compact.png"
                 | "alden-model-menu-default.png"
                 | "alden-model-menu-compact.png"
                 | "workspace-memory-default.png"
@@ -818,6 +820,8 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
     graphRead:d?d.graphRead:null, navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
     regions:d?.regions??null,synapses:d?.synapses??null,
+    motion:d?.motion??null,geometry:d?{detailMode:d.detailMode,neuronGlyphs:d.neuronGlyphs,orbGlyphs:d.orbCount,geometries:d.geometries,drawCalls:d.drawCalls}:null,
+    depthLegend:(()=>{const e=document.querySelector('.knowledge-depth-legend');const r=e?.getBoundingClientRect();return e?{hidden:e.hidden,entries:e.children.length,left:r.left,top:r.top,width:r.width,height:r.height,scrollWidth:e.scrollWidth}:null;})(),
     nodeActivity:d?.nodeActivity??null,activityJournal:d?.activityJournal??null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
     notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth,focusState:n.dataset.focusState,nodeId:n.dataset.nodeId,bodyChars:document.querySelector('#knowledge-node-body')?.textContent?.length??0}:null;})(),
@@ -833,6 +837,18 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
 
 fn graph_collect_script() -> String {
     GRAPH_COLLECT.replace("__AUDIT_LABEL_GEOMETRY__", LABEL_GEOMETRY_COLLECT)
+}
+
+fn observe_connections(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    let bound = deadline.min(Instant::now() + Duration::from_secs(3));
+    loop {
+        let state = collect_script(window, graph_collect_script(), deadline)?;
+        if state["motion"]["camera"] == false || Instant::now() >= bound {
+            return Ok(state);
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
@@ -1116,6 +1132,8 @@ fn audit_settings(
         deadline,
     )?;
     let expanded = graph_step(&window, "expand", deadline)?;
+    let expanded_capture = observe_connections(&window, deadline)?;
+    publish(output, "alden-connections-default.png", &snapshot(&window, deadline)?, deadline)?;
     let second = graph_step(&window, "second", deadline)?;
     // A real isolated source has no second node to select. That action is a
     // no-op and must not invent an extra history entry or an extra Back click.
@@ -1250,6 +1268,9 @@ fn audit_settings(
         &snapshot(&window, deadline)?,
         deadline,
     )?;
+    let compact_connections = graph_step(&window, "expand", deadline)?;
+    let compact_connections_capture = observe_connections(&window, deadline)?;
+    publish(output, "alden-connections-compact.png", &snapshot(&window, deadline)?, deadline)?;
     graph_step(&window, "overview", deadline)?;
     let workspace_compact = if workspaces {
         capture_workspaces(&window, output, "compact", deadline)?
@@ -1259,7 +1280,9 @@ fn audit_settings(
     publish(output, "workspace-readback.json", &serde_json::to_vec_pretty(&json!({
         "schema":1,"scope":"owned read-only WKWebView with persisted application data; not the primary process, physical voice, lock or production",
         "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
-        "navigation":{"initial":initial["navigation"],"expanded":expanded["navigation"],"backOverview":back_overview["navigation"]}
+        "navigation":{"initial":initial["navigation"],"expanded":expanded["navigation"],"backOverview":back_overview["navigation"]},
+        "connectionsDefault":expanded_capture,"connectionsCompact":compact_connections_capture,
+        "compactConnectionsNavigation":compact_connections["navigation"]
     })).map_err(|_| "workspace readback JSON failed")?,deadline)?;
     let counters = app.state::<WorkspaceCounters>();
     let mut hidden_samples = Vec::new();

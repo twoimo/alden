@@ -66,7 +66,7 @@ export class ConstellationNodes extends THREE.Group {
             float core=1.-smoothstep(.16,.38,r);
             float glow=exp(-7.*r*r)*(1.-smoothstep(.75,1.,r));
             gl_FragColor= uReference>.5
-              ? vec4(vTint,1.-smoothstep(.32,.65,r))
+              ? vec4(vTint,1.-smoothstep(.16,.38,r))
               : vec4(mix(vTint,vec3(1.),core*.35),core*.85+glow*.35);
             #include <colorspace_fragment>
           }`,

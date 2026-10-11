@@ -361,10 +361,10 @@ export class KnowledgeHologram {
     };
   }
 
-  diagnostics(): AnimationLoopDiagnostics & { regions: ReturnType<ContextNebulae['diagnostics']>; motion:KnowledgeHologram['motionDiagnostics']; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number } {
+  diagnostics(): AnimationLoopDiagnostics & { regions: ReturnType<ContextNebulae['diagnostics']>; motion:KnowledgeHologram['motionDiagnostics']; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number; neuronGlyphs:number; detailMode:boolean } {
     return { ...this.loop.diagnostics(), regions:this.nebulae.diagnostics(), motion:this.motionDiagnostics, voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
       displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count,
-      orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes(), physics:this.plasticity.diagnostics(), synapses:(this.neuronDetail?this.synapses:this.overviewSynapses).diagnostics(), drawCalls:this.renderer.info.render.calls, geometries:this.renderer.info.memory.geometries, ambientMotion:false, visibleTime:0 };
+      orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes(), physics:this.plasticity.diagnostics(), synapses:(this.neuronDetail?this.synapses:this.overviewSynapses).diagnostics(), drawCalls:this.renderer.info.render.calls, geometries:this.renderer.info.memory.geometries, neuronGlyphs:this.neuronMeshes.size, detailMode:this.neuronDetail, ambientMotion:false, visibleTime:0 };
   }
   get navigationTargets(): { camera: number[]; lookAt: number[] } {
     return { camera: this.desiredCamera.toArray(), lookAt: this.desiredLookAt.toArray() };
@@ -656,7 +656,14 @@ export class KnowledgeHologram {
     const position = this.anchors.get(nodeId) ?? this.positions.get(nodeId);
     if (!position) return;
     this.desiredLookAt.copy(position);
-    this.desiredCamera.set(position.x * 0.58, position.y * 0.58, position.z + 2.55);
+    const relative = this.view.nodes.flatMap(node => {
+      const point = this.anchors.get(node.id) ?? this.positions.get(node.id);
+      return point ? [{x:point.x-position.x,y:point.y-position.y,z:point.z-position.z}] : [];
+    });
+    const distance = Math.max(this.orbit.minDistance,
+      overviewCameraDistance(relative,this.viewport.width,this.viewport.height,this.camera.fov,.16));
+    this.desiredCamera.set(position.x, position.y, position.z + distance);
+    this.orbit.maxDistance = Math.max(12,distance+.5);
     this.invalidateFrame();
   }
 
