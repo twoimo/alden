@@ -22,7 +22,7 @@ export interface SemanticLayoutDiagnostics {
   affectedNodes: number; dirtyNodes: number; pinnedNodes: number; clusters: number;
   communityPasses: number; communityMoves: number; communityVisits: number;
   solverIterations: number; springEvaluations: number; collisionTests: number;
-  crowdedCells: number; collisionBudgetExhausted: boolean; collisionCandidatesTruncated: boolean;
+  densityEvaluations: number; crowdedCells: number; collisionBudgetExhausted: boolean; collisionCandidatesTruncated: boolean;
   cachedNodes: number; cachedPairs: number; cachedClusters: number; reflow: boolean;
 }
 export interface SemanticLayoutResult {
@@ -106,7 +106,7 @@ export class SemanticLayoutEngine {
       inputTruncated: view.nodes.length > limits.inputNodes || view.edges.length > limits.inputEdges || validatedPairs.length > limits.inputAffinities,
       affectedNodes: 0, dirtyNodes: 0, pinnedNodes: 0, clusters: 0,
       communityPasses: 0, communityMoves: 0, communityVisits: 0, solverIterations: 0,
-      springEvaluations: 0, collisionTests: 0, crowdedCells: 0,
+      springEvaluations: 0, collisionTests: 0, densityEvaluations: 0, crowdedCells: 0,
       collisionBudgetExhausted: false, collisionCandidatesTruncated: false,
       cachedNodes: 0, cachedPairs: 0, cachedClusters: 0, reflow: options.reflow === true,
     };
@@ -270,6 +270,10 @@ export class SemanticLayoutEngine {
     const clusterCenters = ids.map(id => centers.get(clusterIds.get(id)!)!);
     const indexedPairs = pairs.map(pair => ({ ...pair, a: index.get(pair.source)!, b: index.get(pair.target)! }));
     const forces = new Float64Array(ids.length * 3);
+    // Bounded 32^3 cell keys. Reuse direct slots during this snapshot rather
+    // than hashing 27 neighbor keys per occupied cell on every solver pass.
+    const sampleSlots: Array<number[] | undefined> = movableCount ? new Array(32768) : [];
+    const neighborSlots: Array<number[] | undefined> = movableCount ? new Array(32768) : [];
     if (movable.some(Boolean)) for (let iteration = 0; iteration < limits.solverIterations; iteration++) {
       d.solverIterations++; forces.fill(0);
       ids.forEach((_, i) => {
@@ -288,23 +292,44 @@ export class SemanticLayoutEngine {
         if (Math.hypot(dx, dy, dz) < 1e-9) { const v = seed(pair.key); dx = v.x * .001; dy = v.y * .001; dz = v.z * .001; }
         const length = Math.max(1e-9, Math.hypot(dx, dy, dz));
         const gain = 2 * pair.weight * (length - pair.rest) / length;
-        for (const [at, sign] of [[a, 1], [b, -1]]) if (movable[at]) {
-          forces[at * 3] += sign * gain * dx; forces[at * 3 + 1] += sign * gain * dy; forces[at * 3 + 2] += sign * gain * dz;
-        }
+        if (movable[a]) { forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz; }
+        if (movable[b]) { forces[b * 3] -= gain * dx; forces[b * 3 + 1] -= gain * dy; forces[b * 3 + 2] -= gain * dz; }
       }
       if (d.collisionTests < limits.collisionTests) {
         // Numeric cells and one candidate list per occupied cell avoid repeating
         // 27 string lookups for every node. Rotate crowded representatives and
         // reserve a share of the snapshot budget for every pass and movable ID.
         const cellKey = (x: number, y: number, z: number) => ((x + 16) * 32 + y + 16) * 32 + z + 16;
-        const cells = new Map<number, { x: number; y: number; z: number; members: number[] }>();
+        const cells = new Map<number, { x: number; y: number; z: number; members: number[]; sumX: number; sumY: number; sumZ: number }>();
         const nodeCells = new Int32Array(ids.length);
+        const shiftX = iteration * .061 % .16 - .08, shiftY = iteration * .043 % .16 - .08, shiftZ = iteration * .097 % .16 - .08;
         points.forEach((p, i) => {
-          const x = Math.floor(p.x / .16), y = Math.floor(p.y / .16), z = Math.floor(p.z / .16), key = cellKey(x, y, z);
-          const cell = cells.get(key) ?? { x, y, z, members: [] };
-          cell.members.push(i); cells.set(key, cell); nodeCells[i] = key;
+          const x = Math.floor((p.x + shiftX) / .16), y = Math.floor((p.y + shiftY) / .16), z = Math.floor((p.z + shiftZ) / .16), key = cellKey(x, y, z);
+          const cell = cells.get(key) ?? { x, y, z, members: [], sumX: 0, sumY: 0, sumZ: 0 };
+          cell.members.push(i); cell.sumX += p.x; cell.sumY += p.y; cell.sumZ += p.z; cells.set(key, cell); nodeCells[i] = key;
         });
-        const samples = new Map<number, number[]>();
+        // One coarse density evaluation per crowded movable ID, not an
+        // unreported all-pairs search. Shift the grid each pass so cell planes
+        // do not become artificial packing boundaries. This is geometry only.
+        for (const cell of cells.values()) {
+          const count = cell.members.length;
+          if (count < 2) continue;
+          const x = cell.sumX / count, y = cell.sumY / count, z = cell.sumZ / count;
+          const radius = .14 * Math.cbrt(count);
+          for (const a of cell.members) {
+            if (!movable[a]) continue;
+            d.densityEvaluations++;
+            const p = points[a]; let dx = p.x - x, dy = p.y - y, dz = p.z - z;
+            const separation = Math.hypot(dx, dy, dz); let length = separation;
+            if (length < 1e-9) {
+              const v = seed(ids[a]); dx = v.x; dy = v.y; dz = v.z;
+              length = Math.max(1e-9, Math.hypot(dx, dy, dz));
+            }
+            const gain = 3 * Math.max(0, radius - separation) / length;
+            forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz;
+          }
+        }
+        sampleSlots.fill(undefined); neighborSlots.fill(undefined);
         for (const [key, cell] of cells) {
           const members = cell.members, sample: number[] = [];
           if (members.length > limits.cellOccupancy) {
@@ -312,23 +337,22 @@ export class SemanticLayoutEngine {
           }
           const start = iteration * limits.cellOccupancy % members.length;
           for (let i = 0; i < Math.min(members.length, limits.cellOccupancy); i++) sample.push(members[(start + i) % members.length]);
-          samples.set(key, sample);
+          sampleSlots[key] = sample;
         }
-        const neighbors = new Map<number, number[]>();
         for (const [key, cell] of cells) {
           const candidates: number[] = [];
           for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
-            const sample = samples.get(cellKey(cell.x + x, cell.y + y, cell.z + z));
+            const sample = sampleSlots[cellKey(cell.x + x, cell.y + y, cell.z + z)];
             if (sample) for (const b of sample) candidates.push(b);
           }
-          neighbors.set(key, candidates);
+          neighborSlots[key] = candidates;
         }
         const passBudget = Math.floor((limits.collisionTests - d.collisionTests) / (limits.solverIterations - iteration));
         const perNode = Math.max(1, Math.floor(passBudget / movableCount));
         let passTests = 0;
         for (let a = 0; a < ids.length; a++) {
           if (!movable[a]) continue;
-          const candidates = neighbors.get(nodeCells[a])!, total = candidates.length, p = points[a];
+          const candidates = neighborSlots[nodeCells[a]]!, total = candidates.length, p = points[a];
           if (total > perNode) d.collisionCandidatesTruncated = true;
           const start = (collisionSeeds[a] + iteration * 17) % total;
           let tests = 0;

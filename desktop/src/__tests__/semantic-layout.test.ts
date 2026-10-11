@@ -191,6 +191,7 @@ describe('bounded semantic overview layout', () => {
     expect(d.communityPasses).toBeLessThanOrEqual(limits.communityPasses);
     expect(d.solverIterations).toBeLessThanOrEqual(limits.solverIterations);
     expect(d.collisionTests).toBeLessThanOrEqual(limits.collisionTests);
+    expect(d.densityEvaluations).toBeLessThanOrEqual(limits.nodes * limits.solverIterations);
     expect(d.communityVisits).toBeLessThanOrEqual(2 * limits.communityPasses * (d.relationPairs + d.affinityPairs));
     expect(d.springEvaluations).toBeLessThanOrEqual(limits.solverIterations * (d.relationPairs + d.affinityPairs));
     for (const p of result.anchors.values()) expect([p.x, p.y, p.z].every(Number.isFinite)).toBe(true);

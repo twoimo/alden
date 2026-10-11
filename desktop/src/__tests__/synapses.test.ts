@@ -17,6 +17,22 @@ describe('source synaptic bridges',()=>{
     bridges.highlight(null);bridges.update(0,new Map(),true);expect(opacity.getX(0)).toBeCloseTo(quiet);
     expect(bridges.diagnostics().active).toBe(2);bridges.dispose();
   });
+  it('limits crowded hub glare while retaining every edge and full selection contrast',()=>{
+    const single=new SynapticBridges(4096,false),hub=new SynapticBridges(4096,false);
+    const edges=Array.from({length:96},(_,i)=>({key:'hub-'+i,source:'hub',target:'n'+i,strength:.8,purpose:'semantic' as const}));
+    const original=JSON.stringify(edges);
+    try {
+      single.set([edges[0]],null,true);single.update(0,new Map(),true);
+      hub.set(edges,null,true);hub.update(0,new Map(),true);
+      const solo=single.mesh.geometry.getAttribute('aOpacity').getX(0),opacities=hub.mesh.geometry.getAttribute('aOpacity');
+      for(let i=0;i<edges.length;i++) expect(opacities.getX(i)).toBeLessThan(solo*.5);
+      expect((hub.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount).toBe(96);expect(hub.diagnostics().active).toBe(96);
+      hub.highlight('hub');hub.update(0,new Map(),true);
+      for(let i=0;i<edges.length;i++) expect(opacities.getX(i)).toBeGreaterThan(.5);
+      hub.highlight(null);hub.update(0,new Map(),true);
+      expect(opacities.getX(0)).toBeLessThan(solo*.5);expect(JSON.stringify(edges)).toBe(original);
+    } finally {single.dispose();hub.dispose();}
+  });
   it('grows and retracts inside one retained geometry without inventing relationships',()=>{
     const bridges=new SynapticBridges(),geometry=bridges.mesh.geometry;
     const points=new Map([['a',{x:0,y:0,z:0}],['b',{x:1,y:0,z:0}]]);

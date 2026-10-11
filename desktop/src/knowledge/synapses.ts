@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { SYNAPSE_CAP, type Point3, type Synapse } from './plasticity';
 
-interface Bridge extends Synapse { goal: number; growth: number; active: boolean; color: THREE.Color; ax: number; ay: number; az: number; bx: number; by: number; bz: number;
+interface Bridge extends Synapse { goal: number; growth: number; active: boolean; opacityScale: number; color: THREE.Color; ax: number; ay: number; az: number; bx: number; by: number; bz: number;
   portA: number; portB: number; dockAx: number; dockAy: number; dockAz: number; dockBx: number; dockBy: number; dockBz: number }
 
 /** Choose a real tip once, not a free-floating point or a per-frame switch. */
@@ -136,7 +136,7 @@ export class SynapticBridges {
       let record = this.index.get(edge.key);
       if (!record) {
         if (this.records.length >= this.capacity) this.remove(this.records.findIndex(candidate => !candidate.active));
-        record = { ...edge, goal: edge.strength, growth: reducedMotion ? 1 : 0, active: true, color: this.neutral.clone(), ax:0,ay:0,az:0,bx:0,by:0,bz:0,
+        record = { ...edge, goal: edge.strength, growth: reducedMotion ? 1 : 0, active: true, opacityScale:1, color: this.neutral.clone(), ax:0,ay:0,az:0,bx:0,by:0,bz:0,
           portA:-1,portB:-1,dockAx:0,dockAy:0,dockAz:0,dockBx:0,dockBy:0,dockBz:0 };
         this.records.push(record); this.index.set(edge.key, record);
       }
@@ -152,6 +152,17 @@ export class SynapticBridges {
       if (reducedMotion) { record.strength = record.goal; record.growth = 1; }
     }
     if (reducedMotion) for (let i = this.records.length - 1; i >= 0; i--) if (!this.records[i].active) this.remove(i);
+    // Crowded overview hubs should not wash out the center. Calculate this
+    // only on source changes; retain every actual edge and selection contrast.
+    if (!this.detail) {
+      const degree = new Map<string, number>();
+      for (const record of this.records) if (record.active && record.purpose !== 'navigation') {
+        degree.set(record.source, (degree.get(record.source) ?? 0) + 1);
+        degree.set(record.target, (degree.get(record.target) ?? 0) + 1);
+      }
+      for (const record of this.records) record.opacityScale = record.purpose === 'navigation' ? 1
+        : Math.max(.25, 1 / Math.sqrt(Math.max(1, degree.get(record.source) ?? 0, degree.get(record.target) ?? 0)));
+    }
     this.dirty = true; this.moving = !reducedMotion && this.records.some(record => !record.active || record.growth < 1 || Math.abs(record.strength - record.goal) > .001);
     this.geometry.instanceCount = this.records.length; this.mesh.visible = this.records.length > 0;
   }
@@ -185,7 +196,7 @@ export class SynapticBridges {
       this.strengths[i] = record.strength; this.growths[i] = record.growth;
       const selected = this.focus !== null && (record.source === this.focus || record.target === this.focus);
       this.opacities[i] = (this.detail ? (record.purpose === 'navigation' ? .12 : record.active ? .42 + .22 * record.strength : .28)
-        : selected ? .52 : record.purpose === 'navigation' ? .035 : .065 + .055 * record.strength) * record.growth;
+        : selected ? .52 : record.purpose === 'navigation' ? .035 : (.065 + .055 * record.strength) * record.opacityScale) * record.growth;
       this.semantic[i] = record.purpose === 'navigation' ? 0 : 1;
       this.colors[at] = record.color.r; this.colors[at + 1] = record.color.g; this.colors[at + 2] = record.color.b;
     }

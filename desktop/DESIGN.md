@@ -1,5 +1,10 @@
 # Alden desktop design contract
 
+## 0.3.62 — bounded density pressure and hub contrast
+
+Shift the collision grid between solver steps and add one coarse density evaluation per crowded movable identity. R/S strength and community decisions remain unchanged. Reuse two bounded32³ cell-slot arrays within the snapshot and avoid spring tuple allocations. Overview hub opacity depends on actual active degree while retaining all edges, full selected contrast and the local/detail path. See [geometry measurements, rejected experiments and delivery gates](../docs/architecture/alden-graph-density-20261011.md).
+
+
 ## 0.3.61 — bounded crowd separation and label placement
 
 Snapshot collision work is reserved per iteration and movable identity. Numeric spatial cells cache their neighboring candidates; crowded representatives rotate instead of permanently favoring early IDs. Imported exact coincidences receive deterministic geometry offsets while pins, unchanged components and fact identities are retained. The overview label pass prioritizes focus, hover and representative rank and tests at most15 cached screen-space slots. No extra per-frame DOM measurements are introduced.
