@@ -1754,7 +1754,7 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
         collect_script(&window,format!(r#"JSON.stringify((()=>{{
             const text=document.querySelector('#assistant-composer-text');text.value={text};text.dispatchEvent(new Event('input'));
             document.querySelector('#assistant-composer').requestSubmit();return {{submitted:true}};}})())"#),deadline)?;
-        let s=loop {
+        let mut s=loop {
             let s=collect_script(&window,r#"JSON.stringify((()=>{
                 const status=document.querySelector('#assistant-composer-status').textContent;
                 const replies=[...document.querySelectorAll('#voice-message-list .message-row[data-self="false"] .message-text')].map(x=>x.textContent);
@@ -1778,6 +1778,18 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
             }
         }
         if s["width"]!=s["scrollWidth"] {return Err("assistant viewport horizontal overflow".into());}
+        collect_script(&window,"JSON.stringify((()=>{window.__aldenAuditAssistantPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenAuditAssistantPaint=true;}));return {armed:true};})())".into(),deadline)?;
+        let paint=loop {
+            let p=collect_script(&window,r#"JSON.stringify((()=>{
+                const host=document.querySelector('#voice-message-list'),h=host.getBoundingClientRect();
+                const last=[...host.querySelectorAll('.message-row[data-self="false"]')].at(-1)?.getBoundingClientRect();
+                return {ready:window.__aldenAuditAssistantPaint===true,scrollTop:host.scrollTop,scrollHeight:host.scrollHeight,
+                    viewportHeight:host.clientHeight,latestTop:last?.top,latestBottom:last?.bottom,
+                    latestVisible:!!last&&last.top>=h.top-1&&last.bottom<=h.bottom+1};})())"#.into(),deadline)?;
+            if p["ready"]==true {break p;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+        };
+        if paint["latestVisible"]!=true {return Err(format!("latest assistant answer is outside the transcript viewport: {paint}"));}
+        s["paintObservation"]=paint;
         publish(output,&format!("assistant-turn-{index}.png"),&snapshot(&window,deadline)?,deadline)?;
         receipts.push(s);
     }
