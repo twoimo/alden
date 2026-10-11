@@ -16,6 +16,16 @@ import alden_semantic_affinity as sa
 
 
 class SemanticAffinityTests(unittest.TestCase):
+    def test_verified_archive_noncontent_declaration_survives_projection_omission(self):
+        nodes = [self.make_evidence(name, kind='hub', body='Same group description',
+                                   raw={'kind': 'hub', 'content_indexed': 0, 'path': name})
+                 for name in ('first-hub', 'second-hub')]
+        report = self.run_affinity(nodes)
+        self.assertEqual(report['nodes'], [])
+        self.assertEqual(report['candidates'], [])
+        self.assertEqual(report['coverage']['content_exclusion_reasons'], {'source_metadata_only': 2})
+        self.assertEqual(report['coverage']['validation_rejected_nodes'], 0)
+
     def setUp(self):
         self.temp = TemporaryDirectory(prefix="alden-affinity-test-")
         self.addCleanup(self.temp.cleanup)

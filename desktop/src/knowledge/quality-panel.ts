@@ -36,7 +36,7 @@ export type QualitySuccess = {
   findings: Record<string, number>;
   duplicate_candidates: QualityCandidates;
   metadata_matches: Record<'within_context' | 'cross_context', { groups: number; status: 'metadata_match_not_content' }>;
-  content_evidence: { policy: 'source-content-evidence-v1'; status: 'source_declared_exclusions_not_semantic_verdict' };
+  content_evidence: { policy: 'source-content-evidence-v2'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified' };
 };
@@ -154,7 +154,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || (counts.noncontent_current_versions as number) > (counts.project_current_versions as number)
     || (counts.metadata_only_current_versions as number) + (counts.unread_body_marker_current_versions as number)
       !== counts.noncontent_current_versions
-    || evidence.policy !== 'source-content-evidence-v1' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
+    || evidence.policy !== 'source-content-evidence-v2' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
     || !count(metadataWithin.groups) || metadataWithin.status !== 'metadata_match_not_content'
     || !count(metadataCross.groups) || metadataCross.status !== 'metadata_match_not_content'
     || Object.keys(findings).length > 64
@@ -188,7 +188,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       within_context: { groups: metadataWithin.groups as number, status: 'metadata_match_not_content' },
       cross_context: { groups: metadataCross.groups as number, status: 'metadata_match_not_content' },
     },
-    content_evidence: { policy: 'source-content-evidence-v1', status: 'source_declared_exclusions_not_semantic_verdict' },
+    content_evidence: { policy: 'source-content-evidence-v2', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
   };
 }

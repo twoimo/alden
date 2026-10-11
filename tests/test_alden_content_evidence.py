@@ -8,6 +8,14 @@ from alden_content_evidence import content_evidence_class
 
 
 class ContentEvidenceTests(unittest.TestCase):
+    def test_verified_source_declaration_is_not_lost_when_the_projection_omits_it(self):
+        self.assertEqual(content_evidence_class({'kind': 'hub'}, 'Group description',
+                         source={'kind': 'hub', 'content_indexed': 0}), 'source_metadata_only')
+        self.assertEqual(content_evidence_class({}, 'Real retained text',
+                         source={'content_indexed': True}), 'content_candidate')
+        self.assertEqual(content_evidence_class({}, 'Real retained text',
+                         source='unknown source shape'), 'content_candidate')
+
     def test_explicit_noncontent_declarations(self):
         for metadata in ({'kind': 'metadata'}, {'content_indexed': False}, {'content_indexed': 0}):
             with self.subTest(metadata=metadata):

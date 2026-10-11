@@ -15,6 +15,18 @@ from tests import test_alden_semantic_affinity as fixtures
 
 
 class LayoutAffinityTests(unittest.TestCase):
+    def test_archive_only_noncontent_declaration_keeps_refs_without_affinity(self):
+        for name in ('first-hub', 'second-hub'):
+            self.make_evidence(name, kind='hub', body='Same group description',
+                               raw={'kind': 'hub', 'content_indexed': 0, 'path': name})
+        result = self.request()
+        self.assertTrue(result['ok'])
+        affinity = result['layout_affinity']
+        self.assertEqual(len(affinity['input_nodes']), 2)
+        self.assertEqual(affinity['reason'], 'layout_no_eligible_content')
+        self.assertEqual(affinity['candidates'], [])
+        self.assertEqual(affinity['coverage']['content_exclusion_reasons'], {'source_metadata_only': 2})
+
     setUp = fixtures.SemanticAffinityTests.setUp
     make = fixtures.SemanticAffinityTests.make
     make_evidence = fixtures.SemanticAffinityTests.make_evidence
