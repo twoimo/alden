@@ -249,7 +249,8 @@ describe('bounded semantic overview layout', () => {
   it('takes the parent validated channel by default without changing fact edges', () => {
     const view = scene(2);
     view.layoutAffinity = { state: 'bounded_ready', inputKey: 'validated', profileKey: 'existing', inputNodes: [],
-      pairs: [S(0, 1)], requestedNodes: 2, usableNodes: 2, evaluatedPairs: 1, truncatedCandidates: 0 };
+      pairs: [S(0, 1)], requestedNodes: 2, usableNodes: 2, contentExcludedNodes: 0, validationRejectedNodes: 0,
+      evaluatedPairs: 1, truncatedCandidates: 0 };
     const result = new SemanticLayoutEngine().layout(view, empty());
     expect(result.diagnostics.affinityPairs).toBe(1); expect(view.edges).toEqual([]);
   });

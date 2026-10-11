@@ -13,6 +13,7 @@ import struct
 import time
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, normalized_body, normalized_text
+from alden_content_evidence import POLICY, content_evidence_class
 
 
 def _json(value):
@@ -93,7 +94,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     projects = sorted(set(projects))
     counts, findings, samples = Counter(), Counter(), defaultdict(list)
     raw_groups, raw_entries = defaultdict(set), defaultdict(set)
-    text_entries, allowed, checked_blobs = defaultdict(set), defaultdict(set), set()
+    text_entries, metadata_entries = defaultdict(set), defaultdict(set)
+    allowed, checked_blobs = defaultdict(set), set()
     membership_contexts, source_tags, scoped_versions = defaultdict(set), {}, defaultdict(set)
     seen, profiles, originals, source_verified = set(), defaultdict(Counter), {}, {}
     degree, directed_relations = defaultdict(Counter), Counter()
@@ -244,6 +246,10 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             text = label + '\n' + (cached[3] if valid else body)
             examine(text)
             effective_body = cached[3] if valid else body
+            evidence_class = content_evidence_class(metadata, effective_body) if metadata_valid else None
+            if evidence_class in ('metadata_only', 'unread_body_marker'):
+                counts['noncontent_current_versions'] += 1
+                counts[evidence_class + '_current_versions'] += 1
             if not text.strip():
                 counts['search_text_empty'] += 1
                 counts['duplicate_text_ineligible'] += 1
@@ -258,7 +264,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 # for body; no tab/space folding or date/unit/alias rewriting.
                 search_key = digest(encoded([normalized_text(label),
                                              normalized_body(effective_body)]))
-                text_entries[(row['project'], search_key)].add(unique)
+                entries = metadata_entries if evidence_class != 'content_candidate' else text_entries
+                entries[(row['project'], search_key)].add(unique)
             if reference_valid and (not verify_sources or source_verified.get(blob_key) is True):
                 raw_groups[(row['project'], row['raw_sha256'])].add(row['document_id'])
                 raw_entries[(row['project'], row['raw_sha256'])].add(unique)
@@ -339,21 +346,26 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
 
     # Candidate types are deliberately nonexclusive. A within-source match can
     # also have counterparts in other targets, permissions or provenances.
-    within_context, across_context = defaultdict(set), defaultdict(set)
-    cross_contexts, raw_contexts = {}, {}
-    for (project, sha), members in text_entries.items():
-        by_context = defaultdict(set)
-        for member in members:
-            for target_id, platform, permission in membership_contexts[member]:
-                context = (target_id, platform, permission, source_tags.get(member, ''))
-                by_context[context].add(member[1])
-        for context, documents in by_context.items():
-            if len(documents) > 1:
-                within_context[(project, sha, context)] = documents
-        all_documents = set().union(*by_context.values()) if by_context else set()
-        if len(by_context) > 1 and len(all_documents) > 1:
-            across_context[(project, sha)] = all_documents
-            cross_contexts[(project, sha)] = set(by_context)
+    def scoped_matches(entries):
+        within, across, contexts = defaultdict(set), defaultdict(set), {}
+        for (project, sha), members in entries.items():
+            by_context = defaultdict(set)
+            for member in members:
+                for target_id, platform, permission in membership_contexts[member]:
+                    context = (target_id, platform, permission, source_tags.get(member, ''))
+                    by_context[context].add(member[1])
+            for context, documents in by_context.items():
+                if len(documents) > 1:
+                    within[(project, sha, context)] = documents
+            all_documents = set().union(*by_context.values()) if by_context else set()
+            if len(by_context) > 1 and len(all_documents) > 1:
+                across[(project, sha)] = all_documents
+                contexts[(project, sha)] = set(by_context)
+        return within, across, contexts
+
+    within_context, across_context, cross_contexts = scoped_matches(text_entries)
+    metadata_within, metadata_across, metadata_contexts = scoped_matches(metadata_entries)
+    raw_contexts = {}
     for group, members in raw_entries.items():
         raw_contexts[group] = {(target_id, platform, permission, source_tags.get(member, ''))
                                for member in members
@@ -399,6 +411,13 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         'cross_context_search_text': summarize_candidates(
             across_context, 'text_match_across_target_permission_or_provenance',
             cross_contexts)}
+    metadata_matches = {
+        'within_context': summarize_candidates(
+            metadata_within, 'metadata_name_or_notice_match_not_content'),
+        'cross_context': summarize_candidates(
+            metadata_across, 'metadata_name_or_notice_match_not_content', metadata_contexts)}
+    for match in metadata_matches.values():
+        match['status'] = 'metadata_match_not_content'
 
     reciprocal = sum(min(quantity, directed_relations.get((project, target_id, rel_type,
                                                              dst, src), 0))
@@ -423,13 +442,16 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                    'source_blobs_verified', 'stored_body_empty', 'search_text_empty',
                    'duplicate_text_ineligible', 'duplicate_text_untrusted', 'current_vectors', 'current_vector_missing',
                    'nonempty_search_text_vector_missing', 'reciprocal_relation_pairs',
-                   'vector_profiles_mixed_dimensions'):
+                   'vector_profiles_mixed_dimensions', 'noncontent_current_versions',
+                   'metadata_only_current_versions', 'unread_body_marker_current_versions'):
         counts.setdefault(metric, 0)
     check()
-    return {'schema': 2, 'mode': 'read_only_current_versions', 'projects': projects,
+    return {'schema': 3, 'mode': 'read_only_current_versions', 'projects': projects,
             'source_verification_requested': verify_sources, 'counts': dict(sorted(counts.items())),
             'findings': dict(sorted(findings.items())), 'samples': dict(sorted(samples.items())),
-            'duplicate_candidates': candidates, 'scoped_revision_variants': revision_report,
+            'duplicate_candidates': candidates, 'metadata_matches': metadata_matches,
+            'content_evidence': {'policy': POLICY, 'status': 'source_declared_exclusions_not_semantic_verdict'},
+            'scoped_revision_variants': revision_report,
             'numeric_review_candidates': numeric_review,
             'coverage': {'status': 'complete', 'scope': 'current_permitted_memberships_only',
                          'projects': len(projects), 'memberships_scanned': counts['memberships'],
@@ -446,6 +468,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                        'Malformed scoped rows are reported; checks requiring their invalid fields are skipped.',
                        'NFC/CRLF/CR equivalence is supported; meaningful body indentation, tabs, spaces, line breaks, dates, units, names and aliases are preserved.',
                        'Duplicate text candidates require substantive title and effective body plus valid version binding; blank fields, explicit placeholders, and potentially truncated 1024-character titles are excluded. Completeness is not semantically inferred.',
+                       'Source-declared metadata-only or unread-body records are excluded from content text candidates. Their matching names/notices are reported separately and never prove substantive content, original file equality or entity identity.',
                        'Cross-context candidates include target, permission, platform and hash-only source provenance distinctions; within- and cross-context candidate counts can overlap.',
                        'Matching SHA-256 references without --verify-sources are hash-only evidence; verified raw duplicates concern canonical record JSON bytes only, not full original exports or source-capture manifests.',
                        'Byte counts include fetched text/BLOB fields, retained sources and derived search text; they are work accounting, not unique corpus size or peak memory.',

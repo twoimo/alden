@@ -304,6 +304,7 @@ export class CollectionGraphController {
       if (signature(this.affinity) !== signature(parsed.affinity)) this.graph.setLayoutAffinity?.(parsed.affinity);
       this.affinity = parsed.affinity;
       this.affinityDiagnostic = this.affinity ? { state: this.affinity.state, usable: this.affinity.usableNodes,
+        contentExcluded: this.affinity.contentExcludedNodes, validationRejected: this.affinity.validationRejectedNodes,
         requested: this.affinity.requestedNodes, pairs: this.affinity.pairs.length, evaluated: this.affinity.evaluatedPairs,
         truncated: this.affinity.truncatedCandidates } : { state: 'unavailable', reason: parsed.reason };
     } catch {

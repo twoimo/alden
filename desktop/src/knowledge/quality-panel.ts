@@ -11,6 +11,9 @@ type QualityCounts = {
   relations: number;
   distinct_current_documents: number;
   bytes_examined: number;
+  noncontent_current_versions: number;
+  metadata_only_current_versions: number;
+  unread_body_marker_current_versions: number;
 };
 type QualityCandidates = {
   same_raw_bytes: { groups: number; status: 'hash_references_only' };
@@ -20,7 +23,7 @@ type QualityCandidates = {
 type QualityErrorCode = keyof typeof ERROR_TEXT;
 export type QualitySuccess = {
   ok: true;
-  schema: 1;
+  schema: 2;
   scope: RequestedScope & {
     projects: string[];
     coverage: 'permitted_current_collection_memberships';
@@ -32,10 +35,12 @@ export type QualitySuccess = {
   counts: QualityCounts;
   findings: Record<string, number>;
   duplicate_candidates: QualityCandidates;
+  metadata_matches: Record<'within_context' | 'cross_context', { groups: number; status: 'metadata_match_not_content' }>;
+  content_evidence: { policy: 'source-content-evidence-v1'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified' };
 };
-export type QualityFailure = { ok: false; schema: 1; reason: QualityErrorCode; scope: RequestedScope };
+export type QualityFailure = { ok: false; schema: 2; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
 
 const ERROR_TEXT = {
@@ -113,12 +118,12 @@ function matchesScope(value: Record<string, unknown>, query: QualityQuery, allow
  * No untrusted identifiers or extra backend fields leave this parser. */
 export function parseCollectionQuality(value: unknown, query: QualityQuery): QualityResult | null {
   const row = object(value), scope = object(row?.scope);
-  if (!row || row.schema !== 1 || !scope) return null;
+  if (!row || row.schema !== 2 || !scope) return null;
 
   if (row.ok === false) {
     if (!Object.hasOwn(ERROR_TEXT, String(row.reason)) || !matchesScope(scope, query, true)) return null;
     return {
-      ok: false, schema: 1, reason: row.reason as QualityErrorCode,
+      ok: false, schema: 2, reason: row.reason as QualityErrorCode,
       scope: { requested_scope: scope.requested_scope as RequestedScope['requested_scope'],
         requested_project: scope.requested_project as RequestedScope['requested_project'] },
     };
@@ -131,6 +136,8 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
   const cross = object(duplicates?.cross_context_search_text);
   const mixed = object(numeric?.mixed_vector_dimensions);
   const normalization = object(row.normalization);
+  const evidence = object(row.content_evidence), metadata = object(row.metadata_matches);
+  const metadataWithin = object(metadata?.within_context), metadataCross = object(metadata?.cross_context);
   if (row.ok !== true || !matchesScope(scope, query, false)
     || scope.coverage !== 'permitted_current_collection_memberships'
     || scope.filters !== 'project_only' || scope.source_verification !== 'hash_references_only'
@@ -140,8 +147,16 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || (query.scope === 'project' && (scope.projects.length !== 1 || scope.projects[0] !== query.project))
     || !checkedDate(row.checked_at) || !finiteNonnegative(row.elapsed_ms)
     || !counts || !findings || !duplicates || !numeric || !raw || !normalized || !cross || !mixed || !normalization
-    || !(['memberships', 'project_current_versions', 'relations', 'distinct_current_documents', 'bytes_examined'] as const)
+    || !evidence || !metadataWithin || !metadataCross
+    || !(['memberships', 'project_current_versions', 'relations', 'distinct_current_documents', 'bytes_examined',
+      'noncontent_current_versions', 'metadata_only_current_versions', 'unread_body_marker_current_versions'] as const)
       .every(key => count(counts[key]))
+    || (counts.noncontent_current_versions as number) > (counts.project_current_versions as number)
+    || (counts.metadata_only_current_versions as number) + (counts.unread_body_marker_current_versions as number)
+      !== counts.noncontent_current_versions
+    || evidence.policy !== 'source-content-evidence-v1' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
+    || !count(metadataWithin.groups) || metadataWithin.status !== 'metadata_match_not_content'
+    || !count(metadataCross.groups) || metadataCross.status !== 'metadata_match_not_content'
     || Object.keys(findings).length > 64
     || !Object.entries(findings).every(([key, value]) => /^[a-z][a-z0-9_]{0,63}$/.test(key) && count(value))
     || !count(raw.groups) || raw.status !== 'hash_references_only'
@@ -152,7 +167,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || normalization.semantic_validity !== 'unverified') return null;
 
   return {
-    ok: true, schema: 1,
+    ok: true, schema: 2,
     scope: {
       requested_scope: scope.requested_scope as QualitySuccess['scope']['requested_scope'],
       requested_project: scope.requested_project as string | null,
@@ -169,6 +184,11 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       cross_context_search_text: { groups: cross.groups as number, status: 'review_candidate' },
     },
     numeric_review_candidates: { mixed_vector_dimensions: { profiles: mixed.profiles as number, status: 'review_candidate' } },
+    metadata_matches: {
+      within_context: { groups: metadataWithin.groups as number, status: 'metadata_match_not_content' },
+      cross_context: { groups: metadataCross.groups as number, status: 'metadata_match_not_content' },
+    },
+    content_evidence: { policy: 'source-content-evidence-v1', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
   };
 }
@@ -374,10 +394,17 @@ export class KnowledgeQualityPanel {
     }
     metrics('검토 후보', [
       ['동일 원본 해시 참조 그룹', value.duplicate_candidates.same_raw_bytes.groups],
-      ['동일 정규화 검색 텍스트 그룹', value.duplicate_candidates.same_normalized_search_text.groups],
-      ['교차 맥락 검색 텍스트 그룹', value.duplicate_candidates.cross_context_search_text.groups],
+      ['동일 정규화 본문 후보 그룹', value.duplicate_candidates.same_normalized_search_text.groups],
+      ['교차 맥락 본문 후보 그룹', value.duplicate_candidates.cross_context_search_text.groups],
       ['벡터 차원 혼합 프로필', value.numeric_review_candidates.mixed_vector_dimensions.profiles],
     ]);
+    metrics('본문 근거에서 제외한 기록', [
+      ['메타데이터만 있는 현재 버전', value.counts.metadata_only_current_versions],
+      ['본문 미열람 안내만 있는 현재 버전', value.counts.unread_body_marker_current_versions],
+      ['같은 맥락의 이름·안내문 일치 그룹', value.metadata_matches.within_context.groups],
+      ['교차 맥락의 이름·안내문 일치 그룹', value.metadata_matches.cross_context.groups],
+    ]);
+    paragraph('본문을 읽지 않은 기록의 이름·안내문 일치는 본문 중복이나 의미 연결의 근거로 사용하지 않습니다. 자료와 구조 관계는 유지합니다.', 'knowledge-quality-limit');
     paragraph('원본은 해시 참조만 확인하고 원문 바이트를 다시 읽지 않았습니다. NFC·줄바꿈 차이는 관찰만 하며 본문 공백을 유지하고 수정하지 않습니다. 일치 텍스트·차원 혼합은 검토 후보로, 의미상 중복·타당성·이상 여부는 판정하지 않았습니다.', 'knowledge-quality-limit');
     this.report.replaceChildren(...elements);
     this.report.hidden = false;

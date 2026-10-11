@@ -46,6 +46,17 @@ class SemanticAffinityTests(unittest.TestCase):
         self.install(node, vector)
         return node
 
+    def make_evidence(self, name, *, target=None, label="same-name.ts", body="substantive text",
+                      vector=(1., 0.), **declarations):
+        # Synthetic source_path values are metadata only; tests never open
+        # either an original path or a protected source from an actual audit.
+        target = self.a if target is None else target
+        record = {"platform": "graph", "original_id": name, "label": label, "text": body, **declarations}
+        self.store.ingest(target, [record])
+        node = self.ref(name, target)
+        self.install(node, vector)
+        return node
+
     def ref(self, name, target):
         doc = identity("graph", name)
         with self.store.database() as db:
@@ -106,6 +117,99 @@ class SemanticAffinityTests(unittest.TestCase):
         self.assertEqual(report["coverage"]["pairs_evaluated"], 0)
         self.assertEqual(report["candidates"], [])
         self.assertIsNone(report["coverage"]["pair_coverage"])
+
+    def test_identically_named_archived_unread_metadata_cannot_create_semantic_edges(self):
+        notice = "경로만 색인한 파일. 본문은 읽지 않았습니다."
+        nodes = [self.make_evidence("private-a", body=notice, kind="metadata", content_indexed=0,
+                                    source_path="/fictional/private/a/same-name.ts"),
+                 self.make_evidence("private-b", body=notice, kind="metadata", content_indexed=0,
+                                    source_path="/fictional/private/b/same-name.ts")]
+        self.assertNotEqual(nodes[0]["id"], nodes[1]["id"])
+        with patch("socket.socket", side_effect=AssertionError("network forbidden")):
+            report = self.run_affinity(nodes)
+        self.assertEqual(report["state"], "bounded_partial")
+        self.assertEqual(report["content_evidence_policy"], sa.CONTENT_EVIDENCE_POLICY)
+        self.assertEqual(report["coverage"]["requested_nodes"], 2)
+        self.assertEqual(report["coverage"]["usable_vector_nodes"], 0)
+        self.assertEqual(report["coverage"]["rejected_nodes"], 2)
+        self.assertEqual(report["coverage"]["validation_rejected_nodes"], 0)
+        self.assertEqual(report["coverage"]["reasons"], {})
+        self.assertEqual(report["coverage"]["content_excluded_nodes"], 2)
+        self.assertEqual(report["coverage"]["content_exclusion_reasons"], {"metadata_only": 2})
+        self.assertEqual(report["coverage"]["pairs_evaluated"], 0)
+        self.assertEqual(report["nodes"], [])
+        self.assertEqual(report["candidates"], [])
+        self.assertEqual(report["metrics"].get("vector_bytes", 0), 0)
+        payload = json.dumps(report, ensure_ascii=False)
+        self.assertNotIn("/fictional/private/", payload)
+        self.assertNotIn(notice, payload)
+
+    def test_metadata_flags_and_whole_body_notice_exclude_but_substantive_quote_is_eligible(self):
+        notice = "경로만 색인한 파일. 본문은 읽지 않았습니다."
+        excluded = [
+            self.make_evidence("kind-only", body="Actual-looking text", kind="metadata"),
+            self.make_evidence("indexed-zero", body="Actual-looking text", content_indexed=0),
+            self.make_evidence("indexed-false", body="Actual-looking text", content_indexed=False),
+            self.make_evidence("notice-only", body=notice, kind="source"),
+        ]
+        eligible = [
+            self.make_evidence("actually-indexed", body="A documented working note.", kind="source",
+                               content_indexed=1),
+            self.make_evidence("quoted-notice", body="Review notes quote ‘" + notice +
+                               "’ while describing a different, substantive example."),
+        ]
+        report = self.run_affinity(excluded + eligible)
+        self.assertEqual(report["coverage"]["validation_rejected_nodes"], 0)
+        self.assertEqual(report["coverage"]["content_exclusion_reasons"],
+                         {"metadata_only": 3, "unread_body_marker": 1})
+        self.assertEqual(report["coverage"]["usable_vector_nodes"], 2)
+        self.assertEqual({proof["id"] for proof in report["nodes"]}, {node["id"] for node in eligible})
+        self.assertEqual(report["coverage"]["pairs_evaluated"], 1)
+        self.assertEqual(len(report["candidates"]), 1)
+        self.assertEqual({report["candidates"][0]["source"], report["candidates"][0]["target"]},
+                         {node["id"] for node in eligible})
+        self.assertEqual(report["metrics"]["vector_bytes"], 2 * 1536)
+        self.assertFalse(report["identity_merge"])
+        self.assertFalse(report["factual_relationship"])
+
+    def test_content_exclusion_requires_valid_binding_and_is_not_a_vector_failure(self):
+        excluded = self.make_evidence("without-vector", kind="metadata", content_indexed=0)
+        missing = self.make_evidence("eligible-without-vector", kind="source", content_indexed=1)
+        with sqlite3.connect(self.cache) as db:
+            db.execute("DELETE FROM vectors WHERE document_id IN (?,?)", (excluded["id"], missing["id"]))
+        report = self.run_affinity([excluded, missing])
+        self.assertEqual(report["coverage"]["content_exclusion_reasons"], {"metadata_only": 1})
+        self.assertEqual(report["coverage"]["reasons"], {"missing_current_vector": 1})
+        self.assertEqual(report["coverage"]["validation_rejected_nodes"], 1)
+        self.assertEqual(report["nodes"], [])
+        self.assertEqual(report["candidates"], [])
+
+        with sqlite3.connect(self.cache) as db:
+            db.execute("UPDATE texts SET body='unbound' WHERE document_id=?", (excluded["id"],))
+        invalid = self.run_affinity([excluded])
+        self.assertEqual(invalid["coverage"]["reasons"], {"stale_text_binding": 1})
+        self.assertEqual(invalid["coverage"]["content_excluded_nodes"], 0)
+        self.assertEqual(invalid["coverage"]["validation_rejected_nodes"], 1)
+
+    def test_revising_metadata_to_actual_content_changes_request_and_evidence_identity(self):
+        old = self.make_evidence("evolving", body="경로만 색인한 파일. 본문은 읽지 않았습니다.",
+                                 kind="metadata", content_indexed=0)
+        excluded = self.run_affinity([old])
+        self.assertEqual(excluded["coverage"]["content_excluded_nodes"], 1)
+        self.store.ingest(self.a, [{"platform": "graph", "original_id": "evolving", "label": "same-name.ts",
+                                    "text": "A later synthetic source with substantive content.",
+                                    "kind": "source", "content_indexed": 1}])
+        current = self.ref("evolving", self.a)
+        self.assertNotEqual(current["source_version"], old["source_version"])
+        missing = self.run_affinity([current])
+        self.assertEqual(missing["coverage"]["reasons"], {"missing_current_vector": 1})
+        self.install(current, (1., 0.))
+        eligible = self.run_affinity([current])
+        self.assertEqual(eligible["state"], "bounded_ready")
+        self.assertEqual(eligible["coverage"]["content_excluded_nodes"], 0)
+        self.assertEqual([proof["id"] for proof in eligible["nodes"]], [current["id"]])
+        self.assertNotEqual(eligible["input_sha256"], excluded["input_sha256"])
+        self.assertNotEqual(eligible["content_evidence_sha256"], excluded["content_evidence_sha256"])
 
     def test_denied_deleted_missing_and_outside_scope_have_no_provenance_leak(self):
         a = self.make("allowed")

@@ -9,6 +9,8 @@ export interface LayoutAffinity {
   pairs: LayoutAffinityPair[];
   requestedNodes: number;
   usableNodes: number;
+  contentExcludedNodes: number;
+  validationRejectedNodes: number;
   evaluatedPairs: number;
   truncatedCandidates: number;
 }
@@ -48,6 +50,8 @@ export function parseLayoutAffinity(raw: unknown, nodes: readonly KnowledgeNode[
     return fail(reason);
   }
   if (value.state !== 'bounded_ready' && value.state !== 'bounded_partial') return fail('affinity_invalid_state');
+  if (value.content_evidence_policy !== 'source-content-evidence-v1'
+    || !digest(object(value.binding)?.content_evidence_sha256)) return fail('affinity_unverified_content_evidence');
   const profile = object(value.profile);
   if (!profile || profile.model !== MODEL || profile.endpoint !== ENDPOINT || profile.encoding !== ENCODING || profile.dimension !== 384 || value.profile_sha256 !== PROFILE) return fail('affinity_incompatible_profile');
   const inputHash = value.input_sha256 ?? object(value.binding)?.input_sha256;
@@ -91,8 +95,13 @@ export function parseLayoutAffinity(raw: unknown, nodes: readonly KnowledgeNode[
   }
   const coverage = object(value.coverage);
   if (!coverage || coverage.requested_nodes !== references.length || coverage.usable_vector_nodes !== proofs.size
+    || !count(coverage.content_excluded_nodes, references.length)
+    || !count(coverage.validation_rejected_nodes, references.length)
+    || coverage.content_excluded_nodes + coverage.validation_rejected_nodes + proofs.size !== references.length
     || !count(coverage.pairs_evaluated, 131072) || !count(coverage.candidates_truncated, 16384)) return fail('affinity_invalid_coverage');
   return { affinity: { state: value.state, inputKey: inputHash, profileKey: PROFILE, inputNodes: references,
     pairs: [...pairs.values()].sort((a, b) => a.source.localeCompare(b.source) || a.target.localeCompare(b.target)),
-    requestedNodes: references.length, usableNodes: proofs.size, evaluatedPairs: coverage.pairs_evaluated, truncatedCandidates: coverage.candidates_truncated }, reason: null };
+    requestedNodes: references.length, usableNodes: proofs.size,
+    contentExcludedNodes: coverage.content_excluded_nodes, validationRejectedNodes: coverage.validation_rejected_nodes,
+    evaluatedPairs: coverage.pairs_evaluated, truncatedCandidates: coverage.candidates_truncated }, reason: null };
 }

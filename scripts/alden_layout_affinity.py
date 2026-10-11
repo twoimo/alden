@@ -184,6 +184,7 @@ def _query(raw_query):
 
 def _empty_coverage():
     return {"requested_nodes": 0, "usable_vector_nodes": 0, "rejected_nodes": 0, "reasons": {},
+            "validation_rejected_nodes": 0, "content_excluded_nodes": 0, "content_exclusion_reasons": {},
             "node_coverage": None, "usable_by_project": {}, "cross_project_pairs_excluded": 0,
             "possible_vector_pairs": 0, "eligible_same_project_pairs": 0, "pairs_evaluated": 0,
             "dimension_products": 0, "pairs_above_threshold": 0, "neighbor_union_candidates": 0,
@@ -192,14 +193,17 @@ def _empty_coverage():
 
 def _base(projects, refs, revision, options):
     # Minimal current refs only; never body, label, source URL or original ID.
-    binding = {"input_nodes": refs, "input_projects": projects, "profile_sha256": PROFILE_SHA256}
+    binding = {"input_nodes": refs, "input_projects": projects, "profile_sha256": PROFILE_SHA256,
+               "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY}
     return {"schema": "alden-layout-affinity-v1", "state": "unavailable", "purpose": "layout_evidence_only",
             "input_nodes": refs, "input_projects": projects, "profile": asdict(PROFILE),
-            "profile_sha256": PROFILE_SHA256, "nodes": [], "candidates": [], "coverage": _empty_coverage(),
+            "profile_sha256": PROFILE_SHA256, "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY,
+            "nodes": [], "candidates": [], "coverage": _empty_coverage(),
             "binding": {"input_sha256": digest(encoded(binding)), "query_sha256": digest(encoded(options)),
                         "snapshot": "same caller-owned collection read transaction as graph_page; separate cache read snapshot",
                         "graph_revision": revision, "profile_basis": "expected existing E5; each admitted vector checked"},
             "quality_limits": ["cosine .65 is not semantic gold or validated cluster quality",
+                               "excluded metadata-only or unread-body sources cannot substantiate semantic links",
                                "top-k/hub/ID-order/candidate-budget bias", "layout only; no facts edges or identity merge"]}
 
 
@@ -252,16 +256,22 @@ def _on_reads(owner, options):
                                       for candidate in raw["candidates"]])
             if raw["coverage"]["usable_vector_nodes"] == 0:
                 result["state"] = "unavailable"
+                if (raw["coverage"]["content_excluded_nodes"] and
+                        raw["coverage"]["validation_rejected_nodes"] == 0):
+                    result["reason"] = "layout_no_eligible_content"
             result["binding"].update(collection_journal_id=raw["journal_id"],
                                     evaluator_nodes_sha256=raw["input_sha256"],
+                                    content_evidence_sha256=raw["content_evidence_sha256"],
                                     admitted_provenance_sha256=digest(encoded(result["nodes"])))
         else:
             result["state"] = "bounded_ready"
+            result["binding"]["content_evidence_sha256"] = digest(encoded([semantic.CONTENT_EVIDENCE_POLICY, []]))
     except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
         if isinstance(error, sqlite3.Error) and guard.sql_failure is not None:
             error = guard.sql_failure
         result.update(state="unavailable", reason=_error(error), nodes=[], candidates=[])
         result["coverage"]["reasons"] = {_error(error): len(refs)}
+        result["coverage"]["validation_rejected_nodes"] = len(refs)
     result["coverage"].update(graph_total_nodes=page.get("total_nodes", 0), graph_next=page.get("next"))
     result["metrics"] = {**guard.counts, "wall_seconds": time.monotonic() - guard.started,
                          "cpu_seconds": time.process_time() - guard.cpu_started, "process_peak_rss_bytes": semantic._rss()}

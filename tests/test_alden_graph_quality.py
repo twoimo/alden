@@ -14,6 +14,46 @@ from alden_graph_quality import audit
 
 
 class QualityTests(unittest.TestCase):
+    def test_unread_metadata_notice_is_not_a_content_duplicate(self):
+        notice = '경로만 색인한 파일. 본문은 읽지 않았습니다.'
+        records = [dict(self.record(name, notice), kind='metadata',
+                        label='shared.js', source_path=name + '/shared.js')
+                   for name in ('first', 'second')]
+        self.store.ingest(self.a, records)
+        before = self.store.path.read_bytes()
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(report['metadata_matches']['within_context']['groups'], 1)
+        self.assertEqual(report['counts']['metadata_only_current_versions'], 2)
+        self.assertEqual(report['counts']['project_current_versions'], 2)
+        self.assertEqual(self.store.path.read_bytes(), before)
+
+    def test_unread_body_marker_is_excluded_without_a_kind_declaration(self):
+        notice = '경로만 색인한 파일. 본문은 읽지 않았습니다.'
+        self.store.ingest(self.a, [self.record('first', notice), self.record('second', notice)])
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(report['metadata_matches']['within_context']['groups'], 1)
+        self.assertEqual(report['counts']['unread_body_marker_current_versions'], 2)
+
+    def test_metadata_and_content_cannot_form_a_cross_context_content_pair(self):
+        other = self.store.register(platform='graph', original_id='other', kind='source',
+                                    label='other', projects=['one'])
+        self.store.ingest(self.a, [dict(self.record('metadata', 'same text'), kind='metadata')])
+        self.store.ingest(other, [self.record('content', 'same text')])
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['duplicate_candidates']['cross_context_search_text']['groups'], 0)
+        self.assertEqual(report['metadata_matches']['cross_context']['groups'], 0)
+        self.assertEqual(report['counts']['noncontent_current_versions'], 1)
+
+    def test_quoted_notice_inside_a_real_body_remains_a_content_candidate(self):
+        text = '오류 메시지 분석: 경로만 색인한 파일. 본문은 읽지 않았습니다. 이후 본문 접근을 확인한다.'
+        self.store.ingest(self.a, [self.record('first', text), self.record('second', text)])
+        report = audit(self.root, ['one'])
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 1)
+        self.assertEqual(report['metadata_matches']['within_context']['groups'], 0)
+        self.assertEqual(report['counts']['noncontent_current_versions'], 0)
+
     def setUp(self):
         self.temp = TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve(); self.store = CollectionStore(self.root)

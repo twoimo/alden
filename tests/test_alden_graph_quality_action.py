@@ -27,6 +27,7 @@ from alden_collection import CollectionStore, digest, identity
 COUNTS = {
     "memberships", "project_current_versions", "relations",
     "distinct_current_documents", "bytes_examined",
+    "noncontent_current_versions", "metadata_only_current_versions", "unread_body_marker_current_versions",
 }
 CANDIDATES = {
     "same_raw_bytes": "hash_references_only",
@@ -108,7 +109,7 @@ class QualityActionContractTests(unittest.TestCase):
 
     def assert_error(self, result, reason, *, mode=None, project=None):
         self.assertEqual(result, {
-            "ok": False, "schema": 1, "reason": reason,
+            "ok": False, "schema": 2, "reason": reason,
             "scope": {"requested_scope": mode, "requested_project": project},
         })
         json.dumps(result, allow_nan=False)
@@ -117,10 +118,10 @@ class QualityActionContractTests(unittest.TestCase):
         self.assertEqual(set(result), {
             "ok", "schema", "scope", "checked_at", "elapsed_ms", "counts",
             "findings", "duplicate_candidates", "numeric_review_candidates",
-            "normalization",
+            "normalization", "metadata_matches", "content_evidence",
         })
         self.assertIs(result["ok"], True)
-        self.assertEqual(result["schema"], 1)
+        self.assertEqual(result["schema"], 2)
         self.assertEqual(result["scope"], {
             "requested_scope": mode, "requested_project": project,
             "projects": projects,
@@ -473,6 +474,12 @@ class QualityActionContractTests(unittest.TestCase):
         bad_reports = (
             ("absent report", lambda r: None),
             ("wrong schema", set_field(("schema",), 1)),
+            ("old ambiguous text candidates", set_field(("schema",), 2)),
+            ("missing content policy", set_field(("content_evidence",), None)),
+            ("unknown content policy", set_field(("content_evidence", "policy"), "future-policy")),
+            ("impossible exclusion partition", set_field(("counts", "noncontent_current_versions"), 1)),
+            ("missing metadata matches", set_field(("metadata_matches",), None)),
+            ("metadata matches claimed content", set_field(("metadata_matches", "within_context", "status"), "review_candidate")),
             ("wrong projects", set_field(("projects",), ["two"])),
             ("verified sources", set_field(("source_verification_requested",), True)),
             ("partial", set_field(("coverage", "status"), "partial")),

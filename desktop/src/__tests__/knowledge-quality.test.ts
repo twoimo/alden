@@ -10,7 +10,7 @@ const all = { scope: 'all' } as const;
 
 function success(query: QualityQuery = all) {
   return {
-    ok: true, schema: 1,
+    ok: true, schema: 2,
     scope: {
       requested_scope: query.scope,
       requested_project: query.scope === 'project' ? query.project : null,
@@ -20,7 +20,8 @@ function success(query: QualityQuery = all) {
     },
     checked_at: 1_791_768_900.125, elapsed_ms: 25.125,
     counts: { memberships: 42, project_current_versions: 39, relations: 11,
-      distinct_current_documents: 30, bytes_examined: 8000 },
+      distinct_current_documents: 30, bytes_examined: 8000,
+      noncontent_current_versions: 11, metadata_only_current_versions: 9, unread_body_marker_current_versions: 2 },
     findings: { normalization_mismatch: 2, relation_evidence_invalid: 3 },
     duplicate_candidates: {
       same_raw_bytes: { groups: 4, status: 'hash_references_only' },
@@ -28,6 +29,11 @@ function success(query: QualityQuery = all) {
       cross_context_search_text: { groups: 6, status: 'review_candidate' },
     },
     numeric_review_candidates: { mixed_vector_dimensions: { profiles: 7, status: 'review_candidate' } },
+    metadata_matches: {
+      within_context: { groups: 8, status: 'metadata_match_not_content' },
+      cross_context: { groups: 1, status: 'metadata_match_not_content' },
+    },
+    content_evidence: { policy: 'source-content-evidence-v1', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
   };
 }
@@ -125,8 +131,12 @@ describe('manual collection-quality report and fixed native selectors', () => {
     expect(metric('정규화 차이')).toBe('2');
     expect(metric('그 밖의 무결성 발견')).toBe('12');
     expect(metric('동일 원본 해시 참조 그룹')).toBe('4');
-    expect(metric('동일 정규화 검색 텍스트 그룹')).toBe('5');
-    expect(metric('교차 맥락 검색 텍스트 그룹')).toBe('6');
+    expect(metric('동일 정규화 본문 후보 그룹')).toBe('5');
+    expect(metric('교차 맥락 본문 후보 그룹')).toBe('6');
+    expect(metric('메타데이터만 있는 현재 버전')).toBe('9');
+    expect(metric('본문 미열람 안내만 있는 현재 버전')).toBe('2');
+    expect(metric('같은 맥락의 이름·안내문 일치 그룹')).toBe('8');
+    expect(metric('교차 맥락의 이름·안내문 일치 그룹')).toBe('1');
     expect(metric('벡터 차원 혼합 프로필')).toBe('7');
     expect(report().textContent).toContain('문서 30개');
     expect(report().textContent).toContain('NFC·줄바꿈 차이는 관찰만');
@@ -151,9 +161,10 @@ describe('manual collection-quality report and fixed native selectors', () => {
     const empty = success();
     empty.findings = {} as typeof empty.findings;
     empty.counts = { memberships: 0, project_current_versions: 0, relations: 0,
-      distinct_current_documents: 0, bytes_examined: 0 };
+      distinct_current_documents: 0, bytes_examined: 0,
+      noncontent_current_versions: 0, metadata_only_current_versions: 0, unread_body_marker_current_versions: 0 };
     const load = vi.fn<typeof fetchSettingsAction>()
-      .mockResolvedValueOnce(empty).mockResolvedValueOnce({ ok: true, schema: 1, scope: empty.scope });
+      .mockResolvedValueOnce(empty).mockResolvedValueOnce({ ok: true, schema: 2, scope: empty.scope });
     setup(load); info().open = true;
     button().click(); await settle();
     expect(state()).toBe('complete');
@@ -230,7 +241,7 @@ describe('manual collection-quality report and fixed native selectors', () => {
 
   it('exposes known errors and transport failures as unavailable, then allows retry', async () => {
     const load = vi.fn<typeof fetchSettingsAction>()
-      .mockResolvedValueOnce({ ok: false, schema: 1, reason: 'quality_time_budget',
+      .mockResolvedValueOnce({ ok: false, schema: 2, reason: 'quality_time_budget',
         scope: { requested_scope: 'all', requested_project: null } })
       .mockRejectedValueOnce(new Error('network error'))
       .mockResolvedValueOnce(success());
@@ -254,15 +265,23 @@ describe('schema and scope validation must fail closed', () => {
     expect(parseCollectionQuality(success(one), one)).toMatchObject({ ok: true });
     expect(parseCollectionQuality(success(one), all)).toBeNull();
     expect(parseCollectionQuality(success(all), one)).toBeNull();
-    expect(parseCollectionQuality({ ok: false, schema: 1, reason: 'quality_query_invalid',
+    expect(parseCollectionQuality({ ok: false, schema: 2, reason: 'quality_query_invalid',
       scope: { requested_scope: null, requested_project: null } }, one)).toMatchObject({ ok: false });
-    expect(parseCollectionQuality({ ok: false, schema: 1, reason: 'quality_query_invalid',
+    expect(parseCollectionQuality({ ok: false, schema: 2, reason: 'quality_query_invalid',
       scope: { requested_scope: 'all', requested_project: null } }, one)).toBeNull();
-    expect(parseCollectionQuality({ ok: false, schema: 1, reason: 'unknown_error',
+    expect(parseCollectionQuality({ ok: false, schema: 2, reason: 'unknown_error',
       scope: { requested_scope: null, requested_project: null } }, one)).toBeNull();
   });
 
   it.each([
+    ['old report with ambiguous text candidates', (item: any) => { item.schema = 1; }],
+    ['missing content policy', (item: any) => { delete item.content_evidence; }],
+    ['unknown content policy', (item: any) => { item.content_evidence.policy = 'future-policy'; }],
+    ['missing exclusion count', (item: any) => { delete item.counts.noncontent_current_versions; }],
+    ['impossible exclusion partition', (item: any) => { item.counts.metadata_only_current_versions = 0; }],
+    ['more exclusions than current versions', (item: any) => { item.counts.project_current_versions = 1; }],
+    ['missing metadata matches', (item: any) => { delete item.metadata_matches; }],
+    ['metadata match claimed content', (item: any) => { item.metadata_matches.within_context.status = 'review_candidate'; }],
     ['epoch milliseconds', (item: any) => { item.checked_at = 1_791_768_900_125; }],
     ['implausible epoch seconds', (item: any) => { item.checked_at = 42; }],
     ['string time', (item: any) => { item.checked_at = '1791768900'; }],

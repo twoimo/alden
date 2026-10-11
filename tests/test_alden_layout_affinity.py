@@ -17,6 +17,7 @@ from tests import test_alden_semantic_affinity as fixtures
 class LayoutAffinityTests(unittest.TestCase):
     setUp = fixtures.SemanticAffinityTests.setUp
     make = fixtures.SemanticAffinityTests.make
+    make_evidence = fixtures.SemanticAffinityTests.make_evidence
     ref = fixtures.SemanticAffinityTests.ref
     install = fixtures.SemanticAffinityTests.install
 
@@ -45,7 +46,8 @@ class LayoutAffinityTests(unittest.TestCase):
         self.assertEqual(result["revision"], revision)
         self.assertEqual(affinity["binding"]["graph_revision"], revision)
         self.assertEqual(affinity["input_projects"], ["one"])
-        binding = {"input_nodes": refs, "input_projects": ["one"], "profile_sha256": affinity["profile_sha256"]}
+        binding = {"input_nodes": refs, "input_projects": ["one"], "profile_sha256": affinity["profile_sha256"],
+                   "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY}
         self.assertEqual(affinity["binding"]["input_sha256"], digest(encoded(binding)))
         self.assertEqual(len(affinity["candidates"]), 1)
         self.assertAlmostEqual(affinity["candidates"][0]["cosine"], .8, places=6)
@@ -61,6 +63,78 @@ class LayoutAffinityTests(unittest.TestCase):
         for key in ('"body":', '"original_id":', '"description":', '"edges":', '"label":'):
             self.assertNotIn(key, payload)
         self.assertLess(len(encoded(result)), layout.MAX_RESPONSE_BYTES)
+
+    def test_only_unread_metadata_keeps_graph_refs_but_reports_no_eligible_content(self):
+        notice = "경로만 색인한 파일. 본문은 읽지 않았습니다."
+        nodes = [self.make_evidence("archive-a", body=notice, kind="metadata", content_indexed=0,
+                                    source_path="/fictional/scope-a/common.ts"),
+                 self.make_evidence("archive-b", body=notice, kind="metadata", content_indexed=0,
+                                    source_path="/fictional/scope-b/common.ts")]
+        result = self.request()
+        self.assertTrue(result["ok"], result)
+        affinity = result["layout_affinity"]
+        self.assertEqual(affinity["input_nodes"], self.current_refs({})[0])
+        self.assertEqual({n["id"] for n in affinity["input_nodes"]}, {n["id"] for n in nodes})
+        self.assertEqual(affinity["state"], "unavailable")
+        self.assertEqual(affinity["reason"], "layout_no_eligible_content")
+        self.assertEqual(affinity["nodes"], [])
+        self.assertEqual(affinity["candidates"], [])
+        self.assertEqual(affinity["coverage"]["content_exclusion_reasons"], {"metadata_only": 2})
+        self.assertEqual(affinity["coverage"]["validation_rejected_nodes"], 0)
+        self.assertEqual(affinity["coverage"]["reasons"], {})
+        self.assertEqual(affinity["content_evidence_policy"], semantic.CONTENT_EVIDENCE_POLICY)
+        self.assertEqual(len(affinity["binding"]["content_evidence_sha256"]), 64)
+        with sqlite3.connect(self.cache) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM vectors").fetchone()[0], 2)
+        self.assertNotIn("/fictional/", encoded(result).decode())
+
+    def test_mixed_scope_filters_excluded_source_and_preserves_healthy_neighbor(self):
+        excluded = self.make_evidence("private", body="경로만 색인한 파일. 본문은 읽지 않았습니다.",
+                                      kind="metadata", content_indexed=0)
+        left = self.make_evidence("true-left", label="one.ts", body="Actual first content.", kind="source")
+        right = self.make_evidence("true-right", label="two.ts", body="Actual second content.", kind="source",
+                                   vector=(.8, .6))
+        isolated = self.make_evidence("other-project", target=self.b, label="three.ts",
+                                      body="Other project content.", kind="source")
+        result = self.request({"projects": ["one", "two"]})
+        self.assertTrue(result["ok"], result)
+        affinity = result["layout_affinity"]
+        self.assertEqual(affinity["state"], "bounded_partial")
+        self.assertEqual({n["id"] for n in affinity["input_nodes"]},
+                         {excluded["id"], left["id"], right["id"], isolated["id"]})
+        self.assertEqual({n["id"] for n in affinity["nodes"]},
+                         {left["id"], right["id"], isolated["id"]})
+        self.assertEqual(affinity["coverage"]["content_excluded_nodes"], 1)
+        self.assertEqual(affinity["coverage"]["validation_rejected_nodes"], 0)
+        self.assertEqual(affinity["coverage"]["cross_project_pairs_excluded"], 2)
+        self.assertEqual(len(affinity["candidates"]), 1)
+        self.assertEqual({affinity["candidates"][0]["source"], affinity["candidates"][0]["target"]},
+                         {left["id"], right["id"]})
+
+    def test_content_eligibility_revision_changes_layout_bindings(self):
+        old = self.make_evidence("revised", body="경로만 색인한 파일. 본문은 읽지 않았습니다.",
+                                 kind="metadata", content_indexed=0)
+        neighbor = self.make_evidence("neighbor", label="neighbor.ts", body="Another source.", kind="source")
+        before = self.request()["layout_affinity"]
+        self.assertEqual(before["coverage"]["content_excluded_nodes"], 1)
+        self.assertEqual(before["candidates"], [])
+        self.store.ingest(self.a, [{"platform": "graph", "original_id": "revised", "label": "same-name.ts",
+                                    "text": "New substantive source content.", "kind": "source",
+                                    "content_indexed": 1}])
+        current = self.ref("revised", self.a)
+        self.assertNotEqual(current["source_version"], old["source_version"])
+        missing = self.request()["layout_affinity"]
+        self.assertEqual(missing["coverage"]["reasons"], {"missing_current_vector": 1})
+        self.install(current, (1., 0.))
+        after = self.request()["layout_affinity"]
+        self.assertEqual(after["state"], "bounded_ready")
+        self.assertEqual(after["coverage"]["content_excluded_nodes"], 0)
+        self.assertEqual(len(after["candidates"]), 1)
+        self.assertEqual({after["candidates"][0]["source"], after["candidates"][0]["target"]},
+                         {current["id"], neighbor["id"]})
+        for key in ("input_sha256", "evaluator_nodes_sha256", "content_evidence_sha256",
+                    "admitted_provenance_sha256"):
+            self.assertNotEqual(before["binding"][key], after["binding"][key])
 
     def test_existing_graph_filters_paging_search_focus_time_type_relation_are_preserved(self):
         records = [{"original_id": "a", "label": "alpha", "text": "body", "kind": "person"},
@@ -212,6 +286,8 @@ class LayoutAffinityTests(unittest.TestCase):
         self.assertEqual(result["layout_affinity"]["state"], "unavailable")
         self.assertEqual(len(result["layout_affinity"]["input_nodes"]), 1)
         self.assertEqual(result["layout_affinity"]["reason"], "layout_existing_retrieval_required")
+        self.assertEqual(result["layout_affinity"]["coverage"]["validation_rejected_nodes"], 1)
+        self.assertEqual(result["layout_affinity"]["coverage"]["content_excluded_nodes"], 0)
         self.assertFalse(self.cache.exists())
         with sqlite3.connect(self.cache) as db:
             db.execute("CREATE TABLE unrelated(x)")
@@ -304,6 +380,8 @@ class LayoutAffinityTests(unittest.TestCase):
             self.assertTrue(result["ok"], result)
             self.assertEqual(result["layout_affinity"]["state"], "bounded_ready")
             self.assertEqual(result["layout_affinity"]["input_nodes"], [])
+            self.assertEqual(result["layout_affinity"]["binding"]["content_evidence_sha256"],
+                             digest(encoded([semantic.CONTENT_EVIDENCE_POLICY, []])))
             self.assertIsNone(result["layout_affinity"]["coverage"]["node_coverage"])
 
     def test_borrowed_collection_cannot_publish_and_memory_overlay_is_rejected(self):

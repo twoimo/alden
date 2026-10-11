@@ -8,6 +8,25 @@ const graph = () => parseKnowledgeGraph({ nodes: ['a', 'b'].map(id => ({ id, lab
   edges: [{ source: 'a', target: 'b', relation: 'contradicts', weight: 1 }] });
 
 describe('source-bound separate layout channel', () => {
+  it('rejects old or unbound content policy instead of reusing filename affinity', () => {
+    for (const key of ['content_evidence_policy', 'binding']) {
+      const payload: any = affinityPayload(); delete payload[key];
+      expect(parseLayoutAffinity(payload, graph().nodes).reason).toBe('affinity_unverified_content_evidence');
+    }
+  });
+
+  it('retains structural facts while accepting a content-excluded partial result', () => {
+    const current = graph(), before = JSON.stringify(current.edges), payload = affinityPayload();
+    payload.state = 'bounded_partial'; payload.nodes.pop(); payload.candidates = [];
+    payload.coverage.usable_vector_nodes = 1; payload.coverage.content_excluded_nodes = 1;
+    const parsed = parseLayoutAffinity(payload, current.nodes);
+    expect(parsed.affinity?.pairs).toEqual([]);
+    expect(parsed.affinity?.contentExcludedNodes).toBe(1);
+    expect(JSON.stringify(current.edges)).toBe(before);
+    payload.coverage.validation_rejected_nodes = 1;
+    expect(parseLayoutAffinity(payload, current.nodes).reason).toBe('affinity_invalid_coverage');
+  });
+
   it('accepts compatible provenance without changing fact edges or activity signatures', () => {
     const current = graph(), signature = knowledgeSignature(current), facts = JSON.stringify(current.edges);
     const parsed = parseLayoutAffinity(affinityPayload(), current.nodes, ['one']);

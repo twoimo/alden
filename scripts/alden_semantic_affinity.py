@@ -24,6 +24,7 @@ import sys
 import time
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity
+from alden_content_evidence import POLICY as CONTENT_EVIDENCE_POLICY, content_evidence_class
 
 MODEL = "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0"
 ENDPOINT = digest(b"http://127.0.0.1:11236/v1/embeddings")
@@ -249,24 +250,17 @@ def _load(db, cache, store, node, projects, profile, guard):
             return None, "current_version_hash_mismatch"
     except (TypeError, ValueError, RecursionError):
         return None, "malformed_current_version"
-    vector_meta = cache.execute("""SELECT CASE WHEN typeof(text_hash)='text' AND length(text_hash)=64
-        THEN text_hash END,model=? AND endpoint=? AND encoding=?,typeof(vector),length(vector)
-        FROM vectors WHERE document_id=? AND version=?""",
-        (profile.model, profile.endpoint, profile.encoding, node["id"], node["source_version"])).fetchone()
-    if vector_meta is None:
-        return None, "missing_current_vector"
-    if vector_meta[1] != 1:
-        return None, "different_profile"
-    if vector_meta[2] != "blob" or type(vector_meta[3]) is not int or vector_meta[3] % 4:
-        return None, "malformed_vector"
-    if vector_meta[3] != profile.dimension * 4:
-        return None, "different_dimension"
     text_size = cache.execute("""SELECT length(CAST(label AS BLOB))+length(CAST(body AS BLOB))+
         length(CAST(base_hash AS BLOB))+length(CAST(raw_sha256 AS BLOB))+
         length(CAST(extraction AS BLOB))+length(CAST(body_source AS BLOB))
         FROM texts WHERE document_id=? AND version=?""", (node["id"], node["source_version"])).fetchone()
     if text_size is None:
-        return None, "missing_bound_text"
+        # Keep the older missing-current-vector diagnostic for a newly
+        # ingested version without cache entries. This is an existence query,
+        # never vector admission or an attempt to recover archived evidence.
+        exists = cache.execute("SELECT 1 FROM vectors WHERE document_id=? AND version=?",
+                               (node["id"], node["source_version"])).fetchone()
+        return None, "missing_current_vector" if exists is None else "missing_bound_text"
     if type(text_size[0]) is not int or text_size[0] > MAX_RECORD_BYTES:
         return None, "malformed_bound_text"
     guard.charge("text_bytes", text_size[0])
@@ -292,6 +286,24 @@ def _load(db, cache, store, node, projects, profile, guard):
     if not complete_text.strip():
         return None, "empty_text"
     text_hash = digest(complete_text.encode())
+    # A stored filename and an explicitly unread body are not content evidence,
+    # even when a matching E5 vector exists. Validate the admitted source and
+    # retained-text binding first; never inspect the protected original path.
+    evidence = content_evidence_class(metadata, text[4])
+    if evidence != "content_candidate":
+        return None, "content_evidence:" + evidence
+    vector_meta = cache.execute("""SELECT CASE WHEN typeof(text_hash)='text' AND length(text_hash)=64
+        THEN text_hash END,model=? AND endpoint=? AND encoding=?,typeof(vector),length(vector)
+        FROM vectors WHERE document_id=? AND version=?""",
+        (profile.model, profile.endpoint, profile.encoding, node["id"], node["source_version"])).fetchone()
+    if vector_meta is None:
+        return None, "missing_current_vector"
+    if vector_meta[1] != 1:
+        return None, "different_profile"
+    if vector_meta[2] != "blob" or type(vector_meta[3]) is not int or vector_meta[3] % 4:
+        return None, "malformed_vector"
+    if vector_meta[3] != profile.dimension * 4:
+        return None, "different_dimension"
     if vector_meta[0] != text_hash:
         return None, "stale_vector_text_hash"
     guard.charge("vector_bytes", vector_meta[3])
@@ -449,26 +461,37 @@ def _affinity_on_reads(store, db, cache, projects, nodes, *, profile=E5Profile()
     tables = {r[0] for r in cache.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {"vectors", "texts"} <= tables:
         raise ValueError("affinity_existing_vector_text_tables_required")
-    rejected, loaded = Counter(), []
+    rejected, excluded, loaded, eligibility = Counter(), Counter(), [], []
     journal = db.execute("SELECT substr(value,1,128) FROM meta WHERE key='journal_id'").fetchone()
     for node in nodes:
         guard.check()
         entry, reason = _load(db, cache, store, node, projects, profile, guard)
         if entry is None:
-            rejected[reason] += 1
+            if reason.startswith("content_evidence:"):
+                excluded[reason.partition(":")[2]] += 1
+            else:
+                rejected[reason] += 1
         else:
             loaded.append(entry)
+        eligibility.append((node["id"], reason if reason is not None else "content_candidate_vector"))
     candidates, pairs = _candidates(loaded, budgets, min_cosine, guard)
     guard.check()
     proofs = [entry[0] for entry in loaded]
     complete = len(proofs) == len(nodes) and not pairs["pair_budget_exhausted"] and not pairs["candidates_truncated"]
     return {"schema": "alden-semantic-affinity-v1", "state": "bounded_ready" if complete else "bounded_partial",
             "purpose": "layout_evidence_only", "identity_merge": False, "factual_relationship": False,
+            "content_evidence_policy": CONTENT_EVIDENCE_POLICY,
+            "content_evidence_sha256": digest(encoded([CONTENT_EVIDENCE_POLICY, eligibility])),
             "projects": projects, "profile": asdict(profile), "profile_sha256": digest(encoded(asdict(profile))),
-            "input_sha256": digest(encoded(nodes)), "journal_id": journal[0] if journal else None,
+            "input_sha256": digest(encoded({"nodes": nodes, "projects": projects,
+                                            "content_evidence_policy": CONTENT_EVIDENCE_POLICY})),
+            "journal_id": journal[0] if journal else None,
             "snapshot_basis": "independent read transactions; exact target/version/raw/base/text bindings",
             "coverage": {"requested_nodes": len(nodes), "usable_vector_nodes": len(proofs),
                          "rejected_nodes": len(nodes) - len(proofs), "reasons": dict(sorted(rejected.items())),
+                         "validation_rejected_nodes": sum(rejected.values()),
+                         "content_excluded_nodes": sum(excluded.values()),
+                         "content_exclusion_reasons": dict(sorted(excluded.items())),
                          "node_coverage": len(proofs) / len(nodes) if nodes else None,
                          "usable_by_project": dict(sorted(Counter(p for proof in proofs for p in proof["projects"]).items())),
                          "cross_project_pairs_excluded": pairs["possible_vector_pairs"] - pairs["eligible_same_project_pairs"], **pairs},
@@ -476,6 +499,7 @@ def _affinity_on_reads(store, db, cache, projects, nodes, *, profile=E5Profile()
             "metrics": {**guard.counts, "wall_seconds": time.monotonic() - guard.started,
                         "cpu_seconds": time.process_time() - guard.cpu_started, "process_peak_rss_bytes": _rss()},
             "limitations": ["only supplied graph nodes, not whole project/graph coverage",
+                "metadata-only and whole-body unread notices lack semantic content evidence; candidates are not content verification",
                 "no service liveness or current loaded weights verification",
                 "similarity is not identity, factual relation, semantic gold or independent-source proof",
                 "read-time versions can change; consumer must revalidate",

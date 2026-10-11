@@ -8,8 +8,10 @@ import unicodedata
 
 from alden_collection import CollectionStore
 from alden_graph_quality import _json, audit
+from alden_content_evidence import POLICY
 
-COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_current_documents','bytes_examined')
+COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_current_documents','bytes_examined',
+              'noncontent_current_versions','metadata_only_current_versions','unread_body_marker_current_versions')
 ERRORS=frozenset(('quality_scope_unavailable','quality_scan_budget','quality_time_budget',
                  'quality_cancelled','quality_report_unavailable','quality_query_invalid'))
 
@@ -48,7 +50,7 @@ def _projects(store,mode,project):
         return [r[0] for r in db.execute("SELECT DISTINCT project FROM target_projects WHERE permission!='denied' AND project=? LIMIT 1",(project,))]
 
 def _summary(report,projects):
-    if (not isinstance(report,dict) or report.get('schema')!=2 or report.get('mode')!='read_only_current_versions'
+    if (not isinstance(report,dict) or report.get('schema')!=3 or report.get('mode')!='read_only_current_versions'
             or report.get('projects')!=projects or report.get('source_verification_requested') is not False):
         raise ValueError('quality_report_unavailable')
     coverage=report.get('coverage',{})
@@ -60,6 +62,11 @@ def _summary(report,projects):
     if (counts['memberships']+counts['relations']>100000 or counts['bytes_examined']>512*1024*1024
             or counts['distinct_current_documents']>counts['project_current_versions']
             or counts['project_current_versions']>counts['memberships']):
+        raise ValueError('quality_report_unavailable')
+    if (counts['noncontent_current_versions']>counts['project_current_versions']
+            or counts['metadata_only_current_versions']+counts['unread_body_marker_current_versions']
+            !=counts['noncontent_current_versions']
+            or report.get('content_evidence')!={'policy':POLICY,'status':'source_declared_exclusions_not_semantic_verdict'}):
         raise ValueError('quality_report_unavailable')
     if (_count(report['counts']['source_blobs_verified'])!=0
             or _count(coverage.get('memberships_scanned'))!=counts['memberships']
@@ -81,10 +88,18 @@ def _summary(report,projects):
                 or _count(candidate.get('verified_groups'))!=0 or _count(candidate.get('hash_only_groups'))!=groups):
             raise ValueError('quality_report_unavailable')
         duplicates[key]={'groups':groups,'status':'hash_references_only' if key=='same_raw_bytes' else 'review_candidate'}
+    metadata_matches={}
+    for key in ('within_context','cross_context'):
+        match=report['metadata_matches'][key]
+        if (match.get('status')!='metadata_match_not_content'
+                or match.get('classification')!='metadata_name_or_notice_match_not_content'):
+            raise ValueError('quality_report_unavailable')
+        metadata_matches[key]={'groups':_count(match['groups']),'status':'metadata_match_not_content'}
     numeric=report['numeric_review_candidates']['mixed_vector_dimensions']
     if numeric.get('status')!='review_candidate_not_semantic_outlier':
         raise ValueError('quality_report_unavailable')
     return {'counts':counts,'findings':findings,'duplicate_candidates':duplicates,
+        'metadata_matches':metadata_matches,'content_evidence':report['content_evidence'],
         'numeric_review_candidates':{'mixed_vector_dimensions':{'profiles':_count(numeric['profiles']),'status':'review_candidate'}},
         'normalization':{'method':'NFC_line_endings_preserving_body_spacing','semantic_validity':'unverified'}}
 
@@ -115,9 +130,9 @@ def read_action(state_root,query_raw,cancelled=None):
         checked=time.time();elapsed=(time.monotonic()-started)*1000
         if not math.isfinite(checked) or checked<=0 or not math.isfinite(elapsed) or elapsed<0:
             raise ValueError('quality_report_unavailable')
-        return {'ok':True,'schema':1,'scope':{**scope,'projects':projects,
+        return {'ok':True,'schema':2,'scope':{**scope,'projects':projects,
             'coverage':'permitted_current_collection_memberships','filters':'project_only',
             'source_verification':'hash_references_only'},'checked_at':checked,'elapsed_ms':round(elapsed,3),**summary}
     except (ValueError,RuntimeError,OSError,KeyError,TypeError,RecursionError,AttributeError,sqlite3.Error) as error:
         code=str(error) if str(error) in ERRORS else 'quality_report_unavailable'
-        return {'ok':False,'schema':1,'scope':scope,'reason':code}
+        return {'ok':False,'schema':2,'scope':scope,'reason':code}

@@ -257,7 +257,7 @@ SETTINGS_ACTIONS: dict[str, Any] = {
     "collection-scheduler-control": {"ok": False, "reason": "read_only_fixture"},
     "collection-graph": {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "next": None},
     "collection-affinity": {"ok": True, "layout_affinity": {"schema": "alden-layout-affinity-v1", "state": "unavailable", "reason": "read_only_fixture"}},
-    "collection-quality": {"ok": False, "schema": 1, "scope": {"requested_scope": None, "requested_project": None}, "reason": "quality_scope_unavailable"},
+    "collection-quality": {"ok": False, "schema": 2, "scope": {"requested_scope": None, "requested_project": None}, "reason": "quality_scope_unavailable"},
     "reply-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},
     "geeknews-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},
     "knowledge-graph-status": {
