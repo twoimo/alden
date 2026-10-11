@@ -28,11 +28,13 @@ const FLAG: &str = "--audit-own-webview";
 const SETTINGS_FLAG: &str = "--audit-own-settings";
 const WORKSPACES_FLAG: &str = "--audit-own-workspaces";
 const ASSISTANT_FLAG: &str = "--audit-own-assistant-input";
+const ASSISTANT_INVALID_FLAG: &str = "--audit-own-assistant-invalid-input";
 pub struct Request {
     pub directory: PathBuf,
     pub settings: bool,
     pub workspaces: bool,
     pub assistant: bool,
+    pub assistant_invalid: bool,
     pub focus_node: Option<String>,
 }
 struct AuditPolicy {
@@ -64,7 +66,7 @@ const COLLECT: &str = r#"JSON.stringify((() => {
 pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request>, String> {
     let args: Vec<_> = args.collect();
     if !args.iter().any(|arg| {
-        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG]
+        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG]
             .iter()
             .any(|flag| arg.to_string_lossy().starts_with(flag))
     }) {
@@ -103,7 +105,7 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
         None
     };
     if (args.len() != 2 && focus_node.is_none())
-        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG]
+        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG]
             .iter()
             .any(|flag| args[0] == *flag)
     {
@@ -111,9 +113,10 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     }
     Ok(Some(Request {
         directory: PathBuf::from(&args[1]),
-        settings: args[0] == SETTINGS_FLAG || args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG,
-        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG,
-        assistant: args[0] == ASSISTANT_FLAG,
+        settings: args[0] != FLAG,
+        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG,
+        assistant: args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG,
+        assistant_invalid: args[0] == ASSISTANT_INVALID_FLAG,
         focus_node,
     }))
 }
@@ -1598,7 +1601,7 @@ fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<V
         "monitorScaleFactors":monitors.iter().map(|monitor|monitor.scale_factor()).collect::<Vec<_>>()}))
 }
 
-fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<Value,String> {
+fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, invalid_only: bool) -> Result<Value,String> {
     let window = app.get_webview_window("settings").ok_or("settings window missing")?;
     visibility(&window,true,deadline)?;
     loop {
@@ -1607,6 +1610,33 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant) -
         live(deadline)?;std::thread::sleep(Duration::from_millis(50));
     }
     collect_script(&window,"JSON.stringify((()=>{document.querySelector('#settings-tab-voice').click();return {selected:true};})())".into(),deadline)?;
+    if invalid_only {
+        let mut receipts = Vec::new();
+        for index in 0..12 {
+            collect_script(&window,format!(r#"JSON.stringify((()=>{{
+                const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array([1,2,3])],'audit-invalid.png',{{type:'image/png'}}));
+                const picker=document.querySelector('#assistant-composer-images');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
+                const text=document.querySelector('#assistant-composer-text');text.value='검수 '+{index};text.dispatchEvent(new Event('input'));
+                return {{prepared:true}};}})())"#),deadline)?;
+            loop {
+                let s=collect_script(&window,"JSON.stringify({ready:document.querySelector('#assistant-composer-status').textContent.includes('1개 이미지를 첨부')})".into(),deadline)?;
+                if s["ready"]==true {break;} live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+            }
+            collect_script(&window,"JSON.stringify((()=>{document.querySelector('#assistant-composer').requestSubmit();return {submitted:true};})())".into(),deadline)?;
+            let s=loop {
+                let s=collect_script(&window,r#"JSON.stringify({status:document.querySelector('#assistant-composer-status').textContent,
+                    busy:document.querySelector('#assistant-composer').getAttribute('aria-busy')})"#.into(),deadline)?;
+                if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("오류 코드:")) {break s;}
+                live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+            };
+            if !s["status"].as_str().is_some_and(|t|t.contains("오류 코드: assistant_image_invalid")) {
+                return Err(format!("assistant invalid-input admission failed at {index}: {s}"));
+            }
+            receipts.push(s);
+        }
+        visibility(&window,false,deadline)?;
+        return Ok(json!({"receipts":receipts,"scope":"twelve invalid-image WKWebView requests; decoder rejects before model admission; no inference, microphone, TTS or sends"}));
+    }
     collect_script(&window,r#"JSON.stringify((()=>{
         const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;
         const ctx=canvas.getContext('2d');ctx.fillStyle='#ff0000';ctx.fillRect(0,0,128,128);
@@ -1659,6 +1689,7 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let settings_mode = request.settings;
     let workspaces_mode = request.workspaces;
     let assistant_mode = request.assistant;
+    let invalid_input_mode = request.assistant_invalid;
     let bridge = if assistant_mode { super::PythonBridge::for_assistant_audit(request.directory.join("input-state"))
         .unwrap_or_else(|error|{eprintln!("Alden assistant audit: {error}");std::process::exit(2);}) } else {super::PythonBridge::new()};
     let builder = {
@@ -1696,14 +1727,14 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
             std::thread::spawn(move || {
                 let started = Instant::now();
                 let deadline = started + Duration::from_secs(if assistant_mode {180} else if workspaces_mode {96}else{40});
-                let result = if assistant_mode {audit_assistant(&handle,&output,deadline)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
+                let result = if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
-                    "mode":if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
+                    "mode":if invalid_input_mode {"isolated-assistant-invalid-input"}else if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();
@@ -1926,6 +1957,16 @@ mod tests {
         .unwrap()
         .unwrap();
         assert!(request.workspaces && request.settings);
+    }
+    #[test]
+    fn invalid_assistant_audit_has_an_explicit_separate_mode() {
+        for (flag, invalid) in [(ASSISTANT_FLAG, false), (ASSISTANT_INVALID_FLAG, true)] {
+            let request = parse_args([OsString::from(flag), OsString::from("/private/tmp/test")].into_iter())
+                .unwrap().unwrap();
+            assert!(request.assistant && request.settings && request.workspaces);
+            assert_eq!(request.assistant_invalid, invalid);
+        }
+        assert!(parse_args([OsString::from(format!("{ASSISTANT_INVALID_FLAG}=true")), OsString::from("/private/tmp/test")].into_iter()).is_err());
     }
     #[test]
     fn focused_capture_requires_a_canonical_id_and_workspace_mode() {

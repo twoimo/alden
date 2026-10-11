@@ -2770,12 +2770,13 @@ fn voice_session_from_process_table(
             .ok()
             .filter(|pid| *pid > 0)
             .ok_or(BridgeError::VoiceProcessCheck)?;
-        let (status, executable) = rest
-            .trim_start()
-            .split_once(char::is_whitespace)
-            .ok_or(BridgeError::VoiceProcessCheck)?;
+        let Some((status, executable)) = rest.trim_start().split_once(char::is_whitespace) else {
+            eprintln!("Alden voice process check: missing executable for pid {pid}");
+            return Err(BridgeError::VoiceProcessCheck);
+        };
         let executable = executable.trim_start();
         if executable.is_empty() {
+            eprintln!("Alden voice process check: empty executable for pid {pid}");
             return Err(BridgeError::VoiceProcessCheck);
         }
         if !status.contains('Z') && is_python_executable(Path::new(executable)) {
