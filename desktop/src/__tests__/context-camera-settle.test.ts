@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { describe, expect, it, vi } from 'vitest';
 import { AnimationLoop, type FrameScheduler } from '../core/animation-loop';
 import { ContextNebulae } from '../knowledge/cortex';
-import { overviewGraph, parseKnowledgeGraph } from '../knowledge/graph-model';
+import { KnowledgeDrilldown, overviewGraph, parseKnowledgeGraph } from '../knowledge/graph-model';
 import { KnowledgeHologram } from '../knowledge/hologram';
 import { PlasticityLayout } from '../knowledge/plasticity';
 import { PositionTransition } from '../knowledge/position-transition';
@@ -33,7 +33,7 @@ class Scheduler implements FrameScheduler {
 }
 
 describe('context overview camera lifecycle', () => {
-  it('reaches a fitted distance above 12 and stops requesting frames', () => {
+  it.each(['fitted', 'restored', 'too-close', 'overflow'] as const)('stops requesting frames at an admitted %s overview pose', pose => {
     const graph = parseKnowledgeGraph({
       nodes: Array.from({ length: 24 }, (_, i) => ({
         id: 'n' + i, label: 'Node ' + i, space: '00_Scope/A',
@@ -68,6 +68,7 @@ describe('context overview camera lifecycle', () => {
     const methods = hologram as unknown as {
       resetOverviewCamera(): void;
       render(dt: number): void;
+      replaceGraph: KnowledgeHologram['replaceGraph'];
     };
     const loop = new AnimationLoop(dt => methods.render(dt), scheduler);
     const renderer = { render: vi.fn() };
@@ -78,19 +79,43 @@ describe('context overview camera lifecycle', () => {
       lookAt: new THREE.Vector3(), motion: { matches: false }, paused: false,
       plasticity, positionTransition: new PositionTransition(), synapses,overviewSynapses,constellationNodes,globalLabels:new Set(),neuronDetail:false, nebulae, nodeMeshes: new Map(), orbMeshes: new Map(),
       loop, voiceEnvelope, latestVoice: null, labels: new Map(), renderer, scene,
-      orbitActive: false,
+      orbitActive: false, requestedAnimation: true, canvas: { hidden: false },
+      drilldown: new KnowledgeDrilldown(graph), rebuildGraph: vi.fn(), resize: vi.fn(), notifyView: vi.fn(),
       syncPoint: (id: string, x: number, y: number, z: number) => positions.get(id)?.set(x, y, z),
     });
 
     try {
       methods.resetOverviewCamera();
+      const fitted = hologram.navigationTargets;
+      if (pose === 'restored') {
+        // A saved pose may be farther than the current view's fitted limit.
+        // Exercise the real restoration path and controls; other geometry is
+        // already settled so it cannot keep the camera test alive.
+        const far = orbit.maxDistance + 10;
+        methods.replaceGraph(graph, { focusId: null, hops: 0 }, {
+          camera: [1.2, -.4, .9 + far], lookAt: [1.2, -.4, .9],
+        });
+      } else if (pose === 'too-close' || pose === 'overflow') {
+        methods.replaceGraph(graph, { focusId: null, hops: 0 }, {
+          camera: pose === 'too-close' ? [0, 0, .5] : [1e308, 0, 0],
+          lookAt: [0, 0, 0],
+        });
+        // Unsafe saved radii retain the admitted fit rather than an
+        // unreachable target that makes the controls draw indefinitely.
+        expect(hologram.navigationTargets).toEqual(fitted);
+      }
       const target = new THREE.Vector3().fromArray(hologram.navigationTargets.camera);
+      const targetLook = new THREE.Vector3().fromArray(hologram.navigationTargets.lookAt);
       loop.start();
       for (let frame = 0; frame < 300 && loop.isRunning(); frame++) scheduler.step();
 
       expect(target.z).toBeGreaterThan(12);
-      expect(orbit.maxDistance).toBeGreaterThanOrEqual(target.length());
+      expect(loop.isRunning(), JSON.stringify({ frames: loop.renderCount,
+        distanceToTarget: camera.position.distanceTo(target), limit: orbit.maxDistance,
+        requestedDistance: target.distanceTo(targetLook) })).toBe(false);
+      expect(orbit.maxDistance).toBeGreaterThanOrEqual(target.distanceTo(targetLook));
       expect(camera.position.distanceTo(target)).toBeLessThan(.001);
+      expect(hologram.motionDiagnostics.camera).toBe(false);
       expect(nebulae.moving).toBe(false);
       expect(loop.isRunning()).toBe(false);
       expect(scheduler.callbacks.size).toBe(0);

@@ -1,5 +1,9 @@
 # Alden desktop design contract
 
+## 0.3.63 — restored camera and render-idle observation
+
+A saved camera pose must be reachable by the current OrbitControls limits. Preserve the exact valid pose while admitting its radius; reject too-close or overflowing restored radii. Diagnostics expose the actual camera, transition, bridge, region, orbit and voice motion gates. The owned native audit now waits for the render loop to stop within its original bounded deadline, records both loop states and distinguishes physics rest from render idle. It does not stop the renderer to obtain a passing result. See [source checks and remaining delivery gates](../docs/architecture/alden-camera-stream-20261011.md).
+
 ## 0.3.62 — bounded density pressure and hub contrast
 
 Shift the collision grid between solver steps and add one coarse density evaluation per crowded movable identity. R/S strength and community decisions remain unchanged. Reuse two bounded32³ cell-slot arrays within the snapshot and avoid spring tuple allocations. Overview hub opacity depends on actual active degree while retaining all edges, full selected contrast and the local/detail path. See [geometry measurements, rejected experiments and delivery gates](../docs/architecture/alden-graph-density-20261011.md).

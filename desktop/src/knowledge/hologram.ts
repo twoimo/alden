@@ -308,8 +308,17 @@ export class KnowledgeHologram {
     if (navigation || focus && !ids.has(focus)) this.resetOverviewCamera();
     if (navigation && this.view.focusId && this.view.hops > 0) this.focusCamera(this.view.focusId);
     if (viewpoint && [viewpoint.camera, viewpoint.lookAt].every(values => values.length === 3 && values.every(Number.isFinite))) {
-      this.desiredCamera.fromArray(viewpoint.camera); this.desiredLookAt.fromArray(viewpoint.lookAt);
-      this.restoredWindowSize={width:window.innerWidth,height:window.innerHeight};
+      const camera = new THREE.Vector3().fromArray(viewpoint.camera);
+      const lookAt = new THREE.Vector3().fromArray(viewpoint.lookAt);
+      const distance = camera.distanceTo(lookAt);
+      // The saved pose has its own radius. The current graph fit may have
+      // lowered the controls limit, making this otherwise valid pose
+      // unreachable and keeping the idle render loop alive forever.
+      if (Number.isFinite(distance) && distance >= this.orbit.minDistance) {
+        this.desiredCamera.copy(camera); this.desiredLookAt.copy(lookAt);
+        this.orbit.maxDistance = Math.max(12, distance + .5);
+        this.restoredWindowSize={width:window.innerWidth,height:window.innerHeight};
+      }
     }
     this.canvas.hidden = graph.nodes.length === 0;
     this.resize(false);
@@ -333,8 +342,21 @@ export class KnowledgeHologram {
     affinity: this.graph.layoutAffinity ? { state: this.graph.layoutAffinity.state, pairs: this.graph.layoutAffinity.pairs.length,
       usable: this.graph.layoutAffinity.usableNodes, requested: this.graph.layoutAffinity.requestedNodes } : null }; }
 
-  diagnostics(): AnimationLoopDiagnostics & { regions: ReturnType<ContextNebulae['diagnostics']>; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number } {
-    return { ...this.loop.diagnostics(), regions:this.nebulae.diagnostics(), voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
+  get motionDiagnostics() {
+    return {
+      camera: this.camera.position.distanceToSquared(this.desiredCamera) > .000001
+        || this.lookAt.distanceToSquared(this.desiredLookAt) > .000001,
+      requestedCameraDistance: this.desiredCamera.distanceTo(this.desiredLookAt),
+      cameraMinDistance: this.orbit.minDistance, cameraMaxDistance: this.orbit.maxDistance,
+      physics: this.plasticity.moving, transition: this.positionTransition.moving,
+      bridges: this.synapses.moving, overviewBridges: this.overviewSynapses.moving,
+      regions: this.nebulae.moving, orbit: this.orbitActive,
+      voice: this.voiceEnvelope.needsFrame,
+    };
+  }
+
+  diagnostics(): AnimationLoopDiagnostics & { regions: ReturnType<ContextNebulae['diagnostics']>; motion:KnowledgeHologram['motionDiagnostics']; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number } {
+    return { ...this.loop.diagnostics(), regions:this.nebulae.diagnostics(), motion:this.motionDiagnostics, voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
       displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count,
       orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes(), physics:this.plasticity.diagnostics(), synapses:(this.neuronDetail?this.synapses:this.overviewSynapses).diagnostics(), drawCalls:this.renderer.info.render.calls, geometries:this.renderer.info.memory.geometries, ambientMotion:false, visibleTime:0 };
   }

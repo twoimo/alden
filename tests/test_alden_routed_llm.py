@@ -40,6 +40,38 @@ class RoutedLlmTests(unittest.TestCase):
             result=self.adapter.generate_messages('CALLER SYSTEM','LATEST USER',self.token,**kwargs)
         return result,requests
 
+    def invoke_raw_stream(self, raw):
+        response = Stream([])
+        response.write(raw)
+        response.seek(0)
+        with patch('alden_routed_llm.catalog', return_value=self.catalog), \
+                patch('alden_routed_llm.CancellableLocalResponse', return_value=response):
+            return self.adapter.generate_messages('CALLER SYSTEM', 'LATEST USER', self.token)
+
+    def test_sse_multiline_crlf_and_bom_preserve_one_json_event(self):
+        event = {'type': 'response.completed', 'response': self.completed()}
+        lines = json.dumps(event, indent=2).encode().splitlines()
+        raw = b'\xef\xbb\xbfdata: ' + lines[0] + b'\r\n: comment\r\n' + b''.join(b'data: ' + line + b'\r\n' for line in lines[1:]) + b'\r\n'
+        self.assertEqual(self.invoke_raw_stream(raw), '확인')
+
+    def test_sse_whitespace_field_is_not_an_event_boundary(self):
+        event = {'type': 'response.completed', 'response': self.completed()}
+        lines = json.dumps(event, indent=2).encode().splitlines()
+        raw = b'data: ' + lines[0] + b'\n\t\n' + b''.join(b'data: ' + line + b'\n' for line in lines[1:]) + b'\n'
+        self.assertEqual(self.invoke_raw_stream(raw), '확인')
+
+    def test_sse_unterminated_terminal_frame_does_not_publish_completion(self):
+        event = {'type': 'response.completed', 'response': self.completed()}
+        raw = b'data: ' + json.dumps(event).encode() + b'\n'
+        with self.assertRaisesRegex(RuntimeError, '^routed_llm_incomplete_response$'):
+            self.invoke_raw_stream(raw)
+        self.assertEqual(self.adapter.last_metrics['request']['state'], 'failed')
+
+    def test_sse_pending_fields_keep_the_response_byte_budget(self):
+        with patch('alden_routed_llm.MAX_RESPONSE_BYTES', 512):
+            with self.assertRaisesRegex(RuntimeError, '^routed_llm_response_budget$'):
+                self.invoke_raw_stream(b'data: \n' * 100)
+
     def completed(self, **changes):
         return {'status': 'completed', 'model': DEFAULT_MODEL, 'id': 'response-1',
                 'usage': {'output_tokens': 2}, 'output': [{'type': 'message',

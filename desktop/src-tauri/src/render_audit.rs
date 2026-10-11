@@ -802,6 +802,8 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
     let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
       return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
         displayedNodes:d?.nodeCount??0,physics:d?.physics??null,
+        loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
+        motion:d?.motion??null,regions:d?.regions??null,synapses:d?.synapses??null,
         semantic:d?.semanticLayout??null,
         affinity:d?.graphRead?.affinity??null};})())"#;
     let before = collect_script(window, script.into(), deadline)?;
@@ -819,7 +821,9 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
         if (state["physics"]["moving"] == false
             && state["semantic"]["pendingTargets"] == 0
             && worker_ready
-            && affinity_ready)
+            && affinity_ready
+            && state["loop"]["running"] == false
+            && state["loop"]["pendingFrame"] == false)
             || Instant::now() >= bound
         {
             break state;
@@ -835,6 +839,11 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
         "before":before,"restObserved":rested["physics"]["moving"] == false,
         "layoutObserved":matches!(rested["semantic"]["worker"]["state"].as_str(),Some("ready" | "cached")) && rested["semantic"]["pendingTargets"] == 0,
         "affinityObserved":matches!(rested["affinity"]["state"].as_str(),Some("bounded_ready" | "bounded_partial")),
+        "renderIdleObserved":rested["loop"]["running"] == false
+            && rested["loop"]["pendingFrame"] == false
+            && after["loop"]["running"] == false
+            && after["loop"]["pendingFrame"] == false
+            && rested["renderCount"] == after["renderCount"],
         "rested":rested,"afterTwoSeconds":after}),
     )
 }

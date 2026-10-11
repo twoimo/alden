@@ -104,6 +104,11 @@ class OpenCodexLlm:
                         self.last_metrics["ttft_ms"] = (time.perf_counter() - started) * 1000
                     completed = True
                 else:
+                    # LF/CRLF SSE data fields belong to one event until a
+                    # genuinely empty line. EOF discards an unfinished frame;
+                    # a truncated terminal payload must not confirm success.
+                    pending_data = []
+                    first_line = True
                     while True:
                         token.raise_if_cancelled()
                         line = response.readline(65537)
@@ -112,9 +117,24 @@ class OpenCodexLlm:
                         total += len(line)
                         if len(line) > 65536 or total > MAX_RESPONSE_BYTES:
                             raise RoutedGenerationError("routed_llm_response_budget")
-                        if not line.startswith(b"data:"):
+                        if first_line:
+                            line = line.removeprefix(b"\xef\xbb\xbf")
+                            first_line = False
+                        if line.startswith(b"data:"):
+                            field = line[5:].rstrip(b"\r\n")
+                            if field.startswith(b" "):
+                                field = field[1:]
+                            pending_data.append(field)
                             continue
-                        data = line[5:].strip()
+                        if line.rstrip(b"\r\n") == b"data":
+                            pending_data.append(b"")
+                            continue
+                        if line not in {b"\n", b"\r\n"} or not pending_data:
+                            continue
+                        data = b"\n".join(pending_data)
+                        pending_data.clear()
+                        if not data:
+                            continue
                         if data == b"[DONE]":
                             break
                         event = self._json(data)
