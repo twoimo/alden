@@ -18,7 +18,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, AtomicI32, Ordering},
+    atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
     mpsc, Arc,
 };
 use std::time::{Duration, Instant};
@@ -41,23 +41,32 @@ struct AuditPolicy {
     workspaces: bool,
     focus_node: Option<String>,
 }
-struct AssistantPageReady(Arc<AtomicBool>);
+struct AssistantPageReady { ready: Arc<AtomicBool>, phase: Arc<AtomicU8> }
 
 #[tauri::command]
-fn audit_assistant_ready(window: tauri::WebviewWindow, ready: tauri::State<'_, AssistantPageReady>) {
-    if window.url().is_ok_and(|url| audit_settings_page(window.label(), &url)) {
-        ready.0.store(true, Ordering::Release);
+fn audit_assistant_ready(window: tauri::WebviewWindow, ready: tauri::State<'_, AssistantPageReady>, phase: String) {
+    if window.label() == "settings" {
+        let code = match phase.as_str() {"injected"=>1, "dom"=>2, "composer"=>3, _=>return};
+        ready.phase.store(code, Ordering::Release);
+        if code == 3 {ready.ready.store(true, Ordering::Release);}
+        eprintln!("Alden assistant readiness phase {code}");
     }
 }
 
 const ASSISTANT_READY_SCRIPT: &str = r#"(() => {
+  const signal = phase => window.__TAURI_INTERNALS__.invoke('audit_assistant_ready', {phase}).catch(() => {});
+  signal('injected');
+  let sent = false;
   const ready = () => {
-    if (document.getElementById('assistant-composer-text'))
-      window.__TAURI_INTERNALS__.invoke('audit_assistant_ready').catch(() => {});
+    if (!sent && document.getElementById('assistant-composer-text')) {
+      sent = true; observer.disconnect(); signal('composer');
+    }
   };
+  const observer = new MutationObserver(ready);
+  observer.observe(document, {childList:true, subtree:true});
   if (document.readyState === 'loading')
-    document.addEventListener('DOMContentLoaded', ready, {once:true});
-  else queueMicrotask(ready);
+    document.addEventListener('DOMContentLoaded', () => {signal('dom'); ready();}, {once:true});
+  else queueMicrotask(() => {signal('dom'); ready();});
 })()"#;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const COLLECT: &str = r#"JSON.stringify((() => {
@@ -1626,14 +1635,14 @@ fn audit_settings_page(label: &str, url: &tauri::Url) -> bool {
             || (matches!(url.scheme(), "http"|"https") && url.host_str() == Some("tauri.localhost")))
 }
 
-fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, invalid_only: bool, loaded: &AtomicBool) -> Result<Value,String> {
+fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, invalid_only: bool, loaded: &AtomicBool, asset: &AtomicBool, phase: &AtomicU8) -> Result<Value,String> {
     let window = app.get_webview_window("settings").ok_or("settings window missing")?;
     visibility(&window,true,deadline)?;
     let mount_deadline = deadline.min(Instant::now() + Duration::from_secs(8));
     // Do not evaluate JavaScript in WKWebView's initial about:blank while the
     // owned asset navigation is starting. Its callback can be lost on navigation.
-    while !loaded.load(Ordering::Acquire) {
-        if Instant::now() >= mount_deadline {return Err("assistant asset modules and composer did not finish loading".into());}
+    while !loaded.load(Ordering::Acquire) || !asset.load(Ordering::Acquire) {
+        if Instant::now() >= mount_deadline {return Err(format!("assistant asset modules and composer did not finish loading: phase {}, asset {}",phase.load(Ordering::Acquire),asset.load(Ordering::Acquire)));}
         std::thread::sleep(Duration::from_millis(20));
     }
     let mut first_probe = true;
@@ -1730,13 +1739,16 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let assistant_mode = request.assistant;
     let invalid_input_mode = request.assistant_invalid;
     let settings_loaded = Arc::new(AtomicBool::new(false));
-    let page_loaded = Arc::clone(&settings_loaded);
+    let asset_loaded = Arc::new(AtomicBool::new(false));
+    let ready_phase = Arc::new(AtomicU8::new(0));
+    let page_loaded = Arc::clone(&asset_loaded);
+    let page_dom = Arc::clone(&settings_loaded);
     let bridge = if assistant_mode { super::PythonBridge::for_assistant_audit(request.directory.join("input-state"))
         .unwrap_or_else(|error|{eprintln!("Alden assistant audit: {error}");std::process::exit(2);}) } else {super::PythonBridge::new()};
     let builder = {
         let builder = tauri::Builder::default()
             .manage(bridge)
-            .manage(AssistantPageReady(Arc::clone(&settings_loaded)))
+            .manage(AssistantPageReady {ready:Arc::clone(&settings_loaded),phase:Arc::clone(&ready_phase)})
             .manage(AuditPolicy {
                 workspaces: workspaces_mode,
                 focus_node: request.focus_node.clone(),
@@ -1764,9 +1776,10 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     };
     let app = builder
         .on_page_load(move |view, payload| {
-            if audit_settings_page(view.label(), payload.url())
-                && payload.event() == tauri::webview::PageLoadEvent::Started {
-                page_loaded.store(false, Ordering::Release);
+            if view.label() == "settings" {
+                let finished = payload.event() == tauri::webview::PageLoadEvent::Finished;
+                page_loaded.store(finished && audit_settings_page(view.label(), payload.url()), Ordering::Release);
+                if !finished {page_dom.store(false, Ordering::Release);}
             }
         })
         .on_window_event(super::handle_window_event)
@@ -1775,7 +1788,7 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
             std::thread::spawn(move || {
                 let started = Instant::now();
                 let deadline = started + Duration::from_secs(if assistant_mode {180} else if workspaces_mode {96}else{40});
-                let result = if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode,&settings_loaded)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
+                let result = if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
