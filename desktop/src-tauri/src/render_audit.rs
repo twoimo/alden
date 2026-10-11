@@ -53,9 +53,10 @@ fn audit_assistant_ready(window: tauri::WebviewWindow, ready: tauri::State<'_, A
     }
 }
 
-const ASSISTANT_READY_SCRIPT: &str = r#"(() => {
+const ASSISTANT_READY_SCRIPT: &str = r#"
+;(() => {
+  const start = () => {
   const signal = phase => window.__TAURI_INTERNALS__.invoke('audit_assistant_ready', {phase}).catch(() => {});
-  signal('injected');
   let sent = false;
   const ready = () => {
     if (!sent && document.getElementById('assistant-composer-text')) {
@@ -64,10 +65,14 @@ const ASSISTANT_READY_SCRIPT: &str = r#"(() => {
   };
   const observer = new MutationObserver(ready);
   observer.observe(document, {childList:true, subtree:true});
-  if (document.readyState === 'loading')
-    document.addEventListener('DOMContentLoaded', () => {signal('dom'); ready();}, {once:true});
-  else queueMicrotask(() => {signal('dom'); ready();});
-})()"#;
+  signal('dom'); ready();
+  };
+  // append_invoke_initialization_script runs before Tauri's metadata/core
+  // scripts. The public invoke function is available after DOMContentLoaded.
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true});
+  else queueMicrotask(start);
+})();
+"#;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const COLLECT: &str = r#"JSON.stringify((() => {
   const c = document.querySelector('canvas.alden-core');
