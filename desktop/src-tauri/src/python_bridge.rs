@@ -2829,7 +2829,19 @@ fn read_voice_process_args(pid: i32) -> Result<Option<VoiceProcessArgs>, BridgeE
             // A reused PID, EPERM or any uncertain status remains a blocker.
             let result = unsafe { libc::kill(pid, 0) };
             let gone = result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
-            if gone { eprintln!("Alden voice process check: EINVAL target exit confirmed for pid {pid}"); }
+            if gone { eprintln!("Alden voice process check: EINVAL target exit confirmed for pid {pid}"); return true; }
+            if result != 0 { return false; }
+            // Darwin also reports success for signal zero on a zombie. Inspect
+            // only this PID's same-user status; unknown/live statuses block.
+            let zombie = confirmed_voice_process_zombie(pid, unsafe { libc::geteuid() },
+                Command::new("/bin/ps").args(["-p", &pid.to_string(), "-o", "uid=,pid=,stat="])
+                    .stdin(Stdio::null()).output());
+            if zombie { eprintln!("Alden voice process check: EINVAL target zombie confirmed for pid {pid}"); return true; }
+            // The zombie can be reaped while ps starts. Recheck absence once;
+            // failure/permission/live results still never admit the input.
+            let result = unsafe { libc::kill(pid, 0) };
+            let gone = result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone { eprintln!("Alden voice process check: EINVAL target exit confirmed after status for pid {pid}"); }
             gone
         }).inspect_err(|_| {
             eprintln!("Alden voice process check: args unavailable for pid {pid}, errno {errno:?}");
@@ -2853,6 +2865,18 @@ fn voice_args_unavailable(
     } else {
         Err(BridgeError::VoiceProcessCheck)
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn confirmed_voice_process_zombie(pid: i32, uid: libc::uid_t, output: std::io::Result<std::process::Output>) -> bool {
+    let Ok(output) = output else { return false; };
+    if !output.status.success() || output.stdout.len() > 128 { return false; }
+    let Ok(text) = std::str::from_utf8(&output.stdout) else { return false; };
+    let fields: Vec<_> = text.split_whitespace().collect();
+    fields.len() == 3 && fields[0].parse::<libc::uid_t>() == Ok(uid)
+        && fields[1].parse::<i32>() == Ok(pid)
+        && fields[2].bytes().all(|b| b.is_ascii_alphabetic() || matches!(b, b'+'|b'<'|b'>'))
+        && fields[2].contains('Z')
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -6875,6 +6899,18 @@ mod tests {
         for error in [Some(libc::EPERM), Some(libc::EACCES), Some(libc::EIO), None] {
             assert!(matches!(voice_args_unavailable(error, || panic!("do not reinterpret other errors")), Err(BridgeError::VoiceProcessCheck)));
         }
+    }
+    #[test]
+    fn voice_process_zombie_confirmation_rejects_live_foreign_and_uncertain_statuses() {
+        assert!(confirmed_voice_process_zombie(42, 501, voice_ps_output(true, b"501 42 Z+\n")));
+        for (success, bytes) in [
+            (true, &b"501 42 S\n"[..]), (true, b"502 42 Z\n"), (true, b"501 43 Z\n"),
+            (true, b""), (true, b"501 42 Z\n501 43 Z\n"), (true, b"501 42 ?Z\n"),
+            (false, b"501 42 Z\n"), (true, b"\xff"),
+        ] {
+            assert!(!confirmed_voice_process_zombie(42, 501, voice_ps_output(success, bytes)));
+        }
+        assert!(!confirmed_voice_process_zombie(42, 501, Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))));
     }
     #[test]
     fn voice_process_table_ignores_unrelated_zombie_and_exited_processes() {
