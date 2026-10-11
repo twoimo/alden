@@ -2824,17 +2824,35 @@ fn read_voice_process_args(pid: i32) -> Result<Option<VoiceProcessArgs>, BridgeE
     };
     if result != 0 {
         let errno = std::io::Error::last_os_error().raw_os_error();
-        return if errno == Some(libc::ESRCH) {
-            Ok(None) // Exited since ps; permission/parse failures still block spawn.
-        } else {
+        return voice_args_unavailable(errno, || {
+            // Signal zero only checks existence; it delivers no signal.
+            // A reused PID, EPERM or any uncertain status remains a blocker.
+            let result = unsafe { libc::kill(pid, 0) };
+            let gone = result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone { eprintln!("Alden voice process check: EINVAL target exit confirmed for pid {pid}"); }
+            gone
+        }).inspect_err(|_| {
             eprintln!("Alden voice process check: args unavailable for pid {pid}, errno {errno:?}");
-            Err(BridgeError::VoiceProcessCheck)
-        };
+        });
     }
     bytes.truncate(size);
     parse_voice_process_args(&bytes).map(Some).inspect_err(|_| {
         eprintln!("Alden voice process check: invalid args for pid {pid}, returned bytes {size}");
     })
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn voice_args_unavailable(
+    errno: Option<i32>,
+    definitely_gone: impl FnOnce() -> bool,
+) -> Result<Option<VoiceProcessArgs>, BridgeError> {
+    // Darwin KERN_PROCARGS2 returns EINVAL when proc_find no longer finds the
+    // PID, but also for live/permission failures. Never ignore EINVAL alone.
+    if errno == Some(libc::ESRCH) || (errno == Some(libc::EINVAL) && definitely_gone()) {
+        Ok(None)
+    } else {
+        Err(BridgeError::VoiceProcessCheck)
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -6849,6 +6867,15 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn voice_args_einval_requires_independent_proof_of_exit() {
+        assert!(voice_args_unavailable(Some(libc::EINVAL), || true).unwrap().is_none());
+        assert!(matches!(voice_args_unavailable(Some(libc::EINVAL), || false), Err(BridgeError::VoiceProcessCheck)));
+        assert!(voice_args_unavailable(Some(libc::ESRCH), || panic!("already absent")).unwrap().is_none());
+        for error in [Some(libc::EPERM), Some(libc::EACCES), Some(libc::EIO), None] {
+            assert!(matches!(voice_args_unavailable(error, || panic!("do not reinterpret other errors")), Err(BridgeError::VoiceProcessCheck)));
+        }
+    }
     #[test]
     fn voice_process_table_ignores_unrelated_zombie_and_exited_processes() {
         let mut inspected = Vec::new();
