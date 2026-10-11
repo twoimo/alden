@@ -1604,9 +1604,17 @@ fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<V
 fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, invalid_only: bool) -> Result<Value,String> {
     let window = app.get_webview_window("settings").ok_or("settings window missing")?;
     visibility(&window,true,deadline)?;
+    let mount_deadline = deadline.min(Instant::now() + Duration::from_secs(8));
+    let mut first_probe = true;
     loop {
-        let s=collect_script(&window,"JSON.stringify({mounted:!!document.querySelector('#assistant-composer-text')})".into(),deadline)?;
+        let s=collect_script(&window,r#"JSON.stringify({mounted:!!document.querySelector('#assistant-composer-text'),
+            documentState:document.readyState,appState:document.querySelector('#app')?.dataset.state,
+            voiceStart:!!document.querySelector('#voice-start'),reader:!!document.querySelector('#settings-page-voice .history-reader'),
+            scriptCount:document.scripts.length})"#.into(),mount_deadline)
+            .map_err(|error|format!("assistant mount check: {error}"))?;
+        if first_probe { eprintln!("Alden assistant bootstrap: {s}"); first_probe = false; }
         if s["mounted"]==true { break; }
+        if Instant::now() >= mount_deadline {return Err(format!("assistant composer did not mount: {s}"));}
         live(deadline)?;std::thread::sleep(Duration::from_millis(50));
     }
     collect_script(&window,"JSON.stringify((()=>{document.querySelector('#settings-tab-voice').click();return {selected:true};})())".into(),deadline)?;
@@ -1626,7 +1634,7 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
             let s=loop {
                 let s=collect_script(&window,r#"JSON.stringify({status:document.querySelector('#assistant-composer-status').textContent,
                     busy:document.querySelector('#assistant-composer').getAttribute('aria-busy')})"#.into(),deadline)?;
-                if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("오류 코드:")) {break s;}
+                if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("오류 코드:")||t.contains("못했")||t.contains("취소")) {break s;}
                 live(deadline)?;std::thread::sleep(Duration::from_millis(50));
             };
             if !s["status"].as_str().is_some_and(|t|t.contains("오류 코드: assistant_image_invalid")) {
