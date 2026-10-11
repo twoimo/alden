@@ -170,3 +170,7 @@ permissions, dev-only fallback/overrides and exact JSON resource declarations.
 Process tests run only short synthetic Python snippets. Building/inspecting the
 unsigned `.app` does not launch it or establish live KakaoTalk, mic, model,
 TCC, signing, installation, or send success.
+
+## 0.3.72 — 본문 근거가 없는 기록 구분
+
+수동 품질 정보에서 본문 텍스트 후보와 메타데이터 이름·미열람 안내의 일치를 구분한다. 선언된 제외 수량과 확인 범위를 표시하며 이전 모호한 보고서는 미확인으로 둔다. 의미 배치는 검증된 현재 투영·보관 기록의 미열람 선언도 확인하고 원래 노드·구조 관계를 보존한다. 한 줄 상단과 정보 창 내부 스크롤을 유지한다. [근거·실제 표본·설치와 미결](../docs/architecture/alden-source-content-evidence-20261012.md).
