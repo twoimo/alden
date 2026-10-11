@@ -800,6 +800,7 @@ export class KnowledgeHologram {
     const bottom=this.layoutMode==='popover'?42:16;
     this.viewport = { x: 28, y: Math.min(top, height / 2), width: Math.max(1, width - 56), height: Math.max(1, height - Math.min(top, height / 2) - bottom) };
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
+    this.overviewSynapses.setViewportHeight(this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
     this.camera.updateProjectionMatrix();
     if(this.restoredWindowSize && (this.restoredWindowSize.width!==window.innerWidth || this.restoredWindowSize.height!==window.innerHeight))this.restoredWindowSize=null;

@@ -944,8 +944,8 @@ fn graph_step(
         }
         if Instant::now() >= settle {
             return Err(format!(
-                "graph action {action} did not settle: pending={}, focusState={}",
-                graph_pending["pending"], state["notePane"]["focusState"]
+                "graph action {action} did not settle: pending={}, focusState={}, remainingDeadlineMs={}",
+                graph_pending["pending"], state["notePane"]["focusState"], deadline.saturating_duration_since(Instant::now()).as_millis()
             ));
         }
         live(deadline)?;
@@ -1631,13 +1631,14 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
         .setup(move |app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                let deadline = Instant::now() + Duration::from_secs(if workspaces_mode {96}else{40});
+                let started = Instant::now();
+                let deadline = started + Duration::from_secs(if workspaces_mode {96}else{40});
                 let result = if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
                     "mode":if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
-                    "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),
+                    "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
                     "result":result.ok(),"success":success,"error":error,
                     "scope":if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");

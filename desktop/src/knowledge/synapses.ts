@@ -73,9 +73,9 @@ export class SynapticBridges {
     this.geometry.instanceCount = 0;
     this.mesh = new THREE.Mesh(this.geometry, new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, side: THREE.DoubleSide, forceSinglePass:true,
-      uniforms:{uDetail:{value:detail?1:0}},
+      uniforms:{uDetail:{value:detail?1:0},uViewportHeight:{value:0}},
       vertexShader: `
-        uniform float uDetail;
+        uniform float uDetail, uViewportHeight;
         attribute vec3 aStart, aEnd, aColor;
         attribute float aStrength, aGrowth, aOpacity, aSemantic;
         varying float vAcross, vAlong, vGrowth, vOpacity, vSemantic, vBranch, vGap;
@@ -105,6 +105,7 @@ export class SynapticBridges {
           float radius=(.003+.006*aStrength)*taper;
           if(abs(branch)<.5) radius*=1.+1.5*terminal*aSemantic;
           if(aSemantic<.5 || uDetail<.5) radius=.0012;
+          if(uDetail<.5 && uViewportHeight>0.) radius=abs(eye.z)/(projectionMatrix[1][1]*uViewportHeight);
           eye.xy += normal*position.x*radius;
           gl_Position = projectionMatrix*eye;
           vAcross=position.x; vAlong=t; vGrowth=aGrowth; vOpacity=aOpacity; vColor=aColor;
@@ -228,6 +229,12 @@ export class SynapticBridges {
     this.relationDepths.clear();
     for (const [id, depth] of depths) if (Number.isSafeInteger(depth) && depth >= 0) this.relationDepths.set(id, depth);
     this.highlight(this.focus);
+  }
+
+  /** One CSS pixel wide in a perspective view, updated only on resize. */
+  setViewportHeight(height: number): void {
+    if (this.disposed || !Number.isFinite(height) || height <= 0) return;
+    (this.mesh.material as THREE.ShaderMaterial).uniforms.uViewportHeight.value = height;
   }
 
   diagnostics(): { active: number; retiring: number; forming: number; formed: number; dockedEndpoints: number; capacity: number; bufferBytes: number; moving: boolean } {
