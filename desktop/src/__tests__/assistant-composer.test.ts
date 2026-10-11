@@ -477,6 +477,11 @@ describe('assistant composer native ownership', () => {
     { reason: new Error('assistant_image_store_unavailable'), code: 'assistant_image_store_unavailable' },
     { reason: 'Error: local_llm_model_not_ready', code: 'local_llm_model_not_ready' },
     { reason: { error_code: 'routed_llm_incomplete_response' }, code: 'routed_llm_incomplete_response' },
+    { reason: 'voice_session_process_check_failed', code: 'voice_session_process_check_failed' },
+    { reason: 'state_io_failed: private state detail', code: 'state_io_failed' },
+    { reason: 'action_not_allowed', code: 'action_not_allowed' },
+    { reason: 'resource_missing', code: 'resource_missing' },
+    { reason: 'python_environment_missing_or_unsafe', code: 'python_environment_missing_or_unsafe' },
   ])('shows known rejected native error codes without leaking raw errors (%s)', async ({ reason, code }) => {
     const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     app.write('초안'); app.submit();

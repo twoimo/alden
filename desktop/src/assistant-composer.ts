@@ -22,6 +22,22 @@ const HEX_32 = /^[a-f0-9]{32}$/;
 const UUID_V4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const NATIVE_CODE = /^(?:Error:\s*)?([a-z][a-z0-9]*(?:_[a-z0-9]+)+)(?::\s.*)?$/;
 const ERROR_DETAILS: Readonly<Record<string, string>> = {
+  python_spawn_failed: '대화 처리기를 시작하지 못했습니다. 실행 환경을 확인해 주세요.',
+  python_wait_failed: '대화 처리기의 종료를 확인하지 못했습니다. 같은 요청을 다시 확인해 주세요.',
+  python_timed_out: '대화 처리 시간이 초과됐습니다. 작성한 내용은 남아 있습니다.',
+  python_cancelled: '대화 처리가 취소되었습니다. 작성한 내용은 남아 있습니다.',
+  python_output_too_large: '대화 처리 결과가 허용 범위를 넘었습니다. 작성한 내용은 남아 있습니다.',
+  python_failed: '대화 처리기가 정상적으로 종료되지 못했습니다. 작성한 내용은 남아 있습니다.',
+  python_output_empty: '대화 처리 결과를 받지 못했습니다. 같은 요청을 다시 확인해 주세요.',
+  python_json_invalid: '대화 처리 결과를 해석하지 못했습니다. 같은 요청을 다시 확인해 주세요.',
+  action_not_allowed: '입력 요청이나 처리 결과를 확인하지 못했습니다. 작성한 내용은 남아 있습니다.',
+  state_io_failed: '대화 상태를 읽거나 저장하지 못했습니다. 저장소 상태를 확인해 주세요.',
+  resource_missing: '대화 처리에 필요한 앱 파일을 찾지 못했습니다. 앱 설치를 확인해 주세요.',
+  resource_unsafe: '대화 처리에 필요한 앱 파일을 검증하지 못했습니다. 앱 설치를 확인해 주세요.',
+  development_resources_disabled: '대화 처리 파일의 실행 경로를 사용할 수 없습니다. 앱 설치를 확인해 주세요.',
+  python_environment_missing_or_unsafe: '대화 처리 실행 환경을 검증하지 못했습니다. 실행 환경을 확인해 주세요.',
+  voice_session_already_running: '음성 대화가 실행 중이라 입력을 처리하지 못했습니다. 음성 대화가 끝난 뒤 다시 시도해 주세요.',
+  voice_session_process_check_failed: '음성 대화 실행 상태를 확인하지 못했습니다. 잠시 뒤 다시 시도해 주세요.',
   assistant_text_too_long: '메시지 크기가 허용 범위를 넘었습니다. 내용을 줄여 주세요.',
   assistant_input_too_large: '메시지 크기가 허용 범위를 넘었습니다. 내용을 줄여 주세요.',
   input_too_large: '메시지 크기가 허용 범위를 넘었습니다. 내용을 줄여 주세요.',

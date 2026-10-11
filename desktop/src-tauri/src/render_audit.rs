@@ -1631,7 +1631,7 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant) -
                 return {status,reply:replies.at(-1)??'',replies:replies.length,conversationId:document.querySelector('#voice-start').dataset.conversationId,
                     busy:document.querySelector('#assistant-composer').getAttribute('aria-busy'),width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
             if s["status"]=="답변이 저장되었습니다." && s["replies"].as_u64()==Some(index) {break s;}
-            if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("못했")||t.contains("취소")) {
+            if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("못했")||t.contains("취소")||t.contains("오류 코드:")) {
                 return Err(format!("assistant input did not complete: {s}"));
             }
             live(deadline)?;std::thread::sleep(Duration::from_millis(50));
