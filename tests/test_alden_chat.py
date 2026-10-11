@@ -32,6 +32,46 @@ def png(rgb=(255,0,0)):
 
 
 class AssistantInputTests(unittest.TestCase):
+    def test_actual_transport_images_are_bound_to_selected_bytes(self):
+        photo = {'name':'public.png','mime':'image/png','data':base64.b64encode(png()).decode()}
+        proof = {'sha256':hashlib.sha256(png()).hexdigest(),'mime':'image/png','bytes':len(png())}
+        result = self.run_input(request(images=[photo]),generate=lambda *args: ('사진 답변',{'images':[proof]}))
+        self.assertEqual(result['state'],'completed')
+        self.assertEqual(result['generation']['transport_images'],[proof])
+
+    def test_different_transport_image_bytes_cannot_commit_answer(self):
+        photo = {'name':'public.png','mime':'image/png','data':base64.b64encode(png()).decode()}
+        proof = {'sha256':'f'*64,'mime':'image/png','bytes':len(png())}
+        result = self.run_input(request(images=[photo]),generate=lambda *args: ('다른 사진 답변',{'images':[proof]}))
+        self.assertEqual(result['error_code'],'generation_metadata_invalid')
+        with database(self.root) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
+
+    def test_failed_generation_keeps_bound_observations_without_answer(self):
+        def failed(root,ticket,text,token,paths,selection):
+            ticket['adapter_metrics']={'request':{**{k:ticket[k] for k in ('conversation_id','turn_id','context_version')},
+                'model_id':'selected/model','transport':'opencodex','state':'failed','source':'text'},
+                'elapsed_ms':12,'error_code':'routed_llm_generation_failed'}
+            raise RuntimeError('routed_llm_generation_failed')
+        result=self.run_input(request(),generate=failed)
+        self.assertEqual(result['state'],'failed')
+        from alden_chat_turns import get_request
+        generation=get_request(self.root,request()['request_id'])['generation']
+        self.assertEqual(generation['terminal_state'],'failed')
+        self.assertEqual(generation['request']['context_binding'],'verified')
+        self.assertEqual(generation['timing']['elapsed_ms'],12)
+        with database(self.root) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
+
+    def test_mismatched_generation_identity_is_not_committed_as_a_reply(self):
+        def wrong(root,ticket,*args):
+            return '다른 맥락의 답변',{'request':{'conversation_id':'f'*32,'turn_id':ticket['turn_id'],'context_version':ticket['context_version']}}
+        result=self.run_input(request(),generate=wrong)
+        self.assertEqual(result['state'],'failed')
+        self.assertEqual(result['error_code'],'generation_metadata_invalid')
+        with database(self.root) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

@@ -48,6 +48,8 @@ const ERROR_DETAILS: Readonly<Record<string, string>> = {
   assistant_image_decoder_unavailable: '이미지 해독 기능을 사용할 수 없습니다. 이미지 처리 환경을 확인해 주세요.',
   assistant_image_decoder_timeout: '이미지 해독 시간이 초과됐습니다. 작은 이미지로 다시 시도해 주세요.',
   image_input_provenance_changed: '받은 이미지 내용이 바뀌었습니다. 같은 사진을 다시 첨부해 주세요.',
+  assistant_image_context_changed: '이전 사진의 대화 근거가 바뀌었습니다. 내용을 확인한 뒤 다시 요청해 주세요.',
+  generation_metadata_invalid: '모델 응답의 대화·측정 근거를 확인하지 못했습니다. 작성한 내용은 남아 있습니다.',
   assistant_image_pixel_budget: '이미지 픽셀 수 한도를 넘었습니다. 해상도를 줄여 주세요.',
   assistant_image_store_unavailable: '이미지를 저장할 수 없습니다. 저장소 상태를 확인해 주세요.',
   assistant_image_model_unsupported: '선택한 모델이 이미지 입력을 지원하지 않습니다. 모델 설정을 확인해 주세요.',

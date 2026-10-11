@@ -178,6 +178,10 @@ jobs:
           tests.test_alden_voice_retrieval
           tests.test_alden_voice_turns
           tests.test_alden_voice_metrics
+          tests.test_alden_chat
+          tests.test_alden_chat_context
+          tests.test_alden_chat_generation_store
+          tests.test_alden_chat_metrics
           tests.test_alden_model_routes
           tests.test_alden_routed_llm
           tests.test_alden_route_http

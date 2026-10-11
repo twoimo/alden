@@ -1900,7 +1900,10 @@ class LocalMlxLlm:
             content = message.get("content")
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise RuntimeError("local_llm_response_invalid") from exc
-        if mlx_response_model_conflicts(self.model, body.get("model")):
+        observed_model = body.get('model')
+        if isinstance(observed_model, str) and len(observed_model) <= 128:
+            self.last_metrics['response_model_id'] = observed_model
+        if mlx_response_model_conflicts(self.model, observed_model):
             raise RuntimeError("local_llm_model_mismatch")
         backend_id = body.get("id")
         if isinstance(backend_id, str) and re.fullmatch(r"[A-Za-z0-9:_-]{1,128}", backend_id):

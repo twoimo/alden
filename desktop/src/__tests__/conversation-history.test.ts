@@ -9,6 +9,31 @@ beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('complete local histories', () => {
+  it('shows persisted generation evidence only on assistant replies in collapsed details', async () => {
+    const generation = { schema_version: 1, response: { model_id: 'observed/model', usage: { total_tokens: 0 } },
+      image_context: { selected: [{ origin: 'current' }, { origin: 'previous' }] } };
+    const load = vi.fn<typeof fetchSettingsAction>(async action => action === 'voice-history-sessions'
+      ? { ok: true, items: [{ id: '1', title: '사진 비교' }] }
+      : { ok: true, next: null, items: [
+        { id: '1', turn_id: 1, role: 'user', content: '사진 질문', generation },
+        { id: '2', turn_id: 1, role: 'assistant', content: '사진 답변', generation },
+        { id: '3', turn_id: 2, role: 'assistant', content: '기존 답변' },
+      ] });
+    const views = wireConversationViews(load);
+    try {
+      views.select('voice');
+      await settle();
+      const rows = document.querySelectorAll('#voice-message-list .message-row');
+      expect(rows).toHaveLength(3);
+      expect(rows[0].querySelector('details')).toBeNull();
+      const details = rows[1].querySelector('details')!;
+      expect(details.open).toBe(false);
+      expect(details.textContent).toContain('observed/model');
+      expect(details.textContent).toContain('0 토큰');
+      expect(details.textContent).toContain('이번 1장 · 이전 1장');
+      expect(rows[2].querySelector('details')).toBeNull();
+    } finally { views.dispose(); }
+  });
   it('loads an unfocused visible window and still obeys native hide and restore', async () => {
     const load = vi.fn<typeof fetchSettingsAction>(async action => action === 'history-rooms'
       ? { ok: true, rooms: [{ chat_id: '1', chat_name: '확인된 방' }] }

@@ -132,6 +132,25 @@ def _schema(db: sqlite3.Connection) -> None:
     )''')
     db.execute('''CREATE INDEX IF NOT EXISTS alden_chat_by_conversation
                   ON alden_chat_requests(conversation_id, state, turn_id DESC)''')
+    db.execute('''CREATE TABLE IF NOT EXISTS alden_chat_generations (
+        request_id TEXT PRIMARY KEY REFERENCES alden_chat_requests(request_id),
+        metadata_json TEXT NOT NULL CHECK(length(metadata_json)<=4096),
+        recorded_at REAL NOT NULL
+    )''')
+
+
+def _generation(value: dict | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError('generation_metadata_invalid')
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
+        if len(encoded.encode('utf-8')) > 4096:
+            raise ValueError('generation_metadata_invalid')
+    except (TypeError, ValueError, UnicodeError) as error:
+        raise ValueError('generation_metadata_invalid') from error
+    return encoded
 
 
 @contextmanager
@@ -180,16 +199,41 @@ def _history_attachments(db: sqlite3.Connection, conversation_id: str, before: i
               WHERE a.session_id=r.conversation_id AND a.turn_id=r.turn_id
                 AND a.role='assistant' AND a.state='confirmed')
         ORDER BY r.turn_id DESC LIMIT 64''', (conversation_id, before)).fetchall()
-    found = []
+    found, seen = [], set()
     for row in rows:
         for item in json.loads(row['attachments_json']):
             if not item['mime'].startswith('image/'):
                 continue
+            key = (item['sha256'], item['mime'])
+            if key in seen:
+                continue
+            seen.add(key)
             found.append({**item, 'source_request_id': row['request_id'],
                           'source_turn_id': row['turn_id']})
             if len(found) == MAX_HISTORY_ATTACHMENTS:
                 return found
     return found
+
+
+def _verify_history_image_sources(db: sqlite3.Connection, ticket: dict) -> None:
+    for image in ticket.get('image_context', {}).get('selected', []):
+        if image['origin'] != 'previous':
+            continue
+        row = db.execute('''SELECT r.* FROM alden_chat_requests AS r
+            WHERE request_id=? AND conversation_id=? AND turn_id=? AND turn_id<? AND state='completed'
+              AND (SELECT count(*) FROM voice_messages AS m WHERE m.session_id=r.conversation_id
+                   AND m.turn_id=r.turn_id AND m.role IN ('user','assistant') AND m.state='confirmed')=2''',
+            (image['source_request_id'],ticket['conversation_id'],image['source_turn_id'],ticket['turn_id'])).fetchone()
+        if row is None or not any(all(item.get(k)==image[k] for k in ('sha256','mime','size'))
+                                  for item in json.loads(row['attachments_json'])):
+            raise ValueError('assistant_image_context_changed')
+
+
+def verify_history_image_sources(state_root: Path, ticket: dict) -> None:
+    with database(state_root) as db:
+        if db is None:
+            raise ValueError('assistant_image_context_changed')
+        _verify_history_image_sources(db, ticket)
 
 
 def _receipt(db: sqlite3.Connection, row: sqlite3.Row, *, include_owner: bool) -> dict:
@@ -215,6 +259,10 @@ def _receipt(db: sqlite3.Connection, row: sqlite3.Row, *, include_owner: bool) -
     }
     if include_owner:
         result['owner_id'] = row['owner_id']
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='alden_chat_generations'").fetchone():
+        generation = db.execute('SELECT metadata_json FROM alden_chat_generations WHERE request_id=?', (row['request_id'],)).fetchone()
+        if generation is not None:
+            result['generation'] = json.loads(generation['metadata_json'])
     if row['reason'] is not None:
         result['reason'] = row['reason']
     if row['state'] == 'completed':
@@ -310,7 +358,7 @@ def _ticket(db: sqlite3.Connection, ticket: dict) -> sqlite3.Row:
 
 
 def complete_turn(state_root: Path, ticket: dict, reply: str, *,
-                  provenance: list[dict] | None = None) -> dict:
+                  provenance: list[dict] | None = None, generation: dict | None = None) -> dict:
     """Persist one assistant answer with compare-and-swap turn/source checks.
 
     Caller must hold its existing global abort commit guard. This function
@@ -318,12 +366,14 @@ def complete_turn(state_root: Path, ticket: dict, reply: str, *,
     """
     _text(reply, 'turn_reply', MAX_REPLY_CHARS, MAX_REPLY_BYTES)
     proof = _provenance(provenance)
+    observation = _generation(generation)
     with _write(state_root) as db:
         row = _ticket(db, ticket)
         if row['state'] in ('completed', 'retracted'):
             return _receipt(db, row, include_owner=True)
         if row['state'] != 'pending':
             raise StaleTurn(f"turn_{row['state']}")
+        _verify_history_image_sources(db, ticket)
         user = db.execute('''SELECT content FROM voice_messages
             WHERE session_id=? AND turn_id=? AND role='user' AND state='confirmed' ''',
             (row['conversation_id'], row['turn_id'])).fetchone()
@@ -350,13 +400,17 @@ def complete_turn(state_root: Path, ticket: dict, reply: str, *,
         if proof is not None:
             db.execute('INSERT INTO voice_sources(session_id,turn_id,provenance) VALUES(?,?,?)',
                        (row['conversation_id'], row['turn_id'], proof))
+        if observation is not None:
+            db.execute('INSERT INTO alden_chat_generations(request_id,metadata_json,recorded_at) VALUES(?,?,?)',
+                       (row['request_id'], observation, time.time()))
         return _receipt(db, _row(db, row['request_id']), include_owner=True)
 
 
-def cancel_turn(state_root: Path, ticket: dict, *, reason: str = 'cancelled') -> dict:
+def cancel_turn(state_root: Path, ticket: dict, *, reason: str = 'cancelled', generation: dict | None = None) -> dict:
     """Cancel pending work; 'retracted' also hides a completed turn's images."""
     if not isinstance(reason, str) or _REASON.fullmatch(reason) is None:
         raise ValueError('turn_cancel_reason_invalid')
+    observation = _generation(generation)
     with _write(state_root) as db:
         row = _ticket(db, ticket)
         if row['state'] == 'pending':
@@ -364,6 +418,9 @@ def cancel_turn(state_root: Path, ticket: dict, *, reason: str = 'cancelled') ->
             db.execute('''UPDATE alden_chat_requests SET state=?,reason=?,updated_at=?
                           WHERE request_id=? AND state='pending' AND owner_id=?''',
                        (state, reason, time.time(), row['request_id'], row['owner_id']))
+            if observation is not None:
+                db.execute('INSERT INTO alden_chat_generations(request_id,metadata_json,recorded_at) VALUES(?,?,?)',
+                           (row['request_id'],observation,time.time()))
         elif row['state'] == 'completed' and reason == 'retracted':
             db.execute('''UPDATE alden_chat_requests SET state='retracted',reason=?,updated_at=?
                           WHERE request_id=? AND state='completed' AND owner_id=?''',

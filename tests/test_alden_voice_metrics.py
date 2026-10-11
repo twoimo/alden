@@ -68,6 +68,7 @@ class VoiceMetricsTests(unittest.TestCase):
         self.assertFalse(trace["cancelled"])
         self.assertGreaterEqual(trace["completed_at_unix"], trace["requested_at_unix"])
         self.assertEqual(metrics["backend_request_id"], "chatcmpl-fixed")
+        self.assertEqual(metrics['response_model_id'],voice.QWEN38_27B_MODEL_ID.removeprefix('mlx/'))
         self.assertEqual(metrics["usage"]["completion_tokens"], 3)
         self.assertEqual(metrics["engine_before"]["state"], "connected")
         self.assertEqual(metrics["engine_after"]["values"]["vllm:request_success_total"], 12)

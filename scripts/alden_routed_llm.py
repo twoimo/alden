@@ -107,8 +107,8 @@ class OpenCodexLlm:
                     payload = self._json(raw)
                     self._confirm_completed(payload)
                     output = self._text(payload)
-                    if output:
-                        self.last_metrics["ttft_ms"] = (time.perf_counter() - started) * 1000
+                    # A complete JSON body cannot reveal when its first token
+                    # was generated. Keep only the final call elapsed time.
                     completed = True
                 else:
                     # LF/CRLF SSE data fields belong to one event until a
@@ -149,8 +149,11 @@ class OpenCodexLlm:
                         if kind == "response.output_text.delta":
                             delta = event.get("delta")
                             if isinstance(delta, str):
-                                if not output:
-                                    self.last_metrics["ttft_ms"] = (time.perf_counter() - started) * 1000
+                                if delta and "first_output_ms" not in self.last_metrics:
+                                    first_ms = (time.perf_counter() - started) * 1000
+                                    self.last_metrics["ttft_ms"] = first_ms
+                                    self.last_metrics["first_output_ms"] = first_ms
+                                    self.last_metrics["first_output_scope"] = "stream_output_text_delta"
                                 output.append(delta)
                         elif kind == "response.completed":
                             payload = event.get("response", {})
@@ -201,6 +204,10 @@ class OpenCodexLlm:
         if not isinstance(payload, dict):
             raise RoutedGenerationError("routed_llm_invalid_response")
         returned = payload.get("model")
+        if isinstance(returned, str) and len(returned) <= 128:
+            # The response model is an observation, independent of the
+            # requested route. Preserve it even for a model-mismatch failure.
+            self.last_metrics["response_model_id"] = returned
         if not isinstance(returned, str) or returned not in {self.model, self.model.split("/", 1)[-1]}:
             raise RoutedGenerationError("routed_model_mismatch")
         if payload.get("status") in {"failed", "incomplete", "cancelled"} or payload.get("error") is not None or payload.get("incomplete_details") is not None:

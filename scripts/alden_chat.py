@@ -18,6 +18,7 @@ import unicodedata
 from alden_abort import AbortToken, AldenCancelled
 
 MAX_INPUT_BYTES = 29 * 1024 * 1024
+MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_BATCH_BYTES = 20 * 1024 * 1024
 IMAGE_SUFFIX = {'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif'}
@@ -37,6 +38,7 @@ KNOWN_INPUT_ERRORS = frozenset({
     'routed_llm_incomplete_response','image_input_unavailable','image_input_budget',
     'image_input_provenance_changed','routed_llm_prompt_budget','conversation_not_found',
     'request_id_payload_or_target_conflict',
+    'assistant_image_context_changed','generation_metadata_invalid',
 })
 
 
@@ -73,7 +75,7 @@ def validate_input(value):
     except UnicodeError as error:
         raise InputUnavailable('assistant_input_invalid') from error
     images = value['images']
-    if not isinstance(images, list) or len(images) > 4:
+    if not isinstance(images, list) or len(images) > MAX_IMAGES:
         raise InputUnavailable('assistant_image_budget')
     decoded, total = [], 0
     for item in images:
@@ -171,18 +173,106 @@ def generate_input(state_root, ticket, text, token, paths, selection):
     turn = SimpleNamespace(**{k: ticket[k] for k in ('conversation_id', 'turn_id', 'context_version')}, source='text')
     if selection.get('transport') == 'opencodex':
         reference, retrieval = _voice_knowledge_reference(text, ticket['history'], state_root, token)
+        from alden_chat_turns import verify_history_image_sources
+        verify_history_image_sources(state_root, ticket)
         adapter = OpenCodexLlm(selection['model'], selection.get('reasoning_effort'), state_root)
-        reply = adapter._generate(text, token, history=ticket['history'], turn=turn, image_paths=paths,
-                                  image_evidence=ticket.get('input_image_evidence'),
-                                  system_prompt=CHAT_PERSONA + ('\n\n' + reference if reference else ''))
-        adapter.last_metrics['retrieval'] = retrieval
+        try:
+            reply = adapter._generate(text, token, history=ticket['history'], turn=turn, image_paths=paths,
+                                      image_evidence=ticket.get('input_image_evidence'),
+                                      system_prompt=CHAT_PERSONA + image_context_prompt(ticket) + ('\n\n' + reference if reference else ''))
+        finally:
+            adapter.last_metrics['retrieval'] = retrieval
+            ticket['adapter_metrics'] = adapter.last_metrics
     else:
         if paths: raise InputUnavailable('assistant_image_model_unsupported')
         adapter = LocalMlxLlm(base_url=selection['base_url'], model=selection['model'], state_root=state_root,
                              catalog_selected=selection.get('transport') == 'local', reasoning_effort=selection.get('reasoning_effort'),
                              system_prompt=CHAT_PERSONA, max_tokens=1024)
-        reply = adapter.generate_for_turn(text, token, history=ticket['history'], turn=turn)
+        try:
+            reply = adapter.generate_for_turn(text, token, history=ticket['history'], turn=turn)
+        finally:
+            ticket['adapter_metrics'] = adapter.last_metrics
     return reply, adapter.last_metrics
+
+
+def generation_evidence(selection, metrics, ticket, terminal_state):
+    from alden_chat_metrics import sanitize_generation
+    chosen = dict(selection or {})
+    if chosen and 'transport' not in chosen:
+        chosen['transport'] = 'local' # The actual legacy LocalMlxLlm branch.
+    result = sanitize_generation(chosen, metrics, ticket)
+    result['terminal_state'] = terminal_state
+    if 'image_context' in ticket:
+        result['image_context'] = ticket['image_context']
+    if isinstance(metrics, dict) and 'images' in metrics:
+        raw = metrics['images']
+        if not isinstance(raw,list) or len(raw)>MAX_IMAGES:
+            raise ValueError('generation_metadata_invalid')
+        submitted=[]
+        for image in raw:
+            if (not isinstance(image,dict) or not isinstance(image.get('sha256'),str)
+                    or not re.fullmatch('[0-9a-f]{64}',image['sha256'])
+                    or image.get('mime') not in IMAGE_SUFFIX or type(image.get('bytes')) is not int
+                    or not 0<image['bytes']<=MAX_IMAGE_BYTES):
+                raise ValueError('generation_metadata_invalid')
+            submitted.append({k:image[k] for k in ('sha256','mime','bytes')})
+        expected=[{'sha256':i['sha256'],'mime':i['mime'],'bytes':i['size']}
+                  for i in ticket.get('image_context',{}).get('selected',[])]
+        if submitted!=expected:
+            raise ValueError('generation_metadata_invalid')
+        result['transport_images']=submitted
+    return result
+
+
+def image_context_prompt(ticket):
+    context = ticket.get('image_context', {})
+    if not context.get('selected') and not any(context.get('omitted', {}).values()):
+        return ''
+    lines = ['이미지는 아래 순서로 전달된다. 현재 첨부와 완료된 이전 턴의 사진을 구분해 해석하라.']
+    for index, image in enumerate(context['selected'], 1):
+        origin = '현재 첨부' if image['origin'] == 'current' else '완료된 이전 턴'
+        lines.append(f"이미지 {index}: {origin}, 대화 턴 {image['source_turn_id']}.")
+    if any(context['omitted'].values()):
+        lines.append('일부 사진은 중복 바이트, 입력 한도 또는 접근 실패로 전달되지 않았다. 전달되지 않은 사진을 확인했다고 주장하지 마라.')
+    return '\n\n' + '\n'.join(lines)
+
+
+def select_image_context(state_root, ticket, decoded, current_paths):
+    paths, evidence, selected, seen = [], [], [], set()
+    omitted = {'duplicate': 0, 'capacity': 0, 'byte_budget': 0, 'unavailable': 0}
+    total = 0
+    current = [({**meta, 'source_request_id': ticket['request_id'],
+                  'source_turn_id': ticket['turn_id']}, path, 'current')
+               for (meta, _), path in zip(decoded, current_paths)]
+    previous = [(meta, None, 'previous') for meta in ticket.get('history_attachments', [])]
+    with image_directory(state_root) as (folder, directory):
+        for meta, path, origin in current + previous:
+            key = (meta['sha256'], meta['mime'])
+            if key in seen:
+                omitted['duplicate'] += 1
+                continue
+            if len(paths) >= MAX_IMAGES:
+                omitted['capacity'] += 1
+                continue
+            if total + meta['size'] > MAX_IMAGE_BATCH_BYTES:
+                omitted['byte_budget'] += 1
+                continue
+            if path is None:
+                try:
+                    path = checked_image(folder, directory, meta)
+                except (OSError, ValueError):
+                    omitted['unavailable'] += 1
+                    continue
+            seen.add(key)
+            total += meta['size']
+            paths.append(path)
+            evidence.append(meta)
+            selected.append({k: meta[k] for k in ('source_request_id', 'source_turn_id', 'sha256', 'mime', 'size')} | {'origin': origin})
+    ticket['input_image_evidence'] = evidence
+    ticket['image_context'] = {'selected': selected, 'omitted': omitted,
+        'history_scope': 'latest_completed_unique_images_up_to_4', 'byte_limit': MAX_IMAGE_BATCH_BYTES,
+        'image_limit': MAX_IMAGES, 'submitted_bytes': total}
+    return paths
 
 
 def process_input(state_root, value, token, *, generate=generate_input, select_model=None):
@@ -213,7 +303,7 @@ def process_input(state_root, value, token, *, generate=generate_input, select_m
 def public_receipt(value):
     return {key: item for key, item in value.items() if key in {
         'ok', 'state', 'request_id', 'conversation_id', 'turn_id', 'context_version',
-        'answer_context_version', 'reply', 'error_code',
+        'answer_context_version', 'reply', 'error_code', 'generation',
     }}
 
 
@@ -234,7 +324,7 @@ def _process_owned_input(state_root, value, decoded, token, *, generate, select_
     from alden_voice import configured_voice_model
     token.raise_if_cancelled()
     paths = persist_images(state_root, decoded, token)
-    ticket = None
+    ticket, selection = None, None
     try:
         with token.commit_guard():
             ticket = reserve_turn(state_root, value['request_id'], value['conversation_id'], value['text'],
@@ -242,10 +332,9 @@ def _process_owned_input(state_root, value, decoded, token, *, generate, select_
         if ticket['state'] != 'running': return {'ok': ticket['state'] == 'completed', **ticket}
         token.raise_if_cancelled()
         selection = (select_model or configured_voice_model)(state_root)
-        if not paths and ticket.get('history_attachments'):
-            with image_directory(state_root) as (folder, fd):
-                paths = [checked_image(folder, fd, meta) for meta in ticket['history_attachments']]
-        ticket['input_image_evidence'] = [meta for meta,_ in decoded] if decoded else ticket.get('history_attachments',[])
+        paths = select_image_context(state_root, ticket, decoded, paths)
+        from alden_chat_turns import verify_history_image_sources
+        verify_history_image_sources(state_root, ticket)
         reply, metrics = generate(state_root, ticket, value['text'], token, paths, selection)
         if not isinstance(reply, str) or not reply.strip() or len(reply) > 16000 or len(reply.encode('utf-8')) > 64000:
             raise InputUnavailable('assistant_response_invalid')
@@ -253,23 +342,35 @@ def _process_owned_input(state_root, value, decoded, token, *, generate, select_
         retrieval = metrics.get('retrieval', {}) if isinstance(metrics, dict) else {}
         proof = retrieval.get('graph_provenance') if isinstance(retrieval, dict) else None
         with token.commit_guard():
-            receipt = complete_turn(state_root, ticket, reply, provenance=proof)
+            receipt = complete_turn(state_root, ticket, reply, provenance=proof,
+                generation=generation_evidence(selection, metrics, ticket, 'completed'))
         return {'ok': receipt['state'] == 'completed', **receipt}
     except AldenCancelled:
-        if ticket: cancel_turn(state_root, ticket)
+        if ticket:
+            cancel_turn(state_root, ticket, generation=failure_generation(selection,ticket,'cancelled'))
         return {'ok': False, 'state': 'cancelled', 'request_id': value['request_id'],
                 'conversation_id': ticket['conversation_id'] if ticket else value['conversation_id'],
                 'error_code': 'assistant_input_cancelled'}
     except StaleTurn:
-        if ticket: cancel_turn(state_root, ticket, reason='superseded')
+        if ticket: cancel_turn(state_root, ticket, reason='superseded', generation=failure_generation(selection,ticket,'superseded'))
         return {'ok': False, 'state': 'superseded', 'request_id': value['request_id'],
                 'conversation_id': ticket['conversation_id'] if ticket else value['conversation_id'],
                 'error_code': 'assistant_input_superseded'}
     except Exception as error:
-        if ticket: cancel_turn(state_root, ticket, reason='failed')
+        if ticket: cancel_turn(state_root, ticket, reason='failed', generation=failure_generation(selection,ticket,'failed'))
         code = str(error) if str(error) in KNOWN_INPUT_ERRORS else 'assistant_input_failed'
         return {'ok': False, 'state': 'failed', 'request_id': value['request_id'],
                 'conversation_id': ticket['conversation_id'] if ticket else value['conversation_id'], 'error_code': code}
+
+
+def failure_generation(selection, ticket, state):
+    try:
+        return generation_evidence(selection, ticket.get('adapter_metrics', {}), ticket, state)
+    except ValueError:
+        # Preserve the cancellation/failure itself, without attributing unsafe
+        # or mismatched observations to this request.
+        return {'schema_version':1,'request':{'context_binding':'unmeasured'},
+                'terminal_state':state,'error_code':'generation_metadata_invalid'}
 
 
 def main():

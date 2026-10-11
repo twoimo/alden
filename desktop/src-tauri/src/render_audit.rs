@@ -217,6 +217,7 @@ impl Output {
                 | "alden-connections-compact.png"
                 | "assistant-turn-1.png"
                 | "assistant-turn-2.png"
+                | "assistant-turn-3.png"
                 | "alden-model-menu-default.png"
                 | "alden-model-menu-compact.png"
                 | "workspace-memory-default.png"
@@ -1722,6 +1723,7 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
     collect_script(&window,r#"JSON.stringify((()=>{
         const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;
         const ctx=canvas.getContext('2d');ctx.fillStyle='#ff0000';ctx.fillRect(0,0,128,128);
+        ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(64,64,12,0,Math.PI*2);ctx.fill();
         const data=atob(canvas.toDataURL('image/png').split(',')[1]);const bytes=Uint8Array.from(data,c=>c.charCodeAt(0));
         const transfer=new DataTransfer();transfer.items.add(new File([bytes],'audit-public.png',{type:'image/png'}));
         const picker=document.querySelector('#assistant-composer-images');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
@@ -1731,7 +1733,23 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
         if s["ready"]==true {break;} live(deadline)?;std::thread::sleep(Duration::from_millis(50));
     }
     let mut receipts=Vec::new();
-    for (index,text) in [(1,"검수 번호는 42입니다. 이 사진의 색상 이름만 한국어로 답해주세요."),(2,"내가 말한 검수 번호는 무엇인가요? 숫자만 답해주세요.")] {
+    for (index,text) in [(1,"검수 번호는 42입니다. 이 사진의 배경 색상 이름만 한국어로 답해주세요."),
+        (2,"내가 말한 검수 번호는 무엇인가요? 숫자만 답해주세요."),
+        (3,"앞서 첨부한 사진의 작은 도형과 이번 사진의 작은 도형을 그 순서대로 색과 모양만 말해주세요. 답변 형식: 색 모양, 색 모양")] {
+        if index==3 {
+            collect_script(&window,r#"JSON.stringify((()=>{
+                const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;
+                const ctx=canvas.getContext('2d');ctx.fillStyle='#0000ff';ctx.fillRect(0,0,128,128);
+                ctx.fillStyle='#ffff00';ctx.fillRect(52,52,24,24);
+                const data=atob(canvas.toDataURL('image/png').split(',')[1]);
+                const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(data,c=>c.charCodeAt(0))],'audit-blue.png',{type:'image/png'}));
+                const picker=document.querySelector('#assistant-composer-images');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
+                return {prepared:true};})())"#.into(),deadline)?;
+            loop {
+                let s=collect_script(&window,"JSON.stringify({ready:document.querySelector('#assistant-composer-status').textContent.includes('1개 이미지를 첨부')})".into(),deadline)?;
+                if s["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+            }
+        }
         let text=serde_json::to_string(text).map_err(|_| "audit text encoding")?;
         collect_script(&window,format!(r#"JSON.stringify((()=>{{
             const text=document.querySelector('#assistant-composer-text');text.value={text};text.dispatchEvent(new Event('input'));
@@ -1752,13 +1770,20 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
         let answer = reply.trim().trim_matches(['*','`']).trim().to_lowercase();
         if index==1 && !["빨간색","빨강","빨강색","붉은색","red"].contains(&answer.as_str()) { return Err("configured model did not identify the red fixture".into()); }
         if index==2 && answer!="42" {return Err("followup did not retain confirmed input".into());}
+        if index==3 {
+            let parts:Vec<_>=answer.split(',').map(str::trim).collect();
+            if parts.len()!=2 || !["흰색 원","하얀색 원","흰색 동그라미","하얀색 동그라미"].contains(&parts[0])
+                || !["노란색 사각형","노란 사각형","노란색 정사각형","노란 정사각형"].contains(&parts[1]) {
+                return Err("configured model did not compare the two controlled image shapes".into());
+            }
+        }
         if s["width"]!=s["scrollWidth"] {return Err("assistant viewport horizontal overflow".into());}
         publish(output,&format!("assistant-turn-{index}.png"),&snapshot(&window,deadline)?,deadline)?;
         receipts.push(s);
     }
-    if receipts[0]["conversationId"]!=receipts[1]["conversationId"] {return Err("assistant conversation changed on followup".into());}
+    if receipts.iter().any(|r|r["conversationId"]!=receipts[0]["conversationId"]) {return Err("assistant conversation changed on followup".into());}
     visibility(&window,false,deadline)?;
-    Ok(json!({"turns":receipts,"scope":"two explicit programmatic WKWebView inputs, public red PNG and contextual followup; private isolated history with copied saved model selection; no microphone/TTS/send, original source-store or physical input proof"}))
+    Ok(json!({"turns":receipts,"scope":"three explicit programmatic WKWebView inputs, controlled red/white-circle and blue/yellow-square PNGs with text and visual followups; isolated history and copied saved model selection; no microphone/TTS/send, original source-store or physical input proof"}))
 }
 
 pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {

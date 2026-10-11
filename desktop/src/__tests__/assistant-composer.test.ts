@@ -440,6 +440,8 @@ describe('assistant composer native ownership', () => {
   it.each([
     ['assistant_image_budget', '이미지'],
     ['assistant_image_invalid', '이미지'],
+    ['assistant_image_context_changed', '사진'],
+    ['generation_metadata_invalid', '근거'],
     ['assistant_image_decoder_unavailable', '이미지'],
     ['assistant_image_pixel_budget', '픽셀'],
     ['assistant_image_store_unavailable', '저장'],
