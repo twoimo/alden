@@ -944,6 +944,42 @@ fn observe_connections(window: &tauri::WebviewWindow, deadline: Instant) -> Resu
     }
 }
 
+fn wait_for_audit_state(
+    phase: &str,
+    deadline: Instant,
+    mut sample: impl FnMut() -> Result<Value, String>,
+    ready: impl Fn(&Value) -> bool,
+) -> Result<Value, String> {
+    let started = Instant::now();
+    let mut last_state = Value::Null;
+    let result = (|| loop {
+        live(deadline)?;
+        last_state = sample()?;
+        live(deadline)?;
+        if ready(&last_state) {
+            return Ok(last_state.clone());
+        }
+        std::thread::sleep(
+            Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    })();
+    result.map_err(|error: String| format!(
+        "audit {phase} failed after {:.0}ms: {error}; last observed state={last_state}",
+        started.elapsed().as_secs_f64() * 1000.0
+    ))
+}
+
+fn applied_affinity_observed(state: &Value) -> bool {
+    let controller = &state["affinity"];
+    let graph = &state["semantic"]["affinity"];
+    matches!(controller["state"].as_str(), Some("bounded_ready" | "bounded_partial"))
+        && graph["state"] == controller["state"]
+        && ["requested", "usable", "pairs"].iter().all(|key| {
+            controller[key].as_u64().is_some()
+                && graph[key].as_u64() == controller[key].as_u64()
+        })
+}
+
 fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
     let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
       return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
@@ -960,10 +996,8 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
             state["semantic"]["worker"]["state"].as_str(),
             Some("ready" | "cached")
         );
-        let affinity_ready = matches!(
-            state["affinity"]["state"].as_str(),
-            Some("bounded_ready" | "bounded_partial" | "unavailable")
-        );
+        let affinity_ready = state["affinity"]["state"] == "unavailable"
+            || applied_affinity_observed(&state);
         if (state["physics"]["moving"] == false
             && state["semantic"]["pendingTargets"] == 0
             && worker_ready
@@ -984,7 +1018,7 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
         json!({"scope":"owned visible graph; observational only, not primary/GPU/battery or semantic proof",
         "before":before,"restObserved":rested["physics"]["moving"] == false,
         "layoutObserved":matches!(rested["semantic"]["worker"]["state"].as_str(),Some("ready" | "cached")) && rested["semantic"]["pendingTargets"] == 0,
-        "affinityObserved":matches!(rested["affinity"]["state"].as_str(),Some("bounded_ready" | "bounded_partial")),
+        "affinityObserved":applied_affinity_observed(&rested) && applied_affinity_observed(&after),
         "renderIdleObserved":rested["loop"]["running"] == false
             && rested["loop"]["pendingFrame"] == false
             && after["loop"]["running"] == false
@@ -1112,27 +1146,17 @@ fn audit_settings(
         .map_err(|_| "settings level dispatch failed")?;
     receive(rx, deadline)?;
     visibility(&window, true, deadline)?;
-    loop {
-        let mounted = collect_script(
+    wait_for_audit_state("settings mount", deadline, || {
+        collect_script(
             &window,
             "JSON.stringify({mounted:!!document.querySelector('#settings-tab-memory')})".into(),
             deadline,
-        )?;
-        if mounted["mounted"] == true {
-            break;
-        }
-        live(deadline)?;
-        std::thread::sleep(Duration::from_millis(50));
-    }
+        )
+    }, |state| state["mounted"] == true)?;
     graph_step(&window, "memory-page", deadline)?;
-    let initial = loop {
-        let state = collect_script(&window, graph_collect_script(), deadline)?;
-        if rendered_since(&state, 0) && state["graphPending"] != true {
-            break state;
-        }
-        live(deadline)?;
-        std::thread::sleep(Duration::from_millis(50));
-    };
+    let initial = wait_for_audit_state("initial graph render", deadline,
+        || collect_script(&window, graph_collect_script(), deadline),
+        |state| rendered_since(state, 0) && state["graphPending"] != true)?;
     if initial["accessibleNodes"].as_u64().unwrap_or(0) < 2
         || initial["navigation"]["focused"] != false
     {
@@ -2156,6 +2180,51 @@ mod tests {
         assert!(!super::resumed_graph(&state, 11));
     }
     use super::*;
+    #[test]
+    fn affinity_observation_requires_enrichment_on_the_current_graph() {
+        let result = json!({"state":"bounded_partial","requested":1984,"usable":1483,"pairs":1024});
+        let valid = json!({"affinity":result,"semantic":{"affinity":result}});
+        assert!(applied_affinity_observed(&valid));
+        let mut absent = valid.clone();
+        absent["semantic"]["affinity"] = Value::Null;
+        assert!(!applied_affinity_observed(&absent));
+        for key in ["requested", "usable", "pairs"] {
+            let mut different = valid.clone();
+            different["semantic"]["affinity"][key] = json!(1);
+            assert!(!applied_affinity_observed(&different));
+        }
+        let mut unavailable = valid;
+        unavailable["affinity"]["state"] = json!("unavailable");
+        assert!(!applied_affinity_observed(&unavailable));
+    }
+
+    #[test]
+    fn audit_wait_preserves_last_pending_state_when_observation_fails() {
+        let mut samples = 0;
+        let error = wait_for_audit_state("initial graph render",
+            Instant::now() + Duration::from_secs(1), || {
+                samples += 1;
+                if samples == 1 { Ok(json!({"ready":false,"pause":"hidden"})) }
+                else { Err("native callback deadline exceeded".into()) }
+            }, |state| state["ready"] == true).unwrap_err();
+        assert_eq!(samples, 2);
+        assert!(error.contains("initial graph render"));
+        assert!(error.contains("native callback deadline exceeded"));
+        assert!(error.contains("\"pause\":\"hidden\""));
+        assert!(error.contains("\"ready\":false"));
+    }
+
+    #[test]
+    fn audit_wait_does_not_sample_or_accept_readiness_after_deadline() {
+        let mut samples = 0;
+        let error = wait_for_audit_state("settings mount", Instant::now(), || {
+            samples += 1; Ok(json!({"mounted":true}))
+        }, |state| state["mounted"] == true).unwrap_err();
+        assert_eq!(samples, 0);
+        assert!(error.contains("settings mount"));
+        assert!(error.contains("native audit deadline exceeded"));
+    }
+
     fn entity_stage_state(nodes: u64) -> Value {
         json!({"page":"memory","project":"project:audit","source":"collection",
             "graphPending":false,"navigationPending":false,
