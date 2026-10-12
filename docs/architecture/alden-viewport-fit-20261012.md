@@ -35,9 +35,31 @@ with actual turn metadata and closure retained. It reviewed provided text only,
 not files or runtime. Its bounds, depth, outlier and interaction concerns
 remain separate from physical device/Retina validation.
 
-Source UI779, native136, typechecking and read-only render-contract Python33
-passed. Build, native rendering, installation, preservation, CI/PR/package and
-final screenshots are distinct delivery gates. Evidence is in the task's
-outputs/graph-viewport-fit-20261012/. All18 goal requirements and independent
+Source UI779, native136, typechecking, strict Clippy and read-only render-contract
+Python33 passed. The canonical ad-hoc build from
+703b115c2a8e3050639910442066460de12afe93 completed and Alden0.3.83 is installed.
+Source CI completed all four jobs. The separate0.3.82 recovery, 68 current
+payload hashes/modes/signature, selected settings/targets/policies/model
+listeners and collection/retrieval/voice table hashes remain exact.
+
+Candidate and installed owned native audits completed14 states/28 PNGs each,
+in73,182 and70,884 ms. Both sizes observed affinity/layout/rest and strict
+two-second render idle. Every2048 projected center is visible; invalid/clipped
+centers are zero. Eight relevant graph/quality PNGs were directly inspected;
+the other workspace PNGs and physical/Retina interaction remain unreviewed.
+
+Compared with the retained0.3.82 installed capture, the installed compact
+center-quarter fraction is77.49% to61.77%, occupied cells121 to160 and nearest
+median2.90 to3.37 CSS pixels. Compact core overlaps249 to222; default246 to172.
+The candidate compact overlap count was251, so that first candidate observation
+does not prove fewer overlaps. Settled poses and marker sizes differ between
+native captures. These observations cannot isolate a pure camera/solver
+improvement or establish pixel, semantic, FPS, battery or whole-app resource
+gains. Remaining compact overlap and independent whole-graph evaluation stay open.
+
+The local ZIP verifies all68 payloads/modes and CRC. No public tag or production
+deployment was performed. Developer ID distribution/notary configuration is a
+separate release gate. Final PR/document CI and delivery receipts are in the
+task's outputs/graph-viewport-fit-20261012/. All18 goal requirements and independent
 semantic/outlier, full-source, physical/host/model and resource/release gates
 remain active.
