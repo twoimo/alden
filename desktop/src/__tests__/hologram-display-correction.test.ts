@@ -58,6 +58,32 @@ function fixture(reducedMotion: boolean) {
 }
 
 describe('display collision correction in the production frame',()=>{
+  it('freezes a newly selected displayed node while the source worker is pending',()=>{
+    const f=fixture(false),{h}=f;
+    try {
+      h.displayOffsets.set('n1',new THREE.Vector3(.01,0,0));
+      h.displayTransition.setTargets(new Map([['n1',new THREE.Vector3(.03,0,0)]]),h.displayOffsets,new Set());
+      h.view={...h.view,focusId:'n1'};h.semanticLayout.settled=false;h.displayRelaxationPending=true;
+      h.render(1/60);
+      expect(h.displayOffsets.get('n1').toArray()).toEqual([.01,0,0]);
+      expect(h.displayTransition.moving).toBe(false);
+    }finally{f.dispose();}
+  });
+  it('reports a rejected oversized correction without retrying it every frame',()=>{
+    const f=fixture(false),{h}=f;
+    try {
+      const extra=Array.from({length:2049-h.view.nodes.length},(_,i)=>({...h.view.nodes[0],id:'overflow'+i}));
+      h.view={...h.view,nodes:[...h.view.nodes,...extra]};
+      extra.forEach(node=>h.positions.set(node.id,new THREE.Vector3(0,0,0)));
+      h.prepareDisplayCorrection();
+      expect(h.projectedRelaxation.state).toBe('rejected');
+      expect(h.projectedRelaxation.reason).toBe('display_correction_invalid_targets');
+      expect(h.projectedRelaxation.inputTruncated).toBe(true);
+      expect(h.displayRelaxationPending).toBe(false);
+      expect(h.displayTransition.moving).toBe(false);
+    }finally{f.dispose();}
+  });
+
   it('completes reduced-motion camera fit before applying pending correction',()=>{
     const f=fixture(true),{h}=f;
     try {

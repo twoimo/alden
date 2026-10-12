@@ -7,6 +7,8 @@ export class PositionTransition {
   get moving(): boolean { return this.targets.size > 0; }
   get pending(): number { return this.targets.size; }
   clear(): void { this.targets.clear(); }
+  /** Keep a newly pinned point at its current position even before a new snapshot arrives. */
+  freeze(id: string | null): void { if(id!==null)this.targets.delete(id); }
 
   setTargets(anchors: ReadonlyMap<string, Point3>, positions: ReadonlyMap<string, Point3>, physics: ReadonlySet<string>): boolean {
     this.targets.clear();

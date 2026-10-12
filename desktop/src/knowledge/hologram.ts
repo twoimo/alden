@@ -94,7 +94,7 @@ export class KnowledgeHologram {
   private readonly displayTransition = new PositionTransition();
   private readonly displayClipMatrix = new THREE.Matrix4();
   private displayRelaxationPending = true;
-  private projectedRelaxation: RelaxationResult['diagnostics'] | null = null;
+  private projectedRelaxation: (RelaxationResult['diagnostics'] & {state:'applied'|'rejected';reason?:string}) | null = null;
   private readonly nebulae = new ContextNebulae();
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly plasticity = new PlasticityLayout(OVERVIEW_NODE_CAP,512);
@@ -997,6 +997,7 @@ export class KnowledgeHologram {
     if(denseOverview&&this.displayRelaxationPending&&!this.plasticity.moving
       &&!this.positionTransition.moving&&!cameraMoving&&!this.orbitActive&&this.semanticLayout.settled)
       this.prepareDisplayCorrection();
+    this.displayTransition.freeze(this.view.focusId);
     const displayMoving=this.displayTransition.moving;
     this.displayTransition.advance(this.displayOffsets,elapsed,this.reducedMotionEnabled||this.paused);
     if (!this.neuronDetail) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
@@ -1134,8 +1135,12 @@ export class KnowledgeHologram {
         .unproject(this.camera).applyMatrix4(inverseRoot).sub(bases[index]);
       targets.set(node.id,target);
     });
-    this.displayTransition.setTargets(targets,this.displayOffsets,new Set(this.view.focusId?[this.view.focusId]:[]));
-    this.projectedRelaxation=result.diagnostics;this.displayRelaxationPending=false;
+    const accepted=this.displayTransition.setTargets(targets,this.displayOffsets,new Set(this.view.focusId?[this.view.focusId]:[]));
+    this.projectedRelaxation={...result.diagnostics,state:accepted?'applied':'rejected',
+      ...(!accepted?{reason:'display_correction_invalid_targets'}:{})};
+    // A rejected snapshot waits for the next real source/camera change. It
+    // never reports application success or keeps RAF busy retrying bad input.
+    this.displayRelaxationPending=false;
   }
   private readonly syncPoint = (id:string,x:number,y:number,z:number):void => {this.positions.get(id)?.set(x,y,z);};
 }
