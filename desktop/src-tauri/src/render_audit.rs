@@ -1488,7 +1488,17 @@ fn entity_wait(window: &tauri::WebviewWindow, script: &str, deadline: Instant) -
     loop {
         live(deadline)?;
         let state = collect_script(window, script.into(), deadline)?;
-        if state["ready"] == true { return Ok(state); }
+        if state["ready"] == true {
+            collect_script(window,r#"JSON.stringify((()=>{window.__entityAuditPaint=false;
+              requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__entityAuditPaint=true;}));
+              return {armed:true};})())"#.into(),deadline)?;
+            loop {
+                live(deadline)?;
+                let paint=collect_script(window,"JSON.stringify({ready:window.__entityAuditPaint===true})".into(),deadline)?;
+                if paint["ready"]==true {return Ok(state);}
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
