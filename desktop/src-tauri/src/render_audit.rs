@@ -1506,6 +1506,72 @@ fn entity_wait(window: &tauri::WebviewWindow, script: &str, deadline: Instant) -
     }
 }
 
+const ENTITY_RENDER_STATE: &str = r#"JSON.stringify((()=>{
+  const d=window.__knowledgeRenderDiagnostics;
+  const c=document.querySelector('#knowledge-graph-canvas'),r=c?.getBoundingClientRect();
+  return {page:document.querySelector('.settings-shell')?.dataset.settingsPage??null,
+    project:document.querySelector('#knowledge-project')?.value??null,
+    source:d?.source??null,graphNodes:d?.graphRead?.nodes??null,
+    navigationPending:d?.graphRead?.navigationPending??null,
+    graphPending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'
+      ||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중',
+    viewNodes:d?.nodeCount??null,renderedFrames:d?.renderedFrames??null,
+    renderedNodeCount:d?.renderedNodeCount??null,
+    motion:{camera:d?.motion?.camera??null,physics:d?.motion?.physics??null,
+      transition:d?.motion?.transition??null},
+    pendingTargets:d?.semanticLayout?.pendingTargets??null,
+    canvasReady:!!c&&!c.hidden&&r?.width>0&&r?.height>0
+      &&getComputedStyle(c).visibility!=='hidden'&&c.getContext('webgl2')?.isContextLost()===false,
+    width:innerWidth,scrollWidth:document.documentElement.scrollWidth};
+})())"#;
+
+fn entity_render_baseline(window: &tauri::WebviewWindow, deadline: Instant) -> Result<u64, String> {
+    let state = collect_script(window, ENTITY_RENDER_STATE.into(), deadline)?;
+    state["renderedFrames"].as_u64().ok_or_else(||
+        format!("entity renderer frame baseline unavailable: {state}"))
+}
+
+fn entity_render_settled(state: &Value, expected: u64, baseline: u64) -> bool {
+    state["page"] == "memory"
+        && state["project"] == "project:audit"
+        && state["source"] == "collection"
+        && state["graphPending"] == false
+        && state["navigationPending"] == false
+        && state["graphNodes"].as_u64() == Some(expected)
+        && state["viewNodes"].as_u64() == Some(expected)
+        && state["renderedNodeCount"].as_u64() == Some(expected)
+        && state["renderedFrames"].as_u64().is_some_and(|frames| frames > baseline)
+        && state["motion"]["camera"] == false
+        && state["motion"]["physics"] == false
+        && state["motion"]["transition"] == false
+        && state["pendingTargets"] == 0
+        && state["canvasReady"] == true
+}
+
+fn entity_render_wait(window: &tauri::WebviewWindow, stage: &str, expected: u64,
+    baseline: u64, deadline: Instant) -> Result<Value, String> {
+    let mut last = Value::Null;
+    loop {
+        live(deadline).map_err(|error|
+            format!("entity {stage} render settling failed: {error}; expectedNodes={expected}, baselineFrames={baseline}, last={last}"))?;
+        let state = collect_script(window, ENTITY_RENDER_STATE.into(), deadline)
+            .map_err(|error| format!("entity {stage} render observation failed: {error}; last={last}"))?;
+        if entity_render_settled(&state, expected, baseline) {
+            // Keep the existing real two-rAF paint gate, then check the stage
+            // again so a transition during those frames cannot be captured.
+            entity_wait(window, "JSON.stringify({ready:true})", deadline)
+                .map_err(|error| format!("entity {stage} paint failed: {error}; state={state}"))?;
+            let after = collect_script(window, ENTITY_RENDER_STATE.into(), deadline)
+                .map_err(|error| format!("entity {stage} post-paint observation failed: {error}; state={state}"))?;
+            if entity_render_settled(&after, expected, baseline) { return Ok(after); }
+            last = after;
+        } else {
+            last = state;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<Value, String> {
     if app.get_webview_window("settings").is_some() { return Err("entity audit refuses an existing shared webview".into()); }
     let window = tauri::WebviewWindowBuilder::new(app, "settings",
@@ -1553,6 +1619,7 @@ fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> R
         collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('.entity-resolution')
           .scrollIntoView({block:'start'});return {scrolled:true};})())"#.into(),deadline)?;
         publish(output,&format!("entity-compare-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
+        let apply_baseline = entity_render_baseline(&window, deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
           s.querySelector('.entity-resolution-approval input').click();
           [...s.querySelectorAll('button')].find(b=>b.textContent==='같은 지식으로 묶기').click();
@@ -1562,9 +1629,7 @@ fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> R
         collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();
           const p=document.querySelector('#knowledge-project');p.value='project:audit';p.dispatchEvent(new Event('change'));
           return {graph:true};})())"#.into(),deadline)?;
-        let applied = entity_wait(&window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
-          return {ready:d?.graphRead?.nodes===2&&!d.graphPending,nodes:d?.graphRead?.nodes,
-            edges:d?.edgeCount,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#,deadline)?;
+        let applied = entity_render_wait(&window, &format!("applied/{size}"), 2, apply_baseline, deadline)?;
         publish(output,&format!("entity-applied-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-history').click();
           const s=document.querySelector('.entity-resolution');s.open=true;
@@ -1572,15 +1637,14 @@ fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> R
           return {revertReview:true};})())"#.into(),deadline)?;
         entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
           return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='되돌리기 확정')};})())"#,deadline)?;
+        let revert_baseline = entity_render_baseline(&window, deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
           [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='되돌리기 확정').click();
           return {reverted:true};})())"#.into(),deadline)?;
         entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
           return {ready:!s.querySelector('select').disabled&&!s.querySelectorAll('.entity-resolution-history button').length};})())"#,deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();return {graph:true};})())"#.into(),deadline)?;
-        let reverted = entity_wait(&window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
-          return {ready:d?.graphRead?.nodes===3&&!d.graphPending,nodes:d?.graphRead?.nodes,
-            edges:d?.edgeCount,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#,deadline)?;
+        let reverted = entity_render_wait(&window, &format!("reverted/{size}"), 3, revert_baseline, deadline)?;
         publish(output,&format!("entity-reverted-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
         if [compared.clone(),applied.clone(),reverted.clone()].iter().any(|s|s["width"]!=s["scrollWidth"]) {
             return Err("entity workflow horizontal overflow".into());
@@ -2090,6 +2154,53 @@ mod tests {
         assert!(!super::resumed_graph(&state, 11));
     }
     use super::*;
+    fn entity_stage_state(nodes: u64) -> Value {
+        json!({"page":"memory","project":"project:audit","source":"collection",
+            "graphPending":false,"navigationPending":false,
+            "graphNodes":nodes,"viewNodes":nodes,"renderedNodeCount":nodes,
+            "renderedFrames":11,"motion":{"camera":false,"physics":false,"transition":false},
+            "pendingTargets":0,"canvasReady":true,"loop":{"running":false}})
+    }
+
+    #[test]
+    fn entity_stage_requires_a_new_matching_render_even_when_data_is_ready() {
+        for nodes in [2, 3] {
+            let mut state = entity_stage_state(nodes);
+            assert!(entity_render_settled(&state, nodes, 10)); // A stopped idle loop is valid.
+            assert!(!entity_render_settled(&state, nodes, 11));
+            assert!(!entity_render_settled(&state, if nodes == 2 { 3 } else { 2 }, 10));
+            state["renderedFrames"] = json!(10);
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedFrames"] = Value::Null;
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedFrames"] = json!(11);
+            state["renderedNodeCount"] = json!(if nodes == 2 { 3 } else { 2 });
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedNodeCount"] = json!(nodes);
+            state["viewNodes"] = json!(if nodes == 2 { 3 } else { 2 });
+            assert!(!entity_render_settled(&state, nodes, 10));
+        }
+    }
+
+    #[test]
+    fn entity_stage_rejects_unsettled_motion_pending_reads_and_wrong_surface() {
+        let valid = entity_stage_state(2);
+        for key in ["camera", "physics", "transition"] {
+            let mut state = valid.clone();
+            state["motion"][key] = json!(true);
+            assert!(!entity_render_settled(&state, 2, 10), "moving {key}");
+        }
+        for (key, value) in [("graphPending", json!(true)),
+            ("navigationPending", json!(true)), ("pendingTargets", json!(1)),
+            ("canvasReady", json!(false)), ("graphNodes", json!(3)),
+            ("page", json!("history")), ("project", json!("legacy")),
+            ("source", json!("legacy"))] {
+            let mut state = valid.clone();
+            state[key] = value;
+            assert!(!entity_render_settled(&state, 2, 10), "invalid {key}");
+        }
+    }
+
     fn title_capture_state() -> Value {
         json!({"page":"history","width":640,"scrollWidth":640,"titleLayout":{
             "title":{"top":25,"bottom":55,"left":170,"right":300,"width":130,"height":30},

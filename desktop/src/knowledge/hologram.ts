@@ -6,7 +6,7 @@ import { ContextNebulae } from './cortex';
 import { contextRegions, sourceRegions, regionBounds } from './context-regions';
 import { createNeuronGlyph, NEURON_EXTENT_RATIO } from './neuron';
 import type { NeuronPort } from './neuron';
-import { ConstellationNodes } from './constellation';
+import { ConstellationNodes, minimumStarRadius } from './constellation';
 import { pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
 import { PlasticityLayout, selectSynapses } from './plasticity';
@@ -127,6 +127,8 @@ export class KnowledgeHologram {
   private view: KnowledgeView;
   private disposed = false;
   private requestedAnimation = false;
+  private renderedFrames = 0;
+  private renderedNodeCount = 0;
   private activityExpiry: ReturnType<typeof setTimeout> | null = null;
   private activityAccepted = 0;
   private lastNodeActivity: NodeActivity | null = null;
@@ -361,8 +363,8 @@ export class KnowledgeHologram {
     };
   }
 
-  diagnostics(): AnimationLoopDiagnostics & { regions: ReturnType<ContextNebulae['diagnostics']>; motion:KnowledgeHologram['motionDiagnostics']; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number; neuronGlyphs:number; detailMode:boolean } {
-    return { ...this.loop.diagnostics(), regions:this.nebulae.diagnostics(), motion:this.motionDiagnostics, voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
+  diagnostics(): AnimationLoopDiagnostics & { renderedFrames:number; renderedNodeCount:number; regions: ReturnType<ContextNebulae['diagnostics']>; motion:KnowledgeHologram['motionDiagnostics']; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number; neuronGlyphs:number; detailMode:boolean } {
+    return { ...this.loop.diagnostics(), renderedFrames:this.renderedFrames, renderedNodeCount:this.renderedNodeCount, regions:this.nebulae.diagnostics(), motion:this.motionDiagnostics, voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
       displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count,
       orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes(), physics:this.plasticity.diagnostics(), synapses:(this.neuronDetail?this.synapses:this.overviewSynapses).diagnostics(), drawCalls:this.renderer.info.render.calls, geometries:this.renderer.info.memory.geometries, neuronGlyphs:this.neuronMeshes.size, detailMode:this.neuronDetail, ambientMotion:false, visibleTime:0 };
   }
@@ -839,8 +841,8 @@ export class KnowledgeHologram {
     else if (!this.paused) this.plasticity.advance(elapsed);
     if (!this.paused) this.positionTransition.advance(this.positions, elapsed, this.reducedMotionEnabled);
     this.plasticity.forEachPoint(this.syncPoint);
-    this.constellationNodes.setMinimumRadius(this.camera.position.distanceTo(this.lookAt)
-      * 2 * Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) / Math.max(1, this.viewport.height) * .6);
+    this.constellationNodes.setMinimumRadius(minimumStarRadius(this.camera.position.distanceTo(this.lookAt),
+      this.camera.fov, this.viewport.height, this.view.nodes.length));
     if (!this.neuronDetail) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
@@ -870,6 +872,8 @@ export class KnowledgeHologram {
     for (const orb of this.orbMeshes.values()) orb.advance(dt);
     this.loop.setVoiceActive(this.voiceEnvelope.displayedRms > 0 || orbActive);
     this.renderer.render(this.scene, this.camera);
+    this.renderedFrames++;
+    this.renderedNodeCount = this.view.nodes.length;
     const { x, y, width, height } = this.viewport;
     let index = 0;
     for (const [id, label] of this.labels) {

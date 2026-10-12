@@ -20,6 +20,16 @@ const CONNECTED = new THREE.Color(GRAPH_CONNECTED_COLOR);
 const ISOLATED = new THREE.Color(GRAPH_ISOLATED_COLOR);
 const UNRELATED = new THREE.Color(GRAPH_UNRELATED_COLOR);
 
+/** World-space floor at the camera target, measured in CSS pixels, not device pixels. */
+export function minimumStarRadius(cameraDistance: number, verticalFov: number, viewportHeight: number, visibleCount: number): number {
+  if (!Number.isFinite(cameraDistance) || cameraDistance <= 0
+    || !Number.isFinite(verticalFov) || verticalFov <= 0 || verticalFov >= 180
+    || !Number.isFinite(viewportHeight) || viewportHeight <= 0
+    || !Number.isSafeInteger(visibleCount) || visibleCount <= 0) return 0;
+  const cssRadius = visibleCount <= 24 ? 1.5 : .6;
+  return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * cssRadius;
+}
+
 /**
  * Overview stars only. The owner supplies positions, links and sphere picking;
  * selected-neuron detail belongs to the owner too. No geometry changes on set.
