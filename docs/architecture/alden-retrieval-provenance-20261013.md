@@ -54,3 +54,34 @@ whose investigation began before the date rollover.
 
 Source tests, build, installed CLI/owned MCP/voice paths, native windows,
 preservation, CI/PR/package and final receipts are separate delivery gates.
+
+Installed acceptance on 2026-10-13 used Alden0.3.84 built from
+9d80f7d70791f8ff892c2e42eb7d0c4732f22910. The installed four-query/six-proof
+readback matched independent current memberships/raw hashes, retained first-query
+facts/ranks and rejected research knowledge in jangsin-only scope. Candidate and
+installed owned stdio initialization/search/negative-scope checks both passed;
+this does not establish global MCP registration or two independent hosts.
+
+The installed voice reference path actually performed a scoped E5/RRF lookup.
+Its one returned proof retained requested projects, actual jangsin membership,
+version/hash and policy-v4 classification identically in model-input context
+and in-memory metrics (2,203 quoted characters). No LLM generation, physical
+voice or durable voice-turn write was performed by that check.
+
+Candidate and installed native audits each completed 14 states/28 PNGs in
+74,429/72,209ms. Both window sizes observed affinity/layout/rest and strict
+two-second render idle; all2,048 projected centers were valid/visible, with no
+clipping. Eight relevant graph/quality PNGs were directly inspected. Remaining
+48 PNGs, physical gestures/Retina, semantic quality and whole-app resource/FPS
+improvements are not certified by these audits; central overlaps remain open.
+
+Local focused Python168, final retrieval23 (overlapping subset), UI779,
+native136, typecheck and strict Clippy passed. Source CI38267959046 passed all
+four jobs. The installed68 payload hashes/modes/strict ad-hoc signature,
+separate0.3.83 recovery, selected settings, seven targets/two policies, model
+listeners and selected collection/retrieval/voice tables were preserved.
+The local ZIP is12,848,136bytes with SHA256
+4d9570af012673c82344200f736fcbf87a1afc87568863677ed7928325c06a9e;
+its68 payload bytes/modes and CRC passed. PR/three-ref/documentation-CI final
+readback is bound by delivery-receipt.json. Developer ID/notary, public tag and
+production deployment remain separate unfinished gates.
