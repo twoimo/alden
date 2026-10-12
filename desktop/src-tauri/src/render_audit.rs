@@ -1143,15 +1143,16 @@ fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Res
                     .ns_window()
                     .map_err(|_| "settings native window missing")?;
                 let native = unsafe { &*native.cast::<NSWindow>() };
-                let content = native
-                    .contentView()
-                    .ok_or("settings content view missing")?
-                    .frame();
+                // Measure rectangles without requesting a retained content
+                // view. Repeated contentView reads in this pinned Wry runtime
+                // produced an over-release exception for its parent NSView.
+                let content = native.contentRectForFrameRect(native.frame());
                 let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
                 let bounds = webview.bounds();
                 let layout = native.contentLayoutRect();
                 Ok(
                     json!({"contentWidth":content.size.width,"contentHeight":content.size.height,
+                "contentBasis":"NSWindow contentRectForFrameRect(frame)",
                 "layoutWidth":layout.size.width,"layoutHeight":layout.size.height,
                 "webviewWidth":bounds.size.width,"webviewHeight":bounds.size.height}),
                 )
