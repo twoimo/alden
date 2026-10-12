@@ -384,12 +384,17 @@ export class KnowledgeHologram {
       nodePairCoverage: this.graph.layoutAffinity.nodePairCoverage ?? null,
       pairCoverage: this.graph.layoutAffinity.pairCoverage ?? null } : null }; }
 
+  /** Constant-cost readiness geometry; no projection or pair audit. */
+  auditViewport() {
+    const rect=this.canvas.getBoundingClientRect();
+    return {left:rect.left+this.viewport.x,top:rect.top+this.viewport.y,
+      width:this.viewport.width,height:this.viewport.height};
+  }
+
   /** Explicit audit snapshot only; no labels, identities or per-frame pair work. */
   auditProjectedLayout(includeCircles = false) {
     if (this.disposed || this.neuronDetail) return { available:false,reason:'overview_unavailable' };
-    const rect=this.canvas.getBoundingClientRect(), points:ProjectedCircle[]=[];
-    const viewport={left:rect.left+this.viewport.x,top:rect.top+this.viewport.y,
-      width:this.viewport.width,height:this.viewport.height};
+    const points:ProjectedCircle[]=[],viewport=this.auditViewport();
     const projected=new THREE.Vector3(), eye=new THREE.Vector3();
     const factor=viewport.height/(2*Math.tan(THREE.MathUtils.degToRad(this.camera.fov/2)));
     for(const node of this.view.nodes.slice(0,2048)){

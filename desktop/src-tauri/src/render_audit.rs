@@ -1287,10 +1287,13 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             let mut state=collect_script(window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
               const pending=document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true';
               const canvas=document.querySelector('#knowledge-graph-canvas'),r=canvas?.getBoundingClientRect();
-              const p=window.__knowledgeLayoutAudit?.().viewport;
+              const p=window.__knowledgeViewportAudit?.();
               const resized=!!r&&!!p&&p.width===Math.max(1,Math.floor(r.width)-56)&&p.height===Math.max(1,Math.floor(r.height)-28);
               return {ready:!pending&&d?.nodeCount>0&&resized&&d.motion?.camera===false,
-                width:innerWidth,height:innerHeight,resized,projectionViewport:p,canvasWidth:r?.width,canvasHeight:r?.height};
+                width:innerWidth,height:innerHeight,resized,projectionViewport:p,canvasWidth:r?.width,canvasHeight:r?.height,
+                filterPending:pending,diagnosticsPresent:!!d,nodeCount:d?.nodeCount??0,
+                motion:d?.motion??null,running:d?.running??null,pendingFrame:d?.pendingFrame??null,
+                renderCount:d?.renderCount??null,motionReduced:d?.motionReduced??null,targets:d?.targets??null};
             })())"#.into(),deadline)?;
             let matched=state["width"].as_f64()==native["layoutWidth"].as_f64()
                 && state["height"].as_f64()==native["layoutHeight"].as_f64();

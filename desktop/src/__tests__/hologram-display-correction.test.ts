@@ -58,6 +58,17 @@ function fixture(reducedMotion: boolean) {
 }
 
 describe('display collision correction in the production frame',()=>{
+  it('reads readiness viewport without traversing nodes or projecting pair geometry',()=>{
+    const f=fixture(false),{h}=f;
+    try {
+      const fail=vi.fn(()=>{throw new Error('readiness touched node geometry');});
+      h.view=new Proxy(h.view,{get(target,key){if(key==='nodes')return fail();return target[key];}});
+      h.constellationNodes.radius=fail;
+      expect(h.auditViewport()).toEqual({left:0,top:0,width:900,height:600});
+      expect(fail).not.toHaveBeenCalled();
+    }finally{f.dispose();}
+  });
+
   it('freezes a newly selected displayed node while the source worker is pending',()=>{
     const f=fixture(false),{h}=f;
     try {

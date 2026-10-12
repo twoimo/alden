@@ -743,6 +743,7 @@ export async function bootSettings(
       }) });
       Object.defineProperty(window, "__knowledgeRenderPause", { configurable: true, get: () => lifecycle.lastPauseMeasurement() });
       // Expensive pair geometry is read explicitly by owned audits only.
+      Object.defineProperty(window, "__knowledgeViewportAudit", { configurable:true, value:() => graph.auditViewport() });
       Object.defineProperty(window, "__knowledgeLayoutAudit", { configurable:true, value:(includeCircles=false) => graph.auditProjectedLayout(includeCircles) });
       Object.defineProperty(window, "__knowledgePhysicsAudit", { configurable:true, value:() => graph.auditPhysicsState() });
       wireRenderLifecycle(lifecycle, {
