@@ -29,16 +29,19 @@ const SETTINGS_FLAG: &str = "--audit-own-settings";
 const WORKSPACES_FLAG: &str = "--audit-own-workspaces";
 const ASSISTANT_FLAG: &str = "--audit-own-assistant-input";
 const ASSISTANT_INVALID_FLAG: &str = "--audit-own-assistant-invalid-input";
+const ENTITY_FLAG: &str = "--audit-own-entity-review";
 pub struct Request {
     pub directory: PathBuf,
     pub settings: bool,
     pub workspaces: bool,
     pub assistant: bool,
     pub assistant_invalid: bool,
+    pub entity: bool,
     pub focus_node: Option<String>,
 }
 struct AuditPolicy {
     workspaces: bool,
+    entity: bool,
     focus_node: Option<String>,
 }
 struct AssistantPageReady { ready: Arc<AtomicBool>, phase: Arc<AtomicU8> }
@@ -99,7 +102,7 @@ const COLLECT: &str = r#"JSON.stringify((() => {
 pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request>, String> {
     let args: Vec<_> = args.collect();
     if !args.iter().any(|arg| {
-        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG]
+        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ENTITY_FLAG]
             .iter()
             .any(|flag| arg.to_string_lossy().starts_with(flag))
     }) {
@@ -138,7 +141,8 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
         None
     };
     if (args.len() != 2 && focus_node.is_none())
-        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG]
+        || args[0] == ENTITY_FLAG && focus_node.is_some()
+        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ENTITY_FLAG]
             .iter()
             .any(|flag| args[0] == *flag)
     {
@@ -147,9 +151,10 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     Ok(Some(Request {
         directory: PathBuf::from(&args[1]),
         settings: args[0] != FLAG,
-        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG,
+        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG || args[0] == ENTITY_FLAG,
         assistant: args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG,
         assistant_invalid: args[0] == ASSISTANT_INVALID_FLAG,
+        entity: args[0] == ENTITY_FLAG,
         focus_node,
     }))
 }
@@ -505,9 +510,12 @@ async fn fetch_settings_action(
     query: Option<String>,
     node_id: Option<String>,
     chat_id: Option<String>,
+    explicit_opt_in: Option<bool>,
 ) -> Result<Value, String> {
     let workspace = policy.workspaces;
-    if !audit_read_action(&action, workspace) {
+    let entity_mutation = policy.workspaces && policy.entity && explicit_opt_in == Some(true)
+        && matches!(action.as_str(), "collection-resolution-apply" | "collection-resolution-revert");
+    if !audit_read_action(&action, workspace) && !entity_mutation {
         return Err("audit admits explicit read actions only".into());
     }
     let bridge = bridge.inner().clone();
@@ -519,7 +527,7 @@ async fn fetch_settings_action(
                 node_id.as_deref(),
                 chat_id.as_deref(),
                 None,
-                None,
+                if entity_mutation { Some(true) } else { None },
                 None,
             )
         } else {
@@ -543,6 +551,8 @@ fn audit_read_action(action: &str, workspace: bool) -> bool {
                     | "db-sync-history"
                     | "collection-history"
                     | "collection-projects"
+                    | "collection-resolution-preview"
+                    | "collection-resolution-history"
                     | "collection-scheduler-status"
                     | "routed-models"
                     | "collection-graph"
@@ -1468,6 +1478,102 @@ fn audit_settings(
     )
 }
 
+fn entity_wait(window: &tauri::WebviewWindow, script: &str, deadline: Instant) -> Result<Value, String> {
+    loop {
+        live(deadline)?;
+        let state = collect_script(window, script.into(), deadline)?;
+        if state["ready"] == true { return Ok(state); }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<Value, String> {
+    if app.get_webview_window("settings").is_some() { return Err("entity audit refuses an existing shared webview".into()); }
+    let window = tauri::WebviewWindowBuilder::new(app, "settings",
+        tauri::WebviewUrl::App("index.html?view=settings".into()))
+        .incognito(true).title("Alden · owned entity review audit")
+        .inner_size(1200.0, 800.0).visible(true).build().map_err(|e| e.to_string())?;
+    entity_wait(&window, r#"JSON.stringify({ready:document.getElementById('app')?.dataset.state==='ready'
+        && !!document.querySelector('#settings-tab-history')})"#, deadline)?;
+    let mut states = Vec::new();
+    for size in ["default", "compact"] {
+        if size == "compact" {
+            let target = window.clone(); let (tx, rx) = mpsc::sync_channel(1);
+            window.run_on_main_thread(move || {
+                let result = (|| { let native=target.ns_window().map_err(|_| "entity audit native window missing")?;
+                    unsafe { (&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0,680.0)); }
+                    Ok::<(),String>(()) })();
+                let _ = tx.try_send(result);
+            }).map_err(|_| "entity resize dispatch failed")?;
+            receive(rx,deadline)?;
+        }
+        collect_script(&window,r#"JSON.stringify((()=>{
+          document.querySelector('#settings-tab-history').click();
+          const s=document.querySelector('.entity-resolution');s.open=true;s.dispatchEvent(new Event('toggle'));
+          return {opened:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:!!s&&[...s.querySelector('select').options].some(o=>o.value==='audit')};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution'),p=s.querySelector('select');
+          p.value='audit';p.dispatchEvent(new Event('change'));return {selected:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution'),
+          b=[...s.querySelectorAll('button')].find(b=>b.textContent==='자료 찾기');
+          return {ready:!!b&&!b.disabled};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          [...s.querySelectorAll('button')].find(b=>b.textContent==='자료 찾기').click();return {requested:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify({ready:document.querySelectorAll('.entity-resolution-list input').length===3})"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          for(const label of s.querySelectorAll('.entity-resolution-list label')){
+            if(['a','b'].includes(label.childNodes[1]?.textContent)){const b=label.querySelector('input');b.click();}}
+          const t=s.querySelector('textarea');t.value='Reviewed two owned synthetic copies';t.dispatchEvent(new Event('input'));
+          [...s.querySelectorAll('button')].find(b=>b.textContent==='선택한 자료 비교').click();return {compared:true};})())"#.into(),deadline)?;
+        let compared = entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:s.querySelectorAll('.entity-resolution-comparison pre').length===2
+            &&!s.querySelector('.entity-resolution-approval input').disabled,
+            records:s.querySelectorAll('.entity-resolution-comparison pre').length,
+            width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#,deadline)?;
+        publish(output,&format!("entity-compare-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          s.querySelector('.entity-resolution-approval input').click();
+          [...s.querySelectorAll('button')].find(b=>b.textContent==='같은 지식으로 묶기').click();
+          return {applied:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='되돌리기')};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();
+          const p=document.querySelector('#knowledge-project');p.value='project:audit';p.dispatchEvent(new Event('change'));
+          return {graph:true};})())"#.into(),deadline)?;
+        let applied = entity_wait(&window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
+          return {ready:d?.graphRead?.nodes===2&&!d.graphPending,nodes:d?.graphRead?.nodes,
+            edges:d?.edgeCount,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#,deadline)?;
+        publish(output,&format!("entity-applied-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-history').click();
+          const s=document.querySelector('.entity-resolution');s.open=true;
+          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='되돌리기').click();
+          return {revertReview:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='되돌리기 확인')};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='되돌리기 확인').click();
+          return {reverted:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:!s.querySelector('select').disabled&&!s.querySelectorAll('.entity-resolution-history button').length};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();return {graph:true};})())"#.into(),deadline)?;
+        let reverted = entity_wait(&window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
+          return {ready:d?.graphRead?.nodes===3&&!d.graphPending,nodes:d?.graphRead?.nodes,
+            edges:d?.edgeCount,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#,deadline)?;
+        publish(output,&format!("entity-reverted-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
+        if [compared.clone(),applied.clone(),reverted.clone()].iter().any(|s|s["width"]!=s["scrollWidth"]) {
+            return Err("entity workflow horizontal overflow".into());
+        }
+        states.push(json!({"size":size,"compared":compared,"applied":applied,"reverted":reverted}));
+    }
+    let preservation=app.state::<super::PythonBridge>().verify_entity_audit().map_err(|e|e.to_string())?;
+    if preservation["ok"]!=true || preservation["active_groups"]!=0 || preservation["resolution_events"]!=4 {
+        return Err("entity workflow source/revert verification failed".into());
+    }
+    Ok(json!({"states":states,"preservation":preservation,"incognito":true,
+        "scope":"native controls with real CLI/SQLite over owned synthetic sources; human entity truth and production mutation unverified"}))
+}
+
 fn workspace_notification_audit(
     app: &tauri::AppHandle,
     window: &tauri::WebviewWindow,
@@ -1843,12 +1949,15 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
     let workspaces_mode = request.workspaces;
     let assistant_mode = request.assistant;
     let invalid_input_mode = request.assistant_invalid;
+    let entity_mode = request.entity;
     let settings_loaded = Arc::new(AtomicBool::new(false));
     let asset_loaded = Arc::new(AtomicBool::new(false));
     let ready_phase = Arc::new(AtomicU8::new(0));
     let page_loaded = Arc::clone(&asset_loaded);
     let page_dom = Arc::clone(&settings_loaded);
-    let bridge = if assistant_mode { super::PythonBridge::for_assistant_audit(request.directory.join("input-state"))
+    let bridge = if entity_mode { super::PythonBridge::for_entity_audit(request.directory.join("resolution-state"))
+        .unwrap_or_else(|error|{eprintln!("Alden entity audit: {error}");std::process::exit(2);}) }
+        else if assistant_mode { super::PythonBridge::for_assistant_audit(request.directory.join("input-state"))
         .unwrap_or_else(|error|{eprintln!("Alden assistant audit: {error}");std::process::exit(2);}) } else {super::PythonBridge::new()};
     let builder = {
         let builder = tauri::Builder::default()
@@ -1856,6 +1965,7 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
             .manage(AssistantPageReady {ready:Arc::clone(&settings_loaded),phase:Arc::clone(&ready_phase)})
             .manage(AuditPolicy {
                 workspaces: workspaces_mode,
+                entity: entity_mode,
                 focus_node: request.focus_node.clone(),
             });
         if assistant_mode {
@@ -1892,15 +2002,15 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let started = Instant::now();
-                let deadline = started + Duration::from_secs(if assistant_mode {180} else if workspaces_mode {96}else{40});
-                let result = if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
+                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode {96}else{40});
+                let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
-                    "mode":if invalid_input_mode {"isolated-assistant-invalid-input"}else if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
+                    "mode":if entity_mode {"isolated-entity-review-fixture"}else if invalid_input_mode {"isolated-assistant-invalid-input"}else if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if entity_mode {"owned incognito WKWebView; compare/apply/revert only in a newly created private synthetic collection; no original source, production write, model inference, send or physical-input attestation"}else if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();
@@ -1927,6 +2037,24 @@ pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn entity_fixture_mode_has_an_explicit_owned_scope_without_a_caller_focus() {
+        let request = parse_args([OsString::from(ENTITY_FLAG), OsString::from("/private/tmp/test")].into_iter())
+            .unwrap().unwrap();
+        assert!(request.settings && request.workspaces && request.entity && !request.assistant);
+        assert!(parse_args([OsString::from(ENTITY_FLAG), OsString::from("/private/tmp/test"),
+            OsString::from("--focus-node"), OsString::from(format!("graph:{}", "a".repeat(64)))]
+            .into_iter()).is_err());
+    }
+
+    #[test]
+    fn ordinary_read_audits_never_admit_entity_mutation_or_fixture_seed() {
+        for action in ["collection-resolution-apply","collection-resolution-revert",
+                       "collection-resolution-fixture","collection-resolution-fixture-verify"] {
+            assert!(!audit_read_action(action,true));
+            assert!(!audit_read_action(action,false));
+        }
+    }
     #[test]
     fn resumed_collection_requires_its_visible_consumer_not_only_an_old_frame() {
         let mut state = serde_json::json!({"ready":true,"renderCount":11,"canvas":{"contextLost":false},
@@ -2098,6 +2226,8 @@ mod tests {
             "send",
             "stop",
             "collection-scheduler-control",
+            "collection-resolution-apply",
+            "collection-resolution-revert",
         ] {
             assert!(!audit_read_action(action, true));
         }
@@ -2110,6 +2240,8 @@ mod tests {
             "collection-affinity",
             "collection-quality",
             "collection-scheduler-status",
+            "collection-resolution-preview",
+            "collection-resolution-history",
         ] {
             assert!(audit_read_action(action, true));
             assert!(!audit_read_action(action, false));

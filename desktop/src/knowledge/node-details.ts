@@ -95,6 +95,38 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const body = root.getElementById('knowledge-node-body');
   const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
   if (body) { renderBody(body, copy, graph); body.hidden = !copy; }
+  root.querySelectorAll('.knowledge-resolution-note').forEach(note => note.remove());
+  const resolutions = node.resolutionContexts?.length
+    ? node.resolutionContexts.map(context => ({ resolution: context, context }))
+    : node.resolution ? [{ resolution: node.resolution, context: null }] : [];
+  let resolutionAnchor = body;
+  for (const { resolution, context } of resolutions) {
+    if (!resolutionAnchor) break;
+    const note = root.createElement('section'); note.className = 'knowledge-resolution-note';
+    note.dataset.resolutionId = resolution.id; note.dataset.project = resolution.project;
+    const title = root.createElement('h3'); title.textContent = context
+      ? `${text(resolution.project, 128)} · 검토 결정 · 자료 ${resolution.members.length}개`
+      : '검토로 묶은 자료 ' + resolution.members.length + '개';
+    const reason = root.createElement('p'); reason.textContent = text(resolution.reason, 1024);
+    const basis = root.createElement('p'); basis.textContent = context
+      ? '명시적인 사용자 검토 결정입니다. 각 원문과 관계는 보존됩니다.'
+      : '현재 화면의 검토 결정입니다. 각 원문과 관계는 보존됩니다.';
+    note.append(title, reason, basis);
+    if (context) {
+      const display = root.createElement('p'); display.textContent = context.consolidated
+        ? '현재 통합 화면에서 이 프로젝트의 검토 결정으로 묶어 표시합니다.'
+        : '현재 통합 화면에서는 이 프로젝트의 묶음을 적용하지 않고 원문을 유지합니다.';
+      const version = root.createElement('p'); version.textContent = context.displayMatches
+        ? '현재 표시 버전이 이 결정의 검토 버전과 일치합니다.'
+        : '현재 표시 버전이 이 결정의 검토 버전과 다릅니다. 현재 본문을 검토된 내용으로 간주할 수 없습니다.';
+      note.append(display, version);
+    }
+    const sources = root.createElement('ul');
+    for (const member of resolution.members) {
+      const item = root.createElement('li'); item.textContent = text(member.label, 1024) || '제목 없는 자료'; sources.append(item);
+    }
+    note.append(sources); resolutionAnchor.after(note); resolutionAnchor = note;
+  }
   if (summary) summary.hidden = Boolean(body && copy);
   const kind = root.getElementById('knowledge-node-kind'); if (kind) kind.textContent = nodeKind(node);
   const facts = root.getElementById('knowledge-node-facts'); facts?.replaceChildren();

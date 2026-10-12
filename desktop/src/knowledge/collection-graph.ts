@@ -64,6 +64,10 @@ export class CollectionGraphController {
         projects: query.projects, target_id: query.target_id, platform: query.platform }) });
     }, () => this.refresh.invalidate(), event => this.graph.showNodeActivity(event), () => this.graph.clearNodeActivity());
     const signal = this.controls.signal;
+    root.defaultView?.addEventListener('alden://entity-resolution-changed', () => {
+      if (!this.active || this.disposed || !this.collection) return;
+      this.epoch++; this.affinity = null; this.refresh.stop(); this.refresh.start();
+    }, { signal });
     this.source.addEventListener('change', () => {
       this.userSelected = true;
       const target = this.root.getElementById('knowledge-target') as HTMLSelectElement;

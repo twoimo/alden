@@ -2,7 +2,7 @@ import type { KnowledgeGraph } from './graph-model';
 
 function memories(graph: KnowledgeGraph): Map<string, string> {
   return new Map(graph.nodes.map(n => [n.id, JSON.stringify([n.label, n.category, n.importance, n.description, n.facts,
-    n.space, n.isHub, n.canonicalId, n.sourceVersion, n.sourceTarget, n.sourcePlatform, n.sourceUrl, n.degree, n.degreeScope,
+    n.space, n.isHub, n.canonicalId, n.sourceVersion, n.sourceTarget, n.sourcePlatform, n.sourceUrl, n.degree, n.degreeScope, n.resolution, n.resolutionContexts,
     n.evidence.kind, n.evidence.chatId, [...(n.evidence.roomIds ?? [])].sort(), [...n.evidence.sourceEventIds].sort(), n.evidence.confirmedAt, n.evidence.retracted])]));
 }
 function relations(graph: KnowledgeGraph): Map<string, string> {
@@ -10,7 +10,7 @@ function relations(graph: KnowledgeGraph): Map<string, string> {
   for (const e of graph.edges) {
     const key = JSON.stringify([e.source, e.target, e.relation, e.roomId, e.purpose]);
     const values = groups.get(key) ?? [];
-    values.push(JSON.stringify([e.weight, e.context, e.validFrom, e.validTo, e.evidenceMessageId, e.evidence.kind,
+    values.push(JSON.stringify([e.weight, e.context, e.validFrom, e.validTo, e.evidenceMessageId, e.evidence.kind, e.originalSource, e.originalTarget,
       e.evidence.chatId, [...e.evidence.sourceEventIds].sort(), e.evidence.confirmedAt, e.evidence.retracted]));
     groups.set(key, values);
   }

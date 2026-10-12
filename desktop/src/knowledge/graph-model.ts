@@ -17,6 +17,18 @@ export interface KnowledgeEvidence {
   retracted: boolean;
 }
 
+export interface KnowledgeResolution {
+  id: string;
+  project: string;
+  reason: string;
+  members: Array<{ id: string; label: string; version: string; target: string }>;
+}
+
+export interface KnowledgeResolutionContext extends KnowledgeResolution {
+  consolidated: boolean;
+  displayMatches: boolean;
+}
+
 export interface KnowledgeNode {
   id: string;
   label: string;
@@ -36,6 +48,8 @@ export interface KnowledgeNode {
   sourceUrl?: string;
   degree?: number;
   degreeScope?: string;
+  resolution?: KnowledgeResolution;
+  resolutionContexts?: KnowledgeResolutionContext[];
 }
 
 export interface KnowledgeEdge {
@@ -50,6 +64,8 @@ export interface KnowledgeEdge {
   evidenceMessageId: string;
   evidence: KnowledgeEvidence;
   purpose?: 'semantic' | 'navigation' | 'reference';
+  originalSource?: string;
+  originalTarget?: string;
 }
 
 export interface KnowledgeGraph {
@@ -87,6 +103,34 @@ function stringValue(value: unknown): string {
 
 function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function parseResolution(value: unknown): KnowledgeNode['resolution'] {
+  const row = objectValue(value);
+  if (row?.kind !== 'explicit_user_decision' || !stringValue(row.resolution_id).trim() || !stringValue(row.project).trim()) return undefined;
+  const raw = Array.isArray(row.members) ? row.members : [];
+  if (raw.length < 2 || raw.length > 16) return undefined;
+  const members = raw.flatMap(entry => {
+    const item = objectValue(entry);
+    if (!item || !stringValue(item.id).trim() || !stringValue(item.source_version).trim() || !stringValue(item.source_target).trim()) return [];
+    return [{ id: stringValue(item.id).slice(0, 256), label: stringValue(item.label).slice(0, 1024),
+      version: stringValue(item.source_version).slice(0, 256), target: stringValue(item.source_target).slice(0, 256) }];
+  });
+  if (members.length !== raw.length || new Set(members.map(member => member.id)).size !== members.length) return undefined;
+  return { id: stringValue(row.resolution_id).slice(0, 128), project: stringValue(row.project).slice(0, 128),
+    reason: stringValue(row.reason).slice(0, 1024), members };
+}
+
+function parseResolutionContexts(value: unknown): KnowledgeNode['resolutionContexts'] {
+  if (!Array.isArray(value)) return undefined;
+  const contexts = value.flatMap((entry): KnowledgeResolutionContext[] => {
+    const row = objectValue(entry), resolution = parseResolution(entry);
+    // A project decision and its current display state are separate evidence.
+    // Missing or truthy non-boolean flags cannot establish either display claim.
+    if (!row || !resolution || typeof row.consolidated !== 'boolean' || typeof row.display_matches !== 'boolean') return [];
+    return [{ ...resolution, consolidated: row.consolidated, displayMatches: row.display_matches }];
+  });
+  return contexts.length ? contexts : undefined;
 }
 
 function parseEvidence(value: unknown): KnowledgeEvidence {
@@ -135,6 +179,8 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         sourceUrl: stringValue(item.source_url).slice(0, 4096),
         degree: typeof item.degree === 'number' && Number.isFinite(item.degree) ? Math.max(0, Math.floor(item.degree)) : undefined,
         degreeScope: stringValue(item.degree_scope),
+        resolution: parseResolution(item.resolution),
+        resolutionContexts: parseResolutionContexts(item.resolution_contexts),
       }];
     })
     : [];
@@ -162,6 +208,8 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         evidenceMessageId: stringValue(item.evidence_message_id),
         evidence,
         purpose: item.purpose === 'navigation' || item.purpose === 'reference' ? item.purpose : 'semantic',
+        originalSource: stringValue(item.original_source).slice(0, 256),
+        originalTarget: stringValue(item.original_target).slice(0, 256),
       }];
     })
     : [];

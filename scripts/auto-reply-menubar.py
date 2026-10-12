@@ -2683,6 +2683,30 @@ def _mlx_lifecycle_payload(action: str, state_root: Path) -> dict:
 
 def main():
     routed_action = _argv_flag_value("--action")
+    if routed_action in {"collection-resolution-fixture", "collection-resolution-fixture-verify"}:
+        from alden_entity_fixture import create_fixture, verify_fixture
+        root_raw = _argv_flag_value("--state-root")
+        if not root_raw:
+            raise ValueError("entity_fixture_scope_invalid")
+        root = Path(root_raw)
+        _print_json(create_fixture(root) if routed_action == "collection-resolution-fixture"
+                    else verify_fixture(root))
+        return 0
+    if routed_action in {"collection-resolution-preview", "collection-resolution-history",
+                         "collection-resolution-apply", "collection-resolution-revert"}:
+        from alden_entity_resolution import resolution_action
+        from alden_abort import read_abort_state
+        root_raw = _argv_flag_value("--state-root")
+        root = Path(root_raw).expanduser() if root_raw else _DEFAULT_STATE_ROOT
+        try:
+            if (routed_action in {"collection-resolution-apply", "collection-resolution-revert"}
+                    and read_abort_state(root / "alden-abort.json").latched):
+                raise RuntimeError("entity_resolution_emergency_stopped")
+            _print_json(resolution_action(root, routed_action, _argv_flag_value("--history-query"),
+                                          explicit_opt_in="--explicit-opt-in" in sys.argv))
+        except (ValueError, RuntimeError, OSError) as error:
+            _print_json({"ok": False, "action": routed_action, "reason": str(error)[:96]})
+        return 0
     if routed_action == "collection-quality":
         from alden_graph_quality_action import read_action
         from alden_abort import read_abort_state

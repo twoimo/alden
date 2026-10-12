@@ -198,6 +198,11 @@ jobs:
           tests.test_alden_source_acquisition
           tests.test_alden_graph_quality
           tests.test_alden_content_evidence
+          tests.test_alden_entity_resolution
+          tests.test_alden_entity_integrity
+          tests.test_alden_entity_fixture
+          tests.test_alden_entity_projection
+          tests.test_alden_entity_union_review
           tests.test_alden_conversation_switch
           tests.test_alden_status_mcp
           tests.test_alden_history

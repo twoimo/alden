@@ -15,7 +15,9 @@ type SettingsAction =
   | "reply-history" | "geeknews-history"
   | "voice-history-sessions" | "voice-history-messages" | "db-sync-history"
   | "collection-history" | "collection-graph" | "collection-affinity" | "collection-projects" | "collection-quality"
-  | "collection-scheduler-status" | "collection-scheduler-control";
+  | "collection-scheduler-status" | "collection-scheduler-control"
+  | "collection-resolution-preview" | "collection-resolution-history"
+  | "collection-resolution-apply" | "collection-resolution-revert";
 
 export async function operatorPause(): Promise<EmergencyState | null> {
   try { return parseEmergencyState(await invoke<unknown>("operator_pause")); }

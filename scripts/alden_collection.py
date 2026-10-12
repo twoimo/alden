@@ -838,6 +838,25 @@ class CollectionStore:
             target_spaces = {}
             for association in db.execute("SELECT target_id,project FROM target_projects WHERE permission!='denied' AND project IN (" + marks + ") ORDER BY project", projects):
                 target_spaces.setdefault(association["target_id"], []).append(association["project"])
+            source_contexts = {}
+            # Preserve every permitted current membership behind a shared ID.
+            # A union's chosen latest version does not replace another project's
+            # current source context or authorize a decision for that context.
+            contexts_sql = """SELECT m.document_id,m.target_id,m.current_version,p.project,v.label
+              FROM memberships m JOIN target_projects p ON p.target_id=m.target_id
+              JOIN versions v ON v.id=m.current_version JOIN targets t ON t.id=m.target_id
+              WHERE m.document_id IN (""" + selected + ") AND p.permission!='denied' AND p.project IN (" + marks + ") "
+            if self.schema >= 3:
+                contexts_sql += "AND m.availability='available' "
+            contexts_sql += """AND (? IS NULL OR m.target_id=?) AND (? IS NULL OR t.platform=?)
+              AND (? IS NULL OR json_extract(v.metadata,'$.kind')=?)
+              AND (? IS NULL OR v.collected_at>=?) AND (? IS NULL OR v.collected_at<?)
+              ORDER BY m.document_id,p.project,m.target_id,m.current_version"""
+            for association in db.execute(contexts_sql, (*ids, *projects, target_id, target_id, platform, platform,
+                                                         node_type, node_type, since, since, until, until)):
+                source_contexts.setdefault(association["document_id"], []).append({
+                    "project": association["project"], "target_id": association["target_id"],
+                    "version": association["current_version"], "label": association["label"]})
             nodes = []
             for row in rows:
                 meta = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
@@ -847,6 +866,7 @@ class CollectionStore:
                               "importance": 20, "updated_at": row["collected_at"], "description": row["body"][:2400],
                               "space": ", ".join(target_spaces.get(row["target_id"], [])), "source_version": row["visible_version"],
                               "source_url": row["source_url"], "source_target": row["target_id"], "source_platform": row["platform"],
+                              "source_contexts": source_contexts.get(row["id"], []),
                               "degree": row["degree"], "degree_scope": "permitted filtered graph",
                               "source_metadata": {"kind": kind}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
             edges = [{"id": row["id"], "source": row["source"], "target": row["target"], "relation": row["type"], "context": "explicit source relationship", "weight": 1, "purpose": "reference", "evidence_message_id": row["id"], "evidence": {"kind": "snapshot", "source_event_ids": [row["id"]], "chat_id": "", "confirmed_at": None, "retracted": False}}
@@ -1112,10 +1132,22 @@ def read_action(state_root: Path, action: str, query: str | None = None) -> dict
         if options.get("activity") is True:
             return store.activity_page(projects=projects, after=options.get("after"), stream_id=options.get("stream_id"),
                                        limit=options.get("limit",200), target_id=options.get("target_id"), platform=options.get("platform"))
-        return store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
+        result = store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
                                 focus=options.get("focus"), hops=options.get("hops",1), query=str(options.get("search", ""))[:256],
                                 target_id=options.get("target_id"), platform=options.get("platform"),
                                 node_type=options.get("node_type"), relation=options.get("relation"),
                                 since=options.get("since"), until=options.get("until"),
                                 details=options.get("details",False), expected_version=options.get("expected_version"), overview=options.get("overview",False))
+        # Read existing project-bound decisions without changing their source
+        # validation or write contract. A union preserves independent contexts
+        # unless every displayed current context explicitly agrees.
+        if projects:
+            from alden_entity_resolution import active_resolutions
+            from alden_entity_projection import project_groups, project_context_groups
+            with store.database() as db:
+                groups = [group for project in dict.fromkeys(projects) for group in active_resolutions(store, db, [project])]
+            current = [{**group, "state": "active"} for group in groups
+                       if group.get("current_validity", {}).get("valid") is True]
+            result = project_groups(result, current, projects[0]) if len(projects) == 1 else project_context_groups(result, current, projects)
+        return result
     raise ValueError("collection_action_invalid")

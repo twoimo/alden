@@ -985,6 +985,31 @@ impl PythonBridge {
         }
     }
 
+    pub fn for_entity_audit(state_root: PathBuf) -> Result<Self, BridgeError> {
+        if state_root.file_name().is_none_or(|name| name != "resolution-state") {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        let bridge = Self::for_assistant_audit(state_root.clone())?;
+        let mut marker = OpenOptions::new().write(true).create_new(true).mode(0o600)
+            .open(state_root.join("owned-entity-audit.json")).map_err(|_| BridgeError::StateIo)?;
+        marker.write_all(br#"{"purpose":"alden-owned-entity-resolution-audit-v1","schema":1}"#)
+            .map_err(|_| BridgeError::StateIo)?;
+        let receipt = parse_json_output(&bridge.run_python(
+            &["--action".into(), "collection-resolution-fixture".into()], Duration::from_secs(30), None, false)?)?;
+        if receipt["ok"] != true || receipt["purpose"] != "alden-owned-entity-resolution-audit-v1" {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        Ok(bridge)
+    }
+
+    pub fn verify_entity_audit(&self) -> Result<Value, BridgeError> {
+        if self.audit_abort_root.is_none() || self.config.state_root.file_name().is_none_or(|name| name != "resolution-state") {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        parse_json_output(&self.run_python(
+            &["--action".into(), "collection-resolution-fixture-verify".into()], Duration::from_secs(20), None, false)?)
+    }
+
     /// Read-only, bounded metadata probe of the checkpoint and persisted notes.
     pub fn knowledge_revision(&self) -> Option<String> {
         knowledge_revision_probe::probe(&self.config.state_root)
@@ -1226,6 +1251,10 @@ impl PythonBridge {
                 | "collection-affinity"
                 | "collection-quality"
                 | "collection-projects"
+                | "collection-resolution-preview"
+                | "collection-resolution-history"
+                | "collection-resolution-apply"
+                | "collection-resolution-revert"
                 | "collection-scheduler-status"
                 | "collection-scheduler-control"
                 | "reply-history"
@@ -2320,11 +2349,75 @@ fn settings_action_args(
             | MLX_SERVER_LAUNCH_ACTION
             | MLX_SERVER_STOP_ACTION
             | "collection-scheduler-control"
+            | "collection-resolution-apply"
+            | "collection-resolution-revert"
     );
     if !opt_in_allowed && (explicit_opt_in.is_some() || token_id.is_some()) {
         return Err(BridgeError::ActionNotAllowed);
     }
     match action {
+        "collection-resolution-preview" | "collection-resolution-history" => {
+            if node_id.is_some() || chat_id.is_some() || model.is_some() {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            let value = bounded_arg(query, 4096).ok_or(BridgeError::ActionNotAllowed)?;
+            let parsed: Value =
+                serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
+            if !parsed.is_object() {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            args.extend(["--history-query".into(), value]);
+        }
+        "collection-resolution-apply" | "collection-resolution-revert" => {
+            if explicit_opt_in != Some(true)
+                || token_id.is_some()
+                || node_id.is_some()
+                || chat_id.is_some()
+                || model.is_some()
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            let value = bounded_arg(query, 32768).ok_or(BridgeError::ActionNotAllowed)?;
+            let parsed: Value =
+                serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
+            let object = parsed.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+            let fields: &[&str] = if action == "collection-resolution-apply" {
+                &["plan", "request_id"]
+            } else {
+                &[
+                    "resolution_id",
+                    "expected_revision",
+                    "request_id",
+                    "projects",
+                ]
+            };
+            if object.keys().any(|key| !fields.contains(&key.as_str()))
+                || object.len() != fields.len()
+                || parsed["request_id"].as_str().is_none_or(|value| {
+                    !(16..=64).contains(&value.len())
+                        || !value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                })
+                || action == "collection-resolution-apply" && !parsed["plan"].is_object()
+                || action == "collection-resolution-revert"
+                    && (parsed["resolution_id"]
+                        .as_str()
+                        .is_none_or(|v| v.is_empty() || v.len() > 128)
+                        || parsed["expected_revision"]
+                            .as_u64()
+                            .is_none_or(|v| v >= 9_007_199_254_740_991)
+                        || parsed["projects"].as_array().is_none_or(|projects| {
+                            projects.len() != 1
+                                || projects[0]
+                                    .as_str()
+                                    .is_none_or(|v| v.is_empty() || v.len() > 128)
+                        }))
+            {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            args.extend(["--history-query".into(), value, "--explicit-opt-in".into()]);
+        }
         "collection-scheduler-status" => {
             if query.is_some() || node_id.is_some() || chat_id.is_some() || model.is_some() {
                 return Err(BridgeError::ActionNotAllowed);
@@ -5589,6 +5682,104 @@ mod tests {
             "private-error",
         ] {
             assert!(!text.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn entity_resolution_writes_require_the_exact_explicit_boundary() {
+        let apply = r#"{"plan":{"project":"a"},"request_id":"opaque-resolution-request-0001"}"#;
+        assert!(settings_action_args(
+            "collection-resolution-apply",
+            Some(apply),
+            None,
+            None,
+            None,
+            None,
+            None
+        )
+        .is_err());
+        let accepted = settings_action_args(
+            "collection-resolution-apply",
+            Some(apply),
+            None,
+            None,
+            None,
+            Some(true),
+            None,
+        )
+        .unwrap();
+        assert_eq!(accepted.last().unwrap(), "--explicit-opt-in");
+        assert!(settings_action_args(
+            "collection-resolution-apply",
+            Some(apply),
+            None,
+            None,
+            None,
+            Some(true),
+            Some("token")
+        )
+        .is_err());
+        let injected =
+            r#"{"plan":{},"request_id":"opaque-resolution-request-0001","model":"other"}"#;
+        assert!(settings_action_args(
+            "collection-resolution-apply",
+            Some(injected),
+            None,
+            None,
+            None,
+            Some(true),
+            None
+        )
+        .is_err());
+        let undo = r#"{"resolution_id":"r","expected_revision":1,"request_id":"opaque-resolution-request-0002","projects":["a"]}"#;
+        assert!(settings_action_args(
+            "collection-resolution-revert",
+            Some(undo),
+            None,
+            None,
+            None,
+            Some(true),
+            None
+        )
+        .is_ok());
+        let widened = undo.replace(r#"["a"]"#, r#"["a","b"]"#);
+        assert!(settings_action_args(
+            "collection-resolution-revert",
+            Some(&widened),
+            None,
+            None,
+            None,
+            Some(true),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn entity_resolution_reads_do_not_accept_write_or_model_flags() {
+        for action in [
+            "collection-resolution-preview",
+            "collection-resolution-history",
+        ] {
+            let query = r#"{"projects":["a"]}"#;
+            assert!(
+                settings_action_args(action, Some(query), None, None, None, None, None).is_ok()
+            );
+            assert!(
+                settings_action_args(action, Some(query), None, None, None, Some(true), None)
+                    .is_err()
+            );
+            assert!(settings_action_args(
+                action,
+                Some(query),
+                None,
+                None,
+                Some("model"),
+                None,
+                None
+            )
+            .is_err());
+            assert!(settings_action_args(action, None, None, None, None, None, None).is_err());
         }
     }
 

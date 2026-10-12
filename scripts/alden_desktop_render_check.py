@@ -258,6 +258,10 @@ SETTINGS_ACTIONS: dict[str, Any] = {
     "collection-graph": {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0, "next": None},
     "collection-affinity": {"ok": True, "layout_affinity": {"schema": "alden-layout-affinity-v1", "state": "unavailable", "reason": "read_only_fixture"}},
     "collection-quality": {"ok": False, "schema": 2, "scope": {"requested_scope": None, "requested_project": None}, "reason": "quality_scope_unavailable"},
+    "collection-resolution-history": {"ok": True, "state": "not_configured", "items": [], "revision": 0, "request_result": None},
+    "collection-resolution-preview": {"ok": False, "reason": "collection_resolution_store_not_configured"},
+    "collection-resolution-apply": {"ok": False, "reason": "read_only_fixture"},
+    "collection-resolution-revert": {"ok": False, "reason": "read_only_fixture"},
     "reply-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},
     "geeknews-history": {"ok": True, "items": [], "next": None, "total": 0, "partial": False},
     "knowledge-graph-status": {
