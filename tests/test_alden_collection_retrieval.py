@@ -18,6 +18,118 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_large_shared_membership_proof_fails_with_a_budget_error_instead_of_partial_attribution(self):
+        doc=None
+        for i in range(257):
+            target=self.store.register(platform='graph',original_id='shared-'+str(i),kind='source',
+                label='shared',projects=['one'])
+            doc=self.add(target,'widely-shared','original body')
+        with self.assertRaisesRegex(RuntimeError,'collection_retrieval_budget'):
+            retrieve(self.root,'shared',projects=['one'],also=[doc],max_entities=1,max_relations=0)
+
+    def test_union_proof_does_not_borrow_another_current_version_membership(self):
+        doc=self.add(self.allowed,'same-original','older original source')
+        self.add(self.other,'same-original','newer other source')
+        result=retrieve(self.root,'shared',projects=['one','two'],also=[doc],max_entities=1,max_relations=0)
+        proof=result['fact_provenance'][0]
+        self.assertEqual(proof['projects'],['two'])
+        self.assertEqual({m['target_id'] for m in proof['source_memberships']},{self.other})
+        self.assertIn('newer other source',result['facts'][0])
+        self.assertNotIn('older original source',result['facts'][0])
+
+    def test_shared_version_exposes_only_requested_permitted_memberships(self):
+        shared=self.store.register(platform='graph',original_id='shared',kind='source',label='shared',
+                                   projects=['one','two','not-requested'])
+        doc=self.add(shared,'both','original shared source')
+        with self.store.database() as db:
+            db.execute("UPDATE target_projects SET permission='denied' WHERE target_id=? AND project='two'",(shared,))
+        result=retrieve(self.root,'shared',projects=['one','two'],also=[doc],max_entities=1,max_relations=0)
+        proof=result['fact_provenance'][0]
+        self.assertEqual(proof['projects'],['one'])
+        self.assertEqual([m['project'] for m in proof['source_memberships']],['one'])
+        with self.store.database() as db:
+            db.execute("UPDATE target_projects SET permission='local-private' WHERE target_id=? AND project='two'",(shared,))
+        proof=retrieve(self.root,'shared',projects=['two','one'],also=[doc],max_entities=1,max_relations=0)['fact_provenance'][0]
+        self.assertEqual(proof['projects'],['one','two'])
+        self.assertEqual(proof['requested_projects'],['two','one'])
+        self.assertEqual(len(proof['source_memberships']),2)
+
+    def test_metadata_summary_stays_searchable_without_certifying_original_body(self):
+        self.store.ingest(self.allowed,[{'platform':'graph','original_id':'description','label':'shared term',
+            'text':'A file description','coverage':'existing privacy-filtered derived metadata; original bytes not opened',
+            'raw':{'summary':'A file description','content_indexed':1}}])
+        result=retrieve(self.root,'shared',projects=['one'],max_relations=0)
+        self.assertEqual(result['fact_provenance'][0]['content_evidence']['classification'],'metadata_description')
+        self.assertEqual(result['fact_provenance'][0]['truth_status'],'source_description; original body unverified')
+        self.assertTrue(result['facts'][0].startswith('[자료 설명 · 원래 본문 미확인]'))
+
+    def test_relation_proof_uses_its_current_stored_revision_and_project(self):
+        docs=[{'platform':'graph','original_id':n,'label':'shared term '+n,'text':'original '+n} for n in ('a','b')]
+        rel={'source_platform':'graph','source_id':'a','target_platform':'graph','target_id':'b',
+             'type':'mentions','evidence':{'location':'synthetic declared source'}}
+        self.store.ingest(self.allowed,docs,relations=[rel])
+        result=retrieve(self.root,'shared',projects=['one','two'],also=[identity('graph','a')],max_entities=1)
+        proof=next(p for p in result['fact_provenance'] if p['fact_type']=='relation')
+        self.assertEqual(proof['projects'],['one'])
+        self.assertEqual(proof['requested_projects'],['one','two'])
+        self.assertEqual(proof['source_memberships'][0]['target_id'],self.allowed)
+        with self.store.database() as db:
+            db.execute("UPDATE relations SET evidence=? WHERE id=?",('{"location":"fabricated"}',proof['relation_id']))
+        with self.assertRaisesRegex(RuntimeError,'collection_relation_integrity'):
+            retrieve(self.root,'shared',projects=['one'],also=[identity('graph','a')],max_entities=1)
+
+    def test_projection_field_changes_fail_and_json_key_order_does_not(self):
+        doc=self.add(self.allowed,'bound-document','original body')
+        with self.store.database() as db:
+            original=dict(db.execute('SELECT * FROM versions WHERE document_id=?',(doc,)).fetchone())
+        for field,value in [('label','changed label'),('processing_version','different-parser'),
+                            ('projection_sha256','f'*64),('metadata','{"other":"changed"}')]:
+            with self.subTest(field=field):
+                with self.store.database() as db:db.execute('UPDATE versions SET '+field+'=? WHERE id=?',(value,original['id']))
+                with self.assertRaisesRegex(RuntimeError,'collection_version_integrity'):
+                    retrieve(self.root,'shared',projects=['one'],also=[doc],max_entities=1,max_relations=0)
+                with self.store.database() as db:db.execute('UPDATE versions SET '+field+'=? WHERE id=?',(original[field],original['id']))
+        metadata=json.loads(original['metadata'])
+        with self.store.database() as db:
+            db.execute('UPDATE versions SET metadata=? WHERE id=?',(json.dumps(dict(reversed(list(metadata.items())))),original['id']))
+        self.assertTrue(retrieve(self.root,'shared',projects=['one'],also=[doc],max_entities=1,max_relations=0)['fact_provenance'][0]['provenance_valid'])
+
+    def test_revised_version_and_revoked_permission_after_ranking_cannot_publish_old_proof(self):
+        for mode in ('revision','permission'):
+            with self.subTest(mode=mode):
+                doc=self.add(self.allowed,'racing-'+mode,'original body')
+                original_search=CollectionStore.search
+                def changed(store,*args,**kwargs):
+                    result=original_search(store,*args,**kwargs)
+                    if mode=='revision':
+                        self.store.ingest(self.allowed,[{'platform':'graph','original_id':'racing-'+mode,
+                            'label':'shared term','text':'original body'}],processing_version='different-parser')
+                    else:
+                        with self.store.database() as db:
+                            db.execute("UPDATE target_projects SET permission='denied' WHERE target_id=?",(self.allowed,))
+                    return result
+                with patch.object(CollectionStore,'search',changed),self.assertRaisesRegex(RuntimeError,'collection_graph_version_changed'):
+                    retrieve(self.root,'shared',projects=['one'],also=[doc],max_entities=1,max_relations=0)
+
+
+    def test_union_query_does_not_turn_request_scope_into_source_membership(self):
+        doc=self.add(self.allowed,'research-only','original shared source')
+        self.add(self.other,'separate-source','different evidence')
+        result=retrieve(self.root,'shared',projects=['one','two'],also=[doc],max_entities=1,max_relations=0)
+        proof=result['fact_provenance'][0]
+        self.assertEqual(result['projects'],['one','two'])
+        self.assertEqual(proof['projects'],['one'])
+        self.assertEqual(proof['requested_projects'],['one','two'])
+        self.assertEqual(proof['source_memberships'],[{'target_id':self.allowed,'project':'one',
+            'permission':'local-private','source_version':proof['source_version']}])
+
+    def test_modified_stored_body_cannot_be_certified_by_an_unchanged_raw_hash(self):
+        doc=self.add(self.allowed,'corrupt-projection','original body')
+        with self.store.database() as db:
+            db.execute("UPDATE versions SET body='fabricated statement' WHERE document_id=?",(doc,))
+        with self.assertRaisesRegex(RuntimeError,'collection_version_integrity'):
+            retrieve(self.root,'shared',projects=['one'],also=[doc],max_entities=1,max_relations=0)
+
     def test_latest_source_uses_publication_not_collection_time_and_keeps_history(self):
         self.store.ingest(self.allowed,[{'original_id':'old','label':'shared term','text':'older terms','published_at':'2026-08-01T00:00:00Z'}])
         self.store.ingest(self.allowed,[{'original_id':'new','label':'shared term','text':'recent terms','published_at':'2026-09-01T00:00:00Z'}])

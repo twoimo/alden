@@ -10,6 +10,22 @@ import alden_voice as voice
 from alden_abort import AbortController,AldenCancelled
 
 class VoiceRetrievalTests(unittest.TestCase):
+    def test_collection_source_memberships_and_content_class_survive_model_and_saved_context(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            proof={'fact_type':'entity','entity_id':'stable','note_id':'stable','source_kind':'collected_source',
+                   'source_version':'v2','projects':['one'],'requested_projects':['one','two'],
+                   'source_memberships':[{'target_id':'declared','project':'one','permission':'local-private','source_version':'v2'}],
+                   'scope_basis':'current_permitted_version_memberships_at_selected_snapshot',
+                   'content_evidence':{'policy':'source-content-evidence-v4','classification':'metadata_description'},
+                   'truth_status':'source_description; original body unverified','provenance_valid':True}
+            result={'facts':['[자료 설명 · 원래 본문 미확인] 파일 위치'],'fact_provenance':[proof],'search_mode':'rrf'}
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=result):
+                reference,metrics=voice._voice_knowledge_reference('저장된 자료의 출처를 알려줘',[],root,AbortController(root).token())
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(context['graph_provenance'][0],proof)
+            self.assertEqual(metrics['graph_provenance'][0],proof)
+
     def root(self,path):
         root=Path(path);folder=root/'knowledge/corpus';folder.mkdir(parents=True);(folder/'current.json').write_text('{}');return root
 

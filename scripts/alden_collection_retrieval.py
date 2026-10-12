@@ -6,13 +6,81 @@ from pathlib import Path
 import sqlite3
 import struct
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, safe_directory
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory
+from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class
 
 ENCODING = 'e5-char256-stride192-weighted-unit-pool-v1'
 TEXT_VERSION = 'retained-local-original-text-v1'
 MAX_TEXT_BYTES = 32 * 1024 * 1024
 MAX_DOCUMENTS = 100000
 BATCH = 8
+MAX_SOURCE_MEMBERSHIPS = 256
+
+
+def _strict_json(value):
+    def pairs(items):
+        result = {}
+        for key, item in items:
+            if key in result:
+                raise ValueError('collection_json_duplicate_key')
+            result[key] = item
+        return result
+    def constant(_value):
+        raise ValueError('collection_json_nonfinite')
+    return json.loads(value, object_pairs_hook=pairs, parse_constant=constant)
+
+
+def _verified_source(db, store, row, projects):
+    """Bind selected source bytes to the current permitted projection snapshot."""
+    current = db.execute('''SELECT v.*,d.platform,d.original_id FROM (''' +
+        store._scope_versions(projects) + ''') s JOIN documents d ON d.id=s.document_id
+        JOIN versions v ON v.id=s.current_version
+        WHERE d.id=? AND d.availability='available' ''', (*projects, row['id'])).fetchone()
+    if current is None or current['id'] != row['version']:
+        raise RuntimeError('collection_graph_version_changed')
+    try:
+        metadata = _strict_json(current['metadata'])
+        if (not isinstance(metadata, dict) or not isinstance(current['metadata'], str)
+                or any(not isinstance(current[k], str) for k in
+                       ('document_id','platform','original_id','label','body',
+                        'raw_sha256','raw_path','processing_version','projection_sha256'))):
+            raise ValueError('version_fields')
+        projection = digest(encoded([current['label'], current['body'],
+            {k:v for k,v in metadata.items() if k != 'source'}]))
+        expected = identity('version', encoded([row['id'], current['raw_sha256'],
+                            current['processing_version'], projection]).decode())
+        if (current['document_id'] != row['id']
+                or identity(current['platform'], current['original_id']) != row['id']
+                or projection != current['projection_sha256'] or expected != current['id']
+                or any(current[k] != row[k] for k in ('label','platform','original_id','raw_sha256','raw_path'))):
+            raise ValueError('version_binding')
+    except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+        raise RuntimeError('collection_version_integrity') from error
+    raw = store._verified_source_blob(store.blobs, current['raw_path'], MAX_RECORD_BYTES)
+    if digest(raw) != current['raw_sha256']:
+        raise RuntimeError('collection_source_integrity')
+    try:
+        record = _strict_json(raw)
+    except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+        raise RuntimeError('collection_source_integrity') from error
+    if (row['body_source'] == 'retained_record.localOriginalText'
+            and (not isinstance(record, dict) or record.get('localOriginalText') != row['body'])
+            or row['body_source'] == 'stored_body' and current['body'] != row['body']):
+        raise RuntimeError('collection_source_integrity')
+    marks = ','.join('?' for _ in projects)
+    memberships = [dict(r) for r in db.execute('''SELECT m.target_id,p.project,p.permission,
+        m.current_version AS source_version FROM memberships m
+        JOIN target_projects p ON p.target_id=m.target_id
+        WHERE m.document_id=? AND m.current_version=? AND m.availability='available'
+        AND p.permission!='denied' AND p.project IN (''' + marks + ''')
+        ORDER BY p.project,m.target_id LIMIT 257''', (row['id'], row['version'], *projects))]
+    if len(memberships) > MAX_SOURCE_MEMBERSHIPS:
+        raise RuntimeError('collection_retrieval_budget')
+    if not memberships:
+        raise RuntimeError('collection_graph_version_changed')
+    if any(m['permission'] not in ('public','local-private') for m in memberships):
+        raise RuntimeError('collection_source_scope_integrity')
+    return record, metadata, memberships
 
 
 def _check(cancelled):
@@ -332,28 +400,28 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         chosen = []
         for document_id, _score in ranked[:max(0, min(int(max_entities), 10))]:
             row = eligible[document_id]
-            current = db.execute("SELECT s.current_version FROM (" + store._scope_versions(projects) +
-                                 ") s JOIN documents d ON d.id=s.document_id WHERE d.id=? AND d.availability='available'", (*projects, document_id)).fetchone()
-            if current is None or current[0] != row['version']:
-                raise RuntimeError('collection_graph_version_changed')
-            raw = store._verified_source_blob(store.blobs, row['raw_path'], MAX_RECORD_BYTES)
-            if digest(raw) != row['raw_sha256']:
-                raise RuntimeError('collection_source_integrity')
-            record = json.loads(raw)
-            if row['body_source'] == 'retained_record.localOriginalText' and (
-                    not isinstance(record, dict) or record.get('localOriginalText') != row['body']):
-                raise RuntimeError('collection_source_integrity')
-            metadata = json.loads(db.execute('SELECT metadata FROM versions WHERE id=?', (row['version'],)).fetchone()[0])
+            record, metadata, memberships = _verified_source(db, store, row, projects)
+            source_projects = list(dict.fromkeys(m['project'] for m in memberships))
             proof = {'fact_type': 'entity', 'entity_id': document_id, 'note_id': document_id,
                      'source_kind': 'collected_source', 'source_version': row['version'],
                      'note_hash': row['raw_sha256'], 'original_id': row['original_id'],
-                     'platform': row['platform'], 'projects': projects, 'updated_at': row['collected_at'],
+                     'platform': row['platform'], 'projects': source_projects,
+                     'requested_projects': projects, 'source_memberships': memberships,
+                     'scope_basis': 'current_permitted_version_memberships_at_selected_snapshot',
+                     'updated_at': row['collected_at'],
                      'body_source': row['body_source'],
                      'derived_from': metadata.get('source', {}), 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
+            evidence_class = content_evidence_class(metadata, row['body'], source=record,
+                                                   body_source=row['body_source'])
+            proof['content_evidence'] = {'policy': CONTENT_POLICY, 'classification': evidence_class}
+            if evidence_class != 'content_candidate':
+                proof['truth_status'] = 'source_description; original body unverified'
             if isinstance(record, dict):
                 proof['source_author'] = {key: record[key] for key in ['author', 'handle', 'date', 'url', 'localTextOrigin'] if isinstance(record.get(key), str)}
             text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
+            if evidence_class != 'content_candidate':
+                text='[자료 설명 · 원래 본문 미확인] '+text
             if temporal_selection['mode']=='latest_observation':
                 proof['observation_time']=metadata.get('published_at');proof['observation_basis']='source_published_at'
                 text=observation_note(metadata.get('published_at'),'source_published_at')+text
@@ -376,14 +444,34 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 target = eligible[edge['target']]
                 if edge['source_version'] != eligible[edge['source']]['version'] or edge['target_version'] != target['version']:
                     continue
-                raw = store._verified_source_blob(store.blobs, target['raw_path'], MAX_RECORD_BYTES)
-                if digest(raw) != target['raw_sha256']:
-                    raise RuntimeError('collection_source_integrity')
+                _verified_source(db, store, target, projects)
+                revision = db.execute('''SELECT target_id,source,target,type,evidence FROM relation_versions
+                    WHERE relation_id=? AND version=?''', (edge['id'], edge['version'])).fetchone()
+                if (revision is None or tuple(revision) != tuple(edge[k] for k in
+                        ('target_id','source','target','type','evidence'))
+                        or digest(edge['evidence'].encode()) != edge['version']):
+                    raise RuntimeError('collection_relation_integrity')
+                try:
+                    declared_evidence = _strict_json(edge['evidence'])
+                except (ValueError, TypeError, UnicodeError, RecursionError) as error:
+                    raise RuntimeError('collection_relation_integrity') from error
+                relation_memberships = [dict(r) for r in db.execute('''SELECT target_id,project,permission
+                    FROM target_projects WHERE target_id=? AND permission!='denied'
+                    AND project IN (''' + marks + ') ORDER BY project', (edge['target_id'], *projects))]
+                if not relation_memberships or any(m['permission'] not in ('public','local-private') for m in relation_memberships):
+                    raise RuntimeError('collection_source_scope_integrity')
                 append(eligible[edge['source']]['label'] + ' — ' + edge['type'] + ' → ' + target['label'],
                        {'fact_type': 'relation', 'source_kind': 'collected_source', 'relation': edge['type'],
                         'source_id': edge['source'], 'target_id': edge['target'], 'relation_id': edge['id'],
                         'source_version': eligible[edge['source']]['version'], 'target_version': target['version'],
-                        'projects': projects, 'source_evidence': json.loads(edge['evidence']),
+                        'projects': [m['project'] for m in relation_memberships],
+                        'requested_projects': projects, 'source_memberships': [
+                            {**m,'source_version':edge['source_version'],'target_version':edge['target_version']}
+                            for m in relation_memberships],
+                        'scope_basis': 'current_permitted_relation_memberships_at_selected_snapshot',
+                        'source_evidence': declared_evidence,
+                        'evidence_version': edge['version'],
+                        'truth_status': 'declared stored relation; not independently verified',
                         'provenance_valid': True, 'retracted': False})
                 if sum(p['fact_type'] == 'relation' for p in provenance) >= min(int(max_relations), 10):
                     break
