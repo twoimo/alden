@@ -247,6 +247,12 @@ impl Output {
                 | "workspace-readback.json"
                 | "knowledge-quality-default.png"
                 | "knowledge-quality-compact.png"
+                | "entity-compare-default.png"
+                | "entity-compare-compact.png"
+                | "entity-applied-default.png"
+                | "entity-applied-compact.png"
+                | "entity-reverted-default.png"
+                | "entity-reverted-compact.png"
                 | "activity-ready.json"
                 | "render-audit.json"
         ) || bytes.len() > MAX_BYTES
