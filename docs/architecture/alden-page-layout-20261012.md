@@ -16,7 +16,7 @@ rules and stored source records are unchanged.
 
 A new warm-checkpoint regression fails against the preceding source. It then
 passes with exact surviving coordinates and the new explicit pin preserved.
-All 753 UI tests and 136 native tests pass, as do TypeScript and strict Clippy.
+All 754 UI tests and 136 native tests pass, as do TypeScript and strict Clippy.
 
 The first candidate reduced default-view overlap but did not materially fix
 compact central concentration. It was not installed. The compact audit also
@@ -31,6 +31,15 @@ provisional. A regression covers this exact cache-restoration boundary.
 Constructor-bypassing render test fixtures initially lacked the new marker
 set, causing 21 unrelated fixture failures. Their initialization was brought
 into line with the actual constructor; product guards were not weakened.
+
+The next native compact capture restored geometry but still used a camera fit
+made from temporary display points. The existing one-time asynchronous fit
+completion is now also armed for large overviews when an explicit fit sees
+provisional positions. Ordinary data updates do not arm it, and orbit input
+or a restored camera pose still prevents a late refit. A 25-node regression
+checks the smaller final distance, visible centers and absence of repeat fits.
+This changes requested camera-fit completion as well as geometry; actual
+before/after poses remain part of the native comparison.
 
 ## Evidence and measurement scope
 

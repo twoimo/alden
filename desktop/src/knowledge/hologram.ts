@@ -837,7 +837,8 @@ export class KnowledgeHologram {
     const relative=points.map(p=>({x:p.x-x,y:p.y-y,z:p.z-z}));
     const distance=overviewCameraDistance(relative,this.viewport.width,this.viewport.height,this.camera.fov,this.view.hops===0?.08:.32);
     this.desiredCamera.set(x,y,z+distance);this.desiredLookAt.set(x,y,z);
-    this.fitAfterSemanticLayout = this.view.hops === 0 && this.view.nodes.length > 0 && this.view.nodes.length <= 24;
+    this.fitAfterSemanticLayout = this.view.hops === 0 && this.view.nodes.length > 0
+      && (this.view.nodes.length <= 24 || this.provisionalOverviewPositions.size > 0);
     // Orbit controls must admit the fitted overview; otherwise every frame
     // pulls toward an unreachable target and the idle loop never settles.
     this.orbit.maxDistance = Math.max(12,distance+.5);

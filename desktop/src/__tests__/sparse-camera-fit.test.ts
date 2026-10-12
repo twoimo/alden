@@ -15,6 +15,7 @@ function fixture() {
     desiredCamera: new THREE.Vector3(0, 0, 3.6), desiredLookAt: new THREE.Vector3(),
     orbit: { maxDistance: 12 }, orbitActive: false, restoredWindowSize: null,
     fitAfterSemanticLayout: false, preparePositionMotion: vi.fn(),
+    provisionalOverviewPositions: new Set<string>(),
     loop: { start: vi.fn() }, invalidateFrame: vi.fn(),
   });
   return value as {
@@ -69,5 +70,22 @@ describe('sparse fit after asynchronous layout', () => {
     value.view.nodes = Array.from({ length: 25 }, (_, i) => ({ id: String(i) }));
     value.anchors = new Map(value.view.nodes.map(n => [n.id, new THREE.Vector3()]));
     value.resetOverviewCamera(); expect(value.fitAfterSemanticLayout).toBe(false);
+  });
+
+  it('finishes an explicit large-graph fit made from provisional points without refitting ordinary updates', () => {
+    const value=fixture(), ids=Array.from({length:25},(_,i)=>String(i));
+    value.view.nodes=ids.map(id=>({id}));
+    value.anchors=new Map(ids.map((id,i)=>[id,new THREE.Vector3(i%2?2.2:-2.2,0,0)]));
+    Object.assign(value,{provisionalOverviewPositions:new Set(ids)});
+    value.resetOverviewCamera();const far=value.desiredCamera.distanceTo(value.desiredLookAt);
+    expect(value.fitAfterSemanticLayout).toBe(true);
+    const compact=ids.map((id,i)=>[id,{x:(i-12)*.025,y:0,z:0}] as [string,{x:number;y:number;z:number}]);
+    value.applySemanticLayout({anchors:compact} as LayoutResponse);
+    expect(value.desiredCamera.distanceTo(value.desiredLookAt)).toBeLessThan(far);
+    expect(value.fitAfterSemanticLayout).toBe(false);
+    const pose=value.desiredCamera.toArray();
+    value.applySemanticLayout({anchors:compact} as LayoutResponse);
+    expect(value.desiredCamera.toArray()).toEqual(pose);
+    for(const [,point] of compact)expect(Math.abs(project(value,point).x)).toBeLessThan(1);
   });
 });
