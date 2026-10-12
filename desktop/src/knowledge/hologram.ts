@@ -981,7 +981,10 @@ export class KnowledgeHologram {
       this.camera.fov, this.viewport.height, this.view.nodes.length),
       overviewGlyphScale(this.viewport.width,this.viewport.height,denseOverview),
       denseOverview?maximumOverviewStarRadius(this.camera.position.distanceTo(this.lookAt),this.camera.fov,this.viewport.height):Infinity);
-    if(denseOverview&&this.displayRelaxationPending&&!pointsMoving&&!cameraMoving&&!this.orbitActive&&this.semanticLayout.settled)
+    // The source advance above can settle on this very frame. Testing its
+    // pre-advance state would stop RAF before the first correction can run.
+    if(denseOverview&&this.displayRelaxationPending&&!this.plasticity.moving
+      &&!this.positionTransition.moving&&!cameraMoving&&!this.orbitActive&&this.semanticLayout.settled)
       this.prepareDisplayCorrection();
     const displayMoving=this.displayTransition.moving;
     this.displayTransition.advance(this.displayOffsets,elapsed,this.reducedMotionEnabled||this.paused);

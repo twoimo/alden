@@ -58,6 +58,19 @@ function fixture(reducedMotion: boolean) {
 }
 
 describe('display collision correction in the production frame',()=>{
+  it.each([false,true])('applies correction on the final source-settling frame (reduced=%s)',reduced=>{
+    const f=fixture(reduced),{h}=f;
+    try {
+      h.displayRelaxationPending=true;h.plasticity.moving=true;
+      h.plasticity.advance=()=>{h.plasticity.moving=false;};
+      h.plasticity.settle=()=>{h.plasticity.moving=false;};
+      h.render(1/60);
+      expect(h.displayRelaxationPending).toBe(false);
+      expect(h.projectedRelaxation.moved).toBeGreaterThan(0);
+      if(reduced)expect(h.auditProjectedLayout().metrics.overlapPairs).toBe(0);
+      else expect(h.displayTransition.moving).toBe(true);
+    }finally{f.dispose();}
+  });
   it.each([false,true])('preserves sources and pins; synchronizes GPU, labels, picking and bridges (reduced=%s)', reduced=>{
     const f=fixture(reduced),{h,positions,anchors,displayedPositions}=f;
     const snapshot=()=>JSON.stringify({positions:[...positions],anchors:[...anchors],graph:h.graph});
