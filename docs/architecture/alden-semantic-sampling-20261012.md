@@ -76,3 +76,44 @@ file equality, outlier causes, whole-graph semantic gold, central screen-space
 overlap reduction, or representative whole-app latency/resource gains.
 Existing R/S holds, source data, vectors, queues and model settings remain.
 Private evidence is under `outputs/semantic-sampling-20261012/` in the task root.
+
+## Local 0.3.77 delivery
+
+The canonical build source is `75aec2414f99cba33a58655b9cd896000ecb753f`.
+Source CI 38212922950 passed all four jobs. The local installation has 68
+payload files whose hashes and modes match the canonical build receipt;
+strict/deep ad-hoc signature verification and the independent 0.3.76 recovery
+copy passed. Three settings files, seven targets, two acquisition policies,
+model listeners and the selected collection/retrieval/voice tables matched
+the preinstallation snapshot. This does not certify every chat preference,
+queue or original full file.
+
+The current-graph regression is covered by the 746-test UI suite and the final
+public-port fixture, with TypeScript passing. Final native tests passed 136
+cases and strict Clippy; the pinned focused Python suite passed 86 cases.
+An earlier native startup exceeded its unchanged 96-second deadline before
+producing captures. Its cause remains unverified. Startup waits now retain
+their phase and last observed state; the failure receipt is preserved.
+
+The final candidate's 14 workspace states and 28 captures include applied
+semantic affinity and a stopped idle renderer at both sizes. The installed
+audit also completed the 14 workspace states, but its compact revalidation
+returned `affinity_rss_budget` and rendered the relation-only fallback. Its
+`affinityObserved` is explicitly false. The audit checks actual current graph
+enrichment against controller state and counts; a cached controller result
+alone cannot make that observation true. Both candidate and installed private
+synthetic entity workflows completed 3→2→3 nodes at both sizes with original
+sources preserved, no active groups and four resolution events. Twenty
+affected images were directly inspected.
+
+A separate installed CLI request completed with the same admitted proofs,
+bindings and coverage. Its inner peak RSS metric was 130,465,792 bytes against
+the existing 134,217,728-byte guard; the outer process peak was 134,742,016
+bytes. The inner observation does not prove a whole-process memory cap.
+Reducing avoidable allocations and repeating the affected installed flow
+remains required. No budget was raised or stale affinity silently retained.
+
+Dense compact captures retain central concentration and a bounded rectangular
+presentation. They do not certify whole-graph overlap or semantic clustering.
+The local package is ad-hoc signed; Developer ID, notarization, release tags
+and production deployment remain separate gates.
