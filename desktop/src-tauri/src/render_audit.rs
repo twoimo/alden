@@ -1031,7 +1031,7 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
         semantic:d?.semanticLayout??null,
         affinity:d?.graphRead?.affinity??null};})())"#;
     let before = collect_script(window, script.into(), deadline)?;
-    let bound = deadline.min(Instant::now() + Duration::from_secs(15));
+    let mut stable_since=None;
     let rested = loop {
         let state = collect_script(window, script.into(), deadline)?;
         let worker_ready = matches!(
@@ -1040,13 +1040,17 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
         );
         let affinity_ready = state["affinity"]["state"] == "unavailable"
             || applied_affinity_observed(&state);
+        if worker_ready && affinity_ready && state["semantic"]["pendingTargets"]==0 {
+            stable_since.get_or_insert(Instant::now());
+        } else { stable_since=None; }
         if (state["physics"]["moving"] == false
             && state["semantic"]["pendingTargets"] == 0
             && worker_ready
             && affinity_ready
             && state["loop"]["running"] == false
             && state["loop"]["pendingFrame"] == false)
-            || Instant::now() >= bound
+            || stable_since.is_some_and(|since:Instant|since.elapsed()>=Duration::from_secs(15))
+            || Instant::now() >= deadline
         {
             break state;
         }
@@ -1058,7 +1062,8 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
     let after = collect_script(window, script.into(), deadline)?;
     Ok(
         json!({"scope":"owned visible graph; observational only, not primary/GPU/battery or semantic proof",
-        "before":before,"restObserved":rested["physics"]["moving"] == false,
+        "before":before,"restWindowBasis":"fifteen seconds after current layout and affinity are ready, bounded by original global deadline",
+        "restObserved":rested["physics"]["moving"] == false,
         "layoutObserved":matches!(rested["semantic"]["worker"]["state"].as_str(),Some("ready" | "cached")) && rested["semantic"]["pendingTargets"] == 0,
         "affinityObserved":applied_affinity_observed(&rested) && applied_affinity_observed(&after),
         "renderIdleObserved":rested["loop"]["running"] == false
@@ -1198,19 +1203,29 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
     let mut states=Vec::new();
     for size in ["default","compact"] {
         if size=="compact" {
+            eprintln!("Alden scope {case}: suspend before compact resize");
             // Suspend this owned WKWebView before changing AppKit geometry;
             // resuming uses the existing visibility/reconnection lifecycle.
             visibility(window,false,deadline)?;
+            eprintln!("Alden scope {case}: suspended");
             let target=window.clone();let (tx,rx)=mpsc::sync_channel(1);
             window.run_on_main_thread(move || {
                 let result=live(deadline).and_then(|_| {
+                    let caught=objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
                     let native=target.ns_window().map_err(|_| "scope native window missing")?;
                     live(deadline)?;
                     unsafe {(&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0,680.0));}
                     Ok(())
+                    }));
+                    match caught {
+                        Ok(value)=>value,
+                        Err(exception)=>Err(format!("scope AppKit resize exception: {exception:?}")),
+                    }
                 });let _=tx.try_send(result);
             }).map_err(|_| "scope resize dispatch failed")?;receive(rx,deadline)?;
+            eprintln!("Alden scope {case}: compact native geometry set");
             visibility(window,true,deadline)?;
+            eprintln!("Alden scope {case}: resumed");
         }
         wait_for_audit_state("scoped graph paint",deadline,|| {
             let native=native_settings_size(window,deadline)?;
@@ -1254,6 +1269,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             "scope":"owned read-only native scoped graph only; no physical input, pixel/GPU/FPS or semantic gold proof"});
         publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
         publish(output,&format!("graph-scope-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+        eprintln!("Alden scope {case}: {size} files delivered");
         states.push(state);
     }
     Ok(json!({"case":case,"states":states,"scope":"fixed observed projects/filter/next-page, two owned window sizes, read-only"}))
