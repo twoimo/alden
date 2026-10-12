@@ -21,6 +21,7 @@ import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-dri
 import { PositionTransition } from './position-transition';
 import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout-metrics';
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
+import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
@@ -91,6 +92,7 @@ export class KnowledgeHologram {
   private readonly displayedPositions = new Map<string, THREE.Vector3>();
   private readonly displayOffsets = new Map<string, THREE.Vector3>();
   private readonly displayTransition = new PositionTransition();
+  private readonly displayClipMatrix = new THREE.Matrix4();
   private displayRelaxationPending = true;
   private projectedRelaxation: RelaxationResult['diagnostics'] | null = null;
   private readonly nebulae = new ContextNebulae();
@@ -960,6 +962,15 @@ export class KnowledgeHologram {
   private render(dt: number): void {
     if (this.disposed) return;
     const elapsed = Math.min(.25, Math.max(0, dt));
+    // Finalize the camera before testing correction readiness or projecting its
+    // display cap. Reduced motion must finish in this same requested frame.
+    const cameraProjectionChanged=this.camera.position.distanceToSquared(this.desiredCamera)>0
+      ||this.lookAt.distanceToSquared(this.desiredLookAt)>0||this.orbitActive;
+    const alpha=this.reducedMotionEnabled||this.paused?1:1-Math.exp(-12*elapsed);
+    this.camera.position.lerp(this.desiredCamera,alpha);this.lookAt.lerp(this.desiredLookAt,alpha);
+    this.camera.lookAt(this.lookAt);this.orbit.target.copy(this.lookAt);this.orbit.update();
+    this.camera.updateMatrixWorld(true);
+
     // Physics points stay within the 2.3-unit envelope. Use a larger bound
     // to underestimate pixel size for the nearest possible point, including
     // orbit/zoom, so a visible drift cannot be hidden by the rest criterion.
@@ -989,25 +1000,26 @@ export class KnowledgeHologram {
     const displayMoving=this.displayTransition.moving;
     this.displayTransition.advance(this.displayOffsets,elapsed,this.reducedMotionEnabled||this.paused);
     if (!this.neuronDetail) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
+    if(denseOverview&&this.displayOffsets.size){
+      this.graphRoot.updateMatrixWorld(true);
+      this.displayClipMatrix.multiplyMatrices(this.camera.projectionMatrix,this.camera.matrixWorldInverse).multiply(this.graphRoot.matrixWorld);
+    }
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
       if(base&&position){
         overviewDisplayPoint(base,this.viewport.width,this.viewport.height,denseOverview,position);
-        if(denseOverview){const offset=this.displayOffsets.get(id);if(offset)position.add(offset);}
+        if(denseOverview){const offset=this.displayOffsets.get(id);
+          if(offset&&offset.lengthSq()>0)position.addScaledVector(offset,
+            projectedOffsetGain(position,offset,this.displayClipMatrix.elements,this.viewport.width,this.viewport.height));}
         mesh.position.copy(position);this.orbMeshes.get(id)?.position.copy(position);this.neuronMeshes.get(id)?.position.copy(position);
       }
     }
-    this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving||displayMoving);
-    this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving||displayMoving);
+    this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving||displayMoving||denseOverview&&cameraProjectionChanged);
+    this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving||displayMoving||denseOverview&&cameraProjectionChanged);
     this.constellationNodes.update(this.displayedPositions);
     const nodeActivityMoving = this.constellationNodes.advanceActivity(Date.now(), this.reducedMotionEnabled || this.paused);
-    if(pointsMoving || this.nebulae.moving) this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
+    if(pointsMoving || displayMoving || this.nebulae.moving || denseOverview&&cameraProjectionChanged) this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
     this.loop.setInteractive(this.plasticity.moving||this.positionTransition.moving||this.displayTransition.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
-    const alpha = this.reducedMotionEnabled||this.paused ? 1 : 1 - Math.exp(-12 * elapsed);
-    this.camera.position.lerp(this.desiredCamera, alpha);
-    this.lookAt.lerp(this.desiredLookAt, alpha);
-    this.camera.lookAt(this.lookAt);
-    this.orbit.target.copy(this.lookAt);this.orbit.update();
     this.applyDetailMode(this.view.hops>0&&this.camera.position.distanceTo(this.lookAt)<2.35);
     this.synapses.mesh.visible=this.neuronDetail&&(this.synapses.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount>0;
     this.overviewSynapses.mesh.visible=!this.neuronDetail&&(this.overviewSynapses.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount>0;
@@ -1115,13 +1127,14 @@ export class KnowledgeHologram {
     }
     const result=relaxProjectedCircles(circles,{left:0,top:0,width,height},pinned,initial),targets=new Map<string,THREE.Vector3>();
     this.view.nodes.forEach((node,index)=>{
+      if(node.id===this.view.focusId){targets.set(node.id,this.displayOffsets.get(node.id)!.clone());return;}
       const dx=result.offsets[index*2],dy=result.offsets[index*2+1];
       if(!dx&&!dy){targets.set(node.id,new THREE.Vector3());return;}
       const target=new THREE.Vector3((circles[index].x+dx)/width*2-1,1-(circles[index].y+dy)/height*2,depths[index])
         .unproject(this.camera).applyMatrix4(inverseRoot).sub(bases[index]);
       targets.set(node.id,target);
     });
-    this.displayTransition.setTargets(targets,this.displayOffsets,new Set());
+    this.displayTransition.setTargets(targets,this.displayOffsets,new Set(this.view.focusId?[this.view.focusId]:[]));
     this.projectedRelaxation=result.diagnostics;this.displayRelaxationPending=false;
   }
   private readonly syncPoint = (id:string,x:number,y:number,z:number):void => {this.positions.get(id)?.set(x,y,z);};

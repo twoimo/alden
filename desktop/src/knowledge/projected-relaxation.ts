@@ -24,12 +24,12 @@ export function relaxProjectedCircles(input: readonly ProjectedCircle[], viewpor
       || p.x < left || p.x > left + width || p.y < top || p.y > top + height
       || p.radius * 2 > width || p.radius * 2 > height) continue;
     active[i] = 1; maxRadius = Math.max(maxRadius, p.radius);
-    if (!pinned.has(i) && initialOffsets?.length === count * 2) {
+    if (initialOffsets?.length === count * 2) {
       const ox = initialOffsets[i*2], oy = initialOffsets[i*2+1], size = Math.hypot(ox,oy);
       if (Number.isFinite(size)) {
         const gain = size > limits.shiftCssPx ? limits.shiftCssPx / size : 1;
-        x[i] = Math.max(left + p.radius,Math.min(left + width - p.radius,p.x + ox * gain));
-        y[i] = Math.max(top + p.radius,Math.min(top + height - p.radius,p.y + oy * gain));
+        x[i] = pinned.has(i) ? p.x + ox * gain : Math.max(left + p.radius,Math.min(left + width - p.radius,p.x + ox * gain));
+        y[i] = pinned.has(i) ? p.y + oy * gain : Math.max(top + p.radius,Math.min(top + height - p.radius,p.y + oy * gain));
       }
     }
   }
@@ -79,7 +79,7 @@ export function relaxProjectedCircles(input: readonly ProjectedCircle[], viewpor
       y[i] = Math.max(top + input[i].radius,Math.min(top + height - input[i].radius,input[i].y + oy));
     }
   }
-  for (let i = 0; i < count; i++) if (active[i] && !pinned.has(i)) {
+  for (let i = 0; i < count; i++) if (active[i]) {
     let ox = x[i] - input[i].x, oy = y[i] - input[i].y, size = Math.hypot(ox,oy);
     // Clipping correction must obey the same displacement limit.
     if (size > limits.shiftCssPx) { ox *= limits.shiftCssPx / size; oy *= limits.shiftCssPx / size; size = limits.shiftCssPx; }

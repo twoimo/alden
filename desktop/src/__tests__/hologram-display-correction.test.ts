@@ -37,7 +37,7 @@ function fixture(reducedMotion: boolean) {
   const h=Object.create(KnowledgeHologram.prototype) as Record<string,any>;
   Object.assign(h,{
     graph,view,positions,anchors,displayedPositions,displayOffsets:new Map(),displayTransition:new PositionTransition(),
-    displayRelaxationPending:false,semanticLayout:{settled:true},positionTransition:new PositionTransition(),
+    displayClipMatrix:new THREE.Matrix4(),displayRelaxationPending:false,semanticLayout:{settled:true},positionTransition:new PositionTransition(),
     plasticity:{moving:false,setDisplayScale:vi.fn(),advance:vi.fn(),forEachPoint:vi.fn()},
     camera,desiredCamera:camera.position.clone(),lookAt:new THREE.Vector3(),desiredLookAt:new THREE.Vector3(),
     graphRoot,scene,canvas,viewport:{x:0,y:0,width:900,height:600},projected:new THREE.Vector3(),
@@ -58,6 +58,42 @@ function fixture(reducedMotion: boolean) {
 }
 
 describe('display collision correction in the production frame',()=>{
+  it('completes reduced-motion camera fit before applying pending correction',()=>{
+    const f=fixture(true),{h}=f;
+    try {
+      h.displayRelaxationPending=true;h.desiredCamera.set(0,0,6);
+      h.render(1/60);
+      expect(h.camera.position.toArray()).toEqual([0,0,6]);
+      expect(h.displayRelaxationPending).toBe(false);
+      expect(h.projectedRelaxation.moved).toBeGreaterThan(0);
+      expect(h.auditProjectedLayout().metrics.overlapPairs).toBe(0);
+    }finally{f.dispose();}
+  });
+  it.each(['resize','zoom'])('bounds retained display shifts during active %s',change=>{
+    const f=fixture(false),{h}=f;
+    try {
+      h.displayOffsets.set('n1',new THREE.Vector3(.08,0,0));h.orbitActive=true;
+      if(change==='resize'){h.viewport.height=1200;h.camera.aspect=900/1200;h.camera.updateProjectionMatrix();}
+      else h.desiredCamera.set(0,0,4);
+      h.reducedMotion=true;h.render(1/60);
+      const base=new THREE.Vector3();overviewDisplayPoint(f.positions.get('n1')!,h.viewport.width,h.viewport.height,true,base);
+      const original=base.project(h.camera),shown=f.displayedPositions.get('n1')!.clone().project(h.camera);
+      expect(Math.hypot((shown.x-original.x)*h.viewport.width/2,(shown.y-original.y)*h.viewport.height/2)).toBeLessThanOrEqual(10+1e-8);
+      expect(h.displayOffsets.get('n1').toArray()).toEqual([.08,0,0]);
+    }finally{f.dispose();}
+  });
+  it('keeps a newly focused overview node at its settled displayed point',()=>{
+    const f=fixture(false),{h}=f;
+    try {
+      h.displayRelaxationPending=true;
+      for(let i=0;i<180;i++){h.render(1/60);if(!h.displayTransition.moving)break;}
+      const shown=f.displayedPositions.get('n1')!.clone(),offset=h.displayOffsets.get('n1').clone();
+      h.view={...h.view,focusId:'n1'};h.displayRelaxationPending=true;h.render(1/60);
+      expect(h.displayOffsets.get('n1').toArray()).toEqual(offset.toArray());
+      expect(f.displayedPositions.get('n1')!.distanceTo(shown)).toBeLessThan(1e-12);
+    }finally{f.dispose();}
+  });
+
   it.each([false,true])('applies correction on the final source-settling frame (reduced=%s)',reduced=>{
     const f=fixture(reduced),{h}=f;
     try {

@@ -9,7 +9,7 @@ describe('settled projected display collision correction', () => {
     const seeded=relaxProjectedCircles(points,viewport,new Set(),new Float64Array([4,-2,0,0]));
     expect([...seeded.offsets]).toEqual([4,-2,0,0]);
     expect([...relaxProjectedCircles(points,viewport,new Set(),seeded.offsets).offsets]).toEqual([4,-2,0,0]);
-    expect([...relaxProjectedCircles(points,viewport,new Set([0]),seeded.offsets).offsets]).toEqual([0,0,0,0]);
+    expect([...relaxProjectedCircles(points,viewport,new Set([0]),seeded.offsets).offsets]).toEqual([4,-2,0,0]);
   });
   it('separates coincident cores without changing source circles or point count', () => {
     const points = Object.freeze(Array.from({length:16},()=>Object.freeze({x:320,y:240,radius:1.6})));
