@@ -38,6 +38,7 @@ pub struct Request {
     pub assistant_invalid: bool,
     pub entity: bool,
     pub focus_node: Option<String>,
+    pub graph_scope: Option<u8>,
 }
 struct AuditPolicy {
     workspaces: bool,
@@ -140,7 +141,14 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     } else {
         None
     };
-    if (args.len() != 2 && focus_node.is_none())
+    let graph_scope = if args.len() == 4 && args[0] == WORKSPACES_FLAG && args[2] == "--graph-scope" {
+        let raw = args[3].to_str().ok_or("graph scope must be UTF-8")?;
+        if raw.len() != 1 || !raw.bytes().all(|b| (b'0'..=b'8').contains(&b)) {
+            return Err("graph scope must be one fixed case 0..8".into());
+        }
+        Some(raw.parse::<u8>().map_err(|_| "graph scope invalid")?)
+    } else { None };
+    if (args.len() != 2 && focus_node.is_none() && graph_scope.is_none())
         || args[0] == ENTITY_FLAG && focus_node.is_some()
         || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ENTITY_FLAG]
             .iter()
@@ -156,6 +164,7 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
         assistant_invalid: args[0] == ASSISTANT_INVALID_FLAG,
         entity: args[0] == ENTITY_FLAG,
         focus_node,
+        graph_scope,
     }))
 }
 
@@ -247,6 +256,10 @@ impl Output {
                 | "workspace-readback.json"
                 | "graph-layout-default.json"
                 | "graph-layout-compact.json"
+                | "graph-scope-default.png"
+                | "graph-scope-compact.png"
+                | "graph-scope-default.json"
+                | "graph-scope-compact.json"
                 | "workspace-observed-default-memory.json"
                 | "workspace-observed-default-conversation.json"
                 | "workspace-observed-default-reply.json"
@@ -1137,11 +1150,94 @@ fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Res
     receive(rx, deadline)
 }
 
+fn graph_scope_case(case: u8) -> Result<(&'static str, bool, bool), String> {
+    match case {
+        0 => Ok(("all", false, false)),
+        1 => Ok(("all", true, false)),
+        2 => Ok(("project:alden-model-research", false, false)),
+        3 => Ok(("project:career", false, false)),
+        4 => Ok(("project:jangsin", false, false)),
+        5 => Ok(("project:sparkuniverse", false, false)),
+        6 => Ok(("project:sparkuniverse", true, false)),
+        7 => Ok(("project:youtube-tzuyang", false, false)),
+        8 => Ok(("all", false, true)),
+        _ => Err("graph scope outside fixed cases".into()),
+    }
+}
+
+fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, case: u8) -> Result<Value, String> {
+    let (source, next, youtube) = graph_scope_case(case)?;
+    graph_step(window, "memory-page", deadline)?;
+    wait_for_audit_state("graph scope options", deadline, || collect_script(window,
+        "JSON.stringify({ready:document.querySelector('#knowledge-project')?.querySelectorAll('option').length>2})".into(),deadline),
+        |state| state["ready"] == true)?;
+    // Only this owned audit WKWebView, fixed observed scopes and read-only UI.
+    let source_json = serde_json::to_string(source).map_err(|_| "scope source JSON failed")?;
+    collect_script(window, format!(r#"JSON.stringify((()=>{{
+      const input=document.querySelector('#knowledge-project');
+      const value={source_json};if(![...input.options].some(o=>o.value===value))throw Error('registered scope missing');
+      input.value=value;input.dispatchEvent(new Event('change'));
+      return {{source:input.value}};
+    }})())"#),deadline)?;
+    if youtube {
+        wait_for_audit_state("graph platform options",deadline,|| collect_script(window,
+            "JSON.stringify({ready:[...document.querySelector('#knowledge-platform').options].some(o=>o.value==='youtube')})".into(),deadline),
+            |state|state["ready"]==true)?;
+        collect_script(window,"JSON.stringify((()=>{const input=document.querySelector('#knowledge-platform');input.value='youtube';input.dispatchEvent(new Event('change'));return {platform:input.value};})())".into(),deadline)?;
+    }
+    wait_for_audit_state("initial scoped graph", deadline, || collect_script(window,graph_collect_script(),deadline),
+        |state| state["graphPending"]!=true && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0)?;
+    if next {
+        let state=graph_step(window,"expand",deadline)?;
+        if state["navigation"]["overviewOffset"].as_u64().unwrap_or(0)==0 {
+            return Err("fixed next-page scope did not advance".into());
+        }
+    }
+    let mut states=Vec::new();
+    for size in ["default","compact"] {
+        if size=="compact" {
+            let target=window.clone();let (tx,rx)=mpsc::sync_channel(1);
+            window.run_on_main_thread(move || {
+                let result=live(deadline).and_then(|_| {
+                    let native=target.ns_window().map_err(|_| "scope native window missing")?;
+                    live(deadline)?;
+                    unsafe {(&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0,680.0));}
+                    Ok(())
+                });let _=tx.try_send(result);
+            }).map_err(|_| "scope resize dispatch failed")?;receive(rx,deadline)?;
+        }
+        wait_for_audit_state("scoped graph paint",deadline,|| collect_script(window,
+            format!(r#"JSON.stringify((()=>{{const d=window.__knowledgeRenderDiagnostics;
+              const pending=document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true';
+              return {{ready:!pending&&d?.nodeCount>0&&{size_check},width:innerWidth,height:innerHeight}};
+            }})())"#,size_check=if size=="compact" {"innerWidth===640&&innerHeight===680"} else {"innerWidth===1200&&innerHeight===760"}),deadline),
+            |state| state["ready"]==true)?;
+        let physics=observe_graph_rest(window,deadline)?;
+        let geometry=collect_script(window,"JSON.stringify(window.__knowledgeLayoutAudit())".into(),deadline)?;
+        let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
+        let navigation=collect_script(window,graph_collect_script(),deadline)?;
+        let query=&navigation["graphRead"]["query"];
+        if (source!="all" && query["projects"]!=json!([source.trim_start_matches("project:")]))
+            || youtube && query["platform"]!="youtube"
+            || next && query["offset"].as_u64().unwrap_or(0)==0 {
+            return Err(format!("scoped graph read mismatched selected UI: {query}"));
+        }
+        let state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,
+            "physics":physics,"geometry":geometry,"labels":labels,"navigation":navigation,
+            "scope":"owned read-only native scoped graph only; no physical input, pixel/GPU/FPS or semantic gold proof"});
+        publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
+        publish(output,&format!("graph-scope-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+        states.push(state);
+    }
+    Ok(json!({"case":case,"states":states,"scope":"fixed observed projects/filter/next-page, two owned window sizes, read-only"}))
+}
+
 fn audit_settings(
     app: &tauri::AppHandle,
     output: &Output,
     deadline: Instant,
     workspaces: bool,
+    graph_scope: Option<u8>,
 ) -> Result<Value, String> {
     use super::workspace_visibility::{WorkspaceCounters, WorkspaceNote};
     let window = app
@@ -1180,6 +1276,9 @@ fn audit_settings(
             deadline,
         )
     }, |state| state["mounted"] == true)?;
+    if let Some(case) = graph_scope {
+        return audit_graph_scope(&window, output, deadline, case);
+    }
     graph_step(&window, "memory-page", deadline)?;
     let initial = wait_for_audit_state("initial graph render", deadline,
         || collect_script(&window, graph_collect_script(), deadline),
@@ -2091,6 +2190,7 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
     let assistant_mode = request.assistant;
     let invalid_input_mode = request.assistant_invalid;
     let entity_mode = request.entity;
+    let graph_scope = request.graph_scope;
     let settings_loaded = Arc::new(AtomicBool::new(false));
     let asset_loaded = Arc::new(AtomicBool::new(false));
     let ready_phase = Arc::new(AtomicU8::new(0));
@@ -2144,14 +2244,14 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
             std::thread::spawn(move || {
                 let started = Instant::now();
                 let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode {96}else{40});
-                let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode) } else { audit(&handle, &output, deadline) };
+                let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode,graph_scope) } else { audit(&handle, &output, deadline) };
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
                     "mode":if entity_mode {"isolated-entity-review-fixture"}else if invalid_input_mode {"isolated-assistant-invalid-input"}else if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if entity_mode {"owned incognito WKWebView; compare/apply/revert only in a newly created private synthetic collection; no original source, production write, model inference, send or physical-input attestation"}else if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if graph_scope.is_some() {"owned two-size fixed project/filter/page graph WKWebView; read-only adapters, source/solver/display observations; no primary, physical input, semantic gold or pixel/GPU/FPS attestation"}else if entity_mode {"owned incognito WKWebView; compare/apply/revert only in a newly created private synthetic collection; no original source, production write, model inference, send or physical-input attestation"}else if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();
@@ -2178,6 +2278,24 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn graph_scope_audit_only_accepts_fixed_case_arguments() {
+        for case in 0..9u8 {
+            let request=super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
+                std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(case.to_string())].into_iter()).unwrap().unwrap();
+            assert!(request.settings && request.workspaces && !request.assistant && !request.entity);
+            assert_eq!(request.graph_scope,Some(case));assert!(request.focus_node.is_none());
+            assert!(super::graph_scope_case(case).is_ok());
+        }
+        for invalid in ["9","00","-1","1;alert(1)","project:career"] {
+            assert!(super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
+                std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(invalid)].into_iter()).is_err());
+        }
+        assert!(super::parse_args([std::ffi::OsString::from(super::SETTINGS_FLAG),std::ffi::OsString::from("/private/tmp/test"),
+            std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from("0")].into_iter()).is_err());
+        assert!(super::graph_scope_case(9).is_err());
+    }
+
     #[test]
     fn entity_fixture_mode_has_an_explicit_owned_scope_without_a_caller_focus() {
         let request = parse_args([OsString::from(ENTITY_FLAG), OsString::from("/private/tmp/test")].into_iter())
