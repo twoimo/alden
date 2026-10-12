@@ -1221,7 +1221,20 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             Ok(state)
         },|state| state["ready"]==true)?;
         let physics=observe_graph_rest(window,deadline)?;
-        let integration=collect_script(window,"JSON.stringify(window.__knowledgePhysicsAudit())".into(),deadline)?;
+        collect_script(window,"JSON.stringify((()=>{window.__aldenAuditPhysicsSnapshot=window.__knowledgePhysicsAudit();return {ready:true};})())".into(),deadline)?;
+        let mut integration=json!({});
+        for keys in [
+            "schema,nodeCount,edgeCount,nodeCap,synapseCap,moving,quietSteps,visualRestSpeed,visualRestForce,simulatedSeconds",
+            "coordinates,inverseMass,degree,components", "velocity", "anchors", "edgeA,edgeB", "edgeStrength", "restLength",
+        ] {
+            // One captured state, bounded pieces through the existing metric
+            // byte fence. No wider metric cap and no mixed-frame arrays.
+            let keys_json=serde_json::to_string(&keys.split(',').collect::<Vec<_>>()).map_err(|_|"integration keys failed")?;
+            let piece=collect_script(window,format!("JSON.stringify(Object.fromEntries({keys_json}.map(k=>[k,window.__aldenAuditPhysicsSnapshot[k]])))"),deadline)?;
+            integration.as_object_mut().ok_or("integration object missing")?
+                .extend(piece.as_object().ok_or("integration piece missing")?.clone());
+        }
+        collect_script(window,"delete window.__aldenAuditPhysicsSnapshot;JSON.stringify({cleared:true})".into(),deadline)?;
         publish(output,&format!("graph-physics-{size}.json"),&serde_json::to_vec_pretty(&integration).map_err(|_|"integration JSON failed")?,deadline)?;
         let geometry=collect_script(window,"JSON.stringify(window.__knowledgeLayoutAudit())".into(),deadline)?;
         let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
