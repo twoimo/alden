@@ -1023,6 +1023,10 @@ fn applied_affinity_observed(state: &Value) -> bool {
 }
 
 fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    observe_graph_rest_with_budget(window,deadline,Duration::from_secs(15))
+}
+
+fn observe_graph_rest_with_budget(window: &tauri::WebviewWindow, deadline: Instant, observation_budget: Duration) -> Result<Value, String> {
     let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
       return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
         displayedNodes:d?.nodeCount??0,physics:d?.physics??null,
@@ -1049,7 +1053,7 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
             && affinity_ready
             && state["loop"]["running"] == false
             && state["loop"]["pendingFrame"] == false)
-            || stable_since.is_some_and(|since:Instant|since.elapsed()>=Duration::from_secs(15))
+            || stable_since.is_some_and(|since:Instant|since.elapsed()>=observation_budget)
             || Instant::now() >= deadline
         {
             break state;
@@ -1062,7 +1066,8 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
     let after = collect_script(window, script.into(), deadline)?;
     Ok(
         json!({"scope":"owned visible graph; observational only, not primary/GPU/battery or semantic proof",
-        "before":before,"restWindowBasis":"fifteen seconds after current layout and affinity are ready, bounded by original global deadline",
+        "before":before,"restWindowBasis":"after current layout and affinity are ready; observation bound remains inside original global deadline",
+        "restObservationBudgetMs":observation_budget.as_millis(),
         "restObserved":rested["physics"]["moving"] == false,
         "layoutObserved":matches!(rested["semantic"]["worker"]["state"].as_str(),Some("ready" | "cached")) && rested["semantic"]["pendingTargets"] == 0,
         "affinityObserved":applied_affinity_observed(&rested) && applied_affinity_observed(&after),
@@ -1231,7 +1236,11 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             let native=native_settings_size(window,deadline)?;
             let mut state=collect_script(window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
               const pending=document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true';
-              return {ready:!pending&&d?.nodeCount>0,width:innerWidth,height:innerHeight};
+              const canvas=document.querySelector('#knowledge-graph-canvas'),r=canvas?.getBoundingClientRect();
+              const p=window.__knowledgeLayoutAudit?.().viewport;
+              const resized=!!r&&!!p&&p.width===Math.max(1,Math.floor(r.width)-56)&&p.height===Math.max(1,Math.floor(r.height)-28);
+              return {ready:!pending&&d?.nodeCount>0&&resized&&d.motion?.camera===false,
+                width:innerWidth,height:innerHeight,resized,projectionViewport:p,canvasWidth:r?.width,canvasHeight:r?.height};
             })())"#.into(),deadline)?;
             let matched=state["width"].as_f64()==native["layoutWidth"].as_f64()
                 && state["height"].as_f64()==native["layoutHeight"].as_f64();
@@ -1239,7 +1248,10 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             state["nativeLayout"]=native;
             Ok(state)
         },|state| state["ready"]==true)?;
-        let physics=observe_graph_rest(window,deadline)?;
+        collect_script(window,"JSON.stringify((()=>{window.__aldenScopePaintReady=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenScopePaintReady=true;}));return {armed:true};})())".into(),deadline)?;
+        wait_for_audit_state("scoped final paint",deadline,|| collect_script(window,
+            "JSON.stringify({ready:window.__aldenScopePaintReady===true})".into(),deadline),|state|state["ready"]==true)?;
+        let physics=observe_graph_rest_with_budget(window,deadline,Duration::from_secs(30))?;
         collect_script(window,"JSON.stringify((()=>{window.__aldenAuditPhysicsSnapshot=window.__knowledgePhysicsAudit();return {ready:true};})())".into(),deadline)?;
         let mut integration=json!({});
         for keys in [
