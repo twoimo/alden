@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 import struct
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, korean_literal_plan, korean_literal_matches
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class
 
 ENCODING = 'e5-char256-stride192-weighted-unit-pool-v1'
@@ -307,7 +307,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     eligible = {row['id']: row for row in rows}
     terms = kg._fts_query_terms([query])
     lexical = [(r['id'], float(r['rank'])) for r in store.search(terms, projects=projects,
-                limit=candidate_limit, time_from=time_from, time_to=time_to)] if terms else []
+                limit=candidate_limit, time_from=time_from, time_to=time_to, expand_korean=False)] if terms else []
     dense, mode = [], 'bm25_only'
     path = _path(store)
     if terms and path.is_file():
@@ -325,6 +325,17 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 else:
                     seen = {i for i, _ in lexical}
                     lexical = (lexical + [(i, s) for i, s in projected_lexical if i not in seen])[:candidate_limit]
+    token_ids = {document_id for document_id, _ in lexical}
+    literal_ids = set()
+    plan = korean_literal_plan(terms)
+    if plan:
+        seen = {identity for identity, _ in lexical}
+        for row in rows:
+            _check(cancelled)
+            if len(lexical) >= candidate_limit:
+                break
+            if row['id'] not in seen and korean_literal_matches(plan, row['label'], row['body']):
+                lexical.append((row['id'], 0.0)); seen.add(row['id']); literal_ids.add(row['id'])
     _check(cancelled)
     try:
         if path.is_file() and eligible:
@@ -410,6 +421,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                      'scope_basis': 'current_permitted_version_memberships_at_selected_snapshot',
                      'updated_at': row['collected_at'],
                      'body_source': row['body_source'],
+                     'lexical_match': ('korean_literal_substring' if document_id in literal_ids else
+                                       'bm25_token' if document_id in token_ids else None),
                      'derived_from': metadata.get('source', {}), 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
             evidence_class = content_evidence_class(metadata, row['body'], source=record,
@@ -471,7 +484,9 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 if sum(p['fact_type'] == 'relation' for p in provenance) >= min(int(max_relations), 10):
                     break
     _check(cancelled)
-    return {'facts': facts, 'fact_provenance': provenance, 'search_mode': mode,
+    return {'facts': facts, 'fact_provenance': provenance,
+            'search_mode': 'bm25_with_literals' if mode == 'bm25_only' and literal_ids else mode,
+            'lexical_policy': 'token_then_korean_literal_substring_v1',
             'projects': projects, 'eligible_documents': len(rows), 'context_chars': used,
             'unsearchable_documents': len(source_rows) - len(rows),
             'pending_text_versions': sum(not r['text_ready'] for r in source_rows),

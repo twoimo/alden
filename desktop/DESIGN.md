@@ -290,4 +290,6 @@ The expanded graph direction is a dark three-dimensional knowledge view, with ac
 
 ## 제목 없는 본문 검토
 
+검색창은 붙은 한국어의 리터럴 후보를 기존 단어 결과 뒤에 표시합니다. 실제 현재 기록과 필터를 유지하며, 가까운 배치·부분문자열을 관계나 확인된 사실로 표시하지 않습니다. [검색 계약](../docs/architecture/alden-korean-literal-search-20261013.md).
+
 품질 정보에서 제목·본문 결합 후보와 제목 없이 비교한 저장 본문 후보를 구분합니다. 링크 문자열은 별도 지표로 표시하고 작성자·원문 동일성이나 병합 결론으로 사용하지 않습니다. 유효 제목 누락·자료 설명 제외와 검사 가능한 범위를 표시하며 원문·좌표·모델을 유지합니다. [본문 검사 계약](../docs/architecture/alden-body-matches-20261013.md).

@@ -18,6 +18,42 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_attached_korean_source_is_naturally_retrieved_with_unverified_provenance(self):
+        body='이자리35년336 그리고 두번째올해49년814. 서로 다른 식당의 진술입니다.'
+        doc=self.add(self.allowed,'attached-claim',body)
+        self.add(self.other,'foreign-claim',body)
+        before=self.store.path.read_bytes()
+        for query in ('35년','49년'):
+            with self.subTest(query=query):
+                result=retrieve(self.root,query,projects=['one'],max_entities=1,max_relations=0,
+                                query_embed=lambda _: (_ for _ in ()).throw(RuntimeError('disabled')))
+                self.assertEqual(result['search_mode'],'bm25_with_literals')
+                self.assertEqual(result['fact_provenance'][0]['entity_id'],doc)
+                self.assertEqual(result['fact_provenance'][0]['lexical_match'],'korean_literal_substring')
+                self.assertEqual(result['fact_provenance'][0]['truth_status'],'source_record; not independently verified')
+                self.assertEqual(result['fact_provenance'][0]['projects'],['one'])
+                self.assertIn(body,result['facts'][0])
+        self.assertEqual(self.store.path.read_bytes(),before)
+
+    def test_retained_korean_text_fallback_keeps_raw_binding_and_rejects_forged_cache(self):
+        body='이자리35년336. 원래 보존된 본문입니다.'
+        self.store.ingest(self.allowed,[{'platform':'graph','original_id':'retained-korean',
+            'label':'','text':'','raw':{'localOriginalText':body}}])
+        doc=identity('graph','retained-korean')
+        with self.profile():
+            index_dense(self.root,['one'],embed=self.embed)
+            result=retrieve(self.root,'35년',projects=['one'],max_entities=1,max_relations=0,
+                            query_embed=lambda _: (_ for _ in ()).throw(RuntimeError('disabled')))
+            self.assertEqual(result['search_mode'],'bm25_with_literals')
+            self.assertEqual(result['facts'],[body])
+            self.assertEqual(result['fact_provenance'][0]['body_source'],'retained_record.localOriginalText')
+            import sqlite3
+            with sqlite3.connect(self.store.root/'retrieval.sqlite3') as db:
+                db.execute('UPDATE texts SET body=? WHERE document_id=?',('가짜올해49년814',doc))
+            with self.assertRaisesRegex(RuntimeError,'collection_source_integrity'):
+                retrieve(self.root,'49년',projects=['one'],max_entities=1,max_relations=0,
+                         query_embed=lambda _: (_ for _ in ()).throw(RuntimeError('disabled')))
+
     def test_large_shared_membership_proof_fails_with_a_budget_error_instead_of_partial_attribution(self):
         doc=None
         for i in range(257):

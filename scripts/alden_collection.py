@@ -55,6 +55,50 @@ def normalized_body(value: str) -> str:
     return unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
 
 
+def korean_literal_plan(query):
+    """Positive literal AND/OR only; advanced FTS keeps its original meaning."""
+    if not isinstance(query, str) or len(query) > 1024:
+        return None
+    tokens = re.findall(r'"(?:[^"]|"")*"|[^\s]+', unicodedata.normalize('NFC', query))
+    clauses, expect_word, pending = [[]], True, 'AND'
+    words = 0
+    for token in tokens:
+        if token in ('AND', 'OR'):
+            if expect_word:
+                return None
+            pending, expect_word = token, True
+            continue
+        word = token[1:-1] if token.startswith('"') and token.endswith('"') else token
+        if not re.fullmatch(r'[0-9A-Za-z가-힣]{2,64}', word) or not re.search(r'[가-힣]', word):
+            return None
+        if pending == 'OR':
+            clauses.append([])
+        clauses[-1].append(word.lower())
+        pending, expect_word = 'AND', False
+        words += 1
+        if words > 24:
+            return None
+    return tuple(tuple(c) for c in clauses) if words and not expect_word else None
+
+
+def korean_literal_sql(plan, label='v.label', body='v.body'):
+    # Column expressions are fixed by callers. All query values stay bound.
+    clauses, values = [], []
+    for clause in plan:
+        expressions = []
+        for word in clause:
+            columns = [f'lower({c})' if re.search(r'[a-z]', word) else c for c in (label, body)]
+            expressions.append(f'(instr({columns[0]},?)>0 OR instr({columns[1]},?)>0)')
+            values.extend((word, word))
+        clauses.append('(' + ' AND '.join(expressions) + ')')
+    return '(' + ' OR '.join(clauses) + ')', tuple(values)
+
+
+def korean_literal_matches(plan, label, body):
+    fields = [unicodedata.normalize('NFC', value).lower() for value in (label, body)]
+    return any(all(any(word in field for field in fields) for word in clause) for clause in plan)
+
+
 RELATION_BIND_FIELDS = ('target_id', 'source', 'target', 'type', 'evidence')
 # Fixed aliases are used by the bounded graph and read-only quality queries.
 RELATION_HISTORY_MATCH = ('h.relation_id IS NOT NULL AND '
@@ -700,7 +744,9 @@ class CollectionStore:
                                   "source_evidence": json.loads(row["evidence"])})
             return {"nodes": nodes, "edges": edges, "scope": projects, "canonical": "independent original sources; this is a derived projection"}
 
-    def search(self, query: str, *, projects: list[str], limit=10, time_from=None, time_to=None) -> list[dict]:
+    def search(self, query: str, *, projects: list[str], limit=10, time_from=None, time_to=None, expand_korean=True) -> list[dict]:
+        if type(expand_korean) is not bool:
+            raise ValueError('collection_graph_filter_invalid')
         if not projects:
             return []
         with self.database() as db:
@@ -708,22 +754,46 @@ class CollectionStore:
             for value, operator in [(time_from, '>='), (time_to, '<=')]:
                 if value is not None:
                     clauses.append('v.collected_at' + operator + '?');values.append(value)
-            rows = db.execute("""SELECT d.id,v.label,v.body,v.metadata,bm25(version_search) AS rank
+            plan = korean_literal_plan(query) if expand_korean else None
+            if plan:
+                contains, params = korean_literal_sql(plan)
+                sql = """WITH search_candidates AS MATERIALIZED (
+                    SELECT document_id FROM version_search WHERE version_search MATCH ?
+                    UNION SELECT v.document_id FROM versions v WHERE """ + contains + """),
+                    scoped AS MATERIALIZED (
+                    SELECT d.id,s.current_version,v.label,v.body,v.metadata
+                    FROM (""" + self._scope_versions(projects, candidates=True) + """) s
+                    JOIN documents d ON d.id=s.document_id JOIN versions v ON v.id=s.current_version
+                    WHERE d.availability='available' """ + ''.join(' AND ' + c for c in clauses) + """),
+                    token_matches AS MATERIALIZED (
+                    SELECT s.id,bm25(version_search) AS rank FROM version_search
+                    JOIN scoped s ON s.current_version=version_search.version_id WHERE version_search MATCH ?),
+                    matches AS (SELECT id,rank,0 AS priority FROM token_matches UNION ALL
+                    SELECT s.id,0.0,1 FROM scoped s WHERE """ + korean_literal_sql(plan, 's.label', 's.body')[0] + """
+                    AND s.id NOT IN (SELECT id FROM token_matches))
+                    SELECT s.id,s.label,s.body,s.metadata,m.rank FROM matches m JOIN scoped s ON s.id=m.id
+                    ORDER BY m.priority,m.rank,m.id LIMIT ?"""
+                rows = db.execute(sql, (query, *params, *projects, *values, query, *params, limit)).fetchall()
+            else:
+                rows = db.execute("""WITH search_candidates AS MATERIALIZED (
+              SELECT document_id FROM version_search WHERE version_search MATCH ?)
+              SELECT d.id,v.label,v.body,v.metadata,bm25(version_search) AS rank
               FROM version_search JOIN documents d ON d.id=version_search.document_id
-              JOIN (""" + self._scope_versions(projects) + """) s ON s.document_id=d.id
+              JOIN (""" + self._scope_versions(projects, candidates=True) + """) s ON s.document_id=d.id
               AND s.current_version=version_search.version_id JOIN versions v ON v.id=s.current_version
               WHERE version_search MATCH ? AND d.availability='available' """ + ''.join(' AND ' + c for c in clauses) + ' ORDER BY rank,d.id LIMIT ?',
-              (*projects, query, *values, limit)).fetchall()
+              (query, *projects, query, *values, limit)).fetchall()
             return [{**dict(row), "metadata": json.loads(row["metadata"])} for row in rows]
 
-    def _scope_versions(self, projects: list[str]) -> str:
+    def _scope_versions(self, projects: list[str], *, candidates=False) -> str:
         marks = ",".join("?" for _ in projects)
         available = "m.availability='available' AND " if self.schema >= 3 else ""
+        candidate_scope = "m.document_id IN (SELECT document_id FROM search_candidates) AND " if candidates else ""
         return """SELECT document_id,current_version FROM (
           SELECT m.document_id,m.current_version,ROW_NUMBER() OVER(
             PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
           FROM memberships m JOIN versions v ON v.id=m.current_version
-          WHERE """ + available + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+          WHERE """ + available + candidate_scope + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
             AND p.permission!='denied' AND p.project IN (""" + marks + "))) WHERE choice=1"
 
     def projects(self) -> list[dict]:
@@ -823,7 +893,9 @@ class CollectionStore:
             if not focus:
                 # All overview outputs share one materialized permitted scope.
                 # LIMIT+1 remains inside SQL, including FTS pages.
-                fts = ' AND '.join('"' + term.replace('"', '""') + '"' for term in query.split())
+                plan = korean_literal_plan(query)
+                fts = (' OR '.join(' AND '.join('"' + word + '"' for word in clause) for clause in plan)
+                       if plan else ' AND '.join('"' + term.replace('"', '""') + '"' for term in query.split()))
                 picking = ("SELECT s.id FROM version_search JOIN shown s ON s.visible_version=version_search.version_id WHERE version_search MATCH ? ORDER BY bm25(version_search),s.id" if fts else
                            "SELECT s.id FROM shown s LEFT JOIN degrees d ON d.id=s.id ORDER BY COALESCE(d.degree,0) DESC,s.id")
                 if overview and not fts:
@@ -832,8 +904,20 @@ class CollectionStore:
                     picking = """SELECT id FROM (SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.target_id
                       ORDER BY COALESCE(d.degree,0) DESC,s.id) AS source_slot
                       FROM shown s LEFT JOIN degrees d ON d.id=s.id) ORDER BY source_slot,id"""
-                pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
-                overview = cte + ",picked AS MATERIALIZED (" + picking + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
+                search_cte = cte
+                if plan:
+                    contains, params = korean_literal_sql(plan)
+                    search_cte += """,token_matches AS MATERIALIZED (
+                      SELECT s.id,bm25(version_search) AS rank FROM version_search JOIN shown s
+                      ON s.visible_version=version_search.version_id WHERE version_search MATCH ?),
+                      literal_versions AS MATERIALIZED (SELECT v.id FROM versions v WHERE """ + contains + ")"
+                    picking = """SELECT id FROM (SELECT id,rank,0 AS priority FROM token_matches UNION ALL
+                      SELECT s.id,0.0,1 FROM shown s JOIN literal_versions v ON v.id=s.visible_version
+                      WHERE s.id NOT IN (SELECT id FROM token_matches)) ORDER BY priority,rank,id"""
+                    pick_args = [fts, *params, limit+1, offset, limit]
+                else:
+                    pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
+                overview = search_cte + ",picked AS MATERIALIZED (" + picking + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
                 nodes_json, edges_json, total, total_edges, more, kinds, types, invalid_relations = db.execute(overview + """SELECT
                   (SELECT json_group_array(json(item)) FROM (SELECT """ + json_node + """ AS item
                     FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version

@@ -143,8 +143,8 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     };
     let graph_scope = if args.len() == 4 && args[0] == WORKSPACES_FLAG && args[2] == "--graph-scope" {
         let raw = args[3].to_str().ok_or("graph scope must be UTF-8")?;
-        if raw.len() != 1 || !raw.bytes().all(|b| (b'0'..=b'8').contains(&b)) {
-            return Err("graph scope must be one fixed case 0..8".into());
+        if raw.len() != 1 || !raw.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("graph scope must be one fixed case 0..9".into());
         }
         Some(raw.parse::<u8>().map_err(|_| "graph scope invalid")?)
     } else { None };
@@ -1205,6 +1205,7 @@ fn graph_scope_case(case: u8) -> Result<(&'static str, bool, bool), String> {
         6 => Ok(("project:sparkuniverse", true, false)),
         7 => Ok(("project:youtube-tzuyang", false, false)),
         8 => Ok(("all", false, true)),
+        9 => Ok(("project:youtube-tzuyang", false, false)),
         _ => Err("graph scope outside fixed cases".into()),
     }
 }
@@ -1236,6 +1237,15 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
     wait_for_audit_state("initial scoped graph", deadline, || collect_script(window,graph_collect_script(),deadline),
         |state| state["graphPending"]!=true && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0)?;
     eprintln!("Alden scope {case}: scoped graph ready");
+    if case == 9 {
+        collect_script(window,r#"JSON.stringify((()=>{
+          const input=document.querySelector('#knowledge-search');
+          input.value='49년';input.dispatchEvent(new Event('input'));
+          return {search:input.value};})())"#.into(),deadline)?;
+        wait_for_audit_state("Korean scoped search",deadline,|| collect_script(window,graph_collect_script(),deadline),
+            |state|state["graphPending"]!=true && state["graphRead"]["query"]["search"]=="49년"
+                && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0)?;
+    }
     if next {
         let state=graph_step(window,"expand",deadline)?;
         if state["navigation"]["overviewOffset"].as_u64().unwrap_or(0)==0 {
@@ -1314,10 +1324,20 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         let query=&navigation["graphRead"]["query"];
         if (source!="all" && query["projects"]!=json!([source.trim_start_matches("project:")]))
             || youtube && query["platform"]!="youtube"
+            || case==9 && query["search"]!="49년"
             || next && query["offset"].as_u64().unwrap_or(0)==0 {
             return Err(format!("scoped graph read mismatched selected UI: {query}"));
         }
-        let state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,
+        let search_ids=if case==9 {
+            let observed=collect_script(window,r#"JSON.stringify(Array.from(
+              document.querySelectorAll('#knowledge-result-list button[data-graph-node]')).map(b=>b.dataset.graphNode))"#.into(),deadline)?;
+            let expected="graph:5b2647ee6e54888280228c04d308eca554bf910cc7b8ed6103229af967f1eff3";
+            if !observed.as_array().is_some_and(|ids|ids.iter().any(|id|id==expected)) {
+                return Err(format!("Korean expected source missing from graph list: {observed}"));
+            }
+            observed
+        } else {Value::Null};
+        let state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,"searchResultIds":search_ids,
             "physics":physics,"geometry":geometry,"labels":labels,"navigation":navigation,
             "scope":"owned read-only native scoped graph only; no physical input, pixel/GPU/FPS or semantic gold proof"});
         publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
@@ -2393,20 +2413,20 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
 mod tests {
     #[test]
     fn graph_scope_audit_only_accepts_fixed_case_arguments() {
-        for case in 0..9u8 {
+        for case in 0..10u8 {
             let request=super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
                 std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(case.to_string())].into_iter()).unwrap().unwrap();
             assert!(request.settings && request.workspaces && !request.assistant && !request.entity);
             assert_eq!(request.graph_scope,Some(case));assert!(request.focus_node.is_none());
             assert!(super::graph_scope_case(case).is_ok());
         }
-        for invalid in ["9","00","-1","1;alert(1)","project:career"] {
+        for invalid in ["10","00","-1","1;alert(1)","project:career"] {
             assert!(super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
                 std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(invalid)].into_iter()).is_err());
         }
         assert!(super::parse_args([std::ffi::OsString::from(super::SETTINGS_FLAG),std::ffi::OsString::from("/private/tmp/test"),
             std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from("0")].into_iter()).is_err());
-        assert!(super::graph_scope_case(9).is_err());
+        assert!(super::graph_scope_case(10).is_err());
     }
 
     #[test]
