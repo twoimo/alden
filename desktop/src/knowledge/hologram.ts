@@ -9,7 +9,7 @@ import type { NeuronPort } from './neuron';
 import { ConstellationNodes, minimumStarRadius } from './constellation';
 import { pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
-import { overviewDisplayPoint, OVERVIEW_DISPLAY_GAIN } from './overview-presentation';
+import { overviewDisplayPoint, overviewGlyphScale, OVERVIEW_DISPLAY_GAIN } from './overview-presentation';
 import { PlasticityLayout, selectSynapses } from './plasticity';
 import { relationAnchors, relationCenterId } from './relation-layout';
 import { relationDepths } from './relation-depth';
@@ -899,7 +899,8 @@ export class KnowledgeHologram {
     if (!this.paused) this.positionTransition.advance(this.positions, elapsed, this.reducedMotionEnabled);
     this.plasticity.forEachPoint(this.syncPoint);
     this.constellationNodes.setMinimumRadius(minimumStarRadius(this.camera.position.distanceTo(this.lookAt),
-      this.camera.fov, this.viewport.height, this.view.nodes.length));
+      this.camera.fov, this.viewport.height, this.view.nodes.length),
+      overviewGlyphScale(this.viewport.width,this.viewport.height,denseOverview));
     if (!this.neuronDetail) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
