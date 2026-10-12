@@ -403,6 +403,8 @@ export class KnowledgeHologram {
       metrics:projectedLayoutMetrics(points,viewport)};
   }
 
+  auditPhysicsState() { return this.plasticity.auditState(); }
+
   get motionDiagnostics() {
     return {
       camera: this.camera.position.distanceToSquared(this.desiredCamera) > .000001

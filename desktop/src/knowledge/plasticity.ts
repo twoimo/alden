@@ -137,6 +137,20 @@ export class PlasticityLayout {
     }
   }
 
+  /** Explicit audit read only. Index-based integration state has no source
+   * identities, labels, bodies or mutation/import path and is never per-frame. */
+  auditState() {
+    const n=this.ids.length,e=this.edgeCount;
+    return {schema:1,nodeCount:n,edgeCount:e,nodeCap:this.nodeCap,synapseCap:this.synapseCap,
+      coordinates:Array.from(this.coordinates.slice(0,n*3)),velocity:Array.from(this.velocity.slice(0,n*3)),
+      anchors:Array.from(this.anchors.slice(0,n*3)),inverseMass:Array.from(this.inverseMass.slice(0,n)),
+      degree:Array.from(this.degree.slice(0,n)),components:Array.from(this.components.slice(0,n)),
+      edgeA:Array.from(this.edgeA.slice(0,e)),edgeB:Array.from(this.edgeB.slice(0,e)),
+      edgeStrength:Array.from(this.edgeStrength.slice(0,e)),restLength:Array.from(this.restLength.slice(0,e)),
+      moving:this.moving,quietSteps:this.quietSteps,visualRestSpeed:this.visualRestSpeed,
+      visualRestForce:this.visualRestForce,simulatedSeconds:this.simulatedSeconds};
+  }
+
   advance(dt: number): boolean {
     if (!this.moving || !Number.isFinite(dt) || dt <= 0) return false;
     const elapsed = Math.min(.25, dt), steps = Math.min(8, Math.max(1, Math.ceil(elapsed * 120 - 1e-12)));

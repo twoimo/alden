@@ -260,6 +260,8 @@ impl Output {
                 | "graph-scope-compact.png"
                 | "graph-scope-default.json"
                 | "graph-scope-compact.json"
+                | "graph-physics-default.json"
+                | "graph-physics-compact.json"
                 | "workspace-observed-default-memory.json"
                 | "workspace-observed-default-conversation.json"
                 | "workspace-observed-default-reply.json"
@@ -1219,6 +1221,8 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             Ok(state)
         },|state| state["ready"]==true)?;
         let physics=observe_graph_rest(window,deadline)?;
+        let integration=collect_script(window,"JSON.stringify(window.__knowledgePhysicsAudit())".into(),deadline)?;
+        publish(output,&format!("graph-physics-{size}.json"),&serde_json::to_vec_pretty(&integration).map_err(|_|"integration JSON failed")?,deadline)?;
         let geometry=collect_script(window,"JSON.stringify(window.__knowledgeLayoutAudit())".into(),deadline)?;
         let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
         let navigation=collect_script(window,graph_collect_script(),deadline)?;
