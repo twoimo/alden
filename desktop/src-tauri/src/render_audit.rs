@@ -1938,7 +1938,10 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
     Ok(json!({"turns":receipts,"scope":"three explicit programmatic WKWebView inputs, controlled red/white-circle and blue/yellow-square PNGs with text and visual followups; isolated history and copied saved model selection; no microphone/TTS/send, original source-store or physical input proof"}))
 }
 
-pub fn run(request: Request, context: tauri::Context<tauri::Wry>) {
+pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
+    // This audit creates one incognito view itself; configured persistent
+    // views must never be created or adopted by the fixture workflow.
+    if request.entity { context.config_mut().app.windows.clear(); }
     let output = Output::open(&request.directory).unwrap_or_else(|error| {
         eprintln!("Alden render audit: {error}");
         std::process::exit(2);
