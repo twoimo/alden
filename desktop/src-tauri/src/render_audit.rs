@@ -1138,7 +1138,7 @@ fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Res
     let target = window.clone();
     window
         .with_webview(move |platform| {
-            let result = live(deadline).and_then(|_| {
+            let measured = objc2::exception::catch(std::panic::AssertUnwindSafe(|| live(deadline).and_then(|_| {
                 let native = target
                     .ns_window()
                     .map_err(|_| "settings native window missing")?;
@@ -1155,6 +1155,9 @@ fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Res
                 "layoutWidth":layout.size.width,"layoutHeight":layout.size.height,
                 "webviewWidth":bounds.size.width,"webviewHeight":bounds.size.height}),
                 )
+            })));
+            let result = measured.unwrap_or_else(|exception| {
+                Err(format!("settings geometry Objective-C exception: {exception:?}"))
             });
             let _ = tx.try_send(result);
         })
@@ -1212,6 +1215,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
     }
     let mut states=Vec::new();
     for size in ["default","compact"] {
+        eprintln!("Alden scope {case}: waiting for {size} viewport");
         if size=="compact" {
             eprintln!("Alden scope {case}: suspend before compact resize");
             // Suspend this owned WKWebView before changing AppKit geometry;
@@ -1253,10 +1257,13 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             state["nativeLayout"]=native;
             Ok(state)
         },|state| state["ready"]==true)?;
+        eprintln!("Alden scope {case}: {size} viewport ready");
         collect_script(window,"JSON.stringify((()=>{window.__aldenScopePaintReady=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenScopePaintReady=true;}));return {armed:true};})())".into(),deadline)?;
         wait_for_audit_state("scoped final paint",deadline,|| collect_script(window,
             "JSON.stringify({ready:window.__aldenScopePaintReady===true})".into(),deadline),|state|state["ready"]==true)?;
+        eprintln!("Alden scope {case}: {size} final paint ready");
         let physics=observe_graph_rest_with_budget(window,deadline,Duration::from_secs(30))?;
+        eprintln!("Alden scope {case}: {size} rest observation returned");
         collect_script(window,"JSON.stringify((()=>{window.__aldenAuditPhysicsSnapshot=window.__knowledgePhysicsAudit();return {ready:true};})())".into(),deadline)?;
         let mut integration=json!({});
         for keys in [
@@ -2314,6 +2321,12 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
                 let started = Instant::now();
                 let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode {96}else{40});
                 let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,invalid_input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode,graph_scope) } else { audit(&handle, &output, deadline) };
+                if let Err(reason) = &result {
+                    // One write keeps the original failure intact even if the
+                    // main run loop subsequently aborts while producing JSON.
+                    let line = format!("Alden audit failure: {reason}\n");
+                    unsafe { libc::write(libc::STDERR_FILENO, line.as_ptr().cast(), line.len()); }
+                }
                 let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
                 let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
                 let report = json!({"schema":1,"pid":std::process::id(),
