@@ -386,6 +386,7 @@ export class KnowledgeHologram {
 
   /** Constant-cost readiness geometry; no projection or pair audit. */
   auditViewport() {
+    if (this.disposed || this.neuronDetail) return null;
     const rect=this.canvas.getBoundingClientRect();
     return {left:rect.left+this.viewport.x,top:rect.top+this.viewport.y,
       width:this.viewport.width,height:this.viewport.height};
@@ -393,8 +394,8 @@ export class KnowledgeHologram {
 
   /** Explicit audit snapshot only; no labels, identities or per-frame pair work. */
   auditProjectedLayout(includeCircles = false) {
-    if (this.disposed || this.neuronDetail) return { available:false,reason:'overview_unavailable' };
     const points:ProjectedCircle[]=[],viewport=this.auditViewport();
+    if (!viewport) return { available:false,reason:'overview_unavailable' };
     const projected=new THREE.Vector3(), eye=new THREE.Vector3();
     const factor=viewport.height/(2*Math.tan(THREE.MathUtils.degToRad(this.camera.fov/2)));
     for(const node of this.view.nodes.slice(0,2048)){

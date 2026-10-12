@@ -58,6 +58,28 @@ function fixture(reducedMotion: boolean) {
 }
 
 describe('display collision correction in the production frame',()=>{
+  it.each(['disposed','neuronDetail'])('does not report an overview viewport when %s',state=>{
+    const f=fixture(false),{h}=f;
+    try {
+      h[state]=true;
+      const rect=vi.spyOn(h.canvas,'getBoundingClientRect');
+      expect(h.auditViewport()).toBeNull();
+      expect(h.auditProjectedLayout()).toEqual({available:false,reason:'overview_unavailable'});
+      expect(rect).not.toHaveBeenCalled();
+    }finally{f.dispose();}
+  });
+
+  it('uses the same canvas offset and projection viewport as the full audit',()=>{
+    const f=fixture(false),{h}=f;
+    try {
+      vi.spyOn(h.canvas,'getBoundingClientRect').mockReturnValue({left:73,top:41} as DOMRect);
+      h.viewport={x:28,y:14,width:844,height:572};
+      const expected={left:101,top:55,width:844,height:572};
+      expect(h.auditViewport()).toEqual(expected);
+      expect(h.auditProjectedLayout().viewport).toEqual(expected);
+    }finally{f.dispose();}
+  });
+
   it('reads readiness viewport without traversing nodes or projecting pair geometry',()=>{
     const f=fixture(false),{h}=f;
     try {
