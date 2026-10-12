@@ -402,7 +402,8 @@ export class KnowledgeHologram {
       points.push({x:viewport.left+(projected.x+1)*viewport.width/2,
         y:viewport.top+(1-projected.y)*viewport.height/2,
         radius:.76*this.constellationNodes.radius(node.id)*factor/Math.max(this.camera.near,-eye.z),
-        inClipVolume:projected.z>=-1&&projected.z<=1&&eye.z<0});
+        inClipVolume:projected.z>=-1&&projected.z<=1&&eye.z<0,
+        ...(includeCircles&&this.anchors.has(node.id)?{solverTarget:this.anchors.get(node.id)!.toArray() as [number,number,number]}:{})});
     }
     return {scope:'on-demand projected reference core circles; no pixel, glow, label or semantic-quality proof',
       renderedFrames:this.renderedFrames,renderedNodes:this.renderedNodeCount,viewNodes:this.view.nodes.length,

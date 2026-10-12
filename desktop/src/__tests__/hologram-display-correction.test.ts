@@ -147,6 +147,9 @@ describe('display collision correction in the production frame',()=>{
       expect(h.auditProjectedLayout().metrics.overlapPairs).toBeLessThan(initial.metrics.overlapPairs);
       expect(h.auditProjectedLayout().metrics.visiblePoints).toBe(121);
       expect(snapshot()).toBe(before);
+      const audited=h.auditProjectedLayout(true);
+      expect(audited.circles.map((circle:any)=>circle.solverTarget)).toEqual(h.view.nodes.map((node:any)=>anchors.get(node.id)!.toArray()));
+      expect(h.auditProjectedLayout().circles).toBeUndefined();
       expect(h.displayOffsets.get('n0').length()).toBe(0);
       expect(h.displayOffsets.get('n1').length()).toBeGreaterThan(0);
       const shown=displayedPositions.get('n1')!;

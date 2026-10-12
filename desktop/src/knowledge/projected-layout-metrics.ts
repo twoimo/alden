@@ -1,4 +1,4 @@
-export interface ProjectedCircle { x:number; y:number; radius:number; inClipVolume?:boolean }
+export interface ProjectedCircle { x:number; y:number; radius:number; inClipVolume?:boolean; solverTarget?:readonly [number,number,number] }
 export interface ProjectionViewport { left:number; top:number; width:number; height:number }
 const CAP = 2048;
 /** On-demand geometric audit, never a frame loop or a semantic-quality score.
