@@ -36,6 +36,8 @@ _WRITE_ACTIONS = {getattr(sqlite3, name) for name in (
 _PROOF_KEYS = ("id", "source_version", "source_target", "projects", "raw_sha256", "processing_version",
                "raw_path", "projection_sha256", "base_text_sha256", "text_sha256", "body_source", "vector_sha256",
                "vector_norm", "permissions", "dimension", "profile_sha256")
+_SAMPLING_FIELDS = ("pair_sampling", "vector_nodes_compared", "eligible_vector_nodes",
+                    "comparison_min", "comparison_max", "node_pair_coverage")
 
 
 def _sidecars(folder):
@@ -188,7 +190,8 @@ def _empty_coverage():
             "node_coverage": None, "usable_by_project": {}, "cross_project_pairs_excluded": 0,
             "possible_vector_pairs": 0, "eligible_same_project_pairs": 0, "pairs_evaluated": 0,
             "dimension_products": 0, "pairs_above_threshold": 0, "neighbor_union_candidates": 0,
-            "candidates_returned": 0, "candidates_truncated": 0, "pair_coverage": None, "pair_budget_exhausted": False}
+            "candidates_returned": 0, "candidates_truncated": 0, "pair_coverage": None, "pair_budget_exhausted": False,
+            **dict.fromkeys(_SAMPLING_FIELDS)}
 
 
 def _base(projects, refs, revision, options):
@@ -204,7 +207,10 @@ def _base(projects, refs, revision, options):
                         "graph_revision": revision, "profile_basis": "expected existing E5; each admitted vector checked"},
             "quality_limits": ["cosine .65 is not semantic gold or validated cluster quality",
                                "excluded metadata-only or unread-body sources cannot substantiate semantic links",
-                               "top-k/hub/ID-order/candidate-budget bias", "layout only; no facts edges or identity merge"]}
+                               "bounded pair sampling can miss eligible pairs even when every eligible node was compared",
+                               "per-node top-k, hubs, score ties and candidate caps bias selected links",
+                               "pair coverage is limited to the displayed, validated vector subset",
+                               "layout only; no facts edges or identity merge"]}
 
 
 def _error(error):
@@ -250,7 +256,12 @@ def _on_reads(owner, options):
         if refs:
             raw = semantic._affinity_on_reads(store, owner.collection, owner.cache, projects, refs,
                                               budgets=guard.budgets, guard=guard)
-            result.update(state=raw["state"], coverage=raw["coverage"],
+            # Older evaluators never measured these statistics. Preserve that
+            # absence as null rather than manufacturing full/balanced coverage.
+            coverage = {**dict.fromkeys(_SAMPLING_FIELDS), **raw["coverage"]}
+            state = ("bounded_partial" if (coverage["pair_budget_exhausted"]
+                     or coverage["candidates_truncated"]) else raw["state"])
+            result.update(state=state, coverage=coverage,
                           nodes=[{k: proof[k] for k in _PROOF_KEYS} for proof in raw["nodes"]],
                           candidates=[{k: candidate[k] for k in ("source", "target", "cosine", "projects")}
                                       for candidate in raw["candidates"]])

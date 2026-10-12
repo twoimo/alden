@@ -76,6 +76,52 @@ class LayoutAffinityTests(unittest.TestCase):
             self.assertNotIn(key, payload)
         self.assertLess(len(encoded(result)), layout.MAX_RESPONSE_BYTES)
 
+    def test_round_robin_diagnostics_are_forwarded_without_changing_evidence_bindings(self):
+        self.make("a")
+        self.make("b")
+        evaluator = semantic._affinity_on_reads
+        def with_sampling(*args, **kwargs):
+            raw = evaluator(*args, **kwargs)
+            raw["coverage"].update(pair_sampling="project-round-robin-v1",
+                                   vector_nodes_compared=2, eligible_vector_nodes=2,
+                                   comparison_min=1, comparison_max=1, node_pair_coverage=1.0)
+            return raw
+        baseline = self.request()["layout_affinity"]
+        self.assertEqual(baseline["coverage"]["pair_sampling"], "project-round-robin-v1")
+        self.assertEqual(baseline["coverage"]["vector_nodes_compared"], 2)
+        self.assertEqual(baseline["coverage"]["eligible_vector_nodes"], 2)
+        self.assertEqual(baseline["coverage"]["comparison_min"], 1)
+        self.assertEqual(baseline["coverage"]["comparison_max"], 1)
+        self.assertEqual(baseline["coverage"]["node_pair_coverage"], 1.0)
+        with patch.object(semantic, "_affinity_on_reads", side_effect=with_sampling):
+            sampled = self.request()["layout_affinity"]
+        self.assertEqual(sampled["state"], "bounded_ready")
+        self.assertEqual({key: sampled["coverage"][key] for key in layout._SAMPLING_FIELDS},
+                         {"pair_sampling": "project-round-robin-v1", "vector_nodes_compared": 2,
+                          "eligible_vector_nodes": 2, "comparison_min": 1, "comparison_max": 1,
+                          "node_pair_coverage": 1.0})
+        self.assertEqual(sampled["nodes"], baseline["nodes"])
+        self.assertEqual(sampled["candidates"], baseline["candidates"])
+        self.assertEqual(sampled["binding"], baseline["binding"])
+        self.assertTrue(any("pair sampling" in item for item in sampled["quality_limits"]))
+
+    def test_legacy_and_empty_sampling_is_explicitly_unreported(self):
+        self.make("a")
+        evaluator = semantic._affinity_on_reads
+        def without_sampling(*args, **kwargs):
+            raw = evaluator(*args, **kwargs)
+            for key in layout._SAMPLING_FIELDS:
+                raw["coverage"].pop(key, None)
+            return raw
+        with patch.object(semantic, "_affinity_on_reads", side_effect=without_sampling):
+            legacy = self.request()["layout_affinity"]
+        empty = self.request({"projects": []})["layout_affinity"]
+        for response in (legacy, empty):
+            with self.subTest(state=response["state"]):
+                self.assertTrue(all(response["coverage"][key] is None for key in layout._SAMPLING_FIELDS))
+        self.assertEqual(empty["state"], "bounded_ready")
+        self.assertEqual(empty["coverage"]["pairs_evaluated"], 0)
+
     def test_only_unread_metadata_keeps_graph_refs_but_reports_no_eligible_content(self):
         notice = "경로만 색인한 파일. 본문은 읽지 않았습니다."
         nodes = [self.make_evidence("archive-a", body=notice, kind="metadata", content_indexed=0,
@@ -341,9 +387,34 @@ class LayoutAffinityTests(unittest.TestCase):
         self.assertEqual(limited["layout_affinity"]["coverage"]["pairs_evaluated"], 2)
         self.assertTrue(limited["layout_affinity"]["coverage"]["pair_budget_exhausted"])
         self.assertEqual(limited["layout_affinity"]["state"], "bounded_partial")
+        self.assertEqual(limited["layout_affinity"]["coverage"]["pair_sampling"], "project-round-robin-v1")
+        self.assertEqual(limited["layout_affinity"]["coverage"]["vector_nodes_compared"], 4)
+        self.assertEqual(limited["layout_affinity"]["coverage"]["eligible_vector_nodes"], 4)
+        self.assertEqual(limited["layout_affinity"]["coverage"]["node_pair_coverage"], 1.0)
+        self.assertAlmostEqual(limited["layout_affinity"]["coverage"]["pair_coverage"], 2 / 6)
         capped = self.request(budgets=replace(semantic.Budgets(), max_candidates=1))
         self.assertEqual(capped["layout_affinity"]["coverage"]["candidates_returned"], 1)
         self.assertEqual(capped["layout_affinity"]["coverage"]["candidates_truncated"], 5)
+        self.assertEqual(capped["layout_affinity"]["state"], "bounded_partial")
+
+    def test_layout_never_claims_ready_when_evaluator_reports_truncation(self):
+        for name in ("a", "b", "c"):
+            self.make(name)
+        evaluator = semantic._affinity_on_reads
+        for limit, cap in (("max_pairs", 1), ("max_candidates", 1)):
+            with self.subTest(cap=limit):
+                def incorrectly_ready(*args, **kwargs):
+                    raw = evaluator(*args, **kwargs)
+                    raw["state"] = "bounded_ready"
+                    return raw
+                with patch.object(semantic, "_affinity_on_reads", side_effect=incorrectly_ready):
+                    result = self.request(budgets=replace(semantic.Budgets(), **{limit: cap}))
+                self.assertTrue(result["ok"], result)
+                affinity = result["layout_affinity"]
+                self.assertEqual(affinity["state"], "bounded_partial")
+                self.assertEqual(affinity["coverage"]["usable_vector_nodes"], 3)
+                self.assertTrue(affinity["coverage"]["pair_budget_exhausted"]
+                                or affinity["coverage"]["candidates_truncated"] > 0)
 
     def test_hard_budget_and_mid_compute_cancel_publish_no_partial_candidates(self):
         self.make("a")

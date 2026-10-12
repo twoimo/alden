@@ -350,7 +350,14 @@ export class KnowledgeHologram {
 
   get semanticDiagnostics() { return { worker: this.semanticLayout.diagnostics, layout: this.layoutDiagnostics, pendingTargets: this.positionTransition.pending,
     affinity: this.graph.layoutAffinity ? { state: this.graph.layoutAffinity.state, pairs: this.graph.layoutAffinity.pairs.length,
-      usable: this.graph.layoutAffinity.usableNodes, requested: this.graph.layoutAffinity.requestedNodes } : null }; }
+      usable: this.graph.layoutAffinity.usableNodes, requested: this.graph.layoutAffinity.requestedNodes,
+      pairSampling: this.graph.layoutAffinity.pairSampling ?? null,
+      comparedNodes: this.graph.layoutAffinity.vectorNodesCompared ?? null,
+      eligibleNodes: this.graph.layoutAffinity.eligibleVectorNodes ?? null,
+      comparisonMin: this.graph.layoutAffinity.comparisonMin ?? null,
+      comparisonMax: this.graph.layoutAffinity.comparisonMax ?? null,
+      nodePairCoverage: this.graph.layoutAffinity.nodePairCoverage ?? null,
+      pairCoverage: this.graph.layoutAffinity.pairCoverage ?? null } : null }; }
 
   get motionDiagnostics() {
     return {

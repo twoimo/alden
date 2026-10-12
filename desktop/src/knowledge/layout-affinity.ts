@@ -13,7 +13,22 @@ export interface LayoutAffinity {
   validationRejectedNodes: number;
   evaluatedPairs: number;
   truncatedCandidates: number;
+  // Optional for existing in-process callers; parsed wire replies always
+  // populate explicit null when the evaluator did not report a statistic.
+  pairSampling?: 'project-round-robin-v1' | null;
+  vectorNodesCompared?: number | null;
+  eligibleVectorNodes?: number | null;
+  comparisonMin?: number | null;
+  comparisonMax?: number | null;
+  nodePairCoverage?: number | null;
+  pairCoverage?: number | null;
 }
+type SamplingDiagnostics = Required<Pick<LayoutAffinity, 'pairSampling' | 'vectorNodesCompared' | 'eligibleVectorNodes'
+  | 'comparisonMin' | 'comparisonMax' | 'nodePairCoverage' | 'pairCoverage'>>;
+const UNREPORTED_SAMPLING: SamplingDiagnostics = {
+  pairSampling: null, vectorNodesCompared: null, eligibleVectorNodes: null,
+  comparisonMin: null, comparisonMax: null, nodePairCoverage: null, pairCoverage: null,
+};
 const MODEL = 'mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0';
 const ENDPOINT = '5956b9388ba26ec18062d7a95c02b4d02eb01a467e383f7ddd505ecba2508844';
 const ENCODING = 'e5-char256-stride192-weighted-unit-pool-v1';
@@ -26,6 +41,55 @@ const ref = (value: unknown): { id: string; sourceVersion: string; sourceTarget:
   if (!row || !['id', 'source_version', 'source_target'].every(key => typeof row[key] === 'string' && (row[key] as string).length > 0 && (row[key] as string).length <= 256)) return null;
   return { id: row.id as string, sourceVersion: row.source_version as string, sourceTarget: row.source_target as string };
 };
+
+/** Legacy payloads have no sampling method or per-node comparison evidence.
+ * All absent/null fields remain unreported; a partly reported tuple is invalid. */
+function parseSampling(coverage: Record<string, unknown>, usable: number, evaluated: number, candidates: number): SamplingDiagnostics | null {
+  const keys = ['pair_sampling', 'vector_nodes_compared', 'eligible_vector_nodes',
+    'comparison_min', 'comparison_max', 'node_pair_coverage'] as const;
+  if (keys.every(key => coverage[key] == null)) {
+    return { ...UNREPORTED_SAMPLING };
+  }
+  const eligiblePairs = coverage.eligible_same_project_pairs;
+  const compared = coverage.vector_nodes_compared;
+  const eligibleNodes = coverage.eligible_vector_nodes;
+  const min = coverage.comparison_min;
+  const max = coverage.comparison_max;
+  const expectedPairs = usable * (usable - 1) / 2;
+  if (coverage.pair_sampling !== 'project-round-robin-v1'
+    || !count(compared, usable) || !count(eligibleNodes, usable) || compared > eligibleNodes
+    || !count(coverage.possible_vector_pairs, expectedPairs) || coverage.possible_vector_pairs !== expectedPairs
+    || !count(eligiblePairs, expectedPairs) || evaluated > eligiblePairs
+    || eligiblePairs > eligibleNodes * (eligibleNodes - 1) / 2
+    || eligiblePairs < Math.ceil(eligibleNodes / 2)
+    || (eligiblePairs === 0) !== (eligibleNodes === 0)
+    || typeof coverage.pair_budget_exhausted !== 'boolean'
+    || coverage.pair_budget_exhausted !== (evaluated < eligiblePairs)
+    || !count(coverage.candidates_returned, 4096) || coverage.candidates_returned !== candidates
+    || compared > 2 * evaluated || evaluated > compared * (compared - 1) / 2) return null;
+
+  const noComparisons = evaluated === 0 && ((min === null && max === null) || (min === 0 && max === 0));
+  const measuredComparisons = count(min, evaluated) && count(max, evaluated) && min <= max
+    && max <= Math.max(0, eligibleNodes - 1) && min * eligibleNodes <= 2 * evaluated
+    && 2 * evaluated <= max * eligibleNodes
+    && (compared < eligibleNodes ? min === 0 : evaluated === 0 || min >= 1);
+  if ((evaluated === 0 && !noComparisons) || (evaluated > 0 && (!measuredComparisons || compared < 2))) return null;
+
+  const pairCoverage = coverage.pair_coverage, nodeCoverage = coverage.node_pair_coverage;
+  const expectedPairCoverage = eligiblePairs === 0 ? null : evaluated / eligiblePairs;
+  const expectedNodeCoverage = eligibleNodes === 0 ? null : compared / eligibleNodes;
+  const matchesRatio = (value: unknown, expected: number | null) => expected === null
+    ? value === null
+    : typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+      && Math.abs(value - expected) <= 1e-9;
+  if (!matchesRatio(pairCoverage, expectedPairCoverage)
+    || !matchesRatio(nodeCoverage, expectedNodeCoverage)) return null;
+  return {
+    pairSampling: 'project-round-robin-v1', vectorNodesCompared: compared, eligibleVectorNodes: eligibleNodes,
+    comparisonMin: min as number | null, comparisonMax: max as number | null,
+    nodePairCoverage: nodeCoverage as number | null, pairCoverage: pairCoverage as number | null,
+  };
+}
 
 /** The collection snapshot is authoritative; a memory overlay never gains
  * collection authority from a coincident name, ID or inherited metadata. */
@@ -99,9 +163,15 @@ export function parseLayoutAffinity(raw: unknown, nodes: readonly KnowledgeNode[
     || !count(coverage.validation_rejected_nodes, references.length)
     || coverage.content_excluded_nodes + coverage.validation_rejected_nodes + proofs.size !== references.length
     || !count(coverage.pairs_evaluated, 131072) || !count(coverage.candidates_truncated, 16384)) return fail('affinity_invalid_coverage');
+  if ((coverage.pair_budget_exhausted !== undefined && typeof coverage.pair_budget_exhausted !== 'boolean')
+    || (value.state === 'bounded_ready' && (proofs.size !== references.length
+      || coverage.pair_budget_exhausted === true || coverage.candidates_truncated > 0))
+    || (value.candidates.length > 0 && coverage.pairs_evaluated === 0)) return fail('affinity_invalid_coverage');
+  const sampling = parseSampling(coverage, proofs.size, coverage.pairs_evaluated, value.candidates.length);
+  if (!sampling) return fail('affinity_invalid_coverage');
   return { affinity: { state: value.state, inputKey: inputHash, profileKey: PROFILE, inputNodes: references,
     pairs: [...pairs.values()].sort((a, b) => a.source.localeCompare(b.source) || a.target.localeCompare(b.target)),
     requestedNodes: references.length, usableNodes: proofs.size,
     contentExcludedNodes: coverage.content_excluded_nodes, validationRejectedNodes: coverage.validation_rejected_nodes,
-    evaluatedPairs: coverage.pairs_evaluated, truncatedCandidates: coverage.candidates_truncated }, reason: null };
+    evaluatedPairs: coverage.pairs_evaluated, truncatedCandidates: coverage.candidates_truncated, ...sampling }, reason: null };
 }

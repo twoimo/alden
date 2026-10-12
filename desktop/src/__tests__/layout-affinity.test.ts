@@ -4,8 +4,17 @@ import { parseLayoutAffinity } from '../knowledge/layout-affinity';
 import { knowledgeSignature } from '../knowledge/changes';
 import { affinityPayload } from './fixtures/affinity-payload';
 
-const graph = () => parseKnowledgeGraph({ nodes: ['a', 'b'].map(id => ({ id, label: id, source_version: 'v1', source_target: 'target-a' })),
-  edges: [{ source: 'a', target: 'b', relation: 'contradicts', weight: 1 }] });
+const graph = (ids = ['a', 'b']) => parseKnowledgeGraph({ nodes: ids.map(id => ({ id, label: id, source_version: 'v1', source_target: 'target-a' })),
+  edges: ids.includes('a') && ids.includes('b') ? [{ source: 'a', target: 'b', relation: 'contradicts', weight: 1 }] : [] });
+
+const sampledPayload = (ids = ['a', 'b']): any => {
+  const payload = affinityPayload(ids);
+  Object.assign(payload.coverage, { pair_sampling: 'project-round-robin-v1', vector_nodes_compared: 2,
+    eligible_vector_nodes: 2, comparison_min: 1, comparison_max: 1, node_pair_coverage: 1,
+    possible_vector_pairs: 1, eligible_same_project_pairs: 1, pair_coverage: 1,
+    pair_budget_exhausted: false, candidates_returned: 1 });
+  return payload;
+};
 
 describe('source-bound separate layout channel', () => {
   it('rejects old or unbound content policy instead of reusing filename affinity', () => {
@@ -72,5 +81,98 @@ describe('source-bound separate layout channel', () => {
     expect(parseLayoutAffinity({ schema: 'alden-layout-affinity-v1', state: 'unavailable', reason: 'affinity_cpu_budget' }, graph().nodes).reason).toBe('affinity_cpu_budget');
     const payload = affinityPayload(); payload.coverage.usable_vector_nodes = 0;
     expect(parseLayoutAffinity(payload, graph().nodes).reason).toBe('affinity_invalid_coverage');
+  });
+
+  it('exposes measured round-robin statistics while preserving factual edges and activity', () => {
+    const current = graph(), facts = JSON.stringify(current.edges), signature = knowledgeSignature(current);
+    const parsed = parseLayoutAffinity(sampledPayload(), current.nodes, ['one']);
+    expect(parsed.reason).toBeNull();
+    expect(parsed.affinity).toMatchObject({
+      state: 'bounded_ready', pairSampling: 'project-round-robin-v1', vectorNodesCompared: 2,
+      eligibleVectorNodes: 2, comparisonMin: 1, comparisonMax: 1, nodePairCoverage: 1, pairCoverage: 1,
+    });
+    current.layoutAffinity = parsed.affinity!;
+    expect(JSON.stringify(current.edges)).toBe(facts);
+    expect(knowledgeSignature(current)).toBe(signature);
+  });
+
+  it('keeps historical and explicitly null sampling statistics unreported', () => {
+    const legacy = affinityPayload();
+    for (const payload of [legacy, { ...legacy, coverage: { ...legacy.coverage,
+      pair_sampling: null, vector_nodes_compared: null, eligible_vector_nodes: null,
+      comparison_min: null, comparison_max: null, node_pair_coverage: null } }]) {
+      const parsed = parseLayoutAffinity(payload, graph().nodes);
+      expect(parsed.reason).toBeNull();
+      expect(parsed.affinity).toMatchObject({
+        pairSampling: null, vectorNodesCompared: null, eligibleVectorNodes: null,
+        comparisonMin: null, comparisonMax: null, nodePairCoverage: null, pairCoverage: null,
+      });
+    }
+  });
+
+  it('requires bounded_partial for truncated pairs or candidates even with every node compared', () => {
+    const ids = ['a', 'b', 'c'], current = graph(ids);
+    const pairsLimited = sampledPayload(ids);
+    pairsLimited.state = 'bounded_partial';
+    Object.assign(pairsLimited.coverage, { possible_vector_pairs: 3, eligible_same_project_pairs: 3,
+      pairs_evaluated: 2, pair_budget_exhausted: true, pair_coverage: 2 / 3,
+      vector_nodes_compared: 3, eligible_vector_nodes: 3, comparison_min: 1, comparison_max: 2,
+      node_pair_coverage: 1 });
+    const parsed = parseLayoutAffinity(pairsLimited, current.nodes);
+    expect(parsed.reason).toBeNull();
+    expect(parsed.affinity).toMatchObject({ state: 'bounded_partial', nodePairCoverage: 1, pairCoverage: 2 / 3 });
+    pairsLimited.state = 'bounded_ready';
+    expect(parseLayoutAffinity(pairsLimited, current.nodes).reason).toBe('affinity_invalid_coverage');
+
+    const candidatesLimited = sampledPayload(ids);
+    candidatesLimited.state = 'bounded_partial';
+    Object.assign(candidatesLimited.coverage, { possible_vector_pairs: 3, eligible_same_project_pairs: 3,
+      pairs_evaluated: 3, pair_coverage: 1, vector_nodes_compared: 3, eligible_vector_nodes: 3,
+      comparison_min: 2, comparison_max: 2, candidates_truncated: 2 });
+    expect(parseLayoutAffinity(candidatesLimited, current.nodes).affinity?.state).toBe('bounded_partial');
+    candidatesLimited.state = 'bounded_ready';
+    expect(parseLayoutAffinity(candidatesLimited, current.nodes).reason).toBe('affinity_invalid_coverage');
+  });
+
+  it('distinguishes sampled-node reach from eligible pair coverage and handles no eligible pairs', () => {
+    const ids = ['a', 'b', 'c'], partial = sampledPayload(ids);
+    partial.state = 'bounded_partial';
+    Object.assign(partial.coverage, { possible_vector_pairs: 3, eligible_same_project_pairs: 3,
+      pair_budget_exhausted: true, pair_coverage: 1 / 3,
+      eligible_vector_nodes: 3, vector_nodes_compared: 2, comparison_min: 0, node_pair_coverage: 2 / 3 });
+    expect(parseLayoutAffinity(partial, graph(ids).nodes).affinity).toMatchObject({
+      state: 'bounded_partial', nodePairCoverage: 2 / 3, pairCoverage: 1 / 3, comparisonMin: 0,
+    });
+    const alone = sampledPayload(['a']);
+    alone.candidates = [];
+    Object.assign(alone.coverage, { pairs_evaluated: 0, possible_vector_pairs: 0,
+      eligible_same_project_pairs: 0, vector_nodes_compared: 0, eligible_vector_nodes: 0,
+      comparison_min: 0, comparison_max: 0, node_pair_coverage: null, pair_coverage: null,
+      candidates_returned: 0 });
+    expect(parseLayoutAffinity(alone, graph(['a']).nodes).affinity).toMatchObject({
+      state: 'bounded_ready', vectorNodesCompared: 0, eligibleVectorNodes: 0, nodePairCoverage: null,
+    });
+    alone.coverage.eligible_vector_nodes = 1;
+    alone.coverage.node_pair_coverage = 0;
+    expect(parseLayoutAffinity(alone, graph(['a']).nodes).reason).toBe('affinity_invalid_coverage');
+  });
+
+  it('rejects malformed, partially present and contradictory sampling diagnostics', () => {
+    const mutations = [
+      { pair_sampling: 'row-first' }, { pair_sampling: null }, { vector_nodes_compared: 1 },
+      { vector_nodes_compared: 3 }, { vector_nodes_compared: NaN }, { eligible_vector_nodes: 1 },
+      { comparison_min: -1 }, { comparison_min: 2 }, { comparison_max: 0 },
+      { comparison_max: null }, { node_pair_coverage: 0.5 }, { node_pair_coverage: Infinity },
+      { pair_coverage: 0 }, { eligible_same_project_pairs: 0 }, { possible_vector_pairs: 0 },
+      { pair_budget_exhausted: true }, { candidates_returned: 0 },
+    ];
+    for (const mutation of mutations) {
+      const payload = sampledPayload();
+      Object.assign(payload.coverage, mutation);
+      expect(parseLayoutAffinity(payload, graph().nodes).reason, JSON.stringify(mutation)).toBe('affinity_invalid_coverage');
+    }
+    const omitted = sampledPayload();
+    delete omitted.coverage.node_pair_coverage;
+    expect(parseLayoutAffinity(omitted, graph().nodes).reason).toBe('affinity_invalid_coverage');
   });
 });

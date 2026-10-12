@@ -14,6 +14,7 @@ import heapq
 import json
 import math
 import os
+from operator import mul
 from pathlib import Path
 import re
 import resource
@@ -339,37 +340,80 @@ def _eligible_pairs(proofs, guard):
     return count
 
 
+def _project_matchings(groups, node_count, pair_cap, guard):
+    """Unique permitted pairs in bounded tournament rounds, not ID-row prefixes."""
+    if pair_cap <= 0 or not groups:
+        return
+    rounds = max(len(members) + len(members) % 2 - 1 for members in groups)
+    # At 2,048 admitted nodes this triangle occupies at most 262,016 bytes.
+    # A Python set of 65,536 tuple/integer keys competes with the RSS guard.
+    seen = bytearray((node_count * (node_count - 1) // 2 + 7) // 8)
+    yielded = 0
+    visited = 0
+    for round_index in range(rounds):
+        guard.check()
+        # Rotate the final partial round's project priority as well as partners.
+        for offset in range(len(groups)):
+            members = groups[(round_index + offset) % len(groups)]
+            size = len(members)
+            padded = size + size % 2
+            ring = padded - 1
+            if round_index >= ring:
+                continue
+            for slot in range(padded // 2):
+                visited += 1
+                if visited % 256 == 0:
+                    guard.check()
+                a, b = ((ring, round_index) if slot == 0
+                        else ((round_index + slot) % ring, (round_index - slot) % ring))
+                if a >= size or b >= size:  # An odd project has one bye.
+                    continue
+                i, j = sorted((members[a], members[b]))
+                key = j * (j - 1) // 2 + i
+                byte, bit = key >> 3, 1 << (key & 7)
+                if seen[byte] & bit:  # A pair may share more than one project.
+                    continue
+                seen[byte] |= bit
+                yielded += 1
+                yield i, j
+                if yielded >= pair_cap:
+                    return
+
+
 def _candidates(loaded, budgets, threshold, guard):
+    loaded = sorted(loaded, key=lambda entry: entry[0]["id"])
     heaps = [[] for _ in loaded]
     proofs = [entry[0] for entry in loaded]
     eligible = _eligible_pairs(proofs, guard)
     pair_cap = min(budgets.max_pairs, budgets.max_products // E5Profile().dimension)
+    projects = {}
+    for i, proof in enumerate(proofs):
+        if i % 64 == 0:
+            guard.check()
+        for project in sorted(set(proof["projects"])):
+            projects.setdefault(project, []).append(i)
+    groups = [members for _, members in sorted(projects.items()) if len(members) > 1]
+    eligible_nodes = {i for members in groups for i in members}
+    comparisons = [0] * len(loaded)
     evaluated = passing = 0
-    stop = False
-    for i, (left, x, nx) in enumerate(loaded):
-        guard.check()
-        for j in range(i + 1, len(loaded)):
-            right, y, ny = loaded[j]
-            if set(left["projects"]).isdisjoint(right["projects"]):
-                continue
-            if evaluated >= pair_cap:
-                stop = True
-                break
-            if evaluated % 16 == 0:
-                guard.check()
-            score = max(-1., min(1., sum(a * b for a, b in zip(x, y)) / (nx * ny)))
-            evaluated += 1
-            if score < threshold:
-                continue
-            passing += 1
-            for owner, neighbor in ((i, j), (j, i)):
-                item = (score, neighbor)
-                if len(heaps[owner]) < budgets.neighbors_per_node:
-                    heapq.heappush(heaps[owner], item)
-                elif item > heaps[owner][0]:
-                    heapq.heapreplace(heaps[owner], item)
-        if stop:
-            break
+    for i, j in _project_matchings(groups, len(loaded), pair_cap, guard):
+        if evaluated % 16 == 0:
+            guard.check()
+        _, x, nx = loaded[i]
+        _, y, ny = loaded[j]
+        score = max(-1., min(1., sum(map(mul, x, y)) / (nx * ny)))
+        evaluated += 1
+        comparisons[i] += 1
+        comparisons[j] += 1
+        if score < threshold:
+            continue
+        passing += 1
+        for owner, neighbor in ((i, j), (j, i)):
+            item = (score, neighbor)
+            if len(heaps[owner]) < budgets.neighbors_per_node:
+                heapq.heappush(heaps[owner], item)
+            elif item > heaps[owner][0]:
+                heapq.heapreplace(heaps[owner], item)
     pairs = {}
     for i, heap in enumerate(heaps):
         for score, j in heap:
@@ -384,7 +428,13 @@ def _candidates(loaded, budgets, threshold, guard):
         "neighbor_union_candidates": len(ranked), "candidates_returned": len(candidates),
         "candidates_truncated": max(0, len(ranked) - budgets.max_candidates),
         "pair_coverage": evaluated / eligible if eligible else None,
-        "pair_budget_exhausted": evaluated < eligible}
+        "pair_budget_exhausted": evaluated < eligible,
+        "pair_sampling": "project-round-robin-v1",
+        "vector_nodes_compared": sum(count > 0 for count in comparisons),
+        "eligible_vector_nodes": len(eligible_nodes),
+        "comparison_min": min((comparisons[i] for i in eligible_nodes), default=0),
+        "comparison_max": max(comparisons, default=0),
+        "node_pair_coverage": sum(count > 0 for count in comparisons) / len(eligible_nodes) if eligible_nodes else None}
 
 
 def affinity(root, projects, nodes, *, profile=E5Profile(), budgets=Budgets(),
