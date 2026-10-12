@@ -14,6 +14,7 @@ type QualityCounts = {
   noncontent_current_versions: number;
   metadata_only_current_versions: number;
   unread_body_marker_current_versions: number;
+  metadata_description_current_versions: number;
 };
 type QualityCandidates = {
   same_raw_bytes: { groups: number; status: 'hash_references_only' };
@@ -23,7 +24,7 @@ type QualityCandidates = {
 type QualityErrorCode = keyof typeof ERROR_TEXT;
 export type QualitySuccess = {
   ok: true;
-  schema: 2;
+  schema: 3;
   scope: RequestedScope & {
     projects: string[];
     coverage: 'permitted_current_collection_memberships';
@@ -36,11 +37,11 @@ export type QualitySuccess = {
   findings: Record<string, number>;
   duplicate_candidates: QualityCandidates;
   metadata_matches: Record<'within_context' | 'cross_context', { groups: number; status: 'metadata_match_not_content' }>;
-  content_evidence: { policy: 'source-content-evidence-v2'; status: 'source_declared_exclusions_not_semantic_verdict' };
+  content_evidence: { policy: 'source-content-evidence-v3'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified' };
 };
-export type QualityFailure = { ok: false; schema: 2; reason: QualityErrorCode; scope: RequestedScope };
+export type QualityFailure = { ok: false; schema: 3; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
 
 const ERROR_TEXT = {
@@ -118,12 +119,12 @@ function matchesScope(value: Record<string, unknown>, query: QualityQuery, allow
  * No untrusted identifiers or extra backend fields leave this parser. */
 export function parseCollectionQuality(value: unknown, query: QualityQuery): QualityResult | null {
   const row = object(value), scope = object(row?.scope);
-  if (!row || row.schema !== 2 || !scope) return null;
+  if (!row || row.schema !== 3 || !scope) return null;
 
   if (row.ok === false) {
     if (!Object.hasOwn(ERROR_TEXT, String(row.reason)) || !matchesScope(scope, query, true)) return null;
     return {
-      ok: false, schema: 2, reason: row.reason as QualityErrorCode,
+      ok: false, schema: 3, reason: row.reason as QualityErrorCode,
       scope: { requested_scope: scope.requested_scope as RequestedScope['requested_scope'],
         requested_project: scope.requested_project as RequestedScope['requested_project'] },
     };
@@ -149,12 +150,14 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || !counts || !findings || !duplicates || !numeric || !raw || !normalized || !cross || !mixed || !normalization
     || !evidence || !metadataWithin || !metadataCross
     || !(['memberships', 'project_current_versions', 'relations', 'distinct_current_documents', 'bytes_examined',
-      'noncontent_current_versions', 'metadata_only_current_versions', 'unread_body_marker_current_versions'] as const)
+      'noncontent_current_versions', 'metadata_only_current_versions', 'unread_body_marker_current_versions',
+      'metadata_description_current_versions'] as const)
       .every(key => count(counts[key]))
     || (counts.noncontent_current_versions as number) > (counts.project_current_versions as number)
     || (counts.metadata_only_current_versions as number) + (counts.unread_body_marker_current_versions as number)
+      + (counts.metadata_description_current_versions as number)
       !== counts.noncontent_current_versions
-    || evidence.policy !== 'source-content-evidence-v2' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
+    || evidence.policy !== 'source-content-evidence-v3' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
     || !count(metadataWithin.groups) || metadataWithin.status !== 'metadata_match_not_content'
     || !count(metadataCross.groups) || metadataCross.status !== 'metadata_match_not_content'
     || Object.keys(findings).length > 64
@@ -167,7 +170,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || normalization.semantic_validity !== 'unverified') return null;
 
   return {
-    ok: true, schema: 2,
+    ok: true, schema: 3,
     scope: {
       requested_scope: scope.requested_scope as QualitySuccess['scope']['requested_scope'],
       requested_project: scope.requested_project as string | null,
@@ -188,7 +191,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       within_context: { groups: metadataWithin.groups as number, status: 'metadata_match_not_content' },
       cross_context: { groups: metadataCross.groups as number, status: 'metadata_match_not_content' },
     },
-    content_evidence: { policy: 'source-content-evidence-v2', status: 'source_declared_exclusions_not_semantic_verdict' },
+    content_evidence: { policy: 'source-content-evidence-v3', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
   };
 }
@@ -401,6 +404,7 @@ export class KnowledgeQualityPanel {
     metrics('본문 근거에서 제외한 기록', [
       ['메타데이터만 있는 현재 버전', value.counts.metadata_only_current_versions],
       ['본문 미열람 안내만 있는 현재 버전', value.counts.unread_body_marker_current_versions],
+      ['내용 대신 자료 설명만 있는 현재 버전', value.counts.metadata_description_current_versions],
       ['같은 맥락의 이름·안내문 일치 그룹', value.metadata_matches.within_context.groups],
       ['교차 맥락의 이름·안내문 일치 그룹', value.metadata_matches.cross_context.groups],
     ]);

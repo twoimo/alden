@@ -27,7 +27,7 @@ from alden_collection import CollectionStore, digest, identity
 COUNTS = {
     "memberships", "project_current_versions", "relations",
     "distinct_current_documents", "bytes_examined",
-    "noncontent_current_versions", "metadata_only_current_versions", "unread_body_marker_current_versions",
+    "noncontent_current_versions", "metadata_only_current_versions", "unread_body_marker_current_versions", "metadata_description_current_versions",
 }
 CANDIDATES = {
     "same_raw_bytes": "hash_references_only",
@@ -109,7 +109,7 @@ class QualityActionContractTests(unittest.TestCase):
 
     def assert_error(self, result, reason, *, mode=None, project=None):
         self.assertEqual(result, {
-            "ok": False, "schema": 2, "reason": reason,
+            "ok": False, "schema": 3, "reason": reason,
             "scope": {"requested_scope": mode, "requested_project": project},
         })
         json.dumps(result, allow_nan=False)
@@ -121,7 +121,7 @@ class QualityActionContractTests(unittest.TestCase):
             "normalization", "metadata_matches", "content_evidence",
         })
         self.assertIs(result["ok"], True)
-        self.assertEqual(result["schema"], 2)
+        self.assertEqual(result["schema"], 3)
         self.assertEqual(result["scope"], {
             "requested_scope": mode, "requested_project": project,
             "projects": projects,
@@ -474,7 +474,7 @@ class QualityActionContractTests(unittest.TestCase):
         bad_reports = (
             ("absent report", lambda r: None),
             ("wrong schema", set_field(("schema",), 1)),
-            ("old ambiguous text candidates", set_field(("schema",), 2)),
+            ("old ambiguous text candidates", set_field(("schema",), 3)),
             ("missing content policy", set_field(("content_evidence",), None)),
             ("unknown content policy", set_field(("content_evidence", "policy"), "future-policy")),
             ("impossible exclusion partition", set_field(("counts", "noncontent_current_versions"), 1)),

@@ -8,7 +8,7 @@ const storageKey = 'alden-entity-resolution-pending-v1';
 const nodes = ['one', 'two'].map(id => ({ id, label: id, source_target: 'target', source_version: id + '-v', source_platform: 'graph' }));
 const sourceRecord = (node: typeof nodes[number]) => ({ target_id: 'target', document_id: node.id, version: node.source_version,
   label: node.label, body: 'Synthetic original statement for document ' + node.id, basis: 'permitted_current_stored_record',
-  content_evidence: { policy: 'source-content-evidence-v2', classification: 'content_candidate' },
+  content_evidence: { policy: 'source-content-evidence-v3', classification: 'content_candidate' },
   source_url: 'https://example.com/' + node.id, truncated: false });
 const plan = { schema: 1, project: 'a', members: nodes.map(node => ({ document_id: node.id, target_id: 'target', version: node.source_version })),
   canonical: { target_id: 'target', document_id: 'one' }, reason: '같은 지식의 원문 근거', revision: 0,
@@ -151,9 +151,10 @@ describe('source-reviewed duplicate decisions', () => {
   });
   it.each([
     ['missing original body', { body: ' ' }],
-    ['declared metadata-only body', { body: 'two', content_evidence: { policy: 'source-content-evidence-v2', classification: 'metadata_only' } }],
-    ['archive-only noncontent declaration', { content_evidence: { policy: 'source-content-evidence-v2', classification: 'source_metadata_only' } }],
-    ['unread whole-body notice', { body: '경로만 색인한 파일. 본문은 읽지 않았습니다.', content_evidence: { policy: 'source-content-evidence-v2', classification: 'unread_body_marker' } }],
+    ['declared metadata-only body', { body: 'two', content_evidence: { policy: 'source-content-evidence-v3', classification: 'metadata_only' } }],
+    ['archive-only noncontent declaration', { content_evidence: { policy: 'source-content-evidence-v3', classification: 'source_metadata_only' } }],
+    ['generic source-file description', { body: '현재 체크아웃의 소스 파일', content_evidence: { policy: 'source-content-evidence-v3', classification: 'metadata_description' } }],
+    ['unread whole-body notice', { body: '경로만 색인한 파일. 본문은 읽지 않았습니다.', content_evidence: { policy: 'source-content-evidence-v3', classification: 'unread_body_marker' } }],
     ['missing evidence policy', { content_evidence: null }],
     ['old ambiguous evidence policy', { content_evidence: { policy: 'source-content-evidence-v1', classification: 'content_candidate' } }],
     ['metadata-only basis', { basis: 'source_metadata' }],

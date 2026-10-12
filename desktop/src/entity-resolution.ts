@@ -19,7 +19,7 @@ function reviewableRecord(row: Row, member: Member): boolean {
   return row.basis === 'permitted_current_stored_record'
     && row.target_id === member.target_id && row.document_id === member.document_id && row.version === member.version
     && row.truncated === false && !!body
-    && evidence?.policy === 'source-content-evidence-v2' && evidence.classification === 'content_candidate';
+    && evidence?.policy === 'source-content-evidence-v3' && evidence.classification === 'content_candidate';
 }
 
 function matchesRequestedPlan(value: Row, project: string, members: Member[], reason: string): boolean {
@@ -63,7 +63,7 @@ export function wireEntityResolution(load: typeof fetchSettingsAction = fetchSet
   const button = (label: string) => { const node = make('button', label); node.type = 'button'; return node; };
   const section = make('details'); section.className = 'entity-resolution';
   section.append(make('summary', '중복 지식 검토'));
-  const introduction = make('p', '원문을 비교한 뒤 같은 지식으로 묶을 수 있습니다. 원래 자료와 연결은 보존되며 결정은 되돌릴 수 있습니다.');
+  const introduction = make('p', '저장된 자료를 비교해 같은 지식으로 묶을 수 있습니다. 원래 자료와 연결은 보존되며 결정은 되돌릴 수 있습니다.');
   const project = make('select'); project.setAttribute('aria-label', '중복 검토 프로젝트');
   const emptyProject = make('option', '프로젝트 선택'); emptyProject.value = ''; project.append(emptyProject);
   const search = make('input'); search.type = 'search'; search.placeholder = '비교할 자료 검색'; search.setAttribute('aria-label', '비교할 자료 검색');
@@ -280,6 +280,14 @@ export function wireEntityResolution(load: typeof fetchSettingsAction = fetchSet
       && members.every(member => records.some(row => reviewableRecord(row, member)));
     comparison.replaceChildren(...records.map(row => {
       const article = make('article'); article.append(make('h4', text(row.label) || text(row.original_id)), make('pre', text(row.body)));
+      const evidence = row.content_evidence as Row | undefined;
+      const classification = text(evidence?.classification);
+      const description = ['metadata_only', 'source_metadata_only', 'metadata_description'].includes(classification)
+        ? '이름·자료 설명입니다. 실제 내용의 동일성은 확인되지 않았습니다.'
+        : classification === 'unread_body_marker' ? '본문 미열람 안내입니다.'
+        : row.body_source === 'retained_record.localOriginalText' ? '보관된 본문입니다.'
+        : '저장된 본문·설명입니다. 원래 파일 전체의 확인과 구분됩니다.';
+      article.append(make('p', description));
       if (row.truncated === true) article.append(make('p', '보관된 본문 일부를 표시했습니다. 전체 내용을 확인한 뒤 판단하세요.'));
       const url = text(row.source_url);
       try {

@@ -10,7 +10,7 @@ const all = { scope: 'all' } as const;
 
 function success(query: QualityQuery = all) {
   return {
-    ok: true, schema: 2,
+    ok: true, schema: 3,
     scope: {
       requested_scope: query.scope,
       requested_project: query.scope === 'project' ? query.project : null,
@@ -21,7 +21,7 @@ function success(query: QualityQuery = all) {
     checked_at: 1_791_768_900.125, elapsed_ms: 25.125,
     counts: { memberships: 42, project_current_versions: 39, relations: 11,
       distinct_current_documents: 30, bytes_examined: 8000,
-      noncontent_current_versions: 11, metadata_only_current_versions: 9, unread_body_marker_current_versions: 2 },
+      noncontent_current_versions: 15, metadata_only_current_versions: 9, unread_body_marker_current_versions: 2, metadata_description_current_versions: 4 },
     findings: { normalization_mismatch: 2, relation_evidence_invalid: 3 },
     duplicate_candidates: {
       same_raw_bytes: { groups: 4, status: 'hash_references_only' },
@@ -33,7 +33,7 @@ function success(query: QualityQuery = all) {
       within_context: { groups: 8, status: 'metadata_match_not_content' },
       cross_context: { groups: 1, status: 'metadata_match_not_content' },
     },
-    content_evidence: { policy: 'source-content-evidence-v2', status: 'source_declared_exclusions_not_semantic_verdict' },
+    content_evidence: { policy: 'source-content-evidence-v3', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
   };
 }
@@ -162,9 +162,9 @@ describe('manual collection-quality report and fixed native selectors', () => {
     empty.findings = {} as typeof empty.findings;
     empty.counts = { memberships: 0, project_current_versions: 0, relations: 0,
       distinct_current_documents: 0, bytes_examined: 0,
-      noncontent_current_versions: 0, metadata_only_current_versions: 0, unread_body_marker_current_versions: 0 };
+      noncontent_current_versions: 0, metadata_only_current_versions: 0, unread_body_marker_current_versions: 0, metadata_description_current_versions: 0 };
     const load = vi.fn<typeof fetchSettingsAction>()
-      .mockResolvedValueOnce(empty).mockResolvedValueOnce({ ok: true, schema: 2, scope: empty.scope });
+      .mockResolvedValueOnce(empty).mockResolvedValueOnce({ ok: true, schema: 3, scope: empty.scope });
     setup(load); info().open = true;
     button().click(); await settle();
     expect(state()).toBe('complete');
@@ -241,7 +241,7 @@ describe('manual collection-quality report and fixed native selectors', () => {
 
   it('exposes known errors and transport failures as unavailable, then allows retry', async () => {
     const load = vi.fn<typeof fetchSettingsAction>()
-      .mockResolvedValueOnce({ ok: false, schema: 2, reason: 'quality_time_budget',
+      .mockResolvedValueOnce({ ok: false, schema: 3, reason: 'quality_time_budget',
         scope: { requested_scope: 'all', requested_project: null } })
       .mockRejectedValueOnce(new Error('network error'))
       .mockResolvedValueOnce(success());
@@ -265,11 +265,11 @@ describe('schema and scope validation must fail closed', () => {
     expect(parseCollectionQuality(success(one), one)).toMatchObject({ ok: true });
     expect(parseCollectionQuality(success(one), all)).toBeNull();
     expect(parseCollectionQuality(success(all), one)).toBeNull();
-    expect(parseCollectionQuality({ ok: false, schema: 2, reason: 'quality_query_invalid',
+    expect(parseCollectionQuality({ ok: false, schema: 3, reason: 'quality_query_invalid',
       scope: { requested_scope: null, requested_project: null } }, one)).toMatchObject({ ok: false });
-    expect(parseCollectionQuality({ ok: false, schema: 2, reason: 'quality_query_invalid',
+    expect(parseCollectionQuality({ ok: false, schema: 3, reason: 'quality_query_invalid',
       scope: { requested_scope: 'all', requested_project: null } }, one)).toBeNull();
-    expect(parseCollectionQuality({ ok: false, schema: 2, reason: 'unknown_error',
+    expect(parseCollectionQuality({ ok: false, schema: 3, reason: 'unknown_error',
       scope: { requested_scope: null, requested_project: null } }, one)).toBeNull();
   });
 

@@ -98,6 +98,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     allowed, checked_blobs = defaultdict(set), set()
     membership_contexts, source_tags, scoped_versions = defaultdict(set), {}, defaultdict(set)
     seen, profiles, originals, source_verified = set(), defaultdict(Counter), {}, {}
+    source_declarations = {}
     degree, directed_relations = defaultdict(Counter), Counter()
 
     def check():
@@ -227,6 +228,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                     if digest(data) != row['raw_sha256']:
                         raise ValueError('raw_hash')
                     source = _json(data)
+                    source_declarations[blob_key] = {name: source[name] for name in ('kind', 'content_indexed')
+                        if isinstance(source, dict) and name in source}
                     original = source.get('localOriginalText') if isinstance(source, dict) else None
                     originals[blob_key] = digest(original.encode()) if isinstance(original, str) and original.strip() else None
                     counts['source_blobs_verified'] += 1
@@ -246,8 +249,9 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             text = label + '\n' + (cached[3] if valid else body)
             examine(text)
             effective_body = cached[3] if valid else body
-            evidence_class = content_evidence_class(metadata, effective_body) if metadata_valid else None
-            if evidence_class in ('metadata_only', 'unread_body_marker'):
+            evidence_class = content_evidence_class(metadata, effective_body,
+                source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None) if metadata_valid else None
+            if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description'):
                 counts['noncontent_current_versions'] += 1
                 counts[evidence_class + '_current_versions'] += 1
             if not text.strip():
@@ -259,6 +263,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 counts['duplicate_text_ineligible'] += 1
             elif not metadata_valid:
                 counts['duplicate_text_untrusted'] += 1
+            elif verify_sources and source_verified.get(blob_key) is not True:
+                counts['duplicate_text_source_unverified'] += 1
             else:
                 # Conservative search fingerprint: NFC and line endings only
                 # for body; no tab/space folding or date/unit/alias rewriting.
@@ -443,10 +449,12 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                    'duplicate_text_ineligible', 'duplicate_text_untrusted', 'current_vectors', 'current_vector_missing',
                    'nonempty_search_text_vector_missing', 'reciprocal_relation_pairs',
                    'vector_profiles_mixed_dimensions', 'noncontent_current_versions',
-                   'metadata_only_current_versions', 'unread_body_marker_current_versions'):
+                   'metadata_only_current_versions', 'unread_body_marker_current_versions',
+                   'metadata_description_current_versions', 'source_metadata_only_current_versions',
+                   'duplicate_text_source_unverified'):
         counts.setdefault(metric, 0)
     check()
-    return {'schema': 3, 'mode': 'read_only_current_versions', 'projects': projects,
+    return {'schema': 4, 'mode': 'read_only_current_versions', 'projects': projects,
             'source_verification_requested': verify_sources, 'counts': dict(sorted(counts.items())),
             'findings': dict(sorted(findings.items())), 'samples': dict(sorted(samples.items())),
             'duplicate_candidates': candidates, 'metadata_matches': metadata_matches,

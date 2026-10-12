@@ -1,8 +1,14 @@
-"""Source-declared exclusions; a candidate is never a semantic truth verdict."""
+"""Source declarations and typed descriptions; candidates are not truth verdicts."""
 from alden_collection import normalized_text
 
-POLICY = 'source-content-evidence-v2'
+POLICY = 'source-content-evidence-v3'
 UNREAD_BODY_MARKERS = frozenset({'경로만 색인한 파일. 본문은 읽지 않았습니다.'})
+METADATA_DESCRIPTIONS = {
+    'code': frozenset({'현재 체크아웃의 소스 파일'}),
+    'hub': frozenset({'파일 시스템의 디렉터리'}),
+}
+# Whole descriptions observed in the retained file graph. Quoted occurrences
+# and unknown record kinds remain separate; an indexed flag is not body proof.
 
 
 def _declares_noncontent(value):
@@ -26,6 +32,12 @@ def content_evidence_class(metadata, body, *, source=None):
         return 'metadata_only'
     if _declares_noncontent(source):
         return 'source_metadata_only'
-    if normalized_text(body) in UNREAD_BODY_MARKERS:
+    text = normalized_text(body)
+    if text in UNREAD_BODY_MARKERS:
         return 'unread_body_marker'
+    kinds = [metadata.get('kind')]
+    if isinstance(source, dict):
+        kinds.append(source.get('kind'))
+    if any(isinstance(kind, str) and text in METADATA_DESCRIPTIONS.get(kind, ()) for kind in kinds):
+        return 'metadata_description'
     return 'content_candidate'

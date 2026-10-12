@@ -11,7 +11,8 @@ from alden_graph_quality import _json, audit
 from alden_content_evidence import POLICY
 
 COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_current_documents','bytes_examined',
-              'noncontent_current_versions','metadata_only_current_versions','unread_body_marker_current_versions')
+              'noncontent_current_versions','metadata_only_current_versions','unread_body_marker_current_versions',
+              'metadata_description_current_versions')
 ERRORS=frozenset(('quality_scope_unavailable','quality_scan_budget','quality_time_budget',
                  'quality_cancelled','quality_report_unavailable','quality_query_invalid'))
 
@@ -50,7 +51,7 @@ def _projects(store,mode,project):
         return [r[0] for r in db.execute("SELECT DISTINCT project FROM target_projects WHERE permission!='denied' AND project=? LIMIT 1",(project,))]
 
 def _summary(report,projects):
-    if (not isinstance(report,dict) or report.get('schema')!=3 or report.get('mode')!='read_only_current_versions'
+    if (not isinstance(report,dict) or report.get('schema')!=4 or report.get('mode')!='read_only_current_versions'
             or report.get('projects')!=projects or report.get('source_verification_requested') is not False):
         raise ValueError('quality_report_unavailable')
     coverage=report.get('coverage',{})
@@ -64,7 +65,7 @@ def _summary(report,projects):
             or counts['project_current_versions']>counts['memberships']):
         raise ValueError('quality_report_unavailable')
     if (counts['noncontent_current_versions']>counts['project_current_versions']
-            or counts['metadata_only_current_versions']+counts['unread_body_marker_current_versions']
+            or counts['metadata_only_current_versions']+counts['unread_body_marker_current_versions']+counts['metadata_description_current_versions']
             !=counts['noncontent_current_versions']
             or report.get('content_evidence')!={'policy':POLICY,'status':'source_declared_exclusions_not_semantic_verdict'}):
         raise ValueError('quality_report_unavailable')
@@ -130,9 +131,9 @@ def read_action(state_root,query_raw,cancelled=None):
         checked=time.time();elapsed=(time.monotonic()-started)*1000
         if not math.isfinite(checked) or checked<=0 or not math.isfinite(elapsed) or elapsed<0:
             raise ValueError('quality_report_unavailable')
-        return {'ok':True,'schema':2,'scope':{**scope,'projects':projects,
+        return {'ok':True,'schema':3,'scope':{**scope,'projects':projects,
             'coverage':'permitted_current_collection_memberships','filters':'project_only',
             'source_verification':'hash_references_only'},'checked_at':checked,'elapsed_ms':round(elapsed,3),**summary}
     except (ValueError,RuntimeError,OSError,KeyError,TypeError,RecursionError,AttributeError,sqlite3.Error) as error:
         code=str(error) if str(error) in ERRORS else 'quality_report_unavailable'
-        return {'ok':False,'schema':2,'scope':scope,'reason':code}
+        return {'ok':False,'schema':3,'scope':scope,'reason':code}
