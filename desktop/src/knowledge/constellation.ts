@@ -31,6 +31,14 @@ export function minimumStarRadius(cameraDistance: number, verticalFov: number, v
   return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * cssRadius;
 }
 
+/** Dense overview ceiling at the camera target, in CSS rather than device pixels. */
+export function maximumOverviewStarRadius(cameraDistance: number, verticalFov: number, viewportHeight: number): number {
+  if (!Number.isFinite(cameraDistance) || cameraDistance <= 0
+    || !Number.isFinite(verticalFov) || verticalFov <= 0 || verticalFov >= 180
+    || !Number.isFinite(viewportHeight) || viewportHeight <= 0) return Infinity;
+  return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * 1.8;
+}
+
 /**
  * Overview stars only. The owner supplies positions, links and sphere picking;
  * selected-neuron detail belongs to the owner too. No geometry changes on set.
@@ -49,6 +57,7 @@ export class ConstellationNodes extends THREE.Group {
   private readonly instanceSize = new THREE.Vector3();
   private minimumRadius = 0;
   private displayRadiusScale = 1;
+  private maximumRadius = Infinity;
   private selectedId: string | null = null;
   private readonly activity = new Map<string, NodeActivity>();
   private readonly activityColor = new THREE.Color();
@@ -167,10 +176,12 @@ export class ConstellationNodes extends THREE.Group {
     this.highlight(this.selectedId);
   }
 
-  setMinimumRadius(radius: number, displayRadiusScale = 1): void {
+  setMinimumRadius(radius: number, displayRadiusScale = 1, maximumRadius = Infinity): void {
     this.minimumRadius = this.capacity > CAPACITY && Number.isFinite(radius) ? Math.min(.03, Math.max(0, radius)) : 0;
     this.displayRadiusScale = this.capacity > CAPACITY && Number.isFinite(displayRadiusScale)
       ? Math.max(.5,Math.min(1,displayRadiusScale)) : 1;
+    this.maximumRadius = this.capacity > CAPACITY && Number.isFinite(maximumRadius) && maximumRadius > 0
+      ? Math.max(this.minimumRadius, maximumRadius) : Infinity;
   }
 
   /** Missing/non-finite positions collapse immediately. No per-update allocations. */
@@ -181,7 +192,7 @@ export class ConstellationNodes extends THREE.Group {
       const id = this.slotIds[slot], point = id === null ? undefined : positions.get(id);
       const x = Math.fround(point?.x ?? NaN), y = Math.fround(point?.y ?? NaN), z = Math.fround(point?.z ?? NaN);
       const valid = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
-      const radius = valid ? Math.fround(Math.max(this.minimumRadius,this.radii[slot]*this.displayRadiusScale)) : 0;
+      const radius = valid ? Math.fround(Math.min(this.maximumRadius, Math.max(this.minimumRadius,this.radii[slot]*this.displayRadiusScale))) : 0;
       const px = valid ? x : 0, py = valid ? y : 0, pz = valid ? z : 0, at = slot * 16;
       visible ||= valid;
       if (matrices[at] === radius && matrices[at+5] === radius && matrices[at+10] === radius
@@ -269,7 +280,7 @@ export class ConstellationNodes extends THREE.Group {
   /** Base sphere radius for the owner's picker; absent/capped/retracted IDs return zero. */
   radius(id: string): number {
     const slot = this.slots.get(id);
-    return slot === undefined ? 0 : Math.max(this.minimumRadius, this.radii[slot]*this.displayRadiusScale);
+    return slot === undefined ? 0 : Math.min(this.maximumRadius, Math.max(this.minimumRadius, this.radii[slot]*this.displayRadiusScale));
   }
 
   private clearInstances(): void {

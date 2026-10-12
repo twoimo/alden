@@ -6,7 +6,7 @@ import { ContextNebulae } from './cortex';
 import { contextRegions, sourceRegions, regionBounds } from './context-regions';
 import { createNeuronGlyph, NEURON_EXTENT_RATIO } from './neuron';
 import type { NeuronPort } from './neuron';
-import { ConstellationNodes, minimumStarRadius } from './constellation';
+import { ConstellationNodes, minimumStarRadius, maximumOverviewStarRadius } from './constellation';
 import { pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
 import { overviewDisplayPoint, overviewGlyphScale, OVERVIEW_DISPLAY_GAIN } from './overview-presentation';
@@ -898,7 +898,8 @@ export class KnowledgeHologram {
       z=(Math.min(...points.map(p=>p.z))+Math.max(...points.map(p=>p.z)))/2;
     }
     const relative=points.map(p=>({x:p.x-x,y:p.y-y,z:p.z-z}));
-    const distance=overviewCameraDistance(relative,this.viewport.width,this.viewport.height,this.camera.fov,this.view.hops===0?.08:.32);
+    const distance=overviewCameraDistance(relative,this.viewport.width,this.viewport.height,this.camera.fov,
+      this.view.hops===0?.08:.32,this.view.hops===0&&this.view.nodes.length>120);
     this.desiredCamera.set(x,y,z+distance);this.desiredLookAt.set(x,y,z);
     this.fitAfterSemanticLayout = this.view.hops === 0 && this.view.nodes.length > 0
       && (this.view.nodes.length <= 24 || this.provisionalOverviewPositions.size > 0);
@@ -961,7 +962,8 @@ export class KnowledgeHologram {
     this.plasticity.forEachPoint(this.syncPoint);
     this.constellationNodes.setMinimumRadius(minimumStarRadius(this.camera.position.distanceTo(this.lookAt),
       this.camera.fov, this.viewport.height, this.view.nodes.length),
-      overviewGlyphScale(this.viewport.width,this.viewport.height,denseOverview));
+      overviewGlyphScale(this.viewport.width,this.viewport.height,denseOverview),
+      denseOverview?maximumOverviewStarRadius(this.camera.position.distanceTo(this.lookAt),this.camera.fov,this.viewport.height):Infinity);
     if (!this.neuronDetail) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);

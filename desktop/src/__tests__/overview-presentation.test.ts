@@ -1,11 +1,40 @@
 import { describe, expect, it } from 'vitest';
 import { overviewDisplayPoint, overviewGlyphScale } from '../knowledge/overview-presentation';
-import { ConstellationNodes } from '../knowledge/constellation';
+import { ConstellationNodes, maximumOverviewStarRadius } from '../knowledge/constellation';
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
 import { overviewCameraDistance } from '../knowledge/camera-fit';
 import { projectedLayoutMetrics } from '../knowledge/projected-layout-metrics';
 
 describe('dense overview display projection', () => {
+  it('bounds dense glyphs in CSS space and gives the picker the exact GPU radius', () => {
+    const {nodes,edges}=parseKnowledgeGraph({nodes:[{id:'hub',label:'synthetic',degree:900,degree_scope:'permitted filtered graph'}],edges:[]});
+    const stars=new ConstellationNodes(2048);stars.set(nodes,edges);
+    const point=new Map([['hub',{x:.1,y:.2,z:0}]]);
+    const radiusBefore=stars.radius('hub'),cap=maximumOverviewStarRadius(4.7,38,510);
+    stars.setMinimumRadius(.003,1,cap);stars.update(point);
+    const radius=stars.radius('hub');
+    expect(radius).toBeLessThan(radiusBefore);expect(radius).toBeLessThanOrEqual(cap);
+    expect(radius*510/(2*4.7*Math.tan(38*Math.PI/360))).toBeCloseTo(1.8);
+    const batch=stars.children[0] as import('three').InstancedMesh;
+    expect(batch.instanceMatrix.array[0]).toBeCloseTo(radius,7);
+    expect(batch.instanceMatrix.array[5]).toBeCloseTo(radius,7);
+    stars.setMinimumRadius(.003);stars.update(point);
+    expect(stars.radius('hub')).toBe(radiusBefore);
+    batch.dispose();batch.geometry.dispose();(batch.material as import('three').Material).dispose();
+  });
+
+  it('retains a visible floor and rejects invalid ceiling inputs', () => {
+    expect(maximumOverviewStarRadius(0,38,510)).toBe(Infinity);
+    expect(maximumOverviewStarRadius(4.7,NaN,510)).toBe(Infinity);
+    expect(maximumOverviewStarRadius(4.7,38,0)).toBe(Infinity);
+    const {nodes,edges}=parseKnowledgeGraph({nodes:[{id:'dot',label:'synthetic'}],edges:[]});
+    const stars=new ConstellationNodes(2048);stars.set(nodes,edges);
+    stars.setMinimumRadius(.01,1,.001);
+    expect(stars.radius('dot')).toBe(.01);
+    const batch=stars.children[0] as import('three').InstancedMesh;
+    batch.dispose();batch.geometry.dispose();(batch.material as import('three').Material).dispose();
+  });
+
   it('uses matching glyph radii for the GPU and picker, retaining a visible floor after compression', () => {
     const {nodes,edges}=parseKnowledgeGraph({nodes:[{id:'synthetic-dot',label:'synthetic'}],edges:[]});
     const stars=new ConstellationNodes(2048);stars.set(nodes,edges);

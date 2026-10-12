@@ -5,10 +5,14 @@ export function overviewCameraDistance(
   height: number,
   verticalFov = 38,
   radius = .32,
+  denseOverview = false,
 ): number {
   const tanY = Math.tan(verticalFov * Math.PI / 360);
   const tanX = tanY * Math.max(1, width) / Math.max(1, height);
-  const safeX = tanX * Math.max(0.3, 1 - 96 / Math.max(1, width));
+  // Dense stars have small bounded glyphs; local/detail labels retain the
+  // original wide margin. Every enclosing point still contributes to fit.
+  const horizontalPadding = denseOverview ? 32 : 96;
+  const safeX = tanX * Math.max(0.3, 1 - horizontalPadding / Math.max(1, width));
   const safeY = tanY * Math.max(0.3, 1 - 40 / Math.max(1, height));
   let distance = 3.6;
   for (const point of points) {
