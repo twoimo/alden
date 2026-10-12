@@ -278,6 +278,8 @@ impl Output {
                 | "workspace-observed-compact-settings.json"
                 | "knowledge-quality-default.png"
                 | "knowledge-quality-compact.png"
+                | "knowledge-quality-body-default.png"
+                | "knowledge-quality-body-compact.png"
                 | "entity-compare-default.png"
                 | "entity-compare-compact.png"
                 | "entity-applied-default.png"
@@ -819,7 +821,7 @@ fn capture_workspaces(
                 const button=document.querySelector('#knowledge-quality-run');
                 if(!button||button.disabled)throw new Error('quality control unavailable');
                 button.click();return {requested:true};})())"#.into(),deadline)?;
-            let quality=loop {
+            let mut quality=loop {
                 let state=collect_script(window,r#"JSON.stringify((()=>{
                     const panel=document.querySelector('#knowledge-quality-report');
                     return {state:panel.dataset.state,status:document.querySelector('#knowledge-quality-status').textContent,
@@ -841,6 +843,32 @@ fn capture_workspaces(
                 if state["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
             }
             publish(output,&format!("knowledge-quality-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+            collect_script(window,r#"JSON.stringify((()=>{
+                const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                const heading=document.querySelector('#knowledge-quality-body');
+                if(!box||!heading)throw new Error('body quality section unavailable');
+                box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+                window.__aldenQualityPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenQualityPaint=true;}));
+                return {scrolled:true};})())"#.into(),deadline)?;
+            loop {
+                let ready=collect_script(window,"JSON.stringify({ready:window.__aldenQualityPaint===true})".into(),deadline)?;
+                if ready["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+            }
+            let body=collect_script(window,r#"JSON.stringify((()=>{
+                const heading=document.querySelector('#knowledge-quality-body');
+                const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                const rect=box.getBoundingClientRect();
+                const list=heading.nextElementSibling;
+                const rows=Array.from(list.querySelectorAll('dt')).map(dt=>{
+                    const dd=dt.nextElementSibling,r=dd.getBoundingClientRect();
+                    return {label:dt.textContent,value:dd.textContent,visible:r.top>=rect.top&&r.bottom<=rect.bottom};
+                });
+                return {rows,horizontalOverflow:document.documentElement.scrollWidth>innerWidth};})())"#.into(),deadline)?;
+            if body["horizontalOverflow"]!=false || body["rows"].as_array().is_none_or(|rows|rows.len()!=6||rows.iter().any(|r|r["visible"]!=true)) {
+                return Err(format!("body quality metrics clipped: {body}"));
+            }
+            publish(output,&format!("knowledge-quality-body-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+            quality["bodyObservation"]=body;
             collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-info').open=false;return {closed:true};})())".into(),deadline)?;
             state["qualityObservation"]=quality;
         }

@@ -99,7 +99,31 @@ def _summary(report,projects):
     numeric=report['numeric_review_candidates']['mixed_vector_dimensions']
     if numeric.get('status')!='review_candidate_not_semantic_outlier':
         raise ValueError('quality_report_unavailable')
+    body=report.get('body_matches')
+    if (not isinstance(body,dict) or body.get('policy')!='stored-body-match-v1'
+            or body.get('basis')!='current_stored_body_projection_not_original_equivalence'
+            or not isinstance(body.get('counts'),dict)):
+        raise ValueError('quality_report_unavailable')
+    body_counts={key:_count(body['counts'].get(key)) for key in
+        ('eligible_current_versions','without_substantive_label','reference_only_current_versions')}
+    if (body_counts['eligible_current_versions']>counts['project_current_versions']
+            or any(body_counts[key]>body_counts['eligible_current_versions'] for key in
+                ('without_substantive_label','reference_only_current_versions'))):
+        raise ValueError('quality_report_unavailable')
+    body_candidates={}
+    for key,classification in [('stored_body','stored_body_text_match_not_source_equivalence'),
+                               ('reference_text','reference_text_match_not_linked_content')]:
+        item=body.get(key)
+        if (not isinstance(item,dict) or item.get('status')!='review_candidates_not_confirmed_entities'
+                or item.get('classification')!=classification):
+            raise ValueError('quality_report_unavailable')
+        groups,members=_count(item.get('groups')),_count(item.get('distinct_document_members'))
+        available=body_counts['reference_only_current_versions'] if key=='reference_text' else body_counts['eligible_current_versions']-body_counts['reference_only_current_versions']
+        if members>available or groups*2>members or bool(groups)!=bool(members):
+            raise ValueError('quality_report_unavailable')
+        body_candidates[key]={'groups':groups,'members':members,'status':'text_match_review_only'}
     return {'counts':counts,'findings':findings,'duplicate_candidates':duplicates,
+        'body_matches':{'policy':body['policy'],'basis':body['basis'],'counts':body_counts,**body_candidates},
         'metadata_matches':metadata_matches,'content_evidence':report['content_evidence'],
         'numeric_review_candidates':{'mixed_vector_dimensions':{'profiles':_count(numeric['profiles']),'status':'review_candidate'}},
         'normalization':{'method':'NFC_line_endings_preserving_body_spacing','semantic_validity':'unverified'}}

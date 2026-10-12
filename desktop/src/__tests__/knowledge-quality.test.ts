@@ -28,6 +28,12 @@ function success(query: QualityQuery = all) {
       same_normalized_search_text: { groups: 5, status: 'review_candidate' },
       cross_context_search_text: { groups: 6, status: 'review_candidate' },
     },
+    body_matches: {
+      policy: 'stored-body-match-v1', basis: 'current_stored_body_projection_not_original_equivalence',
+      counts: { eligible_current_versions: 20, without_substantive_label: 17, reference_only_current_versions: 8 },
+      stored_body: { groups: 3, members: 10, status: 'text_match_review_only' },
+      reference_text: { groups: 2, members: 6, status: 'text_match_review_only' },
+    },
     numeric_review_candidates: { mixed_vector_dimensions: { profiles: 7, status: 'review_candidate' } },
     metadata_matches: {
       within_context: { groups: 8, status: 'metadata_match_not_content' },
@@ -131,8 +137,14 @@ describe('manual collection-quality report and fixed native selectors', () => {
     expect(metric('정규화 차이')).toBe('2');
     expect(metric('그 밖의 무결성 발견')).toBe('12');
     expect(metric('동일 원본 해시 참조 그룹')).toBe('4');
-    expect(metric('동일 정규화 본문 후보 그룹')).toBe('5');
-    expect(metric('교차 맥락 본문 후보 그룹')).toBe('6');
+    expect(metric('제목·본문 일치 후보 그룹')).toBe('5');
+    expect(metric('교차 맥락 제목·본문 후보 그룹')).toBe('6');
+    expect(metric('저장 본문 문자열 일치 후보 그룹')).toBe('3');
+    expect(metric('저장 본문 일치 후보 참여 기록')).toBe('10');
+    expect(metric('검사한 본문 중 유효 제목 없는 기록')).toBe('17');
+    expect(metric('링크 문자열 일치 후보 그룹')).toBe('2');
+    expect(metric('링크 일치 후보 참여 기록')).toBe('6');
+    expect(document.getElementById('knowledge-quality-body')?.textContent).toBe('제목과 별도로 확인한 저장 본문');
     expect(metric('메타데이터만 있는 현재 버전')).toBe('9');
     expect(metric('본문 미열람 안내만 있는 현재 버전')).toBe('2');
     expect(metric('같은 맥락의 이름·안내문 일치 그룹')).toBe('8');
@@ -163,6 +175,10 @@ describe('manual collection-quality report and fixed native selectors', () => {
     empty.counts = { memberships: 0, project_current_versions: 0, relations: 0,
       distinct_current_documents: 0, bytes_examined: 0,
       noncontent_current_versions: 0, metadata_only_current_versions: 0, unread_body_marker_current_versions: 0, metadata_description_current_versions: 0 };
+    empty.body_matches.counts = { eligible_current_versions: 0,
+      without_substantive_label: 0, reference_only_current_versions: 0 };
+    empty.body_matches.stored_body = { groups: 0, members: 0, status: 'text_match_review_only' };
+    empty.body_matches.reference_text = { groups: 0, members: 0, status: 'text_match_review_only' };
     const load = vi.fn<typeof fetchSettingsAction>()
       .mockResolvedValueOnce(empty).mockResolvedValueOnce({ ok: true, schema: 3, scope: empty.scope });
     setup(load); info().open = true;
@@ -274,6 +290,19 @@ describe('schema and scope validation must fail closed', () => {
   });
 
   it.each([
+    ['missing body coverage', (item: any) => { delete item.body_matches; }],
+    ['old body coverage policy', (item: any) => { item.body_matches.policy = 'title-only'; }],
+    ['body match promoted to original identity', (item: any) => { item.body_matches.basis = 'verified_original_equivalence'; }],
+    ['boolean body count', (item: any) => { item.body_matches.counts.eligible_current_versions = true; }],
+    ['eligible bodies exceed current scope', (item: any) => { item.body_matches.counts.eligible_current_versions = 40; }],
+    ['untitled bodies exceed eligible', (item: any) => { item.body_matches.counts.without_substantive_label = 21; }],
+    ['reference bodies exceed eligible', (item: any) => { item.body_matches.counts.reference_only_current_versions = 21; }],
+    ['body match claimed confirmed', (item: any) => { item.body_matches.stored_body.status = 'confirmed'; }],
+    ['content members exceed eligible non-references', (item: any) => { item.body_matches.stored_body.members = 13; }],
+    ['reference members exceed eligible references', (item: any) => { item.body_matches.reference_text.members = 9; }],
+    ['singleton groups', (item: any) => { item.body_matches.stored_body.groups = 6; }],
+    ['members without groups', (item: any) => { item.body_matches.reference_text.groups = 0; }],
+    ['groups without members', (item: any) => { item.body_matches.reference_text.members = 0; }],
     ['old report with ambiguous text candidates', (item: any) => { item.schema = 1; }],
     ['missing content policy', (item: any) => { delete item.content_evidence; }],
     ['unknown content policy', (item: any) => { item.content_evidence.policy = 'future-policy'; }],

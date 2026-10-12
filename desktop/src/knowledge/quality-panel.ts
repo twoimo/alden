@@ -21,6 +21,13 @@ type QualityCandidates = {
   same_normalized_search_text: { groups: number; status: 'review_candidate' };
   cross_context_search_text: { groups: number; status: 'review_candidate' };
 };
+type BodyMatches = {
+  policy: 'stored-body-match-v1';
+  basis: 'current_stored_body_projection_not_original_equivalence';
+  counts: { eligible_current_versions: number; without_substantive_label: number; reference_only_current_versions: number };
+  stored_body: { groups: number; members: number; status: 'text_match_review_only' };
+  reference_text: { groups: number; members: number; status: 'text_match_review_only' };
+};
 type QualityErrorCode = keyof typeof ERROR_TEXT;
 export type QualitySuccess = {
   ok: true;
@@ -36,6 +43,7 @@ export type QualitySuccess = {
   counts: QualityCounts;
   findings: Record<string, number>;
   duplicate_candidates: QualityCandidates;
+  body_matches: BodyMatches;
   metadata_matches: Record<'within_context' | 'cross_context', { groups: number; status: 'metadata_match_not_content' }>;
   content_evidence: { policy: 'source-content-evidence-v4'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
@@ -139,6 +147,8 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
   const normalization = object(row.normalization);
   const evidence = object(row.content_evidence), metadata = object(row.metadata_matches);
   const metadataWithin = object(metadata?.within_context), metadataCross = object(metadata?.cross_context);
+  const body = object(row.body_matches), bodyCounts = object(body?.counts);
+  const storedBody = object(body?.stored_body), references = object(body?.reference_text);
   if (row.ok !== true || !matchesScope(scope, query, false)
     || scope.coverage !== 'permitted_current_collection_memberships'
     || scope.filters !== 'project_only' || scope.source_verification !== 'hash_references_only'
@@ -149,6 +159,17 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || !checkedDate(row.checked_at) || !finiteNonnegative(row.elapsed_ms)
     || !counts || !findings || !duplicates || !numeric || !raw || !normalized || !cross || !mixed || !normalization
     || !evidence || !metadataWithin || !metadataCross
+    || !body || !bodyCounts || !storedBody || !references
+    || body.policy !== 'stored-body-match-v1' || body.basis !== 'current_stored_body_projection_not_original_equivalence'
+    || !['eligible_current_versions', 'without_substantive_label', 'reference_only_current_versions'].every(k => count(bodyCounts[k]))
+    || (bodyCounts.eligible_current_versions as number) > (counts.project_current_versions as number)
+    || (bodyCounts.without_substantive_label as number) > (bodyCounts.eligible_current_versions as number)
+    || (bodyCounts.reference_only_current_versions as number) > (bodyCounts.eligible_current_versions as number)
+    || ![storedBody, references].every(item => count(item.groups) && count(item.members)
+      && item.status === 'text_match_review_only' && (item.groups as number) * 2 <= (item.members as number)
+      && Boolean(item.groups) === Boolean(item.members))
+    || (storedBody.members as number) > (bodyCounts.eligible_current_versions as number) - (bodyCounts.reference_only_current_versions as number)
+    || (references.members as number) > (bodyCounts.reference_only_current_versions as number)
     || !(['memberships', 'project_current_versions', 'relations', 'distinct_current_documents', 'bytes_examined',
       'noncontent_current_versions', 'metadata_only_current_versions', 'unread_body_marker_current_versions',
       'metadata_description_current_versions'] as const)
@@ -185,6 +206,12 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       same_raw_bytes: { groups: raw.groups as number, status: 'hash_references_only' },
       same_normalized_search_text: { groups: normalized.groups as number, status: 'review_candidate' },
       cross_context_search_text: { groups: cross.groups as number, status: 'review_candidate' },
+    },
+    body_matches: {
+      policy: 'stored-body-match-v1', basis: 'current_stored_body_projection_not_original_equivalence',
+      counts: bodyCounts as BodyMatches['counts'],
+      stored_body: { groups: storedBody.groups as number, members: storedBody.members as number, status: 'text_match_review_only' },
+      reference_text: { groups: references.groups as number, members: references.members as number, status: 'text_match_review_only' },
     },
     numeric_review_candidates: { mixed_vector_dimensions: { profiles: mixed.profiles as number, status: 'review_candidate' } },
     metadata_matches: {
@@ -354,9 +381,10 @@ export class KnowledgeQualityPanel {
       if (className) p.className = className;
       elements.push(p);
     };
-    const metrics = (title: string, entries: Array<[string, string | number]>) => {
+    const metrics = (title: string, entries: Array<[string, string | number]>, id?: string) => {
       const h = this.root.createElement('h3');
       h.textContent = title;
+      if (id) h.id = id;
       elements.push(h);
       const dl = this.root.createElement('dl');
       for (const [label, metric] of entries) {
@@ -397,10 +425,19 @@ export class KnowledgeQualityPanel {
     }
     metrics('검토 후보', [
       ['동일 원본 해시 참조 그룹', value.duplicate_candidates.same_raw_bytes.groups],
-      ['동일 정규화 본문 후보 그룹', value.duplicate_candidates.same_normalized_search_text.groups],
-      ['교차 맥락 본문 후보 그룹', value.duplicate_candidates.cross_context_search_text.groups],
+      ['제목·본문 일치 후보 그룹', value.duplicate_candidates.same_normalized_search_text.groups],
+      ['교차 맥락 제목·본문 후보 그룹', value.duplicate_candidates.cross_context_search_text.groups],
       ['벡터 차원 혼합 프로필', value.numeric_review_candidates.mixed_vector_dimensions.profiles],
     ]);
+    metrics('제목과 별도로 확인한 저장 본문', [
+      ['검사한 저장 본문', value.body_matches.counts.eligible_current_versions],
+      ['검사한 본문 중 유효 제목 없는 기록', value.body_matches.counts.without_substantive_label],
+      ['저장 본문 문자열 일치 후보 그룹', value.body_matches.stored_body.groups],
+      ['저장 본문 일치 후보 참여 기록', value.body_matches.stored_body.members],
+      ['링크 문자열 일치 후보 그룹', value.body_matches.reference_text.groups],
+      ['링크 일치 후보 참여 기록', value.body_matches.reference_text.members],
+    ], 'knowledge-quality-body');
+    paragraph('저장 본문은 제목·검색 캐시와 별도로 비교합니다. 반복 안내·광고도 문자열이 같을 수 있으며, 링크 일치는 연결된 원문의 내용 일치가 아닙니다. 원래 포스트 전체·작성자·시각·같은 인물은 검증하지 않았고 자동 병합하지 않습니다.', 'knowledge-quality-limit');
     metrics('본문 근거에서 제외한 기록', [
       ['메타데이터만 있는 현재 버전', value.counts.metadata_only_current_versions],
       ['본문 미열람 안내만 있는 현재 버전', value.counts.unread_body_marker_current_versions],

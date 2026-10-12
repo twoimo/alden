@@ -14,6 +14,40 @@ from alden_graph_quality import audit
 
 
 class QualityTests(unittest.TestCase):
+    def test_body_matching_preserves_spacing_scope_and_source_exclusions(self):
+        rows = [dict(self.record(name, body), label='') for name, body in
+            [('a', 'cafe\u0301\r\n  날짜 2026-10-13'), ('b', 'café\n  날짜 2026-10-13'),
+             ('spacing', 'café\n 날짜 2026-10-13')]]
+        rows.append(dict(self.record('description', 'café\n  날짜 2026-10-13'),
+            label='', coverage='existing privacy-filtered derived metadata; original bytes not opened'))
+        self.store.ingest(self.a, rows)
+        self.store.ingest(self.b, [dict(self.record('foreign', 'café\n  날짜 2026-10-13'), label='')])
+        before = self.store.path.read_bytes()
+        report = audit(self.root, ['one'], verify_sources=True, sample_cap=10)
+        matches = report['body_matches']
+        self.assertEqual(matches['counts']['eligible_current_versions'], 3)
+        self.assertEqual(matches['stored_body']['groups'], 1)
+        self.assertEqual(matches['stored_body']['distinct_document_members'], 2)
+        self.assertEqual(set(matches['stored_body']['samples'][0]['document_ids']),
+                         {identity('graph', name) for name in ('a', 'b')})
+        self.assertEqual(self.store.path.read_bytes(), before)
+
+    def test_stored_body_matches_do_not_require_a_title(self):
+        body='서로 별도 기록인 원래 저장 본문입니다. 날짜와 단위를 그대로 유지합니다.\n  원래 들여쓰기'
+        self.store.ingest(self.a,[{**self.record(name,body),'label':''} for name in ('body-a','body-b')])
+        report=audit(self.root,['one'])
+        self.assertEqual(report['body_matches']['stored_body']['groups'],1)
+        self.assertEqual(report['body_matches']['counts']['without_substantive_label'],2)
+        self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'],0)
+
+    def test_reference_body_matches_are_separate_from_content_and_keep_url_case(self):
+        rows=[{**self.record(name,body),'label':''} for name,body in
+            [('link-a','https://example.test/Path?ID=ABC'),('link-b','https://example.test/Path?ID=ABC'),
+             ('different','https://example.test/path?ID=abc')]]
+        self.store.ingest(self.a,rows)
+        report=audit(self.root,['one'])
+        self.assertEqual(report['body_matches']['reference_text']['groups'],1)
+        self.assertEqual(report['body_matches']['stored_body']['groups'],0)
     def test_unread_metadata_notice_is_not_a_content_duplicate(self):
         notice = '경로만 색인한 파일. 본문은 읽지 않았습니다.'
         records = [dict(self.record(name, notice), kind='metadata',
@@ -25,6 +59,8 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(report['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
         self.assertEqual(report['metadata_matches']['within_context']['groups'], 1)
         self.assertEqual(report['counts']['metadata_only_current_versions'], 2)
+        self.assertEqual(report['body_matches']['counts']['eligible_current_versions'], 0)
+        self.assertEqual(report['body_matches']['stored_body']['groups'], 0)
         self.assertEqual(report['counts']['project_current_versions'], 2)
         self.assertEqual(self.store.path.read_bytes(), before)
 

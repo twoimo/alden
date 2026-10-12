@@ -95,6 +95,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     counts, findings, samples = Counter(), Counter(), defaultdict(list)
     raw_groups, raw_entries = defaultdict(set), defaultdict(set)
     text_entries, metadata_entries = defaultdict(set), defaultdict(set)
+    body_entries, reference_entries = defaultdict(set), defaultdict(set)
+    body_counts = Counter()
     allowed, checked_blobs = defaultdict(set), set()
     membership_contexts, source_tags, scoped_versions = defaultdict(set), {}, defaultdict(set)
     seen, profiles, originals, source_verified = set(), defaultdict(Counter), {}, {}
@@ -261,6 +263,20 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description'):
                 counts['noncontent_current_versions'] += 1
                 counts[evidence_class + '_current_versions'] += 1
+            # Inspect the immutable stored projection, independently of titles
+            # and disposable search-cache bodies. This is text equality only.
+            stored_class = content_evidence_class(metadata,body,
+                source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
+                body_source='stored_body') if metadata_valid else None
+            if (metadata_valid and stored_class == 'content_candidate'
+                    and _substantive_field(body)
+                    and (not verify_sources or source_verified.get(blob_key) is True)):
+                body_counts['eligible_current_versions'] += 1
+                body_counts['without_substantive_label'] += not _substantive_field(label, title=True)
+                reference_only = re.fullmatch(r'(?:https?://[^\s]+\s*)+', body.strip()) is not None
+                body_counts['reference_only_current_versions'] += reference_only
+                entries = reference_entries if reference_only else body_entries
+                entries[(row['project'], digest(normalized_body(body).encode()))].add(unique)
             if not text.strip():
                 counts['search_text_empty'] += 1
                 counts['duplicate_text_ineligible'] += 1
@@ -430,6 +446,18 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         'cross_context_search_text': summarize_candidates(
             across_context, 'text_match_across_target_permission_or_provenance',
             cross_contexts)}
+    body_matches = {'policy':'stored-body-match-v1',
+                    'basis':'current_stored_body_projection_not_original_equivalence',
+                    'counts':{name:body_counts[name] for name in
+                        ('eligible_current_versions','without_substantive_label','reference_only_current_versions')}}
+    for name, entries in (('stored_body',body_entries),('reference_text',reference_entries)):
+        contexts = {key:{(target_id,platform,permission,source_tags.get(member,''))
+                    for member in members for target_id,platform,permission in membership_contexts[member]}
+                    for key,members in entries.items()}
+        groups = {key:{member[1] for member in members} for key,members in entries.items()}
+        body_matches[name] = summarize_candidates(groups,
+            'stored_body_text_match_not_source_equivalence' if name=='stored_body'
+            else 'reference_text_match_not_linked_content', contexts)
     metadata_matches = {
         'within_context': summarize_candidates(
             metadata_within, 'metadata_name_or_notice_match_not_content'),
@@ -471,6 +499,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             'source_verification_requested': verify_sources, 'counts': dict(sorted(counts.items())),
             'findings': dict(sorted(findings.items())), 'samples': dict(sorted(samples.items())),
             'duplicate_candidates': candidates, 'metadata_matches': metadata_matches,
+            'body_matches':body_matches,
             'content_evidence': {'policy': POLICY, 'status': 'source_declared_exclusions_not_semantic_verdict'},
             'scoped_revision_variants': revision_report,
             'numeric_review_candidates': numeric_review,

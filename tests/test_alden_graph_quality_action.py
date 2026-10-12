@@ -42,6 +42,48 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
+    def test_untitled_body_and_reference_matches_are_counted_without_private_samples(self):
+        target = self.target()
+        body = 'private-body-sentinel: 별도 출처에 반복된 안내문입니다. 내용 일치만 관찰합니다.'
+        link = 'https://private.example.invalid/Path?ID=ABC'
+        self.store.ingest(target, [dict(self.record(name, text=text), label='')
+            for name, text in [('body-a', body), ('body-b', body), ('link-a', link), ('link-b', link)]])
+        before = self.durable_files()
+        result = action.read_action(self.root, self.union_query())
+        self.assert_success(result, mode='all', project=None, projects=['one'])
+        self.assertEqual(result['body_matches'], {
+            'policy': 'stored-body-match-v1',
+            'basis': 'current_stored_body_projection_not_original_equivalence',
+            'counts': {'eligible_current_versions': 4, 'without_substantive_label': 4,
+                       'reference_only_current_versions': 2},
+            'stored_body': {'groups': 1, 'members': 2, 'status': 'text_match_review_only'},
+            'reference_text': {'groups': 1, 'members': 2, 'status': 'text_match_review_only'},
+        })
+        self.assertEqual(result['duplicate_candidates']['same_normalized_search_text']['groups'], 0)
+        self.assertEqual(self.durable_files(), before)
+
+    def test_missing_impossible_or_confirmed_body_coverage_cannot_become_success(self):
+        target = self.target()
+        self.store.ingest(target, [self.record('healthy')])
+        base = quality.audit(self.root, ['one'], verify_sources=False, sample_cap=0)
+        def missing(report): del report['body_matches']
+        mutations = [missing,
+            lambda r: r['body_matches']['counts'].update(eligible_current_versions=True),
+            lambda r: r['body_matches']['counts'].update(without_substantive_label=2),
+            lambda r: r['body_matches']['counts'].update(reference_only_current_versions=2),
+            lambda r: r['body_matches']['stored_body'].update(status='confirmed'),
+            lambda r: r['body_matches']['stored_body'].update(groups=1, distinct_document_members=1),
+            lambda r: r['body_matches']['reference_text'].update(groups=0, distinct_document_members=1),
+            lambda r: r['body_matches'].update(basis='verified_original_equivalence'),
+        ]
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                report = copy.deepcopy(base)
+                mutate(report)
+                with patch.object(action, 'audit', return_value=report):
+                    self.assert_error(action.read_action(self.root, self.union_query()),
+                        'quality_report_unavailable', mode='all')
+
     def test_union_project_added_during_scan_cannot_return_partial_all_scope(self):
         target=self.target();self.store.ingest(target,[self.record('healthy')])
         real_audit=action.audit
@@ -118,7 +160,7 @@ class QualityActionContractTests(unittest.TestCase):
         self.assertEqual(set(result), {
             "ok", "schema", "scope", "checked_at", "elapsed_ms", "counts",
             "findings", "duplicate_candidates", "numeric_review_candidates",
-            "normalization", "metadata_matches", "content_evidence",
+            "normalization", "metadata_matches", "content_evidence", "body_matches",
         })
         self.assertIs(result["ok"], True)
         self.assertEqual(result["schema"], 3)
