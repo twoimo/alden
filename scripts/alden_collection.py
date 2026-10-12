@@ -81,12 +81,16 @@ def korean_literal_plan(query):
     return tuple(tuple(c) for c in clauses) if words and not expect_word else None
 
 
-def korean_literal_sql(plan, label='v.label', body='v.body'):
+def korean_literal_sql(plan, label='v.label', body='v.body', *, numeric_boundaries=False):
     # Column expressions are fixed by callers. All query values stay bound.
     clauses, values = [], []
     for clause in plan:
         expressions = []
         for word in clause:
+            if numeric_boundaries and (word[0].isdigit() or word[-1].isdigit()):
+                expressions.append(f'alden_korean_literal({label},{body},?)=1')
+                values.append(word)
+                continue
             columns = [f'lower({c})' if re.search(r'[a-z]', word) else c for c in (label, body)]
             expressions.append(f'(instr({columns[0]},?)>0 OR instr({columns[1]},?)>0)')
             values.extend((word, word))
@@ -96,7 +100,17 @@ def korean_literal_sql(plan, label='v.label', body='v.body'):
 
 def korean_literal_matches(plan, label, body):
     fields = [unicodedata.normalize('NFC', value).lower() for value in (label, body)]
-    return any(all(any(word in field for field in fields) for word in clause) for clause in plan)
+    def contains(field, word):
+        offset = field.find(word)
+        while offset >= 0:
+            end = offset + len(word)
+            left = not word[0].isdigit() or offset == 0 or not field[offset-1].isdigit()
+            right = not word[-1].isdigit() or end == len(field) or not field[end].isdigit()
+            if left and right:
+                return True
+            offset = field.find(word, offset + 1)
+        return False
+    return any(all(any(contains(field, word) for field in fields) for word in clause) for clause in plan)
 
 
 RELATION_BIND_FIELDS = ('target_id', 'source', 'target', 'type', 'evidence')
@@ -757,6 +771,9 @@ class CollectionStore:
             plan = korean_literal_plan(query) if expand_korean else None
             if plan:
                 contains, params = korean_literal_sql(plan)
+                db.create_function('alden_korean_literal',3,
+                    lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
+                strict, strict_params = korean_literal_sql(plan,'s.label','s.body',numeric_boundaries=True)
                 sql = """WITH search_candidates AS MATERIALIZED (
                     SELECT document_id FROM version_search WHERE version_search MATCH ?
                     UNION SELECT v.document_id FROM versions v WHERE """ + contains + """),
@@ -769,11 +786,11 @@ class CollectionStore:
                     SELECT s.id,bm25(version_search) AS rank FROM version_search
                     JOIN scoped s ON s.current_version=version_search.version_id WHERE version_search MATCH ?),
                     matches AS (SELECT id,rank,0 AS priority FROM token_matches UNION ALL
-                    SELECT s.id,0.0,1 FROM scoped s WHERE """ + korean_literal_sql(plan, 's.label', 's.body')[0] + """
+                    SELECT s.id,0.0,1 FROM scoped s WHERE """ + strict + """
                     AND s.id NOT IN (SELECT id FROM token_matches))
                     SELECT s.id,s.label,s.body,s.metadata,m.rank FROM matches m JOIN scoped s ON s.id=m.id
                     ORDER BY m.priority,m.rank,m.id LIMIT ?"""
-                rows = db.execute(sql, (query, *params, *projects, *values, query, *params, limit)).fetchall()
+                rows = db.execute(sql, (query, *params, *projects, *values, query, *strict_params, limit)).fetchall()
             else:
                 rows = db.execute("""WITH search_candidates AS MATERIALIZED (
               SELECT document_id FROM version_search WHERE version_search MATCH ?)
@@ -907,14 +924,17 @@ class CollectionStore:
                 search_cte = cte
                 if plan:
                     contains, params = korean_literal_sql(plan)
+                    db.create_function('alden_korean_literal',3,
+                        lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
+                    strict, strict_params = korean_literal_sql(plan,numeric_boundaries=True)
                     search_cte += """,token_matches AS MATERIALIZED (
                       SELECT s.id,bm25(version_search) AS rank FROM version_search JOIN shown s
                       ON s.visible_version=version_search.version_id WHERE version_search MATCH ?),
-                      literal_versions AS MATERIALIZED (SELECT v.id FROM versions v WHERE """ + contains + ")"
+                      literal_versions AS MATERIALIZED (SELECT v.id,v.label,v.body FROM versions v WHERE """ + contains + ")"
                     picking = """SELECT id FROM (SELECT id,rank,0 AS priority FROM token_matches UNION ALL
                       SELECT s.id,0.0,1 FROM shown s JOIN literal_versions v ON v.id=s.visible_version
-                      WHERE s.id NOT IN (SELECT id FROM token_matches)) ORDER BY priority,rank,id"""
-                    pick_args = [fts, *params, limit+1, offset, limit]
+                      WHERE """ + strict + """ AND s.id NOT IN (SELECT id FROM token_matches)) ORDER BY priority,rank,id"""
+                    pick_args = [fts, *params, *strict_params, limit+1, offset, limit]
                 else:
                     pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
                 overview = search_cte + ",picked AS MATERIALIZED (" + picking + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "

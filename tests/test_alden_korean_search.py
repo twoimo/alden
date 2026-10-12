@@ -15,6 +15,20 @@ from alden_collection import CollectionStore, digest, encoded, identity
 
 
 class KoreanSearchRegressionTests(unittest.TestCase):
+    def test_numeric_literals_do_not_match_larger_values_and_check_later_occurrences(self):
+        target = self.target()
+        self.store.ingest(target, [
+            self.record('larger-year', '미래2035년예측'),
+            self.record('larger-age', '189년된곳'),
+            self.record('exact-age', '이자리35년336'),
+            self.record('later-valid', '먼저2035년예측 그리고이자리35년336'),
+        ])
+        expected = {identity('graph', name) for name in ('exact-age', 'later-valid')}
+        self.assertEqual(set(self.search_ids('35년')), expected)
+        self.assertEqual(set(self.graph_ids('35년')), expected)
+        self.assertEqual(self.search_ids('89년'), [])
+        self.assertEqual(self.graph_ids('89년'), [])
+
     def setUp(self):
         temporary = TemporaryDirectory(prefix="alden-korean-search-")
         self.addCleanup(temporary.cleanup)
