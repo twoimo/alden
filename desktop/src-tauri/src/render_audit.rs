@@ -1198,6 +1198,9 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
     let mut states=Vec::new();
     for size in ["default","compact"] {
         if size=="compact" {
+            // Suspend this owned WKWebView before changing AppKit geometry;
+            // resuming uses the existing visibility/reconnection lifecycle.
+            visibility(window,false,deadline)?;
             let target=window.clone();let (tx,rx)=mpsc::sync_channel(1);
             window.run_on_main_thread(move || {
                 let result=live(deadline).and_then(|_| {
@@ -1207,6 +1210,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
                     Ok(())
                 });let _=tx.try_send(result);
             }).map_err(|_| "scope resize dispatch failed")?;receive(rx,deadline)?;
+            visibility(window,true,deadline)?;
         }
         wait_for_audit_state("scoped graph paint",deadline,|| {
             let native=native_settings_size(window,deadline)?;

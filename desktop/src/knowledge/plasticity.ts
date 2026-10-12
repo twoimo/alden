@@ -208,7 +208,19 @@ export class PlasticityLayout {
       for (let axis = 0; axis < 3; axis++) this.velocity[at + axis] = damping * (this.velocity[at + axis] + h * this.forces[at + axis] * scale * this.inverseMass[i]);
       const speed = Math.hypot(this.velocity[at], this.velocity[at + 1], this.velocity[at + 2]);
       const speedScale = speed > 1.4 ? 1.4 / speed : 1;
-      for (let axis = 0; axis < 3; axis++) { this.velocity[at + axis] *= speedScale; positions[at + axis] += h * this.velocity[at + axis]; }
+      for (let axis = 0; axis < 3; axis++) this.velocity[at + axis] *= speedScale;
+      // On an ellipsoid the radial direction differs from the surface normal.
+      // Advancing an outward velocity and then radially clipping the position
+      // creates a tangential drift even at constrained equilibrium. Apply the
+      // active boundary constraint before advancing, retaining all tangential
+      // and inward movement. The final projection still admits new contacts.
+      if (Math.hypot(beforeX / 2.3, beforeY / 1.55, beforeZ / 1.1) >= 1 - 1e-9) {
+        let nx=beforeX/5.29,ny=beforeY/2.4025,nz=beforeZ/1.21;
+        const normalLength=Math.hypot(nx,ny,nz);nx/=normalLength;ny/=normalLength;nz/=normalLength;
+        const outward=Math.max(0,this.velocity[at]*nx+this.velocity[at+1]*ny+this.velocity[at+2]*nz);
+        this.velocity[at]-=outward*nx;this.velocity[at+1]-=outward*ny;this.velocity[at+2]-=outward*nz;
+      }
+      for (let axis = 0; axis < 3; axis++) positions[at + axis] += h * this.velocity[at + axis];
       const envelope = Math.sqrt((positions[at] / 2.3) ** 2 + (positions[at + 1] / 1.55) ** 2 + (positions[at + 2] / 1.1) ** 2);
       if (envelope > 1) for (let axis = 0; axis < 3; axis++) positions[at + axis] /= envelope;
       if (envelope >= 1 - 1e-9) {
@@ -227,7 +239,9 @@ export class PlasticityLayout {
     // Require low force, low latent velocity and measured post-projection
     // movement in display units/second; a turning point alone cannot rest.
     const visuallyStill = this.maxSpeed < 0.003 && this.maxForce < this.visualRestForce && this.maxPositionSpeed < this.visualRestSpeed;
-    if ((this.maxSpeed < 0.0015 && this.maxForce < 0.025) || visuallyStill) this.quietSteps++; else this.quietSteps = 0;
+    const numericallyStill = this.maxSpeed < 0.0015 && this.maxForce < 0.025
+      && this.maxPositionSpeed < this.visualRestSpeed;
+    if (numericallyStill || visuallyStill) this.quietSteps++; else this.quietSteps = 0;
     if (this.quietSteps >= 12) { this.velocity.fill(0); this.moving = false; }
   }
 }

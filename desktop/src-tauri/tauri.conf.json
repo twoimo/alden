@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.84",
+  "version": "0.3.85",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,7 +34,7 @@
       },
       {
         "label": "settings",
-        "title": "Alden 설정",
+        "title": "Alden \uc124\uc815",
         "url": "index.html?view=settings",
         "width": 1200,
         "height": 760,

@@ -36,7 +36,7 @@ export function maximumOverviewStarRadius(cameraDistance: number, verticalFov: n
   if (!Number.isFinite(cameraDistance) || cameraDistance <= 0
     || !Number.isFinite(verticalFov) || verticalFov <= 0 || verticalFov >= 180
     || !Number.isFinite(viewportHeight) || viewportHeight <= 0) return Infinity;
-  return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * 1.8;
+  return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * 1.6;
 }
 
 /**
