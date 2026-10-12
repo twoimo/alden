@@ -2,6 +2,7 @@ import type { KnowledgeView } from './graph-model';
 import type { LayoutAffinityPair } from './layout-affinity';
 import type { Point3 } from './plasticity';
 import type { SemanticLayoutCheckpoint, SemanticLayoutDiagnostics } from './semantic-layout';
+import { relationCurrentlyValid } from './relation-validity';
 
 export interface LayoutRequest { id: number; view: KnowledgeView; previous: Array<[string, Point3]>;
   pairs: readonly LayoutAffinityPair[]; changed: string[]; pinned: string[]; checkpoint?: SemanticLayoutCheckpoint }
@@ -11,8 +12,9 @@ export interface LayoutWorkerPort { onmessage: ((event: MessageEvent<LayoutRespo
   onerror: ((event: Event) => void) | null; postMessage(value: LayoutRequest): void; terminate(): void }
 
 function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>):string {
+  const now=Date.now();
   return JSON.stringify([view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance]),
-    view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted]),
+    view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted,relationCurrentlyValid(e,now)]),
     view.layoutAffinity?.pairs??[],[...pinned].sort()]);
 }
 

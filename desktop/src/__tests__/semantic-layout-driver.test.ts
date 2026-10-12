@@ -22,6 +22,18 @@ const view = (ids = ['a', 'b']) => overviewGraph(parseKnowledgeGraph({ nodes: id
   edges: [{ source: 'a', target: 'b', relation: 'ref', weight: 1 }] }));
 
 describe('owned asynchronous semantic layout', () => {
+  it('invalidates same-ID cached communities when an unchanged link reaches its valid-to boundary',()=>{
+    vi.useFakeTimers();vi.setSystemTime(1000);
+    try {
+      const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),a=view();
+      a.edges=a.edges.map(e=>({...e,validTo:'1970-01-01T00:00:02.000Z'}));
+      driver.request(a,new Map(),new Set(),new Set());worker.flush();
+      expect(driver.labelsFor(a,new Set())).toBeDefined();vi.setSystemTime(2000);
+      expect(driver.labelsFor(a,new Set())).toBeUndefined();
+      driver.request(a,new Map(),new Set(),new Set());expect(worker.requests).toHaveLength(2);
+      const expired=worker.flush();expect(new Set(expired.checkpoint.labels.map(([,label])=>label)).size).toBe(2);driver.clear();
+    } finally {vi.useRealTimers();}
+  });
   it('binds cached labels to current R/S, source versions, pins and authority clear',()=>{
     const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),a=view();
     driver.request(a,new Map(),new Set(),new Set());const response=worker.flush();

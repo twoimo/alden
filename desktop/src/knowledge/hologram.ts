@@ -15,6 +15,7 @@ import { relationAnchors, relationCenterId } from './relation-layout';
 import { relationDepths } from './relation-depth';
 import { COMMUNITY_COLORS, RELATION_DEPTH_COLORS } from './graph-palette';
 import { communitySnapshot, type CommunitySnapshot } from './community-snapshot';
+import { nextRelationBoundary } from './relation-validity';
 import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
 import { PositionTransition } from './position-transition';
@@ -138,6 +139,7 @@ export class KnowledgeHologram {
   private renderedVisibleNodeCount: number | null = null;
   private fitAfterSemanticLayout = false;
   private activityExpiry: ReturnType<typeof setTimeout> | null = null;
+  private relationBoundaryTimer:ReturnType<typeof setTimeout>|null=null;
   private activityAccepted = 0;
   private lastNodeActivity: NodeActivity | null = null;
   private viewport = { x: 0, y: 0, width: 1, height: 1 };
@@ -206,11 +208,13 @@ export class KnowledgeHologram {
     if (this.disposed) return;
     this.requestedAnimation = true;
     this.queueSemanticLayout();
+    this.scheduleRelationBoundary();
     this.updateOrbActivity();
     if (this.view.nodes.length > 0) { this.loop.start(); this.voicePoller?.start(); }
   }
 
   stop(): void {
+    if(this.relationBoundaryTimer!==null){clearTimeout(this.relationBoundaryTimer);this.relationBoundaryTimer=null;}
     this.semanticLayout.stop();
     this.requestedAnimation = false;
     this.cancelHover();
@@ -568,6 +572,7 @@ export class KnowledgeHologram {
   }
 
   private rebuildGraph(): void {
+    this.scheduleRelationBoundary();
     this.cancelHover();
     this.layoutPositions();
     const retired=new THREE.Group();
@@ -722,6 +727,21 @@ export class KnowledgeHologram {
       marker.style.backgroundColor=COMMUNITY_COLORS[0];marker.setAttribute('aria-hidden','true');
       entry.append(marker,`${state.groups.length?'기타':'독립'} ${state.otherNodes.toLocaleString()}`);legend.append(entry);
     }
+  }
+
+  /** One owned timer; no frame polling, reads, voice or activity receipts.
+   * Hidden/stopped views resume from current time through start(). */
+  private scheduleRelationBoundary():void {
+    if(this.relationBoundaryTimer!==null)clearTimeout(this.relationBoundaryTimer);
+    this.relationBoundaryTimer=null;
+    if(!this.requestedAnimation||this.disposed)return;
+    const now=Date.now(),boundary=nextRelationBoundary(this.view.edges,now);
+    if(boundary===null)return;
+    this.relationBoundaryTimer=setTimeout(()=>{
+      this.relationBoundaryTimer=null;
+      if(!this.requestedAnimation||this.disposed)return;
+      this.rebuildGraph();this.invalidateFrame();
+    },Math.min(2147483647,Math.max(1,boundary-now)));
   }
 
   /** Detail is paid for once, only after zooming into the real local view. */
