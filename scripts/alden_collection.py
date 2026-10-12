@@ -755,8 +755,16 @@ class CollectionStore:
               degrees AS (SELECT id,COUNT(DISTINCT neighbor) AS degree FROM (
                 SELECT source AS id,target AS neighbor FROM permitted_edges WHERE source!=target
                 UNION ALL SELECT target AS id,source AS neighbor FROM permitted_edges WHERE source!=target) GROUP BY id) """
-            args = [*projects, target_id, target_id, platform, platform, node_type, node_type,
-                    since, since, until, until, target_id, target_id, *projects, relation, relation, relation]
+            visible_args = [*projects, target_id, target_id, platform, platform, node_type, node_type,
+                            since, since, until, until]
+            relation_args = [target_id, target_id, *projects, relation, relation, relation]
+            args = [*visible_args, *relation_args]
+
+            def incident_scope(current_ids):
+                slots = ",".join("?" for _ in current_ids)
+                sql = cte.replace("WHERE r.active=1", "WHERE r.active=1 AND (r.source IN ("
+                                  + slots + ") OR r.target IN (" + slots + "))", 1)
+                return sql, (*visible_args, *current_ids, *current_ids, *relation_args)
             fields = """s.id,s.platform,s.original_id,s.visible_version,s.target_id,s.collected_at,
               v.label,v.body,v.metadata,v.raw_sha256,v.raw_path,json_extract(v.metadata,'$.source_url') AS source_url"""
             if details and focus and hops == 0 and relation is None:
@@ -801,28 +809,37 @@ class CollectionStore:
                 rows, edge_rows = json.loads(nodes_json), json.loads(edges_json)
                 ids = [r["id"] for r in rows]
             else:
-                total, total_edges, kinds, types, edge_json, focus_exists = db.execute(cte + """SELECT (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),
+                total, total_edges, kinds, types, first_neighbors, focus_exists = db.execute(cte + """, focus_neighbors AS (
+              SELECT target AS neighbor FROM permitted_edges WHERE source=?
+              UNION SELECT source AS neighbor FROM permitted_edges WHERE target=?)
+              SELECT (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),
               (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind
                 FROM ranked s JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
                 WHERE s.choice=1 AND d.availability='available' AND kind IS NOT NULL ORDER BY kind LIMIT 128)),
               (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128)),
-              (SELECT json_group_array(json_array(id,source,target,type)) FROM permitted_edges),
-              EXISTS(SELECT 1 FROM shown WHERE id=?)""", (*args, focus)).fetchone()
+              (SELECT json_group_array(neighbor) FROM (SELECT neighbor FROM focus_neighbors WHERE neighbor!=?
+                ORDER BY neighbor COLLATE BINARY LIMIT ?)),
+              EXISTS(SELECT 1 FROM shown WHERE id=?)""", (*args, focus, focus, focus,
+                  min(limit, 24)-1 if hops else 0, focus)).fetchone()
                 if not focus_exists:
                     raise ValueError("collection_graph_focus_not_in_scope")
-                # Build bounded BFS from one consistent permitted edge read.
-                # This does not create relationships or copy source bodies.
-                edge_rows = [{"id": r[0], "source": r[1], "target": r[2], "type": r[3]} for r in json.loads(edge_json)]
-                adjacency = {}
-                for edge in edge_rows:
-                    if edge["source"] != edge["target"]:
-                        adjacency.setdefault(edge["source"], set()).add(edge["target"])
-                        adjacency.setdefault(edge["target"], set()).add(edge["source"])
+                # Keep traversal inside the same permitted SQL snapshot. Only
+                # the next bounded ID set crosses into Python; degree remains
+                # the unique non-self neighbors in the full filtered scope.
             facets = {"node_types": json.loads(kinds), "relations": json.loads(types)}
             if focus:
-                ids = [focus]
-                for _ in range(hops):
-                    neighbors = sorted(set().union(*(adjacency.get(identifier, set()) for identifier in ids))-set(ids))[:min(limit,24)-len(ids)]
+                ids = [focus, *json.loads(first_neighbors)]
+                for _ in range(max(0, hops-1)):
+                    remaining = min(limit, 24) - len(ids)
+                    if remaining <= 0:
+                        break
+                    seen = ",".join("?" for _ in ids)
+                    incident_cte, incident_args = incident_scope(ids)
+                    neighbors = [row[0] for row in db.execute(incident_cte + """, neighbors AS (
+                      SELECT target AS neighbor FROM permitted_edges WHERE source IN (""" + seen + ") "
+                      "UNION SELECT source AS neighbor FROM permitted_edges WHERE target IN (" + seen + ")) "
+                      "SELECT neighbor FROM neighbors WHERE neighbor NOT IN (" + seen + ") "
+                      "ORDER BY neighbor COLLATE BINARY LIMIT ?", (*incident_args, *ids, *ids, *ids, remaining))]
                     ids.extend(neighbors)
                     if not neighbors or len(ids) >= min(limit, 24):
                         break
@@ -832,9 +849,31 @@ class CollectionStore:
                         "next": None, "facets": facets, "activity_checkpoint": checkpoint}
             selected = ",".join("?" for _ in ids)
             if focus:
-                rows = [{**dict(row), "degree": len(adjacency.get(row["id"], set()))} for row in db.execute(cte + "SELECT " + fields + " FROM visible s JOIN versions v ON v.id=s.visible_version WHERE s.id IN (" + selected + ") ORDER BY s.id", (*args, *ids))]
-                selected_ids = set(ids)
-                edge_rows = sorted((row for row in edge_rows if row["source"] in selected_ids and row["target"] in selected_ids), key=lambda row: row["id"])[:144]
+                incident_cte, incident_args = incident_scope(ids)
+                focus_node = """json_object('id',s.id,'platform',s.platform,'original_id',s.original_id,
+                  'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
+                  'label',v.label,'body',v.body,'metadata',v.metadata,'raw_sha256',v.raw_sha256,
+                  'raw_path',v.raw_path,'source_url',json_extract(v.metadata,'$.source_url'),
+                  'degree',COALESCE(d.degree,0))"""
+                nodes_json, edges_json = db.execute(incident_cte + "SELECT "
+                    + "(SELECT json_group_array(json(node)) FROM (SELECT " + focus_node
+                    + " AS node FROM visible s JOIN versions v ON v.id=s.visible_version "
+                    + "LEFT JOIN degrees d ON d.id=s.id WHERE s.id IN (" + selected + ") ORDER BY s.id)),"
+                    + "(SELECT json_group_array(json_object('id',id,'source',source,'target',target,'type',type)) "
+                    + "FROM (SELECT id,source,target,type FROM permitted_edges WHERE source IN (" + selected
+                    + ") AND target IN (" + selected + ") ORDER BY id COLLATE BINARY LIMIT 144))",
+                    (*incident_args, *ids, *ids, *ids)).fetchone()
+                rows = json.loads(nodes_json)
+                edge_rows = json.loads(edges_json)
+                # JSON1 formats REAL values with fewer significant digits than
+                # SQLite's native float read. Keep the source clock exact using
+                # one bounded primary-key lookup in this same read snapshot.
+                versions = [row["visible_version"] for row in rows]
+                clock_slots = ",".join("?" for _ in versions)
+                clocks = {row["id"]: row["collected_at"] for row in db.execute(
+                    "SELECT id,collected_at FROM versions WHERE id IN (" + clock_slots + ")", versions)}
+                for row in rows:
+                    row["collected_at"] = clocks[row["visible_version"]]
             target_spaces = {}
             for association in db.execute("SELECT target_id,project FROM target_projects WHERE permission!='denied' AND project IN (" + marks + ") ORDER BY project", projects):
                 target_spaces.setdefault(association["target_id"], []).append(association["project"])
