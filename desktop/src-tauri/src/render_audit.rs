@@ -1329,8 +1329,8 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         let projected_count=projected_header["count"].as_u64().ok_or("projected circles missing")? as usize;
         if projected_count>2048 {return Err("projected circle capture budget exceeded".into());}
         let mut circles=Vec::with_capacity(projected_count);
-        for start in (0..projected_count).step_by(256) {
-            let chunk=collect_script(window,format!("JSON.stringify(window.__aldenAuditCircles.slice({start},{}))",(start+256).min(projected_count)),deadline)?;
+        for start in (0..projected_count).step_by(64) {
+            let chunk=collect_script(window,format!("JSON.stringify(window.__aldenAuditCircles.slice({start},{}))",(start+64).min(projected_count)),deadline)?;
             circles.extend(chunk.as_array().ok_or("projected circle chunk invalid")?.iter().cloned());
         }
         collect_script(window,"delete window.__aldenAuditCircles;JSON.stringify({cleared:true})".into(),deadline)?;
