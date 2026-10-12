@@ -54,7 +54,7 @@ describe('permitted collection graph navigation', () => {
       async () => ++calls === 1 ? { ok: true, layout_affinity: affinityPayload() } : later.promise);
     await settle();
     expect(port.currentGraph.layoutAffinity?.pairs).toHaveLength(1);
-    port.currentGraph.layoutAffinity = undefined;
+    port.replaceGraph({ ...port.currentGraph, layoutAffinity: undefined });
     await settle(60000);
     later.resolve({ ok: true, layout_affinity: affinityPayload() }); await settle();
     expect(port.setLayoutAffinity).toHaveBeenCalledTimes(2);
