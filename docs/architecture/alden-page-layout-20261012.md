@@ -84,7 +84,10 @@ Source CI 38226865853 passed all four jobs. Both the final candidate and
 installed native audits completed 14 workspace states/28 captures and showed
 all 2,048 projected centers without clipping or input truncation. Current
 affinity application, settled geometry and idle rendering remain separate
-checks in the audit receipt.
+checks in the audit receipt. The final candidate default observation did not
+settle/stop within its 15-second observation window; its worker layout and
+affinity were ready. The installed observation settled and stopped at both
+sizes. The candidate's aggregate audit success is not idle proof.
 
 | Reference-core geometry | Instrumented 0.3.78 | Installed 0.3.79 |
 |---|---:|---:|
