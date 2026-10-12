@@ -61,22 +61,70 @@ a30second observation budget after layout/affinity readiness within the
 original96second global deadline; the ordinary workspace observer retains15.
 This observation change is not a settling-performance improvement.
 
-Several temporary audit processes aborted in the Tao observer. Failures, empty
-reports and partial observations are retained; the primary app was not
-restarted as recovery. Owned resize now uses suspend/resume and a local
-Objective-C exception boundary, following the pinned publisher's
-[exception API](https://github.com/madsmtm/objc2/blob/objc2-0.6.4/crates/objc2/src/exception.rs).
-This guard is not proof of the asynchronous abort's cause or universal repair.
+Several temporary audit processes aborted in the Tao observer. A local
+Objective-C boundary finally preserved the exact failure: repeated retained
+`NSWindow.contentView()` reads in `native_settings_size` reached parent-view
+deallocation while it still had a superview. Measurement now uses
+`contentRectForFrameRect(frame)`, `contentLayoutRect` and borrowed WKWebView
+bounds without requesting a retained parent. This identifies the observed
+owned diagnostic path; it is not a universal upstream Wry defect attribution.
+Pinned versions, exceptions and prior failed/empty reports remain preserved.
 
-Current source validation passed UI785, native137, typecheck/strict Clippy,
-focused Python34 and packaging7 (separate suites). Installed acceptance,
-native scopes, preservation, exact-head CI/PR/package and final delivery remain
-distinct gates in outputs/graph-scope-layout-20261013/. Career's later phase
-logging confirms its graph read reached ready after the wire fix, before the
-temporary diagnostic process failed. Debugserver denied attaching even to the
-new owned process; no alternate debugger/permission bypass was used. Original
-installed0.3.84 remains pending full0.3.85 native acceptance, not an installed
-0.3.85 delivery. The full18 requirements,
-remaining overlaps/independent original-source semantic/outlier/identity gold,
-physical/host/model/DPO/resource checks, nine current diagrams and normal
-Developer ID/notary/public/production release remain open.
+Canonical packaging exposed a separate shared-stage error: a debug Rust check
+had staged the 55,035,024-byte debug CLI, while the actual release CLI was
+18,195,968 bytes. A signed output manifest alone previously accepted that
+mismatch. The build now stages the release CLI atomically before Tauri bundling,
+checks the bundled bytes against that release binary, and requires the same
+check for receipt reuse. The new regression failed against the old verifier.
+Hard-linked prior staging targets remain intact, and missing/symlink inputs
+fail closed. The evaluation fixture now supplies the actual bundled CLI.
+Source-only Rust checks should use `OPENKAKAO_TAURI_SOURCE_CHECK=1`; perform local
+checks before the canonical build so a debug check cannot rewrite its stage.
+
+The rejected candidate bundle was 68,174,794 bytes. The corrected installed
+bundle is 31,335,738 bytes; the preserved 0.3.84 baseline is 31,300,250 bytes.
+This fixes packaging growth, not a size speedup against that installed baseline.
+The native `__TEXT` sections, including embedded frontend, exactly match the
+18-scope reviewed candidate after the packaging-only correction.
+
+Installed 0.3.85 and its candidate each completed nine fixed actual scopes in
+two owned window sizes. All 18 conditions retained every displayed point,
+settled the bounded physics and stopped rendering across a strict two-second
+observation. Four Spark conditions explicitly remain `unavailable` with
+`layout_no_eligible_content`; other 14 admitted actual partial/ready E5 input.
+The installed conditions retained 1,940 aggregate point-overlap pairs across
+repeated subsets. This after-only native observation must not be compared as
+an identical-coordinate improvement against the separate numerical replay.
+Candidate screenshots were directly inspected; installed visual readback and
+primary physical gestures remain distinct evidence gates.
+
+Current source validation passed UI 785, native 137, typecheck/strict Clippy,
+focused Python 34 and build/evaluation 41 (separate suites). Installed source is
+07186e093e35dd941434416ede3316a335a3fb61; later test/document changes do not require
+reinstallation. Installed 68 files/modes and strict deep signature matched the
+candidate; the independently retained 0.3.84 recovery, model/enrollment/emergency
+settings, seven targets, policies, model listeners and selected source/retrieval/
+history tables were preserved at the install boundary.
+
+During the earlier read-only investigation, the existing scheduler appended
+one YouTube version and reused its existing E5 vector. Immutable prefix and
+current-pointer reconstruction reconcile that receipt. A first vector check
+incorrectly assumed row count equalled maximum rowid; the table already had
+77 gaps. Excluding only the new version restored the full prior-row hash.
+No source rollback, schedule change or extra acquisition was performed.
+
+A reused child's later settings drifted to a different model. Those contract
+reports are retained with their actual metadata and are not presented as
+requested-model proof. A fresh bounded parallel contract review used verified
+`chatgpt-web/gpt-6-sol` / `xhigh`, the highest supported effort. It verified no
+code/runtime or semantic gold. It confirmed that equal physical force does
+not necessarily bring nodes together, and the display transform does not
+preserve nearest-neighbor order. Neither visually isolated points nor equal
+names authorize source deletion or identity merges.
+
+Evidence is under outputs/graph-scope-layout-20261013/. CI, PR, local ZIP,
+installation and actual owned readback are separately recorded there. No public
+tag, Developer ID/notary or production deployment is inferred. The full 18
+requirements, independent original-source semantic/outlier/identity gold,
+remaining overlaps, physical/host/model/DPO/resource checks and nine current
+architecture diagrams remain open.

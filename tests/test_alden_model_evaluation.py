@@ -225,6 +225,9 @@ class VersionEvaluationTests(unittest.TestCase):
         app = desktop/'src-tauri/target/release/bundle/macos/Alden.app/Contents/MacOS/openkakao-alden-desktop'
         app.parent.mkdir(parents=True)
         for path in (binary, app): path.write_text('#!/bin/sh\nexit 0\n'); path.chmod(0o755)
+        bundled_cli = app.parent.parent/'Resources/bin/openkakao-cli'
+        bundled_cli.parent.mkdir(parents=True)
+        shutil.copyfile(binary, bundled_cli); bundled_cli.chmod(0o755)
         bin_dir = repo/'bin'; bin_dir.mkdir()
         for name in ('cargo','npm'):
             path = bin_dir/name; path.write_text('#!/bin/sh\nprintf "%s\\n" "$0" >> "$BUILD_CALLS"\n')
@@ -237,7 +240,8 @@ class VersionEvaluationTests(unittest.TestCase):
         def build():
             return subprocess.run(['/bin/sh',str(scripts/'build-alden-desktop.sh')],env=env,
                                   stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
-        self.assertEqual(build().returncode,0); self.assertFalse(calls.exists())
+        first = build()
+        self.assertEqual(first.returncode,0,first.stderr.decode()); self.assertFalse(calls.exists())
         env['ALDEN_EVALUATION_DATASET'] = str(self.dataset)
         self.assertNotEqual(build().returncode,0); self.assertFalse(calls.exists())
         env.update(ALDEN_EVALUATION_PYTHON=sys.executable,ALDEN_EVALUATION_POLICY_DIR=str(self.policy),
