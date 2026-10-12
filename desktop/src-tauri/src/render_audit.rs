@@ -247,6 +247,20 @@ impl Output {
                 | "workspace-readback.json"
                 | "graph-layout-default.json"
                 | "graph-layout-compact.json"
+                | "workspace-observed-default-memory.json"
+                | "workspace-observed-default-conversation.json"
+                | "workspace-observed-default-reply.json"
+                | "workspace-observed-default-geeknews.json"
+                | "workspace-observed-default-voice.json"
+                | "workspace-observed-default-history.json"
+                | "workspace-observed-default-settings.json"
+                | "workspace-observed-compact-memory.json"
+                | "workspace-observed-compact-conversation.json"
+                | "workspace-observed-compact-reply.json"
+                | "workspace-observed-compact-geeknews.json"
+                | "workspace-observed-compact-voice.json"
+                | "workspace-observed-compact-history.json"
+                | "workspace-observed-compact-settings.json"
                 | "knowledge-quality-default.png"
                 | "knowledge-quality-compact.png"
                 | "entity-compare-default.png"
@@ -693,6 +707,7 @@ fn capture_workspaces(
         "history",
         "settings",
     ] {
+        let phase_started = Instant::now();
         collect_script(
             window,
             format!(
@@ -873,6 +888,11 @@ fn capture_workspaces(
             )?;
             collect_script(window,"JSON.stringify((()=>{const p=document.querySelector('#routed-model-picker');if(p)p.open=false;return {closed:true};})())".into(),deadline)?;
         }
+        publish(output, &format!("workspace-observed-{size}-{page}.json"),
+            &serde_json::to_vec_pretty(&json!({
+                "scope":"completed owned read-only workspace phase; not full audit success",
+                "size":size,"page":page,"phaseElapsedMs":phase_started.elapsed().as_millis(),"state":state
+            })).map_err(|_| "workspace phase observation JSON failed")?,deadline)?;
         states.push(state);
     }
     graph_step(window, "memory-page", deadline)?;
