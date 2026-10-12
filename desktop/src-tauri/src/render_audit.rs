@@ -1179,10 +1179,13 @@ fn graph_scope_case(case: u8) -> Result<(&'static str, bool, bool), String> {
 
 fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, case: u8) -> Result<Value, String> {
     let (source, next, youtube) = graph_scope_case(case)?;
+    eprintln!("Alden scope {case}: opening memory page");
     graph_step(window, "memory-page", deadline)?;
+    eprintln!("Alden scope {case}: memory page ready");
     wait_for_audit_state("graph scope options", deadline, || collect_script(window,
         "JSON.stringify({ready:document.querySelector('#knowledge-project')?.querySelectorAll('option').length>2})".into(),deadline),
         |state| state["ready"] == true)?;
+    eprintln!("Alden scope {case}: project options ready");
     // Only this owned audit WKWebView, fixed observed scopes and read-only UI.
     let source_json = serde_json::to_string(source).map_err(|_| "scope source JSON failed")?;
     collect_script(window, format!(r#"JSON.stringify((()=>{{
@@ -1191,6 +1194,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
       input.value=value;input.dispatchEvent(new Event('change'));
       return {{source:input.value}};
     }})())"#),deadline)?;
+    eprintln!("Alden scope {case}: selected {source}");
     if youtube {
         wait_for_audit_state("graph platform options",deadline,|| collect_script(window,
             "JSON.stringify({ready:[...document.querySelector('#knowledge-platform').options].some(o=>o.value==='youtube')})".into(),deadline),
@@ -1199,6 +1203,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
     }
     wait_for_audit_state("initial scoped graph", deadline, || collect_script(window,graph_collect_script(),deadline),
         |state| state["graphPending"]!=true && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0)?;
+    eprintln!("Alden scope {case}: scoped graph ready");
     if next {
         let state=graph_step(window,"expand",deadline)?;
         if state["navigation"]["overviewOffset"].as_u64().unwrap_or(0)==0 {
@@ -2230,7 +2235,16 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, i
     Ok(json!({"turns":receipts,"scope":"three explicit programmatic WKWebView inputs, controlled red/white-circle and blue/yellow-square PNGs with text and visual followups; isolated history and copied saved model selection; no microphone/TTS/send, original source-store or physical input proof"}))
 }
 
+unsafe extern "C" fn audit_uncaught_exception(exception: *mut objc2_foundation::NSException) {
+    if exception.is_null() { return; }
+    // Diagnostic only in this owned process. Logging does not recover an
+    // Objective-C exception or authorize continuing a failed UI operation.
+    let exception=unsafe { &*exception };
+    eprintln!("Alden native uncaught exception: name={:?}, reason={:?}",exception.name(),exception.reason());
+}
+
 pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
+    unsafe { objc2_foundation::NSSetUncaughtExceptionHandler(audit_uncaught_exception as *const () as *mut _); }
     // This audit creates one incognito view itself; configured persistent
     // views must never be created or adopted by the fixture workflow.
     if request.entity { context.config_mut().app.windows.clear(); }
@@ -2307,9 +2321,11 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
                     "result":result.ok(),"success":success,"error":error,
                     "scope":if graph_scope.is_some() {"owned two-size fixed project/filter/page graph WKWebView; read-only adapters, source/solver/display observations; no primary, physical input, semantic gold or pixel/GPU/FPS attestation"}else if entity_mode {"owned incognito WKWebView; compare/apply/revert only in a newly created private synthetic collection; no original source, production write, model inference, send or physical-input attestation"}else if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                eprintln!("Alden audit: result returned, success={success}, preparing final report");
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
                 let delivered = written.is_ok();
+                eprintln!("Alden audit: final report delivered={delivered}");
                 if let Err(error) = written { eprintln!("Alden render audit: {error}"); }
                 let code = if success && delivered && live(deadline).is_ok() { 0 } else { 1 };
                 worker_status.store(code,Ordering::Release);
