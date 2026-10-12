@@ -201,6 +201,7 @@ jobs:
           tests.test_alden_entity_resolution
           tests.test_alden_entity_integrity
           tests.test_alden_entity_fixture
+          tests.test_alden_graph_transport
           tests.test_alden_entity_projection
           tests.test_alden_entity_union_review
           tests.test_alden_conversation_switch

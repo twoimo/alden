@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { expandGraphTransport } from "./graph-transport";
 import { listen } from "@tauri-apps/api/event";
 import type { CancellationToken, EmergencyState, RuntimeSnapshot, VoiceStatus } from "./contracts";
 import { parseEmergencyState, parseRuntimeSnapshot, parseVoiceStatus, unavailableSnapshot } from "./contracts";
@@ -93,7 +94,7 @@ export async function fetchSettingsAction(
   input: SettingsActionInput = {},
 ): Promise<Record<string, unknown> | null> {
   try {
-    return await invoke<Record<string, unknown>>("fetch_settings_action", {
+    const value = await invoke<Record<string, unknown>>("fetch_settings_action", {
       action,
       query: input.query,
       nodeId: input.nodeId,
@@ -101,6 +102,7 @@ export async function fetchSettingsAction(
       model: input.model,
       explicitOptIn: input.explicitOptIn,
     });
+    return action === "collection-graph" ? expandGraphTransport(value) : value;
   } catch {
     return null;
   }

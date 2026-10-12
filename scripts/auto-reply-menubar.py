@@ -205,6 +205,16 @@ DEFAULT_REPLY_FALLBACK_MODELS: tuple[str, ...] = (
 _WRAPPER_ONLY_FLAGS.update(_CATALOG_MUTATE_FLAGS)
 
 _orig_main = main
+_orig_print_json = _print_json
+
+
+def _print_json(value):
+    if "--compact-json" in sys.argv and _argv_flag_value("--action") == "collection-graph":
+        from alden_graph_transport import pack_graph
+        print(json.dumps(pack_graph(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False))
+    else:
+        _orig_print_json(value)
+
 _orig_set_reply_model = set_reply_model
 _orig_collect_reply_models = collect_reply_models
 _orig_add_api_provider = add_api_provider

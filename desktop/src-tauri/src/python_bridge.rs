@@ -1186,7 +1186,7 @@ impl PythonBridge {
         explicit_opt_in: Option<bool>,
         token_id: Option<&str>,
     ) -> Result<Value, BridgeError> {
-        let args = settings_action_args(
+        let mut args = settings_action_args(
             action,
             query,
             node_id,
@@ -1195,6 +1195,9 @@ impl PythonBridge {
             explicit_opt_in,
             token_id,
         )?;
+        if action == "collection-graph" {
+            args.push("--compact-json".into());
+        }
         let is_swap = action == "model-swap";
         let is_mlx_launch = action == MLX_SERVER_LAUNCH_ACTION;
         let is_history = matches!(
