@@ -83,6 +83,7 @@ export class KnowledgeHologram {
   private readonly press=new THREE.Vector2();
   private drilldown: KnowledgeDrilldown;
   private readonly positions = new Map<string, THREE.Vector3>();
+  private readonly provisionalOverviewPositions = new Set<string>();
   private readonly displayedPositions = new Map<string, THREE.Vector3>();
   private readonly nebulae = new ContextNebulae();
   private readonly anchors = new Map<string, THREE.Vector3>();
@@ -308,11 +309,13 @@ export class KnowledgeHologram {
     const focus = this.view.focusId;
     if (!graph.nodes.length) {
       this.semanticLayout.clear(); this.layoutFingerprints.clear(); this.positionTransition.clear();
+      this.provisionalOverviewPositions.clear();
     }
     this.graph = graph;
     const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
     const ids = new Set(sorted.map(node => node.id));
     for (const id of this.positions.keys()) if (!ids.has(id)) this.positions.delete(id);
+    for (const id of this.provisionalOverviewPositions) if (!ids.has(id)) this.provisionalOverviewPositions.delete(id);
     for (const id of this.displayedPositions.keys()) if (!ids.has(id)) this.displayedPositions.delete(id);
     this.view = navigation ? this.drilldown.restore(graph, navigation) : this.drilldown.replaceGraph(graph);
     this.rebuildGraph();
@@ -505,18 +508,24 @@ export class KnowledgeHologram {
       // Seed only new real nodes cheaply while the worker computes R/S.
       // Existing visible coordinates remain intact until a verified result.
       anchors = new Map(this.view.nodes.map(node => [node.id, this.positions.get(node.id) ?? semanticSeedPoint(node.id)]));
-    } else { this.semanticLayout.stop(); anchors = relationAnchors(this.view, this.graph, 24); }
+    } else {
+      this.semanticLayout.stop(); anchors = relationAnchors(this.view, this.graph, 24);
+      for(const node of this.view.nodes)this.provisionalOverviewPositions.add(node.id);
+    }
     for (const [id, p] of anchors) {
       const point = new THREE.Vector3(p.x, p.y, p.z);
       this.anchors.set(id, point);
-      if (!this.positions.has(id)) this.positions.set(id, point.clone());
+      if (!this.positions.has(id)) {
+        this.positions.set(id, point.clone());this.provisionalOverviewPositions.add(id);
+      }
     }
     this.queueSemanticLayout();
   }
 
   private queueSemanticLayout(): void {
     if (!this.requestedAnimation || this.disposed || this.view.hops !== 0 || !this.view.nodes.length) return;
-    this.semanticLayout.request(this.view, this.positions, this.layoutChanged, new Set(this.view.focusId ? [this.view.focusId] : []));
+    this.semanticLayout.request(this.view, this.positions, this.layoutChanged, new Set(this.view.focusId ? [this.view.focusId] : []),
+      this.provisionalOverviewPositions);
   }
 
   private applySemanticLayout(result: LayoutResponse): void {
@@ -915,6 +924,9 @@ export class KnowledgeHologram {
     for (const orb of this.orbMeshes.values()) orb.advance(dt);
     this.loop.setVoiceActive(this.voiceEnvelope.displayedRms > 0 || orbActive);
     this.renderer.render(this.scene, this.camera);
+    if(this.provisionalOverviewPositions.size&&this.view.hops===0&&!this.plasticity.moving
+      &&!this.positionTransition.moving&&this.semanticLayout.settled)
+      for(const node of this.view.nodes)this.provisionalOverviewPositions.delete(node.id);
     this.renderedFrames++;
     this.renderedNodeCount = this.view.nodes.length;
     // Only sparse fixtures need a clip-volume certificate. Dense rendering

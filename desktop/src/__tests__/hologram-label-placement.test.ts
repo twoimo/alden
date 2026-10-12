@@ -63,6 +63,7 @@ function setup(
 
   const fake = Object.create(KnowledgeHologram.prototype) as TestHologram;
   Object.assign(fake, {
+    provisionalOverviewPositions: new Set<string>(),
     disposed: false,
     view: { hops: 0, focusId: opts.focus ?? null, nodes: specs.map((node) => ({ id: node.id, label: node.id })) },
     hoveredId: opts.hover ?? null,

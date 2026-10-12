@@ -8,14 +8,29 @@ positions. The solver then averaged those coordinates into community centers.
 Returning to the first page could compress its communities toward the origin.
 
 The driver now passes previous positions only for identities present in the
-last completed checkpoint or explicitly pinned by the user. Surviving solved
+last completed checkpoint whose current coordinates are settled overview
+coordinates, or explicitly pinned by the user. Surviving solved
 coordinates, selection pins, authority clears and cancelled-job fences remain.
 The node/edge/provenance/permission data, R/S weights, solver limits, camera
 rules and stored source records are unchanged.
 
 A new warm-checkpoint regression fails against the preceding source. It then
 passes with exact surviving coordinates and the new explicit pin preserved.
-All 752 UI tests and 136 native tests pass, as do TypeScript and strict Clippy.
+All 753 UI tests and 136 native tests pass, as do TypeScript and strict Clippy.
+
+The first candidate reduced default-view overlap but did not materially fix
+compact central concentration. It was not installed. The compact audit also
+traverses a local expanded view: discarded overview identities receive new
+display seeds on return even if their IDs remain in a completed checkpoint.
+The renderer now marks fresh seeds and local-view coordinates as provisional
+for overview solving. They reuse completed overview targets, and the marker
+is cleared only after the current overview has rendered a settled layout.
+Even an unchanged view key must restore targets when current coordinates are
+provisional. A regression covers this exact cache-restoration boundary.
+
+Constructor-bypassing render test fixtures initially lacked the new marker
+set, causing 21 unrelated fixture failures. Their initialization was brought
+into line with the actual constructor; product guards were not weakened.
 
 ## Evidence and measurement scope
 

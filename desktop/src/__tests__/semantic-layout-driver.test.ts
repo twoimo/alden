@@ -67,6 +67,19 @@ describe('owned asynchronous semantic layout', () => {
     expect(workers[1].requests[0].checkpoint).toBeDefined(); driver.clear();
   });
 
+  it('restores known identities whose current coordinates are provisional even for an unchanged view key', () => {
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker);
+    driver.request(view(),new Map(),new Set(),new Set());const first=worker.flush();
+    expect(driver.settled).toBe(true);
+    const placeholders=new Map([['a',{x:1.2,y:.7,z:.4}],['b',{x:-1.3,y:-.6,z:-.3}]]);
+    driver.request(view(),placeholders,new Set(),new Set(),new Set(['a','b']));
+    expect(worker.requests).toHaveLength(2);
+    expect(worker.requests[1].previous).toEqual([]);
+    expect(driver.settled).toBe(false);
+    expect(worker.flush().anchors).toEqual(first.anchors);
+    expect(driver.settled).toBe(true);driver.clear();
+  });
+
   it('drops every prior-scope cache on clear and reuses an already applied snapshot without new work', () => {
     const workers: WorkerStub[] = [], driver = new SemanticLayoutDriver(vi.fn(), () => { const worker = new WorkerStub(); workers.push(worker); return worker; });
     driver.request(view(), new Map(), new Set(), new Set()); workers[0].flush();

@@ -25,14 +25,17 @@ export class SemanticLayoutDriver {
     private readonly create: () => LayoutWorkerPort = () => new Worker(new URL('./semantic-layout-worker.ts', import.meta.url), { type: 'module' }) as unknown as LayoutWorkerPort) {}
   get diagnostics() { return { ...this.state }; }
   get ready(): boolean { return !!this.checkpoint; }
+  get settled(): boolean { return !this.busy && !!this.checkpoint && this.appliedKey === this.requestedKey; }
 
-  request(view: KnowledgeView, previous: ReadonlyMap<string, Point3>, changed: ReadonlySet<string>, pinned: ReadonlySet<string>): void {
+  request(view: KnowledgeView, previous: ReadonlyMap<string, Point3>, changed: ReadonlySet<string>, pinned: ReadonlySet<string>,
+    provisional: ReadonlySet<string> = new Set()): void {
     const pairs = view.layoutAffinity?.pairs ?? [];
     const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, label: n.id, description: '', facts: [] })),
       edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', evidence: { ...e.evidence, sourceEventIds: [] } })) };
     const key = JSON.stringify([compact.nodes.map(n => [n.id, n.sourceVersion, n.sourceTarget, n.importance]),
       compact.edges.map(e => [e.source, e.target, e.weight, e.purpose, e.validFrom, e.validTo, e.evidence.retracted]), pairs, [...pinned].sort()]);
-    if (key === this.appliedKey || this.busy && key === this.requestedKey) return;
+    const restore = [...previous.keys()].some(id => provisional.has(id));
+    if (key === this.appliedKey && !restore || this.busy && key === this.requestedKey) return;
     // Cancel obsolete work immediately; restore only the last completed cache.
     if (this.busy) this.stop();
     const worker = this.worker ?? this.create(); this.worker = worker;
@@ -55,7 +58,7 @@ export class SemanticLayoutDriver {
     // Retain completed identities and explicit pins; unrelated cached IDs do
     // not make new seeds an authoritative prior community center.
     const solved = new Set(this.checkpoint?.positions.map(([id]) => id) ?? []);
-    const retained = [...previous].filter(([id]) => solved.has(id) || pinned.has(id));
+    const retained = [...previous].filter(([id]) => pinned.has(id) || solved.has(id) && !provisional.has(id));
     worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
       pairs, changed: [...changed], pinned: [...pinned], checkpoint: this.checkpoint });
   }

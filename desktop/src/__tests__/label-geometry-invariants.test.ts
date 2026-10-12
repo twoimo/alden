@@ -114,6 +114,7 @@ function mount(
   };
   const fake = Object.create(KnowledgeHologram.prototype) as RenderHarness;
   Object.assign(fake, {
+    provisionalOverviewPositions: new Set<string>(),
     disposed: false, view, hoveredId: null,
     canvas, camera, graphRoot, projected: new THREE.Vector3(),
     desiredCamera: camera.position.clone(),
