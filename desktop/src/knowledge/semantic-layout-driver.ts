@@ -51,9 +51,11 @@ export class SemanticLayoutDriver {
       if (this.worker !== worker || id !== this.generation) return;
       this.busy = false; this.state = { state: 'failed', reason: 'semantic_layout_worker_failed' };
     };
-    // Initial ID seeds are a pending display, not a prior solved geometry.
-    // Averaging that random volume collapses unrelated cold communities.
-    const retained = this.checkpoint ? [...previous] : [...previous].filter(([id]) => pinned.has(id));
+    // A new identity's ID seed is provisional even after another page solved.
+    // Retain completed identities and explicit pins; unrelated cached IDs do
+    // not make new seeds an authoritative prior community center.
+    const solved = new Set(this.checkpoint?.positions.map(([id]) => id) ?? []);
+    const retained = [...previous].filter(([id]) => solved.has(id) || pinned.has(id));
     worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
       pairs, changed: [...changed], pinned: [...pinned], checkpoint: this.checkpoint });
   }

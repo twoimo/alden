@@ -39,6 +39,22 @@ describe('owned asynchronous semantic layout', () => {
     driver.clear(); expect(workers[1].terminate).toHaveBeenCalledTimes(1);
   });
 
+  it('retains only solved identities or explicit pins when a later batch contains provisional seeds', () => {
+    const worker = new WorkerStub(), driver = new SemanticLayoutDriver(vi.fn(), () => worker);
+    driver.request(view(), new Map(), new Set(), new Set());
+    const first = worker.flush(), solved = new Map(first.anchors);
+    const initialNew = { x: .8, y: -.4, z: .2 };
+    const pinnedNew = { x: -.6, y: .3, z: -.1 };
+    const previous = new Map([...solved, ['new', initialNew], ['pinned', pinnedNew]]);
+    driver.request(view(['a', 'b', 'new', 'pinned']), previous, new Set(), new Set(['pinned']));
+    expect(worker.requests[1].previous).toEqual([...solved, ['pinned', pinnedNew]]);
+    const response = worker.flush();
+    expect(response.anchors.find(([id]) => id === 'a')![1]).toEqual(solved.get('a'));
+    expect(response.anchors.find(([id]) => id === 'b')![1]).toEqual(solved.get('b'));
+    expect(response.anchors.find(([id]) => id === 'pinned')![1]).toEqual(pinnedNew);
+    driver.clear();
+  });
+
   it('terminates hidden work and restores the last completed cache while preserving an unrelated component', () => {
     const workers: WorkerStub[] = [], apply = vi.fn(), driver = new SemanticLayoutDriver(apply, () => { const worker = new WorkerStub(); workers.push(worker); return worker; });
     driver.request(view(), new Map(), new Set(), new Set()); const first = workers[0].flush();
