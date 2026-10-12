@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import * as THREE from 'three';
+import { PositionTransition } from '../knowledge/position-transition';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { KnowledgeHologram } from '../knowledge/hologram';
 import { ConstellationNodes } from '../knowledge/constellation';
@@ -28,6 +29,9 @@ function fixture() {
   const value=Object.create(KnowledgeHologram.prototype) as KnowledgeHologram;
   const fake = value as unknown as Record<string, any>;
   Object.assign(fake, {
+    displayOffsets: new Map(), displayTransition: new PositionTransition(),
+    displayRelaxationPending: false,
+
     view,graph:view,positions,anchors:positions,displayedPositions:new Map(),
     graphRoot:root,canvas,constellationNodes:constellation,synapses,overviewSynapses:overview,
     nodeMeshes:new Map(),neuronMeshes:new Map(),neuronPorts:new Map(),orbMeshes:new Map(),
@@ -35,7 +39,7 @@ function fixture() {
     pickGeometry:null,pickMaterial:null,orbit:{mouseButtons:{}},hoveredId:null,
     nebulae:{set:vi.fn(),update:vi.fn()},motion:{matches:true},reducedMotion:true,
     layoutPositions:vi.fn(),preparePositionMotion:vi.fn(),cancelHover:vi.fn(),
-    semanticLayout:{labelsFor:vi.fn(()=>undefined)},communitySlots:new Map(),
+    semanticLayout:{settled:false,labelsFor:vi.fn(()=>undefined)},communitySlots:new Map(),
     viewport:{height:400},renderer:{getPixelRatio:()=>1},
   });
   owned.push(() => {

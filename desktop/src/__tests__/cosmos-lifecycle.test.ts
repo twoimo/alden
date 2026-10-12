@@ -31,6 +31,7 @@ describe("decorative sky ownership", () => {
     Object.defineProperties(graph,{
       semanticLayout:{value:{stop:vi.fn(),clear:vi.fn()}},positionTransition:{value:{clear:vi.fn()}},layoutChanged:{value:new Set()},layoutFingerprints:{value:new Map()},
       communitySlots:{value:new Map()},
+      displayOffsets:{value:new Map()},displayTransition:{value:{clear:vi.fn()}},
       disposed:{value:false,writable:true},onDispose:{value:vi.fn()},
       canvas:{value:{removeEventListener:vi.fn(),parentElement:null}},
       loop:{value:{stop:stopped,start:started,setVoiceActive:vi.fn()}},orbit:{value:{dispose:vi.fn()}},

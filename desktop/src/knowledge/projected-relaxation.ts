@@ -9,7 +9,7 @@ export interface RelaxationResult {
 /** Bounded display-only offsets. No identities, edges, source coordinates or
  * semantic weights are created or modified. Called on settled snapshots. */
 export function relaxProjectedCircles(input: readonly ProjectedCircle[], viewport: ProjectionViewport,
-  pinned: ReadonlySet<number> = new Set()): RelaxationResult {
+  pinned: ReadonlySet<number> = new Set(), initialOffsets?: Float64Array): RelaxationResult {
   const limits = PROJECTED_RELAXATION_LIMITS, count = Math.min(input.length, limits.nodes);
   const offsets = new Float64Array(count * 2), x = new Float64Array(count), y = new Float64Array(count);
   const active = new Uint8Array(count), dx = new Float64Array(count), dy = new Float64Array(count);
@@ -24,12 +24,22 @@ export function relaxProjectedCircles(input: readonly ProjectedCircle[], viewpor
       || p.x < left || p.x > left + width || p.y < top || p.y > top + height
       || p.radius * 2 > width || p.radius * 2 > height) continue;
     active[i] = 1; maxRadius = Math.max(maxRadius, p.radius);
+    if (!pinned.has(i) && initialOffsets?.length === count * 2) {
+      const ox = initialOffsets[i*2], oy = initialOffsets[i*2+1], size = Math.hypot(ox,oy);
+      if (Number.isFinite(size)) {
+        const gain = size > limits.shiftCssPx ? limits.shiftCssPx / size : 1;
+        x[i] = Math.max(left + p.radius,Math.min(left + width - p.radius,p.x + ox * gain));
+        y[i] = Math.max(top + p.radius,Math.min(top + height - p.radius,p.y + oy * gain));
+      }
+    }
   }
   const cellSize = Math.max(1, maxRadius * 2 + limits.gapCssPx);
+  const columns = Math.ceil(width / cellSize) + 3;
+  if (!Number.isSafeInteger(columns * (Math.ceil(height / cellSize) + 3))) return { offsets, diagnostics };
   for (let pass = 0; pass < limits.passes; pass++) {
-    const grid = new Map<string, number[]>();
+    const grid = new Map<number, number[]>();
     for (let i = 0; i < count; i++) if (active[i]) {
-      const key = Math.floor(x[i] / cellSize) + ':' + Math.floor(y[i] / cellSize);
+      const key = Math.floor((y[i] - top) / cellSize) * columns + Math.floor((x[i] - left) / cellSize);
       const cell = grid.get(key); if (cell) cell.push(i); else grid.set(key, [i]);
     }
     dx.fill(0); dy.fill(0);
@@ -38,9 +48,9 @@ export function relaxProjectedCircles(input: readonly ProjectedCircle[], viewpor
     outer: for (let slot = 0; slot < count; slot++) {
       const a = (slot + pass * 257) % count;
       if (!active[a]) continue;
-      const cx = Math.floor(x[a] / cellSize), cy = Math.floor(y[a] / cellSize);
+      const cx = Math.floor((x[a] - left) / cellSize), cy = Math.floor((y[a] - top) / cellSize);
       for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++)
-        for (const b of grid.get(gx + ':' + gy) ?? []) {
+        for (const b of grid.get(gy * columns + gx) ?? []) {
           if (b <= a || pinned.has(a) && pinned.has(b)) continue;
           if (tested >= budget) { diagnostics.budgetExhausted = true; break outer; }
           tested++; diagnostics.pairTests++;

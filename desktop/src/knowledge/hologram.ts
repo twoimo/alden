@@ -20,6 +20,7 @@ import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-la
 import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
 import { PositionTransition } from './position-transition';
 import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout-metrics';
+import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
@@ -88,6 +89,10 @@ export class KnowledgeHologram {
   private readonly positions = new Map<string, THREE.Vector3>();
   private readonly provisionalOverviewPositions = new Set<string>();
   private readonly displayedPositions = new Map<string, THREE.Vector3>();
+  private readonly displayOffsets = new Map<string, THREE.Vector3>();
+  private readonly displayTransition = new PositionTransition();
+  private displayRelaxationPending = true;
+  private projectedRelaxation: RelaxationResult['diagnostics'] | null = null;
   private readonly nebulae = new ContextNebulae();
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly plasticity = new PlasticityLayout(OVERVIEW_NODE_CAP,512);
@@ -161,7 +166,7 @@ export class KnowledgeHologram {
     this.orbit=new OrbitControls(this.camera,canvas);
     this.orbit.enableDamping=false;this.orbit.minDistance=2.2;this.orbit.maxDistance=12;this.orbit.rotateSpeed=.65;this.orbit.zoomSpeed=.7;
     this.orbit.addEventListener('start',()=>{this.orbitActive=true;this.fitAfterSemanticLayout=false;});
-    this.orbit.addEventListener('end',()=>{this.orbitActive=false;});
+    this.orbit.addEventListener('end',()=>{this.orbitActive=false;this.displayRelaxationPending=true;this.invalidateFrame();});
     this.orbit.addEventListener('change',()=>{if(this.orbitActive){this.desiredCamera.copy(this.camera.position);this.desiredLookAt.copy(this.orbit.target);this.lookAt.copy(this.orbit.target);}this.invalidateFrame();});
     this.scene.add(this.graphRoot);
     this.graphRoot.add(this.synapses.mesh);
@@ -363,6 +368,7 @@ export class KnowledgeHologram {
   }
 
   get semanticDiagnostics() { return { worker: this.semanticLayout.diagnostics, layout: this.layoutDiagnostics, pendingTargets: this.positionTransition.pending,
+    projectedCorrection:this.projectedRelaxation,
     communities:this.communityState?{state:'computed',nodes:this.communityState.nodes,clusters:this.communityState.clusters,
       multiNodeClusters:this.communityState.multiNodeClusters,majorGroups:this.communityState.groups.length,
       majorNodes:this.communityState.nodes-this.communityState.otherNodes,otherNodes:this.communityState.otherNodes}:null,
@@ -398,7 +404,7 @@ export class KnowledgeHologram {
     }
     return {scope:'on-demand projected reference core circles; no pixel, glow, label or semantic-quality proof',
       renderedFrames:this.renderedFrames,renderedNodes:this.renderedNodeCount,viewNodes:this.view.nodes.length,
-      inputTruncated:this.view.nodes.length>2048,viewport,
+      inputTruncated:this.view.nodes.length>2048,viewport,displayCorrection:this.projectedRelaxation,
       camera:this.camera.position.toArray(),lookAt:this.lookAt.toArray(),
       metrics:projectedLayoutMetrics(points,viewport), ...(includeCircles ? { circles: points } : {})};
   }
@@ -411,7 +417,7 @@ export class KnowledgeHologram {
         || this.lookAt.distanceToSquared(this.desiredLookAt) > .000001,
       requestedCameraDistance: this.desiredCamera.distanceTo(this.desiredLookAt),
       cameraMinDistance: this.orbit.minDistance, cameraMaxDistance: this.orbit.maxDistance,
-      physics: this.plasticity.moving, transition: this.positionTransition.moving,
+      physics: this.plasticity.moving, transition: this.positionTransition.moving || this.displayTransition.moving,
       bridges: this.synapses.moving, overviewBridges: this.overviewSynapses.moving,
       regions: this.nebulae.moving, orbit: this.orbitActive,
       voice: this.voiceEnvelope.needsFrame,
@@ -487,6 +493,7 @@ export class KnowledgeHologram {
     this.onDispose();
     this.stop();
     this.semanticLayout.clear(); this.positionTransition.clear(); this.layoutChanged.clear(); this.layoutFingerprints.clear();
+    this.displayOffsets.clear();this.displayTransition.clear();
     this.communityState=null;this.communitySlots.clear();
     this.canvas.removeEventListener("pointerdown", this.rememberPress);
     this.canvas.removeEventListener("pointerup", this.handlePointerDown);
@@ -562,6 +569,7 @@ export class KnowledgeHologram {
   }
 
   private preparePositionMotion(): void {
+    this.displayRelaxationPending = true;
     // Selected overview nodes stay fixed while their surrounding geometry
     // updates. All other displayed nodes receive targets, including late IDs.
     const view = this.view.hops === 0 && this.view.focusId
@@ -574,6 +582,10 @@ export class KnowledgeHologram {
   }
 
   private rebuildGraph(): void {
+    this.displayRelaxationPending = true;
+    const visibleIds = new Set(this.view.nodes.map(node=>node.id));
+    for(const id of this.displayOffsets.keys())if(!visibleIds.has(id))this.displayOffsets.delete(id);
+    if(this.view.hops!==0||this.view.nodes.length<=120){this.displayOffsets.clear();this.displayTransition.clear();this.projectedRelaxation=null;}
     this.scheduleRelationBoundary();
     this.cancelHover();
     this.layoutPositions();
@@ -882,6 +894,7 @@ export class KnowledgeHologram {
   };
 
   private resetOverviewCamera(): void {
+    this.displayRelaxationPending = true;
     const points = this.view.nodes.flatMap(node => {
       const point = this.anchors.get(node.id) ?? this.positions.get(node.id);
       return point ? [overviewDisplayPoint(point,this.viewport.width,this.viewport.height,
@@ -920,6 +933,7 @@ export class KnowledgeHologram {
     const top = this.layoutMode==='popover'?58:12;
     const bottom=this.layoutMode==='popover'?42:16;
     this.viewport = { x: 28, y: Math.min(top, height / 2), width: Math.max(1, width - 56), height: Math.max(1, height - Math.min(top, height / 2) - bottom) };
+    if(previousWidth!==this.viewport.width||previousHeight!==this.viewport.height)this.displayRelaxationPending=true;
     this.renderer.setViewport(this.viewport.x, height - this.viewport.y - this.viewport.height, this.viewport.width, this.viewport.height);
     this.overviewSynapses.setViewportHeight(this.viewport.height);
     this.camera.aspect = this.viewport.width / this.viewport.height;
@@ -955,6 +969,7 @@ export class KnowledgeHologram {
     // Include perspective motion from depth changes at the viewport corners.
     const perspectiveBound = Math.hypot(1, halfFovTangent * Math.hypot(1, this.camera.aspect));
     const denseOverview=this.view.hops===0&&this.view.nodes.length>120;
+    const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
     this.plasticity.setDisplayScale(2 * nearestDepth * halfFovTangent / (Math.max(1, this.viewport.height) * perspectiveBound
       * (denseOverview?OVERVIEW_DISPLAY_GAIN:1)));
     const pointsMoving = this.plasticity.moving || this.positionTransition.moving;
@@ -966,21 +981,25 @@ export class KnowledgeHologram {
       this.camera.fov, this.viewport.height, this.view.nodes.length),
       overviewGlyphScale(this.viewport.width,this.viewport.height,denseOverview),
       denseOverview?maximumOverviewStarRadius(this.camera.position.distanceTo(this.lookAt),this.camera.fov,this.viewport.height):Infinity);
+    if(denseOverview&&this.displayRelaxationPending&&!pointsMoving&&!cameraMoving&&!this.orbitActive&&this.semanticLayout.settled)
+      this.prepareDisplayCorrection();
+    const displayMoving=this.displayTransition.moving;
+    this.displayTransition.advance(this.displayOffsets,elapsed,this.reducedMotionEnabled||this.paused);
     if (!this.neuronDetail) for (const [id, mesh] of this.nodeMeshes) mesh.scale.setScalar(this.constellationNodes.radius(id));
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
       if(base&&position){
         overviewDisplayPoint(base,this.viewport.width,this.viewport.height,denseOverview,position);
+        if(denseOverview){const offset=this.displayOffsets.get(id);if(offset)position.add(offset);}
         mesh.position.copy(position);this.orbMeshes.get(id)?.position.copy(position);this.neuronMeshes.get(id)?.position.copy(position);
       }
     }
-    this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving);
-    this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving);
+    this.synapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving||displayMoving);
+    this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving||displayMoving);
     this.constellationNodes.update(this.displayedPositions);
     const nodeActivityMoving = this.constellationNodes.advanceActivity(Date.now(), this.reducedMotionEnabled || this.paused);
     if(pointsMoving || this.nebulae.moving) this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
-    const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
-    this.loop.setInteractive(this.plasticity.moving||this.positionTransition.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
+    this.loop.setInteractive(this.plasticity.moving||this.positionTransition.moving||this.displayTransition.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
     const alpha = this.reducedMotionEnabled||this.paused ? 1 : 1 - Math.exp(-12 * elapsed);
     this.camera.position.lerp(this.desiredCamera, alpha);
     this.lookAt.lerp(this.desiredLookAt, alpha);
@@ -1066,7 +1085,41 @@ export class KnowledgeHologram {
       if (label.hidden === box.visible) label.hidden = !box.visible;
       if (box.visible && (!wasVisible || previousLeft !== box.left || previousTop !== box.top)) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }
-    if (this.paused || this.reducedMotionEnabled || (!nodeActivityMoving && !this.plasticity.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
+    if (this.paused || this.reducedMotionEnabled || (!nodeActivityMoving && !this.plasticity.moving && !this.positionTransition.moving && !this.displayTransition.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
+  }
+  private prepareDisplayCorrection(): void {
+    const {width,height}=this.viewport;
+    if(width<=0||height<=0)return;
+    this.camera.updateMatrixWorld(true);this.graphRoot.updateMatrixWorld(true);
+    const inverseRoot=this.graphRoot.matrixWorld.clone().invert(),factor=height/(2*Math.tan(THREE.MathUtils.degToRad(this.camera.fov/2)));
+    const circles:ProjectedCircle[]=[],bases:THREE.Vector3[]=[],depths:number[]=[],initial=new Float64Array(this.view.nodes.length*2);
+    const pinned=new Set<number>(),projected=new THREE.Vector3(),eye=new THREE.Vector3(),shifted=new THREE.Vector3();
+    for(const [index,node] of this.view.nodes.entries()){
+      const source=this.positions.get(node.id);
+      if(!source)return;
+      const base=new THREE.Vector3();overviewDisplayPoint(source,width,height,true,base);bases.push(base);
+      projected.copy(base).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);depths.push(projected.z);
+      eye.copy(base).applyMatrix4(this.graphRoot.matrixWorld).applyMatrix4(this.camera.matrixWorldInverse);
+      circles.push({x:(projected.x+1)*width/2,y:(1-projected.y)*height/2,
+        radius:.76*this.constellationNodes.radius(node.id)*factor/Math.max(this.camera.near,-eye.z),
+        inClipVolume:projected.z>=-1&&projected.z<=1&&eye.z<0});
+      const offset=this.displayOffsets.get(node.id);
+      if(offset){
+        shifted.copy(base).add(offset).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
+        initial[index*2]=(shifted.x-projected.x)*width/2;initial[index*2+1]=(projected.y-shifted.y)*height/2;
+      }else this.displayOffsets.set(node.id,new THREE.Vector3());
+      if(node.id===this.view.focusId)pinned.add(index);
+    }
+    const result=relaxProjectedCircles(circles,{left:0,top:0,width,height},pinned,initial),targets=new Map<string,THREE.Vector3>();
+    this.view.nodes.forEach((node,index)=>{
+      const dx=result.offsets[index*2],dy=result.offsets[index*2+1];
+      if(!dx&&!dy){targets.set(node.id,new THREE.Vector3());return;}
+      const target=new THREE.Vector3((circles[index].x+dx)/width*2-1,1-(circles[index].y+dy)/height*2,depths[index])
+        .unproject(this.camera).applyMatrix4(inverseRoot).sub(bases[index]);
+      targets.set(node.id,target);
+    });
+    this.displayTransition.setTargets(targets,this.displayOffsets,new Set());
+    this.projectedRelaxation=result.diagnostics;this.displayRelaxationPending=false;
   }
   private readonly syncPoint = (id:string,x:number,y:number,z:number):void => {this.positions.get(id)?.set(x,y,z);};
 }

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import * as THREE from 'three';
+import { PositionTransition } from '../knowledge/position-transition';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConstellationNodes, minimumStarRadius } from '../knowledge/constellation';
 import { KnowledgeHologram } from '../knowledge/hologram';
@@ -116,6 +117,10 @@ describe('sparse-visibility world-space minimum', () => {
       const bridge = () => ({ moving: false, update: noop, mesh: { visible: false, geometry: { instanceCount: 0 } } });
       const frame = Object.create(KnowledgeHologram.prototype) as { render(dt: number): void; renderedFrames: number; renderedNodeCount: number; renderedVisibleNodeCount: number | null; disposed: boolean };
       Object.assign(frame, {
+        displayOffsets: new Map(), displayTransition: new PositionTransition(),
+        displayRelaxationPending: false,
+        semanticLayout: { settled: false },
+
         provisionalOverviewPositions: new Set<string>(),
         disposed: false, paused: true, reducedMotion: true, motion: { matches: true },
         renderedFrames: 0, renderedNodeCount: 0,

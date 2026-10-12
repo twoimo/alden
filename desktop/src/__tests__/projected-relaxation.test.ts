@@ -4,6 +4,13 @@ import { projectedLayoutMetrics } from '../knowledge/projected-layout-metrics';
 
 const viewport = { left: 0, top: 0, width: 640, height: 480 };
 describe('settled projected display collision correction', () => {
+  it('retains settled offsets for unaffected nodes without accumulating displacement', () => {
+    const points=[{x:100,y:100,radius:1},{x:400,y:400,radius:1}];
+    const seeded=relaxProjectedCircles(points,viewport,new Set(),new Float64Array([4,-2,0,0]));
+    expect([...seeded.offsets]).toEqual([4,-2,0,0]);
+    expect([...relaxProjectedCircles(points,viewport,new Set(),seeded.offsets).offsets]).toEqual([4,-2,0,0]);
+    expect([...relaxProjectedCircles(points,viewport,new Set([0]),seeded.offsets).offsets]).toEqual([0,0,0,0]);
+  });
   it('separates coincident cores without changing source circles or point count', () => {
     const points = Object.freeze(Array.from({length:16},()=>Object.freeze({x:320,y:240,radius:1.6})));
     const before = JSON.stringify(points), result = relaxProjectedCircles(points,viewport);
