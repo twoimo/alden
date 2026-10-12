@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SemanticLayoutDriver, type LayoutRequest, type LayoutResponse, type LayoutWorkerPort } from '../knowledge/semantic-layout-driver';
 import { SemanticLayoutEngine } from '../knowledge/semantic-layout';
-import { parseKnowledgeGraph, overviewGraph } from '../knowledge/graph-model';
+import { parseKnowledgeGraph, overviewGraph, type KnowledgeView } from '../knowledge/graph-model';
 
 class WorkerStub implements LayoutWorkerPort {
   onmessage: ((event: MessageEvent<LayoutResponse>) => void) | null = null;
@@ -21,7 +21,88 @@ class WorkerStub implements LayoutWorkerPort {
 const view = (ids = ['a', 'b']) => overviewGraph(parseKnowledgeGraph({ nodes: ids.map(id => ({ id, label: id })),
   edges: [{ source: 'a', target: 'b', relation: 'ref', weight: 1 }] }));
 
+const withAffinity=(source:KnowledgeView):KnowledgeView=>({...source,layoutAffinity:{
+  state:'bounded_ready',inputKey:'a'.repeat(64),profileKey:'b'.repeat(64),
+  inputNodes:source.nodes.map(node=>({id:node.id,sourceVersion:node.sourceVersion??'synthetic-v1',sourceTarget:node.sourceTarget??'synthetic'})),
+  pairs:[{source:'a',target:'b',cosine:.9}],requestedNodes:2,usableNodes:2,
+  contentExcludedNodes:0,validationRejectedNodes:0,evaluatedPairs:1,truncatedCandidates:0,
+}});
+
 describe('owned asynchronous semantic layout', () => {
+  it('re-solves a changed explicit pin even with an unchanged graph and pin identity',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),source=view();
+    const first=new Map([['a',{x:.3,y:.2,z:0}]]);
+    driver.request(source,first,new Set(),new Set(['a']));worker.flush();
+    const moved=new Map([['a',{x:.5,y:.1,z:.2}]]);
+    driver.request(source,moved,new Set(),new Set(['a']));
+    expect(worker.requests).toHaveLength(2);
+    expect(worker.flush().anchors.find(([id])=>id==='a')![1]).toEqual(moved.get('a'));
+    driver.clear();
+  });
+
+  it('does not reuse a completed result after a node retracts or an explicit visible change is requested',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),source=view();
+    driver.request(source,new Map(),new Set(),new Set());worker.flush();
+    driver.request(source,new Map(),new Set(['a']),new Set());expect(worker.requests).toHaveLength(2);worker.flush();
+    const retracted={...source,nodes:source.nodes.map(n=>n.id==='b'?{...n,evidence:{...n.evidence,retracted:true}}:n)};
+    expect(driver.labelsFor(retracted,new Set())).toBeUndefined();
+    driver.request(retracted,new Map(),new Set(),new Set());
+    expect(worker.flush().anchors.map(([id])=>id)).toEqual(['a']);driver.clear();
+  });
+
+  it('does not declare a failed same-key restoration settled',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),source=view();
+    driver.request(source,new Map(),new Set(),new Set());worker.flush();
+    const placeholders=new Map([['a',{x:1,y:0,z:0}],['b',{x:-1,y:0,z:0}]]);
+    driver.request(source,placeholders,new Set(),new Set(),new Set(['a','b']));
+    worker.onerror?.(new Event('error'));
+    expect(driver.diagnostics.state).toBe('failed');expect(driver.settled).toBe(false);driver.clear();
+  });
+
+  it('fails a requested pin with no current position instead of inventing a checkpoint position',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),source=view();
+    driver.request(source,new Map(),new Set(),new Set());worker.flush();
+    driver.request(source,new Map(),new Set(),new Set(['a']));
+    expect(driver.diagnostics.state).toBe('failed');expect(driver.diagnostics.reason).toBe('semantic_layout_pin_unavailable');
+    expect(driver.settled).toBe(false);expect(worker.requests).toHaveLength(1);driver.clear();
+  });
+
+  it('uses identical completed solver coordinates when affinities arrive during or after presentation settling',()=>{
+    const run=(provisional:boolean)=>{
+      const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),firstView=view();
+      driver.request(firstView,new Map(),new Set(),new Set());const completed=worker.flush();
+      const shown=new Map(completed.anchors.map(([id,p],i)=>[id,{x:p.x+.007*(i+1),y:p.y-.006,z:p.z+.002}]));
+      const before=JSON.stringify([...shown]);
+      const next=withAffinity(firstView);
+      driver.request(next,shown,new Set(),new Set(),new Set(provisional?shown.keys():[]));
+      const response=worker.flush();expect(JSON.stringify([...shown])).toBe(before);
+      driver.clear();return response.anchors;
+    };
+    expect(run(false)).toEqual(run(true));
+  });
+
+  it('preserves the current explicit pin while excluding unrelated cached coordinates from a request',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),firstView=view();
+    driver.request(firstView,new Map(),new Set(),new Set());const completed=worker.flush();
+    const shown=new Map(completed.anchors.map(([id,p])=>[id,{...p,x:p.x+.013}]));
+    shown.set('outside',{x:9,y:9,z:9});
+    const next=withAffinity(firstView);
+    driver.request(next,shown,new Set(),new Set(['a']));
+    const request=worker.requests.at(-1)!;
+    expect(request.previous.find(([id])=>id==='a')![1]).toEqual(shown.get('a'));
+    expect(request.previous.find(([id])=>id==='b')![1]).toEqual(new Map(completed.anchors).get('b'));
+    expect(request.previous.some(([id])=>id==='outside')).toBe(false);
+    driver.clear();
+  });
+
+  it('does not restart a completed current scope because a hidden identity remains provisional',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker);
+    driver.request(view(),new Map(),new Set(),new Set());const completed=worker.flush();
+    const shown=new Map([...completed.anchors,['outside',{x:1,y:1,z:1}]]);
+    driver.request(view(),shown,new Set(),new Set(),new Set(['outside']));
+    expect(worker.requests).toHaveLength(1);expect(driver.settled).toBe(true);driver.clear();
+  });
+
   it('cancels obsolete work when the requested scope returns to its completed cache',()=>{
     const workers:WorkerStub[]=[],apply=vi.fn(),driver=new SemanticLayoutDriver(apply,()=>{const w=new WorkerStub();workers.push(w);return w;});
     const a=view(),b={...a,edges:[]};driver.request(a,new Map(),new Set(),new Set());workers[0].flush();

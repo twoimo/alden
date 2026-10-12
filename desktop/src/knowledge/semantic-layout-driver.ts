@@ -13,7 +13,7 @@ export interface LayoutWorkerPort { onmessage: ((event: MessageEvent<LayoutRespo
 
 function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>):string {
   const now=Date.now();
-  return JSON.stringify([view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance]),
+  return JSON.stringify([view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance,n.evidence.retracted]),
     view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted,relationCurrentlyValid(e,now)]),
     view.layoutAffinity?.pairs??[],[...pinned].sort()]);
 }
@@ -27,6 +27,8 @@ export class SemanticLayoutDriver {
   private generation = 0;
   private appliedKey = '';
   private requestedKey = '';
+  private requestedInputs = '';
+  private appliedPins = '';
   private busy = false;
   private state: Record<string, unknown> = { state: 'idle' };
   private completedState:Record<string,unknown>={state:'idle'};
@@ -34,7 +36,8 @@ export class SemanticLayoutDriver {
     private readonly create: () => LayoutWorkerPort = () => new Worker(new URL('./semantic-layout-worker.ts', import.meta.url), { type: 'module' }) as unknown as LayoutWorkerPort) {}
   get diagnostics() { return { ...this.state }; }
   get ready(): boolean { return !!this.checkpoint; }
-  get settled(): boolean { return !this.busy && !!this.checkpoint && this.appliedKey === this.requestedKey; }
+  get settled(): boolean { return !this.busy && !!this.checkpoint && this.appliedKey === this.requestedKey
+    && (this.state.state==='ready'||this.state.state==='cached'); }
 
   /** An identical completed snapshot may restore its colour metadata on a
    * rebuild. Matching IDs alone never confer permission to reuse labels. */
@@ -45,32 +48,42 @@ export class SemanticLayoutDriver {
   request(view: KnowledgeView, previous: ReadonlyMap<string, Point3>, changed: ReadonlySet<string>, pinned: ReadonlySet<string>,
     provisional: ReadonlySet<string> = new Set()): void {
     const pairs = view.layoutAffinity?.pairs ?? [];
+    const visibleIds=new Set(view.nodes.filter(node=>!node.evidence.retracted).map(node=>node.id));
     const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, label: n.id, description: '', facts: [] })),
       edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', evidence: { ...e.evidence, sourceEventIds: [] } })) };
     const key = snapshotKey(view,pinned);
-    const restore = [...previous.keys()].some(id => provisional.has(id));
-    if(key===this.appliedKey&&!restore){
+    const pinCoordinates=()=>[...pinned].filter(id=>visibleIds.has(id)).sort().map(id=>{
+      const p=previous.get(id);return [id,p?.x??null,p?.y??null,p?.z??null];
+    });
+    if(pinCoordinates().some(row=>!row.slice(1).every(value=>typeof value==='number'&&Number.isFinite(value)))){
+      this.stop();this.requestedKey=key;this.state={state:'failed',reason:'semantic_layout_pin_unavailable'};return;
+    }
+    const pinKey=JSON.stringify(pinCoordinates());
+    const changedVisible=[...changed].filter(id=>visibleIds.has(id)).sort();
+    const inputs=JSON.stringify([key,pinKey,changedVisible,[...provisional].filter(id=>visibleIds.has(id)).sort()]);
+    const restore = [...previous.keys()].some(id => visibleIds.has(id)&&provisional.has(id));
+    if(key===this.appliedKey&&!restore&&!changedVisible.length&&pinKey===this.appliedPins){
       if(this.busy)this.stop();
       this.requestedKey=key;this.state={...this.completedState,state:'cached',generation:this.generation};return;
     }
-    if(this.busy&&key===this.requestedKey)return;
+    if(this.busy&&inputs===this.requestedInputs)return;
     // Cancel obsolete work immediately; restore only the last completed cache.
     if (this.busy) this.stop();
     const worker = this.worker ?? this.create(); this.worker = worker;
-    const id = ++this.generation; this.busy = true; this.requestedKey = key; this.state = { state: 'pending', generation: id };
+    const id = ++this.generation; this.busy = true; this.requestedKey = key; this.requestedInputs=inputs; this.state = { state: 'pending', generation: id };
     worker.onmessage = event => {
       if (this.worker !== worker || event.data.id !== id || id !== this.generation) return;
       this.busy = false;
       // A boundary can pass while the main thread is unable to run its timer.
       // Discard that reply before publishing any position or membership state.
-      if(snapshotKey(view,pinned)!==key){
+      if(snapshotKey(view,pinned)!==key||JSON.stringify(pinCoordinates())!==pinKey){
         this.request(view,previous,changed,pinned,provisional);return;
       }
       if (event.data.error || !event.data.anchors || !event.data.diagnostics || !event.data.checkpoint) {
         this.state = { state: 'failed', reason: event.data.error ?? 'semantic_layout_invalid_reply' }; return;
       }
-      this.appliedKey = key; this.checkpoint = event.data.checkpoint;
-      this.state = { state: 'ready', generation: id, wallMs: event.data.wallMs, ...event.data.diagnostics };
+      this.appliedKey = key; this.appliedPins=pinKey; this.checkpoint = event.data.checkpoint;
+      this.state = { state: 'ready', generation: id, wallMs: event.data.wallMs, ...event.data.diagnostics, ...priorBasis };
       this.completedState={...this.state};
       this.apply(event.data);
     };
@@ -81,12 +94,21 @@ export class SemanticLayoutDriver {
     // A new identity's ID seed is provisional even after another page solved.
     // Retain completed identities and explicit pins; unrelated cached IDs do
     // not make new seeds an authoritative prior community center.
-    const solved = new Set(this.checkpoint?.positions.map(([id]) => id) ?? []);
-    const retained = [...previous].filter(([id]) => pinned.has(id) || solved.has(id) && !provisional.has(id));
+    const solved = new Map(this.checkpoint?.positions ?? []);
+    // Animation/physics coordinates depend on when an asynchronous affinity
+    // reply arrives. Preserve the completed solver snapshot as the next solve's
+    // prior; only an explicit pin takes the currently shown source position.
+    const retained = [...previous].filter(([id]) => visibleIds.has(id)
+      && (pinned.has(id) || solved.has(id) && !provisional.has(id)))
+      .map(([id,p]) => [id,pinned.has(id)?p:solved.get(id)!] as [string,Point3]);
+    const priorBasis={priorSource:'completed_solver_or_explicit_pin',retainedPriorNodes:retained.length,
+      explicitPinPriorNodes:retained.filter(([key])=>pinned.has(key)).length,
+      restoredProvisionalNodes:[...visibleIds].filter(key=>provisional.has(key)&&solved.has(key)&&!pinned.has(key)).length};
+    this.state={...this.state,...priorBasis};
     worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
       pairs, changed: [...changed], pinned: [...pinned], checkpoint: this.checkpoint });
   }
 
-  stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.requestedKey = ''; }
-  clear(): void { this.stop(); this.checkpoint = undefined; this.appliedKey = ''; this.state = { state: 'idle' };this.completedState={state:'idle'}; }
+  stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.requestedKey = ''; this.requestedInputs=''; }
+  clear(): void { this.stop(); this.checkpoint = undefined; this.appliedKey = ''; this.appliedPins=''; this.state = { state: 'idle' };this.completedState={state:'idle'}; }
 }
