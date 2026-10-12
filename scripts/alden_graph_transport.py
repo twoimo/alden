@@ -1,5 +1,21 @@
 """Lossless references to exactly matching display source-context fields."""
+import json
+
 CODEC = 'display-source-context-v1'
+RECORD_CODEC = 'record-keys-v1'
+
+
+def _record_table(records):
+    if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
+        raise ValueError('graph_transport_records_invalid')
+    all_keys = {key for row in records for key in row}
+    if len(all_keys) > 256 or any(not isinstance(key, str) or not key or len(key) > 128 for key in all_keys):
+        raise ValueError('graph_transport_keys_invalid')
+    keys = sorted(all_keys)
+    index = {key: i for i, key in enumerate(keys)}
+    # Every present key/value is retained. An absent field differs from null;
+    # rows do not fill missing columns or reinterpret nested source records.
+    return keys, [[item for key, value in row.items() for item in (index[key], value)] for row in records]
 
 
 def pack_graph(value):
@@ -21,4 +37,12 @@ def pack_graph(value):
             else:
                 contexts.append(context)
         nodes.append({**node, 'source_contexts': contexts})
-    return {**value, 'nodes': nodes, 'source_context_encoding': CODEC}
+    packed = {**value, 'nodes': nodes, 'source_context_encoding': CODEC}
+    if len(json.dumps(packed, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()) <= 3 * 1024 * 1024:
+        return packed
+    if 'source_record_encoding' in packed:
+        raise ValueError('graph_transport_encoding_collision')
+    node_keys, node_rows = _record_table(packed['nodes'])
+    edge_keys, edge_rows = _record_table(packed.get('edges', []))
+    return {**packed, 'nodes': node_rows, 'edges': edge_rows,
+            'source_record_encoding': {'codec': RECORD_CODEC, 'nodes': node_keys, 'edges': edge_keys}}
