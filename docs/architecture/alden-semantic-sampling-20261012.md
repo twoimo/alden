@@ -21,6 +21,14 @@ contradictory counts or ratios. Full node participation remains
 These statistics are available through internal render diagnostics without
 new product controls. Layout candidates never become fact edges or merges.
 
+The first native compact observation retained an earlier controller result
+while its actual graph had no enrichment. Fresh, revalidated results are now
+compared with the graph actually shown, rather than only with the controller's
+cache. Missing enrichment reports pending work without retaining the earlier
+completion diagnostic. A regression fails against the prior source when an
+identical valid reply must re-enrich a restored graph. Existing scope/epoch
+fences and version/permission validation remain in force.
+
 ## Actual fixed-input evidence
 
 An installed read admitted 1,483 existing E5 vectors, dimension 384 and

@@ -255,7 +255,7 @@ export class CollectionGraphController {
     }
     const next = parseKnowledgeGraph(payload), signature = knowledgeSignature(next);
     if (this.affinity && affinityMatches(this.affinity, next.nodes)) next.layoutAffinity = this.affinity;
-    else this.affinity = null;
+    else { this.affinity = null; this.affinityDiagnostic = { state: 'not_requested' }; }
     this.applying = true;
     if (signature !== this.signature || this.navigationChanged) {
       this.signature = signature;
@@ -286,6 +286,7 @@ export class CollectionGraphController {
     const ttl = this.affinity && this.affinity.usableNodes === this.affinity.requestedNodes ? 60000 : 15000;
     if (this.affinityRequestEpoch === this.epoch && key === this.affinityRequestKey && Date.now() - this.affinityReadAt < ttl) return;
     this.affinityPending = { epoch: this.epoch, query, key };
+    if (!this.graph.currentGraph.layoutAffinity) this.affinityDiagnostic = { state: 'pending' };
     void this.readAffinity();
   }
 
@@ -305,7 +306,9 @@ export class CollectionGraphController {
         parsed.reason = parseLayoutAffinity({ schema: 'alden-layout-affinity-v1', state: 'unavailable', reason: response?.reason }, []).reason;
       }
       const signature = (value: LayoutAffinity | null) => value && JSON.stringify([value.inputKey, value.profileKey, value.state, value.pairs]);
-      if (signature(this.affinity) !== signature(parsed.affinity)) this.graph.setLayoutAffinity?.(parsed.affinity);
+      // The controller cache can outlive a rebuilt/restored graph. A matching
+      // response still has to enrich the graph that is actually being shown.
+      if (signature(this.graph.currentGraph.layoutAffinity ?? null) !== signature(parsed.affinity)) this.graph.setLayoutAffinity?.(parsed.affinity);
       this.affinity = parsed.affinity;
       this.affinityDiagnostic = this.affinity ? { state: this.affinity.state, usable: this.affinity.usableNodes,
         contentExcluded: this.affinity.contentExcludedNodes, validationRejected: this.affinity.validationRejectedNodes,

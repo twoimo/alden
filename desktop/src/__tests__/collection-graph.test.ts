@@ -48,6 +48,20 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const c of owned) c.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('permitted collection graph navigation', () => {
+  it('reapplies a revalidated identical result when the actual graph lost its cached enrichment', async () => {
+    const later = deferred<Record<string, unknown>>(); let calls = 0;
+    const { c, port } = controller(async () => page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })) }), undefined,
+      async () => ++calls === 1 ? { ok: true, layout_affinity: affinityPayload() } : later.promise);
+    await settle();
+    expect(port.currentGraph.layoutAffinity?.pairs).toHaveLength(1);
+    port.graph = { ...port.graph, layoutAffinity: undefined };
+    await settle(60000);
+    later.resolve({ ok: true, layout_affinity: affinityPayload() }); await settle();
+    expect(port.setLayoutAffinity).toHaveBeenCalledTimes(2);
+    expect(port.currentGraph.layoutAffinity?.pairs).toHaveLength(1);
+    expect(c.readDiagnostics?.affinity).toMatchObject({ state: 'bounded_ready' });
+  });
+
   it('shows factual data first and applies later valid affinity without moving selection/camera or creating activity', async () => {
     const pending = deferred<Record<string, unknown>>();
     const { port, load } = controller(async () => page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })),
