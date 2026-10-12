@@ -92,8 +92,8 @@ two owned window sizes. All 18 conditions retained every displayed point,
 settled the bounded physics and stopped rendering across a strict two-second
 observation. Four Spark conditions explicitly remain `unavailable` with
 `layout_no_eligible_content`; other 14 admitted actual partial/ready E5 input.
-The installed conditions retained 1,940 aggregate point-overlap pairs across
-repeated subsets. This after-only native observation must not be compared as
+The installed conditions retained 1,939 aggregate point-overlap pairs across
+repeated subsets; the candidate had 1,940. This after-only native observation must not be compared as
 an identical-coordinate improvement against the separate numerical replay.
 Candidate screenshots were directly inspected; installed visual readback and
 primary physical gestures remain distinct evidence gates.
