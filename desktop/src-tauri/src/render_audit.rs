@@ -1543,7 +1543,7 @@ fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> R
           [...s.querySelectorAll('button')].find(b=>b.textContent==='같은 지식으로 묶기').click();
           return {applied:true};})())"#.into(),deadline)?;
         entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
-          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='되돌리기')};})())"#,deadline)?;
+          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='이 결정 되돌리기')};})())"#,deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();
           const p=document.querySelector('#knowledge-project');p.value='project:audit';p.dispatchEvent(new Event('change'));
           return {graph:true};})())"#.into(),deadline)?;
@@ -1553,12 +1553,12 @@ fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> R
         publish(output,&format!("entity-applied-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-history').click();
           const s=document.querySelector('.entity-resolution');s.open=true;
-          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='되돌리기').click();
+          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='이 결정 되돌리기').click();
           return {revertReview:true};})())"#.into(),deadline)?;
         entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
-          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='되돌리기 확인')};})())"#,deadline)?;
+          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='되돌리기 확정')};})())"#,deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
-          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='되돌리기 확인').click();
+          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='되돌리기 확정').click();
           return {reverted:true};})())"#.into(),deadline)?;
         entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
           return {ready:!s.querySelector('select').disabled&&!s.querySelectorAll('.entity-resolution-history button').length};})())"#,deadline)?;
