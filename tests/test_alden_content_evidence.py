@@ -8,6 +8,26 @@ from alden_content_evidence import content_evidence_class
 
 
 class ContentEvidenceTests(unittest.TestCase):
+    def test_derived_summary_declaration_does_not_certify_original_body(self):
+        metadata = {'coverage': 'existing privacy-filtered derived metadata; original bytes not opened'}
+        self.assertEqual(content_evidence_class(metadata, 'Shop chassis pointer'),
+                         'metadata_description')
+
+    def test_equal_title_or_short_authored_body_is_not_blanket_excluded(self):
+        self.assertEqual(content_evidence_class({'label': 'Yes', 'kind': 'document'}, 'Yes'),
+                         'content_candidate')
+
+    def test_verified_retained_body_can_replace_summary_but_not_noncontent_guards(self):
+        metadata = {'coverage': 'existing privacy-filtered derived metadata; original bytes not opened'}
+        self.assertEqual(content_evidence_class(metadata, 'Actual preserved body',
+                         body_source='retained_record.localOriginalText'), 'content_candidate')
+        self.assertEqual(content_evidence_class({**metadata, 'content_indexed': 0}, 'Actual preserved body',
+                         body_source='retained_record.localOriginalText'), 'metadata_only')
+        self.assertEqual(content_evidence_class(metadata, '경로만 색인한 파일. 본문은 읽지 않았습니다.',
+                         body_source='retained_record.localOriginalText'), 'unread_body_marker')
+        with self.assertRaisesRegex(ValueError, '^content_evidence_invalid$'):
+            content_evidence_class(metadata, 'body', body_source='unknown-field')
+
     def test_whole_code_or_directory_description_does_not_certify_body_content(self):
         for kind, body in [('code', '현재 체크아웃의 소스 파일'), ('hub', '파일 시스템의 디렉터리')]:
             with self.subTest(kind=kind):

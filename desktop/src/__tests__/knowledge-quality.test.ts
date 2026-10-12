@@ -33,7 +33,7 @@ function success(query: QualityQuery = all) {
       within_context: { groups: 8, status: 'metadata_match_not_content' },
       cross_context: { groups: 1, status: 'metadata_match_not_content' },
     },
-    content_evidence: { policy: 'source-content-evidence-v3', status: 'source_declared_exclusions_not_semantic_verdict' },
+    content_evidence: { policy: 'source-content-evidence-v4', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
   };
 }

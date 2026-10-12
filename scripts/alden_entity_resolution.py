@@ -243,7 +243,8 @@ def _source_rows(db, store, project, members, *, read_blobs, show_records):
                 "source_url": metadata.get("source_url"),
                 "basis": "permitted_current_stored_record",
                 "content_evidence": {"policy": CONTENT_POLICY,
-                    "classification": content_evidence_class(metadata, body, source=source)}})
+                    "classification": content_evidence_class(metadata, body, source=source,
+                        body_source=body_source)}})
     return digest(encoded(fingerprint_rows)), records
 
 

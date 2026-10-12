@@ -4,7 +4,7 @@ export function affinityPayload(ids = ['a', 'b'], project = 'one', version = 'v1
   const input_nodes = ids.map(id => ({ id, source_version: version, source_target: target }));
   return { schema: 'alden-layout-affinity-v1', state: 'bounded_ready', input_nodes, input_sha256: hash,
     input_projects: [project], profile_sha256: profileHash,
-    content_evidence_policy: 'source-content-evidence-v3', binding: { content_evidence_sha256: hash },
+    content_evidence_policy: 'source-content-evidence-v4', binding: { content_evidence_sha256: hash },
     profile: { model: 'mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0',
       endpoint: '5956b9388ba26ec18062d7a95c02b4d02eb01a467e383f7ddd505ecba2508844', encoding: 'e5-char256-stride192-weighted-unit-pool-v1', dimension: 384 },
     nodes: input_nodes.map(node => ({ ...node, projects: [project], permissions: [{ project, permission: 'local-private' }],

@@ -16,6 +16,38 @@ import alden_semantic_affinity as sa
 
 
 class SemanticAffinityTests(unittest.TestCase):
+    def test_verified_retained_body_can_supply_affinity_after_derived_summary(self):
+        nodes = [self.make_evidence(name, body="A derived summary",
+                 coverage="existing privacy-filtered derived metadata; original bytes not opened",
+                 raw={"localOriginalText": "Actual preserved body", "id": name})
+                 for name in ("retained-a", "retained-b")]
+        report = self.run_affinity(nodes)
+        self.assertEqual(len(report["nodes"]), 2)
+        self.assertEqual(len(report["candidates"]), 1)
+        self.assertEqual(report["coverage"]["content_excluded_nodes"], 0)
+
+    def test_normalized_cache_words_cannot_replace_retained_body_structure(self):
+        node = self.make_evidence("structured", body="A derived summary",
+                 coverage="existing privacy-filtered derived metadata; original bytes not opened",
+                 raw={"localOriginalText": "A\n\nB", "id": "structured"})
+        with sqlite3.connect(self.cache) as db:
+            db.execute("UPDATE texts SET body='A B' WHERE document_id=?", (node["id"],))
+        report = self.run_affinity([node])
+        self.assertEqual(report["coverage"]["reasons"], {"retained_text_source_mismatch": 1})
+        self.assertEqual(report["nodes"], [])
+        self.assertEqual(report["candidates"], [])
+
+    def test_derived_summary_vectors_do_not_supply_original_body_affinity(self):
+        nodes = [self.make_evidence(name, body="Shop chassis pointer",
+                 coverage="existing privacy-filtered derived metadata; original bytes not opened",
+                 raw={"summary": "Shop chassis pointer", "content_indexed": 1, "id": name})
+                 for name in ("brand-a", "brand-b")]
+        report = self.run_affinity(nodes)
+        self.assertEqual(report["nodes"], [])
+        self.assertEqual(report["candidates"], [])
+        self.assertEqual(report["coverage"]["content_exclusion_reasons"], {"metadata_description": 2})
+        self.assertEqual(report["coverage"]["validation_rejected_nodes"], 0)
+
     def test_verified_archive_noncontent_declaration_survives_projection_omission(self):
         nodes = [self.make_evidence(name, kind='hub', body='Same group description',
                                    raw={'kind': 'hub', 'content_indexed': 0, 'path': name})

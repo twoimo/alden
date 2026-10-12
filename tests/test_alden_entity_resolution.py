@@ -45,6 +45,15 @@ class EmptyStoreTest(unittest.TestCase):
 
 
 class ResolutionTest(unittest.TestCase):
+    def test_preview_identifies_derived_summary_without_mutating_sources(self):
+        declaration = "existing privacy-filtered derived metadata; original bytes not opened"
+        self.store.ingest(self.t1, [{**record("a"), "coverage": declaration}])
+        self.store.ingest(self.t2, [{**record("b"), "coverage": declaration}])
+        preview = self.preview()
+        self.assertEqual([r["content_evidence"]["classification"] for r in preview["records"]],
+                         ["metadata_description", "metadata_description"])
+        self.assertEqual(preview["plan"]["revision"], 0)
+
     ORIGINAL_TABLES = ("meta", "targets", "target_projects", "documents", "versions",
                        "memberships", "relations", "relation_versions", "runs", "events",
                        "target_snapshots", "event_counts")

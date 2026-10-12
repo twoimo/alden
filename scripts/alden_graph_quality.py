@@ -249,8 +249,15 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             text = label + '\n' + (cached[3] if valid else body)
             examine(text)
             effective_body = cached[3] if valid else body
+            # A cache stamp alone cannot upgrade a declared derived summary to
+            # original body evidence. The verified audit also binds its bytes.
+            body_source = ('retained_record.localOriginalText'
+                if valid and verify_sources and source_verified.get(blob_key)
+                and cached[4] == 'retained_record.localOriginalText'
+                and originals.get(blob_key) == digest(effective_body.encode()) else 'stored_body')
             evidence_class = content_evidence_class(metadata, effective_body,
-                source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None) if metadata_valid else None
+                source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
+                body_source=body_source) if metadata_valid else None
             if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description'):
                 counts['noncontent_current_versions'] += 1
                 counts[evidence_class + '_current_versions'] += 1

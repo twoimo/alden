@@ -37,7 +37,7 @@ export type QualitySuccess = {
   findings: Record<string, number>;
   duplicate_candidates: QualityCandidates;
   metadata_matches: Record<'within_context' | 'cross_context', { groups: number; status: 'metadata_match_not_content' }>;
-  content_evidence: { policy: 'source-content-evidence-v3'; status: 'source_declared_exclusions_not_semantic_verdict' };
+  content_evidence: { policy: 'source-content-evidence-v4'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified' };
 };
@@ -157,7 +157,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || (counts.metadata_only_current_versions as number) + (counts.unread_body_marker_current_versions as number)
       + (counts.metadata_description_current_versions as number)
       !== counts.noncontent_current_versions
-    || evidence.policy !== 'source-content-evidence-v3' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
+    || evidence.policy !== 'source-content-evidence-v4' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
     || !count(metadataWithin.groups) || metadataWithin.status !== 'metadata_match_not_content'
     || !count(metadataCross.groups) || metadataCross.status !== 'metadata_match_not_content'
     || Object.keys(findings).length > 64
@@ -191,7 +191,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       within_context: { groups: metadataWithin.groups as number, status: 'metadata_match_not_content' },
       cross_context: { groups: metadataCross.groups as number, status: 'metadata_match_not_content' },
     },
-    content_evidence: { policy: 'source-content-evidence-v3', status: 'source_declared_exclusions_not_semantic_verdict' },
+    content_evidence: { policy: 'source-content-evidence-v4', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
   };
 }
@@ -408,7 +408,7 @@ export class KnowledgeQualityPanel {
       ['같은 맥락의 이름·안내문 일치 그룹', value.metadata_matches.within_context.groups],
       ['교차 맥락의 이름·안내문 일치 그룹', value.metadata_matches.cross_context.groups],
     ]);
-    paragraph('본문을 읽지 않은 기록의 이름·안내문 일치는 본문 중복이나 의미 연결의 근거로 사용하지 않습니다. 자료와 구조 관계는 유지합니다.', 'knowledge-quality-limit');
+    paragraph('본문을 읽지 않은 기록의 이름·안내문·파생 색인 요약은 실제 본문 중복이나 의미 연결의 근거로 사용하지 않습니다. 자료와 구조 관계는 유지합니다.', 'knowledge-quality-limit');
     paragraph('원본은 해시 참조만 확인하고 원문 바이트를 다시 읽지 않았습니다. NFC·줄바꿈 차이는 관찰만 하며 본문 공백을 유지하고 수정하지 않습니다. 일치 텍스트·차원 혼합은 검토 후보로, 의미상 중복·타당성·이상 여부는 판정하지 않았습니다.', 'knowledge-quality-limit');
     this.report.replaceChildren(...elements);
     this.report.hidden = false;

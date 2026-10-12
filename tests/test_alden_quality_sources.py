@@ -40,6 +40,56 @@ class VerifiedSourceQualityTests(unittest.TestCase):
     def report(self, *, verify=True):
         return quality.audit(self.root, ["one"], verify_sources=verify)
 
+    def test_derived_summary_matches_keep_distinct_sources_and_fts(self):
+        declaration = "existing privacy-filtered derived metadata; original bytes not opened"
+        records = [dict(self.record(name, "Shop chassis pointer",
+                    raw={"id": name, "summary": "Shop chassis pointer", "content_indexed": 1}),
+                    coverage=declaration) for name in ("brand-a", "brand-b")]
+        self.store.ingest(self.target, records)
+        for verify in (False, True):
+            with self.subTest(verify=verify):
+                report = self.report(verify=verify)
+                self.assertEqual(report["findings"], {})
+                self.assertEqual(report["counts"]["metadata_description_current_versions"], 2)
+                self.assertEqual(report["duplicate_candidates"]["same_normalized_search_text"]["groups"], 0)
+                self.assertEqual(report["metadata_matches"]["within_context"]["groups"], 1)
+        self.assertEqual(len(self.store.search("chassis", projects=["one"])), 2)
+        with self.store.database() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT count(*) FROM versions").fetchone()[0], 2)
+
+    def test_derived_summary_cache_cannot_certify_unverified_retained_body(self):
+        from alden_semantic_affinity import TEXT_VERSION
+        records = [dict(self.record(name, "A derived summary",
+                    raw={"localOriginalText": "Actual preserved body", "id": name}),
+                    coverage="existing privacy-filtered derived metadata; original bytes not opened")
+                    for name in ("retained-a", "retained-b")]
+        self.store.ingest(self.target, records)
+        import sqlite3
+        with sqlite3.connect(self.store.root / "retrieval.sqlite3") as db:
+            db.execute("CREATE TABLE texts(document_id,version,base_hash,raw_sha256,extraction,label,body,body_source)")
+            for name in ("retained-a", "retained-b"):
+                row = self.version(name)
+                db.execute("INSERT INTO texts VALUES(?,?,?,?,?,?,?,?)",
+                    (row["document_id"], row["id"], digest((row["label"] + "\n" + row["body"]).encode()),
+                     row["raw_sha256"], TEXT_VERSION, row["label"], "Actual preserved body",
+                     "retained_record.localOriginalText"))
+        manual = self.report(verify=False)
+        self.assertEqual(manual["counts"]["metadata_description_current_versions"], 2)
+        self.assertEqual(manual["duplicate_candidates"]["same_normalized_search_text"]["groups"], 0)
+        verified = self.report()
+        self.assertEqual(verified["findings"], {})
+        self.assertEqual(verified["counts"]["metadata_description_current_versions"], 0)
+        self.assertEqual(verified["duplicate_candidates"]["same_normalized_search_text"]["groups"], 1)
+        with sqlite3.connect(self.store.root / "retrieval.sqlite3") as db:
+            db.execute("UPDATE texts SET body='Actual  preserved body'")
+        mismatched = self.report()
+        self.assertEqual(mismatched["findings"]["retained_text_source_mismatch"], 2)
+        self.assertEqual(mismatched["counts"]["metadata_description_current_versions"], 2)
+        self.assertEqual(mismatched["duplicate_candidates"]["same_normalized_search_text"]["groups"], 0)
+
+
+
     def version(self, name):
         with self.store.database() as db:
             return dict(db.execute(

@@ -290,7 +290,7 @@ def _load(db, cache, store, node, projects, profile, guard):
     # A stored filename and an explicitly unread body are not content evidence,
     # even when a matching E5 vector exists. Validate the admitted source and
     # retained-text binding first; never inspect the protected original path.
-    evidence = content_evidence_class(metadata, text[4], source=source)
+    evidence = content_evidence_class(metadata, text[4], source=source, body_source=text[5])
     if evidence != "content_candidate":
         return None, "content_evidence:" + evidence
     vector_meta = cache.execute("""SELECT CASE WHEN typeof(text_hash)='text' AND length(text_hash)=64
