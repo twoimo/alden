@@ -70,6 +70,10 @@ if [ ! -x "$ROOT/target/release/openkakao-cli" ]; then
   exit 2
 fi
 
+# Debug Rust checks share build.rs's resource staging directory. Refresh the
+# release CLI explicitly even when Cargo reuses the release build script.
+python3 -B "$ROOT/scripts/alden_build_receipt.py" stage-cli --root "$ROOT"
+
 (
   cd "$DESKTOP"
   npm run build
@@ -89,6 +93,12 @@ fi
 
 if [ ! -x "$APP_BIN" ]; then
   echo "build-alden-desktop: Tauri app was not produced at $APP" >&2
+  exit 2
+fi
+
+# Fail closed if a concurrent debug check overwrote the stage during bundling.
+if ! /usr/bin/cmp -s "$ROOT/target/release/openkakao-cli" "$APP/Contents/Resources/bin/openkakao-cli"; then
+  echo "build-alden-desktop: bundled CLI does not match the release CLI" >&2
   exit 2
 fi
 

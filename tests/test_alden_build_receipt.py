@@ -22,6 +22,9 @@ class BuildReceiptTests(unittest.TestCase):
         self.binary.parent.mkdir(parents=True); self.binary.write_bytes(b'validated binary')
         self.cli = self.root/'target/release/openkakao-cli'
         self.cli.parent.mkdir(parents=True); self.cli.write_bytes(b'validated cli'); self.cli.chmod(0o755)
+        self.bundled_cli = self.app/'Contents/Resources/bin/openkakao-cli'
+        self.bundled_cli.parent.mkdir(parents=True)
+        self.bundled_cli.write_bytes(self.cli.read_bytes()); self.bundled_cli.chmod(0o755)
         self.source = self.root/'scripts/runtime.py'
         self.source.parent.mkdir(); self.source.write_text('runtime = 1')
         self.npm = self.root/'desktop/node_modules'
@@ -47,6 +50,31 @@ class BuildReceiptTests(unittest.TestCase):
         before = self.binary.stat().st_mtime_ns
         self.assertTrue(build.verified(self.root, self.receipt))
         self.assertEqual(self.binary.stat().st_mtime_ns, before)
+
+    def test_receipt_cannot_approve_debug_cli_in_release_bundle(self):
+        self.bundled_cli.write_bytes(b'debug cli from concurrent Rust test staging')
+        self.receipt['output_manifest'] = build.output_manifest(self.app)
+        self.assertFalse(build.verified(self.root, self.receipt))
+
+    def test_release_staging_replaces_debug_inode_without_truncating_hardlinks(self):
+        stage = self.root/'desktop/src-tauri/bundle-resources/bin/openkakao-cli'
+        stage.parent.mkdir(parents=True)
+        saved = self.root/'preserved-debug-cli'; saved.write_bytes(b'debug cli')
+        os.link(saved, stage)
+        build.stage_release_cli(self.root)
+        self.assertEqual(stage.read_bytes(), self.cli.read_bytes())
+        self.assertEqual(stage.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(saved.read_bytes(), b'debug cli')
+
+    def test_release_staging_rejects_symlinked_destination_and_missing_release(self):
+        stage = self.root/'desktop/src-tauri/bundle-resources/bin/openkakao-cli'
+        stage.parent.mkdir(parents=True)
+        stage.symlink_to(self.cli)
+        with self.assertRaisesRegex(RuntimeError, 'symlink'):
+            build.stage_release_cli(self.root)
+        self.cli.unlink()
+        with self.assertRaisesRegex(RuntimeError, 'missing|symlink'):
+            build.stage_release_cli(self.root)
 
     def test_installed_dependency_patch_invalidates_unchanged_lock(self):
         (self.npm/'dependency.js').write_text('dependency = 2')

@@ -243,20 +243,56 @@ def output_manifest(app):
         raise RuntimeError('build_output_symlink_unsafe')
     return {path.relative_to(app).as_posix():[sha(path),path.stat().st_mode & 0o777] for path in paths if path.is_file()}
 
+def stage_release_cli(root):
+    """Refresh the shared Tauri stage after any debug/source-check build."""
+    source = checked_dependency(root/'target/release/openkakao-cli')
+    if not stat.S_ISREG(source.stat().st_mode) or not os.access(source, os.X_OK):
+        raise RuntimeError('release_cli_not_executable')
+    parent = root
+    for part in ('desktop', 'src-tauri', 'bundle-resources', 'bin'):
+        parent = parent/part
+        if not parent.exists() and not parent.is_symlink():
+            parent.mkdir()
+        checked_dependency(parent, directory=True)
+        if not parent.is_dir():
+            raise RuntimeError('release_cli_stage_directory_invalid')
+    destination = parent/'openkakao-cli'
+    if destination.exists() or destination.is_symlink():
+        checked_dependency(destination)
+    fd, temporary = tempfile.mkstemp(prefix='.release-cli-', dir=parent)
+    try:
+        with os.fdopen(fd, 'wb') as output, source.open('rb') as input_file:
+            before = os.fstat(input_file.fileno())
+            for chunk in iter(lambda: input_file.read(1024*1024), b''):
+                output.write(chunk)
+            after = os.fstat(input_file.fileno())
+            if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+                raise RuntimeError('release_cli_changed_during_stage')
+            output.flush(); os.fchmod(output.fileno(), 0o755); os.fsync(output.fileno())
+        if sha(Path(temporary)) != sha(source):
+            raise RuntimeError('release_cli_changed_during_stage')
+        os.replace(temporary, destination)
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+
 def verified(root, receipt):
     app=root/'desktop/src-tauri/target/release/bundle/macos/Alden.app'
     cli=root/'target/release/openkakao-cli'
     if not app.is_dir() or not cli.is_file() or app.is_symlink() or cli.is_symlink() or not os.access(cli,os.X_OK):return False
     key,_=inputs(root)
     if key!=receipt.get('input_digest') or sha(cli)!=receipt.get('cli_sha256'):return False
+    bundled_cli=app/'Contents/Resources/bin/openkakao-cli'
+    if not bundled_cli.is_file() or sha(checked_dependency(bundled_cli))!=sha(cli):return False
     if output_manifest(app)!=receipt.get('output_manifest'):return False
     if artifact_evidence(root)!=receipt.get('artifact_evidence'):return False
     return subprocess.run(['codesign','--verify','--deep','--strict',str(app)],capture_output=True).returncode==0
 
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('mode',choices=['key','check','record','run'])
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('mode',choices=['key','check','record','run','stage-cli'])
     parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1]);parser.add_argument('--expected-key')
     args=parser.parse_args();root=args.root.resolve();path=root/'desktop/src-tauri/target/alden-build-receipt.json'
+    if args.mode=='stage-cli':
+        stage_release_cli(root);return
     if args.mode=='run':
         (root/'target').mkdir(exist_ok=True)
         fd=os.open(root/'target/alden-canonical-build.lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
