@@ -248,6 +248,11 @@ def _on_reads(owner, options):
         if focused is None or focused["source_version"] != expected:
             raise ValueError("collection_graph_version_changed")
     revision = page.get("revision", 0)
+    total_nodes, next_offset = page.get("total_nodes", 0), page.get("next")
+    # Keep only the authoritative ordered refs and scalar page metadata during
+    # source/vector admission. Descriptions, contexts and edges belong to the
+    # graph view, not to this compact affinity response.
+    del page
     result = _base(projects, refs, revision, options)
     result["coverage"].update(requested_nodes=len(refs), rejected_nodes=len(refs))
     try:
@@ -283,7 +288,7 @@ def _on_reads(owner, options):
         result.update(state="unavailable", reason=_error(error), nodes=[], candidates=[])
         result["coverage"]["reasons"] = {_error(error): len(refs)}
         result["coverage"]["validation_rejected_nodes"] = len(refs)
-    result["coverage"].update(graph_total_nodes=page.get("total_nodes", 0), graph_next=page.get("next"))
+    result["coverage"].update(graph_total_nodes=total_nodes, graph_next=next_offset)
     result["metrics"] = {**guard.counts, "wall_seconds": time.monotonic() - guard.started,
                          "cpu_seconds": time.process_time() - guard.cpu_started, "process_peak_rss_bytes": semantic._rss()}
     result["budgets"] = {**asdict(guard.budgets), "query_bytes": MAX_QUERY_BYTES, "response_bytes": MAX_RESPONSE_BYTES}

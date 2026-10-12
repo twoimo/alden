@@ -5,6 +5,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import unittest
+import weakref
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -15,6 +16,34 @@ from tests import test_alden_semantic_affinity as fixtures
 
 
 class LayoutAffinityTests(unittest.TestCase):
+    def test_full_graph_page_is_released_before_vector_admission_without_changing_reply(self):
+        self.make("a")
+        self.make("b", vector=(.8, .6))
+        query = {"overview": True}
+        baseline = self.request(query)
+        page_refs = []
+        graph_page = layout._BorrowedCollection.graph_page
+        evaluator = semantic._affinity_on_reads
+        class TrackedPage(dict):
+            pass
+        def tracked_page(*args, **kwargs):
+            page = TrackedPage(graph_page(*args, **kwargs))
+            page_refs.append(weakref.ref(page))
+            return page
+        def evaluate(*args, **kwargs):
+            self.assertTrue(page_refs)
+            self.assertIsNone(page_refs[-1](), "full page overlaps vector admission/scoring")
+            return evaluator(*args, **kwargs)
+        with patch.object(layout._BorrowedCollection, "graph_page", side_effect=tracked_page, autospec=True), \
+             patch.object(semantic, "_affinity_on_reads", side_effect=evaluate):
+            result = self.request(query)
+        self.assertIsNone(page_refs[-1]())
+        for response in (baseline, result):
+            response.pop("sqlite_read_metadata", None)
+            response["layout_affinity"].pop("sqlite_read_metadata", None)
+            response["layout_affinity"].pop("metrics")
+        self.assertEqual(result, baseline)
+
     def test_archive_only_noncontent_declaration_keeps_refs_without_affinity(self):
         for name in ('first-hub', 'second-hub'):
             self.make_evidence(name, kind='hub', body='Same group description',
