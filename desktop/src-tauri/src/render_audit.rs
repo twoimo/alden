@@ -253,6 +253,7 @@ impl Output {
                 | "entity-applied-compact.png"
                 | "entity-reverted-default.png"
                 | "entity-reverted-compact.png"
+                | "source-read-observation.json"
                 | "activity-ready.json"
                 | "render-audit.json"
         ) || bytes.len() > MAX_BYTES
@@ -1215,6 +1216,8 @@ fn audit_settings(
             || first["nodeActivity"]["last"]["document_id"] != first["notePane"]["nodeId"]
             || first["nodeActivity"]["last"]["success"] != true)
     {
+        output.write("source-read-observation.json",
+            &serde_json::to_vec_pretty(&first).map_err(|e|e.to_string())?)?;
         return Err("native source detail did not emit its confirmed read receipt".into());
     }
     publish(
