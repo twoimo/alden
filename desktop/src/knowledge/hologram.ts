@@ -9,6 +9,7 @@ import type { NeuronPort } from './neuron';
 import { ConstellationNodes, minimumStarRadius } from './constellation';
 import { pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
+import { overviewDisplayPoint, OVERVIEW_DISPLAY_GAIN } from './overview-presentation';
 import { PlasticityLayout, selectSynapses } from './plasticity';
 import { relationAnchors, relationCenterId } from './relation-layout';
 import { relationDepths } from './relation-depth';
@@ -820,7 +821,8 @@ export class KnowledgeHologram {
   private resetOverviewCamera(): void {
     const points = this.view.nodes.flatMap(node => {
       const point = this.anchors.get(node.id) ?? this.positions.get(node.id);
-      return point ? [point] : [];
+      return point ? [overviewDisplayPoint(point,this.viewport.width,this.viewport.height,
+        this.view.hops===0&&this.view.nodes.length>120,new THREE.Vector3())] : [];
     });
     for (const region of this.view.hops===0?[]:contextRegions(this.view, this.graph)) {
       const bounds = regionBounds(region, this.anchors);
@@ -888,7 +890,9 @@ export class KnowledgeHologram {
     const halfFovTangent = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     // Include perspective motion from depth changes at the viewport corners.
     const perspectiveBound = Math.hypot(1, halfFovTangent * Math.hypot(1, this.camera.aspect));
-    this.plasticity.setDisplayScale(2 * nearestDepth * halfFovTangent / (Math.max(1, this.viewport.height) * perspectiveBound));
+    const denseOverview=this.view.hops===0&&this.view.nodes.length>120;
+    this.plasticity.setDisplayScale(2 * nearestDepth * halfFovTangent / (Math.max(1, this.viewport.height) * perspectiveBound
+      * (denseOverview?OVERVIEW_DISPLAY_GAIN:1)));
     const pointsMoving = this.plasticity.moving || this.positionTransition.moving;
     if (this.reducedMotionEnabled && this.plasticity.moving) this.plasticity.settle();
     else if (!this.paused) this.plasticity.advance(elapsed);
@@ -900,7 +904,7 @@ export class KnowledgeHologram {
     for (const [id,mesh] of this.nodeMeshes) {
       const base=this.positions.get(id),position=this.displayedPositions.get(id);
       if(base&&position){
-        position.copy(base);
+        overviewDisplayPoint(base,this.viewport.width,this.viewport.height,denseOverview,position);
         mesh.position.copy(position);this.orbMeshes.get(id)?.position.copy(position);this.neuronMeshes.get(id)?.position.copy(position);
       }
     }
