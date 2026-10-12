@@ -1206,12 +1206,18 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
                 });let _=tx.try_send(result);
             }).map_err(|_| "scope resize dispatch failed")?;receive(rx,deadline)?;
         }
-        wait_for_audit_state("scoped graph paint",deadline,|| collect_script(window,
-            format!(r#"JSON.stringify((()=>{{const d=window.__knowledgeRenderDiagnostics;
+        wait_for_audit_state("scoped graph paint",deadline,|| {
+            let native=native_settings_size(window,deadline)?;
+            let mut state=collect_script(window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
               const pending=document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true';
-              return {{ready:!pending&&d?.nodeCount>0&&{size_check},width:innerWidth,height:innerHeight}};
-            }})())"#,size_check=if size=="compact" {"innerWidth===640&&innerHeight===680"} else {"innerWidth===1200&&innerHeight===760"}),deadline),
-            |state| state["ready"]==true)?;
+              return {ready:!pending&&d?.nodeCount>0,width:innerWidth,height:innerHeight};
+            })())"#.into(),deadline)?;
+            let matched=state["width"].as_f64()==native["layoutWidth"].as_f64()
+                && state["height"].as_f64()==native["layoutHeight"].as_f64();
+            state["ready"]=json!(state["ready"]==true && matched);
+            state["nativeLayout"]=native;
+            Ok(state)
+        },|state| state["ready"]==true)?;
         let physics=observe_graph_rest(window,deadline)?;
         let geometry=collect_script(window,"JSON.stringify(window.__knowledgeLayoutAudit())".into(),deadline)?;
         let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
