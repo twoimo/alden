@@ -21,6 +21,18 @@ display radius. Invalid or missing positions collapse their instances.
 receipt alone does not update either value. Hidden or disposed views do not
 generate a completion certificate.
 
+An explicit sparse camera fit starts with temporary seed points. Its next
+valid worker result completes that fit around the later anchors. The first
+candidate's settled compact capture exposed that the old target could leave
+the applied graph out of view. Saved navigation poses, manual orbit input and
+large overview fits keep their existing behavior. Subsequent layout results
+do not repeatedly refit that completed request.
+
+For at most 24 nodes, the renderer also records how many node centers are
+inside the camera clip volume after the successful frame. Entity-fixture
+captures require that count to match their two or three current nodes. This
+is bounded geometry evidence, separate from actual pixel opacity or usability.
+
 The native entity-review fixture must preserve its private synthetic SQLite
 state, source-table hashes, 3→2→3 display flow, incognito scope and deadline.
 Its capture readiness is verified separately from physical user input and

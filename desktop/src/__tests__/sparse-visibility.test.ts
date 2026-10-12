@@ -114,7 +114,7 @@ describe('sparse-visibility world-space minimum', () => {
       const view = { nodes: nodes.slice(0, 24), edges: [], hops: 0, focusId: null };
       const noop = vi.fn();
       const bridge = () => ({ moving: false, update: noop, mesh: { visible: false, geometry: { instanceCount: 0 } } });
-      const frame = Object.create(KnowledgeHologram.prototype) as { render(dt: number): void; renderedFrames: number; renderedNodeCount: number; disposed: boolean };
+      const frame = Object.create(KnowledgeHologram.prototype) as { render(dt: number): void; renderedFrames: number; renderedNodeCount: number; renderedVisibleNodeCount: number | null; disposed: boolean };
       Object.assign(frame, {
         disposed: false, paused: true, reducedMotion: true, motion: { matches: true },
         renderedFrames: 0, renderedNodeCount: 0,
@@ -135,6 +135,7 @@ describe('sparse-visibility world-space minimum', () => {
       frame.render(1 / 60);
       expect(frame.renderedFrames).toBe(1);
       expect(frame.renderedNodeCount).toBe(24);
+      expect(frame.renderedVisibleNodeCount).toBe(24);
       expect(projectedCssRadius(value.radius('n0'), 4, 50, 480, 240)).toBeCloseTo(1.5, 5);
       measured.push(value.radius('n0'));
 
@@ -143,6 +144,7 @@ describe('sparse-visibility world-space minimum', () => {
       frame.render(1 / 60);
       expect(frame.renderedFrames).toBe(2);
       expect(frame.renderedNodeCount).toBe(25);
+      expect(frame.renderedVisibleNodeCount).toBeNull();
       expect(projectedCssRadius(value.radius('n0'), 4, 50, 480, 240)).toBeCloseTo(.6, 5);
       view.nodes = nodes.slice(0, 24);
       Object.assign(frame, { renderer: { render: () => { throw new Error('synthetic render failure'); } } });

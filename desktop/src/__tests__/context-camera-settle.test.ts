@@ -60,6 +60,8 @@ describe('context overview camera lifecycle', () => {
     constellationNodes.set(view.nodes,view.edges);constellationNodes.update(positions);
     const voiceEnvelope = new VoiceEnvelope();
     const scene = new THREE.Scene();
+    const graphRoot = new THREE.Group();
+    scene.add(graphRoot);
     scene.add(nebulae, synapses.mesh,overviewSynapses.mesh,constellationNodes, voiceEnvelope.line);
     const scheduler = new Scheduler();
     const hologram = Object.create(KnowledgeHologram.prototype) as KnowledgeHologram;
@@ -71,14 +73,15 @@ describe('context overview camera lifecycle', () => {
       replaceGraph: KnowledgeHologram['replaceGraph'];
     };
     const loop = new AnimationLoop(dt => methods.render(dt), scheduler);
-    const renderer = { render: vi.fn() };
+    const renderer = { render: vi.fn(() => { scene.updateMatrixWorld(true); camera.updateMatrixWorld(true); }) };
     Object.assign(hologram, {
       disposed: false, view, graph, anchors: positions, positions,
       displayedPositions: positions, viewport: { x: 0, y: 0, width: 200, height: 470 },
       camera, orbit, projected: new THREE.Vector3(), desiredCamera: new THREE.Vector3(), desiredLookAt: new THREE.Vector3(),
       lookAt: new THREE.Vector3(), motion: { matches: false }, paused: false,
       plasticity, positionTransition: new PositionTransition(), synapses,overviewSynapses,constellationNodes,globalLabels:new Set(),neuronDetail:false, nebulae, nodeMeshes: new Map(), orbMeshes: new Map(),
-      loop, voiceEnvelope, latestVoice: null, labels: new Map(), renderer, scene,
+      loop, voiceEnvelope, latestVoice: null, labels: new Map(), renderer, scene, graphRoot,
+      renderedFrames: 0, renderedNodeCount: 0, renderedVisibleNodeCount: null,
       orbitActive: false, requestedAnimation: true, canvas: { hidden: false },
       drilldown: new KnowledgeDrilldown(graph), rebuildGraph: vi.fn(), resize: vi.fn(), notifyView: vi.fn(),
       syncPoint: (id: string, x: number, y: number, z: number) => positions.get(id)?.set(x, y, z),

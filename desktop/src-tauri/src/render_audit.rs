@@ -1517,6 +1517,7 @@ const ENTITY_RENDER_STATE: &str = r#"JSON.stringify((()=>{
       ||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중',
     viewNodes:d?.nodeCount??null,renderedFrames:d?.renderedFrames??null,
     renderedNodeCount:d?.renderedNodeCount??null,
+    renderedVisibleNodeCount:d?.renderedVisibleNodeCount??null,
     motion:{camera:d?.motion?.camera??null,physics:d?.motion?.physics??null,
       transition:d?.motion?.transition??null},
     pendingTargets:d?.semanticLayout?.pendingTargets??null,
@@ -1540,6 +1541,7 @@ fn entity_render_settled(state: &Value, expected: u64, baseline: u64) -> bool {
         && state["graphNodes"].as_u64() == Some(expected)
         && state["viewNodes"].as_u64() == Some(expected)
         && state["renderedNodeCount"].as_u64() == Some(expected)
+        && state["renderedVisibleNodeCount"].as_u64() == Some(expected)
         && state["renderedFrames"].as_u64().is_some_and(|frames| frames > baseline)
         && state["motion"]["camera"] == false
         && state["motion"]["physics"] == false
@@ -2157,7 +2159,7 @@ mod tests {
     fn entity_stage_state(nodes: u64) -> Value {
         json!({"page":"memory","project":"project:audit","source":"collection",
             "graphPending":false,"navigationPending":false,
-            "graphNodes":nodes,"viewNodes":nodes,"renderedNodeCount":nodes,
+            "graphNodes":nodes,"viewNodes":nodes,"renderedNodeCount":nodes,"renderedVisibleNodeCount":nodes,
             "renderedFrames":11,"motion":{"camera":false,"physics":false,"transition":false},
             "pendingTargets":0,"canvasReady":true,"loop":{"running":false}})
     }
@@ -2177,6 +2179,9 @@ mod tests {
             state["renderedNodeCount"] = json!(if nodes == 2 { 3 } else { 2 });
             assert!(!entity_render_settled(&state, nodes, 10));
             state["renderedNodeCount"] = json!(nodes);
+            state["renderedVisibleNodeCount"] = json!(0);
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedVisibleNodeCount"] = json!(nodes);
             state["viewNodes"] = json!(if nodes == 2 { 3 } else { 2 });
             assert!(!entity_render_settled(&state, nodes, 10));
         }

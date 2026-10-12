@@ -129,6 +129,8 @@ export class KnowledgeHologram {
   private requestedAnimation = false;
   private renderedFrames = 0;
   private renderedNodeCount = 0;
+  private renderedVisibleNodeCount: number | null = null;
+  private fitAfterSemanticLayout = false;
   private activityExpiry: ReturnType<typeof setTimeout> | null = null;
   private activityAccepted = 0;
   private lastNodeActivity: NodeActivity | null = null;
@@ -150,7 +152,7 @@ export class KnowledgeHologram {
     this.camera.position.copy(this.desiredCamera);
     this.orbit=new OrbitControls(this.camera,canvas);
     this.orbit.enableDamping=false;this.orbit.minDistance=2.2;this.orbit.maxDistance=12;this.orbit.rotateSpeed=.65;this.orbit.zoomSpeed=.7;
-    this.orbit.addEventListener('start',()=>{this.orbitActive=true;});
+    this.orbit.addEventListener('start',()=>{this.orbitActive=true;this.fitAfterSemanticLayout=false;});
     this.orbit.addEventListener('end',()=>{this.orbitActive=false;});
     this.orbit.addEventListener('change',()=>{if(this.orbitActive){this.desiredCamera.copy(this.camera.position);this.desiredLookAt.copy(this.orbit.target);this.lookAt.copy(this.orbit.target);}this.invalidateFrame();});
     this.scene.add(this.graphRoot);
@@ -363,8 +365,8 @@ export class KnowledgeHologram {
     };
   }
 
-  diagnostics(): AnimationLoopDiagnostics & { renderedFrames:number; renderedNodeCount:number; regions: ReturnType<ContextNebulae['diagnostics']>; motion:KnowledgeHologram['motionDiagnostics']; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number; neuronGlyphs:number; detailMode:boolean } {
-    return { ...this.loop.diagnostics(), renderedFrames:this.renderedFrames, renderedNodeCount:this.renderedNodeCount, regions:this.nebulae.diagnostics(), motion:this.motionDiagnostics, voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
+  diagnostics(): AnimationLoopDiagnostics & { renderedFrames:number; renderedNodeCount:number; renderedVisibleNodeCount:number|null; regions: ReturnType<ContextNebulae['diagnostics']>; motion:KnowledgeHologram['motionDiagnostics']; ambientMotion:boolean; visibleTime:number; voiceRms: number; voiceSource: VoiceAmplitudeSource; displayedRms: number; audioVertices: number; orbCount: number; orbState: OrbState; orbActive: boolean; orbCacheBytes: number; physics: ReturnType<PlasticityLayout['diagnostics']>; synapses: ReturnType<SynapticBridges['diagnostics']>; drawCalls:number; geometries:number; neuronGlyphs:number; detailMode:boolean } {
+    return { ...this.loop.diagnostics(), renderedFrames:this.renderedFrames, renderedNodeCount:this.renderedNodeCount, renderedVisibleNodeCount:this.renderedVisibleNodeCount, regions:this.nebulae.diagnostics(), motion:this.motionDiagnostics, voiceRms: this.voiceEnvelope.targetRms, voiceSource: this.voiceSource,
       displayedRms: this.voiceEnvelope.displayedRms, audioVertices: this.voiceEnvelope.line.geometry.getAttribute("position").count,
       orbCount: this.orbMeshes.size, orbState: this.activity.state, orbActive: this.orbMeshes.get(this.rootNodeId)?.active === true, orbCacheBytes: orbCacheBytes(), physics:this.plasticity.diagnostics(), synapses:(this.neuronDetail?this.synapses:this.overviewSynapses).diagnostics(), drawCalls:this.renderer.info.render.calls, geometries:this.renderer.info.memory.geometries, neuronGlyphs:this.neuronMeshes.size, detailMode:this.neuronDetail, ambientMotion:false, visibleTime:0 };
   }
@@ -490,7 +492,12 @@ export class KnowledgeHologram {
     this.anchors.clear();
     for (const [id, p] of result.anchors) this.anchors.set(id, new THREE.Vector3(p.x, p.y, p.z));
     this.layoutChanged.clear(); this.layoutDiagnostics = result.diagnostics ?? null;
-    this.preparePositionMotion(); this.loop.start(); this.invalidateFrame();
+    this.preparePositionMotion();
+    // A fit made from temporary seed points may miss the later worker anchors.
+    // Finish that explicit sparse fit once; never override an orbit or saved pose.
+    if (this.fitAfterSemanticLayout && !this.orbitActive && !this.restoredWindowSize) this.resetOverviewCamera();
+    this.fitAfterSemanticLayout = false;
+    this.loop.start(); this.invalidateFrame();
   }
 
   private preparePositionMotion(): void {
@@ -786,6 +793,7 @@ export class KnowledgeHologram {
     const relative=points.map(p=>({x:p.x-x,y:p.y-y,z:p.z-z}));
     const distance=overviewCameraDistance(relative,this.viewport.width,this.viewport.height,this.camera.fov,this.view.hops===0?.08:.32);
     this.desiredCamera.set(x,y,z+distance);this.desiredLookAt.set(x,y,z);
+    this.fitAfterSemanticLayout = this.view.hops === 0 && this.view.nodes.length > 0 && this.view.nodes.length <= 24;
     // Orbit controls must admit the fitted overview; otherwise every frame
     // pulls toward an unreachable target and the idle loop never settles.
     this.orbit.maxDistance = Math.max(12,distance+.5);
@@ -874,6 +882,20 @@ export class KnowledgeHologram {
     this.renderer.render(this.scene, this.camera);
     this.renderedFrames++;
     this.renderedNodeCount = this.view.nodes.length;
+    // Only sparse fixtures need a clip-volume certificate. Dense rendering
+    // retains its existing frame cost; this count does not attest pixel opacity.
+    this.renderedVisibleNodeCount = null;
+    if (this.view.nodes.length <= 24) {
+      let visible = 0;
+      for (const node of this.view.nodes) {
+        const position = this.displayedPositions.get(node.id);
+        if (!position) continue;
+        this.projected.copy(position).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
+        if (Math.abs(this.projected.x) <= 1 && Math.abs(this.projected.y) <= 1
+          && this.projected.z >= -1 && this.projected.z <= 1) visible++;
+      }
+      this.renderedVisibleNodeCount = visible;
+    }
     const { x, y, width, height } = this.viewport;
     let index = 0;
     for (const [id, label] of this.labels) {
