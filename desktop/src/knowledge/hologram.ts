@@ -377,7 +377,7 @@ export class KnowledgeHologram {
       pairCoverage: this.graph.layoutAffinity.pairCoverage ?? null } : null }; }
 
   /** Explicit audit snapshot only; no labels, identities or per-frame pair work. */
-  auditProjectedLayout() {
+  auditProjectedLayout(includeCircles = false) {
     if (this.disposed || this.neuronDetail) return { available:false,reason:'overview_unavailable' };
     const rect=this.canvas.getBoundingClientRect(), points:ProjectedCircle[]=[];
     const viewport={left:rect.left+this.viewport.x,top:rect.top+this.viewport.y,
@@ -400,7 +400,7 @@ export class KnowledgeHologram {
       renderedFrames:this.renderedFrames,renderedNodes:this.renderedNodeCount,viewNodes:this.view.nodes.length,
       inputTruncated:this.view.nodes.length>2048,viewport,
       camera:this.camera.position.toArray(),lookAt:this.lookAt.toArray(),
-      metrics:projectedLayoutMetrics(points,viewport)};
+      metrics:projectedLayoutMetrics(points,viewport), ...(includeCircles ? { circles: points } : {})};
   }
 
   auditPhysicsState() { return this.plasticity.auditState(); }

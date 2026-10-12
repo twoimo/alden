@@ -260,6 +260,8 @@ impl Output {
                 | "graph-scope-compact.png"
                 | "graph-scope-default.json"
                 | "graph-scope-compact.json"
+                | "graph-projected-default.json"
+                | "graph-projected-compact.json"
                 | "graph-physics-default.json"
                 | "graph-physics-compact.json"
                 | "workspace-observed-default-memory.json"
@@ -1319,6 +1321,22 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         collect_script(window,"delete window.__aldenAuditPhysicsSnapshot;JSON.stringify({cleared:true})".into(),deadline)?;
         publish(output,&format!("graph-physics-{size}.json"),&serde_json::to_vec_pretty(&integration).map_err(|_|"integration JSON failed")?,deadline)?;
         let geometry=collect_script(window,"JSON.stringify(window.__knowledgeLayoutAudit())".into(),deadline)?;
+        let projected_header=collect_script(window,r#"JSON.stringify((()=>{
+          const snapshot=window.__knowledgeLayoutAudit(true);
+          window.__aldenAuditCircles=snapshot.circles;
+          return {count:snapshot.circles.length,viewport:snapshot.viewport,camera:snapshot.camera,
+            lookAt:snapshot.lookAt,renderedFrames:snapshot.renderedFrames};})())"#.into(),deadline)?;
+        let projected_count=projected_header["count"].as_u64().ok_or("projected circles missing")? as usize;
+        if projected_count>2048 {return Err("projected circle capture budget exceeded".into());}
+        let mut circles=Vec::with_capacity(projected_count);
+        for start in (0..projected_count).step_by(256) {
+            let chunk=collect_script(window,format!("JSON.stringify(window.__aldenAuditCircles.slice({start},{}))",(start+256).min(projected_count)),deadline)?;
+            circles.extend(chunk.as_array().ok_or("projected circle chunk invalid")?.iter().cloned());
+        }
+        collect_script(window,"delete window.__aldenAuditCircles;JSON.stringify({cleared:true})".into(),deadline)?;
+        publish(output,&format!("graph-projected-{size}.json"),&serde_json::to_vec_pretty(&json!({
+            "header":projected_header,"circles":circles,"scope":"anonymous projected reference core circles only; no identities, bodies, glow or semantic proof"}))
+            .map_err(|_|"projected circle JSON failed")?,deadline)?;
         let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
         let navigation=collect_script(window,graph_collect_script(),deadline)?;
         let query=&navigation["graphRead"]["query"];
