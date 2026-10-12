@@ -1537,6 +1537,8 @@ fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> R
             &&!s.querySelector('.entity-resolution-approval input').disabled,
             records:s.querySelectorAll('.entity-resolution-comparison pre').length,
             width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('.entity-resolution')
+          .scrollIntoView({block:'start'});return {scrolled:true};})())"#.into(),deadline)?;
         publish(output,&format!("entity-compare-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
         collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
           s.querySelector('.entity-resolution-approval input').click();
