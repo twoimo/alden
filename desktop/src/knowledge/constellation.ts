@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { KnowledgeEdge, KnowledgeNode } from './graph-model';
 import type { Point3 } from './plasticity';
 import { ACTIVITY_TTL_MS, type NodeActivity } from './collection-activity';
-import { GRAPH_CONNECTED_COLOR, GRAPH_ISOLATED_COLOR, GRAPH_UNRELATED_COLOR, RELATION_DEPTH_COLORS } from './graph-palette';
+import { COMMUNITY_COLORS, GRAPH_CONNECTED_COLOR, GRAPH_ISOLATED_COLOR, GRAPH_UNRELATED_COLOR, RELATION_DEPTH_COLORS } from './graph-palette';
 
 const CAPACITY = 120;
 const MIN_RADIUS = .018;
@@ -16,6 +16,7 @@ const PINK = new THREE.Color('#ec83a8');
 const STORED = new THREE.Color('#8ac5a6');
 const READ = new THREE.Color('#8ab9e0');
 const DEPTH_COLORS = RELATION_DEPTH_COLORS.map(value => new THREE.Color(value));
+const GROUP_COLORS = COMMUNITY_COLORS.map(value=>new THREE.Color(value));
 const CONNECTED = new THREE.Color(GRAPH_CONNECTED_COLOR);
 const ISOLATED = new THREE.Color(GRAPH_ISOLATED_COLOR);
 const UNRELATED = new THREE.Color(GRAPH_UNRELATED_COLOR);
@@ -53,6 +54,7 @@ export class ConstellationNodes extends THREE.Group {
   private readonly activityColor = new THREE.Color();
   private referenceStyle = false;
   private readonly relationDepths = new Map<string, number>();
+  private readonly communityColors = new Map<string,number>();
 
   constructor(private readonly capacity = CAPACITY) {
     super();
@@ -98,6 +100,7 @@ export class ConstellationNodes extends THREE.Group {
 
   /** Keep surviving IDs in their slots; first 120 unique, unretracted nodes win. */
   set(nodes: readonly KnowledgeNode[], edges: readonly KnowledgeEdge[]): void {
+    this.communityColors.clear();
     const nextIds = new Set<string>();
     for (const node of nodes) {
       if (!node.evidence.retracted) nextIds.add(node.id);
@@ -205,10 +208,19 @@ export class ConstellationNodes extends THREE.Group {
     this.sourceColors.clear();
     if (this.stars.material instanceof THREE.ShaderMaterial) this.stars.material.uniforms.uReference.value = 1;
     this.relationDepths.clear();
+    this.communityColors.clear();
     for (const [id, depth] of depths) {
       if (this.slots.has(id) && Number.isSafeInteger(depth) && depth >= 0) this.relationDepths.set(id, depth);
     }
     this.paint(Date.now(), false);
+  }
+
+  /** Snapshot-only palette metadata. Depth and selection retain precedence. */
+  setCommunityColors(colors:ReadonlyMap<string,number>):void {
+    this.communityColors.clear();
+    for(const [id,slot] of colors)if(this.slots.has(id)&&Number.isInteger(slot)&&slot>=0&&slot<GROUP_COLORS.length)
+      this.communityColors.set(id,slot);
+    this.paint(Date.now(),false);
   }
 
   showActivity(event: NodeActivity): void {
@@ -239,6 +251,7 @@ export class ConstellationNodes extends THREE.Group {
           const depth = this.relationDepths.get(nodeId);
           color = depth !== undefined ? DEPTH_COLORS[Math.min(4, depth)]
             : this.relationDepths.size > 0 ? UNRELATED
+            : this.communityColors.has(nodeId) ? GROUP_COLORS[this.communityColors.get(nodeId)!]
             : this.adjacency.get(nodeId)!.size > 0 ? CONNECTED : ISOLATED;
           if (nodeId === this.selectedId && depth === undefined) color = DEPTH_COLORS[0];
         }

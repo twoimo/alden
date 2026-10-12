@@ -13,7 +13,8 @@ import { overviewDisplayPoint, overviewGlyphScale, OVERVIEW_DISPLAY_GAIN } from 
 import { PlasticityLayout, selectSynapses } from './plasticity';
 import { relationAnchors, relationCenterId } from './relation-layout';
 import { relationDepths } from './relation-depth';
-import { RELATION_DEPTH_COLORS } from './graph-palette';
+import { COMMUNITY_COLORS, RELATION_DEPTH_COLORS } from './graph-palette';
+import { communitySnapshot, type CommunitySnapshot } from './community-snapshot';
 import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
 import { PositionTransition } from './position-transition';
@@ -90,6 +91,8 @@ export class KnowledgeHologram {
   private readonly anchors = new Map<string, THREE.Vector3>();
   private readonly plasticity = new PlasticityLayout(OVERVIEW_NODE_CAP,512);
   private readonly semanticLayout = new SemanticLayoutDriver(result => this.applySemanticLayout(result));
+  private communityState:CommunitySnapshot|null=null;
+  private communitySlots=new Map<string,number>();
   private readonly layoutChanged = new Set<string>();
   private readonly positionTransition = new PositionTransition();
   private readonly layoutFingerprints = new Map<string, string>();
@@ -311,6 +314,7 @@ export class KnowledgeHologram {
     if (!graph.nodes.length) {
       this.semanticLayout.clear(); this.layoutFingerprints.clear(); this.positionTransition.clear();
       this.provisionalOverviewPositions.clear();
+      this.communityState=null;this.communitySlots.clear();
     }
     this.graph = graph;
     const sorted = [...graph.nodes].sort((a, b) => a.id.localeCompare(b.id));
@@ -349,11 +353,15 @@ export class KnowledgeHologram {
     this.graph.layoutAffinity = value ?? undefined;
     this.view.layoutAffinity = value ?? undefined;
     if (this.view.hops !== 0) return;
+    this.applyCommunityLabels(this.semanticLayout.labelsFor(this.view,new Set(this.view.focusId?[this.view.focusId]:[])));
     this.layoutPositions(); this.preparePositionMotion();
     if (this.requestedAnimation) this.loop.start(); this.invalidateFrame();
   }
 
   get semanticDiagnostics() { return { worker: this.semanticLayout.diagnostics, layout: this.layoutDiagnostics, pendingTargets: this.positionTransition.pending,
+    communities:this.communityState?{state:'computed',nodes:this.communityState.nodes,clusters:this.communityState.clusters,
+      multiNodeClusters:this.communityState.multiNodeClusters,majorGroups:this.communityState.groups.length,
+      majorNodes:this.communityState.nodes-this.communityState.otherNodes,otherNodes:this.communityState.otherNodes}:null,
     affinity: this.graph.layoutAffinity ? { state: this.graph.layoutAffinity.state, pairs: this.graph.layoutAffinity.pairs.length,
       usable: this.graph.layoutAffinity.usableNodes, requested: this.graph.layoutAffinity.requestedNodes,
       pairSampling: this.graph.layoutAffinity.pairSampling ?? null,
@@ -473,6 +481,7 @@ export class KnowledgeHologram {
     this.onDispose();
     this.stop();
     this.semanticLayout.clear(); this.positionTransition.clear(); this.layoutChanged.clear(); this.layoutFingerprints.clear();
+    this.communityState=null;this.communitySlots.clear();
     this.canvas.removeEventListener("pointerdown", this.rememberPress);
     this.canvas.removeEventListener("pointerup", this.handlePointerDown);
     this.canvas.removeEventListener('pointermove',this.handleHover);
@@ -537,6 +546,7 @@ export class KnowledgeHologram {
     this.anchors.clear();
     for (const [id, p] of result.anchors) this.anchors.set(id, new THREE.Vector3(p.x, p.y, p.z));
     this.layoutChanged.clear(); this.layoutDiagnostics = result.diagnostics ?? null;
+    this.applyCommunityLabels(result.checkpoint?.labels);
     this.preparePositionMotion();
     // A fit made from temporary seed points may miss the later worker anchors.
     // Finish that explicit sparse fit once; never override an orbit or saved pose.
@@ -587,6 +597,8 @@ export class KnowledgeHologram {
     const depths = relationDepths(this.view);
     this.constellationNodes.setRelationDepths(depths);
     this.updateDepthLegend(depths);
+    if(global)this.applyCommunityLabels(this.semanticLayout.labelsFor(this.view,new Set(focusId?[focusId]:[])));
+    else this.communityState=null;
     this.constellationNodes.visible=true;this.neuronDetail=false;
     this.orbit.enableRotate=true;this.orbit.mouseButtons.LEFT=THREE.MOUSE.ROTATE;
     const labelledGroups = new Set<string>();
@@ -665,6 +677,7 @@ export class KnowledgeHologram {
   private updateDepthLegend(depths: ReadonlyMap<string, number>): void {
     const legend = this.canvas.parentElement?.querySelector<HTMLElement>('.knowledge-depth-legend');
     if (!legend) return;
+    legend.dataset.kind='relation-depth';legend.removeAttribute('title');legend.setAttribute('aria-label','현재 자료의 연결 거리');
     legend.hidden = depths.size === 0;
     legend.replaceChildren();
     if (legend.hidden) return;
@@ -680,6 +693,34 @@ export class KnowledgeHologram {
       marker.setAttribute('aria-hidden', 'true');
       entry.append(marker, depth === 0 ? '선택' : depth === 4 ? '4단계 이상' : `${depth}단계`);
       legend.append(entry);
+    }
+  }
+
+  private applyCommunityLabels(labels:unknown):void {
+    const state=communitySnapshot(this.view.nodes.map(n=>n.id),labels,this.communitySlots);
+    this.communityState=state;
+    if(state)this.communitySlots=state.slots;
+    this.constellationNodes.setCommunityColors(state?.colors??new Map());
+    if(this.view.hops!==0||this.view.focusId)return;
+    const legend=this.canvas.parentElement?.querySelector<HTMLElement>('.knowledge-depth-legend');
+    if(!legend)return;
+    legend.replaceChildren();legend.hidden=!state;
+    legend.dataset.kind='communities';
+    legend.removeAttribute('title');legend.removeAttribute('aria-label');
+    if(!state)return;
+    legend.setAttribute('aria-label','현재 화면의 주요 연결 모임과 자료 수');
+    legend.title='현재 표시한 자료의 관계와 사용 가능한 내용 비교로 계산한 모임입니다. 내용 비교는 부분 결과입니다. 기타에는 여러 모임과 독립 자료가 포함됩니다. 원본 자료와 사람은 각각 유지됩니다.';
+    const title=document.createElement('span');title.textContent=state.groups.length?'주요 모임':'연결 모임 없음';legend.append(title);
+    for(const group of state.groups){
+      const entry=document.createElement('span'),marker=document.createElement('i');
+      marker.style.backgroundColor=COMMUNITY_COLORS[group.slot];marker.setAttribute('aria-hidden','true');
+      entry.setAttribute('aria-label',`모임 ${group.slot}, ${group.count}개 자료`);
+      entry.append(marker,`${group.slot} · ${group.count.toLocaleString()}`);legend.append(entry);
+    }
+    if(state.otherNodes){
+      const entry=document.createElement('span'),marker=document.createElement('i');
+      marker.style.backgroundColor=COMMUNITY_COLORS[0];marker.setAttribute('aria-hidden','true');
+      entry.append(marker,`${state.groups.length?'기타':'독립'} ${state.otherNodes.toLocaleString()}`);legend.append(entry);
     }
   }
 

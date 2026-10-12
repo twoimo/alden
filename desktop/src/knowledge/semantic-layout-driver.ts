@@ -10,6 +10,12 @@ export interface LayoutResponse { id: number; anchors?: Array<[string, Point3]>;
 export interface LayoutWorkerPort { onmessage: ((event: MessageEvent<LayoutResponse>) => void) | null;
   onerror: ((event: Event) => void) | null; postMessage(value: LayoutRequest): void; terminate(): void }
 
+function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>):string {
+  return JSON.stringify([view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance]),
+    view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted]),
+    view.layoutAffinity?.pairs??[],[...pinned].sort()]);
+}
+
 /** One latest snapshot, one owned worker; superseded/hidden jobs cannot apply.
  * The last completed bounded cache survives a cancelled job without retaining
  * authority across clear/dispose. No layout solver runs on the UI thread. */
@@ -27,13 +33,18 @@ export class SemanticLayoutDriver {
   get ready(): boolean { return !!this.checkpoint; }
   get settled(): boolean { return !this.busy && !!this.checkpoint && this.appliedKey === this.requestedKey; }
 
+  /** An identical completed snapshot may restore its colour metadata on a
+   * rebuild. Matching IDs alone never confer permission to reuse labels. */
+  labelsFor(view:KnowledgeView,pinned:ReadonlySet<string>):ReadonlyArray<[string,string]>|undefined {
+    return this.appliedKey===snapshotKey(view,pinned)?this.checkpoint?.labels:undefined;
+  }
+
   request(view: KnowledgeView, previous: ReadonlyMap<string, Point3>, changed: ReadonlySet<string>, pinned: ReadonlySet<string>,
     provisional: ReadonlySet<string> = new Set()): void {
     const pairs = view.layoutAffinity?.pairs ?? [];
     const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, label: n.id, description: '', facts: [] })),
       edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', evidence: { ...e.evidence, sourceEventIds: [] } })) };
-    const key = JSON.stringify([compact.nodes.map(n => [n.id, n.sourceVersion, n.sourceTarget, n.importance]),
-      compact.edges.map(e => [e.source, e.target, e.weight, e.purpose, e.validFrom, e.validTo, e.evidence.retracted]), pairs, [...pinned].sort()]);
+    const key = snapshotKey(view,pinned);
     const restore = [...previous.keys()].some(id => provisional.has(id));
     if (key === this.appliedKey && !restore || this.busy && key === this.requestedKey) return;
     // Cancel obsolete work immediately; restore only the last completed cache.

@@ -22,6 +22,24 @@ const view = (ids = ['a', 'b']) => overviewGraph(parseKnowledgeGraph({ nodes: id
   edges: [{ source: 'a', target: 'b', relation: 'ref', weight: 1 }] }));
 
 describe('owned asynchronous semantic layout', () => {
+  it('binds cached labels to current R/S, source versions, pins and authority clear',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),a=view();
+    driver.request(a,new Map(),new Set(),new Set());const response=worker.flush();
+    expect(driver.labelsFor(a,new Set())).toEqual(response.checkpoint.labels);
+    expect(driver.labelsFor({...a,edges:[]},new Set())).toBeUndefined();
+    expect(driver.labelsFor({...a,layoutAffinity:{pairs:[{source:'a',target:'b',cosine:.9}]} as any},new Set())).toBeUndefined();
+    expect(driver.labelsFor({...a,nodes:a.nodes.map(n=>({...n,sourceVersion:'different-current-version'}))},new Set())).toBeUndefined();
+    expect(driver.labelsFor(a,new Set(['a']))).toBeUndefined();driver.clear();expect(driver.labelsFor(a,new Set())).toBeUndefined();
+  });
+  it('never restores labels from superseded same-ID R input or a cancelled result',()=>{
+    const workers:WorkerStub[]=[],apply=vi.fn(),driver=new SemanticLayoutDriver(apply,()=>{const worker=new WorkerStub();workers.push(worker);return worker;});
+    const a=view(),b={...a,edges:[]};driver.request(a,new Map(),new Set(),new Set());const old=workers[0].onmessage;
+    driver.request(b,new Map(),new Set(),new Set());const current=workers[1].flush();
+    old?.({data:{...current,id:workers[0].requests[0].id}} as MessageEvent<LayoutResponse>);
+    expect(apply).toHaveBeenCalledTimes(1);expect(driver.labelsFor(a,new Set())).toBeUndefined();
+    expect(driver.labelsFor(b,new Set())).toEqual(current.checkpoint.labels);driver.clear();
+    workers[1].flush();expect(apply).toHaveBeenCalledTimes(1);expect(driver.labelsFor(b,new Set())).toBeUndefined();
+  });
   it('does not treat provisional ID seeds as solved cold cluster centers while retaining a fixed selection', () => {
     const worker = new WorkerStub(), driver = new SemanticLayoutDriver(vi.fn(), () => worker);
     const initial = new Map([['a', { x: 1, y: 0, z: 0 }], ['b', { x: -1, y: 0, z: 0 }]]);

@@ -35,6 +35,7 @@ function fixture() {
     pickGeometry:null,pickMaterial:null,orbit:{mouseButtons:{}},hoveredId:null,
     nebulae:{set:vi.fn(),update:vi.fn()},motion:{matches:true},reducedMotion:true,
     layoutPositions:vi.fn(),preparePositionMotion:vi.fn(),cancelHover:vi.fn(),
+    semanticLayout:{labelsFor:vi.fn(()=>undefined)},communitySlots:new Map(),
     viewport:{height:400},renderer:{getPixelRatio:()=>1},
   });
   owned.push(() => {

@@ -16,6 +16,7 @@ function fixture() {
     orbit: { maxDistance: 12 }, orbitActive: false, restoredWindowSize: null,
     fitAfterSemanticLayout: false, preparePositionMotion: vi.fn(),
     provisionalOverviewPositions: new Set<string>(),
+    constellationNodes:{setCommunityColors:vi.fn()},canvas:document.createElement('canvas'),
     loop: { start: vi.fn() }, invalidateFrame: vi.fn(),
   });
   return value as {
