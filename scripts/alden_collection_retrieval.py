@@ -6,7 +6,7 @@ from pathlib import Path
 import sqlite3
 import struct
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class
 
 ENCODING = 'e5-char256-stride192-weighted-unit-pool-v1'
@@ -445,12 +445,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 if edge['source_version'] != eligible[edge['source']]['version'] or edge['target_version'] != target['version']:
                     continue
                 _verified_source(db, store, target, projects)
-                revision = db.execute('''SELECT target_id,source,target,type,evidence FROM relation_versions
-                    WHERE relation_id=? AND version=?''', (edge['id'], edge['version'])).fetchone()
-                if (revision is None or tuple(revision) != tuple(edge[k] for k in
-                        ('target_id','source','target','type','evidence'))
-                        or digest(edge['evidence'].encode()) != edge['version']):
-                    raise RuntimeError('collection_relation_integrity')
+                require_relation_binding(db, edge)
                 try:
                     declared_evidence = _strict_json(edge['evidence'])
                 except (ValueError, TypeError, UnicodeError, RecursionError) as error:

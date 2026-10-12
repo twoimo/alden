@@ -55,6 +55,37 @@ def normalized_body(value: str) -> str:
     return unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
 
 
+RELATION_BIND_FIELDS = ('target_id', 'source', 'target', 'type', 'evidence')
+# Fixed aliases are used by the bounded graph and read-only quality queries.
+RELATION_HISTORY_MATCH = ('h.relation_id IS NOT NULL AND '
+    + ' AND '.join('h.'+name+' IS r.'+name for name in RELATION_BIND_FIELDS))
+
+
+def relation_evidence_digest(value):
+    if not isinstance(value, str): return None
+    try:
+        return digest(value.encode())
+    except UnicodeError:
+        return None
+
+
+def require_relation_binding(db, relation, *, allow_new=False):
+    """Check revision consistency, not original identity or semantic truth."""
+    try:
+        values = tuple(relation[name] for name in RELATION_BIND_FIELDS)
+        if not isinstance(values[-1], str) or digest(values[-1].encode()) != relation['version']:
+            raise RuntimeError('collection_relation_integrity')
+        previous = db.execute('''SELECT target_id,source,target,type,evidence FROM relation_versions
+            WHERE relation_id=? AND version=?''', (relation['id'], relation['version'])).fetchone()
+        if previous is None:
+            if allow_new: return
+            raise RuntimeError('collection_relation_integrity')
+        if tuple(previous) != values:
+            raise RuntimeError('collection_relation_integrity')
+    except (KeyError, IndexError, TypeError, UnicodeError, sqlite3.Error) as error:
+        raise RuntimeError('collection_relation_integrity') from error
+
+
 def safe_directory(path: Path) -> Path:
     path = path.absolute()
     if ".." in path.parts:
@@ -576,6 +607,9 @@ class CollectionStore:
                             raise ValueError("collection_orphan_relation")
                         rel_id = identity("relation", encoded([target_id, source, relation["type"], destination, relation.get("original_id", "")]).decode())
                         evidence = encoded(relation.get("evidence", {})).decode()
+                        require_relation_binding(db, {'id':rel_id,'version':digest(evidence.encode()),
+                            'target_id':target_id,'source':source,'target':destination,
+                            'type':relation['type'],'evidence':evidence}, allow_new=True)
                         db.execute("INSERT INTO relations VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET evidence=excluded.evidence,version=excluded.version,active=1",
                                    (rel_id, target_id, source, destination, relation["type"], evidence, digest(evidence.encode())))
                         db.execute('INSERT OR IGNORE INTO relation_versions VALUES(?,?,?,?,?,?,?,?)',
@@ -658,6 +692,7 @@ class CollectionStore:
             edges = []
             for row in db.execute("SELECT r.* FROM relations r WHERE active=1 AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id AND p.project IN (" + marks + ") AND p.permission!='denied')", projects):
                 if row["source"] in allowed and row["target"] in allowed:
+                    require_relation_binding(db, row)
                     edges.append({"id": row["id"], "source": row["source"], "target": row["target"],
                                   "relation": row["type"], "weight": 1, "context": "explicit source relationship",
                                   "purpose": "reference", "evidence_message_id": row["id"],
@@ -723,6 +758,7 @@ class CollectionStore:
         if type(details) is not bool or not isinstance(query, str) or len(query) > 256:
             raise ValueError("collection_graph_filter_invalid")
         with self.database() as db:
+            db.create_function('alden_relation_digest', 1, relation_evidence_digest, deterministic=True)
             checkpoint, _, _, _ = self._activity_scope(db, projects, target_id, platform)
             if not projects:
                 return {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0,
@@ -745,7 +781,10 @@ class CollectionStore:
               WHERE s.choice=1 AND d.availability='available' AND (? IS NULL OR json_extract(v.metadata,'$.kind')=?)
                 AND (? IS NULL OR v.collected_at>=?) AND (? IS NULL OR v.collected_at<?)),
               permitted_relationships AS MATERIALIZED (
-              SELECT r.* FROM relations r JOIN visible a ON a.id=r.source JOIN visible b ON b.id=r.target
+              SELECT r.*, (""" + RELATION_HISTORY_MATCH + """
+                AND r.version IS alden_relation_digest(r.evidence)) AS history_bound
+              FROM relations r JOIN visible a ON a.id=r.source JOIN visible b ON b.id=r.target
+              LEFT JOIN relation_versions h ON h.relation_id=r.id AND h.version=r.version
               WHERE r.active=1 AND (? IS NULL OR r.target_id=?)
                 AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
                   AND p.permission!='denied' AND p.project IN (""" + marks + """))),
@@ -795,7 +834,7 @@ class CollectionStore:
                       FROM shown s LEFT JOIN degrees d ON d.id=s.id) ORDER BY source_slot,id"""
                 pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
                 overview = cte + ",picked AS MATERIALIZED (" + picking + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
-                nodes_json, edges_json, total, total_edges, more, kinds, types = db.execute(overview + """SELECT
+                nodes_json, edges_json, total, total_edges, more, kinds, types, invalid_relations = db.execute(overview + """SELECT
                   (SELECT json_group_array(json(item)) FROM (SELECT """ + json_node + """ AS item
                     FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version
                     LEFT JOIN degrees d ON d.id=s.id ORDER BY s.id)),
@@ -805,11 +844,13 @@ class CollectionStore:
                   (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind FROM ranked s
                     JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
                     WHERE s.choice=1 AND d.availability='available' AND kind IS NOT NULL ORDER BY kind LIMIT 128)),
-                  (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128))""", (*args, *pick_args, limit)).fetchone()
+                  (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128)),
+                  (SELECT COUNT(*) FROM permitted_relationships WHERE history_bound!=1)""", (*args, *pick_args, limit)).fetchone()
+                if invalid_relations: raise RuntimeError('collection_relation_integrity')
                 rows, edge_rows = json.loads(nodes_json), json.loads(edges_json)
                 ids = [r["id"] for r in rows]
             else:
-                total, total_edges, kinds, types, first_neighbors, focus_exists = db.execute(cte + """, focus_neighbors AS (
+                total, total_edges, kinds, types, first_neighbors, focus_exists, invalid_relations = db.execute(cte + """, focus_neighbors AS (
               SELECT target AS neighbor FROM permitted_edges WHERE source=?
               UNION SELECT source AS neighbor FROM permitted_edges WHERE target=?)
               SELECT (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),
@@ -819,8 +860,10 @@ class CollectionStore:
               (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128)),
               (SELECT json_group_array(neighbor) FROM (SELECT neighbor FROM focus_neighbors WHERE neighbor!=?
                 ORDER BY neighbor COLLATE BINARY LIMIT ?)),
-              EXISTS(SELECT 1 FROM shown WHERE id=?)""", (*args, focus, focus, focus,
+              EXISTS(SELECT 1 FROM shown WHERE id=?),
+              (SELECT COUNT(*) FROM permitted_relationships WHERE history_bound!=1)""", (*args, focus, focus, focus,
                   min(limit, 24)-1 if hops else 0, focus)).fetchone()
+                if invalid_relations: raise RuntimeError('collection_relation_integrity')
                 if not focus_exists:
                     raise ValueError("collection_graph_focus_not_in_scope")
                 # Keep traversal inside the same permitted SQL snapshot. Only

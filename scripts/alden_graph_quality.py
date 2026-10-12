@@ -12,7 +12,7 @@ import stat
 import struct
 import time
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, normalized_body, normalized_text
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, normalized_body, normalized_text, RELATION_HISTORY_MATCH
 from alden_content_evidence import POLICY, content_evidence_class
 
 
@@ -307,14 +307,20 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                         flag('vector_nonfinite', key)
                     elif abs(math.sqrt(sum(v*v for v in values)) - 1) > .001:
                         flag('vector_not_unit', key)
-        for row in db.execute('''SELECT p.project,p.permission,r.id,r.target_id,r.source,r.target,r.type,r.evidence,r.version
+        for row in db.execute('''SELECT p.project,p.permission,r.id,r.target_id,r.source,r.target,r.type,r.evidence,r.version,
+                h.relation_id AS history_relation_id,(''' + RELATION_HISTORY_MATCH + ''') AS history_bound
                 FROM target_projects p JOIN relations r ON r.target_id=p.target_id
+                LEFT JOIN relation_versions h ON h.relation_id=r.id AND h.version=r.version
                 WHERE p.permission!='denied' AND p.project IN (''' + marks + ''') AND r.active=1
                 ORDER BY p.project,r.id''', projects):
             counts['relations'] += 1; examine(*row)
             key = row['id'] if isinstance(row['id'], str) else 'relation:' + str(counts['relations'])
             if not isinstance(row['id'], str) or not row['id']:
                 flag('relation_identity_invalid', key)
+            if row['history_relation_id'] is None:
+                flag('relation_history_missing', key)
+            elif row['history_bound'] != 1:
+                flag('relation_history_binding_mismatch', key)
             valid_type = isinstance(row['type'], str) and bool(row['type'].strip())
             if not valid_type:
                 flag('relation_type_invalid', key)

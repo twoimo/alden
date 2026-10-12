@@ -17,7 +17,7 @@ import sqlite3
 import time
 import uuid
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, require_relation_binding
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class
 from alden_graph_quality import _json
 
@@ -276,6 +276,10 @@ def _relations(db, project, members, *, show_relations):
         item = dict(row)
         if len(item["evidence"].encode()) > 16384:
             raise ValueError("collection_resolution_relation_evidence_budget_exceeded")
+        try:
+            require_relation_binding(db, item)
+        except RuntimeError as error:
+            raise RuntimeError("collection_resolution_relation_integrity") from error
         fingerprints.append(item)
         if show_relations:
             try:
