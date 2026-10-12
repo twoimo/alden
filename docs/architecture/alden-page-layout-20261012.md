@@ -11,8 +11,10 @@ The driver now passes previous positions only for identities present in the
 last completed checkpoint whose current coordinates are settled overview
 coordinates, or explicitly pinned by the user. Surviving solved
 coordinates, selection pins, authority clears and cancelled-job fences remain.
-The node/edge/provenance/permission data, R/S weights, solver limits, camera
-rules and stored source records are unchanged.
+The node/edge/provenance/permission data, R/S weights, solver limits and stored
+source records are unchanged. Ordinary updates, user orbit and saved-pose
+rules remain; requested fit completion now also handles provisional dense
+overviews.
 
 A new warm-checkpoint regression fails against the preceding source. It then
 passes with exact surviving coordinates and the new explicit pin preserved.
@@ -74,3 +76,37 @@ workspace tool was unavailable and subsequent inspection reported that the
 request's security status could not be determined. That worker was closed
 without retrying its denied path. The existing authorized native workspace
 path was used for the pure metric helper and its five tests.
+
+## Local 0.3.79 observation
+
+The installed build source is 17d8559522030cd428a6774cfb4f86cc3eb46d0f.
+Source CI 38226865853 passed all four jobs. Both the final candidate and
+installed native audits completed 14 workspace states/28 captures and showed
+all 2,048 projected centers without clipping or input truncation. Current
+affinity application, settled geometry and idle rendering remain separate
+checks in the audit receipt.
+
+| Reference-core geometry | Instrumented 0.3.78 | Installed 0.3.79 |
+|---|---:|---:|
+| Default overlap pairs | 491 | 324 |
+| Compact overlap pairs | 388 | 358 |
+| Default center-quarter fraction | 88.23% | 73.39% |
+| Compact center-quarter fraction | 92.77% | 94.53% |
+
+The viewport sizes and native navigation protocol match; the automatic fitted
+poses differ and are recorded. These are combined presentation observations,
+not pure solver improvement rates or actual raster/semantic-quality proof.
+The compact view remains too centrally concentrated. That requirement stays
+open rather than being redefined around the passing coordinate regressions.
+
+The intermediate compact captures and one 96-second initial-hidden-state
+failure are retained. The failure's last observation had no loaded graph and
+a hidden lifecycle event; a later fresh console observation was unlocked/on
+console, and the same candidate then completed. The cause of that transition
+is unverified; no timeout was enlarged or external session/window restarted.
+
+Installed payload hashes/modes, strict/deep ad-hoc signature, the independent
+0.3.78 recovery copy, three settings files, seven targets, two policies, model
+listeners and selected collection/retrieval/voice tables matched. This does
+not certify every preference, queue or original full source file. Local ad-hoc
+packaging is separate from Developer ID/notary/tag/production release gates.
