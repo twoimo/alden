@@ -29,6 +29,7 @@ export class SemanticLayoutDriver {
   private requestedKey = '';
   private busy = false;
   private state: Record<string, unknown> = { state: 'idle' };
+  private completedState:Record<string,unknown>={state:'idle'};
   constructor(private readonly apply: (result: LayoutResponse) => void,
     private readonly create: () => LayoutWorkerPort = () => new Worker(new URL('./semantic-layout-worker.ts', import.meta.url), { type: 'module' }) as unknown as LayoutWorkerPort) {}
   get diagnostics() { return { ...this.state }; }
@@ -48,7 +49,11 @@ export class SemanticLayoutDriver {
       edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', evidence: { ...e.evidence, sourceEventIds: [] } })) };
     const key = snapshotKey(view,pinned);
     const restore = [...previous.keys()].some(id => provisional.has(id));
-    if (key === this.appliedKey && !restore || this.busy && key === this.requestedKey) return;
+    if(key===this.appliedKey&&!restore){
+      if(this.busy)this.stop();
+      this.requestedKey=key;this.state={...this.completedState,state:'cached',generation:this.generation};return;
+    }
+    if(this.busy&&key===this.requestedKey)return;
     // Cancel obsolete work immediately; restore only the last completed cache.
     if (this.busy) this.stop();
     const worker = this.worker ?? this.create(); this.worker = worker;
@@ -56,11 +61,17 @@ export class SemanticLayoutDriver {
     worker.onmessage = event => {
       if (this.worker !== worker || event.data.id !== id || id !== this.generation) return;
       this.busy = false;
+      // A boundary can pass while the main thread is unable to run its timer.
+      // Discard that reply before publishing any position or membership state.
+      if(snapshotKey(view,pinned)!==key){
+        this.request(view,previous,changed,pinned,provisional);return;
+      }
       if (event.data.error || !event.data.anchors || !event.data.diagnostics || !event.data.checkpoint) {
         this.state = { state: 'failed', reason: event.data.error ?? 'semantic_layout_invalid_reply' }; return;
       }
       this.appliedKey = key; this.checkpoint = event.data.checkpoint;
       this.state = { state: 'ready', generation: id, wallMs: event.data.wallMs, ...event.data.diagnostics };
+      this.completedState={...this.state};
       this.apply(event.data);
     };
     worker.onerror = () => {
@@ -77,5 +88,5 @@ export class SemanticLayoutDriver {
   }
 
   stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.requestedKey = ''; }
-  clear(): void { this.stop(); this.checkpoint = undefined; this.appliedKey = ''; this.state = { state: 'idle' }; }
+  clear(): void { this.stop(); this.checkpoint = undefined; this.appliedKey = ''; this.state = { state: 'idle' };this.completedState={state:'idle'}; }
 }

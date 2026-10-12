@@ -22,6 +22,27 @@ const view = (ids = ['a', 'b']) => overviewGraph(parseKnowledgeGraph({ nodes: id
   edges: [{ source: 'a', target: 'b', relation: 'ref', weight: 1 }] }));
 
 describe('owned asynchronous semantic layout', () => {
+  it('cancels obsolete work when the requested scope returns to its completed cache',()=>{
+    const workers:WorkerStub[]=[],apply=vi.fn(),driver=new SemanticLayoutDriver(apply,()=>{const w=new WorkerStub();workers.push(w);return w;});
+    const a=view(),b={...a,edges:[]};driver.request(a,new Map(),new Set(),new Set());workers[0].flush();
+    driver.request(b,new Map(),new Set(),new Set());const old=workers[0].onmessage;
+    driver.request(a,new Map(),new Set(),new Set());expect(driver.settled).toBe(true);expect(driver.diagnostics.state).toBe('cached');
+    expect(workers[0].terminate).toHaveBeenCalled();old?.({data:{id:workers[0].requests.at(-1)!.id}} as MessageEvent<LayoutResponse>);
+    expect(apply).toHaveBeenCalledTimes(1);expect(driver.labelsFor(a,new Set())).toBeDefined();driver.clear();
+  });
+  it('rejects an active-relation result delivered after its expiry before the main-thread timer runs',()=>{
+    vi.useFakeTimers();vi.setSystemTime(1000);
+    try {
+      const worker=new WorkerStub(),apply=vi.fn(),driver=new SemanticLayoutDriver(apply,()=>worker),a=view();
+      a.edges=a.edges.map(e=>({...e,validTo:'1970-01-01T00:00:02.000Z'}));
+      driver.request(a,new Map(),new Set(),new Set());
+      const request=worker.requests[0],engine=new SemanticLayoutEngine(),result=engine.layout(request.view,new Map());
+      const response={id:request.id,anchors:[...result.anchors],diagnostics:result.diagnostics,checkpoint:engine.checkpoint(),wallMs:1};
+      vi.setSystemTime(2000);worker.onmessage?.({data:response} as MessageEvent<LayoutResponse>);
+      expect(apply).not.toHaveBeenCalled();expect(driver.labelsFor(a,new Set())).toBeUndefined();
+      expect(worker.requests).toHaveLength(2);worker.flush();expect(apply).toHaveBeenCalledTimes(1);driver.clear();
+    } finally {vi.useRealTimers();}
+  });
   it('invalidates same-ID cached communities when an unchanged link reaches its valid-to boundary',()=>{
     vi.useFakeTimers();vi.setSystemTime(1000);
     try {

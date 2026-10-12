@@ -713,9 +713,9 @@ export class KnowledgeHologram {
     legend.dataset.kind='communities';
     legend.removeAttribute('title');legend.removeAttribute('aria-label');
     if(!state)return;
-    legend.setAttribute('aria-label','현재 화면의 주요 연결 모임과 자료 수');
+    legend.setAttribute('aria-label','현재 화면의 주요 연결 모임과 자료 수. 내용 비교는 부분 결과입니다.');
     legend.title='현재 표시한 자료의 관계와 사용 가능한 내용 비교로 계산한 모임입니다. 내용 비교는 부분 결과입니다. 기타에는 여러 모임과 독립 자료가 포함됩니다. 원본 자료와 사람은 각각 유지됩니다.';
-    const title=document.createElement('span');title.textContent=state.groups.length?'주요 모임':'연결 모임 없음';legend.append(title);
+    const title=document.createElement('span');title.textContent=state.groups.length?'주요 모임 · 일부':'계산된 모임 없음';legend.append(title);
     for(const group of state.groups){
       const entry=document.createElement('span'),marker=document.createElement('i');
       marker.style.backgroundColor=COMMUNITY_COLORS[group.slot];marker.setAttribute('aria-hidden','true');
