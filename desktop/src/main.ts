@@ -742,6 +742,8 @@ export async function bootSettings(
         targets: graph.navigationTargets,
       }) });
       Object.defineProperty(window, "__knowledgeRenderPause", { configurable: true, get: () => lifecycle.lastPauseMeasurement() });
+      // Expensive pair geometry is read explicitly by owned audits only.
+      Object.defineProperty(window, "__knowledgeLayoutAudit", { configurable:true, value:() => graph.auditProjectedLayout() });
       wireRenderLifecycle(lifecycle, {
         subscribeVisibility: dependencies.subscribeVisibility,
         readVisibility: dependencies.readVisibility,

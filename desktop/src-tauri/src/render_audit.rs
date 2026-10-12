@@ -245,6 +245,8 @@ impl Output {
                 | "workspace-settings-compact.png"
                 | "settings-layout.json"
                 | "workspace-readback.json"
+                | "graph-layout-default.json"
+                | "graph-layout-compact.json"
                 | "knowledge-quality-default.png"
                 | "knowledge-quality-compact.png"
                 | "entity-compare-default.png"
@@ -767,6 +769,11 @@ fn capture_workspaces(
         validate_workspace_title(&state, size)?;
         if page == "memory" {
             state["physicsObservation"] = observe_graph_rest(window, deadline)?;
+            let geometry = collect_script(window,
+                "JSON.stringify(window.__knowledgeLayoutAudit ? window.__knowledgeLayoutAudit() : {available:false,reason:'audit_missing'})".into(),deadline)?;
+            publish(output, &format!("graph-layout-{size}.json"),
+                &serde_json::to_vec_pretty(&geometry).map_err(|_| "layout audit JSON failed")?, deadline)?;
+            state["projectedLayoutObservation"] = geometry;
             state["labelGeometryObservation"] =
                 collect_script(window, LABEL_GEOMETRY_COLLECT.into(), deadline)?;
         }

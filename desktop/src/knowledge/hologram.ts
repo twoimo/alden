@@ -16,6 +16,7 @@ import { RELATION_DEPTH_COLORS } from './graph-palette';
 import { semanticSeedPoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { SemanticLayoutDriver, type LayoutResponse } from './semantic-layout-driver';
 import { PositionTransition } from './position-transition';
+import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout-metrics';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
@@ -358,6 +359,33 @@ export class KnowledgeHologram {
       comparisonMax: this.graph.layoutAffinity.comparisonMax ?? null,
       nodePairCoverage: this.graph.layoutAffinity.nodePairCoverage ?? null,
       pairCoverage: this.graph.layoutAffinity.pairCoverage ?? null } : null }; }
+
+  /** Explicit audit snapshot only; no labels, identities or per-frame pair work. */
+  auditProjectedLayout() {
+    if (this.disposed || this.neuronDetail) return { available:false,reason:'overview_unavailable' };
+    const rect=this.canvas.getBoundingClientRect(), points:ProjectedCircle[]=[];
+    const viewport={left:rect.left+this.viewport.x,top:rect.top+this.viewport.y,
+      width:this.viewport.width,height:this.viewport.height};
+    const projected=new THREE.Vector3(), eye=new THREE.Vector3();
+    const factor=viewport.height/(2*Math.tan(THREE.MathUtils.degToRad(this.camera.fov/2)));
+    for(const node of this.view.nodes.slice(0,2048)){
+      const point=this.displayedPositions.get(node.id);
+      if(!point){points.push({x:NaN,y:NaN,radius:0});continue;}
+      eye.copy(point).applyMatrix4(this.graphRoot.matrixWorld).applyMatrix4(this.camera.matrixWorldInverse);
+      projected.copy(point).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
+      // Dense billboard radius extends twice the world radius; reference core
+      // alpha reaches zero at shader r=.38. This is core geometry, not glow.
+      points.push({x:viewport.left+(projected.x+1)*viewport.width/2,
+        y:viewport.top+(1-projected.y)*viewport.height/2,
+        radius:.76*this.constellationNodes.radius(node.id)*factor/Math.max(this.camera.near,-eye.z),
+        inClipVolume:projected.z>=-1&&projected.z<=1&&eye.z<0});
+    }
+    return {scope:'on-demand projected reference core circles; no pixel, glow, label or semantic-quality proof',
+      renderedFrames:this.renderedFrames,renderedNodes:this.renderedNodeCount,viewNodes:this.view.nodes.length,
+      inputTruncated:this.view.nodes.length>2048,viewport,
+      camera:this.camera.position.toArray(),lookAt:this.lookAt.toArray(),
+      metrics:projectedLayoutMetrics(points,viewport)};
+  }
 
   get motionDiagnostics() {
     return {
