@@ -2380,7 +2380,7 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
             if paint["ready"]==true {state["paintObservation"]=paint;break;}
             live(deadline)?;std::thread::sleep(Duration::from_millis(25));
         }
-        publish(output,&format!("assistant-file-turn-{index}.png"),&snapshot(window,deadline)?,deadline)?;
+        publish(output,&format!("assistant-turn-{index}.png"),&snapshot(window,deadline)?,deadline)?;
         receipts.push(state);
     }
     if receipts.iter().any(|r|r["conversationId"]!=receipts[0]["conversationId"]) {return Err("document followup conversation changed".into());}
