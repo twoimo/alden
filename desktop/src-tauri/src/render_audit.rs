@@ -288,6 +288,10 @@ impl Output {
                 | "knowledge-quality-compact.png"
                 | "knowledge-quality-body-default.png"
                 | "knowledge-quality-body-compact.png"
+                | "knowledge-quality-time-default.png"
+                | "knowledge-quality-time-compact.png"
+                | "knowledge-quality-quantity-default.png"
+                | "knowledge-quality-quantity-compact.png"
                 | "entity-compare-default.png"
                 | "entity-compare-compact.png"
                 | "entity-applied-default.png"
@@ -877,6 +881,32 @@ fn capture_workspaces(
             }
             publish(output,&format!("knowledge-quality-body-{size}.png"),&snapshot(window,deadline)?,deadline)?;
             quality["bodyObservation"]=body;
+            for (section, expected_rows) in [("time",11),("quantity",7)] {
+                let selector=serde_json::to_string(&format!("#knowledge-quality-{section}")).map_err(|_|"quality section encoding")?;
+                collect_script(window,format!(r#"JSON.stringify((()=>{{
+                    const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                    const heading=document.querySelector({selector});
+                    if(!box||!heading)throw new Error('declared normalization section unavailable');
+                    box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+                    window.__aldenQualityPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{{window.__aldenQualityPaint=true;}}));
+                    return {{scrolled:true}};}})())"#),deadline)?;
+                loop {
+                    let ready=collect_script(window,"JSON.stringify({ready:window.__aldenQualityPaint===true})".into(),deadline)?;
+                    if ready["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+                }
+                let observed=collect_script(window,format!(r#"JSON.stringify((()=>{{
+                    const heading=document.querySelector({selector});
+                    const box=document.querySelector('.knowledge-info .knowledge-scope-block'),bounds=box.getBoundingClientRect();
+                    return {{rows:[...heading.nextElementSibling.querySelectorAll('dt')].map(dt=>{{
+                        const dd=dt.nextElementSibling,rect=dd.getBoundingClientRect();
+                        return {{label:dt.textContent,value:dd.textContent,visible:rect.top>=bounds.top&&rect.bottom<=bounds.bottom}};
+                    }}),horizontalOverflow:document.documentElement.scrollWidth>innerWidth}};}})())"#),deadline)?;
+                if observed["horizontalOverflow"]!=false || observed["rows"].as_array().is_none_or(|rows|rows.len()!=expected_rows||rows.iter().any(|row|row["visible"]!=true)) {
+                    return Err(format!("declared normalization metrics clipped: {section}: {observed}"));
+                }
+                publish(output,&format!("knowledge-quality-{section}-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+                quality[format!("{section}Observation")]=observed;
+            }
             collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-info').open=false;return {closed:true};})())".into(),deadline)?;
             state["qualityObservation"]=quality;
         }

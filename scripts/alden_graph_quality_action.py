@@ -9,6 +9,7 @@ import unicodedata
 from alden_collection import CollectionStore
 from alden_graph_quality import _json, audit
 from alden_content_evidence import POLICY
+from alden_normalization_evidence import validate_declared_summary
 
 COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_current_documents','bytes_examined',
               'noncontent_current_versions','metadata_only_current_versions','unread_body_marker_current_versions',
@@ -126,7 +127,8 @@ def _summary(report,projects):
         'body_matches':{'policy':body['policy'],'basis':body['basis'],'counts':body_counts,**body_candidates},
         'metadata_matches':metadata_matches,'content_evidence':report['content_evidence'],
         'numeric_review_candidates':{'mixed_vector_dimensions':{'profiles':_count(numeric['profiles']),'status':'review_candidate'}},
-        'normalization':{'method':'NFC_line_endings_preserving_body_spacing','semantic_validity':'unverified'}}
+        'normalization':{'method':'NFC_line_endings_preserving_body_spacing','semantic_validity':'unverified',
+            'declared_fields':validate_declared_summary(report.get('declared_field_normalization'),counts['project_current_versions'])}}
 
 def read_action(state_root,query_raw,cancelled=None):
     started=time.monotonic()

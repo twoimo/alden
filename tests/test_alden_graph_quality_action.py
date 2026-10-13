@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import alden_graph_quality as quality
 import alden_graph_quality_action as action
 from alden_collection import CollectionStore, digest, identity
+from alden_normalization_evidence import validate_declared_summary
 
 
 COUNTS = {
@@ -42,6 +43,34 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
+    def test_declared_dates_and_quantities_are_syntax_observations_and_never_merge(self):
+        target = self.target()
+        rows = [dict(self.record('a'), published_at='2026-02-30', quantity={'value':'1000','unit':'g'}),
+                dict(self.record('b'), published_at='2026-10-13T10:00:00', quantity={'value':'1','unit':'kg'})]
+        self.store.ingest(target, rows)
+        before = self.durable_files()
+        result = action.read_action(self.root, self.union_query())
+        self.assert_success(result, mode='all', project=None, projects=['one'])
+        declared = result['normalization']['declared_fields']
+        self.assertEqual(declared['time']['invalid'], 1)
+        self.assertEqual(declared['time']['ambiguous'], 1)
+        self.assertEqual(declared['quantity']['normalized'], 2)
+        self.assertEqual(result['counts']['distinct_current_documents'], 2)
+        self.assertEqual(declared['truth_status'], 'syntax_conversion_not_semantic_verdict')
+        self.assertEqual(self.durable_files(), before)
+
+    def test_declared_summary_cannot_hide_missing_invalid_or_overbudget_fields(self):
+        target = self.target(); self.store.ingest(target,[dict(self.record('a'),published_at='2026-10-13')])
+        report = quality.audit(self.root,['one'],verify_sources=False,sample_cap=0)
+        mutations = [lambda r:r.pop('declared_field_normalization'),
+            lambda r:r['declared_field_normalization'].update(truth_status='verified'),
+            lambda r:r['declared_field_normalization']['time'].update(normalized=2),
+            lambda r:r['declared_field_normalization']['quantity'].update(omitted=1)]
+        for mutate in mutations:
+            altered = copy.deepcopy(report); mutate(altered)
+            with patch.object(action,'audit',return_value=altered):
+                self.assertEqual(action.read_action(self.root,self.union_query())['reason'],'quality_report_unavailable')
+
     def test_untitled_body_and_reference_matches_are_counted_without_private_samples(self):
         target = self.target()
         body = 'private-body-sentinel: 별도 출처에 반복된 안내문입니다. 내용 일치만 관찰합니다.'
@@ -196,10 +225,13 @@ class QualityActionContractTests(unittest.TestCase):
         self.assertIs(type(mixed["profiles"]), int)
         self.assertGreaterEqual(mixed["profiles"], 0)
         self.assertEqual(mixed["status"], "review_candidate")
-        self.assertEqual(result["normalization"], {
+        self.assertEqual({key: result['normalization'][key] for key in ('method', 'semantic_validity')}, {
             "method": "NFC_line_endings_preserving_body_spacing",
             "semantic_validity": "unverified",
         })
+        self.assertEqual(set(result['normalization']), {'method', 'semantic_validity', 'declared_fields'})
+        declared = result['normalization']['declared_fields']
+        self.assertEqual(validate_declared_summary(declared, result['counts']['project_current_versions']), declared)
 
         # Neither audit samples nor source/target identifiers, raw material,
         # auth or URLs are allowed in the public response.

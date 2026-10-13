@@ -14,6 +14,7 @@ import time
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, normalized_body, normalized_text, RELATION_HISTORY_MATCH
 from alden_content_evidence import POLICY, content_evidence_class
+from alden_normalization_evidence import DeclaredFieldSummary
 
 
 def _json(value):
@@ -102,6 +103,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     seen, profiles, originals, source_verified = set(), defaultdict(Counter), {}, {}
     source_declarations = {}
     degree, directed_relations = defaultdict(Counter), Counter()
+    declared_fields = DeclaredFieldSummary()
 
     def check():
         nonlocal next_cancel_check
@@ -209,6 +211,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 if expected != row['current_version']:
                     flag('version_identity_mismatch', key)
                 metadata_valid = projection == row['projection_sha256'] and expected == row['current_version']
+                if metadata_valid:
+                    declared_fields.add(metadata)
                 # Bound a source-identity context to the stored evidence. Never
                 # emit names/URLs/authors, or infer that distinct IDs are aliases.
                 provenance_fields = ('source', 'source_url', 'url', 'source_name',
@@ -503,6 +507,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             'content_evidence': {'policy': POLICY, 'status': 'source_declared_exclusions_not_semantic_verdict'},
             'scoped_revision_variants': revision_report,
             'numeric_review_candidates': numeric_review,
+            'declared_field_normalization': declared_fields.report(),
             'coverage': {'status': 'complete', 'scope': 'current_permitted_memberships_only',
                          'projects': len(projects), 'memberships_scanned': counts['memberships'],
                          'relations_scanned': counts['relations'], 'max_rows': max_rows,

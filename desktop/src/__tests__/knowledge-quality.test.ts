@@ -40,7 +40,12 @@ function success(query: QualityQuery = all) {
       cross_context: { groups: 1, status: 'metadata_match_not_content' },
     },
     content_evidence: { policy: 'source-content-evidence-v4', status: 'source_declared_exclusions_not_semantic_verdict' },
-    normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
+    normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified',
+      declared_fields: { policy: 'source-declared-fields-v1', time_policy: 'source-declared-time-v1', quantity_policy: 'source-declared-quantity-v1',
+        scope: 'explicit_metadata_fields_only', truth_status: 'syntax_conversion_not_semantic_verdict', records_checked: 39,
+        time: { fields: 3, records_absent: 36, normalized: 1, date_only: 1, explicit_offset: 0, unknown_local_offset: 0, ambiguous: 1, invalid: 0, unsupported: 0, missing: 1 },
+        quantity: { fields: 2, records_absent: 37, normalized: 1, invalid: 0, unsupported: 1, missing: 0, omitted: 0 },
+        validity_ranges: { none: 39, ordered: 0, inverted: 0, uncomparable: 0 } } },
   };
 }
 
@@ -86,6 +91,31 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const panel of owned) panel.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('manual collection-quality report and fixed native selectors', () => {
+  it('shows declared time and unit syntax separately without inventing source facts', async () => {
+    const value = success();
+    (value.normalization.declared_fields as any).canonical = 'private-date-sentinel';
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(value);
+    setup(load); info().open = true; button().click(); await settle();
+    expect(state()).toBe('complete');
+    expect(metric('날짜만 확인한 표기')).toBe('1');
+    expect(metric('시간대 미상')).toBe('1');
+    expect(metric('정확한 단위 변환')).toBe('1');
+    expect(report().textContent).toContain('시간대가 없으면 이 Mac의 시간대를 대입하지 않습니다');
+    expect(report().textContent).not.toContain('private-date-sentinel');
+  });
+
+  it('rejects missing, impossible or verified declared-field summaries', () => {
+    const changes = [
+      (v:any) => delete v.normalization.declared_fields,
+      (v:any) => v.normalization.declared_fields.truth_status = 'verified',
+      (v:any) => v.normalization.declared_fields.time.normalized = 9,
+      (v:any) => v.normalization.declared_fields.records_checked = true,
+      (v:any) => v.normalization.declared_fields.quantity.records_absent = 41,
+      (v:any) => v.normalization.declared_fields.validity_ranges.inverted = 1,
+    ];
+    for (const change of changes) {const value = success(); change(value); expect(parseCollectionQuality(value,all)).toBeNull();}
+  });
+
   it('starts idle, has stable IDs and makes no request on open, visibility start or time passing', async () => {
     const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(success());
     setup(load);
@@ -179,6 +209,11 @@ describe('manual collection-quality report and fixed native selectors', () => {
       without_substantive_label: 0, reference_only_current_versions: 0 };
     empty.body_matches.stored_body = { groups: 0, members: 0, status: 'text_match_review_only' };
     empty.body_matches.reference_text = { groups: 0, members: 0, status: 'text_match_review_only' };
+    const declared = empty.normalization.declared_fields;
+    declared.records_checked = 0;
+    for (const values of [declared.time, declared.quantity, declared.validity_ranges]) {
+      for (const key of Object.keys(values)) (values as Record<string, number>)[key] = 0;
+    }
     const load = vi.fn<typeof fetchSettingsAction>()
       .mockResolvedValueOnce(empty).mockResolvedValueOnce({ ok: true, schema: 3, scope: empty.scope });
     setup(load); info().open = true;

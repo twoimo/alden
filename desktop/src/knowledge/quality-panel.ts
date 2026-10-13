@@ -29,6 +29,14 @@ type BodyMatches = {
   reference_text: { groups: number; members: number; status: 'text_match_review_only' };
 };
 type QualityErrorCode = keyof typeof ERROR_TEXT;
+type DeclaredFields = {
+  policy: 'source-declared-fields-v1'; time_policy: 'source-declared-time-v1'; quantity_policy: 'source-declared-quantity-v1';
+  scope: 'explicit_metadata_fields_only'; truth_status: 'syntax_conversion_not_semantic_verdict';
+  records_checked: number;
+  time: { fields: number; records_absent: number; normalized: number; ambiguous: number; invalid: number; unsupported: number; missing: number; date_only: number; explicit_offset: number; unknown_local_offset: number };
+  quantity: { fields: number; records_absent: number; normalized: number; invalid: number; unsupported: number; missing: number; omitted: number };
+  validity_ranges: { none: number; ordered: number; inverted: number; uncomparable: number };
+};
 export type QualitySuccess = {
   ok: true;
   schema: 3;
@@ -47,7 +55,7 @@ export type QualitySuccess = {
   metadata_matches: Record<'within_context' | 'cross_context', { groups: number; status: 'metadata_match_not_content' }>;
   content_evidence: { policy: 'source-content-evidence-v4'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
-  normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified' };
+  normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified'; declared_fields: DeclaredFields };
 };
 export type QualityFailure = { ok: false; schema: 3; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
@@ -101,6 +109,34 @@ function object(value: unknown): Record<string, unknown> | null {
 const count = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const finiteNonnegative = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
+function declaredFields(value: unknown, maxRecords: unknown): DeclaredFields | null {
+  const row = object(value), time = object(row?.time), quantity = object(row?.quantity), ranges = object(row?.validity_ranges);
+  if (!row || !time || !quantity || !ranges || !count(maxRecords) || !count(row.records_checked)
+    || row.records_checked > maxRecords || row.policy !== 'source-declared-fields-v1'
+    || row.time_policy !== 'source-declared-time-v1' || row.quantity_policy !== 'source-declared-quantity-v1'
+    || row.scope !== 'explicit_metadata_fields_only' || row.truth_status !== 'syntax_conversion_not_semantic_verdict') return null;
+  const timeKeys = ['fields', 'records_absent', 'normalized', 'ambiguous', 'invalid', 'unsupported', 'missing', 'date_only', 'explicit_offset', 'unknown_local_offset'] as const;
+  const quantityKeys = ['fields', 'records_absent', 'normalized', 'invalid', 'unsupported', 'missing', 'omitted'] as const;
+  const rangeKeys = ['none', 'ordered', 'inverted', 'uncomparable'] as const;
+  if (!timeKeys.every(k => count(time[k])) || !quantityKeys.every(k => count(quantity[k])) || !rangeKeys.every(k => count(ranges[k]))) return null;
+  const t = Object.fromEntries(timeKeys.map(k => [k, time[k]])) as DeclaredFields['time'];
+  const q = Object.fromEntries(quantityKeys.map(k => [k, quantity[k]])) as DeclaredFields['quantity'];
+  const r = Object.fromEntries(rangeKeys.map(k => [k, ranges[k]])) as DeclaredFields['validity_ranges'];
+  const timePresent = row.records_checked - t.records_absent, quantityPresent = row.records_checked - q.records_absent;
+  if (timePresent < 0 || quantityPresent < 0 || t.fields < timePresent || t.fields > timePresent * 12
+    || q.fields < quantityPresent || q.fields > quantityPresent * 16
+    || t.normalized + t.ambiguous + t.invalid + t.unsupported + t.missing !== t.fields
+    || t.date_only + t.explicit_offset !== t.normalized
+    || t.unknown_local_offset > t.explicit_offset
+    || q.normalized + q.invalid + q.unsupported + q.missing !== q.fields
+    || (!q.fields && q.omitted !== 0)
+    || r.none + r.ordered + r.inverted + r.uncomparable !== row.records_checked
+    || (row.records_checked - r.none) * 2 > t.fields) return null;
+  return { policy: 'source-declared-fields-v1', time_policy: 'source-declared-time-v1', quantity_policy: 'source-declared-quantity-v1',
+    scope: 'explicit_metadata_fields_only', truth_status: 'syntax_conversion_not_semantic_verdict',
+    records_checked: row.records_checked, time: t, quantity: q, validity_ranges: r };
+}
+
 function checkedDate(value: unknown): Date | null {
   // Backend contract: Unix seconds (possibly fractional), in a plausible
   // modern epoch range. Epoch milliseconds and malformed units fail closed.
@@ -145,6 +181,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
   const cross = object(duplicates?.cross_context_search_text);
   const mixed = object(numeric?.mixed_vector_dimensions);
   const normalization = object(row.normalization);
+  const declared = declaredFields(normalization?.declared_fields, counts?.project_current_versions);
   const evidence = object(row.content_evidence), metadata = object(row.metadata_matches);
   const metadataWithin = object(metadata?.within_context), metadataCross = object(metadata?.cross_context);
   const body = object(row.body_matches), bodyCounts = object(body?.counts);
@@ -157,7 +194,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || !scope.projects.every(p => typeof p === 'string' && p.length > 0 && p.length <= 128)
     || (query.scope === 'project' && (scope.projects.length !== 1 || scope.projects[0] !== query.project))
     || !checkedDate(row.checked_at) || !finiteNonnegative(row.elapsed_ms)
-    || !counts || !findings || !duplicates || !numeric || !raw || !normalized || !cross || !mixed || !normalization
+    || !counts || !findings || !duplicates || !numeric || !raw || !normalized || !cross || !mixed || !normalization || !declared
     || !evidence || !metadataWithin || !metadataCross
     || !body || !bodyCounts || !storedBody || !references
     || body.policy !== 'stored-body-match-v1' || body.basis !== 'current_stored_body_projection_not_original_equivalence'
@@ -219,7 +256,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       cross_context: { groups: metadataCross.groups as number, status: 'metadata_match_not_content' },
     },
     content_evidence: { policy: 'source-content-evidence-v4', status: 'source_declared_exclusions_not_semantic_verdict' },
-    normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified' },
+    normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified', declared_fields: declared },
   };
 }
 
@@ -446,6 +483,30 @@ export class KnowledgeQualityPanel {
       ['교차 맥락의 이름·안내문 일치 그룹', value.metadata_matches.cross_context.groups],
     ]);
     paragraph('본문을 읽지 않은 기록의 이름·안내문·파생 색인 요약은 실제 본문 중복이나 의미 연결의 근거로 사용하지 않습니다. 자료와 구조 관계는 유지합니다.', 'knowledge-quality-limit');
+    const declared = value.normalization.declared_fields;
+    metrics('날짜·시간대 표기', [
+      ['검사한 선언 시각 필드', declared.time.fields],
+      ['날짜만 확인한 표기', declared.time.date_only],
+      ['UTC·명시 오프셋 변환', declared.time.explicit_offset],
+      ['UTC는 알려졌지만 현지 오프셋 미상', declared.time.unknown_local_offset],
+      ['시간대 미상', declared.time.ambiguous],
+      ['잘못된 날짜·시각 표기', declared.time.invalid],
+      ['해석하지 않은 시각 표기', declared.time.unsupported],
+      ['값이 없는 선언 시각', declared.time.missing],
+      ['시각 선언이 없는 기록', declared.time.records_absent],
+      ['역전된 유효 기간 검토', declared.validity_ranges.inverted],
+      ['비교할 수 없는 유효 기간', declared.validity_ranges.uncomparable],
+    ], 'knowledge-quality-time');
+    metrics('명시 값·단위 표기', [
+      ['검사한 값·단위 필드', declared.quantity.fields],
+      ['정확한 단위 변환', declared.quantity.normalized],
+      ['잘못된 값·단위 표기', declared.quantity.invalid],
+      ['지원하지 않는 단위·형식', declared.quantity.unsupported],
+      ['값·단위가 없는 선언', declared.quantity.missing],
+      ['값·단위 선언이 없는 기록', declared.quantity.records_absent],
+      ['검사 한도로 남긴 값·단위', declared.quantity.omitted],
+    ], 'knowledge-quality-quantity');
+    paragraph('현재 메타데이터에 명시된 필드만 해석합니다. 날짜만 있으면 시각을 만들지 않고, 시간대가 없으면 이 Mac의 시간대를 대입하지 않습니다. 단위가 없으면 본문·주소·식별자에서 추정하지 않습니다. 원문을 유지하며 실제 발행·효력·사실 확인이나 자동 병합으로 사용하지 않습니다.', 'knowledge-quality-limit');
     paragraph('원본은 해시 참조만 확인하고 원문 바이트를 다시 읽지 않았습니다. NFC·줄바꿈 차이는 관찰만 하며 본문 공백을 유지하고 수정하지 않습니다. 일치 텍스트·차원 혼합은 검토 후보로, 의미상 중복·타당성·이상 여부는 판정하지 않았습니다.', 'knowledge-quality-limit');
     this.report.replaceChildren(...elements);
     this.report.hidden = false;
