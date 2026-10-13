@@ -1,0 +1,133 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.92 · 재연결·창·배치 복원",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "recovery92",
+      "label": "구현 경로와 확인 상태"
+    }
+  ],
+  "mainPath": [
+    "recovery92_0",
+    "recovery92_1",
+    "recovery92_2",
+    "recovery92_3",
+    "recovery92_4",
+    "recovery92_5"
+  ],
+  "nodes": [
+    {
+      "id": "recovery92_0",
+      "lane": "recovery92",
+      "col": 0,
+      "type": "frontend",
+      "label": "가시성과 범위",
+      "sublabel": "native hide·페이지 선택",
+      "width": 132
+    },
+    {
+      "id": "recovery92_1",
+      "lane": "recovery92",
+      "col": 1,
+      "type": "security",
+      "label": "작업 세대 취소",
+      "sublabel": "늦은 source/worker 거절",
+      "width": 132
+    },
+    {
+      "id": "recovery92_2",
+      "lane": "recovery92",
+      "col": 2,
+      "type": "database",
+      "label": "기준점 대사",
+      "sublabel": "stream·cursor·순서",
+      "width": 132
+    },
+    {
+      "id": "recovery92_3",
+      "lane": "recovery92",
+      "col": 3,
+      "type": "backend",
+      "label": "증분·새 snapshot",
+      "sublabel": "대체·rewind·지점 만료",
+      "width": 132
+    },
+    {
+      "id": "recovery92_4",
+      "lane": "recovery92",
+      "col": 4,
+      "type": "backend",
+      "label": "배치와 선택 복원",
+      "sublabel": "완료 solver·pin·현재 ID",
+      "width": 132
+    },
+    {
+      "id": "recovery92_5",
+      "lane": "recovery92",
+      "col": 5,
+      "type": "frontend",
+      "label": "단일 소비자 재개",
+      "sublabel": "보이는 창·정착 후 RAF 0",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "recovery92_edge0",
+      "from": "recovery92_0",
+      "to": "recovery92_1",
+      "label": "범위 확인",
+      "role": "main"
+    },
+    {
+      "id": "recovery92_edge1",
+      "from": "recovery92_1",
+      "to": "recovery92_2",
+      "label": "대사",
+      "role": "main"
+    },
+    {
+      "id": "recovery92_edge2",
+      "from": "recovery92_2",
+      "to": "recovery92_3",
+      "label": "확정",
+      "role": "main"
+    },
+    {
+      "id": "recovery92_edge3",
+      "from": "recovery92_3",
+      "to": "recovery92_4",
+      "label": "검증",
+      "role": "main"
+    },
+    {
+      "id": "recovery92_edge4",
+      "from": "recovery92_4",
+      "to": "recovery92_5",
+      "label": "반환",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "배치와 생명주기",
+      "items": [
+        "이전 기준은 움직이는 화면 좌표 대신 완료된 solver checkpoint를 사용한다.",
+        "보이는 그래프는 늦은 blur로 중단하지 않고 native 숨김·다른 페이지·종료와 비상 latch를 유지한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "실패 기록 보존",
+      "items": [
+        "원래 compact 복원 시간 초과를 보존하며 검증한 late-blur 경로와 모든 이벤트 원인을 구분한다.",
+        "물리 잠금·절전·Retina·장시간 누수와 전체 복원 순서는 미완료다."
+      ]
+    }
+  ]
+}
