@@ -2665,7 +2665,8 @@ fn valid_conversation_id(value: &str) -> bool {
 fn validate_assistant_input(input: &Value, token_id: &str) -> Result<Vec<u8>, BridgeError> {
     if !valid_model_swap_token(token_id) || token_id.as_bytes()[14] != b'4' { return Err(BridgeError::ActionNotAllowed); }
     let obj = input.as_object().ok_or(BridgeError::ActionNotAllowed)?;
-    if obj.len() != 4 || !["request_id", "conversation_id", "text", "images"].iter().all(|k| obj.contains_key(*k)) {
+    if obj.len() != if obj.contains_key("files") { 5 } else { 4 }
+        || !["request_id", "conversation_id", "text", "images"].iter().all(|k| obj.contains_key(*k)) {
         return Err(BridgeError::ActionNotAllowed);
     }
     if input["request_id"].as_str().is_none_or(|s| !valid_conversation_id(s))
@@ -2673,12 +2674,14 @@ fn validate_assistant_input(input: &Value, token_id: &str) -> Result<Vec<u8>, Br
         return Err(BridgeError::ActionNotAllowed);
     }
     let text = input["text"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
-    if (text.trim().is_empty() && input["images"].as_array().is_none_or(Vec::is_empty)) || text.len() > 16000 || text.chars().count() > 4000
+    let files = input.get("files").map(|v| v.as_array().ok_or(BridgeError::ActionNotAllowed)).transpose()?;
+    if (text.trim().is_empty() && input["images"].as_array().is_none_or(Vec::is_empty)
+        && files.is_none_or(Vec::is_empty)) || text.len() > 16000 || text.chars().count() > 4000
         || text.chars().any(|c| c.is_control() && !matches!(c, '\n'|'\t')) {
         return Err(BridgeError::ActionNotAllowed);
     }
     let images = input["images"].as_array().ok_or(BridgeError::ActionNotAllowed)?;
-    if images.len() > 4 { return Err(BridgeError::ActionNotAllowed); }
+    if images.len() + files.map_or(0, Vec::len) > 4 { return Err(BridgeError::ActionNotAllowed); }
     let mut total = 0;
     for image in images {
         let row = image.as_object().ok_or(BridgeError::ActionNotAllowed)?;
@@ -2691,6 +2694,27 @@ fn validate_assistant_input(input: &Value, token_id: &str) -> Result<Vec<u8>, Br
             || !matches!(image["mime"].as_str(), Some("image/png"|"image/jpeg"|"image/gif"|"image/webp"))
             || data.is_empty() || data.len() > (8_usize * 1024 * 1024).div_ceil(3) * 4
             || data.len() % 4 != 0 || !data.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+'|b'/'|b'=')) {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        total += data.len();
+    }
+    for file in files.into_iter().flatten() {
+        let row = file.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+        if row.len() != 3 || !["name", "mime", "data"].iter().all(|k| row.contains_key(*k)) {
+            return Err(BridgeError::ActionNotAllowed);
+        }
+        let name = file["name"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
+        let data = file["data"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
+        let mime = file["mime"].as_str().ok_or(BridgeError::ActionNotAllowed)?;
+        let suffix = name.rsplit_once('.').map(|(_, s)| s.to_ascii_lowercase()).unwrap_or_default();
+        if name.trim().is_empty() || name.chars().count() > 128 || name.len() > 512
+            || name.chars().any(|c| c.is_control() || matches!(c, '/'|'\\'))
+            || !matches!(suffix.as_str(), "txt"|"md"|"csv"|"tsv"|"json"|"yaml"|"yml"|"log"|
+                "py"|"js"|"ts"|"rs"|"toml"|"ini"|"sql"|"xml"|"html"|"htm"|"docx"|"xlsx"|"pptx"|"pdf"|"rtf"|"doc")
+            || mime.len() > 100 || (!mime.is_empty() && (mime.bytes().filter(|b| *b==b'/').count()!=1
+                || !mime.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b,b'.'|b'+'|b'-'|b'/'))))
+            || data.is_empty() || data.len() > (5_usize * 1024 * 1024).div_ceil(3) * 4
+            || data.len() % 4 != 0 || !data.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b,b'+'|b'/'|b'=')) {
             return Err(BridgeError::ActionNotAllowed);
         }
         total += data.len();
@@ -4431,6 +4455,22 @@ mod tests {
         }
         assert!(validate_assistant_input(&input,"00000000-0000-1000-8000-000000000001").is_err());
         assert!(validate_assistant_input(&input,"../private").is_err());
+    }
+    #[test]
+    fn assistant_documents_share_the_total_attachment_budget_and_reject_paths() {
+        let token="00000000-0000-4000-8000-000000000001";
+        let mut input=json!({"request_id":"11111111111111111111111111111111","conversation_id":null,"text":"",
+            "images":[],"files":[{"name":"receipt.txt","mime":"text/plain","data":"NTM="}]});
+        assert!(validate_assistant_input(&input,token).is_ok());
+        for name in ["../receipt.txt","receipt.exe","receipt.txt\n"] {
+            input["files"][0]["name"]=json!(name);
+            assert!(validate_assistant_input(&input,token).is_err());
+        }
+        input["files"][0]["name"]=json!("receipt.txt");
+        input["images"]=Value::Array(vec![json!({"name":"a.png","mime":"image/png","data":"AAAA"});4]);
+        assert!(validate_assistant_input(&input,token).is_err());
+        input["images"]=json!([]);input["files"]=json!(false);
+        assert!(validate_assistant_input(&input,token).is_err());
     }
 
     #[test]

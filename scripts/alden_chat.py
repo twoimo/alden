@@ -16,6 +16,7 @@ import uuid
 import unicodedata
 
 from alden_abort import AbortToken, AldenCancelled
+from alden_chat_files import DOCUMENT_ERRORS
 
 MAX_INPUT_BYTES = 29 * 1024 * 1024
 MAX_IMAGES = 4
@@ -39,7 +40,7 @@ KNOWN_INPUT_ERRORS = frozenset({
     'image_input_provenance_changed','routed_llm_prompt_budget','conversation_not_found',
     'request_id_payload_or_target_conflict',
     'assistant_image_context_changed','generation_metadata_invalid',
-})
+}) | DOCUMENT_ERRORS
 
 
 class InputUnavailable(ValueError):
@@ -58,7 +59,9 @@ class InputToken(AbortToken):
 
 
 def validate_input(value):
-    if not isinstance(value, dict) or set(value) != {'request_id', 'conversation_id', 'text', 'images'}:
+    if not isinstance(value, dict) or set(value) not in (
+            {'request_id', 'conversation_id', 'text', 'images'},
+            {'request_id', 'conversation_id', 'text', 'images', 'files'}):
         raise InputUnavailable('assistant_input_invalid')
     if not isinstance(value['request_id'], str) or not re.fullmatch('[0-9a-f]{32}', value['request_id']):
         raise InputUnavailable('assistant_input_invalid')
@@ -66,7 +69,7 @@ def validate_input(value):
     if cid is not None and (not isinstance(cid, str) or not re.fullmatch('[0-9a-f]{32}', cid)):
         raise InputUnavailable('assistant_input_invalid')
     text = value['text']
-    if (not isinstance(text, str) or (not text.strip() and not value['images']) or len(text) > 4000
+    if (not isinstance(text, str) or (not text.strip() and not value['images'] and not value.get('files')) or len(text) > 4000
             or any(unicodedata.category(c) in {'Cc','Cs'} and c not in '\n\t' for c in text)):
         raise InputUnavailable('assistant_input_invalid')
     try:
@@ -102,7 +105,7 @@ def validate_input(value):
 
 @contextmanager
 def image_directory(root, namespace='assistant-input-images'):
-    if namespace not in {'assistant-input-images', 'assistant-input-locks'}:
+    if namespace not in {'assistant-input-images', 'assistant-input-locks', 'assistant-input-files'}:
         raise InputUnavailable('assistant_input_invalid')
     root = Path(root)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -170,16 +173,23 @@ def generate_input(state_root, ticket, text, token, paths, selection):
     from alden_voice import LocalMlxLlm, _voice_knowledge_reference
     from alden_routed_llm import OpenCodexLlm
     from types import SimpleNamespace
+    from alden_chat_files import document_prompt, verify_file_bytes
+    from alden_chat_turns import verify_history_file_sources
+    verify_history_file_sources(state_root, ticket)
+    verify_file_bytes(state_root, ticket)
+    documents = document_prompt(ticket)
     turn = SimpleNamespace(**{k: ticket[k] for k in ('conversation_id', 'turn_id', 'context_version')}, source='text')
     if selection.get('transport') == 'opencodex':
         reference, retrieval = _voice_knowledge_reference(text, ticket['history'], state_root, token)
         from alden_chat_turns import verify_history_image_sources
         verify_history_image_sources(state_root, ticket)
+        verify_history_file_sources(state_root, ticket)
+        verify_file_bytes(state_root, ticket)
         adapter = OpenCodexLlm(selection['model'], selection.get('reasoning_effort'), state_root)
         try:
             reply = adapter._generate(text, token, history=ticket['history'], turn=turn, image_paths=paths,
                                       image_evidence=ticket.get('input_image_evidence'),
-                                      system_prompt=CHAT_PERSONA + image_context_prompt(ticket) + ('\n\n' + reference if reference else ''))
+                                      system_prompt=CHAT_PERSONA + image_context_prompt(ticket) + documents + ('\n\n' + reference if reference else ''))
         finally:
             adapter.last_metrics['retrieval'] = retrieval
             ticket['adapter_metrics'] = adapter.last_metrics
@@ -187,7 +197,7 @@ def generate_input(state_root, ticket, text, token, paths, selection):
         if paths: raise InputUnavailable('assistant_image_model_unsupported')
         adapter = LocalMlxLlm(base_url=selection['base_url'], model=selection['model'], state_root=state_root,
                              catalog_selected=selection.get('transport') == 'local', reasoning_effort=selection.get('reasoning_effort'),
-                             system_prompt=CHAT_PERSONA, max_tokens=1024)
+                             system_prompt=CHAT_PERSONA + documents, max_tokens=1024)
         try:
             reply = adapter.generate_for_turn(text, token, history=ticket['history'], turn=turn)
         finally:
@@ -204,6 +214,10 @@ def generation_evidence(selection, metrics, ticket, terminal_state):
     result['terminal_state'] = terminal_state
     if 'image_context' in ticket:
         result['image_context'] = ticket['image_context']
+    from alden_chat_files import document_evidence
+    documents = document_evidence(ticket)
+    if documents is not None:
+        result['document_context'] = documents
     if isinstance(metrics, dict) and 'images' in metrics:
         raw = metrics['images']
         if not isinstance(raw,list) or len(raw)>MAX_IMAGES:
@@ -268,6 +282,8 @@ def select_image_context(state_root, ticket, decoded, current_paths):
             paths.append(path)
             evidence.append(meta)
             selected.append({k: meta[k] for k in ('source_request_id', 'source_turn_id', 'sha256', 'mime', 'size')} | {'origin': origin})
+    for key, count in ticket.get('omitted_previous_images', {}).items():
+        omitted[key] += count
     ticket['input_image_evidence'] = evidence
     ticket['image_context'] = {'selected': selected, 'omitted': omitted,
         'history_scope': 'latest_completed_unique_images_up_to_4', 'byte_limit': MAX_IMAGE_BATCH_BYTES,
@@ -275,9 +291,35 @@ def select_image_context(state_root, ticket, decoded, current_paths):
     return paths
 
 
+def bound_previous_attachments(ticket, images, files):
+    def key(kind, meta):
+        return (kind, meta['sha256'], meta['mime'] if kind == 'image' else Path(meta['filename']).suffix.lower())
+    seen, total = set(), 0
+    for kind, decoded in [('image', images), ('file', files)]:
+        for meta, _ in decoded:
+            k = key(kind, meta)
+            if k not in seen:
+                seen.add(k); total += meta['size']
+    history = [('image', row) for row in ticket.get('history_attachments', [])] + [('file', row) for row in ticket.get('history_files', [])]
+    selected = {'image': [], 'file': []}
+    omitted = {kind: {'duplicate': 0, 'capacity': 0, 'byte_budget': 0, 'unavailable': 0} for kind in selected}
+    for kind, row in sorted(history, key=lambda item: item[1]['source_turn_id'], reverse=True):
+        k = key(kind, row)
+        if k in seen: omitted[kind]['duplicate'] += 1; continue
+        if len(seen) >= MAX_IMAGES: omitted[kind]['capacity'] += 1; continue
+        if total + row['size'] > MAX_IMAGE_BATCH_BYTES: omitted[kind]['byte_budget'] += 1; continue
+        selected[kind].append(row); seen.add(k); total += row['size']
+    ticket['history_attachments'], ticket['history_files'] = selected['image'], selected['file']
+    ticket['omitted_previous_images'], ticket['omitted_previous_files'] = omitted['image'], omitted['file']
+
+
 def process_input(state_root, value, token, *, generate=generate_input, select_model=None):
     token.raise_if_cancelled()
     decoded = validate_input(value)
+    from alden_chat_files import decode_files
+    files = decode_files(value.get('files', []))
+    if len(decoded) + len(files) > MAX_IMAGES or sum(meta['size'] for meta, _ in decoded + files) > MAX_IMAGE_BATCH_BYTES:
+        raise InputUnavailable('assistant_file_budget')
     token.raise_if_cancelled()
     with image_directory(state_root, 'assistant-input-locks') as (_, directory):
         fd = os.open(value['request_id'] + '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -292,9 +334,9 @@ def process_input(state_root, value, token, *, generate=generate_input, select_m
                 from alden_chat_turns import reserve_turn
                 with token.commit_guard():
                     ticket = reserve_turn(state_root, value['request_id'], value['conversation_id'], value['text'],
-                                          attachments=[meta for meta, _ in decoded])
+                                          attachments=[meta for meta, _ in decoded + files])
                 return public_receipt({'ok': ticket['state'] == 'completed', **ticket})
-            return public_receipt(_process_owned_input(state_root, value, decoded, token,
+            return public_receipt(_process_owned_input(state_root, value, decoded, token, files=files,
                                                        generate=generate, select_model=select_model))
         finally:
             os.close(fd)
@@ -319,26 +361,38 @@ def failure_receipt(value, code, state='failed'):
     return receipt
 
 
-def _process_owned_input(state_root, value, decoded, token, *, generate, select_model):
+def _process_owned_input(state_root, value, decoded, token, *, generate, select_model, files=()):
     from alden_chat_turns import reserve_turn, complete_turn, cancel_turn, StaleTurn
     from alden_voice import configured_voice_model
     token.raise_if_cancelled()
     paths = persist_images(state_root, decoded, token)
+    from alden_chat_files import persist_files, select_file_context, verify_file_bytes
+    persist_files(state_root, files, token)
     ticket, selection = None, None
     try:
         with token.commit_guard():
             ticket = reserve_turn(state_root, value['request_id'], value['conversation_id'], value['text'],
-                                  attachments=[meta for meta, _ in decoded])
+                                  attachments=[meta for meta, _ in list(decoded) + list(files)])
         if ticket['state'] != 'running': return {'ok': ticket['state'] == 'completed', **ticket}
         token.raise_if_cancelled()
+        from alden_chat_turns import require_current_turn, bind_prepared_context, verify_history_file_sources
+        require_current_turn(state_root, ticket)
         selection = (select_model or configured_voice_model)(state_root)
+        bound_previous_attachments(ticket, decoded, files)
         paths = select_image_context(state_root, ticket, decoded, paths)
+        select_file_context(state_root, ticket, files, token)
         from alden_chat_turns import verify_history_image_sources
         verify_history_image_sources(state_root, ticket)
+        verify_history_file_sources(state_root, ticket)
+        require_current_turn(state_root, ticket)
+        from alden_chat_files import document_evidence
+        with token.commit_guard():
+            bind_prepared_context(state_root, ticket, {'images': ticket.get('image_context'), 'files': document_evidence(ticket)})
         reply, metrics = generate(state_root, ticket, value['text'], token, paths, selection)
         if not isinstance(reply, str) or not reply.strip() or len(reply) > 16000 or len(reply.encode('utf-8')) > 64000:
             raise InputUnavailable('assistant_response_invalid')
         token.raise_if_cancelled()
+        verify_file_bytes(state_root, ticket)
         retrieval = metrics.get('retrieval', {}) if isinstance(metrics, dict) else {}
         proof = retrieval.get('graph_provenance') if isinstance(retrieval, dict) else None
         with token.commit_guard():

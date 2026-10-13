@@ -10,6 +10,7 @@ type OwnedRequest = {
   textRevision: number;
   imageRevision: number;
   images: ImageInput[];
+  files: ImageInput[];
 };
 
 const MAX_CHARACTERS = 4_000;
@@ -17,6 +18,8 @@ const MAX_TEXT_BYTES = 16_000;
 const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_BATCH_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const DOCUMENT_SUFFIXES = new Set(['txt','md','csv','tsv','json','yaml','yml','log','py','js','ts','rs','toml','ini','sql','xml','html','htm','docx','xlsx','pptx','pdf','rtf','doc']);
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const HEX_32 = /^[a-f0-9]{32}$/;
 const UUID_V4 = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -53,6 +56,31 @@ const ERROR_DETAILS: Readonly<Record<string, string>> = {
   assistant_image_pixel_budget: '이미지 픽셀 수 한도를 넘었습니다. 해상도를 줄여 주세요.',
   assistant_image_store_unavailable: '이미지를 저장할 수 없습니다. 저장소 상태를 확인해 주세요.',
   assistant_image_model_unsupported: '선택한 모델이 이미지 입력을 지원하지 않습니다. 모델 설정을 확인해 주세요.',
+  assistant_file_invalid: '파일 이름이나 첨부 바이트를 확인하지 못했습니다. 다시 선택해 주세요.',
+  assistant_file_budget: '사진과 문서를 합쳐 4개/20MiB까지, 문서는 개별 5MiB까지 보낼 수 있습니다.',
+  assistant_file_store_unavailable: '첨부 파일을 저장하지 못했습니다. 저장소 상태를 확인해 주세요.',
+  assistant_file_context_changed: '이전 파일의 내용이나 대화 근거가 바뀌었습니다. 다시 첨부해 주세요.',
+  assistant_file_parser_timeout: '문서 해석 시간이 초과됐습니다. 작은 문서로 다시 시도해 주세요.',
+  assistant_file_parser_unavailable: '문서 내용을 해석하지 못했습니다. 다른 형식으로 저장해 주세요.',
+  assistant_file_parser_output_budget: '문서 해석 결과가 허용 범위를 넘었습니다.',
+  document_format_unsupported: '지원하지 않는 문서 형식입니다. 텍스트, PDF, Word, Excel, PowerPoint를 선택해 주세요.',
+  document_format_mismatch: '파일 내용과 형식이 일치하지 않습니다.',
+  document_encoding_unavailable: '문서 인코딩을 읽지 못했습니다. UTF-8로 저장해 주세요.',
+  document_has_no_text: '문서에서 읽을 수 있는 텍스트를 찾지 못했습니다.',
+  document_pdf_has_no_text: 'PDF에 읽을 수 있는 텍스트가 없습니다. 스캔 문서의 문자 인식은 지원하지 않습니다.',
+  document_pdf_text_unavailable: 'PDF 텍스트를 읽지 못했습니다. 잠금이나 스캔 문서 여부를 확인해 주세요.',
+  document_contains_binary_text: '문서에 읽을 수 없는 바이너리 내용이 있습니다.',
+  document_archive_invalid: '문서 압축 구조가 유효하지 않습니다.',
+  document_archive_budget_or_shape: '문서 압축 구조나 해제 크기가 허용 범위를 넘었습니다.',
+  document_xml_invalid: '문서의 텍스트 구조가 유효하지 않습니다.',
+  document_xml_encoding_unsupported: '문서 구조의 문자 인코딩을 지원하지 않습니다.',
+  document_xml_entities_unsupported: '문서의 외부 개체를 읽을 수 없습니다.',
+  document_native_parser_failed: '시스템 문서 읽기 기능이 문서를 해석하지 못했습니다.',
+  document_native_parser_unavailable: '시스템 문서 읽기 기능을 사용할 수 없습니다.',
+  document_slide_relation_invalid: '슬라이드의 내부 참조를 확인하지 못했습니다.',
+  document_sheet_relation_invalid: '시트의 내부 참조를 확인하지 못했습니다.',
+  document_shared_string_invalid: '시트의 텍스트 참조를 확인하지 못했습니다.',
+  document_byte_budget: '문서 크기가 개별 5MiB 한도를 넘었습니다.',
   assistant_model_unavailable: '대화 모델에 연결할 수 없습니다. 설정을 확인해 주세요.',
   model_unavailable: '대화 모델에 연결할 수 없습니다. 설정을 확인해 주세요.',
   voice_model_configuration_invalid: '대화 모델 설정이 올바르지 않습니다. 모델 설정을 확인해 주세요.',
@@ -113,7 +141,7 @@ function completedReceipt(value: Record<string, unknown>): value is Record<strin
   return positiveSafeInteger(value.turn_id) && positiveSafeInteger(value.context_version);
 }
 
-function readImage(file: File, readers: Set<FileReader>): Promise<ImageInput> {
+function readImage(file: File, readers: Set<FileReader>, byteLimit = MAX_IMAGE_BYTES): Promise<ImageInput> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     readers.add(reader);
@@ -124,11 +152,11 @@ function readImage(file: File, readers: Set<FileReader>): Promise<ImageInput> {
       readers.delete(reader);
       const value = reader.result;
       const match = typeof value === 'string'
-        ? /^data:[^,;]*;base64,([A-Za-z0-9+/]+={0,2})$/.exec(value) : null;
+        ? /^data:[^,]*;base64,([A-Za-z0-9+/]+={0,2})$/.exec(value) : null;
       if (!match || match[1].length % 4 !== 0) { fail(); return; }
       const data = match[1];
       const byteLength = data.length / 4 * 3 - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
-      if (byteLength !== file.size || byteLength > MAX_IMAGE_BYTES) { fail(); return; }
+      if (byteLength !== file.size || byteLength > byteLimit) { fail(); return; }
       resolve({ name: file.name, mime: file.type, data });
     }, { once: true });
     try { reader.readAsDataURL(file); } catch { fail(); }
@@ -189,6 +217,20 @@ export function wireAssistantComposer(
   imagePicker.multiple = true;
   imagePicker.setAttribute('aria-label', '이미지 첨부 선택 (최대 4개)');
   imagePicker.style.maxWidth = '100%';
+  const filePicker = create('input', 'assistant-composer-files');
+  filePicker.type = 'file';
+  filePicker.accept = [...DOCUMENT_SUFFIXES].map(suffix => `.${suffix}`).join(',');
+  filePicker.multiple = true;
+  filePicker.setAttribute('aria-label', '문서 첨부 선택 (사진과 합계 최대 4개)');
+  filePicker.style.maxWidth = '100%';
+  const imageLabel = create('label', 'assistant-composer-image-label');
+  imageLabel.textContent = '사진 '; imageLabel.append(imagePicker);
+  const fileLabel = create('label', 'assistant-composer-file-label');
+  fileLabel.textContent = '문서 '; fileLabel.append(filePicker);
+  for (const field of [imageLabel, fileLabel]) {
+    field.style.display = 'inline-flex'; field.style.flexWrap = 'wrap';
+    field.style.alignItems = 'center'; field.style.gap = '8px'; field.style.maxWidth = '100%';
+  }
 
   const send = create('button', 'assistant-composer-send', 'preferences-save');
   send.type = 'submit';
@@ -200,15 +242,15 @@ export function wireAssistantComposer(
 
   const preview = create('div', 'assistant-composer-preview', 'message-attachment');
   preview.setAttribute('role', 'list');
-  preview.setAttribute('aria-label', '선택한 이미지');
+  preview.setAttribute('aria-label', '선택한 첨부');
   preview.style.flex = '1 1 100%';
   const limits = create('small', 'assistant-composer-limits', 'settings-field-note');
-  limits.textContent = '4,000자 · 이미지 4개까지 (개별 8MiB, 합계 20MiB)';
+  limits.textContent = '4,000자 · 사진·문서 합계 4개/20MiB · 사진 8MiB, 문서 5MiB까지';
   const status = create('p', 'assistant-composer-status', 'settings-field-note');
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   status.style.flex = '1 1 100%';
-  form.append(label, imagePicker, send, cancel, preview, limits, status);
+  form.append(label, imageLabel, fileLabel, send, cancel, preview, limits, status);
   reader.append(form);
 
   let disposed = false;
@@ -221,6 +263,7 @@ export function wireAssistantComposer(
   let superseding = false;
   let contextEpoch = 0;
   let images: ImageInput[] = [];
+  let files: ImageInput[] = [];
   let textRevision = 0;
   let imageRevision = 0;
   let readingEpoch = 0;
@@ -232,7 +275,8 @@ export function wireAssistantComposer(
   const active = () => !disposed && shown && selectedPage === 'voice';
   const samePayload = (owner: OwnedRequest) => owner.conversationId === conversationId()
     && owner.textRevision === textRevision && owner.imageRevision === imageRevision
-    && owner.text === text.value && JSON.stringify(owner.images) === JSON.stringify(images);
+    && owner.text === text.value && JSON.stringify(owner.images) === JSON.stringify(images)
+    && JSON.stringify(owner.files) === JSON.stringify(files);
 
   function updateControls(): void {
     form.hidden = !active();
@@ -243,6 +287,7 @@ export function wireAssistantComposer(
     cancel.hidden = !pending || !active();
     cancel.disabled = !pending || !active();
     imagePicker.disabled = !active();
+    filePicker.disabled = !active();
     text.disabled = !active();
   }
 
@@ -290,7 +335,9 @@ export function wireAssistantComposer(
 
   function renderImages(): void {
     preview.replaceChildren();
-    for (const [index, image] of images.entries()) {
+    const attachments = [...images.map((image,index)=>({image,index,kind:'image'})),
+      ...files.map((image,index)=>({image,index,kind:'file'}))];
+    for (const {index,image,kind} of attachments) {
       const item = root.createElement('div');
       item.setAttribute('role', 'listitem');
       const name = root.createElement('span');
@@ -304,7 +351,8 @@ export function wireAssistantComposer(
         if (!active()) return;
         retirePending('입력이 바뀌어 이전 요청을 취소했습니다.');
         uncertain = null;
-        images.splice(index, 1);
+        if (kind === 'image') images.splice(index, 1);
+        else files.splice(index, 1);
         imageRevision++;
         renderImages();
         updateControls();
@@ -323,11 +371,11 @@ export function wireAssistantComposer(
     abortRead();
     // The read epoch fences older picker completions without changing a submitted draft.
     const epoch = readingEpoch;
-    if (chosen.length > MAX_IMAGES
+    if (chosen.length + files.length > MAX_IMAGES
       || chosen.some(file => !IMAGE_TYPES.has(file.type) || !Number.isSafeInteger(file.size)
         || file.size <= 0 || file.size > MAX_IMAGE_BYTES
         || !file.name || Array.from(file.name).length > 128 || /[\\/\x00-\x1f\x7f]/.test(file.name))
-      || chosen.reduce((size, file) => size + file.size, 0) > MAX_BATCH_BYTES) {
+      || chosen.reduce((size, file) => size + file.size, 0) + files.reduce((size,file)=>size+file.data.length*3/4,0) > MAX_BATCH_BYTES) {
       status.textContent = 'PNG, JPEG, WebP, GIF 이미지 4개까지 선택할 수 있습니다. 개별 8MiB, 합계 20MiB 이하로 해 주세요.';
       return;
     }
@@ -355,12 +403,52 @@ export function wireAssistantComposer(
     }
   }
 
+  async function pickFiles(): Promise<void> {
+    syncSelection();
+    if (!active()) return;
+    const chosen = Array.from(filePicker.files ?? []);
+    filePicker.value = '';
+    if (!chosen.length) return;
+    abortRead();
+    const epoch = readingEpoch;
+    if (chosen.some(file => !DOCUMENT_SUFFIXES.has(file.name.split('.').at(-1)?.toLowerCase() ?? ''))) {
+      status.textContent = ERROR_DETAILS.document_format_unsupported;
+      return;
+    }
+    if (chosen.length + images.length > MAX_IMAGES
+      || chosen.some(file => !DOCUMENT_SUFFIXES.has(file.name.split('.').at(-1)?.toLowerCase() ?? '')
+        || !Number.isSafeInteger(file.size) || file.size <= 0 || file.size > MAX_FILE_BYTES
+        || !file.name.trim() || Array.from(file.name).length > 128 || /[\\/\p{Cc}\p{Cs}]/u.test(file.name))
+      || chosen.reduce((size,file)=>size+file.size,0) + images.reduce((size,image)=>size+image.data.length*3/4,0) > MAX_BATCH_BYTES) {
+      status.textContent = ERROR_DETAILS.assistant_file_budget;
+      return;
+    }
+    retirePending('첨부가 바뀌어 이전 요청을 취소했습니다.');
+    uncertain = null;
+    reading = true;
+    status.textContent = '선택한 문서를 준비하고 있습니다…';
+    updateControls();
+    try {
+      const copied = await Promise.all(chosen.map(file=>readImage(file,readers,MAX_FILE_BYTES)));
+      syncSelection();
+      if (!active() || epoch !== readingEpoch) return;
+      files = copied;
+      imageRevision++;
+      renderImages();
+      status.textContent = `${files.length}개 문서를 첨부했습니다.`;
+    } catch {
+      if (active() && epoch === readingEpoch) status.textContent = '문서 바이트를 읽지 못했습니다. 다시 선택해 주세요.';
+    } finally {
+      if (epoch === readingEpoch) { reading=false;readers.clear();updateControls(); }
+    }
+  }
+
   async function submit(): Promise<void> {
     syncSelection();
     if (!active() || superseding || reading || composing) return;
     const message = text.value;
     if (pending && pending.text === message && pending.imageRevision === imageRevision) return;
-    if (!message.trim() && !images.length) {
+    if (!message.trim() && !images.length && !files.length) {
       status.textContent = '메시지를 입력해 주세요. 이미지는 메시지와 함께 보낼 수 있습니다.';
       return;
     }
@@ -414,6 +502,7 @@ export function wireAssistantComposer(
     const owned: OwnedRequest = {
       tokenId, requestId, conversationId: selectedConversation, text: message, textRevision, imageRevision,
       images: images.map(image=>({...image})),
+      files: files.map(file=>({...file})),
     };
     const copiedImages = images.map(image => ({ ...image }));
     pending = owned;
@@ -421,7 +510,8 @@ export function wireAssistantComposer(
     updateControls();
     try {
       const result: unknown = await invoke('submit_assistant_input', {
-        input: { request_id: requestId, conversation_id: owned.conversationId, text: message, images: copiedImages },
+        input: { request_id: requestId, conversation_id: owned.conversationId, text: message, images: copiedImages,
+          ...(owned.files.length ? {files:owned.files.map(file=>({...file}))} : {}) },
         tokenId,
       });
       syncSelection();
@@ -445,6 +535,7 @@ export function wireAssistantComposer(
         }
         if (imageRevision === owned.imageRevision) {
           images = [];
+          files = [];
           imageRevision++;
           renderImages();
         }
@@ -499,6 +590,7 @@ export function wireAssistantComposer(
   text.addEventListener('keyup', () => { finishingComposition = false; }, { signal: listeners.signal });
   text.addEventListener('pointerup', () => { finishingComposition = false; }, { signal: listeners.signal });
   imagePicker.addEventListener('change', () => { void pickImages(); }, { signal: listeners.signal });
+  filePicker.addEventListener('change', () => { void pickFiles(); }, { signal: listeners.signal });
   cancel.addEventListener('click', () => retirePending('요청 취소를 보냈습니다. 작성한 내용은 남아 있습니다.'), { signal: listeners.signal });
   root.defaultView?.addEventListener('pagehide', () => {
     contextEpoch++;

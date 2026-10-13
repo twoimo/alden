@@ -137,6 +137,11 @@ def _schema(db: sqlite3.Connection) -> None:
         metadata_json TEXT NOT NULL CHECK(length(metadata_json)<=4096),
         recorded_at REAL NOT NULL
     )''')
+    db.execute('''CREATE TABLE IF NOT EXISTS alden_chat_input_contexts (
+        request_id TEXT PRIMARY KEY REFERENCES alden_chat_requests(request_id),
+        context_sha256 TEXT NOT NULL,
+        bound_at REAL NOT NULL
+    )''')
 
 
 def _generation(value: dict | None) -> str | None:
@@ -185,7 +190,7 @@ def _history(db: sqlite3.Connection, conversation_id: str, before: int) -> list[
             for row in reversed(rows)]
 
 
-def _history_attachments(db: sqlite3.Connection, conversation_id: str, before: int) -> list[dict]:
+def _history_attachments(db: sqlite3.Connection, conversation_id: str, before: int, *, files=False) -> list[dict]:
     # Ignore all non-completed or retracted requests. Each stored value is at
     # most four metadata objects; search results and return size are bounded.
     rows = db.execute('''SELECT r.request_id, r.turn_id, r.attachments_json
@@ -202,7 +207,7 @@ def _history_attachments(db: sqlite3.Connection, conversation_id: str, before: i
     found, seen = [], set()
     for row in rows:
         for item in json.loads(row['attachments_json']):
-            if not item['mime'].startswith('image/'):
+            if item['mime'].startswith('image/') == files:
                 continue
             key = (item['sha256'], item['mime'])
             if key in seen:
@@ -236,6 +241,29 @@ def verify_history_image_sources(state_root: Path, ticket: dict) -> None:
         _verify_history_image_sources(db, ticket)
 
 
+def _verify_history_file_sources(db: sqlite3.Connection, ticket: dict) -> None:
+    for item in ticket.get('document_context', {}).get('selected', []):
+        if item['origin'] != 'previous':
+            continue
+        row = db.execute('''SELECT r.attachments_json FROM alden_chat_requests AS r
+            WHERE request_id=? AND conversation_id=? AND turn_id=? AND turn_id<? AND state='completed'
+              AND (SELECT count(*) FROM voice_messages AS m WHERE m.session_id=r.conversation_id
+                   AND m.turn_id=r.turn_id AND m.role IN ('user','assistant') AND m.state='confirmed')=2''',
+            (item['source_request_id'], ticket['conversation_id'], item['source_turn_id'], ticket['turn_id'])).fetchone()
+        if row is None or not any(all(meta.get(key) == item[key] for key in ('filename', 'sha256', 'mime', 'size'))
+                                 for meta in json.loads(row['attachments_json'])):
+            raise ValueError('assistant_file_context_changed')
+
+
+def verify_history_file_sources(state_root: Path, ticket: dict) -> None:
+    if not ticket.get('document_context', {}).get('selected'):
+        return
+    with database(state_root) as db:
+        if db is None:
+            raise ValueError('assistant_file_context_changed')
+        _verify_history_file_sources(db, ticket)
+
+
 def _receipt(db: sqlite3.Connection, row: sqlite3.Row, *, include_owner: bool) -> dict:
     # Stable public/native states. The persisted SQL state remains suitable for
     # pending-turn CAS and old databases: pending -> running, cancelled with a
@@ -256,6 +284,7 @@ def _receipt(db: sqlite3.Connection, row: sqlite3.Row, *, include_owner: bool) -
         'source': 'text',
         'history': _history(db, row['conversation_id'], row['turn_id']),
         'history_attachments': _history_attachments(db, row['conversation_id'], row['turn_id']),
+        'history_files': _history_attachments(db, row['conversation_id'], row['turn_id'], files=True),
     }
     if include_owner:
         result['owner_id'] = row['owner_id']
@@ -311,7 +340,7 @@ def reserve_turn(state_root: Path, request_id: str, conversation_id: str | None,
         if selected is None:
             selected = uuid.uuid4().hex
             db.execute('INSERT INTO voice_sessions(id, started_at, title, source) VALUES(?,?,?,?)',
-                       (selected, now, text[:80] or '이미지 대화', 'text'))
+                       (selected, now, text[:80] or '첨부 대화', 'text'))
         elif db.execute('SELECT 1 FROM voice_sessions WHERE id=?', (selected,)).fetchone() is None:
             raise ValueError('conversation_not_found')
 
@@ -357,6 +386,37 @@ def _ticket(db: sqlite3.Connection, ticket: dict) -> sqlite3.Row:
     return row
 
 
+def require_current_turn(state_root: Path, ticket: dict) -> None:
+    with database(state_root) as db:
+        if db is None:
+            raise StaleTurn('turn_not_current')
+        row = _ticket(db, ticket)
+        latest = db.execute('SELECT COALESCE(MAX(turn_id),0),COALESCE(MAX(context_version),0) FROM voice_messages WHERE session_id=?',
+                            (row['conversation_id'],)).fetchone()
+        if row['state'] != 'pending' or tuple(latest) != (row['turn_id'], row['context_version']):
+            raise StaleTurn('turn_not_current')
+
+
+def bind_prepared_context(state_root: Path, ticket: dict, context: dict) -> None:
+    # Only digests of prepared metadata and history: no document body cache.
+    payload = json.dumps({'references': context, 'history': ticket['history']}, ensure_ascii=False,
+                         sort_keys=True, allow_nan=False, separators=(',', ':')).encode('utf-8')
+    digest = hashlib.sha256(payload).hexdigest()
+    with _write(state_root) as db:
+        row = _ticket(db, ticket)
+        if row['state'] != 'pending':
+            raise StaleTurn('turn_not_current')
+        latest = db.execute('SELECT COALESCE(MAX(turn_id),0),COALESCE(MAX(context_version),0) FROM voice_messages WHERE session_id=?',
+                            (row['conversation_id'],)).fetchone()
+        if tuple(latest) != (row['turn_id'], row['context_version']):
+            raise StaleTurn('turn_not_current')
+        previous = db.execute('SELECT context_sha256 FROM alden_chat_input_contexts WHERE request_id=?', (row['request_id'],)).fetchone()
+        if previous and previous[0] != digest:
+            raise ValueError('assistant_file_context_changed')
+        db.execute('INSERT OR IGNORE INTO alden_chat_input_contexts VALUES(?,?,?)', (row['request_id'], digest, time.time()))
+    ticket['prepared_context_sha256'] = digest
+
+
 def complete_turn(state_root: Path, ticket: dict, reply: str, *,
                   provenance: list[dict] | None = None, generation: dict | None = None) -> dict:
     """Persist one assistant answer with compare-and-swap turn/source checks.
@@ -373,7 +433,13 @@ def complete_turn(state_root: Path, ticket: dict, reply: str, *,
             return _receipt(db, row, include_owner=True)
         if row['state'] != 'pending':
             raise StaleTurn(f"turn_{row['state']}")
+        expected = ticket.get('prepared_context_sha256')
+        if expected is not None:
+            bound = db.execute('SELECT context_sha256 FROM alden_chat_input_contexts WHERE request_id=?', (row['request_id'],)).fetchone()
+            if bound is None or bound[0] != expected:
+                raise StaleTurn('turn_context_changed')
         _verify_history_image_sources(db, ticket)
+        _verify_history_file_sources(db, ticket)
         user = db.execute('''SELECT content FROM voice_messages
             WHERE session_id=? AND turn_id=? AND role='user' AND state='confirmed' ''',
             (row['conversation_id'], row['turn_id'])).fetchone()

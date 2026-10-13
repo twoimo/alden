@@ -60,6 +60,45 @@ function receipt(call: NativeCall, overrides: Record<string, unknown> = {}) {
   };
 }
 
+describe('document intake and ownership', () => {
+  const ready = (app: ReturnType<typeof fixture>) => vi.waitFor(()=>expect(app.form.getAttribute('aria-busy')).toBe('false'));
+  function pickFiles(_app: ReturnType<typeof fixture>, ...files: File[]) {
+    const picker=document.querySelector<HTMLInputElement>('#assistant-composer-files')!;
+    Object.defineProperty(picker,'files',{configurable:true,value:files});
+    picker.dispatchEvent(new Event('change',{bubbles:true}));
+  }
+  it('submits document bytes and reconciles the same immutable payload', async () => {
+    const app=fixture();pickFiles(app,new File(['quantity 53'],'receipt.txt',{type:'text/plain'}));await ready(app);
+    app.submit();const first=app.submitted[0];
+    expect(input(first).files).toEqual([{name:'receipt.txt',mime:'text/plain',data:btoa('quantity 53')}]);
+    first.reject(new Error('transport unavailable'));await tick();app.submit();
+    expect(input(app.submitted[1])).toEqual(input(first));
+    app.submitted[1].resolve(receipt(app.submitted[1]));await tick();
+    expect(app.preview.children).toHaveLength(0);
+  });
+  it('changing a document fences an older completion and uses a new request', async () => {
+    const app=fixture();pickFiles(app,new File(['one'],'one.txt',{type:'text/plain'}));await ready(app);app.submit();const first=app.submitted[0];
+    pickFiles(app,new File(['two'],'two.txt',{type:'text/plain'}));await ready(app);
+    first.resolve(receipt(first));await tick();expect(app.committed).not.toHaveBeenCalled();
+    app.submit();expect(input(app.submitted[1]).request_id).not.toBe(input(first).request_id);
+    expect((input(app.submitted[1]).files as {name:string}[])[0].name).toBe('two.txt');
+  });
+  it('enforces a common four-attachment limit for images and documents', async () => {
+    const app=fixture();app.pick(...[1,2,3].map(n=>new File(['png'],`${n}.png`,{type:'image/png'})));await ready(app);
+    pickFiles(app,new File(['one'],'one.txt'),new File(['two'],'two.txt'));await tick();
+    expect(app.status.textContent).toContain('4개');app.submit();expect(input(app.submitted[0]).files).toBeUndefined();
+  });
+  it('does not send a document chosen from a retired hidden view', async () => {
+    const app=fixture();app.controller.visible(false);pickFiles(app,new File(['private'],'hidden.txt'));await tick();
+    app.controller.visible(true);app.submit();expect(app.submitted).toHaveLength(0);
+  });
+  it('keeps the selected document after a concrete parser failure', async () => {
+    const app=fixture();pickFiles(app,new File(['not-pdf'],'bad.pdf',{type:'application/pdf'}));await ready(app);app.submit();
+    app.submitted[0].resolve(receipt(app.submitted[0],{ok:false,state:'failed',error_code:'document_format_mismatch'}));await tick();
+    expect(app.preview.children).toHaveLength(1);expect(app.status.textContent).toContain('형식이 일치하지');
+  });
+});
+
 describe('uncertain input reconciliation and strict receipts', () => {
   it('reuses an uncertain request ID and payload with a fresh token after transport failure', async () => {
     const app = fixture(); app.write('원래 입력'); app.submit();
