@@ -8,6 +8,8 @@ import { SynapticBridges } from '../knowledge/synapses';
 import { PositionTransition } from '../knowledge/position-transition';
 import { overviewDisplayPoint } from '../knowledge/overview-presentation';
 import { pickKnowledgeSphere } from '../knowledge/picking';
+import { AnimationLoop } from '../core/animation-loop';
+import { VoiceEnvelope } from '../knowledge/voice-envelope';
 
 // Real frame, projection, instance buffers, bridges and picker; only the WebGL
 // draw and upstream settled worker are replaced. Synthetic records are not live
@@ -58,6 +60,28 @@ function fixture(reducedMotion: boolean) {
 }
 
 describe('display collision correction in the production frame',()=>{
+  it('keeps emergency state latched and returns to idle after a visible redraw',()=>{
+    const f=fixture(false),{h}=f;
+    const callbacks=new Map<number,FrameRequestCallback>();let serial=0,now=0;
+    const loop=new AnimationLoop(dt=>h.render(dt),{now:()=>now,
+      request:callback=>{callbacks.set(++serial,callback);return serial;},cancel:id=>{callbacks.delete(id);}});
+    h.loop=loop;h.voiceEnvelope=new VoiceEnvelope();h.voiceEnvelope.setRms(1);
+    h.voiceSource='input';h.queueSemanticLayout=vi.fn();h.scheduleRelationBoundary=vi.fn();h.updateOrbActivity=vi.fn();
+    try {
+      h.setEmergency({schemaVersion:1,epoch:1,latched:true,reason:'controlled test stop'});
+      expect(h.lifecycleDiagnostics.emergencyPaused).toBe(true);
+      expect(h.voiceEnvelope.targetRms).toBe(0);expect(h.voiceSource).toBe('none');
+      for(let restore=0;restore<3;restore++){
+        h.start();now+=100;
+        const queued=[...callbacks.values()];callbacks.clear();queued.forEach(callback=>callback(now));
+        expect(h.lifecycleDiagnostics.emergencyPaused).toBe(true);
+        expect(loop.diagnostics()).toMatchObject({running:false,pendingFrame:false});
+        expect(callbacks.size).toBe(0);
+      }
+      expect(loop.renderCount).toBe(3);
+    }finally{loop.stop();f.dispose();}
+  });
+
   it.each(['disposed','neuronDetail'])('does not report an overview viewport when %s',state=>{
     const f=fixture(false),{h}=f;
     try {
