@@ -24,8 +24,9 @@ describe('message list viewport changes', () => {
       target: host, contentRect: new DOMRect(0, 0, width, height),
       borderBoxSize: [], contentBoxSize: [], devicePixelContentBoxSize: [],
     }], {} as ResizeObserver);
-    const resize = (nextWidth: number, nextHeight: number) => {
+    const resize = (nextWidth: number, nextHeight: number, beforeMeasured?: () => void) => {
       width = nextWidth; height = nextHeight;
+      beforeMeasured?.();
       // A browser may deliver the clamped scroll event before ResizeObserver.
       host.dispatchEvent(new Event('scroll'));
       measured();
@@ -53,6 +54,53 @@ describe('message list viewport changes', () => {
     list.set([1, 2, 3, 4, 5, 6, 7], { end: list.followsLatest, preserve: true });
     expect(list.followsLatest).toBe(false);
     expect(host.scrollTop).toBe(110);
+    list.dispose();
+  });
+
+  it('honors an upward wheel while the resize observer is still pending', () => {
+    const { host, list, resize } = setup();
+    resize(240, 120, () => {
+      host.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 }));
+      host.scrollTop = 110;
+    });
+    expect(list.followsLatest).toBe(false);
+    expect(host.scrollTop).toBe(110);
+    list.set([1, 2, 3, 4, 5, 6, 7], { end: list.followsLatest, preserve: true });
+    expect(host.scrollTop).toBe(110);
+    list.dispose();
+  });
+
+  it('keeps latest reading intent through a hidden scroll reset and same-size restore', () => {
+    const { host, list, resize } = setup();
+    list.setVisible(false); resize(0, 0);
+    host.scrollTop = 0; host.dispatchEvent(new Event('scroll'));
+    list.setVisible(true); resize(600, 300);
+    expect(list.followsLatest).toBe(true);
+    list.set([1, 2, 3, 4, 5, 6, 7], { end: list.followsLatest, preserve: true });
+    expect(host.scrollTop).toBeGreaterThanOrEqual(400);
+    list.dispose();
+  });
+
+  it('restores an older-message anchor when hidden layout resets scrolling', () => {
+    const { host, list, resize } = setup();
+    host.scrollTop = 110; host.dispatchEvent(new Event('scroll'));
+    list.setVisible(false); resize(0, 0); host.scrollTop = 0;
+    host.dispatchEvent(new Event('scroll'));
+    list.setVisible(true); resize(600, 300);
+    expect(list.followsLatest).toBe(false); expect(host.scrollTop).toBe(110);
+    list.dispose();
+  });
+
+  it('honors keyboard navigation during resize without treating text editing as scroll intent', () => {
+    const { host, list, resize } = setup();
+    const input = document.createElement('input'); host.append(input);
+    resize(240, 120, () => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })));
+    expect(list.followsLatest).toBe(true);
+    resize(320, 120, () => {
+      host.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }));
+      host.scrollTop = 110;
+    });
+    expect(list.followsLatest).toBe(false); expect(host.scrollTop).toBe(110);
     list.dispose();
   });
 });

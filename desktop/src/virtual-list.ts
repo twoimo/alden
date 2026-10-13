@@ -11,15 +11,19 @@ export class VirtualList<T> {
   private visible = true;
   private viewportWidth = 0;
   private viewportHeight = 0;
+  private resumePending = false;
+  private resumeAnchor: { key: string; within: number } | null = null;
   get followsLatest():boolean { return this.endPinned; }
   constructor(private host: HTMLElement, private key: (item:T)=>string, private render: (item:T)=>HTMLElement, private estimate=78) {
     this.surface.style.position="relative"; host.replaceChildren(this.surface);
     this.observer=typeof ResizeObserver==='undefined'?null:new ResizeObserver(entries=>{
+      if(!this.visible||this.disposed)return;
       let changed=false;
-      const anchor=this.anchor();
+      const anchor=this.resumeAnchor??this.anchor();
       for(const entry of entries){
         if(entry.target===this.host){
           const width=this.host.clientWidth,height=this.host.clientHeight;
+          if(width>0&&height>0&&this.resumePending){this.resumePending=false;changed=true;}
           if(width>0&&height>0&&(Math.abs(width-this.viewportWidth)>1||Math.abs(height-this.viewportHeight)>1)){
             this.viewportWidth=width;this.viewportHeight=height;changed=true;
           }
@@ -27,9 +31,11 @@ export class VirtualList<T> {
         }
         const id=(entry.target as HTMLElement).dataset.virtualKey!;const height=entry.borderBoxSize?.[0]?.blockSize || entry.contentRect.height;
         if(height>0 && Math.abs((this.heights.get(id)??this.estimate)-height)>1){this.heights.set(id,height);changed=true;}}
-      if(changed){this.measure();if(this.endPinned)this.host.scrollTop=this.offsets.at(-1)!;else this.restore(anchor);this.schedule();}
+      if(changed){this.measure();if(this.endPinned)this.host.scrollTop=this.offsets.at(-1)!;else this.restore(anchor);if(!this.resumePending)this.resumeAnchor=null;this.schedule();}
     });
     host.addEventListener('scroll',this.scroll,{passive:true});
+    host.addEventListener('wheel',this.wheel,{passive:true});
+    host.addEventListener('keydown',this.keydown);
   }
   set(items:T[],options:{end?:boolean;preserve?:boolean}={}):void {
     const anchor=options.preserve?this.anchor():null;
@@ -52,10 +58,17 @@ export class VirtualList<T> {
   setVisible(visible:boolean):void {
     if(this.visible===visible||this.disposed)return;
     this.visible=visible;
-    if(visible)this.draw();else{this.observer?.disconnect();if(this.frame!==null)cancelAnimationFrame(this.frame);this.frame=null;}
+    if(visible){
+      this.resumePending=this.observer!==null;
+      if(this.endPinned)this.host.scrollTop=this.offsets.at(-1)!;else this.restore(this.resumeAnchor);
+      if(!this.resumePending)this.resumeAnchor=null;
+      this.draw();
+    }
+    else{this.resumeAnchor=this.anchor();this.resumePending=false;this.observer?.disconnect();if(this.frame!==null)cancelAnimationFrame(this.frame);this.frame=null;}
   }
   private measure():void {this.offsets=[0];for(const item of this.items)this.offsets.push(this.offsets.at(-1)!+(this.heights.get(this.key(item))??this.estimate));this.surface.style.height=this.offsets.at(-1)+'px';}
   private readonly scroll=():void=>{
+    if(!this.visible||this.resumePending)return;
     // Resize may emit a scroll before its measurement callback. Keep the
     // previous reading intent until the observer adjusts the new scroll range.
     const resizing=this.viewportWidth>0&&this.viewportHeight>0&&(
@@ -63,6 +76,16 @@ export class VirtualList<T> {
       Math.abs(this.host.clientHeight-this.viewportHeight)>1);
     if(!resizing)this.endPinned=this.host.scrollTop+this.host.clientHeight>=this.offsets.at(-1)!-12;
     this.schedule();
+  };
+  private olderIntent():void {
+    if(!this.visible||this.disposed)return;
+    this.endPinned=false;this.resumeAnchor=null;
+  }
+  private readonly wheel=(event:WheelEvent):void=>{if(!event.defaultPrevented&&event.deltaY<0)this.olderIntent();};
+  private readonly keydown=(event:KeyboardEvent):void=>{
+    if(!event.defaultPrevented&&!event.altKey&&!event.ctrlKey&&!event.metaKey&&
+      ['ArrowUp','PageUp','Home'].includes(event.key)&&
+      !(event.target instanceof HTMLElement&&event.target.closest('input,textarea,select,[contenteditable="true"]')))this.olderIntent();
   };
   private schedule():void {if(this.frame!==null||this.disposed||!this.visible)return;this.frame=requestAnimationFrame(()=>{this.frame=null;this.draw();});}
   private draw():void {
@@ -77,5 +100,5 @@ export class VirtualList<T> {
       this.surface.append(row);this.observer?.observe(row);
     }
   }
-  dispose():void {this.disposed=true;this.host.removeEventListener('scroll',this.scroll);this.observer?.disconnect();if(this.frame!==null)cancelAnimationFrame(this.frame);this.surface.replaceChildren();}
+  dispose():void {this.disposed=true;this.host.removeEventListener('scroll',this.scroll);this.host.removeEventListener('wheel',this.wheel);this.host.removeEventListener('keydown',this.keydown);this.observer?.disconnect();if(this.frame!==null)cancelAnimationFrame(this.frame);this.surface.replaceChildren();}
 }
