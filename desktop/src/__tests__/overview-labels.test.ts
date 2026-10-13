@@ -14,10 +14,11 @@ describe('overview reading entry labels', () => {
       {id:'f',label:'이력서·서류',category:'topic',degree:20,source_target:'one'},
       {id:'g',label:'면접 질문을 준비하는 방법',category:'video',source_target:'two'},
       {id:'h',label:'snippets',category:'hub',degree:9999},
+      {id:'i',label:'돈 벌어주는 스파미 일반 영상 133개',category:'index',degree:9999},
     ]);
     const before=JSON.stringify(input);
     expect(selectOverviewLabels(input.nodes).map(n=>n.label)).toEqual(['연봉·복리후생','면접 질문을 준비하는 방법','이력서·서류']);
-    expect(JSON.stringify(input)).toBe(before);expect(input.nodes).toHaveLength(8);
+    expect(JSON.stringify(input)).toBe(before);expect(input.nodes).toHaveLength(9);
   });
   it('deduplicates display text without merging nodes, and preserves project coverage', () => {
     const nodes=graph([
@@ -28,6 +29,16 @@ describe('overview reading entry labels', () => {
     ]).nodes;
     const result=selectOverviewLabels(nodes,3);
     expect(result.map(n=>n.sourceTarget)).toEqual(['a','b','c']); expect(nodes).toHaveLength(4);
+  });
+  it('keeps declared unread metadata out of representatives without fabricating content', () => {
+    const nodes=graph([
+      {id:'a',label:'돈 벌어주는 스파미 일반 영상 133개',category:'document',source_metadata:{content_evidence:'metadata_description'}},
+      {id:'b',label:'채용 자료 파일 모음',category:'document',source_metadata:{content_evidence:'unread_body_marker'}},
+      {id:'c',label:'서류 준비의 실제 조건',category:'source_claim',source_metadata:{content_evidence:'content_candidate'}},
+      {id:'d',label:'형식이 아직 알려지지 않은 자료',category:'document',source_metadata:{content_evidence:'unexpected'}},
+    ]).nodes;
+    expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['c','d']);expect(nodes).toHaveLength(4);
+    expect(nodes[0].contentEvidence).toBe('metadata_description');expect(nodes[3].contentEvidence).toBeUndefined();
   });
   it('keeps meaningful short subjects and uncertain claims, with no generated text', () => {
     const nodes=graph([{id:'a',label:'면접',category:'topic'},{id:'b',label:'미확인 조건에서 발생할 수 있는 실패',category:'source_claim'}]).nodes;

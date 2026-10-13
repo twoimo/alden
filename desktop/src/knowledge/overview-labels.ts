@@ -12,7 +12,8 @@ export function selectOverviewLabels(nodes: readonly KnowledgeNode[], cap = 8): 
   const limit = Math.min(8, Math.max(0, Math.floor(Number.isFinite(cap) ? cap : 0)));
   const candidates = nodes.flatMap(node => {
     const label = node.label.normalize('NFC').replace(/\s+/g, ' ').trim();
-    if (node.evidence.retracted || PEOPLE.test(node.category) || node.category === 'collection' || node.category === 'hub'
+    if (node.evidence.retracted || (node.contentEvidence && node.contentEvidence !== 'content_candidate')
+      || PEOPLE.test(node.category) || ['collection','hub','index','metadata'].includes(node.category)
       || GENERIC.test(label) || !/[A-Za-z가-힣]/.test(label)
       || /^@[^\s]+$/.test(label) || /^(?:graph|source|target|version|youtube|threads|files|memory):/i.test(label)
       || /^[0-9a-f]{32,}$/i.test(label) || label.length < 2) return [];

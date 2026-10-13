@@ -14,6 +14,16 @@ from alden_collect import capture_source, collect_target
 
 
 class CollectionTests(unittest.TestCase):
+    def test_graph_classifies_declared_unread_metadata_without_reading_original_files(self):
+        target=self.target()
+        self.store.ingest(target,[{'original_id':'unread','label':'자료 목록','text':'경로만 색인한 파일. 본문은 읽지 않았습니다.','kind':'document'},
+          {'original_id':'body','label':'실제 본문','text':'실제 저장된 본문 진술입니다.','kind':'document'}])
+        nodes=self.store.graph_page(projects=['one'])['nodes']
+        self.assertEqual({n['label']:n['source_metadata']['content_evidence'] for n in nodes},
+                         {'자료 목록':'unread_body_marker','실제 본문':'content_candidate'})
+        overview=self.store.graph_page(projects=['one'],limit=1984,overview=True)['nodes']
+        self.assertEqual({n['label']:n['source_metadata']['content_evidence'] for n in overview},
+                         {'자료 목록':'unread_body_marker','실제 본문':'content_candidate'})
     def test_overview_density_is_explicit_bounded_and_keeps_scope_and_detail_budgets(self):
         allowed, denied = self.target(), self.target("denied", "other")
         self.store.ingest(allowed, [self.record(str(i)) for i in range(160)])

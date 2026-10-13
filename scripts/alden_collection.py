@@ -145,6 +145,57 @@ def require_relation_binding(db, relation, *, allow_new=False):
         raise RuntimeError('collection_relation_integrity') from error
 
 
+def same_file_relation_evidence(previous, incoming, source_revision):
+    """An unchanged file re-read is not a changed relationship assertion."""
+    try:
+        old = json.loads(previous)
+        if not isinstance(old, dict) or encoded(old).decode() != previous or not isinstance(incoming, dict):
+            return False
+        a, b = old.get('source'), incoming.get('source')
+        if not isinstance(a, dict) or not isinstance(b, dict):return False
+        if a.get('sha256') != source_revision or b.get('sha256') != source_revision:return False
+        if any(type(s.get('observed_at')) not in (int,float) or not math.isfinite(s['observed_at']) or s['observed_at']<=0 for s in (a,b)):
+            return False
+        stripped = lambda value: {**value, 'source': {k:v for k,v in value['source'].items() if k != 'observed_at'}}
+        return stripped(old) == stripped(incoming)
+    except (ValueError,TypeError,UnicodeError,RecursionError):
+        return False
+
+
+def source_observation(cursor, source_revision):
+    if not isinstance(cursor, dict) or 'source_observation' not in cursor:return None
+    value=cursor['source_observation']
+    if (not isinstance(value,dict) or set(value)!= {'source_revision','observed_at'}
+            or value['source_revision']!=source_revision
+            or type(value['observed_at']) not in (int,float) or abs(value['observed_at'])>2**53
+            or not math.isfinite(value['observed_at']) or value['observed_at']<=0):
+        raise ValueError('collection_source_observation_invalid')
+    return {**value,'observed_at':float(value['observed_at'])}
+
+
+SOURCE_OBSERVATIONS_SQL = '''CREATE TABLE IF NOT EXISTS source_observations(
+    id TEXT PRIMARY KEY,target_id TEXT NOT NULL,source_revision TEXT NOT NULL,
+    processing_version TEXT NOT NULL,projection_sha256 TEXT NOT NULL,
+    observed_at REAL NOT NULL,confirmed_at REAL NOT NULL,basis_run_id TEXT NOT NULL,
+    record_count INTEGER NOT NULL,relation_count INTEGER NOT NULL,
+    FOREIGN KEY(target_id) REFERENCES targets(id),FOREIGN KEY(basis_run_id) REFERENCES runs(id))'''
+
+
+def record_source_observation(db,target_id,revision,processor,projection,observation,run_id,records,relations):
+    if observation is None:return None
+    if not db.execute("SELECT 1 FROM runs WHERE id=? AND target_id=? AND state='complete'",(run_id,target_id)).fetchone():
+        raise RuntimeError('collection_observation_binding')
+    db.execute(SOURCE_OBSERVATIONS_SQL)
+    value=(target_id,revision,processor,projection,observation['observed_at'],run_id,records,relations)
+    key=identity('source-observation',encoded(value).decode())
+    old=db.execute('''SELECT target_id,source_revision,processing_version,projection_sha256,
+        observed_at,basis_run_id,record_count,relation_count FROM source_observations WHERE id=?''',(key,)).fetchone()
+    if old is not None and tuple(old)!=value:raise RuntimeError('collection_observation_binding')
+    db.execute('INSERT OR IGNORE INTO source_observations VALUES(?,?,?,?,?,?,?,?,?,?)',
+               (key,*value[:5],time.time(),*value[5:]))
+    return key
+
+
 def safe_directory(path: Path) -> Path:
     path = path.absolute()
     if ".." in path.parts:
@@ -549,6 +600,7 @@ class CollectionStore:
             if not isinstance(source_revision, str) or not re.fullmatch(r'[0-9a-f]{64}', source_revision) or type(source_order) is not int or source_order < 0:
                 raise ValueError("collection_source_revision_invalid")
             records, relations = list(records), list(relations)
+            observation = source_observation(cursor, source_revision)
             if len(records) > SNAPSHOT_RECORD_BUDGET:
                 raise ValueError("collection_snapshot_budget")
             target_platform = self.target(target_id)['platform']
@@ -591,8 +643,18 @@ class CollectionStore:
                             confirmation.execute('UPDATE target_snapshots SET source_order=? WHERE target_id=?',
                                                  (effective_order, target_id))
                             confirmation.execute('UPDATE targets SET next_run=?+interval_seconds WHERE id=?', (time.time(), target_id))
+                            if observation is not None:
+                                saved=json.loads(target['cursor'] or '{}')
+                                if not isinstance(saved,dict):raise RuntimeError('collection_cursor_integrity')
+                                old_observation=source_observation(saved,source_revision)
+                                saved['source_observation']=old_observation if old_observation and old_observation['observed_at']>observation['observed_at'] else observation
+                                confirmation.execute('UPDATE targets SET cursor=?,last_success=? WHERE id=?',
+                                                     (encoded(saved).decode(),time.time(),target_id))
+                            observation_id=record_source_observation(confirmation,target_id,source_revision,processing_version,
+                                projection,observation,prior['run_id'],len(records),len(relations))
                         return {'run_id': prior['run_id'], 'target_id': target_id, 'state': 'unchanged',
-                                'added': 0, 'revised': 0, 'unchanged': len(records), 'removed': 0}
+                                'added': 0, 'revised': 0, 'unchanged': len(records), 'removed': 0,
+                                **({'source_observation_id':observation_id} if observation_id else {})}
                     if automatic_snapshot_run and prior:
                         # A -> B -> A is a new transition, not a replay of A's
                         # completed run. The locked predecessor also keeps a
@@ -666,13 +728,25 @@ class CollectionStore:
                             raise ValueError("collection_orphan_relation")
                         rel_id = identity("relation", encoded([target_id, source, relation["type"], destination, relation.get("original_id", "")]).decode())
                         evidence = encoded(relation.get("evidence", {})).decode()
-                        require_relation_binding(db, {'id':rel_id,'version':digest(evidence.encode()),
-                            'target_id':target_id,'source':source,'target':destination,
-                            'type':relation['type'],'evidence':evidence}, allow_new=True)
-                        db.execute("INSERT INTO relations VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET evidence=excluded.evidence,version=excluded.version,active=1",
-                                   (rel_id, target_id, source, destination, relation["type"], evidence, digest(evidence.encode())))
-                        db.execute('INSERT OR IGNORE INTO relation_versions VALUES(?,?,?,?,?,?,?,?)',
-                                   (rel_id, digest(evidence.encode()), target_id, source, destination, relation['type'], evidence, time.time()))
+                        reused_evidence=False
+                        if complete_snapshot and prior and prior['source_revision'] == source_revision:
+                            old_relation=db.execute('SELECT id,version,target_id,source,target,type,evidence,active FROM relations WHERE id=?',(rel_id,)).fetchone()
+                            if old_relation is not None:
+                                require_relation_binding(db,old_relation)
+                                if tuple(old_relation[k] for k in ('target_id','source','target','type')) != (target_id,source,destination,relation['type']):
+                                    raise RuntimeError('collection_relation_integrity')
+                                if same_file_relation_evidence(old_relation['evidence'],relation.get('evidence',{}),source_revision):
+                                    evidence=old_relation['evidence']
+                                    reused_evidence=True
+                                    if not old_relation['active']:db.execute('UPDATE relations SET active=1 WHERE id=?',(rel_id,))
+                        if not reused_evidence:
+                            require_relation_binding(db, {'id':rel_id,'version':digest(evidence.encode()),
+                                'target_id':target_id,'source':source,'target':destination,
+                                'type':relation['type'],'evidence':evidence}, allow_new=True)
+                            db.execute("INSERT INTO relations VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET evidence=excluded.evidence,version=excluded.version,active=1",
+                                       (rel_id, target_id, source, destination, relation["type"], evidence, digest(evidence.encode())))
+                            db.execute('INSERT OR IGNORE INTO relation_versions VALUES(?,?,?,?,?,?,?,?)',
+                                       (rel_id, digest(evidence.encode()), target_id, source, destination, relation['type'], evidence, time.time()))
                         if complete_snapshot:
                             if not all(db.execute('SELECT 1 FROM snapshot_members WHERE document_id=?', (value,)).fetchone() for value in (source, destination)):
                                 raise ValueError('collection_orphan_relation')
@@ -701,7 +775,10 @@ class CollectionStore:
                                (now, encoded(cursor).decode(), counts["added"], counts["revised"], counts["unchanged"], run_id))
                     db.execute("UPDATE targets SET cursor=?,last_success=?,last_error=NULL,next_run=?+interval_seconds WHERE id=?",
                                (encoded(cursor).decode(), now, now, target_id))
-                return {"run_id": run_id, "target_id": target_id, "state": "complete", **counts, "removed": removed}
+                    observation_id=record_source_observation(db,target_id,source_revision,processing_version,projection,
+                        observation if complete_snapshot else None,run_id,len(records) if complete_snapshot else 0,len(relations) if complete_snapshot else 0)
+                return {"run_id": run_id, "target_id": target_id, "state": "complete", **counts, "removed": removed,
+                        **({'source_observation_id':observation_id} if observation_id else {})}
             except Exception as error:
                 reason = str(error)[:200]
                 state = "paused" if reason == "collection_cancelled" or isinstance(error, AldenCancelled) else "failed"
@@ -847,6 +924,8 @@ class CollectionStore:
             raise ValueError("collection_graph_filter_invalid")
         with self.database() as db:
             db.create_function('alden_relation_digest', 1, relation_evidence_digest, deterministic=True)
+            from alden_content_evidence import content_evidence_class
+            db.create_function('alden_content_class',2,lambda meta,body:content_evidence_class(json.loads(meta),body),deterministic=True)
             checkpoint, _, _, _ = self._activity_scope(db, projects, target_id, platform)
             if not projects:
                 return {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0,
@@ -905,6 +984,7 @@ class CollectionStore:
             json_node = """json_object('id',s.id,'platform',s.platform,'original_id',s.original_id,
               'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
               'label',v.label,'body',substr(v.body,1,2400),'metadata',json_object('kind',substr(CAST(json_extract(v.metadata,'$.kind') AS TEXT),1,256)),
+              'content_evidence',alden_content_class(v.metadata,v.body),
               'source_url',json_extract(v.metadata,'$.source_url'),'degree',COALESCE(d.degree,0))"""
             if overview:
                 json_node = json_node.replace("substr(v.body,1,2400)", "substr(v.body,1,0)")
@@ -1055,7 +1135,7 @@ class CollectionStore:
                               "source_url": row["source_url"], "source_target": row["target_id"], "source_platform": row["platform"],
                               "source_contexts": source_contexts.get(row["id"], []),
                               "degree": row["degree"], "degree_scope": "permitted filtered graph",
-                              "source_metadata": {"kind": kind}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
+                              "source_metadata": {"kind": kind, "content_evidence": row.get('content_evidence') or content_evidence_class(meta,row['body'])}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
             edges = [{"id": row["id"], "source": row["source"], "target": row["target"], "relation": row["type"], "context": "explicit source relationship", "weight": 1, "purpose": "reference", "evidence_message_id": row["id"], "evidence": {"kind": "snapshot", "source_event_ids": [row["id"]], "chat_id": "", "confirmed_at": None, "retracted": False}}
                      for row in edge_rows]
             result = {"ok": True, "nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": total_edges,

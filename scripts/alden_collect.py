@@ -367,7 +367,8 @@ def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: 
         # declared source file's observed modification time instead.
         order = path.stat(follow_symlinks=False).st_mtime_ns
     result = store.ingest(target_id, records, relations=relations,
-                          cursor={"source_revision": source_revision, "offset": len(records), "complete": True},
+                          cursor={"source_revision": source_revision, "offset": len(records), "complete": True,
+                                  "source_observation":{"source_revision":source_revision,"observed_at":source['observed_at']}},
                           origin="alden-collector", cancelled=cancelled, complete_snapshot=True,
                           source_revision=source_revision, source_order=order,
                           processing_version='declared-source-snapshot-v3', publication_guard=publication_guard)
