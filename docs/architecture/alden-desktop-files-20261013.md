@@ -19,3 +19,7 @@ source 구현·단위/통제 회귀·실제 패키지/설치·물리 사용의 �
 macOS에서는 종료한 자식 PID를 회수하지 않은 채 그룹 정리를 수행한다. [Darwin SDK의 siginfo/wait 계약](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/wait.h)을 따르며 UID가 채워졌다는 가정은 하지 않는다. [XNU killpg 구현](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c)은 zombie를 그룹 신호 대상에서 제외하므로 EPERM이 발생하면 소유 그룹의 live 프로세스가 없는지 별도로 확인한다. 살아 있는 프로세스에 대한 권한 실패는 성공으로 처리하지 않는다. 중간 UID·zombie-only 실패와 잘못된 CI YAML 들여쓰기 실패도 실행 기록에 보존했다.
 
 0.3.92의 [아홉 도식](alden-0.3.92/README.md)은 해당 판본으로 보존한다. 이 판본의 Desktop 입력 경로에는 파일 byte store·문서 parser child·문서 참조 digest와 후속 자료 CAS가 추가됐다. 모델 기본값과 로컬 RAM/가용성·명시 자동 모드 정책은 기존 선택을 따른다.
+
+설치0.3.93의 문서3턴은53→53→67을 답했고 기본1200·작은640 CSS픽셀 창을 직접 확인했다. 최종 원격4716f38의 CI38343165983 네 작업이 성공했다. 설치69파일/모드/서명·설정/7대상/정책/모델/선택 DB와 독립.92복구·ZIP 추출을 대사했다. 실제 생성 메타데이터는1,747/1,747/2,314바이트였다. 물리 파일 선택의 증거가 아니다.
+
+추가 그래프 audit에서 기본 창2,048개 코어 겹침0을 확인했으나 작은 창의 분리된 준비 조회→blur dispatch 구간에서32.106초 실패를 관측했다. 직전 준비와 이벤트 직전 상태를 구분할 수 없던 증거 공백을 보완해 단일 JS task 안에서 before/blur/after를 기록한다. 준비되지 않았으면 이벤트를 보내지 않고 기한 안에서 기다리며, 실제 before=true→after=false·닫힘·비상정지는 계속 실패로 처리한다. 생산 graph blur 정책을 바꾼 수정이 아니다. 최종 graph 재실행 결과는 별도 영수증으로 구분한다.

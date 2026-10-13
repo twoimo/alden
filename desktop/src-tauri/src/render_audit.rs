@@ -1285,13 +1285,16 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             eprintln!("Alden scope {case}: compact native geometry set");
             visibility(window,true,deadline)?;
             eprintln!("Alden scope {case}: resumed");
-            wait_for_audit_state("scoped native resume",deadline,|| collect_script(window,
-                "JSON.stringify({ready:window.__knowledgeRenderDiagnostics?.lifecycle?.animationRequested===true})".into(),deadline),|state|state["ready"]==true)?;
-            late_blur=collect_script(window,r#"JSON.stringify((()=>{
+            // Read readiness and dispatch in one JS task. Native/DOM visibility
+            // events can arrive between two independent WebView evaluations.
+            late_blur=wait_for_audit_state("scoped native resume and blur",deadline,|| collect_script(window,r#"JSON.stringify((()=>{
+                const before={...window.__knowledgeRenderDiagnostics?.lifecycle};
+                if(before.animationRequested!==true) return {synthetic:false,before,documentVisibility:document.visibilityState};
                 window.dispatchEvent(new Event('blur'));
-                return {synthetic:true,event:'blur',lifecycle:window.__knowledgeRenderDiagnostics?.lifecycle??null};
-            })())"#.into(),deadline)?;
-            if late_blur["lifecycle"]["animationRequested"]!=true {
+                return {synthetic:true,event:'blur',before,lifecycle:window.__knowledgeRenderDiagnostics?.lifecycle??null,
+                    documentVisibility:document.visibilityState};
+            })())"#.into(),deadline),|state|state["synthetic"]==true)?;
+            if !scoped_blur_preserved(&late_blur) {
                 return Err(format!("visible scoped graph stopped after synthetic late blur: {late_blur}"));
             }
         }
@@ -1382,6 +1385,14 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         states.push(state);
     }
     Ok(json!({"case":case,"states":states,"scope":"fixed observed projects/filter/next-page, two owned window sizes, read-only"}))
+}
+
+fn scoped_blur_preserved(state: &Value) -> bool {
+    state["synthetic"] == true && state["event"] == "blur"
+        && ["before", "lifecycle"].iter().all(|key| {
+            state[key]["animationRequested"] == true
+                && state[key]["disposed"] == false && state[key]["emergencyPaused"] == false
+        })
 }
 
 fn audit_settings(
@@ -2522,6 +2533,30 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoped_blur_requires_observed_ready_state_before_and_after_dispatch() {
+        let lifecycle = serde_json::json!({"animationRequested":true,"disposed":false,"emergencyPaused":false});
+        let mut state = serde_json::json!({"synthetic":true,"event":"blur","before":lifecycle,"lifecycle":lifecycle});
+        assert!(super::scoped_blur_preserved(&state));
+        state["before"]["animationRequested"] = serde_json::json!(false);
+        assert!(!super::scoped_blur_preserved(&state));
+        state["before"]["animationRequested"] = serde_json::json!(true);
+        state["lifecycle"]["animationRequested"] = serde_json::json!(false);
+        assert!(!super::scoped_blur_preserved(&state));
+    }
+
+    #[test]
+    fn scoped_blur_rejects_undispatched_closed_or_emergency_observations() {
+        let lifecycle = serde_json::json!({"animationRequested":true,"disposed":false,"emergencyPaused":false});
+        let state = serde_json::json!({"synthetic":true,"event":"blur","before":lifecycle,"lifecycle":lifecycle});
+        for (key, value) in [("disposed",true),("emergencyPaused",true)] {
+            let mut invalid = state.clone(); invalid["lifecycle"][key] = serde_json::json!(value);
+            assert!(!super::scoped_blur_preserved(&invalid));
+        }
+        let mut invalid = state; invalid["synthetic"] = serde_json::json!(false);
+        assert!(!super::scoped_blur_preserved(&invalid));
+    }
+
     #[test]
     fn graph_scope_audit_only_accepts_fixed_case_arguments() {
         for case in 0..10u8 {
