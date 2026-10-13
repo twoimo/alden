@@ -2,6 +2,11 @@ import {describe,it,expect} from 'vitest';
 import {generationDetail} from '../generation-detail';
 
 describe('generation evidence display',()=>{
+  it('keeps fetched response text, metadata and inaccessible links distinct',()=>{
+    expect(generationDetail({schema_version:1,link_context:{parsed:2,metadata_only:1,unavailable:['http_failed'],omitted:{unavailable_snapshot:1}}}))
+      .toEqual(['링크 자료 · 응답 텍스트 1개 · 메타데이터 1개','링크 1개 접근 실패 · 본문 미확인','이전 링크 1개 제외 · 저장 자료 접근 실패']);
+    expect(generationDetail({schema_version:1,link_context:{parsed:1,metadata_only:2}})).toEqual([]);
+  });
   it('does not turn a requested model into an observed response',()=>{
     const lines=generationDetail({schema_version:1,selection:{model_id:'selected/model'}});
     expect(lines).toEqual(['요청 모델 · selected/model · 응답 모델 미확인']);

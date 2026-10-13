@@ -105,11 +105,13 @@ def snapshot(folder, directory, meta):
         os.close(handle)
 
 
-def persist_files(root, decoded, token):
+def persist_files(root, decoded, token, *, namespace="assistant-input-files"):
+    if namespace not in {"assistant-input-files", "assistant-input-links"}:
+        raise ValueError("assistant_file_store_unavailable")
     if not decoded:
         return
     from alden_chat import image_directory
-    with image_directory(root, 'assistant-input-files') as (folder, directory):
+    with image_directory(root, namespace) as (folder, directory):
         for meta, data in decoded:
             token.raise_if_cancelled()
             name = meta['sha256'] + Path(meta['filename']).suffix.lower()
@@ -194,6 +196,48 @@ def _stop(child):
         child.wait(timeout=1)
 
 
+def run_owned_json(command, token, *, timeout=8, max_stdout_bytes=64_000, error_prefix="assistant_file_parser"):
+    token.raise_if_cancelled()
+    try:
+        child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, start_new_session=True)
+    except OSError as error:
+        raise ValueError(error_prefix + '_unavailable') from error
+    deadline, output = time.monotonic() + timeout, {'stdout': bytearray(), 'stderr': bytearray()}
+    try:
+        with selectors.DefaultSelector() as selector:
+            for name, pipe in [('stdout', child.stdout), ('stderr', child.stderr)]:
+                os.set_blocking(pipe.fileno(), False); selector.register(pipe, selectors.EVENT_READ, name)
+            while selector.get_map():
+                token.raise_if_cancelled()
+                if time.monotonic() >= deadline:
+                    raise ValueError(error_prefix + '_timeout')
+                for key, _ in selector.select(.05):
+                    chunk = os.read(key.fd, 65536)
+                    if not chunk: selector.unregister(key.fileobj); continue
+                    output[key.data].extend(chunk)
+                    if len(output[key.data]) > (max_stdout_bytes if key.data == 'stdout' else 4096):
+                        raise ValueError(error_prefix + '_output_budget')
+        while True:
+            status = _unreaped_status(child)
+            if status is not None:
+                code = status
+                break
+            token.raise_if_cancelled()
+            if time.monotonic() >= deadline: raise ValueError(error_prefix + '_timeout')
+            time.sleep(.01)
+        token.raise_if_cancelled()
+        try: result = json.loads(output['stdout'])
+        except (ValueError, UnicodeError) as error:
+            raise ValueError(error_prefix + '_unavailable') from error
+        return code, result
+    finally:
+        try:
+            _stop(child)
+        finally:
+            child.stdout.close(); child.stderr.close()
+
+
 def parse_document(data, filename, token):
     token.raise_if_cancelled()
     suffix = Path(filename).suffix.lower()
@@ -203,53 +247,17 @@ def parse_document(data, filename, token):
         source.chmod(0o600)
         command = [sys.executable, '-E', '-B', '-s', str(Path(__file__).resolve()),
                    '--parse', str(source), suffix, hashlib.sha256(data).hexdigest()]
-        try:
-            child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE, start_new_session=True)
-        except OSError as error:
-            raise ValueError('assistant_file_parser_unavailable') from error
-        deadline, output = time.monotonic() + 8, {'stdout': bytearray(), 'stderr': bytearray()}
-        try:
-            with selectors.DefaultSelector() as selector:
-                for name, pipe in [('stdout', child.stdout), ('stderr', child.stderr)]:
-                    os.set_blocking(pipe.fileno(), False); selector.register(pipe, selectors.EVENT_READ, name)
-                while selector.get_map():
-                    token.raise_if_cancelled()
-                    if time.monotonic() >= deadline:
-                        raise ValueError('assistant_file_parser_timeout')
-                    for key, _ in selector.select(.05):
-                        chunk = os.read(key.fd, 65536)
-                        if not chunk: selector.unregister(key.fileobj); continue
-                        output[key.data].extend(chunk)
-                        if len(output[key.data]) > (64_000 if key.data == 'stdout' else 4096):
-                            raise ValueError('assistant_file_parser_output_budget')
-            while True:
-                status = _unreaped_status(child)
-                if status is not None:
-                    code = status
-                    break
-                token.raise_if_cancelled()
-                if time.monotonic() >= deadline: raise ValueError('assistant_file_parser_timeout')
-                time.sleep(.01)
-            token.raise_if_cancelled()
-            try: result = json.loads(output['stdout'])
-            except (ValueError, UnicodeError) as error:
-                raise ValueError('assistant_file_parser_unavailable') from error
-            if code != 0:
-                reason = result.get('unavailable') if isinstance(result, dict) else None
-                raise ValueError(reason if reason in DOCUMENT_ERRORS else 'assistant_file_parser_unavailable')
-            if (not isinstance(result, dict) or set(result) != {'text', 'parser', 'text_sha256', 'truncated', 'scope'}
-                    or not isinstance(result['text'], str) or not result['text'].strip()
-                    or len(result['text'].encode()) > MAX_TEXT_BYTES
-                    or hashlib.sha256(result['text'].encode()).hexdigest() != result['text_sha256']
-                    or type(result['truncated']) is not bool or not isinstance(result['scope'], dict)):
-                raise ValueError('assistant_file_parser_unavailable')
-            return result
-        finally:
-            try:
-                _stop(child)
-            finally:
-                child.stdout.close(); child.stderr.close()
+        code, result = run_owned_json(command, token)
+        if code != 0:
+            reason = result.get('unavailable') if isinstance(result, dict) else None
+            raise ValueError(reason if reason in DOCUMENT_ERRORS else 'assistant_file_parser_unavailable')
+        if (not isinstance(result, dict) or set(result) != {'text', 'parser', 'text_sha256', 'truncated', 'scope'}
+                or not isinstance(result['text'], str) or not result['text'].strip()
+                or len(result['text'].encode()) > MAX_TEXT_BYTES
+                or hashlib.sha256(result['text'].encode()).hexdigest() != result['text_sha256']
+                or type(result['truncated']) is not bool or not isinstance(result['scope'], dict)):
+            raise ValueError('assistant_file_parser_unavailable')
+        return result
 
 
 def select_file_context(root, ticket, decoded, token):

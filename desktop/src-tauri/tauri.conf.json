@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.93",
+  "version": "0.3.94",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -125,6 +125,8 @@
       "bundle-resources/scripts/alden_input_images.py": "scripts/alden_input_images.py",
       "bundle-resources/scripts/alden_chat_metrics.py": "scripts/alden_chat_metrics.py",
       "bundle-resources/scripts/alden_chat_files.py": "scripts/alden_chat_files.py",
+      "bundle-resources/scripts/alden_chat_links.py": "scripts/alden_chat_links.py",
+      "bundle-resources/scripts/alden_link_fetch.py": "scripts/alden_link_fetch.py",
       "bundle-resources/scripts/alden_graph_quality.py": "scripts/alden_graph_quality.py",
       "bundle-resources/scripts/alden_content_evidence.py": "scripts/alden_content_evidence.py",
       "bundle-resources/scripts/alden_graph_quality_action.py": "scripts/alden_graph_quality_action.py"

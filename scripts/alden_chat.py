@@ -17,6 +17,7 @@ import unicodedata
 
 from alden_abort import AbortToken, AldenCancelled
 from alden_chat_files import DOCUMENT_ERRORS
+from alden_chat_links import ERRORS as LINK_ERRORS
 
 MAX_INPUT_BYTES = 29 * 1024 * 1024
 MAX_IMAGES = 4
@@ -40,7 +41,7 @@ KNOWN_INPUT_ERRORS = frozenset({
     'image_input_provenance_changed','routed_llm_prompt_budget','conversation_not_found',
     'request_id_payload_or_target_conflict',
     'assistant_image_context_changed','generation_metadata_invalid',
-}) | DOCUMENT_ERRORS
+}) | DOCUMENT_ERRORS | LINK_ERRORS
 
 
 class InputUnavailable(ValueError):
@@ -105,7 +106,7 @@ def validate_input(value):
 
 @contextmanager
 def image_directory(root, namespace='assistant-input-images'):
-    if namespace not in {'assistant-input-images', 'assistant-input-locks', 'assistant-input-files'}:
+    if namespace not in {'assistant-input-images', 'assistant-input-locks', 'assistant-input-files', 'assistant-input-links'}:
         raise InputUnavailable('assistant_input_invalid')
     root = Path(root)
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -174,10 +175,12 @@ def generate_input(state_root, ticket, text, token, paths, selection):
     from alden_routed_llm import OpenCodexLlm
     from types import SimpleNamespace
     from alden_chat_files import document_prompt, verify_file_bytes
+    from alden_chat_links import link_prompt, verify_link_bytes
     from alden_chat_turns import verify_history_file_sources
     verify_history_file_sources(state_root, ticket)
     verify_file_bytes(state_root, ticket)
-    documents = document_prompt(ticket)
+    verify_link_bytes(state_root, ticket)
+    documents = document_prompt(ticket) + link_prompt(ticket)
     turn = SimpleNamespace(**{k: ticket[k] for k in ('conversation_id', 'turn_id', 'context_version')}, source='text')
     if selection.get('transport') == 'opencodex':
         reference, retrieval = _voice_knowledge_reference(text, ticket['history'], state_root, token)
@@ -218,6 +221,9 @@ def generation_evidence(selection, metrics, ticket, terminal_state):
     documents = document_evidence(ticket)
     if documents is not None:
         result['document_context'] = documents
+    from alden_chat_links import link_evidence
+    links = link_evidence(ticket)
+    if links is not None: result['link_context'] = links
     if isinstance(metrics, dict) and 'images' in metrics:
         raw = metrics['images']
         if not isinstance(raw,list) or len(raw)>MAX_IMAGES:
@@ -316,6 +322,8 @@ def bound_previous_attachments(ticket, images, files):
 def process_input(state_root, value, token, *, generate=generate_input, select_model=None):
     token.raise_if_cancelled()
     decoded = validate_input(value)
+    from alden_chat_links import current_urls
+    current_urls(value['text'])
     from alden_chat_files import decode_files
     files = decode_files(value.get('files', []))
     if len(decoded) + len(files) > MAX_IMAGES or sum(meta['size'] for meta, _ in decoded + files) > MAX_IMAGE_BATCH_BYTES:
@@ -382,21 +390,31 @@ def _process_owned_input(state_root, value, decoded, token, *, generate, select_
         bound_previous_attachments(ticket, decoded, files)
         paths = select_image_context(state_root, ticket, decoded, paths)
         select_file_context(state_root, ticket, files, token)
+        from alden_chat_links import select_link_context, verify_link_bytes, link_evidence
+        select_link_context(state_root, ticket, value['text'], token)
         from alden_chat_turns import verify_history_image_sources
         verify_history_image_sources(state_root, ticket)
         verify_history_file_sources(state_root, ticket)
+        from alden_chat_turns import verify_history_link_sources
+        verify_history_link_sources(state_root,ticket)
         require_current_turn(state_root, ticket)
         from alden_chat_files import document_evidence
-        with token.commit_guard():
-            bind_prepared_context(state_root, ticket, {'images': ticket.get('image_context'), 'files': document_evidence(ticket)})
+        def bind_context():
+            context={'images': ticket.get('image_context'), 'files': document_evidence(ticket)}
+            links=link_evidence(ticket)
+            if links is not None: context['links']=links
+            bind_prepared_context(state_root,ticket,context)
+        with token.commit_guard(): bind_context()
         reply, metrics = generate(state_root, ticket, value['text'], token, paths, selection)
         if not isinstance(reply, str) or not reply.strip() or len(reply) > 16000 or len(reply.encode('utf-8')) > 64000:
             raise InputUnavailable('assistant_response_invalid')
         token.raise_if_cancelled()
         verify_file_bytes(state_root, ticket)
+        verify_link_bytes(state_root,ticket)
         retrieval = metrics.get('retrieval', {}) if isinstance(metrics, dict) else {}
         proof = retrieval.get('graph_provenance') if isinstance(retrieval, dict) else None
         with token.commit_guard():
+            bind_context()
             receipt = complete_turn(state_root, ticket, reply, provenance=proof,
                 generation=generation_evidence(selection, metrics, ticket, 'completed'))
         return {'ok': receipt['state'] == 'completed', **receipt}

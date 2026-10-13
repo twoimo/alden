@@ -180,6 +180,8 @@ jobs:
           tests.test_alden_voice_metrics
           tests.test_alden_chat
           tests.test_alden_chat_files
+          tests.test_alden_chat_links
+          tests.test_alden_link_fetch
           tests.test_alden_chat_context
           tests.test_alden_chat_generation_store
           tests.test_alden_chat_metrics

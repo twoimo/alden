@@ -9314,24 +9314,9 @@ def links_fully_retrieved(
     )
 
 
-def _resolve_link_addresses(hostname: str, port: int, timeout: float) -> list[tuple]:
-    result: list[list[tuple]] = []
-    error: list[BaseException] = []
-
-    def resolve() -> None:
-        try:
-            result.append(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
-        except Exception as exc:
-            error.append(exc)
-
-    worker = threading.Thread(target=resolve, daemon=True)
-    worker.start()
-    worker.join(max(0.0, timeout))
-    if worker.is_alive():
-        raise TimeoutError("link DNS timeout")
-    if error:
-        raise error[0]
-    return result[0] if result else []
+def _resolve_link_addresses(hostname, port, timeout):
+    from alden_link_fetch import resolve_addresses
+    return resolve_addresses(hostname, port, timeout)
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
     def __init__(
         self,
@@ -9352,77 +9337,14 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         )
 
 
-def _open_pinned_link(
-    parsed: urllib.parse.ParseResult,
-    hostname: str,
-    port: int,
-    addresses: list[tuple],
-    deadline: float,
-) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-    host_header = hostname
-    if port not in {80, 443}:
-        host_header = f"{hostname}:{port}"
-    last_error: BaseException | None = None
-    for address in addresses:
-        try:
-            ip = str(address[4][0])
-            remaining = deadline - time.monotonic()
-            if remaining <= 0.0:
-                raise TimeoutError("link URL timeout")
-            if parsed.scheme == "https":
-                connection: http.client.HTTPConnection = _PinnedHTTPSConnection(
-                    ip,
-                    hostname,
-                    port,
-                    remaining,
-                    ssl.create_default_context(),
-                )
-            else:
-                connection = http.client.HTTPConnection(ip, port, timeout=remaining)
-            connection.request(
-                "GET",
-                path,
-                headers={
-                    "Host": host_header,
-                    "User-Agent": "openkakao-auto-reply/1.0",
-                    "Connection": "close",
-                },
-            )
-            return connection, connection.getresponse()
-        except BaseException as exc:
-            last_error = exc
-            try:
-                connection.close()
-            except (NameError, OSError):
-                pass
-    if last_error is not None:
-        raise last_error
-    raise OSError("link connection unavailable")
+def _open_pinned_link(parsed, hostname, port, addresses, deadline):
+    from alden_link_fetch import open_pinned
+    return open_pinned(parsed, hostname, port, addresses, deadline)
 
 
-def _read_link_body(response: object, deadline: float) -> bytes:
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        _raise_if_job_aborted()
-        remaining = deadline - time.monotonic()
-        if remaining <= 0.0:
-            raise TimeoutError("link read timeout")
-        read_size = min(64 * 1024, MAX_LINK_BODY_BYTES - total + 1)
-        chunk = response.read(read_size)
-        if not isinstance(chunk, (bytes, bytearray)):
-            raise ValueError("link response body is not bytes")
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > MAX_LINK_BODY_BYTES:
-            raise ValueError("link body exceeds bounded retrieval size")
-        chunks.append(bytes(chunk))
-    _raise_if_job_aborted()
-    return b"".join(chunks)
+def _read_link_body(response, deadline):
+    from alden_link_fetch import read_body
+    return read_body(response, deadline, cancel=_raise_if_job_aborted, max_bytes=MAX_LINK_BODY_BYTES)
 
 
 def _youtube_hostname(hostname: str | None) -> bool:
@@ -9619,109 +9541,11 @@ def _github_readme_text(url: str, deadline: float) -> str:
     return re.sub(r"\s+", " ", body).strip()[:4000]
 
 
-def _fetch_pinned_http(
-    url: str, deadline: float, *, redirects_left: int = 1
-) -> tuple[bytes, int] | None:
-    _raise_if_job_aborted()
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        return None
-    hostname = parsed.hostname.lower().rstrip(".")
-    if (
-        hostname == "localhost"
-        or hostname.endswith(".localhost")
-        or hostname in {"localhost.localdomain", "localdomain"}
-        or hostname.endswith(".local")
-    ):
-        return None
-    try:
-        host_ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        host_ip = None
-    if host_ip and (
-        host_ip.is_private
-        or host_ip.is_loopback
-        or host_ip.is_link_local
-        or host_ip.is_reserved
-        or host_ip.is_multicast
-        or host_ip.is_unspecified
-    ):
-        return None
-    if parsed.username or parsed.password:
-        return None
-    if parsed.port is not None and parsed.port not in {80, 443}:
-        return None
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    remaining = deadline - time.monotonic()
-    if remaining <= 0.0:
-        raise TimeoutError("link URL timeout")
-    addresses = _resolve_link_addresses(
-        hostname,
-        port,
-        min(MAX_LINK_URL_TIMEOUT_SECONDS, remaining),
-    )
-    _raise_if_job_aborted()
-    if not addresses:
-        raise OSError("link DNS returned no addresses")
-    for address in addresses:
-        try:
-            address_ip = ipaddress.ip_address(address[4][0])
-        except (IndexError, KeyError, TypeError, ValueError):
-            raise OSError("link DNS address malformed")
-        if (
-            not address_ip.is_global
-            or address_ip.is_private
-            or address_ip.is_loopback
-            or address_ip.is_link_local
-            or address_ip.is_reserved
-            or address_ip.is_multicast
-            or address_ip.is_unspecified
-        ):
-            return None
-    remaining = deadline - time.monotonic()
-    if remaining <= 0.0:
-        raise TimeoutError("link URL timeout")
-    _raise_if_job_aborted()
-    connection, response = _open_pinned_link(
-        parsed,
-        hostname,
-        port,
-        addresses,
-        deadline,
-    )
-    redirect_to = ""
-    try:
-        status = getattr(response, "status", None)
-        if isinstance(status, int) and 300 <= status < 400:
-            location = ""
-            getter = getattr(response, "getheader", None)
-            if callable(getter):
-                location = str(getter("Location") or "").strip()
-            next_url = urllib.parse.urljoin(url, location) if location else ""
-            next_parsed = urllib.parse.urlparse(next_url)
-            next_host = (next_parsed.hostname or "").lower().rstrip(".")
-            if (
-                redirects_left <= 0
-                or not _kakao_daum_link_host(hostname)
-                or next_parsed.scheme != "https"
-                or next_parsed.username
-                or next_parsed.password
-                or not _kakao_daum_link_host(next_host)
-            ):
-                raise ValueError("link redirect not allowed")
-            redirect_to = next_url
-        elif isinstance(status, int) and not 200 <= status < 300:
-            raise ValueError("link response not successful")
-        else:
-            body_bytes = _read_link_body(response, deadline)
-    finally:
-        connection.close()
-    _raise_if_job_aborted()
-    if redirect_to:
-        return _fetch_pinned_http(
-            redirect_to, deadline, redirects_left=redirects_left - 1
-        )
-    return body_bytes, len(body_bytes)
+def _fetch_pinned_http(url, deadline, *, redirects_left=1):
+    from alden_link_fetch import fetch_bytes
+    return fetch_bytes(url, deadline, redirects_left=redirects_left,
+        cancel=_raise_if_job_aborted, resolver=_resolve_link_addresses,
+        opener=_open_pinned_link, reader=_read_link_body)
 
 
 def _try_youtube_oembed(watch_url: str, deadline: float) -> tuple[dict, int] | None:

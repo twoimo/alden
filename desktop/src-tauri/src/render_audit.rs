@@ -30,6 +30,7 @@ const WORKSPACES_FLAG: &str = "--audit-own-workspaces";
 const ASSISTANT_FLAG: &str = "--audit-own-assistant-input";
 const ASSISTANT_INVALID_FLAG: &str = "--audit-own-assistant-invalid-input";
 const ASSISTANT_FILES_FLAG: &str = "--audit-own-assistant-files";
+const ASSISTANT_LINKS_FLAG: &str = "--audit-own-assistant-links";
 const ENTITY_FLAG: &str = "--audit-own-entity-review";
 pub struct Request {
     pub directory: PathBuf,
@@ -38,6 +39,7 @@ pub struct Request {
     pub assistant: bool,
     pub assistant_invalid: bool,
     pub assistant_files: bool,
+    pub assistant_links: bool,
     pub entity: bool,
     pub focus_node: Option<String>,
     pub graph_scope: Option<u8>,
@@ -105,7 +107,7 @@ const COLLECT: &str = r#"JSON.stringify((() => {
 pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request>, String> {
     let args: Vec<_> = args.collect();
     if !args.iter().any(|arg| {
-        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ASSISTANT_FILES_FLAG, ENTITY_FLAG]
+        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ASSISTANT_FILES_FLAG, ASSISTANT_LINKS_FLAG, ENTITY_FLAG]
             .iter()
             .any(|flag| arg.to_string_lossy().starts_with(flag))
     }) {
@@ -152,7 +154,7 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     } else { None };
     if (args.len() != 2 && focus_node.is_none() && graph_scope.is_none())
         || args[0] == ENTITY_FLAG && focus_node.is_some()
-        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ASSISTANT_FILES_FLAG, ENTITY_FLAG]
+        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ASSISTANT_FILES_FLAG, ASSISTANT_LINKS_FLAG, ENTITY_FLAG]
             .iter()
             .any(|flag| args[0] == *flag)
     {
@@ -161,10 +163,11 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     Ok(Some(Request {
         directory: PathBuf::from(&args[1]),
         settings: args[0] != FLAG,
-        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG || args[0] == ASSISTANT_FILES_FLAG || args[0] == ENTITY_FLAG,
-        assistant: args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG || args[0] == ASSISTANT_FILES_FLAG,
+        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG || args[0] == ASSISTANT_FILES_FLAG || args[0] == ASSISTANT_LINKS_FLAG || args[0] == ENTITY_FLAG,
+        assistant: args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG || args[0] == ASSISTANT_FILES_FLAG || args[0] == ASSISTANT_LINKS_FLAG,
         assistant_invalid: args[0] == ASSISTANT_INVALID_FLAG,
         assistant_files: args[0] == ASSISTANT_FILES_FLAG,
+        assistant_links: args[0] == ASSISTANT_LINKS_FLAG,
         entity: args[0] == ENTITY_FLAG,
         focus_node,
         graph_scope,
@@ -2183,7 +2186,7 @@ fn audit_settings_page(label: &str, url: &tauri::Url) -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum AssistantAuditMode { Images, InvalidImages, Documents }
+enum AssistantAuditMode { Images, InvalidImages, Documents, Links }
 
 fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, mode: AssistantAuditMode, loaded: &AtomicBool, asset: &AtomicBool, phase: &AtomicU8) -> Result<Value,String> {
     let window = app.get_webview_window("settings").ok_or("settings window missing")?;
@@ -2236,8 +2239,8 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, m
     if selected["page"] != "voice" || selected["hidden"] != false || selected["disabled"] != false {
         return Err(format!("assistant composer is not active: {selected}"));
     }
-    if mode == AssistantAuditMode::Documents {
-        return audit_documents(&window, output, deadline);
+    if matches!(mode, AssistantAuditMode::Documents | AssistantAuditMode::Links) {
+        return audit_documents(&window, output, deadline, mode == AssistantAuditMode::Links);
     }
     if mode == AssistantAuditMode::InvalidImages {
         let mut receipts = Vec::new();
@@ -2344,12 +2347,12 @@ fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, m
     Ok(json!({"turns":receipts,"scope":"three explicit programmatic WKWebView inputs, controlled red/white-circle and blue/yellow-square PNGs with text and visual followups; isolated history and copied saved model selection; no microphone/TTS/send, original source-store or physical input proof"}))
 }
 
-fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Instant) -> Result<Value,String> {
+fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, links: bool) -> Result<Value,String> {
     let mut receipts=Vec::new();
     for (index, question, expected, fixture) in [
-        (1,"첨부 문서의 수량을 숫자만 답해주세요.","53",Some(("audit-quantity.txt","text/plain","검수 자료\n수량: 53개\n검수일: 10월 8일"))),
-        (2,"앞에서 첨부한 문서의 수량을 숫자만 다시 답해주세요.","53",None),
-        (3,"이번 CSV 파일의 수량을 숫자만 답해주세요.","67",Some(("audit-current.csv","text/csv","제품,수량\n올든,67")))
+        (1,if links {"다음 링크 자료에서 문서 파서의 시간 한도는 몇 초인가요? 숫자만 답해주세요. https://raw.githubusercontent.com/twoimo/alden/632221d9a078c6a891a608328e66e9127e0c3fd3/docs/architecture/alden-desktop-files-20261013.md"} else {"첨부 문서의 수량을 숫자만 답해주세요."},if links {"8"} else {"53"},if links {None} else {Some(("audit-quantity.txt","text/plain","검수 자료\n수량: 53개\n검수일: 10월 8일"))}),
+        (2,if links {"앞에서 읽은 링크의 문서 파서 시간 한도를 숫자만 다시 답해주세요."} else {"앞에서 첨부한 문서의 수량을 숫자만 다시 답해주세요."},if links {"8"} else {"53"},None),
+        (3,if links {"앞에서 읽은 링크의 파서 시간 한도와 이번 CSV의 수량을 두 숫자만 쉼표로 구분해서 답해주세요."} else {"이번 CSV 파일의 수량을 숫자만 답해주세요."},if links {"8,67"} else {"67"},Some(("audit-current.csv","text/csv","제품,수량\n올든,67")))
     ] {
         if index == 3 {
             let target = window.clone(); let (tx, rx) = mpsc::sync_channel(1);
@@ -2393,7 +2396,7 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
             }
             live(deadline)?;std::thread::sleep(Duration::from_millis(50));
         };
-        if state["reply"].as_str().is_none_or(|s|s.trim().trim_matches(['*','`']).trim()!=expected) {
+        if state["reply"].as_str().is_none_or(|s|s.trim().trim_matches(['*','`']).trim().replace(" ","")!=expected) {
             return Err(format!("document fixture answer mismatch at {index}: {state}"));
         }
         if state["width"]!=state["scrollWidth"] {return Err("document composer horizontal overflow".into());}
@@ -2408,7 +2411,7 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
     }
     if receipts.iter().any(|r|r["conversationId"]!=receipts[0]["conversationId"]) {return Err("document followup conversation changed".into());}
     visibility(window,false,deadline)?;
-    Ok(json!({"turns":receipts,"scope":"three explicit owned programmatic WKWebView inputs: default-size UTF-8 text and same-conversation followup, compact-size CSV; actual saved selected-model inference; isolated history; no original files, physical picker, microphone, TTS or send proof"}))
+    Ok(json!({"links":links,"turns":receipts,"scope":if links {"three owned inputs: pinned public Alden document URL, same-conversation snapshot followup and compact CSV plus previous link; actual saved model inference and guarded network; no cookies/browser login/source stores/physical picker/voice/send proof"} else {"three explicit owned programmatic WKWebView inputs: default-size UTF-8 text and same-conversation followup, compact-size CSV; actual saved selected-model inference; isolated history; no original files, physical picker, microphone, TTS or send proof"}}))
 }
 
 unsafe extern "C" fn audit_uncaught_exception(exception: *mut objc2_foundation::NSException) {
@@ -2435,7 +2438,8 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
     let assistant_mode = request.assistant;
     let invalid_input_mode = request.assistant_invalid;
     let files_input_mode = request.assistant_files;
-    let input_mode = if files_input_mode {AssistantAuditMode::Documents} else if invalid_input_mode {AssistantAuditMode::InvalidImages} else {AssistantAuditMode::Images};
+    let links_input_mode = request.assistant_links;
+    let input_mode = if links_input_mode {AssistantAuditMode::Links} else if files_input_mode {AssistantAuditMode::Documents} else if invalid_input_mode {AssistantAuditMode::InvalidImages} else {AssistantAuditMode::Images};
     let entity_mode = request.entity;
     let graph_scope = request.graph_scope;
     let settings_loaded = Arc::new(AtomicBool::new(false));
@@ -2504,7 +2508,7 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
                     "mode":if entity_mode {"isolated-entity-review-fixture"}else if files_input_mode {"isolated-assistant-document-generation"}else if invalid_input_mode {"isolated-assistant-invalid-input"}else if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
                     "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
                     "result":result.ok(),"success":success,"error":error,
-                    "scope":if graph_scope.is_some() {"owned two-size fixed project/filter/page graph WKWebView; read-only adapters, source/solver/display observations; no primary, physical input, semantic gold or pixel/GPU/FPS attestation"}else if entity_mode {"owned incognito WKWebView; compare/apply/revert only in a newly created private synthetic collection; no original source, production write, model inference, send or physical-input attestation"}else if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if files_input_mode {"owned WKWebView with three synthetic document and followup requests; actual saved selected-model inference in isolated derived history; no original files, physical picker, microphone, TTS or sends"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                    "scope":if graph_scope.is_some() {"owned two-size fixed project/filter/page graph WKWebView; read-only adapters, source/solver/display observations; no primary, physical input, semantic gold or pixel/GPU/FPS attestation"}else if entity_mode {"owned incognito WKWebView; compare/apply/revert only in a newly created private synthetic collection; no original source, production write, model inference, send or physical-input attestation"}else if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if links_input_mode {"owned WKWebView with pinned public document URL, snapshot followup and mixed CSV; guarded network and saved selected-model inference; isolated history; no original source, login cookies, physical picker, voice or send proof"}else if files_input_mode {"owned WKWebView with three synthetic document and followup requests; actual saved selected-model inference in isolated derived history; no original files, physical picker, microphone, TTS or sends"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
                 eprintln!("Alden audit: result returned, success={success}, error={:?}, preparing final report",report["error"]);
                 let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
                 let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
@@ -2533,6 +2537,12 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn links_audit_is_explicit_and_uses_isolated_assistant_admission() {
+        let request=super::parse_args(["--audit-own-assistant-links","/private/tmp/alden-links-audit"].map(std::ffi::OsString::from).into_iter()).unwrap().unwrap();
+        assert!(request.assistant && request.assistant_links && request.workspaces);
+        assert!(!request.assistant_files && !request.assistant_invalid);
+    }
     #[test]
     fn scoped_blur_requires_observed_ready_state_before_and_after_dispatch() {
         let lifecycle = serde_json::json!({"animationRequested":true,"disposed":false,"emergencyPaused":false});

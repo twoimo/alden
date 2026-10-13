@@ -34,5 +34,16 @@ export function generationDetail(value: unknown): string[] {
     const missing = ['capacity','byte_budget','unavailable'].reduce((sum,key) => sum + Math.min(count(omitted[key]) ?? 0,8),0);
     if (missing) lines.push(`사진 ${missing}장 제외 · 한도 또는 접근 실패`);
   }
+  const links = record(generation.link_context);
+  const parsed = count(links.parsed), metadata = count(links.metadata_only);
+  if (parsed !== null && parsed <= 4 && metadata !== null && metadata <= parsed) {
+    lines.push(`링크 자료 · 응답 텍스트 ${parsed - metadata}개 · 메타데이터 ${metadata}개`);
+    if (Array.isArray(links.unavailable) && links.unavailable.length <= 4 && links.unavailable.length) {
+      lines.push(`링크 ${links.unavailable.length}개 접근 실패 · 본문 미확인`);
+    }
+    const omitted = record(links.omitted);
+    const missing = count(omitted.unavailable_snapshot);
+    if (missing !== null && missing > 0 && missing <= 2) lines.push(`이전 링크 ${missing}개 제외 · 저장 자료 접근 실패`);
+  }
   return lines;
 }

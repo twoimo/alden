@@ -142,6 +142,11 @@ def _schema(db: sqlite3.Connection) -> None:
         context_sha256 TEXT NOT NULL,
         bound_at REAL NOT NULL
     )''')
+    db.execute('''CREATE TABLE IF NOT EXISTS alden_chat_link_inputs (
+        request_id TEXT PRIMARY KEY REFERENCES alden_chat_requests(request_id),
+        records_json TEXT NOT NULL CHECK(length(records_json)<=20000),
+        recorded_at REAL NOT NULL
+    )''')
 
 
 def _generation(value: dict | None) -> str | None:
@@ -220,6 +225,79 @@ def _history_attachments(db: sqlite3.Connection, conversation_id: str, before: i
     return found
 
 
+def _history_links(db, conversation_id, before):
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='alden_chat_link_inputs' AND type='table'").fetchone() is None:
+        return []
+    from alden_chat_links import validate_records
+    rows = db.execute('''SELECT r.request_id,r.turn_id,l.records_json
+        FROM alden_chat_requests r JOIN alden_chat_link_inputs l USING(request_id)
+        WHERE r.conversation_id=? AND r.turn_id<? AND r.state='completed' AND l.records_json!='[]'
+          AND (SELECT count(*) FROM voice_messages m WHERE m.session_id=r.conversation_id
+               AND m.turn_id=r.turn_id AND m.role IN ('user','assistant') AND m.state='confirmed')=2
+        ORDER BY r.turn_id DESC LIMIT 64''',(conversation_id,before)).fetchall()
+    selected, seen = [], set()
+    for row in rows:
+        try: records=validate_records(json.loads(row['records_json']))
+        except (ValueError, TypeError): continue
+        for item in records:
+            if item['url'] in seen: continue
+            selected.append({**item,'source_request_id':row['request_id'],'source_turn_id':row['turn_id']})
+            seen.add(item['url'])
+            if len(selected)==2: return selected
+    return selected
+
+
+def _verify_history_link_sources(db, ticket):
+    from alden_chat_links import META_KEYS
+    for item in ticket.get('link_context',{}).get('selected',[]):
+        row=db.execute('''SELECT r.state,r.turn_id,l.records_json FROM alden_chat_requests r
+            JOIN alden_chat_link_inputs l USING(request_id)
+            WHERE r.request_id=? AND r.conversation_id=? AND r.turn_id=?''',
+            (item['source_request_id'],ticket['conversation_id'],item['source_turn_id'])).fetchone()
+        if row is None: raise ValueError('assistant_link_context_changed')
+        if item['origin']=='current':
+            valid=row['state']=='pending' and item['source_request_id']==ticket['request_id'] and row['turn_id']==ticket['turn_id']
+        elif item['origin']=='previous':
+            valid=row['state']=='completed' and row['turn_id']<ticket['turn_id'] and db.execute('''SELECT count(*) FROM voice_messages
+                WHERE session_id=? AND turn_id=? AND role IN ('user','assistant') AND state='confirmed' ''',
+                (ticket['conversation_id'],row['turn_id'])).fetchone()[0]==2
+        else: valid=False
+        if not valid or not any(all(source.get(key)==item[key] for key in META_KEYS) for source in json.loads(row['records_json'])):
+            raise ValueError('assistant_link_context_changed')
+
+
+def verify_history_link_sources(root, ticket):
+    if not ticket.get('link_context'): return
+    with database(root) as db:
+        if db is None: raise ValueError('assistant_link_context_changed')
+        _verify_history_link_sources(db,ticket)
+
+
+def get_link_inputs(root, ticket):
+    with database(root) as db:
+        _ticket(db,ticket)
+        row=db.execute('SELECT records_json FROM alden_chat_link_inputs WHERE request_id=?',(ticket['request_id'],)).fetchone()
+        if row is None: return None
+        from alden_chat_links import validate_records
+        return validate_records(json.loads(row[0]))
+
+
+def bind_link_inputs(root, ticket, records):
+    from alden_chat_links import validate_records
+    value=json.dumps(validate_records(records),ensure_ascii=False,sort_keys=True,allow_nan=False,separators=(',',':'))
+    if len(value.encode())>20000: raise ValueError('assistant_link_budget')
+    with _write(root) as db:
+        row=_ticket(db,ticket)
+        latest=db.execute('SELECT COALESCE(MAX(turn_id),0),COALESCE(MAX(context_version),0) FROM voice_messages WHERE session_id=?',
+                          (ticket['conversation_id'],)).fetchone()
+        if row['state']!='pending' or tuple(latest)!=(ticket['turn_id'],ticket['context_version']):
+            raise StaleTurn('turn_not_current')
+        previous=db.execute('SELECT records_json FROM alden_chat_link_inputs WHERE request_id=?',(ticket['request_id'],)).fetchone()
+        if previous is not None and previous[0]!=value: raise ValueError('assistant_link_context_changed')
+        db.execute('INSERT OR IGNORE INTO alden_chat_link_inputs VALUES(?,?,?)',(ticket['request_id'],value,time.time()))
+        db.commit()
+
+
 def _verify_history_image_sources(db: sqlite3.Connection, ticket: dict) -> None:
     for image in ticket.get('image_context', {}).get('selected', []):
         if image['origin'] != 'previous':
@@ -285,6 +363,7 @@ def _receipt(db: sqlite3.Connection, row: sqlite3.Row, *, include_owner: bool) -
         'history': _history(db, row['conversation_id'], row['turn_id']),
         'history_attachments': _history_attachments(db, row['conversation_id'], row['turn_id']),
         'history_files': _history_attachments(db, row['conversation_id'], row['turn_id'], files=True),
+        'history_links': _history_links(db,row['conversation_id'],row['turn_id']),
     }
     if include_owner:
         result['owner_id'] = row['owner_id']
@@ -440,6 +519,7 @@ def complete_turn(state_root: Path, ticket: dict, reply: str, *,
                 raise StaleTurn('turn_context_changed')
         _verify_history_image_sources(db, ticket)
         _verify_history_file_sources(db, ticket)
+        _verify_history_link_sources(db, ticket)
         user = db.execute('''SELECT content FROM voice_messages
             WHERE session_id=? AND turn_id=? AND role='user' AND state='confirmed' ''',
             (row['conversation_id'], row['turn_id'])).fetchone()

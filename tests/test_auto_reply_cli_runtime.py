@@ -21029,7 +21029,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with mock.patch.object(
             module,
             "_resolve_link_addresses",
-            return_value=[(0, 0, 0, "", ("8.8.8.8", 443))],
+            return_value=[(2, 1, 6, "", ("8.8.8.8", 443))],
         ), mock.patch.object(module, "_open_pinned_link", side_effect=open_pinned):
             preview, size = module._fetch_link_preview_once(
                 "https://v.kakao.com/v/20260818174953765",
@@ -21063,7 +21063,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with mock.patch.object(
             module,
             "_resolve_link_addresses",
-            return_value=[(0, 0, 0, "", ("8.8.8.8", 443))],
+            return_value=[(2, 1, 6, "", ("8.8.8.8", 443))],
         ), mock.patch.object(
             module, "_open_pinned_link", return_value=(Conn(), Resp())
         ):
