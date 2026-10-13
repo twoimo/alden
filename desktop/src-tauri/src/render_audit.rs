@@ -1293,7 +1293,9 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
                 width:innerWidth,height:innerHeight,resized,projectionViewport:p,canvasWidth:r?.width,canvasHeight:r?.height,
                 filterPending:pending,diagnosticsPresent:!!d,nodeCount:d?.nodeCount??0,
                 motion:d?.motion??null,running:d?.running??null,pendingFrame:d?.pendingFrame??null,
-                renderCount:d?.renderCount??null,motionReduced:d?.motionReduced??null,targets:d?.targets??null};
+                renderCount:d?.renderCount??null,motionReduced:d?.motionReduced??null,targets:d?.targets??null,
+                lifecycle:d?.lifecycle??null,pause:window.__knowledgeRenderPause??null,
+                documentFocused:document.hasFocus(),documentVisibility:document.visibilityState};
             })())"#.into(),deadline)?;
             let matched=state["width"].as_f64()==native["layoutWidth"].as_f64()
                 && state["height"].as_f64()==native["layoutHeight"].as_f64();

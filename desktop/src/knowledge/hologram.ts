@@ -420,6 +420,10 @@ export class KnowledgeHologram {
 
   auditPhysicsState() { return this.plasticity.auditState(); }
 
+  get lifecycleDiagnostics() {
+    return { animationRequested:this.requestedAnimation, emergencyPaused:this.paused, disposed:this.disposed };
+  }
+
   get motionDiagnostics() {
     return {
       camera: this.camera.position.distanceToSquared(this.desiredCamera) > .000001

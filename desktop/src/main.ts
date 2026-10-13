@@ -727,6 +727,7 @@ export async function bootSettings(
       lifecycle.setSurfaceVisible(navigation.current() === "memory");
       Object.defineProperty(window, "__knowledgeRenderDiagnostics", { configurable: true, get: () => ({
         ...graph.diagnostics(), nodeCount: graph.currentView.nodes.length, edgeCount: graph.currentView.edges.length,
+        lifecycle: graph.lifecycleDiagnostics,
         hops: graph.currentView.hops, focused: graph.currentView.focusId !== null,
         overviewLimit:graph.currentView.overviewLimit??OVERVIEW_NODE_CAP,overviewOffset:collectionGraph?.collection?collectionGraph.offset:graph.currentView.overviewOffset??0,
         hasMoreContexts:collectionGraph?.collection?collectionGraph.hasMore:!!graph.currentView.hasMoreContexts,
