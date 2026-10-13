@@ -2416,6 +2416,32 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
             if Instant::now() >= paint_deadline {return Err(format!("latest document reply not visible at {index}: {paint}"));}
             live(deadline)?;std::thread::sleep(Duration::from_millis(25));
         }
+        if index == 3 {
+            visibility(window,false,deadline)?;
+            let hidden_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+            loop {
+                let hidden=collect_script(window,"JSON.stringify({hidden:document.querySelector('#assistant-composer').hidden})".into(),deadline)?;
+                if hidden["hidden"]==true {break;}
+                if Instant::now() >= hidden_deadline {return Err("completed document window did not hide".into());}
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            visibility(window,true,deadline)?;
+            let restore_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+            loop {
+                let restored=collect_script(window,r#"JSON.stringify((()=>{
+                    const host=document.querySelector('#voice-message-list'),bounds=host.getBoundingClientRect();
+                    const text=[...host.querySelectorAll('.message-row[data-self="false"] .message-text')].at(-1);
+                    const last=text?.getBoundingClientRect();
+                    return {hidden:document.querySelector('#assistant-composer').hidden,
+                        conversationId:document.querySelector('#voice-start').dataset.conversationId,
+                        reply:text?.textContent??'',latestReplyVisible:!!last&&last.top>=bounds.top-1&&last.bottom<=bounds.bottom+1};})())"#.into(),deadline)?;
+                if restored["hidden"]==false && restored["latestReplyVisible"]==true && restored["conversationId"]==state["conversationId"] && restored["reply"]==state["reply"] {
+                    state["restoreObservation"]=restored;break;
+                }
+                if Instant::now() >= restore_deadline {return Err(format!("completed document reply did not survive restore: {restored}"));}
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
         publish(output,&format!("assistant-turn-{index}.png"),&snapshot(window,deadline)?,deadline)?;
         receipts.push(state);
     }
