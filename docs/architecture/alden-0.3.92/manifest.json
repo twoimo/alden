@@ -341,9 +341,9 @@
       "name": "voice",
       "type": "workflow",
       "specification": "voice.workflow.json",
-      "specification_sha256": "725a843892dfffd678bca19ecb240809ba0dacfcbae73973b24b9e97a981873b",
+      "specification_sha256": "5af27d98a8ac4affae74319ab1e6dbc90e06c765999c9f925e6a765f9d076d5c",
       "output": "voice.html",
-      "artifact_sha256": "318de66789c8ef39d39c845d2e1c5cfd612fa69201374f6e0476349a0d2ef957",
+      "artifact_sha256": "f3cd7f6618f68f17afc6759d0a5dbfc8f1dfb1275de17fa0804497ee783af997",
       "validation": {
         "checksPassed": 9,
         "checkCount": 9,
@@ -361,19 +361,19 @@
       "screenshots": [
         {
           "path": "voice.visual-check.1440x900.light.png",
-          "sha256": "01824edd0c2ba78e8c30217c140b1abc3c494d6fd531ac99f8f26ddb9a2047a4"
+          "sha256": "faf4b3aaf1cd8c555b270aae8ebb63a0fd1df9d90a2e9d6304a3e195aeaf2019"
         },
         {
           "path": "voice.visual-check.1440x900.dark.png",
-          "sha256": "cae12122d48740bfdc8079bc50751badd8fb7de55e4b11bed40e3576275d0bd2"
+          "sha256": "1bddb043f9582fb22f489ded2c819785c34b5bc65d2283fca90631925afba23a"
         },
         {
           "path": "voice.visual-check.2048x1320.light.png",
-          "sha256": "ee0976db576e259e29e0670bd50839503cdad59e60b92da1243ee2cc65a48233"
+          "sha256": "73868ef08b2929c0b132798609c17236a5da970a98f74a786de78753acd1db41"
         },
         {
           "path": "voice.visual-check.2048x1320.dark.png",
-          "sha256": "b05a95d6ac613f356d7c718345344f5fa5fead28a456df250c5e57997b0abf02"
+          "sha256": "a6b8d19ae8c2a8ba509bd8507f8e79376e094c0ff988e4a472d60c5ac8963a44"
         }
       ],
       "code_evidence": [
@@ -600,6 +600,30 @@
             {
               "line": 1634,
               "text": "class LocalMlxLlm:"
+            },
+            {
+              "line": 1660,
+              "text": "def generate_for_turn(self, text: str, token: AbortToken, *, history=(), turn: VoiceTurn) -> str:"
+            },
+            {
+              "line": 1670,
+              "text": "self._turn_context.reset(binding)"
+            },
+            {
+              "line": 1823,
+              "text": "result = self._generate_response(text, token, history=history, started=started)"
+            },
+            {
+              "line": 1838,
+              "text": "def _generate_response(self, text: str, token: AbortToken, *, history, started: float) -> str:"
+            },
+            {
+              "line": 1842,
+              "text": "reference,retrieval=_voice_knowledge_reference(text,history,self.state_root,token)"
+            },
+            {
+              "line": 1850,
+              "text": "*([{'role':'system','content':reference}] if reference else []),"
             }
           ],
           "verified_same_as_runtime_source": true
@@ -1919,6 +1943,7 @@
     "scope": "Nine supplied summaries and selected source excerpts only; no full repository or runtime certification",
     "report": "independent-review.md",
     "disposition": "review-resolution.md",
-    "agent_closed": true
+    "agent_closed": true,
+    "parent_full_call_path_correction": "The supplied-excerpt review missed local retrieval inside LocalMlxLlm; final voice map and disposition reflect the actual generate_for_turn -> generate -> _generate_response path."
   }
 }

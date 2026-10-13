@@ -5217,15 +5217,15 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <text data-detail="context" x="500.4" y="131" class="t-muted" font-size="8" text-anchor="middle">대화·버전·요청 ID</text>
         </g>
 
-        <g id="node-context92" data-node-id="context92" data-node-label="모델별 입력 준비" tabindex="0" role="button" aria-label="Focus 모델별 입력 준비, 원격 검색·로컬 텍스트, 확정 입력과 응답" aria-pressed="false" data-node-kind="backend" data-node-sublabel="원격 검색·로컬 텍스트" data-node-context="확정 입력과 응답">
-          <title>모델별 입력 준비 · 원격 검색·로컬 텍스트 · 확정 입력과 응답</title>
+        <g id="node-context92" data-node-id="context92" data-node-label="검색 참조 준비" tabindex="0" role="button" aria-label="Focus 검색 참조 준비, 선택 경로·의도·근거, 확정 입력과 응답" aria-pressed="false" data-node-kind="backend" data-node-sublabel="선택 경로·의도·근거" data-node-context="확정 입력과 응답">
+          <title>검색 참조 준비 · 선택 경로·의도·근거 · 확정 입력과 응답</title>
           <rect x="627.5999999999999" y="93" width="132" height="52" rx="6" class="c-mask"/>
           <rect x="627.5999999999999" y="93" width="132" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(633.5999999999999 99) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="693.5999999999999" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">모델별 입력 준비</text>
-          <text data-detail="context" x="693.5999999999999" y="131" class="t-muted" font-size="8" text-anchor="middle">원격 검색·로컬 텍스트</text>
+          <text data-node-label="" data-detail-anchor="" x="693.5999999999999" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">검색 참조 준비</text>
+          <text data-detail="context" x="693.5999999999999" y="131" class="t-muted" font-size="8" text-anchor="middle">선택 경로·의도·근거</text>
         </g>
 
         <g id="node-infer92" data-node-id="infer92" data-node-label="선택한 추론" tabindex="0" role="button" aria-label="Focus 선택한 추론, 저장된 모델·명시 자동, 확정 입력과 응답" aria-pressed="false" data-node-kind="backend" data-node-sublabel="저장된 모델·명시 자동" data-node-context="확정 입력과 응답">
@@ -5532,7 +5532,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         </div>
         <ul>
           <li>&bull; Desktop는 텍스트·사진을 받는다. 현재 로컬 chat 분기는 사진을 거부하며 파일/링크 worker는 별도다.</li>
-          <li>&bull; Desktop 검색 참조는 OpenCodex 분기에서 구성한다. 로컬 분기는 확정 텍스트·턴 이력을 전달한다.</li>
+          <li>&bull; OpenCodex는 입력 분기에서, 로컬 MLX는 어댑터 내부에서 의도에 따른 검색 참조를 준비한다.</li>
         </ul>
       </div>
 

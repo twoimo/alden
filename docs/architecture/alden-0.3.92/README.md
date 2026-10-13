@@ -5,7 +5,7 @@
 | 요구 범위 | 도식 | 구현과 검증 경계 |
 |---|---|---|
 | 전체 프로세스·추론 | [시스템](system.html) | Tauri/Python, 저장된 모델 선택, Gemini Flash/high 기본값, RAM 허용 로컬 경로. 모든 모델의 추론 성공은 별도 |
-| 대화·음성·취소·비상 중단 | [입력과 턴](voice.html) | Desktop 텍스트·사진, 실제 바이트 검증, OpenCodex 검색 참조·로컬 텍스트 분기, 취소 펜스. 물리 음성은 미완료 |
+| 대화·음성·취소·비상 중단 | [입력과 턴](voice.html) | Desktop 텍스트·사진, 실제 바이트 검증, 양쪽 모델의 검색 참조·로컬 chat 사진 제한, 취소 펜스. 물리 음성은 미완료 |
 | 다중 대상·출처 수집 | [수집](collection.html) | 대상·권한·예약/영속 요청, 수집/capture/index 상태, 이전 snapshot 복원. 넓은 자동 재취득은 미완료 |
 | 기존 원본→단일 뷰어 | [계보](lineage.html) | CollectionStore와 OSK 정본, 범위와 페이지에 따른 표시 합성, 부분 실패. 전량 복제·동일인 병합과 구분 |
 | MCP·충돌·중복 | [호스트와 MCP](mcp.html) | 시작 프로젝트 allowlist, 읽기 전용 조회·검색·범위 밖 거절. 전역 등록·양 호스트 독립 실행은 미완료 |
@@ -18,7 +18,7 @@
 
 [manifest](manifest.json)는 정확한 JSON/HTML/PNG SHA-256, 47개 코드 참조와 줄 앵커, 전달/브라우저 영수증을 연결합니다. 코드 바이트는 위 런타임 소스 커밋과 대조했습니다. `*-delivery.json`은 결정적 산출물 검사, `*-browser.json`과 `*.visual-check.json`은 브라우저 관측입니다. 브라우저 영수증의 `visualReview: pending`을 보존하고 이미지 검토 판정은 manifest에 별도로 기록했습니다.
 
-`chatgpt-web/gpt-6-sol` / `xhigh`의 실제 턴 모델을 확인한 병렬 검토를 적용했습니다. [독립 보고](independent-review.md)는 제공한 요약과 코드 발췌만 검토한 결과입니다. [지적 반영](review-resolution.md)은 조건부 검색·사진 모델 제한·부분 합성·학습 기록을 코드에 대조한 부모 작업입니다. 전체 저장소나 제품 실행을 독립 인증한 검토로 확대하지 않습니다.
+`chatgpt-web/gpt-6-sol` / `xhigh`의 실제 턴 모델을 확인한 병렬 검토를 적용했습니다. [독립 보고](independent-review.md)는 제공한 요약과 코드 발췌만 검토한 결과입니다. [지적 반영](review-resolution.md)은 모델별 검색 참조 준비 위치·사진 모델 제한·부분 합성·학습 기록을 전체 호출 경로에 대조한 부모 작업입니다. 로컬 검색이 없다는 발췌 검토의 가정은 어댑터 내부 호출을 확인해 정정했습니다. 전체 저장소나 제품 실행을 독립 인증한 검토로 확대하지 않습니다.
 
 실제 제품 전달 근거는 날짜별 문서를 따릅니다: [본문 근거 검색](../alden-rag-body-evidence-20261013.md), [그래프 복원](../alden-graph-restore-20261013.md), [solver 배치 전달](../alden-layout-handoff-20261013.md), [화면 중앙 충돌](../alden-display-collision-20261013.md), [읽기 전용 품질 확인](../alden-graph-quality-panel-20261012.md), [원문 검토](../alden-source-review-20261012.md).
 

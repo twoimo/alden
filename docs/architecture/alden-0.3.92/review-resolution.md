@@ -4,7 +4,7 @@
 
 | 지적 | 최종 반영과 부모의 확인 |
 |---|---|
-| Desktop 검색이 모든 모델에 연결되는 듯함 | 모델별 입력 준비로 수정했다. `alden_chat.py:169–195`의 OpenCodex 검색 참조와 로컬 텍스트 분기를 표시했다. 로컬 chat 사진 거부를 명시했다. |
+| 발췌에서 로컬 검색 전달이 보이지 않음 | 추가 전체 호출 대사에서 `alden_chat.py:169–195`의 OpenCodex 입력 분기와 `LocalMlxLlm.generate_for_turn → generate → _generate_response`를 확인했다. `alden_voice.py:1838–1853`의 로컬 어댑터도 검색 참조를 준비·전달한다. 검색이 OpenCodex에만 있다는 가정과 이를 반영한 첫 수정본을 정정했다. 로컬 chat 사진 거부는 유지했다. |
 | Gemini 기본값 발췌 누락 | `alden_model_routes.py:19–20`의 정확한 상수와 source SHA를 추가로 확인했다. 저장된 설정에 따른 선택으로 표현했다. 카탈로그를 추론 성공으로 보지 않는다. |
 | 첫 페이지 합성 조건·부분 실패 누락 | `collection-graph.ts:184–195`와 `unified-graph.ts:5–39`를 대조했다. 기억 선택 또는 focus 없는 전체 첫 페이지·수집 조회 가능 여부·부분 실패를 반영했다. |
 | 현재 학습 영수증과 생성 코드 혼동 | 완료 코드 경로의 필드라고 수정했다. `alden_dpo_training.py:220–242`는 학습 완료 시 기록값이며 이번 학습 실행이 아니다. 제품 승격 보류를 유지했다. |

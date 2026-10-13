@@ -6,12 +6,12 @@
   "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-central-density-20261011/docs/architecture/alden-0.3.92/voice.workflow.json",
   "output": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-central-density-20261011/docs/architecture/alden-0.3.92/voice.html",
   "specification": {
-    "sha256": "725a843892dfffd678bca19ecb240809ba0dacfcbae73973b24b9e97a981873b",
-    "bytes": 4445
+    "sha256": "5af27d98a8ac4affae74319ab1e6dbc90e06c765999c9f925e6a765f9d076d5c",
+    "bytes": 4434
   },
   "artifact": {
-    "sha256": "318de66789c8ef39d39c845d2e1c5cfd612fa69201374f6e0476349a0d2ef957",
-    "bytes": 811198
+    "sha256": "f3cd7f6618f68f17afc6759d0a5dbfc8f1dfb1275de17fa0804497ee783af997",
+    "bytes": 811172
   },
   "validation": {
     "checksPassed": 9,
