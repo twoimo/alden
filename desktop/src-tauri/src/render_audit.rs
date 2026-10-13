@@ -1276,13 +1276,17 @@ fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, dead
       const groups=[...document.querySelectorAll('.knowledge-quality-comparison')];
       const records=groups.map(group=>[...group.querySelectorAll('article')].map(article=>article.dataset.document));
       const lengths=[...document.querySelectorAll('.knowledge-quality-comparison pre')].map(p=>Array.from(p.textContent).length);
+      const summaryGeometry=groups.map(group=>{const r=group.querySelector('summary').getBoundingClientRect();return {width:r.width,height:r.height};});
       return {groups:groups.length,records,maximumBodyCharacters:Math.max(0,...lengths),
+        summaryGeometry,
         width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
         noCandidates:document.querySelector('#knowledge-quality-report').textContent.includes('현재 비교할 수 있는 일치 후보가 없습니다.'),
         noMerge:document.querySelector('#knowledge-quality-report').textContent.includes('병합하지 않았습니다.')};})())"#.into(),deadline)?;
     if state["groups"].as_u64().is_none_or(|n|n>6) || state["maximumBodyCharacters"].as_u64().is_none_or(|n|n>4000)
         || state["width"]!=state["scrollWidth"] || state["noMerge"]!=true
         || state["groups"]==0 && state["noCandidates"]!=true
+        || !state["summaryGeometry"].as_array().is_some_and(|groups|groups.iter().all(|r|
+            r["width"].as_f64().is_some_and(|v|v>=100.) && r["height"].as_f64().is_some_and(|v|v>=16.)))
         || !state["records"].as_array().is_some_and(|groups|groups.iter().all(|group|
             group.as_array().is_some_and(|rows|rows.len()==2 && rows[0]!=rows[1]))) {
         return Err(format!("quality comparison scope/geometry invalid: {state}"));

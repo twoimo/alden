@@ -654,6 +654,7 @@ body.settings-view {
 .knowledge-quality-report h3 { margin:10px 0 4px; color:var(--text); font-size:12px; }
 .knowledge-quality-findings { margin:5px 0 8px; color:var(--muted); }
 .knowledge-quality-findings summary { cursor:pointer; }
+.knowledge-quality-report summary { display:block; width:auto; height:auto; padding:6px 0; line-height:1.55; white-space:normal; overflow-wrap:anywhere; }
 .knowledge-quality-compare { margin:6px 0; }
 .knowledge-quality-comparison { margin:8px 0; }
 .knowledge-quality-comparison summary { cursor:pointer; overflow-wrap:anywhere; }
