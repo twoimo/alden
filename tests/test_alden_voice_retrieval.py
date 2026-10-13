@@ -10,6 +10,45 @@ import alden_voice as voice
 from alden_abort import AbortController,AldenCancelled
 
 class VoiceRetrievalTests(unittest.TestCase):
+    def test_complete_context_budget_removal_has_explicit_cause(self):
+        from alden_content_evidence import declared_source_annotations
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            proof={'fact_type':'entity','entity_id':'first','note_id':'first','source_kind':'collected_source',
+                   'source_version':'v-first','provenance_valid':True,
+                   'source_memberships':[{'project':'x'*1000,'permission':'local-private'}]*20,
+                   'source_annotations':declared_source_annotations({'topics':['<'*128]*6,'entityTags':['&'*128]*6},max_field_bytes=900)}
+            self.assertEqual(proof['source_annotations']['fields']['topics']['state'],'over_budget')
+            result={'facts':['본문이 있지만 근거가 너무 큼'],'fact_provenance':[proof],'search_mode':'rrf'}
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=result):
+                reference,metrics=voice._voice_knowledge_reference('저장된 자료 출처',[],root,AbortController(root).token())
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(metrics['state'],'budget_exceeded')
+            self.assertEqual(metrics['note_sources'],0)
+            self.assertEqual(context['reference_status'],'source_context_budget_exceeded')
+            self.assertIn('자료를 읽었다고 하지 말고',reference)
+
+    def test_annotation_differences_survive_model_context_without_truth_upgrade(self):
+        from alden_content_evidence import declared_source_annotations
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            first={'fact_type':'entity','entity_id':'first','note_id':'first','source_kind':'collected_source',
+                   'source_version':'v-first','provenance_valid':True,
+                   'source_annotations':declared_source_annotations({'topics':['one'],'entityTags':['medical']})}
+            other={**first,'entity_id':'copy','note_id':'copy','source_version':'v-copy',
+                   'source_annotations':declared_source_annotations({'topics':['two'],'entityTags':['gov']})}
+            first['matching_sources']={'schema':1,'policy':'retained-threads-annotation-context-v2',
+                'scope':'context_text_only; originals_not_merged','sources':[other],
+                'annotation_differences':['topics','entityTags']}
+            result={'facts':['동일한 보존 본문'],'fact_provenance':[first],'search_mode':'rrf'}
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=result):
+                reference,metrics=voice._voice_knowledge_reference('저장된 자료 출처',[],root,AbortController(root).token())
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(context['graph_provenance'][0],first)
+            self.assertEqual(metrics['graph_provenance'][0],first)
+            self.assertIn('원문별 미검증 태그',reference)
+            self.assertEqual(metrics['note_sources'],2)
+
     def test_shared_context_sources_survive_voice_boundary_and_share_truncation(self):
         with TemporaryDirectory() as td:
             root=self.root(td)

@@ -1,13 +1,72 @@
 """Source declarations and typed descriptions; candidates are not truth verdicts."""
+import json
 from alden_collection import normalized_text
 
 POLICY = 'source-content-evidence-v4'
+ANNOTATION_POLICY = 'retained-declared-tags-v1'
+ANNOTATION_FIELDS = ('topics', 'entityTags')
 DERIVED_SUMMARY_COVERAGE = 'existing privacy-filtered derived metadata; original bytes not opened'
 UNREAD_BODY_MARKERS = frozenset({'경로만 색인한 파일. 본문은 읽지 않았습니다.'})
 METADATA_DESCRIPTIONS = {
     'code': frozenset({'현재 체크아웃의 소스 파일'}),
     'hub': frozenset({'파일 시스템의 디렉터리'}),
 }
+
+
+def _annotation_context_bytes(values):
+    # Count expansion in the fenced model payload, not just the raw JSON list.
+    return len(json.dumps(values, ensure_ascii=False, separators=(',', ':'))
+               .replace('<', r'\u003c').replace('>', r'\u003e').replace('&', r'\u0026').encode('utf-8'))
+
+
+def declared_source_annotations(source, *, max_field_bytes=None):
+    """Describe only retained declarations; caller verifies original bytes."""
+    fields = {}
+    for key in ANNOTATION_FIELDS:
+        state, values = 'undeclared', []
+        if not isinstance(source, dict):
+            state = 'unsupported'
+        elif key in source:
+            value = source[key]
+            if not isinstance(value, list):
+                state = 'unsupported'
+            elif len(value) > 32:
+                state = 'over_budget'
+            elif any(not isinstance(v, str) or not v for v in value):
+                state = 'unsupported'
+            elif any(len(v) > 128 for v in value):
+                state = 'over_budget'
+            elif max_field_bytes is not None and _annotation_context_bytes(value) > max_field_bytes:
+                state = 'over_budget'
+            else:
+                state, values = 'declared', list(value)
+        fields[key] = {'state': state, 'values': values}
+    return {'policy': ANNOTATION_POLICY, 'basis': 'verified_retained_record',
+            'semantic_status': 'unverified', 'fields': fields}
+
+
+def validated_source_annotations(value, *, max_field_bytes=None):
+    """Copy the bounded declaration contract without unknown data fields."""
+    if (not isinstance(value, dict) or value.get('policy') != ANNOTATION_POLICY
+            or value.get('basis') != 'verified_retained_record'
+            or value.get('semantic_status') != 'unverified'
+            or not isinstance(value.get('fields'), dict)
+            or set(value['fields']) != set(ANNOTATION_FIELDS)):
+        raise ValueError('source_annotations_invalid')
+    fields = {}
+    for key in ANNOTATION_FIELDS:
+        field = value['fields'][key]
+        if (not isinstance(field, dict) or field.get('state') not in
+                ('declared', 'undeclared', 'unsupported', 'over_budget')
+                or not isinstance(field.get('values'), list) or len(field['values']) > 32
+                or any(not isinstance(v, str) or not v or len(v) > 128 for v in field['values'])
+                or field['state'] != 'declared' and field['values']):
+            raise ValueError('source_annotations_invalid')
+        if max_field_bytes is not None and _annotation_context_bytes(field['values']) > max_field_bytes:
+            raise ValueError('source_annotations_invalid')
+        fields[key] = {'state': field['state'], 'values': list(field['values'])}
+    return {'policy': ANNOTATION_POLICY, 'basis': 'verified_retained_record',
+            'semantic_status': 'unverified', 'fields': fields}
 # Whole descriptions observed in the retained file graph. Quoted occurrences
 # and unknown record kinds remain separate; an indexed flag is not body proof.
 

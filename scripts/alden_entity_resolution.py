@@ -18,7 +18,7 @@ import time
 import uuid
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, require_relation_binding
-from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class
+from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations as _declared_source_annotations
 from alden_graph_quality import _json
 
 
@@ -175,29 +175,6 @@ def _member_permissions(db, project, members):
     return all(db.execute("""SELECT 1 FROM target_projects WHERE target_id=? AND project=?
                             AND permission!='denied'""", (member["target_id"], project)).fetchone()
                for member in members)
-
-
-def _declared_source_annotations(source):
-    fields = {}
-    for key in ('topics', 'entityTags'):
-        state, values = 'undeclared', []
-        if not isinstance(source, dict):
-            state = 'unsupported'
-        elif key in source:
-            value = source[key]
-            if not isinstance(value, list):
-                state = 'unsupported'
-            elif len(value) > 32:
-                state = 'over_budget'
-            elif any(not isinstance(v, str) or not v for v in value):
-                state = 'unsupported'
-            elif any(len(v) > 128 for v in value):
-                state = 'over_budget'
-            else:
-                state, values = 'declared', list(value)
-        fields[key] = {'state': state, 'values': values}
-    return {'policy': 'retained-declared-tags-v1', 'basis': 'verified_retained_record',
-            'semantic_status': 'unverified', 'fields': fields}
 
 
 def _source_rows(db, store, project, members, *, read_blobs, show_records, include_annotations=False):

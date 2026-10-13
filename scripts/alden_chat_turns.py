@@ -19,6 +19,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 from alden_history import database
+from alden_content_evidence import validated_source_annotations, ANNOTATION_FIELDS
 
 
 MAX_TEXT_CHARS = 4000
@@ -47,7 +48,7 @@ _PROOF_KEYS = frozenset({
     'evidence_version', 'content_evidence', 'source_evidence', 'truth_status',
     'body_source', 'source_author', 'matching_sources', 'lexical_match',
     'selection_basis', 'text_projection',
-    'observation_time', 'observation_basis',
+    'observation_time', 'observation_basis', 'source_annotations',
 })
 
 
@@ -104,11 +105,21 @@ def _attachments(value: list[dict] | None) -> list[dict]:
 
 def _proof_row(row):
     result = {key: item for key, item in row.items() if key in _PROOF_KEYS}
+    if 'source_annotations' in result:
+        if (result.get('source_kind') != 'collected_source'
+                or result.get('fact_type') != 'entity' or result.get('provenance_valid') is not True):
+            raise ValueError('turn_provenance_invalid')
+        try:
+            result['source_annotations'] = validated_source_annotations(result['source_annotations'], max_field_bytes=900)
+        except ValueError as error:
+            raise ValueError('turn_provenance_invalid') from error
     if 'matching_sources' in result:
         group = result['matching_sources']
-        if (not isinstance(group, dict) or set(group) != {'schema', 'policy', 'scope', 'sources'}
+        annotation_group = isinstance(group, dict) and group.get('policy') == 'retained-threads-annotation-context-v2'
+        keys = {'schema', 'policy', 'scope', 'sources'} | ({'annotation_differences'} if annotation_group else set())
+        if (not isinstance(group, dict) or set(group) != keys
                 or type(group['schema']) is not int or group['schema'] != 1
-                or group['policy'] != 'retained-threads-exact-context-v1'
+                or group['policy'] not in ('retained-threads-exact-context-v1', 'retained-threads-annotation-context-v2')
                 or group['scope'] != 'context_text_only; originals_not_merged'
                 or not isinstance(group['sources'], list) or not 1 <= len(group['sources']) <= 9
                 or result.get('source_kind') != 'collected_source'
@@ -127,6 +138,15 @@ def _proof_row(row):
                     or source['entity_id'] in seen):
                 raise ValueError('turn_provenance_invalid')
             seen.add(source['entity_id']); sources.append(_proof_row(source))
+        if annotation_group:
+            rows = [result, *sources]
+            if any('source_annotations' not in source or any(source['source_annotations']['fields'][key]['state']
+                   not in ('declared', 'undeclared') for key in ANNOTATION_FIELDS) for source in rows):
+                raise ValueError('turn_provenance_invalid')
+            differences = [key for key in ANNOTATION_FIELDS if any(result['source_annotations']['fields'][key] !=
+                           source['source_annotations']['fields'][key] for source in sources)]
+            if group['annotation_differences'] != differences:
+                raise ValueError('turn_provenance_invalid')
         result['matching_sources'] = {**group, 'sources': sources}
     return result
 

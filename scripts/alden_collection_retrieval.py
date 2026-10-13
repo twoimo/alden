@@ -8,7 +8,7 @@ import sqlite3
 import struct
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, korean_literal_plan, korean_literal_matches
-from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class
+from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations, ANNOTATION_FIELDS
 from alden_source_text import TEXT_VERSION, project_source_text
 
 ENCODING = 'e5-char256-stride192-weighted-unit-pool-v1'
@@ -17,15 +17,16 @@ MAX_DOCUMENTS = 100000
 BATCH = 8
 MAX_SOURCE_MEMBERSHIPS = 256
 MAX_BODY_EVIDENCE_CHECKS = 100
-CONTEXT_TEXT_POLICY = 'retained-threads-exact-context-v1'
+CONTEXT_TEXT_POLICY = 'retained-threads-annotation-context-v2'
 
 
 def _context_text_key(text, proof, record, metadata):
     """Exact retained-text presentation only; never entity/source identity.
 
     Identity and capture coordinates remain in every individual proof. All
-    other retained fields, including author/date/media/unknown annotations,
-    must match. Missing author/date or declared partial content stays separate.
+    Author/date/media/unknown fields must match. Bounded declared tag values
+    may differ only with every original's declarations retained in its proof.
+    Missing author/date, incomplete tags or partial content stays separate.
     """
     if (proof['content_evidence']['classification'] != 'content_candidate'
             or proof['body_source'] != 'retained_record.localOriginalText'
@@ -36,11 +37,22 @@ def _context_text_key(text, proof, record, metadata):
             or any(record.get(k) or metadata.get(k) for k in
                    ('truncated', 'partial', 'body_truncated', 'localTextTruncated', 'content_truncated'))):
         return None
+    annotations = proof.get('source_annotations')
+    if (annotations is None or any(annotations['fields'][k]['state'] not in
+            ('declared', 'undeclared') for k in ANNOTATION_FIELDS)):
+        return None
+    other_metadata = {k: v for k, v in metadata.items()
+                      if k not in ('source', 'original_id', 'source_node_id')}
+    for key in ANNOTATION_FIELDS:
+        # Only a literal mirror of the verified declaration may be excluded.
+        # A different projection annotation remains a separate semantic field.
+        if key in other_metadata and key in record and other_metadata[key] == record[key]:
+            del other_metadata[key]
     contexts = [(m['target_id'], m['project'], m['permission']) for m in proof['source_memberships']]
     return digest(encoded([text, contexts, proof['truth_status'], proof['body_source'],
         proof['content_evidence'],
-        {k: v for k, v in metadata.items() if k not in ('source', 'original_id', 'source_node_id')},
-        {k: v for k, v in record.items() if k not in ('id', 'code', 'url')}]))
+        [annotations['fields'][k]['state'] for k in ANNOTATION_FIELDS], other_metadata,
+        {k: v for k, v in record.items() if k not in ('id', 'code', 'url', *ANNOTATION_FIELDS)}]))
 
 
 def _prefer_body_literal_evidence(store, rows, ranked, plans, projects, limit, cancelled):
@@ -559,6 +571,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 proof['selection_basis'] = 'matching_current_version_bound_body; source truth not independently verified'
             if isinstance(record, dict):
                 proof['source_author'] = {key: record[key] for key in ['author', 'handle', 'date', 'url', 'localTextOrigin'] if isinstance(record.get(key), str)}
+                if record.get('platform') == 'threads' and record.get('type') == 'source':
+                    proof['source_annotations'] = declared_source_annotations(record, max_field_bytes=900)
             text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
             if evidence_class != 'content_candidate':
                 text='[자료 설명 · 원래 본문 미확인] '+text
@@ -570,9 +584,13 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 representative = provenance[matching_text[match]]
                 group = representative.setdefault('matching_sources', {
                     'schema': 1, 'policy': CONTEXT_TEXT_POLICY,
-                    'scope': 'context_text_only; originals_not_merged', 'sources': []})
+                    'scope': 'context_text_only; originals_not_merged', 'sources': [],
+                    'annotation_differences': []})
                 proof['fact_truncated'] = False
                 group['sources'].append(proof)
+                group['annotation_differences'] = [key for key in ANNOTATION_FIELDS
+                    if any(representative['source_annotations']['fields'][key] !=
+                           source['source_annotations']['fields'][key] for source in group['sources'])]
                 repeated_facts += 1; saved_characters += len(text)
             elif append(text, proof) and match is not None and not proof['fact_truncated']:
                 matching_text[match] = len(provenance) - 1

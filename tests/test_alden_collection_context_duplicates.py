@@ -62,6 +62,80 @@ class CollectionContextDuplicatesTests(unittest.TestCase):
         self.assertEqual(len(result['candidates']), 2)
         self.assertEqual(original_digest(self.store), before)
 
+    def test_same_body_different_declared_tags_is_once_with_both_originals(self):
+        self.add('a', raw_changes={'topics': ['recruitment_timing'], 'entityTags': ['medical', 'samsung']})
+        self.add('b', raw_changes={'topics': ['recruitment_timing', 'public_agency'], 'entityTags': ['gov', 'nh']})
+        before = original_digest(self.store)
+        result = self.get()
+        self.assertEqual(len(result['facts']), 1)
+        proof = result['fact_provenance'][0]
+        group = proof['matching_sources']
+        self.assertEqual(group['policy'], 'retained-threads-annotation-context-v2')
+        self.assertEqual(group['annotation_differences'], ['topics', 'entityTags'])
+        sources = [proof, *group['sources']]
+        self.assertEqual({tuple(s['source_annotations']['fields']['entityTags']['values']) for s in sources},
+                         {('medical', 'samsung'), ('gov', 'nh')})
+        self.assertTrue(all(s['source_annotations']['semantic_status'] == 'unverified' for s in sources))
+        self.assertEqual(original_digest(self.store), before)
+        ticket = turns.reserve_turn(self.root, 'c' * 32, None, '청라 채용 출처')
+        turns.complete_turn(self.root, ticket, '보존된 본문이며 태그의 의미는 미확정입니다.', provenance=[proof])
+        page = history.read(self.root, Path('/unused'), 'voice-history-messages', chat_id=ticket['conversation_id'])
+        self.assertEqual(page['items'][1]['retrieval_provenance'][0], proof)
+
+    def test_annotation_missing_format_and_byte_budget_keep_sources_separate(self):
+        for value in (None, 'topic', [1], ['x' * 129], ['x' * 120] * 8, ['<' * 128] * 6):
+            with self.subTest(value=value), TemporaryDirectory() as directory:
+                self.root = Path(directory).resolve(); self.store = CollectionStore(self.root)
+                self.target = self.store.register(platform='graph', original_id='source', kind='source', label='source', projects=['career'])
+                self.add('a', raw_changes={'topics': value}); self.add('b', raw_changes={'topics': value})
+                result = self.get(); self.assertEqual(len(result['facts']), 2)
+                self.assertTrue(all(p['source_annotations']['fields']['topics']['state'] in ('unsupported', 'over_budget') for p in result['fact_provenance']))
+        with TemporaryDirectory() as directory:
+            self.root = Path(directory).resolve(); self.store = CollectionStore(self.root)
+            self.target = self.store.register(platform='graph', original_id='source', kind='source', label='source', projects=['career'])
+            self.add('a'); self.add('b', raw_changes={'topics': []})
+            self.assertEqual(len(self.get()['facts']), 2)
+
+    def test_mirrored_tags_are_preserved_but_other_projection_tags_remain_distinct(self):
+        self.add('a', raw_changes={'topics': ['one']}, metadata={'topics': ['one']})
+        self.add('b', raw_changes={'topics': ['two']}, metadata={'topics': ['two']})
+        self.assertEqual(len(self.get()['facts']), 1)
+        self.add('c', raw_changes={'topics': ['one']}, metadata={'topics': ['different-projection']})
+        result = self.get(max_entities=3)
+        self.assertEqual(len(result['facts']), 2)
+        self.assertEqual(result['context_text_compaction']['retained_sources'], 3)
+
+    def test_annotation_contract_and_difference_flags_cannot_be_forged_in_history(self):
+        self.add('a', raw_changes={'topics': ['one']}); self.add('b', raw_changes={'topics': ['two']})
+        proof = self.get()['fact_provenance'][0]
+        for change in (lambda p: p['source_annotations'].update(semantic_status='confirmed'),
+                       lambda p: p['matching_sources'].update(annotation_differences=[]),
+                       lambda p: p['matching_sources']['sources'][0]['source_annotations']['fields']['topics'].update(values=['x' * 120] * 8),
+                       lambda p: p['matching_sources']['sources'][0].pop('source_annotations')):
+            with self.subTest(change=change):
+                value = copy.deepcopy(proof); change(value)
+                with self.assertRaisesRegex(ValueError, 'turn_provenance_invalid'):
+                    turns._provenance([value])
+        value = copy.deepcopy(proof); value['source_annotations']['credential'] = 'DO_NOT_STORE'
+        self.assertNotIn('credential', json.loads(turns._provenance([value]))[0]['source_annotations'])
+        legacy = copy.deepcopy(proof); legacy.pop('source_annotations')
+        legacy['matching_sources'].update(policy='retained-threads-exact-context-v1')
+        legacy['matching_sources'].pop('annotation_differences')
+        for source in legacy['matching_sources']['sources']: source.pop('source_annotations')
+        self.assertEqual(json.loads(turns._provenance([legacy]))[0], legacy)
+
+    def test_large_combined_source_proof_budget_is_explicit_without_lost_members(self):
+        for i in range(10):
+            self.add(str(i), raw_changes={'topics': ['x' * 120] * 7, 'entityTags': ['y' * 120] * 7})
+        proof = self.get(max_entities=10)['fact_provenance'][0]
+        self.assertEqual(len(proof['matching_sources']['sources']), 9)
+        for source in [proof, *proof['matching_sources']['sources']]:
+            source['source_memberships'] = [dict(source['source_memberships'][0], project='p' + str(i)) for i in range(256)]
+        before = copy.deepcopy(proof)
+        with self.assertRaisesRegex(ValueError, 'turn_provenance_too_large'):
+            turns._provenance([proof])
+        self.assertEqual(proof, before)
+
     def test_no_group_for_changed_author_date_media_or_other_raw_semantics(self):
         changes = [{'author': 'different'}, {'date': '2026-02-18'},
                    {'remoteMediaUrls': ['https://example.invalid/image.png']},
