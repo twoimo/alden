@@ -750,6 +750,9 @@ export async function bootSettings(
       wireRenderLifecycle(lifecycle, {
         subscribeVisibility: dependencies.subscribeVisibility,
         readVisibility: dependencies.readVisibility,
+        // This data view can remain visible without owning keyboard focus.
+        // Native hide, the selected page and teardown still stop its work.
+        pauseOnBlur: false,
         onClosed: () => {
           try {
             graph.dispose();

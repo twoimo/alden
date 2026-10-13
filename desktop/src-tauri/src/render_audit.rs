@@ -1256,6 +1256,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
     }
     let mut states=Vec::new();
     for size in ["default","compact"] {
+        let mut late_blur=Value::Null;
         eprintln!("Alden scope {case}: waiting for {size} viewport");
         if size=="compact" {
             eprintln!("Alden scope {case}: suspend before compact resize");
@@ -1281,6 +1282,15 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             eprintln!("Alden scope {case}: compact native geometry set");
             visibility(window,true,deadline)?;
             eprintln!("Alden scope {case}: resumed");
+            wait_for_audit_state("scoped native resume",deadline,|| collect_script(window,
+                "JSON.stringify({ready:window.__knowledgeRenderDiagnostics?.lifecycle?.animationRequested===true})".into(),deadline),|state|state["ready"]==true)?;
+            late_blur=collect_script(window,r#"JSON.stringify((()=>{
+                window.dispatchEvent(new Event('blur'));
+                return {synthetic:true,event:'blur',lifecycle:window.__knowledgeRenderDiagnostics?.lifecycle??null};
+            })())"#.into(),deadline)?;
+            if late_blur["lifecycle"]["animationRequested"]!=true {
+                return Err(format!("visible scoped graph stopped after synthetic late blur: {late_blur}"));
+            }
         }
         wait_for_audit_state("scoped graph paint",deadline,|| {
             let native=native_settings_size(window,deadline)?;
@@ -1361,7 +1371,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             observed
         } else {Value::Null};
         let state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,"searchResultIds":search_ids,
-            "physics":physics,"geometry":geometry,"labels":labels,"navigation":navigation,
+            "physics":physics,"geometry":geometry,"labels":labels,"navigation":navigation,"lateBlur":late_blur,
             "scope":"owned read-only native scoped graph only; no physical input, pixel/GPU/FPS or semantic gold proof"});
         publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
         publish(output,&format!("graph-scope-{size}.png"),&snapshot(window,deadline)?,deadline)?;
