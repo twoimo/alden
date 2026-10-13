@@ -153,11 +153,33 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
             text_db = owned
     try:
         with store.database() as db:
-            rows = db.execute('''SELECT d.id,d.platform,d.original_id,v.id AS version,
-                v.raw_sha256,v.raw_path,v.label,v.body,v.collected_at
-                FROM documents d JOIN (''' + store._scope_versions(projects) + ''') s
+            source_query = ' FROM documents d JOIN (' + store._scope_versions(projects) + ''') s
                 ON s.document_id=d.id JOIN versions v ON v.id=s.current_version
-                WHERE d.availability='available' ''' + ''.join(' AND ' + c for c in clauses) + ' ORDER BY d.id', args)
+                WHERE d.availability='available' ''' + ''.join(' AND ' + c for c in clauses)
+            fts_ids = {}
+            if resolve_source:
+                keys = db.execute('SELECT d.id,v.id' + source_query + ' LIMIT ?', (*args, MAX_DOCUMENTS+1)).fetchall()
+                if len(keys)>MAX_DOCUMENTS:raise RuntimeError('collection_retrieval_budget')
+                with text_db:
+                    text_db.execute('DROP TABLE IF EXISTS temp.source_text_scope')
+                    text_db.execute('CREATE TEMP TABLE source_text_scope(document_id TEXT,version TEXT,PRIMARY KEY(document_id,version))')
+                    text_db.executemany('INSERT INTO source_text_scope VALUES(?,?)', keys)
+                # One bounded scope scan. Deleting by the unindexed FTS fields
+                # for each migrated record otherwise rescans every old version.
+                for rowid, doc, version in text_db.execute('''SELECT rowid,document_id,version FROM text_fts
+                    WHERE EXISTS(SELECT 1 FROM source_text_scope s WHERE s.document_id=text_fts.document_id AND s.version=text_fts.version)'''):
+                    fts_ids.setdefault((doc,version), []).append(rowid)
+            pending_text, pending_delete, pending_fts = [], [], []
+            def flush():
+                if not pending_text and not pending_fts:return
+                _check(cancelled)
+                with text_db:
+                    text_db.executemany('INSERT OR REPLACE INTO texts VALUES(?,?,?,?,?,?,?,?)', pending_text)
+                    text_db.executemany('DELETE FROM text_fts WHERE rowid=?', pending_delete)
+                    text_db.executemany('INSERT INTO text_fts VALUES(?,?,?,?)', pending_fts)
+                pending_text.clear();pending_delete.clear();pending_fts.clear()
+            rows = db.execute('''SELECT d.id,d.platform,d.original_id,v.id AS version,
+                v.raw_sha256,v.raw_path,v.label,v.body,v.collected_at''' + source_query + ' ORDER BY d.id', args)
             result, budget = [], 0
             for row in rows:
                 _check(cancelled)
@@ -178,17 +200,16 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
                     source = json.loads(raw)
                     if item['platform'] == 'graph' and isinstance(source, dict) and isinstance(source.get('localOriginalText'), str) and source['localOriginalText'].strip():
                         item['body'], field = project_source_text(source['localOriginalText'], source)['body'], 'retained_record.localOriginalText'
-                    with text_db:
-                        text_db.execute('INSERT OR REPLACE INTO texts VALUES(?,?,?,?,?,?,?,?)',
-                                        (item['id'], item['version'], base_hash, item['raw_sha256'], TEXT_VERSION,
+                    pending_text.append((item['id'], item['version'], base_hash, item['raw_sha256'], TEXT_VERSION,
                                          item['label'], item['body'], field))
-                        # A new version has no FTS row to replace. Both tables
-                        # are written atomically, so avoid a full FTS scan for
-                        # every newly materialized source version.
-                        if cached is not None:
-                            text_db.execute('DELETE FROM text_fts WHERE document_id=? AND version=?', (item['id'], item['version']))
-                        text_db.execute('INSERT INTO text_fts VALUES(?,?,?,?)', (item['id'], item['version'], item['label'], item['body']))
                     ready = True
+                if resolve_source:
+                    rowids = fts_ids.get((item['id'],item['version']), [])
+                    prior = text_db.execute('SELECT label,body FROM text_fts WHERE rowid=?', (rowids[0],)).fetchone() if len(rowids)==1 else None
+                    if prior != (item['label'],item['body']):
+                        pending_delete.extend((rowid,) for rowid in rowids)
+                        pending_fts.append((item['id'],item['version'],item['label'],item['body']))
+                    if len(pending_text)>=256 or len(pending_fts)>=256:flush()
                 item['text_ready'], item['body_source'] = ready, field
                 text = item['label'] + '\n' + item['body']
                 budget += len(text.encode())
@@ -196,6 +217,7 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
                     raise RuntimeError('collection_retrieval_budget')
                 item['text_hash'] = digest(text.encode())
                 result.append(item)
+            flush()
             return result
     finally:
         if owned is not None:

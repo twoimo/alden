@@ -152,6 +152,21 @@ class SourceProjectionIntegrationTests(unittest.TestCase):
         with sqlite3.connect(self.store.root/'retrieval.sqlite3') as db:
             self.assertEqual(db.execute('SELECT extraction,body FROM texts').fetchone(),(TEXT_VERSION,BODY))
 
+    def test_unchanged_migration_keeps_fts_rowids_and_repairs_duplicate_current_rows(self):
+        index_text(self.root,['one'])
+        path=self.store.root/'retrieval.sqlite3'
+        with sqlite3.connect(path) as db:
+            original=db.execute('SELECT rowid,* FROM text_fts').fetchone()
+            db.execute('UPDATE texts SET extraction=?', ('retained-local-original-text-v1',))
+        index_text(self.root,['one'])
+        with sqlite3.connect(path) as db:
+            self.assertEqual(db.execute('SELECT rowid,* FROM text_fts').fetchone(),original)
+            db.execute('INSERT INTO text_fts(document_id,version,label,body) SELECT document_id,version,label,body FROM text_fts')
+        index_text(self.root,['one'])
+        with sqlite3.connect(path) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM text_fts').fetchone(),(1,))
+            self.assertEqual(db.execute('SELECT body FROM text_fts').fetchone(),(BODY,))
+
     def test_clean_body_matches_are_candidates_without_merging_distinct_posts(self):
         self.store.ingest(self.target, [{**self.record, 'original_id':'post2','text':BODY,'raw':source(BODY)}])
         index_text(self.root, ['one'])
