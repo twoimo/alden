@@ -10,6 +10,10 @@ import re
 import time
 import unicodedata
 
+_BASIS_LABELS={'record_confirmed_at':'기록 확인 시각',
+               'source_published_at':'출처 발행 시각',
+               'note_revision_at':'문서 개정 시각'}
+
 
 def _term(value):
     return ''.join(unicodedata.normalize('NFKC',str(value)).casefold().split())
@@ -75,23 +79,31 @@ def select_latest(query, records, *, needles=None, time_from=None, time_to=None,
                 start=text.find(term,start+1)
         return False
     terms=[term for term in groups if independently_mentioned(term)]
-    selected,excluded=set(),set()
+    selected,excluded,protected=set(),set(),set()
     for term in terms:
         group=list(groups[term].values());policy['matched_mentions']+=1
         if any(row.get('has_conflict') for row in group):
-            policy['conflicting_mentions']+=1;continue
+            policy['conflicting_mentions']+=1;protected.update(row['id'] for row in group);continue
         if len(group)>1 and any(row.get('identity_kind')=='person' for row in group):
-            policy['ambiguous_identity_mentions']+=1;continue
+            policy['ambiguous_identity_mentions']+=1;protected.update(row['id'] for row in group);continue
         scopes=[set(scope for name,values in row.get('mention_scopes',{}).items() if _term(name)==term for scope in values) for row in group]
         if any(scopes) and not set.intersection(*scopes):
-            policy['ambiguous_identity_mentions']+=1;continue
-        intervals=[_interval(row.get('observed_at'),now) if row.get('time_basis') else None for row in group]
+            policy['ambiguous_identity_mentions']+=1;protected.update(row['id'] for row in group);continue
+        bases=[row.get('time_basis') for row in group]
+        # Publication, confirmation and revision date different events; none
+        # attests that a record on another basis has been superseded.
+        if any(not isinstance(basis,str) or basis not in _BASIS_LABELS for basis in bases) or len(set(bases))!=1:
+            policy['undetermined_mentions']+=1;protected.update(row['id'] for row in group);continue
+        intervals=[_interval(row.get('observed_at'),now) for row in group]
         if any(value is None for value in intervals):
-            policy['undetermined_mentions']+=1;continue
+            policy['undetermined_mentions']+=1;protected.update(row['id'] for row in group);continue
         boundary=max(value[0] for value in intervals)
         for row,interval in zip(group,intervals):
             (selected if interval[1]>=boundary else excluded).add(row['id'])
     excluded-=selected
+    # An unresolved mention must keep its evidence even when another mention
+    # also matches those records and can be compared by date.
+    excluded-=protected
     excluded-={row['id'] for row in records if row.get('pinned')}
     policy['excluded_older_observations']=len(excluded)
     policy['observation_basis']=sorted({str(row['time_basis']) for row in records if row['id'] in selected})
@@ -101,8 +113,8 @@ def select_latest(query, records, *, needles=None, time_from=None, time_to=None,
 
 
 def observation_note(stamp, basis):
-    labels={'record_confirmed_at':'기록 확인 시각','source_published_at':'출처 발행 시각','note_revision_at':'문서 개정 시각'}
-    if not basis or _interval(stamp,time.time()) is None:return '시점 미확인 기록(현재 효력을 단정할 수 없음): '
+    if not isinstance(basis,str) or basis not in _BASIS_LABELS or _interval(stamp,time.time()) is None:
+        return '시점 미확인 기록(현재 효력을 단정할 수 없음): '
     if type(stamp) in (int,float) and math.isfinite(stamp):
         stamp=datetime.fromtimestamp(stamp,timezone.utc).isoformat()
-    return f'{labels.get(basis,"관측 시각")} {str(stamp)[:64]}(현재 효력의 증명은 아님): '
+    return f'{_BASIS_LABELS[basis]} {str(stamp)[:64]}(현재 효력의 증명은 아님): '

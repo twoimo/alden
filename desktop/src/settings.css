@@ -654,6 +654,13 @@ body.settings-view {
 .knowledge-quality-report h3 { margin:10px 0 4px; color:var(--text); font-size:12px; }
 .knowledge-quality-findings { margin:5px 0 8px; color:var(--muted); }
 .knowledge-quality-findings summary { cursor:pointer; }
+.knowledge-quality-compare { margin:6px 0; }
+.knowledge-quality-comparison { margin:8px 0; }
+.knowledge-quality-comparison summary { cursor:pointer; overflow-wrap:anywhere; }
+.knowledge-quality-comparison article { padding:9px 0; border-top:1px solid var(--border); }
+.knowledge-quality-comparison h4 { margin:4px 0; overflow-wrap:anywhere; }
+.knowledge-quality-comparison p { margin:4px 0; overflow-wrap:anywhere; }
+.knowledge-quality-comparison pre { margin:6px 0; max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
 .knowledge-quality-findings dl { margin:6px 0 0; }
 .knowledge-quality-report .knowledge-quality-limit { padding-top:8px; border-top:1px solid var(--border); color:var(--muted); }
 @media(max-width:980px) {

@@ -29,6 +29,21 @@ type BodyMatches = {
   reference_text: { groups: number; members: number; status: 'text_match_review_only' };
 };
 type QualityErrorCode = keyof typeof ERROR_TEXT;
+type ComparisonRecord = {
+  target_id: string; document_id: string; version: string; platform: string; original_id: string;
+  label: string; target_label: string; body: string; body_source: 'stored_body' | 'retained_record.localOriginalText';
+  truncated: boolean; matched_body: string; matched_body_truncated: boolean;
+  collected_at: number; raw_sha256: string; basis: 'permitted_current_stored_record';
+  content_evidence: { policy: 'source-content-evidence-v4'; classification: string };
+};
+type ComparisonSamples = {
+  policy: 'source-bound-pair-preview-v1'; coverage: 'bounded_sample';
+  maximum_groups: 6; maximum_records_per_group: 2; maximum_body_characters: 4000;
+  maximum_pairs_examined: 20; examined_pairs: number;
+  source_verification: 'displayed_canonical_records_only'; skipped_noncontent_groups: number;
+  groups: Array<{ kind: 'stored_body' | 'canonical_record'; project: string; match_sha256: string;
+    members: number; status: 'review_only_not_confirmed_duplicate'; records: ComparisonRecord[] }>;
+};
 type DeclaredFields = {
   policy: 'source-declared-fields-v1'; time_policy: 'source-declared-time-v1'; quantity_policy: 'source-declared-quantity-v1';
   scope: 'explicit_metadata_fields_only'; truth_status: 'syntax_conversion_not_semantic_verdict';
@@ -56,6 +71,7 @@ export type QualitySuccess = {
   content_evidence: { policy: 'source-content-evidence-v4'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified'; declared_fields: DeclaredFields };
+  comparison_samples?: ComparisonSamples;
 };
 export type QualityFailure = { ok: false; schema: 3; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
@@ -67,6 +83,7 @@ const ERROR_TEXT = {
   quality_cancelled: '품질 확인 요청이 취소되었습니다.',
   quality_report_unavailable: '품질 보고서를 가져오지 못했습니다.',
   quality_query_invalid: '품질 확인 요청 범위가 올바르지 않습니다.',
+  quality_comparison_unavailable: '후보의 현재 원문·출처를 대사하지 못했습니다. 다시 검사해 주세요.',
 } as const;
 
 // Reviewed keys from alden_graph_quality.py. Unknown keys get a generic label;
@@ -153,6 +170,67 @@ export function qualityQueryFromSelection(selection: string): QualityQuery | nul
   return null;
 }
 
+function comparisonSamples(value: unknown, projects: string[], maxMembers: number): ComparisonSamples | null {
+  const samples = object(value);
+  const bounded = (v: unknown, maximum: number, empty = true): v is string => typeof v === 'string'
+    && (empty || v.length > 0) && v.length <= maximum * 2 && [...v].length <= maximum;
+  const sha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+  if (!samples || samples.policy !== 'source-bound-pair-preview-v1' || samples.coverage !== 'bounded_sample'
+    || samples.maximum_groups !== 6 || samples.maximum_records_per_group !== 2 || samples.maximum_body_characters !== 4000
+    || samples.maximum_pairs_examined !== 20 || !count(samples.examined_pairs) || (samples.examined_pairs as number) > 20
+    || samples.source_verification !== 'displayed_canonical_records_only'
+    || !count(samples.skipped_noncontent_groups)
+    || !Array.isArray(samples.groups) || samples.groups.length > 6) return null;
+  if (samples.groups.length + (samples.skipped_noncontent_groups as number) !== samples.examined_pairs) return null;
+  const groups: ComparisonSamples['groups'] = [], keys = new Set<string>(), pairs = new Set<string>();
+  for (const value of samples.groups) {
+    const group = object(value);
+    if (!group || !['stored_body', 'canonical_record'].includes(String(group.kind))
+      || !bounded(group.project, 128, false) || !projects.includes(group.project)
+      || !sha(group.match_sha256) || !count(group.members) || (group.members as number) < 2
+      || (group.members as number) > maxMembers || group.status !== 'review_only_not_confirmed_duplicate'
+      || !Array.isArray(group.records) || group.records.length !== 2) return null;
+    const key = `${group.project}/${group.kind}/${group.match_sha256}`;
+    if (keys.has(key)) return null;
+    keys.add(key);
+    const records: ComparisonRecord[] = [], ids = new Set<string>();
+    for (const value of group.records) {
+      const record = object(value);
+      const evidence = object(record?.content_evidence);
+      if (!record || !bounded(record.target_id, 256, false) || !bounded(record.document_id, 256, false)
+        || typeof record.version !== 'string' || !/^version:[0-9a-f]{64}$/.test(record.version)
+        || !bounded(record.platform, 64, false) || !bounded(record.original_id, 2048, false)
+        || !bounded(record.label, 1024) || !bounded(record.target_label, 1024)
+        || !bounded(record.body, 4000) || !bounded(record.matched_body, 4000)
+        || typeof record.truncated !== 'boolean' || typeof record.matched_body_truncated !== 'boolean'
+        || !['stored_body', 'retained_record.localOriginalText'].includes(String(record.body_source))
+        || !checkedDate(record.collected_at) || !sha(record.raw_sha256)
+        || !evidence || evidence.policy !== 'source-content-evidence-v4'
+        || !['metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description', 'content_candidate'].includes(String(evidence.classification))
+        || evidence.classification !== 'content_candidate'
+        || record.basis !== 'permitted_current_stored_record' || ids.has(record.document_id)
+        || (group.kind === 'canonical_record' && record.raw_sha256 !== group.match_sha256)) return null;
+      ids.add(record.document_id);
+      records.push({ target_id: record.target_id, document_id: record.document_id, version: record.version,
+        platform: record.platform, original_id: record.original_id, label: record.label, target_label: record.target_label,
+        body: record.body, body_source: record.body_source as ComparisonRecord['body_source'], truncated: record.truncated,
+        matched_body: record.matched_body, matched_body_truncated: record.matched_body_truncated,
+        collected_at: record.collected_at as number, raw_sha256: record.raw_sha256, basis: 'permitted_current_stored_record',
+        content_evidence: { policy: 'source-content-evidence-v4', classification: evidence.classification as string } });
+    }
+    const pair = JSON.stringify([group.project,[...ids].sort()]);
+    if (pairs.has(pair)) return null;
+    pairs.add(pair);
+    groups.push({ kind: group.kind as 'stored_body' | 'canonical_record', project: group.project,
+      match_sha256: group.match_sha256, members: group.members as number,
+      status: 'review_only_not_confirmed_duplicate', records });
+  }
+  return { policy: 'source-bound-pair-preview-v1', coverage: 'bounded_sample', maximum_groups: 6,
+    maximum_records_per_group: 2, maximum_body_characters: 4000,
+    maximum_pairs_examined: 20, examined_pairs: samples.examined_pairs as number,
+    source_verification: 'displayed_canonical_records_only', skipped_noncontent_groups: samples.skipped_noncontent_groups as number, groups };
+}
+
 function matchesScope(value: Record<string, unknown>, query: QualityQuery, allowNull: boolean): boolean {
   if (allowNull && value.requested_scope === null && value.requested_project === null) return true;
   return value.requested_scope === query.scope
@@ -227,6 +305,9 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || normalization.method !== 'NFC_line_endings_preserving_body_spacing'
     || normalization.semantic_validity !== 'unverified') return null;
 
+  const comparisons = Object.hasOwn(row, 'comparison_samples')
+    ? comparisonSamples(row.comparison_samples, scope.projects as string[], counts.distinct_current_documents as number) : undefined;
+  if (comparisons === null) return null;
   return {
     ok: true, schema: 3,
     scope: {
@@ -257,6 +338,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     },
     content_evidence: { policy: 'source-content-evidence-v4', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified', declared_fields: declared },
+    ...(comparisons ? { comparison_samples: comparisons } : {}),
   };
 }
 
@@ -290,6 +372,9 @@ export class KnowledgeQualityPanel {
     this.report = root.getElementById('knowledge-quality-report') as HTMLElement;
     this.selection = this.selector.value;
     this.button.addEventListener('click', () => { void this.request(); }, { signal: this.controls.signal });
+    this.report.addEventListener('click', event => {
+      if ((event.target as Element | null)?.closest?.('button.knowledge-quality-compare')) void this.request(true);
+    }, { signal: this.controls.signal });
     this.info.addEventListener('toggle', () => { if (!this.info.open) this.invalidate(); }, { signal: this.controls.signal });
     // Even an immediate close-and-reopen invalidates the earlier request.
     // Observing only removal (oldValue is the present attribute) avoids
@@ -364,7 +449,7 @@ export class KnowledgeQualityPanel {
     this.updateButton();
   }
 
-  private async request(): Promise<void> {
+  private async request(includeSamples = false): Promise<void> {
     this.syncSelection();
     const query = qualityQueryFromSelection(this.selection);
     if (!query || !this.active || this.disposed || !this.info.open
@@ -378,10 +463,11 @@ export class KnowledgeQualityPanel {
     this.report.hidden = true;
     this.report.dataset.state = 'loading';
     try {
-      const response = await this.load('collection-quality', { query: JSON.stringify(query) });
+      const response = await this.load('collection-quality', { query: JSON.stringify({ ...query,
+        ...(includeSamples ? { include_samples: true } : {}) }) });
       if (!this.current(epoch, selection)) return;
       const result = parseCollectionQuality(response, query);
-      if (!result) {
+      if (!result || (result.ok && includeSamples && !result.comparison_samples)) {
         this.status.textContent = '품질 보고서를 확인할 수 없습니다. 다시 요청할 수 있습니다.';
         this.report.dataset.state = 'unavailable';
       } else if (!result.ok) {
@@ -466,6 +552,41 @@ export class KnowledgeQualityPanel {
       ['교차 맥락 제목·본문 후보 그룹', value.duplicate_candidates.cross_context_search_text.groups],
       ['벡터 차원 혼합 프로필', value.numeric_review_candidates.mixed_vector_dimensions.profiles],
     ]);
+    if (!value.comparison_samples) {
+      const compare = this.root.createElement('button');
+      compare.type = 'button'; compare.className = 'knowledge-quality-compare';
+      compare.textContent = '일치 후보의 원문 비교';
+      elements.push(compare);
+    } else {
+      const samples = value.comparison_samples;
+      paragraph('원문 비교: 최대 6그룹에서 각각 2개 자료를 확인합니다. 문자열 일치 후보이며 병합하지 않았습니다.', 'knowledge-quality-limit');
+      if (!samples.groups.length) paragraph('현재 비교할 수 있는 일치 후보가 없습니다.');
+      for (const [index, group] of samples.groups.entries()) {
+        const details = this.root.createElement('details'); details.className = 'knowledge-quality-comparison';
+        details.dataset.kind = group.kind;
+        const summary = this.root.createElement('summary');
+        summary.textContent = `${index + 1}. ${group.project} · ${group.kind === 'stored_body' ? '저장 본문 일치' : '보존 레코드 바이트 일치'} · ${group.members.toLocaleString('ko-KR')}개 중 2개`;
+        details.append(summary);
+        for (const [i, record] of group.records.entries()) {
+          const item = this.root.createElement('article'); item.dataset.document = record.document_id;
+          const heading = this.root.createElement('h4'); heading.textContent = `${i + 1}. ${record.label || '제목 없음'}`;
+          const source = this.root.createElement('p'); source.textContent = record.target_label;
+          const basis = this.root.createElement('p');
+          basis.textContent = `${record.body_source === 'retained_record.localOriginalText' ? '보존 원문' : '저장 본문'}${record.truncated ? ' · 앞부분 4,000자' : ''}`;
+          const body = this.root.createElement('pre'); body.textContent = record.body;
+          item.append(heading, source, basis, body);
+          if (record.matched_body !== record.body) {
+            const matched = this.root.createElement('details'), label = this.root.createElement('summary');
+            label.textContent = `일치 판정에 사용된 저장 본문${record.matched_body_truncated ? ' · 앞부분 4,000자' : ''}`;
+            const text = this.root.createElement('pre'); text.textContent = record.matched_body;
+            matched.append(label, text); item.append(matched);
+          }
+          details.append(item);
+        }
+        elements.push(details);
+      }
+      if (samples.skipped_noncontent_groups) paragraph(`본문 근거가 없는 ${samples.skipped_noncontent_groups}그룹은 원문 비교에서 제외했습니다.`);
+    }
     metrics('제목과 별도로 확인한 저장 본문', [
       ['검사한 저장 본문', value.body_matches.counts.eligible_current_versions],
       ['검사한 본문 중 유효 제목 없는 기록', value.body_matches.counts.without_substantive_label],

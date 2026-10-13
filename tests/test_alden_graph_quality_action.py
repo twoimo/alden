@@ -43,6 +43,123 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
+    def comparison_query(self, project=None):
+        value={'scope':'project','project':project} if project else {'scope':'all'}
+        return json.dumps({**value,'include_samples':True})
+
+    def test_comparison_is_explicit_source_bound_and_read_only(self):
+        target=self.target();self.store.ingest(target,[self.record('a'),self.record('b')])
+        before=self.durable_files()
+        ordinary=action.read_action(self.root,self.union_query())
+        self.assertNotIn('comparison_samples',ordinary)
+        result=action.read_action(self.root,self.comparison_query())
+        self.assertTrue(result['ok'],result)
+        samples=result['comparison_samples'];self.assertEqual(samples['coverage'],'bounded_sample')
+        self.assertEqual([r['kind'] for r in samples['groups']],['canonical_record'])
+        for group in samples['groups']:
+            self.assertEqual(len(group['records']),2)
+            self.assertEqual({r['document_id'] for r in group['records']},{identity('graph','a'),identity('graph','b')})
+            self.assertEqual(group['status'],'review_only_not_confirmed_duplicate')
+            for record in group['records']:
+                self.assertEqual(record['body'],'private-body-sentinel')
+                self.assertNotIn('source_url',record)
+                self.assertNotIn('private-token-sentinel',json.dumps(record))
+                self.assertEqual(record['basis'],'permitted_current_stored_record')
+        self.assertEqual(self.durable_files(),before)
+
+    def test_matching_summary_does_not_claim_original_equivalence(self):
+        target=self.target()
+        self.store.ingest(target,[self.record('a',raw={'localOriginalText':'original A'}),
+                                  self.record('b',raw={'localOriginalText':'original B'})])
+        result=action.read_action(self.root,self.comparison_query());self.assertTrue(result['ok'],result)
+        group=result['comparison_samples']['groups'][0];self.assertEqual(group['kind'],'stored_body')
+        self.assertEqual({r['body'] for r in group['records']},{'original A','original B'})
+        self.assertEqual({r['matched_body'] for r in group['records']},{'private-body-sentinel'})
+        self.assertEqual(group['status'],'review_only_not_confirmed_duplicate')
+
+    def test_corrupt_pair_source_fails_without_disclosing_partial_records(self):
+        target=self.target();self.store.ingest(target,[self.record('a'),self.record('b')])
+        blob=next(self.store.blobs.iterdir());blob.write_text('{"changed":true}')
+        result=action.read_action(self.root,self.comparison_query())
+        self.assert_error(result,'quality_comparison_unavailable',mode='all')
+        self.assertNotIn('private-body-sentinel',json.dumps(result))
+
+    def test_revoked_permission_after_audit_does_not_expose_pair(self):
+        target=self.target();self.store.ingest(target,[self.record('a'),self.record('b')])
+        original=action.audit
+        def revoke(*args,**kwargs):
+            result=original(*args,**kwargs)
+            with sqlite3.connect(self.store.path) as db:
+                db.execute("UPDATE target_projects SET permission='denied' WHERE target_id=?",(target,))
+            return result
+        with patch.object(action,'audit',side_effect=revoke):
+            result=action.read_action(self.root,self.comparison_query())
+        self.assert_error(result,'quality_comparison_unavailable',mode='all')
+
+    def test_changed_pair_after_audit_requires_new_comparison(self):
+        target=self.target();self.store.ingest(target,[self.record('a'),self.record('b')])
+        original=action.audit
+        def change(*args,**kwargs):
+            result=original(*args,**kwargs)
+            self.store.ingest(target,[self.record('a',text='different source body')])
+            return result
+        with patch.object(action,'audit',side_effect=change):
+            self.assert_error(action.read_action(self.root,self.comparison_query()),
+                'quality_comparison_unavailable',mode='all')
+
+    def test_ambiguous_current_versions_are_not_chosen_arbitrarily(self):
+        a,b=self.target(name='a'),self.target(name='b')
+        self.store.ingest(a,[self.record('x',raw={'revision':1,'id':'x'}),self.record('y',raw={'revision':1,'id':'y'})])
+        self.store.ingest(b,[self.record('x',raw={'revision':2,'id':'x'}),self.record('y',raw={'revision':2,'id':'y'})])
+        self.assert_error(action.read_action(self.root,self.comparison_query()),
+            'quality_comparison_unavailable',mode='all')
+
+    def test_pair_preview_clips_unicode_without_mutating_source(self):
+        target=self.target();body='🦊'*5000
+        self.store.ingest(target,[self.record('a',text=body),self.record('b',text=body)])
+        before=self.durable_files();result=action.read_action(self.root,self.comparison_query())
+        self.assertTrue(result['ok'],result)
+        for group in result['comparison_samples']['groups']:
+            for record in group['records']:
+                self.assertEqual(record['body'],'🦊'*4000)
+                self.assertTrue(record['truncated']);self.assertTrue(record['matched_body_truncated'])
+        self.assertEqual(self.durable_files(),before)
+
+    def test_pair_samples_cover_projects_without_exceeding_budget(self):
+        for i in range(7):
+            target=self.target(project=f'p{i}',name=f't{i}')
+            self.store.ingest(target,[self.record(f'a{i}'),self.record(f'b{i}')])
+        result=action.read_action(self.root,self.comparison_query());self.assertTrue(result['ok'],result)
+        groups=result['comparison_samples']['groups']
+        self.assertEqual(len(groups),6);self.assertEqual(len({g['project'] for g in groups}),6)
+
+    def test_noncontent_raw_matches_do_not_crowd_out_substantive_comparisons(self):
+        for i in range(4):
+            target=self.target(project=f'p{i}',name=f't{i}')
+            rows=[]
+            for j in range(2):
+                raw={'content_indexed':False,'kind':'file','marker':j}
+                rows.extend([self.record(f'm{i}-{j}-a',text='index notice',raw=raw),
+                             self.record(f'm{i}-{j}-b',text='index notice',raw=raw)])
+            rows.extend([self.record(f'a{i}',text='shared substantive summary',raw={'localOriginalText':'original A'}),
+                         self.record(f'b{i}',text='shared substantive summary',raw={'localOriginalText':'original B'})])
+            self.store.ingest(target,rows)
+        result=action.read_action(self.root,self.comparison_query());self.assertTrue(result['ok'],result)
+        samples=result['comparison_samples'];self.assertEqual({g['project'] for g in samples['groups']},{'p0','p1','p2','p3'})
+        self.assertGreater(samples['skipped_noncontent_groups'],6)
+        self.assertEqual(samples['examined_pairs'],len(samples['groups'])+samples['skipped_noncontent_groups'])
+        self.assertLessEqual(samples['examined_pairs'],20)
+
+    def test_pair_preview_cancellation_does_not_publish_partial_records(self):
+        import alden_entity_resolution as resolution
+        target=self.target();self.store.ingest(target,[self.record('a'),self.record('b')])
+        state={'cancelled':False};original=resolution._source_rows
+        def stop(*args,**kwargs):
+            result=original(*args,**kwargs);state['cancelled']=True;return result
+        with patch.object(resolution,'_source_rows',side_effect=stop):
+            self.assert_error(action.read_action(self.root,self.comparison_query(),
+                cancelled=lambda:state['cancelled']),'quality_cancelled',mode='all')
+
     def test_declared_dates_and_quantities_are_syntax_observations_and_never_merge(self):
         target = self.target()
         rows = [dict(self.record('a'), published_at='2026-02-30', quantity={'value':'1000','unit':'g'}),

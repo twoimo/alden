@@ -61,3 +61,42 @@ class ObservationSelectionTests(unittest.TestCase):
         rows=[record('a',1,mention_scopes={'구독 조건':['target-a']}),record('b',2,mention_scopes={'구독 조건':['target-b']})]
         ids,policy=select_latest('구독 조건 최신',rows,now=NOW)
         self.assertEqual(ids,['a','b']);self.assertEqual(policy['ambiguous_identity_mentions'],1)
+
+    def test_different_attested_date_bases_do_not_discard_each_other(self):
+        rows=[record('published',1790000000,time_basis='source_published_at'),
+              record('confirmed',1790100000),
+              record('revised',1790200000,time_basis='note_revision_at')]
+        ids,policy=select_latest('구독 조건 최신',rows,now=NOW)
+        self.assertEqual(ids,['published','confirmed','revised'])
+        self.assertEqual(policy['excluded_older_observations'],0)
+        self.assertEqual(policy['undetermined_mentions'],1)
+
+    def test_unrecognized_date_basis_does_not_discard_known_evidence(self):
+        rows=[record('published',1,time_basis='source_published_at'),
+              record('indexed',2,time_basis='indexed_at')]
+        ids,policy=select_latest('구독 조건 최신',rows,now=NOW)
+        self.assertEqual(ids,['published','indexed'])
+        self.assertEqual(policy['excluded_older_observations'],0)
+        self.assertEqual(policy['undetermined_mentions'],1)
+        note=observation_note('2026-09-28T12:00:00+00:00','indexed_at')
+        self.assertIn('시점 미확인',note)
+        self.assertNotIn('2026-09-28',note)
+
+    def test_incomparable_basis_in_one_mention_keeps_other_selection(self):
+        rows=[record('fee-source',1,'요금',time_basis='source_published_at'),
+              record('fee-revision',3,'요금',time_basis='note_revision_at'),
+              record('hours-old',1,'운영시간'),record('hours-new',2,'운영시간')]
+        ids,policy=select_latest('요금과 운영시간 최신 기록',rows,now=NOW)
+        self.assertEqual(set(ids),{'fee-source','fee-revision','hours-new'})
+        self.assertEqual(policy['excluded_older_observations'],1)
+        self.assertEqual(policy['undetermined_mentions'],1)
+
+    def test_incomparable_mention_retains_record_shared_with_another_mention(self):
+        rows=[record('shared-source',1,'요금',time_basis='source_published_at'),
+              record('revised',3,'요금',time_basis='note_revision_at'),
+              record('new-contract',2,'계약',time_basis='source_published_at')]
+        rows[0]['aliases'].append('계약')
+        ids,policy=select_latest('요금과 계약 최신 기록',rows,now=NOW)
+        self.assertEqual(set(ids),{'shared-source','revised','new-contract'})
+        self.assertEqual(policy['excluded_older_observations'],0)
+        self.assertEqual(policy['undetermined_mentions'],1)

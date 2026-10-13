@@ -147,8 +147,8 @@ pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request
     };
     let graph_scope = if args.len() == 4 && args[0] == WORKSPACES_FLAG && args[2] == "--graph-scope" {
         let raw = args[3].to_str().ok_or("graph scope must be UTF-8")?;
-        if raw.len() != 1 || !raw.bytes().all(|b| b.is_ascii_digit()) {
-            return Err("graph scope must be one fixed case 0..9".into());
+        if !(raw == "10" || raw.len() == 1 && raw.bytes().all(|b| b.is_ascii_digit())) {
+            return Err("graph scope must be one fixed case 0..10".into());
         }
         Some(raw.parse::<u8>().map_err(|_| "graph scope invalid")?)
     } else { None };
@@ -292,6 +292,10 @@ impl Output {
                 | "knowledge-quality-time-compact.png"
                 | "knowledge-quality-quantity-default.png"
                 | "knowledge-quality-quantity-compact.png"
+                | "knowledge-quality-comparison-default-1.png"
+                | "knowledge-quality-comparison-default-2.png"
+                | "knowledge-quality-comparison-compact-1.png"
+                | "knowledge-quality-comparison-compact-2.png"
                 | "entity-compare-default.png"
                 | "entity-compare-compact.png"
                 | "entity-applied-default.png"
@@ -1234,7 +1238,7 @@ fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Res
 
 fn graph_scope_case(case: u8) -> Result<(&'static str, bool, bool), String> {
     match case {
-        0 => Ok(("all", false, false)),
+        0 | 10 => Ok(("all", false, false)),
         1 => Ok(("all", true, false)),
         2 => Ok(("project:alden-model-research", false, false)),
         3 => Ok(("project:career", false, false)),
@@ -1246,6 +1250,52 @@ fn graph_scope_case(case: u8) -> Result<(&'static str, bool, bool), String> {
         9 => Ok(("project:youtube-tzuyang", false, false)),
         _ => Err("graph scope outside fixed cases".into()),
     }
+}
+
+fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, size: &str) -> Result<Value,String> {
+    collect_script(window,r#"JSON.stringify((()=>{
+      document.querySelector('#knowledge-info').open=true;
+      const button=document.querySelector('#knowledge-quality-run');
+      if(!button||button.disabled)throw Error('quality comparison control unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    let wait=|| wait_for_audit_state("quality source comparison",deadline,||{
+        let state=collect_script(window,r#"JSON.stringify({state:document.querySelector('#knowledge-quality-report').dataset.state,
+          status:document.querySelector('#knowledge-quality-status').textContent})"#.into(),deadline)?;
+        if state["state"]=="unavailable" {return Err(format!("quality source comparison unavailable: {state}"));}
+        Ok(state)
+    },|state|state["state"]=="complete");
+    wait()?;
+    collect_script(window,r#"JSON.stringify((()=>{
+      const button=document.querySelector('.knowledge-quality-compare');
+      if(!button||button.disabled)throw Error('source comparison request unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    wait()?;
+    let state=collect_script(window,r#"JSON.stringify((()=>{
+      const groups=[...document.querySelectorAll('.knowledge-quality-comparison')];
+      const records=groups.map(group=>[...group.querySelectorAll('article')].map(article=>article.dataset.document));
+      const lengths=[...document.querySelectorAll('.knowledge-quality-comparison pre')].map(p=>Array.from(p.textContent).length);
+      return {groups:groups.length,records,maximumBodyCharacters:Math.max(0,...lengths),
+        width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
+        noCandidates:document.querySelector('#knowledge-quality-report').textContent.includes('현재 비교할 수 있는 일치 후보가 없습니다.'),
+        noMerge:document.querySelector('#knowledge-quality-report').textContent.includes('병합하지 않았습니다.')};})())"#.into(),deadline)?;
+    if state["groups"].as_u64().is_none_or(|n|n>6) || state["maximumBodyCharacters"].as_u64().is_none_or(|n|n>4000)
+        || state["width"]!=state["scrollWidth"] || state["noMerge"]!=true
+        || state["groups"]==0 && state["noCandidates"]!=true
+        || !state["records"].as_array().is_some_and(|groups|groups.iter().all(|group|
+            group.as_array().is_some_and(|rows|rows.len()==2 && rows[0]!=rows[1]))) {
+        return Err(format!("quality comparison scope/geometry invalid: {state}"));
+    }
+    for index in 0..2 {
+        collect_script(window,format!(r#"JSON.stringify((()=>{{
+          const group=document.querySelector('.knowledge-quality-comparison');if(group)group.open=true;
+          const article=group?.querySelectorAll('article')[{index}];
+          const box=document.querySelector('.knowledge-info .knowledge-disclosure-content');
+          if(article)box.scrollTop+=article.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+          return {{positioned:!!article,noCandidates:!group}};}})())"#),deadline)?;
+        publish(output,&format!("knowledge-quality-comparison-{size}-{}.png",index+1),&snapshot(window,deadline)?,deadline)?;
+    }
+    collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-info').open=false;return {closed:true};})())".into(),deadline)?;
+    Ok(state)
 }
 
 fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, case: u8) -> Result<Value, String> {
@@ -1409,11 +1459,12 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
             }
             observed
         } else {Value::Null};
-        let state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,"searchResultIds":search_ids,
+        let mut state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,"searchResultIds":search_ids,
             "physics":physics,"geometry":geometry,"labels":labels,"navigation":navigation,"lateBlur":late_blur,
             "scope":"owned read-only native scoped graph only; no physical input, pixel/GPU/FPS or semantic gold proof"});
-        publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
         publish(output,&format!("graph-scope-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+        if case==10 {state["qualityComparison"]=audit_quality_comparison(window,output,deadline,size)?;}
+        publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
         eprintln!("Alden scope {case}: {size} files delivered");
         states.push(state);
     }
@@ -2638,20 +2689,20 @@ mod tests {
 
     #[test]
     fn graph_scope_audit_only_accepts_fixed_case_arguments() {
-        for case in 0..10u8 {
+        for case in 0..11u8 {
             let request=super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
                 std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(case.to_string())].into_iter()).unwrap().unwrap();
             assert!(request.settings && request.workspaces && !request.assistant && !request.entity);
             assert_eq!(request.graph_scope,Some(case));assert!(request.focus_node.is_none());
             assert!(super::graph_scope_case(case).is_ok());
         }
-        for invalid in ["10","00","-1","1;alert(1)","project:career"] {
+        for invalid in ["11","00","010","-1","1;alert(1)","project:career"] {
             assert!(super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
                 std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(invalid)].into_iter()).is_err());
         }
         assert!(super::parse_args([std::ffi::OsString::from(super::SETTINGS_FLAG),std::ffi::OsString::from("/private/tmp/test"),
             std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from("0")].into_iter()).is_err());
-        assert!(super::graph_scope_case(10).is_err());
+        assert!(super::graph_scope_case(11).is_err());
     }
 
     #[test]

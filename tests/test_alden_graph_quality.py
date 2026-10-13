@@ -14,6 +14,17 @@ from alden_graph_quality import audit
 
 
 class QualityTests(unittest.TestCase):
+    def test_float32_extremes_keep_nonfinite_and_unit_tolerance_findings(self):
+        values={'nan':float('nan'),'inf':float('inf'),'largest':3.4e38,
+                'inside':1.0005,'outside':1.0015,'zero':0.0}
+        self.store.ingest(self.a,[self.record(name,'content') for name in values])
+        for name,value in values.items():self.add_vector(self.version(name),raw=struct.pack('<f',value))
+        before=self.files();report=audit(self.root,['one'],sample_cap=10)
+        self.assertEqual(report['findings']['vector_nonfinite'],2)
+        self.assertEqual(report['findings']['vector_not_unit'],3)
+        self.assertEqual(report['findings'].get('vector_shape_invalid',0),0)
+        self.assertEqual(self.files(),before)
+
     def test_body_matching_preserves_spacing_scope_and_source_exclusions(self):
         rows = [dict(self.record(name, body), label='') for name, body in
             [('a', 'cafe\u0301\r\n  날짜 2026-10-13'), ('b', 'café\n  날짜 2026-10-13'),

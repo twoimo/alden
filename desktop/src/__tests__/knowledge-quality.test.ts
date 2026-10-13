@@ -56,6 +56,25 @@ function pending() {
   return { promise, resolve, reject };
 }
 
+function withComparisons() {
+  const value = success();
+  return { ...value, comparison_samples: {
+    policy: 'source-bound-pair-preview-v1', coverage: 'bounded_sample', maximum_groups: 6,
+    maximum_records_per_group: 2, maximum_body_characters: 4000,
+    maximum_pairs_examined: 20, examined_pairs: 1,
+    source_verification: 'displayed_canonical_records_only', skipped_noncontent_groups: 0,
+    groups: [{ kind: 'stored_body', project: 'one', match_sha256: 'a'.repeat(64), members: 2,
+      status: 'review_only_not_confirmed_duplicate', records: ['a', 'b'].map(id => ({
+        target_id: 'target', document_id: id, version: `version:${'c'.repeat(64)}`,
+        platform: 'graph', original_id: id, label: `<img src=x onerror=alert(1)> ${id}`,
+        target_label: '취업 자료', body: '보존 원문', body_source: 'retained_record.localOriginalText',
+        truncated: false, matched_body: '저장된 요약', matched_body_truncated: false,
+        collected_at: value.checked_at, raw_sha256: 'b'.repeat(64), basis: 'permitted_current_stored_record',
+        content_evidence: { policy: 'source-content-evidence-v4', classification: 'content_candidate' },
+      })) }],
+  } };
+}
+
 function setup(load: typeof fetchSettingsAction) {
   const panel = new KnowledgeQualityPanel(load);
   owned.push(panel);
@@ -91,6 +110,64 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const panel of owned) panel.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('manual collection-quality report and fixed native selectors', () => {
+  it('requests source pairs explicitly and renders stored and original text safely', async () => {
+    const value = withComparisons();
+    (value.comparison_samples!.groups[0].records[0] as any).secret = 'private-extra-sentinel';
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(value);
+    setup(load); info().open = true; button().click(); await settle();
+    expect(JSON.parse(calls(load)[0][1]!.query!)).toEqual({ scope: 'all' });
+    (report().querySelector('.knowledge-quality-compare') as HTMLButtonElement).click(); await settle();
+    expect(JSON.parse(calls(load)[1][1]!.query!)).toEqual({ scope: 'all', include_samples: true });
+    expect(state()).toBe('complete'); expect(report().querySelectorAll('.knowledge-quality-comparison article')).toHaveLength(2);
+    expect(report().textContent).toContain('보존 원문'); expect(report().textContent).toContain('저장된 요약');
+    expect(report().textContent).toContain('병합하지 않았습니다');
+    expect(report().querySelector('img')).toBeNull(); expect(report().textContent).not.toContain('private-extra-sentinel');
+  });
+
+  it('does not call a counts-only reply a completed source comparison', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValue(success());
+    setup(load); info().open = true; button().click(); await settle();
+    (report().querySelector('.knowledge-quality-compare') as HTMLButtonElement).click(); await settle();
+    expect(state()).toBe('unavailable'); expect(report().querySelectorAll('article')).toHaveLength(0);
+  });
+
+  it('rejects wrong-scope, unverified, duplicated and over-budget source pairs', () => {
+    const changes: Array<(v: any) => void> = [
+      v => v.comparison_samples.groups[0].project = 'denied',
+      v => v.comparison_samples.source_verification = 'whole_source_verified',
+      v => v.comparison_samples.groups[0].records[1].document_id = 'a',
+      v => v.comparison_samples.groups[0].records[0].raw_sha256 = 'not-a-hash',
+      v => v.comparison_samples.groups[0].records[0].body = 'x'.repeat(4001),
+      v => v.comparison_samples.groups[0].records[0].content_evidence.classification = 'metadata_only',
+      v => v.comparison_samples.groups[0].members = 1000,
+      v => v.comparison_samples.groups.push(...Array(6).fill(v.comparison_samples.groups[0])),
+    ];
+    for (const change of changes) { const value = withComparisons(); change(value); expect(parseCollectionQuality(value, { scope: 'all' })).toBeNull(); }
+  });
+
+  it('accepts a 4000-character Unicode preview without treating code units as characters', () => {
+    const value = withComparisons(); value.comparison_samples!.groups[0].records[0].body = '🦊'.repeat(4000);
+    value.comparison_samples!.groups[0].records[0].truncated = true;
+    expect(parseCollectionQuality(value, { scope: 'all' })?.ok).toBe(true);
+  });
+
+  it('drops a late source preview after the project changes', async () => {
+    const reply = pending(), load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockReturnValueOnce(reply.promise);
+    const panel = setup(load); info().open = true; button().click(); await settle();
+    (report().querySelector('.knowledge-quality-compare') as HTMLButtonElement).click(); await settle();
+    select(panel, 'project:two'); reply.resolve(withComparisons()); await settle();
+    expect(report().querySelectorAll('article')).toHaveLength(0);
+    expect(report().textContent).not.toContain('보존 원문');
+  });
+
+  it('drops a source preview after close and immediate reopen', async () => {
+    const reply = pending(), load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockReturnValueOnce(reply.promise);
+    setup(load); info().open = true; button().click(); await settle();
+    (report().querySelector('.knowledge-quality-compare') as HTMLButtonElement).click(); await settle();
+    info().open = false; info().open = true; await settle(); reply.resolve(withComparisons()); await settle();
+    expect(report().querySelectorAll('article')).toHaveLength(0); expect(state()).toBe('idle');
+  });
+
   it('shows declared time and unit syntax separately without inventing source facts', async () => {
     const value = success();
     (value.normalization.declared_fields as any).canonical = 'private-date-sentinel';

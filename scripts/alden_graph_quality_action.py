@@ -1,4 +1,4 @@
-"""Bounded product-facing quality observations; no blob reads or repairs."""
+"""Bounded read-only quality observations and explicitly requested source pairs."""
 import math
 from pathlib import Path
 import re
@@ -6,7 +6,7 @@ import sqlite3
 import time
 import unicodedata
 
-from alden_collection import CollectionStore
+from alden_collection import CollectionStore, digest, encoded, identity, normalized_body
 from alden_graph_quality import _json, audit
 from alden_content_evidence import POLICY
 from alden_normalization_evidence import validate_declared_summary
@@ -15,7 +15,8 @@ COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_cur
               'noncontent_current_versions','metadata_only_current_versions','unread_body_marker_current_versions',
               'metadata_description_current_versions')
 ERRORS=frozenset(('quality_scope_unavailable','quality_scan_budget','quality_time_budget',
-                 'quality_cancelled','quality_report_unavailable','quality_query_invalid'))
+                 'quality_cancelled','quality_report_unavailable','quality_query_invalid',
+                 'quality_comparison_unavailable'))
 
 def _count(value):
     if type(value) is not int or not 0<=value<=9_007_199_254_740_991:
@@ -28,14 +29,106 @@ def _query(raw):
     try: value=_json(raw)
     except (ValueError,TypeError,RecursionError):raise ValueError('quality_query_invalid') from None
     if not isinstance(value,dict):raise ValueError('quality_query_invalid')
+    include_samples=value.pop('include_samples',False)
+    if type(include_samples) is not bool:raise ValueError('quality_query_invalid')
     scope=value.get('scope')
-    if scope=='all' and set(value)=={'scope'}:return scope,None
+    if scope=='all' and set(value)=={'scope'}:return scope,None,include_samples
     project=value.get('project')
     if (scope=='project' and set(value)=={'scope','project'} and isinstance(project,str)
             and 0<len(project)<=128 and project==project.strip()
             and not any(unicodedata.category(c)=='Cc' for c in project)):
-        return scope,project
+        return scope,project,include_samples
     raise ValueError('quality_query_invalid')
+
+def _comparison_samples(store,report,projects,check):
+    """At most six source-bound pairs; never turns a text match into a merge."""
+    from alden_entity_resolution import _source_rows
+    candidates=[]
+    # Round-robin projects so the first project cannot consume every preview.
+    pools={project:[] for project in projects}
+    for kind,section in [('canonical_record',report['duplicate_candidates']['same_raw_bytes']),
+                         ('stored_body',report['body_matches']['stored_body'])]:
+        samples=section.get('samples')
+        if not isinstance(samples,list) or len(samples)>len(projects)*2:
+            raise ValueError('quality_comparison_unavailable')
+        for sample in samples:
+            if (not isinstance(sample,dict) or sample.get('project') not in pools
+                    or not isinstance(sample.get('sha256'),str)
+                    or not re.fullmatch('[0-9a-f]{64}',sample['sha256'])
+                    or type(sample.get('members')) is not int
+                    or not 2<=sample['members']<=report['counts']['distinct_current_documents']
+                    or not isinstance(sample.get('document_ids'),list)
+                    or len(sample['document_ids'])!=2
+                    or any(not isinstance(v,str) or not 0<len(v)<=256 for v in sample['document_ids'])
+                    or len(set(sample['document_ids']))!=2):
+                raise ValueError('quality_comparison_unavailable')
+            pools[sample['project']].append((kind,sample))
+    seen_pairs=set()
+    while len(candidates)<20 and any(pools.values()):
+        for project in projects:
+            if pools[project] and len(candidates)<20:
+                kind,sample=pools[project].pop(0)
+                pair=(project,tuple(sorted(sample['document_ids'])))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair);candidates.append((kind,sample))
+    result=[];skipped=0;examined=0
+    with store.database() as db:
+        for kind,sample in candidates:
+            if len(result)==6:break
+            examined+=1
+            check();members=[];match_bodies={}
+            for document in sample['document_ids']:
+                rows=list(db.execute('''SELECT m.target_id,m.current_version,v.raw_sha256,
+                    v.body,v.processing_version,v.projection_sha256
+                    FROM memberships m JOIN target_projects p ON p.target_id=m.target_id
+                    JOIN documents d ON d.id=m.document_id JOIN versions v ON v.id=m.current_version
+                    WHERE p.project=? AND p.permission!='denied' AND m.document_id=?
+                    AND m.availability='available' AND d.availability='available'
+                    AND v.document_id=m.document_id ORDER BY m.target_id LIMIT 33''',
+                    (sample['project'],document)))
+                if len(rows)>32:raise ValueError('quality_comparison_unavailable')
+                matching=[]
+                for row in rows:
+                    if (not isinstance(row['body'],str) or not isinstance(row['raw_sha256'],str)
+                            or not re.fullmatch('[0-9a-f]{64}',row['raw_sha256'])
+                            or not isinstance(row['processing_version'],str)
+                            or not isinstance(row['projection_sha256'],str)
+                            or not re.fullmatch('[0-9a-f]{64}',row['projection_sha256'])):
+                        raise ValueError('quality_comparison_unavailable')
+                    version=identity('version',encoded([document,row['raw_sha256'],
+                        row['processing_version'],row['projection_sha256']]).decode())
+                    if version!=row['current_version']:raise ValueError('quality_comparison_unavailable')
+                    fingerprint=row['raw_sha256'] if kind=='canonical_record' else digest(normalized_body(row['body']).encode())
+                    if fingerprint==sample['sha256']:matching.append(row)
+                if not matching or len({r['current_version'] for r in matching})!=1:
+                    # Changed/ambiguous current versions require a fresh report.
+                    raise ValueError('quality_comparison_unavailable')
+                chosen=matching[0]
+                members.append({'target_id':chosen['target_id'],'document_id':document,'version':chosen['current_version']})
+                match_bodies[document]=chosen['body']
+            check()
+            try:
+                _,records=_source_rows(db,store,sample['project'],members,read_blobs=True,show_records=True)
+            except (ValueError,RuntimeError,OSError) as error:
+                raise ValueError('quality_comparison_unavailable') from error
+            if any(r['content_evidence']['classification']!='content_candidate' for r in records):
+                skipped+=1;continue
+            for record in records:
+                stored=match_bodies[record['document_id']]
+                record['truncated']=record['truncated'] or len(record['body'])>4000
+                record['body']=record['body'][:4000]
+                record['matched_body']=stored[:4000]
+                record['matched_body_truncated']=len(stored)>4000
+                record['target_label']=db.execute('SELECT label FROM targets WHERE id=?',(record['target_id'],)).fetchone()[0]
+                # Paths/URLs/extra source fields do not leave the preview.
+                record.pop('source_url',None)
+            result.append({'kind':kind,'project':sample['project'],'match_sha256':sample['sha256'],
+                'members':sample['members'],'records':records,'status':'review_only_not_confirmed_duplicate'})
+            check()
+    return {'policy':'source-bound-pair-preview-v1','coverage':'bounded_sample',
+        'maximum_groups':6,'maximum_records_per_group':2,'maximum_body_characters':4000,'maximum_pairs_examined':20,
+        'source_verification':'displayed_canonical_records_only',
+        'skipped_noncontent_groups':skipped,'examined_pairs':examined,'groups':result}
 
 def _bindings(store,projects):
     marks=','.join('?' for _ in projects)
@@ -134,7 +227,7 @@ def read_action(state_root,query_raw,cancelled=None):
     started=time.monotonic()
     scope={'requested_scope':None,'requested_project':None}
     try:
-        mode,project=_query(query_raw)
+        mode,project,include_samples=_query(query_raw)
         scope={'requested_scope':mode,'requested_project':project}
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         store=CollectionStore.open_existing(Path(state_root))
@@ -146,9 +239,15 @@ def read_action(state_root,query_raw,cancelled=None):
         projects=available if mode=='all' else [project]
         if project is not None and project not in available:raise ValueError('quality_scope_unavailable')
         permissions=_bindings(store,projects)
-        report=audit(state_root,projects,verify_sources=False,sample_cap=0,
+        report=audit(state_root,projects,verify_sources=False,sample_cap=2 if include_samples else 0,
                      timeout=10,max_rows=100000,max_bytes=512*1024*1024,cancelled=cancelled)
         summary=_summary(report,projects)
+        if include_samples:
+            def check():
+                if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
+                if time.monotonic()-started>10:raise RuntimeError('quality_time_budget')
+            check()
+            summary['comparison_samples']=_comparison_samples(store,report,projects,check)
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         after=store.path.stat()
         if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)

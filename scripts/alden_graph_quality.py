@@ -141,17 +141,46 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         if cache is not None:
             cache.execute('PRAGMA query_only=ON'); cache.execute('BEGIN')
         cache_tables = {r[0] for r in cache.execute("SELECT name FROM sqlite_master WHERE type='table'")} if cache else set()
+        # Stream the exact current-version cache rows with the source cursor.
+        # Two per-record lookups previously repeated over 53,000 SQL calls.
+        # The attached database is explicitly read-only; no cache migration or
+        # all-record Python map is created. Existing row validation still runs.
+        cache_fields={'text':('base_hash','raw_sha256','extraction','body','body_source'),
+                      'vector':('text_hash','model','endpoint','encoding','vector')}
+        extras=[];joins=[]
+        if cache_tables.intersection({'texts','vectors'}):
+            db.execute('ATTACH DATABASE ? AS quality_cache',(retrieval.as_uri()+'?mode=ro',))
+        eligible="""typeof(m.document_id)='text' AND typeof(m.current_version)='text'
+            AND d.platform IS NOT NULL AND d.availability='available'
+            AND v.document_id=m.document_id AND typeof(v.label)='text' AND typeof(v.body)='text'
+            AND typeof(v.raw_sha256)='text' AND typeof(v.raw_path)='text'
+            AND typeof(v.processing_version)='text' AND typeof(v.projection_sha256)='text'"""
+        for kind,table in [('text','texts'),('vector','vectors')]:
+            alias='quality_'+kind
+            present=table in cache_tables
+            columns=('document_id',*cache_fields[kind])
+            extras.extend((f'{alias}.{column}' if present else 'NULL')+f' AS {alias}_{column}' for column in columns)
+            if present:
+                joins.append(f' LEFT JOIN quality_cache.{table} AS {alias} ON {alias}.document_id=m.document_id '
+                    f'AND {alias}.version=m.current_version AND ({eligible})')
         marks = ','.join('?' for _ in projects)
-        rows = db.execute('''SELECT p.project,p.permission,m.target_id,m.document_id,m.current_version,
-            d.platform,d.original_id,d.availability AS document_availability,
-            v.document_id AS version_document,v.raw_sha256,v.raw_path,v.label,v.body,
-            v.metadata,v.collected_at,v.processing_version,v.projection_sha256
-            FROM target_projects p JOIN memberships m ON m.target_id=p.target_id
-            LEFT JOIN documents d ON d.id=m.document_id LEFT JOIN versions v ON v.id=m.current_version
-            WHERE p.permission!='denied' AND p.project IN (''' + marks + ''')
-            AND m.availability='available' ORDER BY p.project,m.target_id,m.document_id''', projects)
-        for row in rows:
-            counts['memberships'] += 1; examine(*row)
+        def scoped_rows():
+            contexts=db.execute("SELECT project,permission,target_id FROM target_projects WHERE permission!='denied' "
+                "AND project IN ("+marks+") ORDER BY project,target_id",projects)
+            for project,permission,target_id in contexts:
+                check()
+                # Keep the original project/target/document order without a
+                # wide temp sort containing all cached bodies and vectors.
+                yield from db.execute('''SELECT ? AS project,? AS permission,m.target_id,m.document_id,m.current_version,
+                    d.platform,d.original_id,d.availability AS document_availability,
+                    v.document_id AS version_document,v.raw_sha256,v.raw_path,v.label,v.body,
+                    v.metadata,v.collected_at,v.processing_version,v.projection_sha256,'''+','.join(extras)+'''
+                    FROM memberships m LEFT JOIN documents d ON d.id=m.document_id
+                    LEFT JOIN versions v ON v.id=m.current_version'''+''.join(joins)+'''
+                    WHERE m.target_id=? AND m.availability='available' ORDER BY m.document_id''',
+                    (project,permission,target_id))
+        for row in scoped_rows():
+            counts['memberships'] += 1; examine(*row[:17])
             if (not isinstance(row['document_id'], str)
                     or row['current_version'] is not None and not isinstance(row['current_version'], str)):
                 flag('membership_identity_invalid', 'membership:' + str(counts['memberships']))
@@ -250,7 +279,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 except (OSError, ValueError, RecursionError):
                     source_verified[blob_key] = False
                     flag('source_blob_invalid', key)
-            cached = cache.execute('SELECT base_hash,raw_sha256,extraction,body,body_source FROM texts WHERE document_id=? AND version=?', (row['document_id'], row['current_version'])).fetchone() if 'texts' in cache_tables else None
+            cached = tuple(row['quality_text_'+field] for field in cache_fields['text']) if row['quality_text_document_id'] is not None else None
             if cached is not None:
                 examine(*cached)
             valid = (cached is not None and isinstance(cached[3], str) and cached[:2] == (digest((label+'\n'+body).encode()), row['raw_sha256'])
@@ -314,7 +343,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             if reference_valid and (not verify_sources or source_verified.get(blob_key) is True):
                 raw_groups[(row['project'], row['raw_sha256'])].add(row['document_id'])
                 raw_entries[(row['project'], row['raw_sha256'])].add(unique)
-            vector = cache.execute('SELECT text_hash,model,endpoint,encoding,vector FROM vectors WHERE document_id=? AND version=?', (row['document_id'], row['current_version'])).fetchone() if 'vectors' in cache_tables else None
+            vector = tuple(row['quality_vector_'+field] for field in cache_fields['vector']) if row['quality_vector_document_id'] is not None else None
             if vector is None:
                 counts['current_vector_missing'] += 1
                 if text.strip():
@@ -335,9 +364,13 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                     values = struct.unpack('<' + 'f' * (len(raw)//4), raw)
                     if profile_valid:
                         profiles[profile][len(values)] += 1
-                    if any(not math.isfinite(v) for v in values):
+                    # These are at most 2048 float32 values. Their finite norm
+                    # cannot overflow float64; hypot checks nonfinite input and
+                    # computes the norm in C instead of two Python traversals.
+                    norm=math.hypot(*values)
+                    if not math.isfinite(norm):
                         flag('vector_nonfinite', key)
-                    elif abs(math.sqrt(sum(v*v for v in values)) - 1) > .001:
+                    elif abs(norm - 1) > .001:
                         flag('vector_not_unit', key)
         for row in db.execute('''SELECT p.project,p.permission,r.id,r.target_id,r.source,r.target,r.type,r.evidence,r.version,
                 h.relation_id AS history_relation_id,(''' + RELATION_HISTORY_MATCH + ''') AS history_bound
