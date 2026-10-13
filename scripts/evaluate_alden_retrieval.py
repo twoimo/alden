@@ -374,7 +374,14 @@ def ndcg_at_k(ranked: list[str], relevant: dict[str, int], k: int) -> float | No
     def dcg(grades: Iterable[int]) -> float:
         return sum((2**grade - 1) / math.log2(rank + 2) for rank, grade in enumerate(grades))
 
-    actual = dcg([int(relevant.get(entity_id, 0)) for entity_id in ranked[:k]])
+    # A repeated document occupies its returned rank but earns no second gain.
+    # Compacting duplicate ranks would also reward a defective retrieval list.
+    seen: set[str] = set()
+    grades = []
+    for entity_id in ranked[:k]:
+        grades.append(0 if entity_id in seen else int(relevant.get(entity_id, 0)))
+        seen.add(entity_id)
+    actual = dcg(grades)
     ideal = dcg(sorted((int(value) for value in relevant.values()), reverse=True)[:k])
     return actual / ideal if ideal else 0.0
 
@@ -477,6 +484,12 @@ def _evaluate_query(
         elapsed_ms = (time.perf_counter_ns() - public_started) / 1_000_000
 
     candidates = [str(item) for item in ranked.get("candidates") or []]
+    seen_candidates: set[str] = set()
+    duplicate_candidates = []
+    for entity_id in candidates[:max(10, max(ks))]:
+        if entity_id in seen_candidates and entity_id not in duplicate_candidates:
+            duplicate_candidates.append(entity_id)
+        seen_candidates.add(entity_id)
     relevant = {str(key): int(value) for key, value in query["relevant"].items()}
     forbidden = {str(item) for item in query.get("forbidden", [])}
     expected_evidence = {str(item) for item in query.get("expected_evidence_ids", [])}
@@ -488,6 +501,7 @@ def _evaluate_query(
     bundle_relation_provenance = list(bundle.get("relation_provenance") or [])
     bundle_fact_provenance = list(bundle.get("fact_provenance") or [])
     bundle_evidence = {str(item) for item in bundle.get("evidence_ids") or []}
+    missing_context_evidence = sorted(expected_evidence - bundle_evidence)
     max_k = max(ks)
     forbidden_hits = [item for item in candidates[:max_k] if item in forbidden]
     bundle_candidate_ids = {
@@ -529,6 +543,8 @@ def _evaluate_query(
     missing_evidence = sorted(expected_evidence - returned_evidence)
     expected_mode = KG.SEARCH_MODE_BM25_ONLY if mode == "bm25" else KG.SEARCH_MODE_RRF
     violations: list[dict[str, Any]] = []
+    if duplicate_candidates:
+        violations.append({"code": "duplicate_candidate_returned", "values": duplicate_candidates})
     if forbidden_hits:
         violations.append({"code": "forbidden_entity_returned", "values": forbidden_hits})
     if forbidden_context_hits:
@@ -571,6 +587,7 @@ def _evaluate_query(
             "relation_provenance": bundle_relation_provenance,
             "fact_provenance": bundle_fact_provenance,
             "evidence_ids": sorted(bundle_evidence),
+            "missing_expected_evidence_ids": missing_context_evidence,
             "boundary_errors": bundle_boundary_errors,
             "retrieval_policy": bundle.get("retrieval_policy"),
             "context_chars": sum(len(fact) for fact in bundle_facts),
@@ -626,6 +643,16 @@ def _aggregate(results: list[dict[str, Any]], ks: tuple[int, ...]) -> dict[str, 
         )
         if evidence_checks
         else None,
+        # Ranked retrieval evidence and delivered public-context evidence are
+        # different outcomes. Neither ID-presence metric certifies claim truth.
+        "context_evidence_check_pass_rate": _round(
+            sum(set(result['expected_evidence_ids']) <= set(result['public_bundle'].get('evidence_ids', []))
+                for result in evidence_checks) / len(evidence_checks)
+        ) if evidence_checks else None,
+        "duplicate_candidate_query_rate": _round(
+            sum(any(item['code'] == 'duplicate_candidate_returned' for item in result['violations'])
+                for result in results) / len(results)
+        ) if results else None,
         "forbidden_fact_query_count": sum(
             any(item["code"] == "forbidden_fact_returned" for item in result["violations"])
             for result in results
@@ -874,6 +901,20 @@ def _production_observations(mode_reports: dict[str, Any]) -> list[dict[str, Any
                     "reason": reason,
                 }
             )
+    context_misses = {
+        mode: [row['id'] for row in results.values()
+               if row['public_bundle'].get('missing_expected_evidence_ids')]
+        for mode, results in by_mode.items()
+    }
+    affected = {mode: ids for mode, ids in context_misses.items() if ids}
+    if affected:
+        observations.append({
+            'code': 'expected_evidence_missing_from_public_context',
+            'status': 'observed',
+            'source': _source_ref(KG.retrieve_knowledge_bundle),
+            'query_ids_by_mode': affected,
+            'reason': 'Expected evidence IDs are missing from the bounded public context. Ranked evidence coverage and context delivery are reported separately; budget, ranking and filtering causes require further investigation.',
+        })
     return observations
 
 
@@ -1106,6 +1147,19 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"{metrics['latency_ms']['p50']} | "
                 f"{metrics['latency_ms']['p95']} |"
             )
+
+    lines.extend([
+        '', '## Evidence delivery and duplicate candidates', '',
+        'These rates check expected evidence ID presence, not citation correctness or source truth. '
+        'Ranked evidence can be available while absent from the actual bounded public context. '
+        'Repeated documents retain their rank positions and gain relevance credit only once.', '',
+        '| Mode | Ranked evidence coverage | Public-context evidence coverage | Duplicate-candidate query rate |',
+        '| --- | ---: | ---: | ---: |',
+    ])
+    for mode, mode_report in report['modes'].items():
+        metrics = mode_report['overall']
+        lines.append(f"| {mode} | {metrics['evidence_check_pass_rate']} | "
+                     f"{metrics['context_evidence_check_pass_rate']} | {metrics['duplicate_candidate_query_rate']} |")
 
     if "live-rrf" in report["modes"]:
         refresh = report["modes"]["live-rrf"]["dense_refresh"]

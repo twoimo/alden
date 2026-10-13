@@ -33,6 +33,15 @@ class MetricTests(unittest.TestCase):
         self.assertIsNone(EVAL.recall_at_k(["a"], {}, 1))
         self.assertIsNone(EVAL.ndcg_at_k(["a"], {}, 1))
 
+    def test_repeated_document_has_no_second_gain_or_rank_compaction(self):
+        self.assertEqual(EVAL.ndcg_at_k(["a", "a", "a"], {"a": 3}, 3), 1.0)
+        relevant = {"a": 3, "b": 1}
+        self.assertAlmostEqual(
+            EVAL.ndcg_at_k(["a", "a", "b"], relevant, 3),
+            EVAL.ndcg_at_k(["a", "noise", "b"], relevant, 3),
+        )
+        self.assertLess(EVAL.ndcg_at_k(["a", "a", "b"], relevant, 3), 1.0)
+
     def test_rrf_tuning_uses_dev_and_reports_heldout_separately(self):
         def row(split, relevant, bm25, dense):
             return {
@@ -278,6 +287,45 @@ class ProductionPathEvaluationTests(unittest.TestCase):
                     len(bundle["candidate_provenance"])
                     + len(bundle["relation_provenance"]),
                 )
+
+    def test_ranked_evidence_does_not_prove_delivery_to_public_context(self):
+        corpus, judgments = EVAL.load_fixture(FIXTURE_DIR)
+        query = next(q for q in judgments['queries'] if q['expected_evidence_ids'] and q['relevant'])
+        original = EVAL.KG.retrieve_knowledge_bundle
+
+        def empty_context(*args, **kwargs):
+            bundle = original(*args, **kwargs)
+            for key in ('facts', 'candidate_provenance', 'relation_provenance', 'fact_provenance', 'evidence_ids'):
+                bundle[key] = []
+            return bundle
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            EVAL._write_synthetic_graph(root, corpus)
+            with mock.patch.object(EVAL.KG, 'retrieve_knowledge_bundle', side_effect=empty_context):
+                row = EVAL._evaluate_query(root, corpus, query, mode='fixture-rrf', ks=(1, 3))
+        report = EVAL._aggregate([row], (1, 3))
+        self.assertEqual(report['evidence_check_pass_rate'], 1.0)
+        self.assertEqual(report['context_evidence_check_pass_rate'], 0.0)
+        self.assertEqual(row['public_bundle']['missing_expected_evidence_ids'], query['expected_evidence_ids'])
+
+    def test_repeated_ranked_candidates_are_reported_as_a_defect(self):
+        corpus, judgments = EVAL.load_fixture(FIXTURE_DIR)
+        query = next(q for q in judgments['queries'] if q['expected_evidence_ids'] and q['relevant'])
+        original = EVAL.KG._query_knowledge_ranked
+
+        def duplicated(*args, **kwargs):
+            ranked = original(*args, **kwargs)
+            ranked['candidates'] = [ranked['candidates'][0], *ranked['candidates']]
+            return ranked
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            EVAL._write_synthetic_graph(root, corpus)
+            with mock.patch.object(EVAL.KG, '_query_knowledge_ranked', side_effect=duplicated):
+                row = EVAL._evaluate_query(root, corpus, query, mode='fixture-rrf', ks=(1, 3))
+        self.assertIn('duplicate_candidate_returned', [v['code'] for v in row['violations']])
+        self.assertEqual(EVAL._aggregate([row], (1, 3))['duplicate_candidate_query_rate'], 1.0)
 
     def test_markdown_keeps_actual_scope_and_commands(self):
         markdown = EVAL.render_markdown(self.report)
