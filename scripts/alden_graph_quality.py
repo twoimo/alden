@@ -15,6 +15,7 @@ import time
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, normalized_body, normalized_text, RELATION_HISTORY_MATCH
 from alden_content_evidence import POLICY, content_evidence_class
 from alden_normalization_evidence import DeclaredFieldSummary
+from alden_source_text import TEXT_VERSION, POLICY as SOURCE_TEXT_POLICY, project_source_text
 
 
 def _json(value):
@@ -104,6 +105,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     source_declarations = {}
     degree, directed_relations = defaultdict(Counter), Counter()
     declared_fields = DeclaredFieldSummary()
+    projected_originals, numeric_tails, projected_body_entries = {}, set(), defaultdict(set)
 
     def check():
         nonlocal next_cancel_check
@@ -238,6 +240,11 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                         if isinstance(source, dict) and name in source}
                     original = source.get('localOriginalText') if isinstance(source, dict) else None
                     originals[blob_key] = digest(original.encode()) if isinstance(original, str) and original.strip() else None
+                    if isinstance(original, str) and original.strip():
+                        projected = project_source_text(original, source)
+                        projected_originals[blob_key] = digest(projected['body'].encode())
+                        if projected['projection'] is not None:
+                            numeric_tails.add(blob_key)
                     counts['source_blobs_verified'] += 1
                     source_verified[blob_key] = True
                 except (OSError, ValueError, RecursionError):
@@ -246,11 +253,13 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             cached = cache.execute('SELECT base_hash,raw_sha256,extraction,body,body_source FROM texts WHERE document_id=? AND version=?', (row['document_id'], row['current_version'])).fetchone() if 'texts' in cache_tables else None
             if cached is not None:
                 examine(*cached)
-            valid = (cached is not None and isinstance(cached[3], str) and cached[:3] == (digest((label+'\n'+body).encode()), row['raw_sha256'], 'retained-local-original-text-v1')
+            valid = (cached is not None and isinstance(cached[3], str) and cached[:2] == (digest((label+'\n'+body).encode()), row['raw_sha256'])
+                     and cached[2] in ('retained-local-original-text-v1', TEXT_VERSION)
                      and (cached[4] == 'stored_body' and cached[3] == body or cached[4] == 'retained_record.localOriginalText'))
             if cached is not None and not valid:
                 flag('retained_text_binding_invalid', key)
-            if valid and verify_sources and cached[4] == 'retained_record.localOriginalText' and originals.get(blob_key) != digest(cached[3].encode()):
+            expected_body_hash = (projected_originals if cached is not None and cached[2] == TEXT_VERSION else originals).get(blob_key)
+            if valid and verify_sources and cached[4] == 'retained_record.localOriginalText' and expected_body_hash != digest(cached[3].encode()):
                 flag('retained_text_source_mismatch', key); valid = False
             text = label + '\n' + (cached[3] if valid else body)
             examine(text)
@@ -260,7 +269,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             body_source = ('retained_record.localOriginalText'
                 if valid and verify_sources and source_verified.get(blob_key)
                 and cached[4] == 'retained_record.localOriginalText'
-                and originals.get(blob_key) == digest(effective_body.encode()) else 'stored_body')
+                and expected_body_hash == digest(effective_body.encode()) else 'stored_body')
             evidence_class = content_evidence_class(metadata, effective_body,
                 source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
                 body_source=body_source) if metadata_valid else None
@@ -272,6 +281,9 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             stored_class = content_evidence_class(metadata,body,
                 source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
                 body_source='stored_body') if metadata_valid else None
+            if (verify_sources and metadata_valid and source_verified.get(blob_key)
+                    and stored_class == 'content_candidate' and projected_originals.get(blob_key)):
+                projected_body_entries[(row['project'], projected_originals[blob_key])].add(unique)
             if (metadata_valid and stored_class == 'content_candidate'
                     and _substantive_field(body)
                     and (not verify_sources or source_verified.get(blob_key) is True)):
@@ -508,6 +520,11 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             'scoped_revision_variants': revision_report,
             'numeric_review_candidates': numeric_review,
             'declared_field_normalization': declared_fields.report(),
+            'source_text_projection': {'policy': SOURCE_TEXT_POLICY,
+                'status': 'verified_retained_records' if verify_sources else 'not_inspected',
+                'numeric_tail_candidates': len(numeric_tails),
+                'same_projected_body_groups': sum(len(members)>1 for members in projected_body_entries.values()),
+                'semantic_validity': 'review_candidates_not_confirmed_duplicates'},
             'coverage': {'status': 'complete', 'scope': 'current_permitted_memberships_only',
                          'projects': len(projects), 'memberships_scanned': counts['memberships'],
                          'relations_scanned': counts['relations'], 'max_rows': max_rows,

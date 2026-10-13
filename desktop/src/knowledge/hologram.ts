@@ -23,6 +23,7 @@ import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
+import { selectOverviewLabels } from './overview-labels';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
@@ -633,11 +634,8 @@ export class KnowledgeHologram {
     else this.communityState=null;
     this.constellationNodes.visible=true;this.neuronDetail=false;
     this.orbit.enableRotate=true;this.orbit.mouseButtons.LEFT=THREE.MOUSE.ROTATE;
-    const labelledGroups = new Set<string>();
-    for (const node of [...this.view.nodes].sort((a,b)=>this.constellationNodes.radius(b.id)-this.constellationNodes.radius(a.id)||a.id.localeCompare(b.id))) {
-      const group = node.sourceTarget || node.space || node.category;
-      if (!labelledGroups.has(group)) { this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id,this.globalLabelRanks.size); labelledGroups.add(group); }
-      if (this.globalLabels.size >= 8) break;
+    for (const node of selectOverviewLabels(this.view.nodes)) {
+      this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
     }
     this.rootNodeId = relationCenterId(this.view);
 
@@ -815,7 +813,7 @@ export class KnowledgeHologram {
     this.hoverFrame=null;
   }
   // Refresh the collision order only on graph rebuild or hover change.
-  // Selection stays ahead of hover; representative ranks follow node radius.
+  // Selection stays ahead of hover; saved topics/titles precede broad hubs.
   private prioritizeOverviewLabels(): void {
     if (this.view.hops !== 0) return;
     const ordered = [...this.labels].sort(([first], [second]) =>

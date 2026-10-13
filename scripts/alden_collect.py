@@ -20,6 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from alden_collection import CollectionStore, encoded, identity, safe_directory
 from alden_abort import ABORT_STATE_NAME, AbortToken
+from alden_source_text import project_source_text
 
 MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
 BATCH_SIZE = 1000
@@ -149,12 +150,16 @@ def source_graph(target: dict, data: dict, source: dict):
     for node in data.get("nodes", []):
         original = prefix + ":node:" + str(node["id"])
         mappings[str(node["id"])] = ("graph", original)
+        original_body = node.get('localOriginalText') or node.get('summary', '')
+        projected = project_source_text(original_body, node) if isinstance(original_body, str) else {'body': original_body, 'projection': None}
         records.append({"platform": "graph", "original_id": original, "label": node.get("label", node.get("title", str(node["id"]))),
                         "kind": node.get("type", node.get("kind", "source_node")),
-                        "text": node.get("localOriginalText") or node.get("summary", ""),
+                        "text": projected['body'],
                         "text_field": "localOriginalText" if node.get("localOriginalText") else "summary",
                         "source": source, "source_node_id": str(node["id"]), "raw": node,
                         "truth_status": "source_record; not independently verified"})
+        if projected['projection'] is not None:
+            records[-1]['text_projection'] = {k:v for k,v in projected['projection'].items() if k != 'separated_tail'}
     for edge in data.get("edges", []):
         a, b = str(edge["source"]), str(edge["target"])
         if a not in mappings or b not in mappings:
@@ -437,21 +442,22 @@ def main():
     parser.add_argument("--graph", nargs="*")
     parser.add_argument("--events", action="store_true")
     parser.add_argument("--index-dense", action="store_true")
+    parser.add_argument("--index-text", action="store_true")
     parser.add_argument("--query")
     parser.add_argument("--project", action="append", default=[])
     parser.add_argument("--after", type=int, default=0)
     args = parser.parse_args()
     choices = [args.config is not None, args.capture_source is not None, args.target is not None,
-               args.graph is not None, args.events, args.index_dense, args.query is not None, args.receive_input is not None]
+               args.graph is not None, args.events, args.index_dense, args.index_text, args.query is not None, args.receive_input is not None]
     if sum(choices) != 1:
         parser.error("select exactly one collection operation")
-    if (args.index_dense or args.query is not None) and not args.project:
+    if (args.index_dense or args.index_text or args.query is not None) and not args.project:
         parser.error("retrieval requires an explicit project scope")
     if args.receive_input is not None and (args.input_snapshot is None or args.expected_current_sha256 is None):
         parser.error('receive-input requires input-snapshot and expected-current-sha256')
     if args.receive_input is None and (args.input_snapshot is not None or args.expected_current_sha256 is not None):
         parser.error('input arguments require receive-input')
-    read_only = args.graph is not None or args.events or args.index_dense or args.query is not None or args.receive_input is not None
+    read_only = args.graph is not None or args.events or args.index_dense or args.index_text or args.query is not None or args.receive_input is not None
     store = CollectionStore.open_existing(args.state_root) if read_only else CollectionStore(args.state_root)
     if store is None:
         if args.receive_input is not None: raise ValueError('collection_target_missing')
@@ -467,12 +473,14 @@ def main():
         for config in data["targets"]:
             targets.append(store.register(**config))
         print(json.dumps({"registered": targets}, ensure_ascii=False))
-    elif args.index_dense or args.query is not None:
-        from alden_collection_retrieval import index_dense, retrieve
+    elif args.index_dense or args.index_text or args.query is not None:
+        from alden_collection_retrieval import index_dense, index_text, retrieve
         import auto_reply_knowledge_graph as kg
         token = AbortToken(args.state_root / ABORT_STATE_NAME)
         with kg.embedding_abort_scope(token):
-            if args.index_dense:
+            if args.index_text:
+                result = index_text(args.state_root, args.project, cancelled=token.is_cancelled)
+            elif args.index_dense:
                 os.nice(10)
                 result = index_dense(args.state_root, args.project, cancelled=token.is_cancelled,
                                      progress=lambda value: print(json.dumps(value), file=__import__('sys').stderr, flush=True))

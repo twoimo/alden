@@ -9,9 +9,9 @@ import struct
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, korean_literal_plan, korean_literal_matches
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class
+from alden_source_text import TEXT_VERSION, project_source_text
 
 ENCODING = 'e5-char256-stride192-weighted-unit-pool-v1'
-TEXT_VERSION = 'retained-local-original-text-v1'
 MAX_TEXT_BYTES = 32 * 1024 * 1024
 MAX_DOCUMENTS = 100000
 BATCH = 8
@@ -96,9 +96,17 @@ def _verified_source(db, store, row, projects):
     except (ValueError, TypeError, UnicodeError, RecursionError) as error:
         raise RuntimeError('collection_source_integrity') from error
     if (row['body_source'] == 'retained_record.localOriginalText'
-            and (not isinstance(record, dict) or record.get('localOriginalText') != row['body'])
+            and (not isinstance(record, dict) or not isinstance(record.get('localOriginalText'), str)
+                 or project_source_text(record['localOriginalText'], record)['body'] != row['body'])
             or row['body_source'] == 'stored_body' and current['body'] != row['body']):
         raise RuntimeError('collection_source_integrity')
+    original = record.get('localOriginalText') if isinstance(record, dict) else None
+    if row['platform'] == 'graph' and isinstance(original, str) and original.strip():
+        projected = project_source_text(original, record)
+        # Legacy fallback is admitted only after its original version binding.
+        if row['body_source'] == 'stored_body' and current['body'] == original:
+            row['body'], row['body_source'] = projected['body'], 'retained_record.localOriginalText'
+        row['text_projection'] = projected['projection']
     marks = ','.join('?' for _ in projects)
     memberships = [dict(r) for r in db.execute('''SELECT m.target_id,p.project,p.permission,
         m.current_version AS source_version FROM memberships m
@@ -169,7 +177,7 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
                         raise RuntimeError('collection_source_integrity')
                     source = json.loads(raw)
                     if item['platform'] == 'graph' and isinstance(source, dict) and isinstance(source.get('localOriginalText'), str) and source['localOriginalText'].strip():
-                        item['body'], field = source['localOriginalText'], 'retained_record.localOriginalText'
+                        item['body'], field = project_source_text(source['localOriginalText'], source)['body'], 'retained_record.localOriginalText'
                     with text_db:
                         text_db.execute('INSERT OR REPLACE INTO texts VALUES(?,?,?,?,?,?,?,?)',
                                         (item['id'], item['version'], base_hash, item['raw_sha256'], TEXT_VERSION,
@@ -224,6 +232,26 @@ def index_dense(root, projects, *, cancelled=lambda: False, embed=None, progress
         return {'state': 'empty', 'documents': 0}
     with store.target_lock('collection-dense-retrieval'):
         return _index_dense(root, projects, cancelled=cancelled, embed=embed, progress=progress)
+
+
+def index_text(root, projects, *, cancelled=lambda: False):
+    """Explicit reversible text-cache refresh; no model loading or embedding."""
+    store = CollectionStore.open_existing(Path(root))
+    if store is None:
+        return {'state': 'empty', 'documents': 0}
+    projects = _scope(projects)
+    with store.target_lock('collection-dense-retrieval'):
+        safe_directory(store.root)
+        with closing(sqlite3.connect(_path(store), timeout=.15)) as db:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.execute('''CREATE TABLE IF NOT EXISTS texts(document_id TEXT,version TEXT,
+                base_hash TEXT,raw_sha256 TEXT,extraction TEXT,label TEXT,body TEXT,body_source TEXT,
+                PRIMARY KEY(document_id,version))''')
+            db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS text_fts USING fts5(document_id UNINDEXED,version UNINDEXED,label,body)')
+            db.commit()
+            rows = _index_rows(store, projects, cancelled, text_db=db, resolve_source=True)
+            return {'state': 'ready', 'documents': len(rows), 'projects': projects,
+                    'text_version': TEXT_VERSION, 'embeddings_generated': 0}
 
 
 def _index_dense(root, projects, *, cancelled, embed, progress):
@@ -473,6 +501,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             evidence_class = content_evidence_class(metadata, row['body'], source=record,
                                                    body_source=row['body_source'])
             proof['content_evidence'] = {'policy': CONTENT_POLICY, 'classification': evidence_class}
+            if row.get('text_projection') is not None:
+                proof['text_projection'] = {k:v for k,v in row['text_projection'].items() if k != 'separated_tail'}
             if evidence_class != 'content_candidate':
                 proof['truth_status'] = 'source_description; original body unverified'
             if document_id in body_preferred:

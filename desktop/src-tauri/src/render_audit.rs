@@ -1019,7 +1019,7 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     settingsState:document.getElementById('app')?.dataset.state,settingsPage:document.querySelector('.settings-shell')?.dataset.settingsPage,
     graphPending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중',
     renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
-    graphRead:d?d.graphRead:null, navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
+    graphRead:d?d.graphRead:null, navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusedSourceVersion:d.focusedSourceVersion,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
     regions:d?.regions??null,synapses:d?.synapses??null,
     motion:d?.motion??null,geometry:d?{detailMode:d.detailMode,neuronGlyphs:d.neuronGlyphs,orbGlyphs:d.orbCount,geometries:d.geometries,drawCalls:d.drawCalls}:null,
     depthLegend:(()=>{const e=document.querySelector('.knowledge-depth-legend');const r=e?.getBoundingClientRect();return e?{hidden:e.hidden,entries:e.children.length,left:r.left,top:r.top,width:r.width,height:r.height,scrollWidth:e.scrollWidth}:null;})(),
@@ -1162,7 +1162,7 @@ fn graph_step(
         (action, _) => match action {
         "memory-page" if focus.as_deref().is_some_and(|id| id.starts_with("osk:")) => "(()=>{document.querySelector('#settings-tab-memory')?.click();const source=document.querySelector('#knowledge-project');if(source){source.value='legacy';source.dispatchEvent(new Event('change'));}})()",
         "memory-page" => "document.querySelector('#settings-tab-memory')?.click()",
-        "first" => "document.querySelectorAll('.knowledge-a11y-node')[0]?.click()",
+        "first" => "(()=>{const id=window.__knowledgeRenderDiagnostics?.firstCollectedId;const buttons=[...document.querySelectorAll('.knowledge-a11y-node')];(buttons.find(b=>id&&b.dataset.nodeId===id)??buttons[0])?.click();})()",
         "second" => "document.querySelectorAll('.knowledge-a11y-node')[1]?.click()",
         "expand" => "document.querySelector('#knowledge-expand-hop')?.click()",
         "back" => "document.querySelector('#knowledge-back')?.click()",
@@ -1557,7 +1557,7 @@ fn audit_settings(
     {
         return Err("native note reader lost its graph or did not open".into());
     }
-    if first["navigation"]["source"] == "collection"
+    if first["navigation"]["focusedSourceVersion"].as_str().is_some()
         && (first["nodeActivity"]["last"]["kind"] != "read"
             || first["nodeActivity"]["last"]["document_id"] != first["notePane"]["nodeId"]
             || first["nodeActivity"]["last"]["success"] != true)

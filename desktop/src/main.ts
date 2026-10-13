@@ -732,6 +732,8 @@ export async function bootSettings(
         overviewLimit:graph.currentView.overviewLimit??OVERVIEW_NODE_CAP,overviewOffset:collectionGraph?.collection?collectionGraph.offset:graph.currentView.overviewOffset??0,
         hasMoreContexts:collectionGraph?.collection?collectionGraph.hasMore:!!graph.currentView.hasMoreContexts,
         focusId: graph.currentView.focusId,
+        firstCollectedId: graph.currentView.nodes.find(node => node.sourceVersion && node.sourceTarget)?.id ?? null,
+        focusedSourceVersion: graph.currentView.nodes.find(node => node.id === graph.currentView.focusId)?.sourceVersion ?? null,
         source: collectionGraph?.collection ? 'collection' : 'legacy',
         nodeActivity: graph.nodeActivityDiagnostics,
         activityJournal: collectionGraph?.activityDiagnostics,

@@ -8,6 +8,25 @@ const graph=parseKnowledgeGraph({nodes:[{id,label:'같은 이름',category:'대�
 beforeEach(()=>{document.body.innerHTML='<p id="knowledge-node-summary"></p><div id="knowledge-node-body" hidden></div><p id="knowledge-node-kind"></p><p id="knowledge-node-basis"></p><ul id="knowledge-node-facts"></ul><h2 id="knowledge-evidence-heading"></h2><div id="knowledge-node-evidence"></div>';});
 const source={source_id:`kakao:${account}:room:42:log:1`,source_kind:'local_db_snapshot',author_id:'7',room_title:'회의',sender:'같은 이름',date:'2026-10-01T15:00:00+09:00',content:'금요일 오후 3시에 회의합니다.',source_role:'peer_history'};
 describe('selected-node explanations',()=>{
+  it('keeps a separated numeric tail collapsed, inert and tied to the selected source version',()=>{
+    const notes=parseKnowledgeGraph({nodes:[{id:'post',label:'게시물',category:'source',source_version:'v1'}],edges:[]});
+    const tail='\n\u00a0\n1\n/\n2\n6\n1\n3';
+    const details={node_id:'post',basis:'source_record',version:'v1',body:'1. 정상 항목\n5. 마지막 항목',raw_sha256:'1'.repeat(64),
+      text_projection:{policy:'threads-separated-numeric-tail-v1',status:'structural_tail_candidate',original_preserved:true,
+        semantic_validity:'unverified',separated_tail:tail,removed_characters:tail.length,
+        original_body_sha256:'2'.repeat(64),body_sha256:'3'.repeat(64),separated_tail_sha256:'4'.repeat(64)}};
+    renderNodeDetails(notes,notes.nodes[0],{details});
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe(details.body);
+    const disclosure=document.querySelector<HTMLDetailsElement>('.knowledge-separated-tail')!;
+    expect(disclosure.open).toBe(false); expect(disclosure.querySelector('pre')!.textContent).toBe(tail);
+    disclosure.open=true;
+    renderNodeDetails(notes,notes.nodes[0],{details:{...details,version:'old'}});
+    expect(document.querySelector('.knowledge-separated-tail')).toBeNull();
+    renderNodeDetails(notes,notes.nodes[0],{details:{...details,text_projection:{...details.text_projection,separated_tail:'<img src=x>',removed_characters:11}}});
+    expect(document.querySelector('img')).toBeNull();
+    renderNodeDetails(notes,notes.nodes[0],{details:{...details,text_projection:{...details.text_projection,removed_characters:999}}});
+    expect(document.querySelector('.knowledge-separated-tail')).toBeNull();
+  });
   it('reads saved body with stable node links and keeps hostile markup inert',()=>{
     const notes=parseKnowledgeGraph({nodes:[{id:'osk:261005-0001-abcdefgh',label:'설계 가설',category:'memory'},
       {id:'person:actor',osk_id:'261005-0002-abcdefgh',label:'전제',category:'memory'}],edges:[]});

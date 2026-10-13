@@ -95,6 +95,21 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const body = root.getElementById('knowledge-node-body');
   const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
   if (body) { renderBody(body, copy, graph); body.hidden = !copy; }
+  root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
+  const projection = record(selected?.text_projection);
+  const tail = projection?.separated_tail;
+  if (body && selected?.basis === 'source_record' && projection?.policy === 'threads-separated-numeric-tail-v1'
+    && projection.status === 'structural_tail_candidate' && projection.original_preserved === true
+    && projection.semantic_validity === 'unverified' && typeof tail === 'string' && tail.length > 0 && tail.length <= 128
+    && projection.removed_characters === tail.length
+    && ['original_body_sha256', 'body_sha256', 'separated_tail_sha256'].every(key => typeof projection[key] === 'string' && /^[0-9a-f]{64}$/.test(projection[key] as string))
+    && /^[0-9a-f]{64}$/.test(text(selected.raw_sha256))) {
+    const disclosure = root.createElement('details'); disclosure.className = 'knowledge-separated-tail';
+    disclosure.append(element('summary', '', '본문 뒤 숫자 묶음 · 펼쳐서 확인'));
+    disclosure.append(element('p', '', '화면에서 추출된 숫자로 보이는 부분을 본문과 분리했습니다. 원문은 보존했습니다.'));
+    disclosure.append(element('pre', 'knowledge-separated-tail-text', tail));
+    body.after(disclosure);
+  }
   root.querySelectorAll('.knowledge-resolution-note').forEach(note => note.remove());
   const resolutions = node.resolutionContexts?.length
     ? node.resolutionContexts.map(context => ({ resolution: context, context }))

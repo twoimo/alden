@@ -19,6 +19,7 @@ import tempfile
 import time
 import unicodedata
 import uuid
+from alden_source_text import project_source_text
 
 
 SCHEMA = 3
@@ -1082,6 +1083,8 @@ class CollectionStore:
             body, body_format = retained, "retained_original_text"
         else:
             body, body_format = row["body"], "normalized_text"
+        projected = project_source_text(body, record)
+        body = projected['body']
         # Structured raw data remains recoverable through its verified archive;
         # implementation metadata is not the reading experience.
         display_label = row["label"]
@@ -1094,6 +1097,7 @@ class CollectionStore:
         return {"ok": True, "details": {"node_id": row["id"], "basis": "source_record", "summary": row["label"], "display_label": display_label,
                                      "body": body[:12000], "truncated": len(body) > 12000,
                                      "body_format": body_format,
+                                     "text_projection": projected['projection'],
                                      "version": row["visible_version"], "collected_at": row["collected_at"],
                                      "raw_sha256": row["raw_sha256"], "source_url": row["source_url"],
                                      "target_id": row["target_id"], "platform": row["platform"],

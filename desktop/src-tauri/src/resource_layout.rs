@@ -53,6 +53,7 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/alden_time_normalization.py",
     "scripts/alden_quantity_normalization.py",
     "scripts/alden_content_evidence.py",
+    "scripts/alden_source_text.py",
     "scripts/alden_graph_quality_action.py",
     VOICE_AUDIO_LIBRARY,
     "scripts/alden_abort.py",
