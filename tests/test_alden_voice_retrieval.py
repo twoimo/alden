@@ -10,6 +10,61 @@ import alden_voice as voice
 from alden_abort import AbortController,AldenCancelled
 
 class VoiceRetrievalTests(unittest.TestCase):
+    def test_explicit_saved_source_requests_route_without_generic_knowledge_nouns(self):
+        requests=('저장된 하나저축은행 IT기획 공고를 근거로 지금 지원 가능한지 알려줘.',
+                  '저장해 둔 영상 찾아줘', '수집한 게시물 요약해줘',
+                  '보관한 문서에서 조건을 확인해 줘', '저장된 링크는 어디야?')
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            for request in requests:
+                with self.subTest(request=request),mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['보존 본문'],'fact_provenance':[],'search_mode':'rrf'}) as graph:
+                    reference,metrics=voice._voice_knowledge_reference(request,[],root,AbortController(root).token())
+                    self.assertEqual(metrics['state'],'found');graph.assert_called_once();self.assertIn('보존 본문',reference)
+            for request in ('이 공고를 저장해 줘', '새 공고 자료를 저장해줘', '이 자료 기억하고 확인했습니다라고만 답해', '보관한 문서가 많아서 힘들어',
+                            '이 링크를 저장한 다음 알려줘', '저장된 공고는 조회하지 마',
+                            '저장된 공고 자료는 조회하지 마', '저장된 영상은 읽지 말아줘'):
+                with self.subTest(request=request),mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle') as graph:
+                    reference,metrics=voice._voice_knowledge_reference(request,[],root,AbortController(root).token())
+                    self.assertEqual(metrics['state'],'not_requested');graph.assert_not_called()
+
+    def test_query_clock_is_host_metadata_and_does_not_replace_historical_source_dates(self):
+        from alden_retrieval_time import query_time_reference
+        clock=query_time_reference(1791922200)
+        with TemporaryDirectory() as td:
+            root=self.root(td);proof={'entity_id':'historical','note_id':'historical','source_kind':'collected_source','source_author':{'date':'2026-02-17'}}
+            result={'facts':['26년 2월 23일까지 진행하는 채용공고'],'fact_provenance':[proof],'search_mode':'rrf','query_clock':{'observed_at_utc':'2099-01-01'}}
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=result),mock.patch('alden_retrieval_time.query_time_reference',return_value=clock):
+                reference,metrics=voice._voice_knowledge_reference('저장된 공고의 2026년 2월 당시 조건 알려줘',[],root,AbortController(root).token())
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(context['query_clock'],clock);self.assertEqual(metrics['query_clock'],clock)
+            self.assertEqual(context['graph_provenance'][0],proof)
+            self.assertIn('사용자가 지정한 과거·미래 기간',reference)
+            self.assertNotIn('2099',reference)
+
+    def test_current_lookup_refusal_and_storage_override_prior_lookup_followup(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td);history=[{'role':'user','content':'저장된 자료에서 공고 찾아줘'},
+                                      {'role':'assistant','content':'보존된 채용 기록입니다.'}]
+            for request in ('그 공고 자료는 조회하지 마', '그 자료는 기억하고 확인했습니다라고만 답해',
+                            '그러면 그 공고를 저장해줘'):
+                with self.subTest(request=request),mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle') as graph,mock.patch('alden_corpus.search') as search:
+                    reference,metrics=voice._voice_knowledge_reference(request,history,root,AbortController(root).token())
+                    self.assertEqual(reference,'');self.assertEqual(metrics['state'],'not_requested')
+                    graph.assert_not_called();search.assert_not_called()
+
+    def test_some_budget_dropped_sources_report_partial_reading_scope(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            small={'entity_id':'small','note_id':'small','source_kind':'collected_source'}
+            large={'entity_id':'large','note_id':'large','source_kind':'collected_source','source_memberships':[{'project':'x'*1000}]*10}
+            result={'facts':['먼저 선택한 본문','다른 본문'],'fact_provenance':[small,large],'search_mode':'rrf'}
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=result):
+                reference,metrics=voice._voice_knowledge_reference('저장된 공고 자료 알려줘',[],root,AbortController(root).token())
+            self.assertEqual(metrics['state'],'found');self.assertEqual(metrics['reference_coverage'],'partial')
+            self.assertEqual(metrics['budget_dropped'],{'graph_facts':1,'quoted_history':0})
+            self.assertEqual(metrics['graph_provenance'],[small])
+            self.assertIn('검색 근거 일부만 전달',reference)
+
     def test_complete_context_budget_removal_has_explicit_cause(self):
         from alden_content_evidence import declared_source_annotations
         with TemporaryDirectory() as td:

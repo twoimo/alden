@@ -1,7 +1,7 @@
 import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from alden_retrieval_time import select_latest,observation_note
+from alden_retrieval_time import select_latest,observation_note,query_time_reference
 
 NOW=1791500000
 def record(identity,stamp,term='구독 조건',**extras):
@@ -9,6 +9,14 @@ def record(identity,stamp,term='구독 조건',**extras):
             'observed_at':stamp,'time_basis':'record_confirmed_at',**extras}
 
 class ObservationSelectionTests(unittest.TestCase):
+    def test_query_time_is_explicit_utc_without_source_validity_inference(self):
+        clock=query_time_reference(1791922200)
+        self.assertEqual(clock['observed_at_utc'],'2026-10-13T20:10:00+00:00')
+        self.assertEqual(clock['basis'],'host_query_time; not source_date_or_claim_validity')
+        for bad in (True,'2026-10-14',float('nan'),-1,10**30):
+            with self.subTest(bad=bad),self.assertRaisesRegex(ValueError,'query_reference_time_invalid'):
+                query_time_reference(bad)
+
     def test_dates_select_sources_without_old_new_labels_or_identity_merges(self):
         rows=[record('z',1788102000),record('a',1790643600)]
         ids,policy=select_latest('구독 조건의 최신 기록',rows,now=NOW)

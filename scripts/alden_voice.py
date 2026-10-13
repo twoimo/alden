@@ -1510,13 +1510,25 @@ class AldenVoicePipeline:
                 return self._turn_end(turn, VoiceState.ABORTED, "turn_cancelled")
 
 
-def _voice_requests_knowledge(text: str) -> bool:
-    """Keep an instruction to remember this input in its own conversation.
+def _voice_blocks_knowledge_lookup(text: str) -> bool:
+    """A current refusal/new-input storage request also overrides followups."""
+    denied = re.search(r'(?:찾|검색|조회|읽)(?:지|하지)\s*(?:마|말)|(?:찾|검색|조회|읽)\s*(?:금지|안\s*해)', text)
+    if denied:
+        return True
+    new_storage = re.search(r'(?:저장|보관)(?:해|하)(?:\s*(?:줘|주세요|둬|두세요)|(?=[.!?]|$))|기억(?:하고|하세요|해(?:\s*(?:줘|주|두|둬)|(?=[.!?]|$)))', text)
+    explicit_lookup = re.search(r'찾|검색|조회|읽|요약|보여', text)
+    return bool(new_storage and not explicit_lookup)
 
-    Explicit saved-memory queries retain the existing lookup path. This is
-    request routing, not a claim that the input was stored as an OSK note.
-    """
+
+def _voice_requests_knowledge(text: str) -> bool:
+    """Keep current-input storage apart from explicit saved-source retrieval."""
+    if _voice_blocks_knowledge_lookup(text):
+        return False
     if any(word in text for word in ('카카오톡','카톡','채팅방','대화방','지식','자료','노드','그래프')):
+        return True
+    saved_source = re.search(r'(?:저장(?:된|한|해\s*둔|해\s*놓은)|수집(?:된|한)|보관(?:된|한|해\s*둔))[^.!?\n]{0,120}(?:공고|게시물|문서|파일|동영상|영상|링크|노트|메모|글)', text)
+    lookup = re.search(r'찾|검색|조회|읽|확인|요약|보여|알려|무엇|언제|어디|가능|[?？]', text)
+    if saved_source and lookup:
         return True
     if '기억' not in text:
         return False
@@ -1543,6 +1555,8 @@ def _voice_collection_projects(root: Path, query: str) -> list[str]:
 def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], root: Path | None,
                                token: AbortToken) -> tuple[str,dict[str,Any]]:
     """Only explicit knowledge turns read quoted context; speech stays last."""
+    if _voice_blocks_knowledge_lookup(text):
+        return '',{'state':'not_requested','mode':'none','sources':0}
     explicit_request = _voice_requests_knowledge(text)
     followup_prefixes=('그','거기','아까','계속','또','그러면')
     earlier=''
@@ -1576,7 +1590,9 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                                              **({'projects': projects} if projects else {}))
         token.raise_if_cancelled()
         fact_budget = entity_budget + relation_budget
-        context={'graph_facts':ranked.get('facts',[])[:fact_budget],'graph_provenance':ranked.get('fact_provenance',[])[:fact_budget],
+        from alden_retrieval_time import query_time_reference
+        query_clock = query_time_reference()
+        context={'query_clock':query_clock,'graph_facts':ranked.get('facts',[])[:fact_budget],'graph_provenance':ranked.get('fact_provenance',[])[:fact_budget],
                  'quoted_history':raw.get('items',[])}
         if not context['graph_facts'] and not context['quoted_history']:
             return '',{'state':'empty','mode':ranked.get('search_mode','bm25_only'),'sources':0,'seconds':time.perf_counter()-started}
@@ -1599,6 +1615,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         def quoted_json():
             return json.dumps(context,ensure_ascii=False).replace('<',r'\u003c').replace('>',r'\u003e').replace('&',r'\u0026')
         encoded=quoted_json()
+        initial_counts={'graph_facts':len(context['graph_facts']),'quoted_history':len(context['quoted_history'])}
         while len(encoded)>8000:
             if context['quoted_history']:
                 context['quoted_history'].pop()
@@ -1610,6 +1627,8 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
             else:
                 break
             encoded=quoted_json()
+        dropped_counts={key:initial_counts[key]-len(context[key]) for key in initial_counts}
+        partial_reference=any(dropped_counts.values())
         if not context['graph_facts'] and not context['quoted_history']:
             reference='<quoted_local_history>'+json.dumps({'reference_status':'source_context_budget_exceeded'},ensure_ascii=False)+'</quoted_local_history>'
             return ('검색 자료가 입력 한도를 초과하여 원문을 전달하지 못했다. 자료를 읽었다고 하지 말고 조회 대상을 좁혀 다시 요청하도록 안내한다. '+reference,
@@ -1620,6 +1639,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'outgoing_unclassified는 사람이 보낸 말인지 자동 답변인지 확정하지 않은 기록이다. '
                    'system_history는 자동 알림의 기록이며 사람의 발화로 해석하지 않는다. '
                    '출처와 기록 시점을 유지하며, 현재 요청과 직접 관련된 내용만 사용한다. '
+                   'query_clock은 호스트의 조회 시각이며 원문의 게시·수집 시각이나 현재 효력의 증명이 아니다. 사용자가 지정한 과거·미래 기간을 조회 시각으로 바꾸지 마라. 현재 지원·이용 가능 여부는 원문의 유효 기간과 확인 범위를 구분하고, 근거가 부족하면 현재 가능하다고 단정하지 마라. '
                    'OSK 노트에는 검증되지 않은 설계 가설도 있다. 저장된 내용을 승인된 사실로 승격하지 마라. '
                    '음성 답변은 서론과 목록 없이 짧은 완결 문장 두 개 이내로 핵심과 한계만 말한다. '
                    'fact_truncated가 참인 자료는 일부만 읽었다고 취급한다. '
@@ -1627,11 +1647,14 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'source_annotations는 원문별 미검증 태그 표기다. annotation_differences가 비어 있지 않으면 같은 본문의 주제·기관 표기도 다르며, 태그를 사실이나 동일인으로 단정하지 마라. '
                    '검색 결과가 없다는 사실을 사용자 발화를 이해하지 못했다는 뜻으로 바꾸지 마라.\n'
                    '<quoted_local_history>'+encoded+'</quoted_local_history>')
+        if partial_reference:
+            reference=('입력 한도로 검색 근거 일부만 전달했다. 전달하지 못한 자료를 읽거나 전체 자료를 검토했다고 말하지 마라. '+reference)
         full_provenance=full_provenance[:len(context['graph_facts'])]
         note_sources=len({source['note_id'] for row in full_provenance
                           for source in [row,*row.get('matching_sources',{}).get('sources',[])]
                           if source.get('note_id')})
-        return reference,{'state':'found','mode':ranked.get('search_mode','bm25_only'),'sources':len(context['quoted_history'])+note_sources,
+        return reference,{'state':'found','query_clock':query_clock,'reference_coverage':'partial' if partial_reference else 'selected_bounded_context',
+                          'budget_dropped':dropped_counts,'mode':ranked.get('search_mode','bm25_only'),'sources':len(context['quoted_history'])+note_sources,
                           'note_sources':note_sources,'history_sources':len(context['quoted_history']),
                           'graph_provenance':full_provenance,'model_provenance_compact':not proof_requested,
                           'seconds':time.perf_counter()-started}

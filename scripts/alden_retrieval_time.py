@@ -15,6 +15,19 @@ _BASIS_LABELS={'record_confirmed_at':'기록 확인 시각',
                'note_revision_at':'문서 개정 시각'}
 
 
+def query_time_reference(now=None):
+    """Host lookup time only; never derive a source's date or valid period."""
+    stamp = time.time() if now is None else now
+    if type(stamp) not in (int, float) or not math.isfinite(stamp) or stamp <= 0:
+        raise ValueError('query_reference_time_invalid')
+    try:
+        observed = datetime.fromtimestamp(stamp, timezone.utc).isoformat()
+    except (ValueError, OverflowError, OSError) as error:
+        raise ValueError('query_reference_time_invalid') from error
+    return {'policy': 'host-query-time-v1', 'observed_at_utc': observed,
+            'basis': 'host_query_time; not source_date_or_claim_validity'}
+
+
 def _term(value):
     return ''.join(unicodedata.normalize('NFKC',str(value)).casefold().split())
 
