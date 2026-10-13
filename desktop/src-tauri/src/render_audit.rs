@@ -2402,9 +2402,18 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
         }
         if state["width"]!=state["scrollWidth"] {return Err("document composer horizontal overflow".into());}
         collect_script(window,"JSON.stringify((()=>{window.__aldenAuditDocumentPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenAuditDocumentPaint=true;}));return {armed:true};})())".into(),deadline)?;
+        let paint_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
         loop {
-            let paint=collect_script(window,"JSON.stringify({ready:window.__aldenAuditDocumentPaint===true})".into(),deadline)?;
-            if paint["ready"]==true {state["paintObservation"]=paint;break;}
+            let paint=collect_script(window,r#"JSON.stringify((()=>{
+                const host=document.querySelector('#voice-message-list');
+                const replies=[...host.querySelectorAll('.message-row[data-self="false"] .message-text')];
+                const last=replies.at(-1)?.getBoundingClientRect(),bounds=host.getBoundingClientRect();
+                return {ready:window.__aldenAuditDocumentPaint===true,
+                    latestReplyVisible:!!last&&last.top>=bounds.top-1&&last.bottom<=bounds.bottom+1,
+                    replyTop:last?.top??null,replyBottom:last?.bottom??null,
+                    viewportTop:bounds.top,viewportBottom:bounds.bottom};})())"#.into(),deadline)?;
+            if paint["ready"]==true && paint["latestReplyVisible"]==true {state["paintObservation"]=paint;break;}
+            if Instant::now() >= paint_deadline {return Err(format!("latest document reply not visible at {index}: {paint}"));}
             live(deadline)?;std::thread::sleep(Duration::from_millis(25));
         }
         publish(output,&format!("assistant-turn-{index}.png"),&snapshot(window,deadline)?,deadline)?;

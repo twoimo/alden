@@ -19,7 +19,7 @@ export class VirtualList<T> {
       const anchor=this.anchor();
       for(const entry of entries){
         if(entry.target===this.host){
-          const {width,height}=entry.contentRect;
+          const width=this.host.clientWidth,height=this.host.clientHeight;
           if(width>0&&height>0&&(Math.abs(width-this.viewportWidth)>1||Math.abs(height-this.viewportHeight)>1)){
             this.viewportWidth=width;this.viewportHeight=height;changed=true;
           }
@@ -55,7 +55,15 @@ export class VirtualList<T> {
     if(visible)this.draw();else{this.observer?.disconnect();if(this.frame!==null)cancelAnimationFrame(this.frame);this.frame=null;}
   }
   private measure():void {this.offsets=[0];for(const item of this.items)this.offsets.push(this.offsets.at(-1)!+(this.heights.get(this.key(item))??this.estimate));this.surface.style.height=this.offsets.at(-1)+'px';}
-  private readonly scroll=():void=>{this.endPinned=this.host.scrollTop+this.host.clientHeight>=this.offsets.at(-1)!-12;this.schedule();};
+  private readonly scroll=():void=>{
+    // Resize may emit a scroll before its measurement callback. Keep the
+    // previous reading intent until the observer adjusts the new scroll range.
+    const resizing=this.viewportWidth>0&&this.viewportHeight>0&&(
+      Math.abs(this.host.clientWidth-this.viewportWidth)>1||
+      Math.abs(this.host.clientHeight-this.viewportHeight)>1);
+    if(!resizing)this.endPinned=this.host.scrollTop+this.host.clientHeight>=this.offsets.at(-1)!-12;
+    this.schedule();
+  };
   private schedule():void {if(this.frame!==null||this.disposed||!this.visible)return;this.frame=requestAnimationFrame(()=>{this.frame=null;this.draw();});}
   private draw():void {
     if(this.disposed||!this.visible)return;this.observer?.disconnect();this.surface.replaceChildren();
