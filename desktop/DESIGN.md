@@ -1,5 +1,9 @@
 # Alden desktop design contract
 
+## 0.3.91 — 가시성과 복원 확인
+
+설정의 그래프는 키보드 포커스 없이 보일 수 있는 데이터 화면이다. native 숨김·페이지 선택·종료를 따르고, blur 하나로 자료 갱신과 미완료 카메라 전이를 중단하지 않는다. 정착 후 RAF 중단과 비상정지 latch는 유지한다. 준비 확인은 화면 사각형만 읽고 상세/종료의 unavailable 상태를 보존한다. 전체 기하 검사는 명시적인 별도 audit에만 수행한다. [실행 검증과 실패 보존](../docs/architecture/alden-graph-restore-20261013.md).
+
 ## 0.3.90 — 완료된 배치 기준과 화면 전이
 
 같은 R/S 자료의 비동기 도착 타이밍이 solver 이전 기준을 바꾸지 않도록 완료된 checkpoint를 사용한다. 명시적 선택 pin은 현재 위치를 유지하고 화면은 기존 물리/위치 전이로 움직인다. 현재 view 밖의 prior를 제외하고 pin 이동·철회·실패 상태를 캐시에 반영한다. 익명 전체목표 진단은64개 단위와 기존16KiB 상한을 유지하며 별도 실제 source 반복으로 검증한다. [검증 범위와 보존/전달](../docs/architecture/alden-layout-handoff-20261013.md).
