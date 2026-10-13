@@ -27,6 +27,25 @@ class JsonResponse(io.BytesIO):
         return False
 
 class RoutedLlmTests(unittest.TestCase):
+    def test_high_reasoning_has_bounded_room_for_reasoning_and_final_answer(self):
+        _,requests=self.invoke([{'type':'response.completed','response':self.completed()}])
+        self.assertEqual(json.loads(requests[0].data)['max_output_tokens'],2048)
+        self.assertEqual(self.adapter.last_metrics['output_token_budget'],2048)
+        self.adapter.reasoning_effort='low';self.catalog['models'][0]['efforts']=['low']
+        _,requests=self.invoke([{'type':'response.completed','response':self.completed()}])
+        self.assertEqual(json.loads(requests[0].data)['max_output_tokens'],1024)
+
+    def test_token_limit_incompletion_preserves_reason_and_does_not_poison_availability(self):
+        payload=self.completed(status='incomplete',incomplete_details={'reason':'max_output_tokens'})
+        for event in ([{'type':'response.output_text.delta','delta':'PARTIAL'}, {'type':'response.incomplete','response':payload}],None):
+            with self.subTest(event=event),patch('alden_routed_llm.record_result') as health:
+                with self.assertRaisesRegex(RuntimeError,'^routed_llm_reply_truncated$'):
+                    self.invoke_json(payload) if event is None else self.invoke(event)
+                health.assert_not_called()
+                self.assertEqual(self.adapter.last_metrics['request']['state'],'failed')
+                self.assertEqual(self.adapter.last_metrics['incomplete_reason'],'max_output_tokens')
+                self.assertEqual(self.adapter.last_metrics['response_model_id'],DEFAULT_MODEL)
+
     def setUp(self):
         t=TemporaryDirectory();self.addCleanup(t.cleanup);self.root=Path(t.name)
         self.token=AbortController(self.root).token()

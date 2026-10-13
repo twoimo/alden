@@ -62,3 +62,24 @@ installation and CI are distinct gates. Physical input/voice, independent
 human temporal gold, current external employer verification and the full18
 goal's other open work remain unverified. No quota or performance gain follows
 from these checks.
+
+## Diagnosed routed output limit
+
+An installed 0.3.107 `process_input` request reached the actual selected model
+but returned `response.incomplete`, `incomplete_reason: max_output_tokens`.
+The former 1,024-token cap had insufficient room for this high-reasoning
+source request. It was not a reason to switch providers or accept partial text.
+
+High/xhigh/max/ultra routed requests now have a bounded 2,048-token cap;
+standard requests retain 1,024. Token-limit incompletion remains a failed
+turn, with `routed_llm_reply_truncated` preserved through generation evidence
+and a user-facing length-limit explanation. This client limit does not poison
+provider availability. Model, effort, input/response byte limits, cancellation,
+no automatic retry and no silent model substitution remain unchanged.
+
+The candidate's same typed-input path completed with actual permitted source
+readback and the saved Gemini/high route. Its answer, individual source proofs
+and verified admitted-turn generation metadata survived isolated history
+readback. Related backend checks pass 162 and the affected composer passes
+75 cases. Earlier errors and the diagnosed 0.3.107 failure are retained. The
+higher cap permits more reasoning/output and is not a quota-savings claim.

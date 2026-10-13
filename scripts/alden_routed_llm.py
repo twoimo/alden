@@ -16,6 +16,8 @@ from alden_model_routes import ROUTER, find_model, catalog, record_result
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_BATCH_BYTES = 20 * 1024 * 1024
+HIGH_REASONING_OUTPUT_TOKENS = 2048
+STANDARD_OUTPUT_TOKENS = 1024
 
 
 class RoutedGenerationError(RuntimeError):
@@ -87,7 +89,9 @@ class OpenCodexLlm:
                     parts.append({"type":"input_image","image_url":"data:"+mime+";base64,"+base64.b64encode(data).decode()})
                 user = parts
             messages.append({"role": "user", "content": user})
-            body = {"model": self.model, "input": messages, "max_output_tokens": 1024, "stream": True, "store": False}
+            output_budget = HIGH_REASONING_OUTPUT_TOKENS if self.reasoning_effort in {"high", "xhigh", "max", "ultra"} else STANDARD_OUTPUT_TOKENS
+            self.last_metrics['output_token_budget'] = output_budget
+            body = {"model": self.model, "input": messages, "max_output_tokens": output_budget, "stream": True, "store": False}
             if self.reasoning_effort:
                 body["reasoning"] = {"effort": self.reasoning_effort}
             headers = {"Content-Type": "application/json", "Accept": "text/event-stream", "X-Alden-Request-Id": request_id}
@@ -162,7 +166,10 @@ class OpenCodexLlm:
                             if terminal_output:
                                 output = terminal_output
                             completed = True
-                        elif kind in {"error", "response.failed", "response.incomplete"}:
+                        elif kind == "response.incomplete":
+                            self._confirm_completed(event.get('response', {}))
+                            raise RoutedGenerationError('routed_llm_incomplete_response')
+                        elif kind in {"error", "response.failed"}:
                             raise RoutedGenerationError("routed_llm_generation_failed")
             token.raise_if_cancelled()
             result = "".join(output).strip()
@@ -181,7 +188,7 @@ class OpenCodexLlm:
             # A missing image, bad prompt or context failure says nothing about
             # provider readiness and must not poison the model picker indicator.
             # User cancellation is not a provider health observation.
-            if stage in {"transport", "response"} and not cancelled:
+            if stage in {"transport", "response"} and not cancelled and reason != 'routed_llm_reply_truncated':
                 record_result(self.state_root, self.model, success=False, error=code)
             token.raise_if_cancelled()
             if isinstance(error, RoutedGenerationError):
@@ -210,6 +217,12 @@ class OpenCodexLlm:
             self.last_metrics["response_model_id"] = returned
         if not isinstance(returned, str) or returned not in {self.model, self.model.split("/", 1)[-1]}:
             raise RoutedGenerationError("routed_model_mismatch")
+        details = payload.get('incomplete_details')
+        if payload.get('status') == 'incomplete' and isinstance(details, dict) and details.get('reason') == 'max_output_tokens':
+            self.last_metrics['usage'] = payload.get('usage')
+            self.last_metrics['backend_request_id'] = payload.get('id')
+            self.last_metrics['incomplete_reason'] = 'max_output_tokens'
+            raise RoutedGenerationError('routed_llm_reply_truncated')
         if payload.get("status") in {"failed", "incomplete", "cancelled"} or payload.get("error") is not None or payload.get("incomplete_details") is not None:
             raise RoutedGenerationError("routed_llm_generation_failed")
         if payload.get("status") != "completed":

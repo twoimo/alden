@@ -32,7 +32,7 @@ _ERROR_CODES = frozenset({
     "cancelled", "routed_model_not_ready", "routed_model_mismatch",
     "routed_llm_prompt_budget", "routed_llm_response_budget",
     "routed_llm_invalid_response", "routed_llm_generation_failed",
-    "routed_llm_incomplete_response", "routed_llm_quota",
+    "routed_llm_incomplete_response", "routed_llm_reply_truncated", "routed_llm_quota",
     "routed_llm_authentication", "routed_llm_unavailable",
     "model_effort_not_supported", "image_input_unavailable",
     "image_input_budget", "image_input_provenance_changed",

@@ -490,6 +490,7 @@ describe('assistant composer native ownership', () => {
     ['voice_model_configuration_invalid', '설정'],
     ['local_llm_model_not_ready', '로컬 모델'],
     ['routed_llm_incomplete_response', '답변'],
+    ['routed_llm_reply_truncated', '길이 한도'],
   ])('shows the exact backend failure code %s', async (code, hint) => {
     const app = fixture('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     app.write('초안'); app.submit();
