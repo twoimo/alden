@@ -2389,8 +2389,9 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
                 const status=document.querySelector('#assistant-composer-status').textContent;
                 const replies=[...document.querySelectorAll('#voice-message-list .message-row[data-self="false"] .message-text')].map(x=>x.textContent);
                 return {status,reply:replies.at(-1)??'',replies:replies.length,conversationId:document.querySelector('#voice-start').dataset.conversationId,
-                    busy:document.querySelector('#assistant-composer').getAttribute('aria-busy'),width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
+                    busy:document.querySelector('#assistant-composer').getAttribute('aria-busy'),owned:document.querySelector('#assistant-composer').dataset.ownedRequest,retirement:document.querySelector('#assistant-composer').dataset.lastRetirement??null,formHidden:document.querySelector('#assistant-composer').hidden,documentVisibility:document.visibilityState,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
             if state["status"]=="답변이 저장되었습니다." && state["replies"].as_u64()==Some(index) {break state;}
+            if state["retirement"].as_str().is_some() {return Err(format!("document input retired before completion: {state}"));}
             if state["busy"]=="false" && state["status"].as_str().is_some_and(|s|s.contains("오류 코드:")||s.contains("못했")||s.contains("취소")) {
                 return Err(format!("document request did not complete: {state}"));
             }

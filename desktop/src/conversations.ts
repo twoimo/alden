@@ -116,7 +116,11 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
           status('voice-history-title', '대화를 선택하세요');
         }
         filterRails();
-        if (!sessionId && sessions.length) pickRoom(sessions[0], true);
+        // A reserved first turn can appear in the catalog before its answer.
+        // Only its completed receipt may adopt the new conversation; a user
+        // can still select any rail entry explicitly while that turn is pending.
+        const inputOwned=document.querySelector<HTMLElement>('#assistant-composer')?.dataset.ownedRequest==='true';
+        if (!sessionId && sessions.length && !inputOwned) pickRoom(sessions[0], true);
         else if (!sessions.length) {
           status('voice-history-status', '지난 음성 대화가 없습니다');
           placeholder('voice', '지난 음성 대화가 없습니다', '음성으로 나눈 대화가 여기에 남습니다.');

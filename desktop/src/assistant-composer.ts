@@ -286,6 +286,7 @@ export function wireAssistantComposer(
 
   function updateControls(): void {
     form.hidden = !active();
+    form.dataset.ownedRequest = String(Boolean(pending || uncertain) || reading || superseding);
     form.setAttribute('aria-busy', String(Boolean(pending) || reading));
     const changed = pending && (pending.text !== text.value || pending.imageRevision !== imageRevision);
     send.disabled = !active() || reading || superseding || Boolean(pending && !changed);
@@ -306,9 +307,10 @@ export function wireAssistantComposer(
     readers.clear();
   }
 
-  function retirePending(message?: string): void {
+  function retirePending(message?: string, reason='request_retired'): void {
     const owned = pending;
     if (!owned) return;
+    form.dataset.lastRetirement = reason;
     pending = null; // Fence even a completion that settles before native cancellation.
     if (message && active()) status.textContent = message;
     updateControls();
@@ -332,7 +334,7 @@ export function wireAssistantComposer(
     const current = conversationId();
     if (current === selectedConversation && changes.length === 0) return;
     contextEpoch++;
-    if (pending) retirePending('대화가 바뀌어 요청을 취소했습니다. 작성한 내용은 남아 있습니다.');
+    if (pending) retirePending('대화가 바뀌어 요청을 취소했습니다. 작성한 내용은 남아 있습니다.','conversation_changed');
     if (reading) abortRead();
     uncertain = null;
     selectedConversation = current;
@@ -385,7 +387,7 @@ export function wireAssistantComposer(
       status.textContent = 'PNG, JPEG, WebP, GIF 이미지 4개까지 선택할 수 있습니다. 개별 8MiB, 합계 20MiB 이하로 해 주세요.';
       return;
     }
-    retirePending('입력이 바뀌어 이전 요청을 취소했습니다.');
+    retirePending('입력이 바뀌어 이전 요청을 취소했습니다.','input_changed');
     uncertain = null;
     reading = true;
     status.textContent = '선택한 이미지를 준비하고 있습니다…';
@@ -512,6 +514,7 @@ export function wireAssistantComposer(
     };
     const copiedImages = images.map(image => ({ ...image }));
     pending = owned;
+    delete form.dataset.lastRetirement;
     status.textContent = '답변을 요청했습니다…';
     updateControls();
     try {
@@ -597,10 +600,10 @@ export function wireAssistantComposer(
   text.addEventListener('pointerup', () => { finishingComposition = false; }, { signal: listeners.signal });
   imagePicker.addEventListener('change', () => { void pickImages(); }, { signal: listeners.signal });
   filePicker.addEventListener('change', () => { void pickFiles(); }, { signal: listeners.signal });
-  cancel.addEventListener('click', () => retirePending('요청 취소를 보냈습니다. 작성한 내용은 남아 있습니다.'), { signal: listeners.signal });
+  cancel.addEventListener('click', () => retirePending('요청 취소를 보냈습니다. 작성한 내용은 남아 있습니다.','user_cancelled'), { signal: listeners.signal });
   root.defaultView?.addEventListener('pagehide', () => {
     contextEpoch++;
-    retirePending();
+    retirePending(undefined,'page_closed');
     if (reading) abortRead();
     updateControls();
   }, { signal: listeners.signal });
@@ -611,7 +614,7 @@ export function wireAssistantComposer(
       syncSelection();
       if (selectedPage !== next) {
         contextEpoch++;
-        retirePending();
+        retirePending(undefined,'page_changed');
         if (reading) abortRead();
         selectedPage = next;
       }
@@ -621,7 +624,7 @@ export function wireAssistantComposer(
       if (disposed) return;
       if (!flag && shown) {
         contextEpoch++;
-        retirePending();
+        retirePending(undefined,'window_hidden');
         if (reading) abortRead();
       }
       shown = flag;
@@ -631,7 +634,7 @@ export function wireAssistantComposer(
     dispose(): void {
       if (disposed) return;
       contextEpoch++;
-      retirePending();
+      retirePending(undefined,'disposed');
       abortRead();
       disposed = true;
       listeners.abort();

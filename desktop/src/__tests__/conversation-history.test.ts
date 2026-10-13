@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsMarkup } from '../ui';
 import { wireConversationViews } from '../conversations';
+import { wireAssistantComposer } from '../assistant-composer';
 import { VirtualList } from '../virtual-list';
 import type { fetchSettingsAction } from '../runtime';
 import { wireRenderLifecycle, type VisibilityHandler } from '../core/lifecycle-wiring';
@@ -9,6 +10,44 @@ beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('complete local histories', () => {
+  it('keeps explicit user selection authoritative during a pending first reply',async()=>{
+    const id='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';let sessions:any[]=[];let resolveReply!:(value:unknown)=>void;
+    const native=vi.fn((command:string):Promise<any>=>command==='submit_assistant_input'?new Promise(resolve=>{resolveReply=resolve;}):Promise.resolve(true));
+    const load=vi.fn<typeof fetchSettingsAction>(async action=>action==='voice-history-sessions'?{ok:true,items:sessions}:{ok:true,next:null,items:[]});
+    const views=wireConversationViews(load);const committed=vi.fn(conversation=>views.refreshConversation(conversation));
+    const composer=wireAssistantComposer(document,native,committed);
+    try{
+      composer.select('voice');views.select('voice');await settle();
+      const text=document.querySelector<HTMLTextAreaElement>('#assistant-composer-text')!;text.value='Pending draft';text.dispatchEvent(new Event('input'));
+      document.querySelector<HTMLFormElement>('#assistant-composer')!.requestSubmit();
+      sessions=[{id,title:'Other conversation'}];views.select('voice');await settle();
+      document.querySelector<HTMLButtonElement>('.history-room')!.click();await settle();
+      expect(native).toHaveBeenCalledWith('cancel_assistant_input',expect.anything());
+      resolveReply({ok:true,state:'completed',request_id:(native.mock.calls[0] as any)[1].input.request_id,conversation_id:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',turn_id:1,context_version:1,reply:'Old response'});await settle();
+      expect(committed).not.toHaveBeenCalled();expect(text.value).toBe('Pending draft');
+      expect(document.getElementById('voice-start')!.dataset.conversationId).toBe(id);
+    }finally{composer.dispose();views.dispose();}
+  });
+  it('does not turn a pending first reply catalog refresh into a user conversation switch',async()=>{
+    const id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';let sessions:any[]=[];let resolveReply!:(value:unknown)=>void;
+    const native=vi.fn((command:string):Promise<any>=>command==='submit_assistant_input'
+      ?new Promise(resolve=>{resolveReply=resolve;}):Promise.resolve(true));
+    const load=vi.fn<typeof fetchSettingsAction>(async action=>action==='voice-history-sessions'
+      ?{ok:true,items:sessions}:{ok:true,next:null,items:[]});
+    const views=wireConversationViews(load);const composer=wireAssistantComposer(document,native,conversation=>views.refreshConversation(conversation));
+    try{
+      composer.select('voice');views.select('voice');await settle();
+      const text=document.querySelector<HTMLTextAreaElement>('#assistant-composer-text')!;text.value='Read the link';text.dispatchEvent(new Event('input'));
+      document.querySelector<HTMLFormElement>('#assistant-composer')!.requestSubmit();
+      sessions=[{id,title:'Pending first question'}];views.select('voice');await settle();
+      expect(document.getElementById('voice-start')!.dataset.conversationId).toBeUndefined();
+      expect(native).not.toHaveBeenCalledWith('cancel_assistant_input',expect.anything());
+      resolveReply({ok:true,state:'completed',request_id:(native.mock.calls[0] as any)[1].input.request_id,
+        conversation_id:id,turn_id:1,context_version:1,answer_context_version:2,reply:'8'});await settle();
+      expect(document.getElementById('voice-start')!.dataset.conversationId).toBe(id);
+      expect(text.value).toBe('');
+    }finally{composer.dispose();views.dispose();}
+  });
   it('distinguishes typed document and image attachments in confirmed history', async () => {
     const load=vi.fn<typeof fetchSettingsAction>(async action=>action==='voice-history-sessions'
       ? {ok:true,items:[{id:'1',title:'첨부'}]}
