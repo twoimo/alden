@@ -81,6 +81,35 @@ class MetricTests(unittest.TestCase):
 
 
 class FixtureContractTests(unittest.TestCase):
+    def test_default_fixture_uses_supported_graph_ids_and_frozen_judgments(self):
+        corpus, judgments = EVAL.load_fixture(EVAL.DEFAULT_FIXTURE_DIR)
+        self.assertIs(corpus['graph_entity_ids_canonical'], True)
+        self.assertEqual(len(judgments['queries']), 27)
+        self.assertTrue(all(EVAL.KG._is_graph_entity_id(row['entity_id']) for row in corpus['entities']))
+        self.assertEqual({row['split'] for row in judgments['queries']}, {'dev', 'heldout'})
+
+    def test_declared_canonical_fixture_rejects_unsupported_id_before_search(self):
+        corpus, judgments = EVAL.load_fixture(EVAL.DEFAULT_FIXTURE_DIR)
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            (fixture/'queries.json').write_text(json.dumps(judgments))
+            for value in ('topic:unsupported', ' ent:topic:space', 'ent:topic:space '):
+                corpus['entities'][0]['entity_id'] = value
+                (fixture/'corpus.json').write_text(json.dumps(corpus))
+                with self.subTest(value=value), self.assertRaisesRegex(EVAL.FixtureError, 'supported graph prefix'):
+                    EVAL.load_fixture(fixture)
+
+    def test_declared_canonical_policy_does_not_accept_truthy_non_boolean_values(self):
+        corpus, judgments = EVAL.load_fixture(EVAL.DEFAULT_FIXTURE_DIR)
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            (fixture/'queries.json').write_text(json.dumps(judgments))
+            for value in (1, 'true', False, None):
+                corpus['graph_entity_ids_canonical'] = value
+                (fixture/'corpus.json').write_text(json.dumps(corpus))
+                with self.subTest(value=value), self.assertRaises(EVAL.FixtureError):
+                    EVAL.load_fixture(fixture)
+
     def test_fixture_is_bounded_synthetic_and_split(self):
         corpus, judgments = EVAL.load_fixture(FIXTURE_DIR)
         self.assertTrue(corpus["synthetic"])

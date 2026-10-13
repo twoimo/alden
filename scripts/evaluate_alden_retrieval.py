@@ -42,7 +42,7 @@ if str(SCRIPTS) not in sys.path:
 import auto_reply_knowledge_graph as KG  # noqa: E402
 
 
-DEFAULT_FIXTURE_DIR = ROOT / "tests" / "fixtures" / "alden-retrieval"
+DEFAULT_FIXTURE_DIR = ROOT / "tests" / "fixtures" / "alden-retrieval-v3"
 DEFAULT_KS = (1, 3, 5)
 RRF_TUNING_GRID = (
     (1.0, 0.25),
@@ -111,6 +111,9 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         raise FixtureError("only fixture schema_version=1 is supported")
     if corpus.get("synthetic") is not True or judgments.get("synthetic") is not True:
         raise FixtureError("fixtures must explicitly declare synthetic=true")
+    canonical_ids = corpus.get('graph_entity_ids_canonical')
+    if 'graph_entity_ids_canonical' in corpus and canonical_ids is not True:
+        raise FixtureError('graph_entity_ids_canonical must be true when declared')
 
     entities = corpus.get("entities")
     relations = corpus.get("relations")
@@ -171,6 +174,8 @@ def load_fixture(fixture_dir: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         if not isinstance(entity, dict):
             raise FixtureError(f"entities[{index}] must be an object")
         entity_id = _bounded_string(entity.get("entity_id"), f"entities[{index}].entity_id")
+        if canonical_ids and (entity_id != entity['entity_id'] or not KG._is_graph_entity_id(entity_id)):
+            raise FixtureError(f'entities[{index}].entity_id requires a supported graph prefix')
         if entity_id in entity_ids:
             raise FixtureError(f"duplicate entity_id: {entity_id}")
         entity_ids.add(entity_id)
@@ -1029,6 +1034,8 @@ def evaluate_fixture(
             "queries": len(judgments["queries"]),
             "splits": dict(Counter(query["split"] for query in judgments["queries"])),
             "k_values": list(ks),
+            "graph_identity_policy": 'declared_supported_graph_ids' if corpus.get('graph_entity_ids_canonical') else 'legacy_unchecked_id_fixture',
+            "unsupported_fixture_entity_ids": [row['entity_id'] for row in corpus['entities'] if not KG._is_graph_entity_id(row['entity_id'])],
             "original_kakao_db_accessed": False,
             "persistent_index_accessed": False,
             "writes": "isolated temporary directories plus explicitly requested report paths",
@@ -1037,6 +1044,7 @@ def evaluate_fixture(
             "directory": str(fixture_dir.relative_to(ROOT)) if fixture_dir.is_relative_to(ROOT) else str(fixture_dir),
             "corpus_sha256": _sha256(fixture_dir / "corpus.json"),
             "queries_sha256": _sha256(fixture_dir / "queries.json"),
+            "identity_map_sha256": _sha256(fixture_dir / 'identity-map.json') if (fixture_dir / 'identity-map.json').is_file() else None,
         },
         "runtime": {
             "python": platform.python_version(),
@@ -1114,6 +1122,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"({scope['splits']['dev']} dev, {scope['splits']['heldout']} held-out) over "
         f"{scope['fixture_entities']} fixture entities and {scope['fixture_relations']} relations.",
         "The evaluator did not open a Kakao database, active queue, persistent graph, or production configuration.",
+        f"Graph ID policy: `{scope['graph_identity_policy']}`; unsupported fixture IDs: {len(scope['unsupported_fixture_entity_ids'])}. "
+        "Legacy fixtures remain dated evidence; unsupported IDs may alter navigation focus and must not be treated as production retrieval defects without further verification.",
         "",
         "`fixture-rrf` exercises the production BM25 path and production RRF merger with a fixed synthetic dense ranking. "
         "It does not invoke E5 and is not evidence of actual embedding quality. `live-rrf` is an explicit opt-in mode.",
