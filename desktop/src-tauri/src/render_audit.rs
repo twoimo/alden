@@ -2560,7 +2560,10 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let started = Instant::now();
-                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode {96}else{40});
+                // The complete workspace audit now takes 34 serial snapshots,
+                // including declared time/quantity pages. Its observation
+                // horizon is separate from production action/cancel deadlines.
+                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode && graph_scope.is_none() {120} else if workspaces_mode {96}else{40});
                 let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode,graph_scope) } else { audit(&handle, &output, deadline) };
                 if let Err(reason) = &result {
                     // One write keeps the original failure intact even if the
