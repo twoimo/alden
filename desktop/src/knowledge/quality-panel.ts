@@ -29,12 +29,17 @@ type BodyMatches = {
   reference_text: { groups: number; members: number; status: 'text_match_review_only' };
 };
 type QualityErrorCode = keyof typeof ERROR_TEXT;
+type SourceAnnotations = {
+  policy: 'retained-declared-tags-v1'; basis: 'verified_retained_record'; semantic_status: 'unverified';
+  fields: Record<'topics' | 'entityTags', { state: 'declared' | 'undeclared' | 'unsupported' | 'over_budget'; values: string[] }>;
+};
 type ComparisonRecord = {
   target_id: string; document_id: string; version: string; platform: string; original_id: string;
   label: string; target_label: string; body: string; body_source: 'stored_body' | 'retained_record.localOriginalText';
   truncated: boolean; matched_body: string; matched_body_truncated: boolean;
   collected_at: number; raw_sha256: string; basis: 'permitted_current_stored_record';
   content_evidence: { policy: 'source-content-evidence-v4'; classification: string };
+  source_annotations?: SourceAnnotations;
 };
 type ComparisonSamples = {
   policy: 'source-bound-pair-preview-v1'; coverage: 'bounded_sample';
@@ -170,6 +175,24 @@ export function qualityQueryFromSelection(selection: string): QualityQuery | nul
   return null;
 }
 
+function parseSourceAnnotations(value: unknown): SourceAnnotations | undefined | null {
+  if (value === undefined) return undefined;
+  const declaration = object(value), fields = object(declaration?.fields);
+  if (!declaration || declaration.policy !== 'retained-declared-tags-v1'
+    || declaration.basis !== 'verified_retained_record' || declaration.semantic_status !== 'unverified'
+    || !fields || Object.keys(fields).length !== 2) return null;
+  const result = {} as SourceAnnotations['fields'];
+  for (const key of ['topics', 'entityTags'] as const) {
+    const field = object(fields[key]);
+    if (!field || !['declared', 'undeclared', 'unsupported', 'over_budget'].includes(String(field.state))
+      || !Array.isArray(field.values) || field.values.length > 32
+      || field.values.some(v => typeof v !== 'string' || !v.length || v.length > 256 || [...v].length > 128)
+      || (field.state !== 'declared' && field.values.length !== 0)) return null;
+    result[key] = { state: field.state as SourceAnnotations['fields']['topics']['state'], values: [...field.values] as string[] };
+  }
+  return { policy: 'retained-declared-tags-v1', basis: 'verified_retained_record', semantic_status: 'unverified', fields: result };
+}
+
 function comparisonSamples(value: unknown, projects: string[], maxMembers: number): ComparisonSamples | null {
   const samples = object(value);
   const bounded = (v: unknown, maximum: number, empty = true): v is string => typeof v === 'string'
@@ -197,6 +220,7 @@ function comparisonSamples(value: unknown, projects: string[], maxMembers: numbe
     for (const value of group.records) {
       const record = object(value);
       const evidence = object(record?.content_evidence);
+      const annotations = parseSourceAnnotations(record?.source_annotations);
       if (!record || !bounded(record.target_id, 256, false) || !bounded(record.document_id, 256, false)
         || typeof record.version !== 'string' || !/^version:[0-9a-f]{64}$/.test(record.version)
         || !bounded(record.platform, 64, false) || !bounded(record.original_id, 2048, false)
@@ -208,6 +232,7 @@ function comparisonSamples(value: unknown, projects: string[], maxMembers: numbe
         || !evidence || evidence.policy !== 'source-content-evidence-v4'
         || !['metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description', 'content_candidate'].includes(String(evidence.classification))
         || evidence.classification !== 'content_candidate'
+        || annotations === null
         || record.basis !== 'permitted_current_stored_record' || ids.has(record.document_id)
         || (group.kind === 'canonical_record' && record.raw_sha256 !== group.match_sha256)) return null;
       ids.add(record.document_id);
@@ -216,7 +241,8 @@ function comparisonSamples(value: unknown, projects: string[], maxMembers: numbe
         body: record.body, body_source: record.body_source as ComparisonRecord['body_source'], truncated: record.truncated,
         matched_body: record.matched_body, matched_body_truncated: record.matched_body_truncated,
         collected_at: record.collected_at as number, raw_sha256: record.raw_sha256, basis: 'permitted_current_stored_record',
-        content_evidence: { policy: 'source-content-evidence-v4', classification: evidence.classification as string } });
+        content_evidence: { policy: 'source-content-evidence-v4', classification: evidence.classification as string },
+        ...(annotations ? { source_annotations: annotations } : {}) });
     }
     const pair = JSON.stringify([group.project,[...ids].sort()]);
     if (pairs.has(pair)) return null;
@@ -347,7 +373,7 @@ function findingTotal(entries: Array<[string, number]>): string {
   return entries.reduce((sum, [, value]) => sum + BigInt(value), 0n).toLocaleString('ko-KR');
 }
 
-/** A click-only report: no timer, background scans, original blobs, or source identifiers. */
+/** Manual aggregate audit; bounded retained-source/tag previews require a separate explicit click. */
 export class KnowledgeQualityPanel {
   private readonly controls = new AbortController();
   private readonly infoObserver: MutationObserver;
@@ -567,6 +593,22 @@ export class KnowledgeQualityPanel {
         const summary = this.root.createElement('summary');
         summary.textContent = `${index + 1}. ${group.project} · ${group.kind === 'stored_body' ? '저장 본문 일치' : '보존 레코드 바이트 일치'} · ${group.members.toLocaleString('ko-KR')}개 중 2개`;
         details.append(summary);
+        const left = group.records[0].source_annotations, right = group.records[1].source_annotations;
+        if (left && right) {
+          const changes: string[] = [];
+          for (const [key, label] of [['topics', '주제 태그'], ['entityTags', '인물·기관 등 태그']] as const) {
+            const a = left.fields[key], b = right.fields[key];
+            if (a.state === 'declared' && b.state === 'declared' && JSON.stringify(a.values) !== JSON.stringify(b.values)) {
+              const sameValues = JSON.stringify([...new Set(a.values)].sort()) === JSON.stringify([...new Set(b.values)].sort());
+              changes.push(`${label}${sameValues ? ' 순서·반복수' : ' 표기'} 차이`);
+            } else if (a.state !== b.state) changes.push(`${label} 확인 범위 차이`);
+          }
+          if (changes.length) {
+            const note = this.root.createElement('p'); note.className = 'knowledge-quality-annotation-difference';
+            note.textContent = `${changes.join(' · ')}가 있습니다. 태그는 보존 자료의 표기이며, 의미가 맞는지 원문 확인이 필요합니다.`;
+            details.append(note);
+          }
+        }
         for (const [i, record] of group.records.entries()) {
           const item = this.root.createElement('article'); item.dataset.document = record.document_id;
           const heading = this.root.createElement('h4'); heading.textContent = `${i + 1}. ${record.label || '제목 없음'}`;
@@ -575,6 +617,16 @@ export class KnowledgeQualityPanel {
           basis.textContent = `${record.body_source === 'retained_record.localOriginalText' ? '보존 원문' : '저장 본문'}${record.truncated ? ' · 앞부분 4,000자' : ''}`;
           const body = this.root.createElement('pre'); body.textContent = record.body;
           item.append(heading, source, basis, body);
+          if (record.source_annotations) {
+            const labels = { topics: '주제 태그', entityTags: '인물·기관 등 태그' };
+            const statusText = { undeclared: '미선언', unsupported: '지원하지 않는 형식', over_budget: '표시 한도 초과' };
+            for (const key of ['topics', 'entityTags'] as const) {
+              const field = record.source_annotations.fields[key];
+              const tags = this.root.createElement('p'); tags.className = 'knowledge-quality-source-tags'; tags.dataset.field = key;
+              tags.textContent = `${labels[key]}: ${field.state === 'declared' ? field.values.join(' · ') || '선언된 빈 목록' : statusText[field.state]}`;
+              item.append(tags);
+            }
+          }
           if (record.matched_body !== record.body) {
             const matched = this.root.createElement('details'), label = this.root.createElement('summary');
             label.textContent = `일치 판정에 사용된 저장 본문${record.matched_body_truncated ? ' · 앞부분 4,000자' : ''}`;

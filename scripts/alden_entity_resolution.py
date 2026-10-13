@@ -177,7 +177,32 @@ def _member_permissions(db, project, members):
                for member in members)
 
 
-def _source_rows(db, store, project, members, *, read_blobs, show_records):
+def _declared_source_annotations(source):
+    fields = {}
+    for key in ('topics', 'entityTags'):
+        state, values = 'undeclared', []
+        if not isinstance(source, dict):
+            state = 'unsupported'
+        elif key in source:
+            value = source[key]
+            if not isinstance(value, list):
+                state = 'unsupported'
+            elif len(value) > 32:
+                state = 'over_budget'
+            elif any(not isinstance(v, str) or not v for v in value):
+                state = 'unsupported'
+            elif any(len(v) > 128 for v in value):
+                state = 'over_budget'
+            else:
+                state, values = 'declared', list(value)
+        fields[key] = {'state': state, 'values': values}
+    return {'policy': 'retained-declared-tags-v1', 'basis': 'verified_retained_record',
+            'semantic_status': 'unverified', 'fields': fields}
+
+
+def _source_rows(db, store, project, members, *, read_blobs, show_records, include_annotations=False):
+    if include_annotations and not read_blobs:
+        raise ValueError('collection_resolution_annotations_require_verified_source')
     fingerprint_rows, records = [], []
     for member in members:
         row = db.execute("""SELECT m.current_version,m.availability AS membership_availability,
@@ -245,6 +270,8 @@ def _source_rows(db, store, project, members, *, read_blobs, show_records):
                 "content_evidence": {"policy": CONTENT_POLICY,
                     "classification": content_evidence_class(metadata, body, source=source,
                         body_source=body_source)}})
+            if include_annotations:
+                records[-1]['source_annotations'] = _declared_source_annotations(source)
     return digest(encoded(fingerprint_rows)), records
 
 

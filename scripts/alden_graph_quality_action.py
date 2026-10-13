@@ -108,7 +108,8 @@ def _comparison_samples(store,report,projects,check):
                 match_bodies[document]=chosen['body']
             check()
             try:
-                _,records=_source_rows(db,store,sample['project'],members,read_blobs=True,show_records=True)
+                _,records=_source_rows(db,store,sample['project'],members,read_blobs=True,show_records=True,
+                                      include_annotations=True)
             except (ValueError,RuntimeError,OSError) as error:
                 raise ValueError('quality_comparison_unavailable') from error
             if any(r['content_evidence']['classification']!='content_candidate' for r in records):

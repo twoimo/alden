@@ -77,6 +77,42 @@ class QualityActionContractTests(unittest.TestCase):
         self.assertEqual({r['matched_body'] for r in group['records']},{'private-body-sentinel'})
         self.assertEqual(group['status'],'review_only_not_confirmed_duplicate')
 
+    def test_source_tags_are_individually_bound_unverified_and_never_copy_metadata(self):
+        target=self.target()
+        self.store.ingest(target,[self.record('a',raw={'topics':['medical'],'entityTags':['school'],
+            'credential':'DO_NOT_DISPLAY'}),self.record('b',raw={'topics':['construction'],'entityTags':['public_corp']})])
+        before=self.durable_files()
+        ordinary=action.read_action(self.root,self.union_query())
+        self.assertNotIn('source_annotations',json.dumps(ordinary))
+        result=action.read_action(self.root,self.comparison_query())
+        self.assertTrue(result['ok'],result)
+        records=result['comparison_samples']['groups'][0]['records']
+        values={r['original_id']:r['source_annotations'] for r in records}
+        self.assertEqual(values['a']['fields']['topics'],{'state':'declared','values':['medical']})
+        self.assertEqual(values['b']['fields']['topics'],{'state':'declared','values':['construction']})
+        for r in records:
+            self.assertEqual(r['source_annotations']['basis'],'verified_retained_record')
+            self.assertEqual(r['source_annotations']['semantic_status'],'unverified')
+        self.assertNotIn('DO_NOT_DISPLAY',json.dumps(result))
+        self.assertEqual(self.durable_files(),before)
+
+    def test_undeclared_empty_malformed_and_budgeted_tags_are_distinct(self):
+        from alden_entity_resolution import _declared_source_annotations
+        for source,state in [({},'undeclared'),({'topics':[]},'declared'),
+            ({'topics':None},'unsupported'),({'topics':['x']*33},'over_budget'),
+            ({'topics':['x'*129]},'over_budget'),({'topics':[True]},'unsupported')]:
+            with self.subTest(source=source):
+                result=_declared_source_annotations(source)['fields']['topics']
+                self.assertEqual(result,{'state':state,'values':[]})
+        result=_declared_source_annotations({'topics':['A','A','a','A B']})
+        self.assertEqual(result['fields']['topics']['values'],['A','A','a','A B'])
+
+    def test_tag_preview_cannot_claim_verified_source_without_blob_validation(self):
+        from alden_entity_resolution import _source_rows
+        with self.store.database() as db:
+            with self.assertRaisesRegex(ValueError,'annotations_require_verified_source'):
+                _source_rows(db,self.store,'one',[],read_blobs=False,show_records=True,include_annotations=True)
+
     def test_corrupt_pair_source_fails_without_disclosing_partial_records(self):
         target=self.target();self.store.ingest(target,[self.record('a'),self.record('b')])
         blob=next(self.store.blobs.iterdir());blob.write_text('{"changed":true}')

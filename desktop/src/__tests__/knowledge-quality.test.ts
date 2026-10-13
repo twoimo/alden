@@ -110,6 +110,56 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const panel of owned) panel.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('manual collection-quality report and fixed native selectors', () => {
+  it('shows independently bound tag differences without approving identity or executing markup', async () => {
+    const value = withComparisons();
+    for (const [index, record] of value.comparison_samples.groups[0].records.entries()) {
+      (record as any).source_annotations = { policy: 'retained-declared-tags-v1', basis: 'verified_retained_record',
+        semantic_status: 'unverified', fields: { topics: { state: 'declared', values: [index ? 'construction' : '<img src=x onerror=alert(1)>'] },
+          entityTags: { state: 'declared', values: [index ? 'public_corp' : 'school'] } } };
+    }
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(value);
+    setup(load); info().open = true; button().click(); await settle();
+    (report().querySelector('.knowledge-quality-compare') as HTMLButtonElement).click(); await settle();
+    expect(state()).toBe('complete'); expect(report().querySelectorAll('.knowledge-quality-source-tags')).toHaveLength(4);
+    expect(report().textContent).toContain('주제 태그 표기 차이'); expect(report().textContent).toContain('원문 확인이 필요');
+    expect(report().textContent).toContain('construction'); expect(report().textContent).toContain('school');
+    expect(report().querySelector('img')).toBeNull();
+  });
+
+  it('rejects oversized or truth-upgraded tag declarations rather than claiming verified meaning', async () => {
+    for (const change of [
+      (a: any) => a.semantic_status = 'verified',
+      (a: any) => a.fields.topics.values = Array(33).fill('topic'),
+      (a: any) => a.fields.topics.values = ['x'.repeat(129)],
+      (a: any) => { a.fields.topics.state = 'undeclared'; a.fields.topics.values = ['invented']; },
+    ]) {
+      const value = withComparisons(); const annotation = { policy: 'retained-declared-tags-v1', basis: 'verified_retained_record',
+        semantic_status: 'unverified', fields: { topics: { state: 'declared', values: ['topic'] }, entityTags: { state: 'declared', values: [] } } };
+      change(annotation); (value.comparison_samples.groups[0].records[0] as any).source_annotations = annotation;
+      const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(value);
+      const panel = setup(load); info().open = true; button().click(); await settle();
+      (report().querySelector('.knowledge-quality-compare') as HTMLButtonElement).click(); await settle();
+      expect(state()).toBe('unavailable'); expect(report().querySelector('.knowledge-quality-source-tags')).toBeNull();
+      panel.dispose(); document.body.innerHTML = settingsMarkup();
+    }
+  });
+
+  it('keeps absent, declared-empty and order/repetition-only differences distinct', async () => {
+    const value = withComparisons();
+    for (const [index, record] of value.comparison_samples.groups[0].records.entries()) {
+      (record as any).source_annotations = { policy: 'retained-declared-tags-v1', basis: 'verified_retained_record',
+        semantic_status: 'unverified', fields: {
+          topics: { state: 'declared', values: index ? ['A', 'B'] : ['B', 'A', 'A'] },
+          entityTags: { state: index ? 'declared' : 'undeclared', values: [] } } };
+    }
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(value);
+    setup(load); info().open = true; button().click(); await settle();
+    (report().querySelector('.knowledge-quality-compare') as HTMLButtonElement).click(); await settle();
+    expect(report().textContent).toContain('주제 태그 순서·반복수 차이');
+    expect(report().textContent).toContain('인물·기관 등 태그 확인 범위 차이');
+    expect(report().textContent).toContain('선언된 빈 목록'); expect(report().textContent).toContain('미선언');
+  });
+
   it('requests source pairs explicitly and renders stored and original text safely', async () => {
     const value = withComparisons();
     (value.comparison_samples!.groups[0].records[0] as any).secret = 'private-extra-sentinel';
