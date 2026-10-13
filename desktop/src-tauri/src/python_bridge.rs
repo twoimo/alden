@@ -2513,9 +2513,11 @@ fn settings_action_args(
             let value=bounded_arg(query,4096).ok_or(BridgeError::ActionNotAllowed)?;
             let parsed:Value=serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
             let object=parsed.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+            let sample_field=usize::from(object.contains_key("include_samples"));
+            if object.get("include_samples").is_some_and(|v|!v.is_boolean()) {return Err(BridgeError::ActionNotAllowed);}
             let valid=match object.get("scope").and_then(Value::as_str) {
-                Some("all") => object.len()==1,
-                Some("project") => object.len()==2 && object.get("project").and_then(Value::as_str).is_some_and(|project| {
+                Some("all") => object.len()==1+sample_field,
+                Some("project") => object.len()==2+sample_field && object.get("project").and_then(Value::as_str).is_some_and(|project| {
                     !project.is_empty() && project.chars().count()<=128 && project==project.trim() && !project.chars().any(char::is_control)
                 }),
                 _ => false,
@@ -5941,12 +5943,14 @@ mod tests {
 
     #[test]
     fn collection_quality_read_preserves_explicit_scope_and_never_admits_controls() {
-        for query in [r#"{"scope":"all"}"#,r#"{"scope":"project","project":"all"}"#] {
+        for query in [r#"{"scope":"all"}"#,r#"{"scope":"project","project":"all"}"#,
+            r#"{"scope":"all","include_samples":true}"#,r#"{"scope":"project","project":"career","include_samples":false}"#] {
             let args=settings_action_args("collection-quality",Some(query),None,None,None,None,None).unwrap();
             assert!(args.windows(2).any(|p|p==["--history-query",query]));
             assert!(!args.iter().any(|a|a=="--explicit-opt-in" || a=="--model"));
         }
-        for query in [None,Some("{}"),Some("[]"),Some(r#"{"scope":"all","project":"private"}"#),Some(r#"{"scope":"project","project":""}"#),Some(r#"{"scope":"all","verify_sources":true}"#)] {
+        for query in [None,Some("{}"),Some("[]"),Some(r#"{"scope":"all","project":"private"}"#),Some(r#"{"scope":"project","project":""}"#),Some(r#"{"scope":"all","verify_sources":true}"#),
+            Some(r#"{"scope":"all","include_samples":"true"}"#),Some(r#"{"scope":"all","include_samples":true,"extra":true}"#)] {
             assert!(settings_action_args("collection-quality",query,None,None,None,None,None).is_err());
         }
         assert!(settings_action_args("collection-quality",Some(r#"{"scope":"all"}"#),Some("node"),None,None,None,None).is_err());
