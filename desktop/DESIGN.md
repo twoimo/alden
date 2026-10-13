@@ -153,7 +153,7 @@ The separate schema2 developer quality audit preserves body structure and distin
 
 ## 0.3.49 구현 경로 도식
 
-[현재 9개 Archify 도식](../docs/architecture/alden-0.3.92/README.md)은 프로세스·입력/음성/취소·수집·계보·MCP·정규화/검색·이력/활동·복구·평가 경로를 설명합니다. 코드 SHA와 조건부 분기·부분 실패·학습/승격 경계를 연결했습니다. 작성 문구는 한국어이며 고정 Viewer UI는 영어입니다. 9/9 구성 검사, 네 데스크톱 크기의 브라우저 검사와 최종 밝은/어두운 이미지 36개 검토를 제품의 실제 실행 증거와 구분합니다. [0.3.49 도식](../docs/architecture/alden-0.3.49/README.md)은 이력으로 보존합니다.
+[현재 Archify 도식](../docs/architecture/alden-0.3.102/README.md)은 입력/음성/취소·수집·계보·MCP·정규화/검색·이력/활동·복구·평가의 8개 최신 경로를 설명합니다. 시스템 도식 1개는 자동 보안 검토의 수정 차단 후 재승인 대기입니다. 파일·링크 후속 대화, 원문 확인 관측, 일치 후보 비교, 날짜 기준 보호를 코드 SHA와 연결했습니다. 작성 문구는 한국어이며 고정 Viewer UI는 영어입니다. 9/9 구성 검사, 네 데스크톱 크기의 브라우저 검사와 최종 밝은/어두운 이미지 32개 검토를 제품의 실제 실행 증거와 구분합니다. 큰 하단 여백은 내용을 유지한 단계별 배치로 보정했습니다. [0.3.92 도식](../docs/architecture/alden-0.3.92/README.md)과 [0.3.49 도식](../docs/architecture/alden-0.3.49/README.md)은 이력으로 보존합니다.
 
 ## 0.3.18 — Cosmic notes
 

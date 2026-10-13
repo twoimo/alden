@@ -216,7 +216,7 @@ Spark의 파생 색인 요약을 원본 본문 중복·의미 연결 근거로 �
 
 ## Alden 0.3.49 — 대상별 주기와 수동 수집
 
-현재 구현의 9개 요구 범위는 [0.3.92 Archify 도식](docs/architecture/alden-0.3.92/README.md)에서 코드 SHA·조건부 경로·남은 검증 경계를 함께 확인합니다. [0.3.49 도식](docs/architecture/alden-0.3.49/README.md)은 해당 판본의 이력입니다.
+현재 구현은 [0.3.102 Archify 도식](docs/architecture/alden-0.3.102/README.md)에서 코드 SHA·조건부 경로·남은 검증 경계를 함께 확인합니다. 8개 최신 도식은 전달했으며 시스템 도식 1개는 자동 보안 검토의 수정 차단 후 재승인 대기입니다. [0.3.92](docs/architecture/alden-0.3.92/README.md)와 [0.3.49](docs/architecture/alden-0.3.49/README.md)는 해당 판본의 이력입니다.
 
 기억 정리의 정기 수집 목록에서 대상별 주기를 저장하고 “지금 수집”을 요청할 수 있습니다. 요청은 영속 큐에 저장되고 기존 일정이 처리하며, 대기와 완료를 구분합니다. 음성·중지·권한·비상 중단·재시도 간격을 유지하고, 오래된 화면의 주기 저장은 최신 설정을 덮어쓰지 않습니다. [실행·복구·검증 경계](docs/architecture/alden-schedule-execution-20261009.md)
 
@@ -341,7 +341,7 @@ Browser jobs use a dedicated, fixed CPython runtime with owned Chromium, separat
 
 The 2026-09-27 installed Python browser backend returned `Example Domain` in **28.770 s**, matched an independent HTTP 200 DOM read, emitted one JSON result and left zero owned Chromium processes. This single check does not exercise the graphical Tauri caller or establish general accuracy or a latency improvement.
 
-Current implementation diagrams are listed in [the nine-map guide for 0.3.92](docs/architecture/alden-0.3.92/README.md): process boundaries, input/voice/cancellation, collection, lineage, MCP, normalization/retrieval, activity, recovery and evaluation. Each has 9/9 artifact checks plus browser and separate image-review evidence. The [six-map guide](docs/architecture/alden-current/README.md) remains dated 0.3.24 evidence.
+Current implementation diagrams are listed in [the 0.3.102 guide](docs/architecture/alden-0.3.102/README.md): eight current maps have 9/9 artifact checks, browser evidence at four desktop sizes and separate review of all 32 final screenshots. The system-map update awaits reapproval after an automatic security-review block. The [0.3.92 nine-map guide](docs/architecture/alden-0.3.92/README.md) and [0.3.24 six-map guide](docs/architecture/alden-current/README.md) remain dated evidence.
 
 ### The knowledge observatory
 
@@ -352,7 +352,7 @@ Current implementation diagrams are listed in [the nine-map guide for 0.3.92](do
 
 The retained legacy gold-core shader benchmark measured 3.4%/2.5% lower CPU submission at 15/30fps (approximately 3–5μs/frame,8 draw calls), with 11/12 pixel cases identical. It concerns that legacy component, not the current graph or GPU/battery power. The current 0.3.8 source fixture instead measured repeated label mutations 138→0 in three 1-second active samples, with idle graph and canvas-orb draws 0 in three 1-second samples.
 
-See the current [recovery and render lifecycle](docs/architecture/alden-0.3.92/recovery.html). The older [activity-to-motion map](docs/architecture/alden-core-load-mapping.html) describes its dated component implementation.
+See the current [recovery and render lifecycle](docs/architecture/alden-0.3.102/recovery.html). The older [activity-to-motion map](docs/architecture/alden-core-load-mapping.html) describes its dated component implementation.
 
 Built 0.1.6 rendered in Chromium/WebGL2 with an empty public fixture; all three images were directly reviewed. This is not an installed WKWebView capture. [Compact settings](docs/architecture/alden-renderer-0.1.6-compact.png), [browser-emulated 2x panel](docs/architecture/alden-renderer-0.1.6-retina2x.png), and [review scope](docs/architecture/alden-renderer-0.1.6-review.json).
 
@@ -371,7 +371,7 @@ GraphRAG defaults to the dedicated loopback embedding adapter at `http://127.0.0
 
 The local synthetic GraphRAG refresh persisted **3/3** E5 vectors and combined **one BM25** and **three dense** candidates with RRF. The adapter's fresh-process maximum RSS fell from **1,028.4 to 670.7 MiB** after replacing the Transformers tokenizer import, a measured **34.8%** reduction on this host. The installed app's dedicated LaunchAgent now serves the exact E5 model on `11236`: it reached readiness in **3.5 seconds** from the **256 MiB** minimal runtime and remained resident after four minutes. Its installed plist now has `RunAtLoad=true`; a fresh bootstrap reached readiness in **22.3 seconds**, while actual logout/login startup remains unverified. A backed-up, locked refresh of the live graph indexed **50/50** entities. The three Kakao reply workers were cut over after a clean drain to immutable runtime `20260927T082218Z-23471`; readback found **3/3 ready**, no active jobs or uncertain deliveries, and no watermark regression. A read-only query through that exact runtime combined **two BM25** and **40 dense** candidates in RRF mode. No new conversation job had arrived after the cutover, so real reply quality and skip-rate changes remain unmeasured.
 
-See the current [normalization and retrieval](docs/architecture/alden-0.3.92/normalization.html) and [original-source lineage](docs/architecture/alden-0.3.92/lineage.html). The previous conversation-map diagrams are dated historical architecture.
+See the current [normalization and retrieval](docs/architecture/alden-0.3.102/normalization.html) and [original-source lineage](docs/architecture/alden-0.3.102/lineage.html). The previous conversation-map diagrams are dated historical architecture.
 
 ### KakaoTalk reply turns
 
@@ -383,7 +383,7 @@ Punctuation-only follow-ups such as `???` and short referential questions such a
 
 ### Voice conversation
 
-The installed voice page supports explicit microphone start/stop. Automatic wake-word startup remains blocked by its release gate. The local pipeline uses four recent turns and 600 characters per message, with a ten-minute idle reset, source/turn identity, cancellation and self-TTS input fencing. A truncated model response is rejected before speech/history commit. Physical microphone-to-playback timing and the full natural-voice flow remain unverified. See the current [input and cancellation map](docs/architecture/alden-0.3.92/voice.html).
+The installed voice page supports explicit microphone start/stop. Automatic wake-word startup remains blocked by its release gate. The local pipeline uses four recent turns and 600 characters per message, with a ten-minute idle reset, source/turn identity, cancellation and self-TTS input fencing. A truncated model response is rejected before speech/history commit. Physical microphone-to-playback timing and the full natural-voice flow remain unverified. See the current [input and cancellation map](docs/architecture/alden-0.3.102/voice.html).
 
 Before loading Whisper or Qwen3-TTS, a local-only admission check requires at least 8 GiB or 10 GiB of reclaimable RAM respectively and 2 GiB of free swap. If either probe is unavailable or the budget is low, the voice session reports the condition and does not load the model. A synthetic local voice run on 2026-09-24 reached the safety stop before a complete turn; end-to-end voice remains unverified on this host.
 
