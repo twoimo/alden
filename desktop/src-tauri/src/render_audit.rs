@@ -1265,11 +1265,13 @@ fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, dead
         Ok(state)
     },|state|state["state"]=="complete");
     wait()?;
+    eprintln!("Alden quality comparison {size}: summary ready");
     collect_script(window,r#"JSON.stringify((()=>{
       const button=document.querySelector('.knowledge-quality-compare');
       if(!button||button.disabled)throw Error('source comparison request unavailable');
       button.click();return {requested:true};})())"#.into(),deadline)?;
     wait()?;
+    eprintln!("Alden quality comparison {size}: source pairs ready");
     let state=collect_script(window,r#"JSON.stringify((()=>{
       const groups=[...document.querySelectorAll('.knowledge-quality-comparison')];
       const records=groups.map(group=>[...group.querySelectorAll('article')].map(article=>article.dataset.document));
@@ -1285,11 +1287,13 @@ fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, dead
             group.as_array().is_some_and(|rows|rows.len()==2 && rows[0]!=rows[1]))) {
         return Err(format!("quality comparison scope/geometry invalid: {state}"));
     }
+    eprintln!("Alden quality comparison {size}: bounded geometry ready");
     for index in 0..2 {
         collect_script(window,format!(r#"JSON.stringify((()=>{{
           const group=document.querySelector('.knowledge-quality-comparison');if(group)group.open=true;
           const article=group?.querySelectorAll('article')[{index}];
-          const box=document.querySelector('.knowledge-info .knowledge-disclosure-content');
+          const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+          if(!box)throw Error('source comparison scroll container missing');
           if(article)box.scrollTop+=article.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
           return {{positioned:!!article,noCandidates:!group}};}})())"#),deadline)?;
         publish(output,&format!("knowledge-quality-comparison-{size}-{}.png",index+1),&snapshot(window,deadline)?,deadline)?;
