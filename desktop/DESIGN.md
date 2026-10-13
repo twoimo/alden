@@ -1,5 +1,11 @@
 # Alden desktop design contract
 
+## 0.3.101 — 대표 라벨의 내용 근거와 재관측 기록
+
+표시용 최소 payload를 만들기 전에 실제 저장 metadata/body의 내용 분류를 계산하고, 선언된 metadata-only·unread-body·description-only 자료를 자동 대표 라벨에서 제외합니다. 분류 필드를 그래프 변경 signature에 포함합니다. 선택/hover·미상 분류·전체 노드/간선은 보존하며 읽지 않은 자료의 주제를 생성하지 않습니다.
+
+완료된 동일 target/snapshot/processing/projection 실행에 새 source observation을 결속합니다. 원문·파일 SHA·관계 방향/유형·나머지 근거가 모두 같고 기존 이력 결속이 유효할 때만 관측 시각 차이를 관계 버전에서 분리합니다. fresh confirmation/cursor/영수증은 같은 보호 transaction에서 저장하며 관측 시각은 뒤로 가지 않습니다. [실제 재수집과 회귀·복구 경계](../docs/architecture/alden-relation-observations-20261013.md).
+
 ## 0.3.100 — 주제 우선 라벨과 가역적인 본문 정리
 
 대표 라벨은 저장된 주제/진술/제목, 출처 범위, 표시문구 중복 억제 순으로 선택하고 노드 크기를 내용의 유용성으로 해석하지 않습니다. 선택·hover는 별도이며 모든 노드/간선을 보존합니다. 숫자 꼬리는 hash-verified Threads 보존 기록의 좁은 형식에서만 structural candidate로 분리합니다. 원문은 보존하고 후보 내용을 펼칠 수 있습니다. 날짜/단위는 명시 필드만 변환합니다. [검증 계약](../docs/architecture/alden-graph-reading-20261013.md).
