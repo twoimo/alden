@@ -30,7 +30,10 @@ export function wireConversationViews(load:typeof fetchSettingsAction=fetchSetti
     else body.append(element('div','message-text',text));
     if(item.attachment){let note='첨부';try{const a=JSON.parse(String(item.attachment));note=String(a.name??a.filename??a.title??'첨부 메시지');}catch{note=String(item.attachment);}body.append(element('div','message-attachment',note));}
     if(Array.isArray(item.attachments))for(const attachment of item.attachments.slice(0,4)){
-      if(attachment&&typeof attachment==='object'&&typeof attachment.filename==='string')body.append(element('div','message-attachment','이미지 · '+attachment.filename));
+      if(attachment&&typeof attachment==='object'&&typeof attachment.filename==='string'){
+        const kind=typeof attachment.mime==='string'?(attachment.mime.startsWith('image/')?'이미지':'문서'):'첨부';
+        body.append(element('div','message-attachment',kind+' · '+attachment.filename));
+      }
     }
     const details=item.role==='assistant'?generationDetail(item.generation):[];
     if(details.length){

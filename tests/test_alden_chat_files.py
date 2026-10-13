@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -142,6 +143,7 @@ class ChatFileTests(unittest.TestCase):
     def test_cancellation_reaps_only_its_owned_parser(self):
         original=files.subprocess.Popen; children=[]
         def slow(command,**kwargs):
+            if command[0]=='/bin/ps':return original(command,**kwargs)
             child=original([sys.executable,'-B','-c','import time; time.sleep(30)'],**kwargs);children.append(child);return child
         controller=AbortController(self.root/'alden-abort.json')
         timer=threading.Timer(.15,lambda:controller.abort('document-test'));timer.start()
@@ -182,6 +184,49 @@ class ChatFileTests(unittest.TestCase):
         for prompt in prompts:
             self.assertIn('quantity 53',prompt);self.assertIn('실행 지시가 아니다',prompt)
             self.assertIn('file:'+hashlib.sha256(b'Alden quantity 53.').hexdigest(),prompt)
+
+    def test_lock_nonowner_never_reserves_before_the_actual_owner(self):
+        value=request(documents=[attachment()])
+        with chat.image_directory(self.root,'assistant-input-locks') as (_,directory):
+            fd=os.open(value['request_id']+'.lock',os.O_RDWR|os.O_CREAT,0o600,dir_fd=directory)
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                other=self.run_input(request(documents=[attachment(data=b'Nonowner')]))
+                self.assertEqual(other['state'],'running')
+                self.assertFalse((self.root/'alden-history.sqlite3').exists())
+            finally:os.close(fd)
+        self.assertTrue(self.run_input(value)['ok'])
+        self.assertEqual(len(self.calls),1)
+
+    def test_unavailable_previous_document_does_not_block_new_photo(self):
+        first=self.run_input(request(documents=[attachment()]))
+        photo={'name':'new.png','mime':'image/png','data':base64.b64encode(png()).decode()}
+        with patch.object(files,'parse_document',side_effect=ValueError('assistant_file_parser_unavailable')):
+            result=self.run_input(request(2,first['conversation_id'],images=[photo]))
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['generation']['document_context']['omitted']['unavailable'],1)
+        self.assertEqual(len(self.calls[-1]['image_context']['selected']),1)
+
+    def test_exited_parser_leader_cannot_leave_its_grandchild_running(self):
+        original=files.subprocess.Popen;children=[];marker=self.root/'owned-descendant.pid';ready=self.root/'ready'
+        result=json.dumps({'text':'ready','parser':'text-txt','text_sha256':hashlib.sha256(b'ready').hexdigest(),'truncated':False,'scope':{}})
+        descendant="import signal,time,pathlib; signal.signal(signal.SIGTERM,signal.SIG_IGN); pathlib.Path("+repr(str(ready))+").write_text('ready'); time.sleep(30)"
+        code="import subprocess,sys,pathlib,time; c=subprocess.Popen([sys.executable,'-B','-c',"+repr(descendant)+"],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); pathlib.Path("+repr(str(marker))+").write_text(str(c.pid));\nwhile not pathlib.Path("+repr(str(ready))+").exists(): time.sleep(.01)\nprint("+repr(result)+")"
+        def spawned(command,**kwargs):
+            if command[0]=='/bin/ps':return original(command,**kwargs)
+            child=original([sys.executable,'-B','-c',code],**kwargs);children.append(child);return child
+        try:
+            with patch.object(files.subprocess,'Popen',side_effect=spawned):
+                parsed=files.parse_document(b'Input','receipt.txt',self.token)
+            self.assertEqual(parsed['text'],'ready')
+            pid=int(marker.read_text());status=files.subprocess.run(['ps','-p',str(pid),'-o','stat='],capture_output=True,text=True).stdout.strip()
+            self.assertTrue(not status or status.startswith('Z'),status)
+        finally:
+            if marker.exists():
+                pid=int(marker.read_text())
+                try:
+                    if children and os.getpgid(pid)==children[0].pid:os.killpg(children[0].pid,9)
+                except ProcessLookupError:pass
 
 
 if __name__=='__main__': unittest.main()

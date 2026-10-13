@@ -9,6 +9,18 @@ beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('complete local histories', () => {
+  it('distinguishes typed document and image attachments in confirmed history', async () => {
+    const load=vi.fn<typeof fetchSettingsAction>(async action=>action==='voice-history-sessions'
+      ? {ok:true,items:[{id:'1',title:'첨부'}]}
+      : {ok:true,next:null,items:[{id:'1',turn_id:1,role:'user',content:'첨부 확인',attachments:[
+        {filename:'receipt.txt',mime:'text/plain'},{filename:'photo.png',mime:'image/png'},{filename:'unknown'}]}]});
+    const views=wireConversationViews(load);
+    try {
+      views.select('voice');await settle();
+      const labels=[...document.querySelectorAll('#voice-message-list .message-attachment')].map(x=>x.textContent);
+      expect(labels).toEqual(['문서 · receipt.txt','이미지 · photo.png','첨부 · unknown']);
+    } finally {views.dispose();}
+  });
   it('shows persisted generation evidence only on assistant replies in collapsed details', async () => {
     const generation = { schema_version: 1, response: { model_id: 'observed/model', usage: { total_tokens: 0 } },
       image_context: { selected: [{ origin: 'current' }, { origin: 'previous' }] } };

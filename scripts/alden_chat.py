@@ -331,10 +331,11 @@ def process_input(state_root, value, token, *, generate=generate_input, select_m
                 raise InputUnavailable('assistant_input_invalid')
             try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                from alden_chat_turns import reserve_turn
-                with token.commit_guard():
-                    ticket = reserve_turn(state_root, value['request_id'], value['conversation_id'], value['text'],
-                                          attachments=[meta for meta, _ in decoded + files])
+                from alden_chat_turns import inspect_replay
+                ticket = inspect_replay(state_root, value['request_id'], value['conversation_id'], value['text'],
+                                        [meta for meta, _ in decoded + files])
+                if ticket is None:
+                    return failure_receipt(value, 'assistant_input_busy', state='running')
                 return public_receipt({'ok': ticket['state'] == 'completed', **ticket})
             return public_receipt(_process_owned_input(state_root, value, decoded, token, files=files,
                                                        generate=generate, select_model=select_model))

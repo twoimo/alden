@@ -503,3 +503,22 @@ def get_request(state_root: Path, request_id: str) -> dict | None:
             return None
         row = _row(db, request_id)
         return _receipt(db, row, include_owner=False) if row is not None else None
+
+
+def inspect_replay(state_root: Path, request_id: str, conversation_id: str | None,
+                   text: str, attachments: list[dict]) -> dict | None:
+    """A non-owner can inspect a reservation; it never creates one."""
+    _identifier(request_id, 'request_id')
+    metadata = _attachments(attachments)
+    payload = json.dumps({'text': text, 'attachments': metadata}, ensure_ascii=False,
+                         sort_keys=True, separators=(',', ':')).encode('utf-8')
+    with database(state_root) as db:
+        if db is None or db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='alden_chat_requests'").fetchone() is None:
+            return None
+        row = _row(db, request_id)
+        if row is None:
+            return None
+        if (row['requested_conversation_id'] != conversation_id
+                or row['payload_sha256'] != hashlib.sha256(payload).hexdigest() or row['source'] != 'text'):
+            raise TurnConflict('request_id_payload_or_target_conflict')
+        return _receipt(db, row, include_owner=False)

@@ -2340,6 +2340,18 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
         (2,"앞에서 첨부한 문서의 수량을 숫자만 다시 답해주세요.","53",None),
         (3,"이번 CSV 파일의 수량을 숫자만 답해주세요.","67",Some(("audit-current.csv","text/csv","제품,수량\n올든,67")))
     ] {
+        if index == 3 {
+            let target = window.clone(); let (tx, rx) = mpsc::sync_channel(1);
+            window.run_on_main_thread(move || {
+                let result = (|| {
+                    let native = target.ns_window().map_err(|_| "document audit native window missing")?;
+                    unsafe { (&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0, 680.0)); }
+                    Ok::<(), String>(())
+                })();
+                let _ = tx.try_send(result);
+            }).map_err(|_| "document resize dispatch failed")?;
+            receive(rx, deadline)?;
+        }
         if let Some((filename,mime,content))=fixture {
             let filename=serde_json::to_string(filename).map_err(|_|"filename encoding")?;
             let mime=serde_json::to_string(mime).map_err(|_|"mime encoding")?;
@@ -2385,7 +2397,7 @@ fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Ins
     }
     if receipts.iter().any(|r|r["conversationId"]!=receipts[0]["conversationId"]) {return Err("document followup conversation changed".into());}
     visibility(window,false,deadline)?;
-    Ok(json!({"turns":receipts,"scope":"three explicit owned programmatic WKWebView inputs: UTF-8 text, same-conversation followup and CSV; actual saved selected-model inference; isolated history; no original files, physical picker, microphone, TTS or send proof"}))
+    Ok(json!({"turns":receipts,"scope":"three explicit owned programmatic WKWebView inputs: default-size UTF-8 text and same-conversation followup, compact-size CSV; actual saved selected-model inference; isolated history; no original files, physical picker, microphone, TTS or send proof"}))
 }
 
 unsafe extern "C" fn audit_uncaught_exception(exception: *mut objc2_foundation::NSException) {

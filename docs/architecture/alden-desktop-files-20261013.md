@@ -14,4 +14,8 @@
 
 source 구현·단위/통제 회귀·실제 패키지/설치·물리 사용의 검증 상태는 부모 workspace의 `outputs/assistant-files-20261013/`에 별도로 기록한다. 실제 TXT·DOCX·XLSX·PDF parser child, 후속 문서·동일 요청·철회·바이트 변경·혼합 첨부 한도·취소 회수를 검사한다. 링크의 실제 취득, 전체 파일/원문 의미 gold, 물리 파일 선택·Retina, 여러 호스트·음성·대표 자원·정식 배포는 이 전달로 완료되지 않는다.
 
+최종 검토 수정은 잠금 비소유자의 읽기 전용 재조회, 접근 불가한 이전 문서의 누락 기록, 확인 범위·파일명 digest와 parser 프로세스 그룹 회수를 포함한다. 세 반례는 이전50daacf에서2실패/1오류로 재현했고 수정본의 관련 Python169·UI834·native138·strict Clippy가 통과했다. scope만 변경한 동일 요청 ID 반례는 자동 승인 검토가 보안 상태를 판단하지 못해 거절했으며 재시도하지 않았다. 해당 실행 검증은 미확인이고 scope hash를 포함한 정적 수정과 구분한다.
+
+macOS에서는 종료한 자식 PID를 회수하지 않은 채 그룹 정리를 수행한다. [Darwin SDK의 siginfo/wait 계약](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/wait.h)을 따르며 UID가 채워졌다는 가정은 하지 않는다. [XNU killpg 구현](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sig.c)은 zombie를 그룹 신호 대상에서 제외하므로 EPERM이 발생하면 소유 그룹의 live 프로세스가 없는지 별도로 확인한다. 살아 있는 프로세스에 대한 권한 실패는 성공으로 처리하지 않는다. 중간 UID·zombie-only 실패와 잘못된 CI YAML 들여쓰기 실패도 실행 기록에 보존했다.
+
 0.3.92의 [아홉 도식](alden-0.3.92/README.md)은 해당 판본으로 보존한다. 이 판본의 Desktop 입력 경로에는 파일 byte store·문서 parser child·문서 참조 digest와 후속 자료 CAS가 추가됐다. 모델 기본값과 로컬 RAM/가용성·명시 자동 모드 정책은 기존 선택을 따른다.
