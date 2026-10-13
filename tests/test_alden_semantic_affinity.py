@@ -13,9 +13,61 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from alden_collection import CollectionStore, digest, identity
 import alden_semantic_affinity as sa
+from alden_source_text import TEXT_VERSION as PRODUCER_TEXT_VERSION, project_source_text
 
 
 class SemanticAffinityTests(unittest.TestCase):
+    def test_current_producer_extraction_admits_verified_existing_vectors(self):
+        nodes = [self.make_evidence(name, body='Derived summary',
+                 raw={'localOriginalText': 'Actual retained body', 'id': name})
+                 for name in ('current-a', 'current-b')]
+        with sqlite3.connect(self.cache) as db:
+            db.execute('UPDATE texts SET extraction=?', (PRODUCER_TEXT_VERSION,))
+        before = self.cache.read_bytes()
+        report = self.run_affinity(nodes)
+        self.assertEqual(report['coverage']['usable_vector_nodes'], 2)
+        self.assertEqual(len(report['candidates']), 1)
+        self.assertEqual(self.cache.read_bytes(), before)
+
+    def test_current_numeric_tail_projection_is_bound_to_retained_original(self):
+        original = ('Source claim with real numbers 1, 2 and 5. ' * 3).rstrip() + '\u00a0\n1\n/\n2\n6\n1\n3'
+        source = {'platform': 'threads', 'type': 'source', 'code': 'projected',
+                  'url': 'https://www.threads.com/@fixture/post/projected',
+                  'localTextOrigin': 'local_corpus_json', 'localOriginalText': original}
+        projected = project_source_text(original, source)
+        self.assertIsNotNone(projected['projection'])
+        node = self.make_evidence('projected', body=projected['body'], raw=source)
+        with sqlite3.connect(self.cache) as db:
+            db.execute('UPDATE texts SET extraction=?,body=?', (PRODUCER_TEXT_VERSION, projected['body']))
+            db.execute('UPDATE vectors SET text_hash=?', (digest(('same-name.ts\n'+projected['body']).encode()),))
+        report = self.run_affinity([node])
+        self.assertEqual(report['coverage']['usable_vector_nodes'], 1)
+        proof = report['nodes'][0]
+        self.assertEqual(proof['text_extraction'], PRODUCER_TEXT_VERSION)
+        self.assertEqual(proof['text_projection']['original_body_sha256'], projected['projection']['original_body_sha256'])
+        self.assertNotIn('separated_tail', proof['text_projection'])
+        with sqlite3.connect(self.cache) as db:
+            db.execute('UPDATE texts SET extraction=?', ('retained-local-original-text-v1',))
+        self.reason(self.run_affinity([node]), 'retained_text_source_mismatch')
+
+    def test_current_extraction_stamp_cannot_admit_forged_whitespace_or_unknown_policy(self):
+        node = self.make_evidence('current-forged', body='Derived summary',
+                                 raw={'localOriginalText': 'A\n\nB'})
+        with sqlite3.connect(self.cache) as db:
+            db.execute('UPDATE texts SET extraction=?,body=?', (PRODUCER_TEXT_VERSION, 'A B'))
+            db.execute('UPDATE vectors SET text_hash=?', (digest(b'same-name.ts\nA B'),))
+        self.reason(self.run_affinity([node]), 'retained_text_source_mismatch')
+        with sqlite3.connect(self.cache) as db:
+            db.execute('UPDATE texts SET extraction=?,body=?', ('unknown-extraction', 'A\n\nB'))
+        self.reason(self.run_affinity([node]), 'stale_text_binding')
+
+    def test_legacy_extraction_retains_its_exact_raw_body_contract(self):
+        node = self.make_evidence('legacy', body='Derived summary',
+                                 raw={'localOriginalText': 'Actual retained body'})
+        with sqlite3.connect(self.cache) as db:
+            db.execute('UPDATE texts SET extraction=?', ('retained-local-original-text-v1',))
+        self.assertEqual(self.run_affinity([node])['coverage']['usable_vector_nodes'], 1)
+
     def test_verified_retained_body_can_supply_affinity_after_derived_summary(self):
         nodes = [self.make_evidence(name, body="A derived summary",
                  coverage="existing privacy-filtered derived metadata; original bytes not opened",

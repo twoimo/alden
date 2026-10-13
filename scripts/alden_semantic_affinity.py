@@ -26,11 +26,13 @@ import time
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity
 from alden_content_evidence import POLICY as CONTENT_EVIDENCE_POLICY, content_evidence_class
+from alden_source_text import TEXT_VERSION, project_source_text
 
 MODEL = "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0"
 ENDPOINT = digest(b"http://127.0.0.1:11236/v1/embeddings")
 ENCODING = "e5-char256-stride192-weighted-unit-pool-v1"
-TEXT_VERSION = "retained-local-original-text-v1"
+LEGACY_TEXT_VERSION = "retained-local-original-text-v1"
+TEXT_BINDING_POLICY = 'verified-current-projection-and-legacy-raw-v2'
 MAX_NODES = 2048
 MAX_INPUT_BYTES = 2 * 1024 * 1024
 
@@ -267,7 +269,8 @@ def _load(db, cache, store, node, projects, profile, guard):
     guard.charge("text_bytes", text_size[0])
     text = cache.execute("""SELECT base_hash,raw_sha256,extraction,label,body,body_source
         FROM texts WHERE document_id=? AND version=?""", (node["id"], node["source_version"])).fetchone()
-    if (tuple(text[:4]) != (digest((row["label"] + "\n" + row["body"]).encode()), row["raw_sha256"], TEXT_VERSION, row["label"])
+    if (tuple(text[:2]) != (digest((row["label"] + "\n" + row["body"]).encode()), row["raw_sha256"])
+            or text[2] not in (LEGACY_TEXT_VERSION, TEXT_VERSION) or text[3] != row["label"]
             or not isinstance(text[4], str) or text[5] not in {"stored_body", "retained_record.localOriginalText"}):
         return None, "stale_text_binding"
     try:
@@ -276,13 +279,23 @@ def _load(db, cache, store, node, projects, profile, guard):
             return None, "source_hash_mismatch"
     except (OSError, ValueError):
         return None, "malformed_source"
+    text_projection = None
     if text[5] == "stored_body":
         if text[4] != row["body"]:
             return None, "stale_text_binding"
-    elif (row["platform"] != "graph" or not isinstance(source, dict)
-          or not isinstance(source.get("localOriginalText"), str)
-          or not source["localOriginalText"].strip() or source["localOriginalText"] != text[4]):
-        return None, "retained_text_source_mismatch"
+    else:
+        if (row["platform"] != "graph" or not isinstance(source, dict)
+                or not isinstance(source.get("localOriginalText"), str)
+                or not source["localOriginalText"].strip()):
+            return None, "retained_text_source_mismatch"
+        expected_body = source["localOriginalText"]
+        if text[2] == TEXT_VERSION:
+            projected = project_source_text(expected_body, source)
+            expected_body = projected['body']
+            if projected['projection'] is not None:
+                text_projection = {k: v for k, v in projected['projection'].items() if k != 'separated_tail'}
+        if expected_body != text[4]:
+            return None, "retained_text_source_mismatch"
     complete_text = row["label"] + "\n" + text[4]
     if not complete_text.strip():
         return None, "empty_text"
@@ -322,7 +335,8 @@ def _load(db, cache, store, node, projects, profile, guard):
              "original_id_sha256": digest(row["original_id"].encode()), "raw_sha256": row["raw_sha256"],
              "raw_path": row["raw_path"], "processing_version": row["processing_version"],
              "projection_sha256": projection, "base_text_sha256": text[0], "text_sha256": text_hash,
-             "body_source": text[5], "vector_sha256": digest(raw), "dimension": profile.dimension,
+             "body_source": text[5], "text_extraction": text[2], "text_projection": text_projection,
+             "vector_sha256": digest(raw), "dimension": profile.dimension,
              "vector_norm": norm, "profile_sha256": digest(encoded(asdict(profile))),
              "source_verified": "retained canonical record JSON; not original full export/media"}
     return (proof, array("f", values), norm), None
@@ -531,10 +545,12 @@ def _affinity_on_reads(store, db, cache, projects, nodes, *, profile=E5Profile()
     return {"schema": "alden-semantic-affinity-v1", "state": "bounded_ready" if complete else "bounded_partial",
             "purpose": "layout_evidence_only", "identity_merge": False, "factual_relationship": False,
             "content_evidence_policy": CONTENT_EVIDENCE_POLICY,
+            "text_binding_policy": TEXT_BINDING_POLICY,
             "content_evidence_sha256": digest(encoded([CONTENT_EVIDENCE_POLICY, eligibility])),
             "projects": projects, "profile": asdict(profile), "profile_sha256": digest(encoded(asdict(profile))),
             "input_sha256": digest(encoded({"nodes": nodes, "projects": projects,
-                                            "content_evidence_policy": CONTENT_EVIDENCE_POLICY})),
+                                            "content_evidence_policy": CONTENT_EVIDENCE_POLICY,
+                                            "text_binding_policy": TEXT_BINDING_POLICY})),
             "journal_id": journal[0] if journal else None,
             "snapshot_basis": "independent read transactions; exact target/version/raw/base/text bindings",
             "coverage": {"requested_nodes": len(nodes), "usable_vector_nodes": len(proofs),

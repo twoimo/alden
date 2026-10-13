@@ -88,8 +88,12 @@ class LayoutAffinityTests(unittest.TestCase):
         self.assertEqual(affinity["binding"]["graph_revision"], revision)
         self.assertEqual(affinity["input_projects"], ["one"])
         binding = {"input_nodes": refs, "input_projects": ["one"], "profile_sha256": affinity["profile_sha256"],
-                   "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY}
+                   "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY,
+                   "text_binding_policy": 'verified-current-projection-and-legacy-raw-v2'}
         self.assertEqual(affinity["binding"]["input_sha256"], digest(encoded(binding)))
+        self.assertEqual(affinity['text_binding_policy'], binding['text_binding_policy'])
+        legacy_binding = {k: v for k, v in binding.items() if k != 'text_binding_policy'}
+        self.assertNotEqual(affinity['binding']['input_sha256'], digest(encoded(legacy_binding)))
         self.assertEqual(len(affinity["candidates"]), 1)
         self.assertAlmostEqual(affinity["candidates"][0]["cosine"], .8, places=6)
         self.assertEqual(set(affinity["candidates"][0]), {"source", "target", "cosine", "projects"})

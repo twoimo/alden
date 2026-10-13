@@ -35,7 +35,7 @@ _WRITE_ACTIONS = {getattr(sqlite3, name) for name in (
     "SQLITE_ATTACH", "SQLITE_DETACH", "SQLITE_CREATE_VTABLE", "SQLITE_DROP_VTABLE")}
 _PROOF_KEYS = ("id", "source_version", "source_target", "projects", "raw_sha256", "processing_version",
                "raw_path", "projection_sha256", "base_text_sha256", "text_sha256", "body_source", "vector_sha256",
-               "vector_norm", "permissions", "dimension", "profile_sha256")
+               "vector_norm", "permissions", "dimension", "profile_sha256", "text_extraction", "text_projection")
 _SAMPLING_FIELDS = ("pair_sampling", "vector_nodes_compared", "eligible_vector_nodes",
                     "comparison_min", "comparison_max", "node_pair_coverage")
 
@@ -197,10 +197,12 @@ def _empty_coverage():
 def _base(projects, refs, revision, options):
     # Minimal current refs only; never body, label, source URL or original ID.
     binding = {"input_nodes": refs, "input_projects": projects, "profile_sha256": PROFILE_SHA256,
-               "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY}
+               "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY,
+               "text_binding_policy": semantic.TEXT_BINDING_POLICY}
     return {"schema": "alden-layout-affinity-v1", "state": "unavailable", "purpose": "layout_evidence_only",
             "input_nodes": refs, "input_projects": projects, "profile": asdict(PROFILE),
             "profile_sha256": PROFILE_SHA256, "content_evidence_policy": semantic.CONTENT_EVIDENCE_POLICY,
+            "text_binding_policy": semantic.TEXT_BINDING_POLICY,
             "nodes": [], "candidates": [], "coverage": _empty_coverage(),
             "binding": {"input_sha256": digest(encoded(binding)), "query_sha256": digest(encoded(options)),
                         "snapshot": "same caller-owned collection read transaction as graph_page; separate cache read snapshot",
