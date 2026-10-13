@@ -17,6 +17,30 @@ MAX_DOCUMENTS = 100000
 BATCH = 8
 MAX_SOURCE_MEMBERSHIPS = 256
 MAX_BODY_EVIDENCE_CHECKS = 100
+CONTEXT_TEXT_POLICY = 'retained-threads-exact-context-v1'
+
+
+def _context_text_key(text, proof, record, metadata):
+    """Exact retained-text presentation only; never entity/source identity.
+
+    Identity and capture coordinates remain in every individual proof. All
+    other retained fields, including author/date/media/unknown annotations,
+    must match. Missing author/date or declared partial content stays separate.
+    """
+    if (proof['content_evidence']['classification'] != 'content_candidate'
+            or proof['body_source'] != 'retained_record.localOriginalText'
+            or not isinstance(record, dict) or record.get('platform') != 'threads'
+            or record.get('type') != 'source'
+            or not all(isinstance(record.get(k), str) and record[k].strip()
+                       for k in ('author', 'handle', 'date', 'localOriginalText'))
+            or any(record.get(k) or metadata.get(k) for k in
+                   ('truncated', 'partial', 'body_truncated', 'localTextTruncated', 'content_truncated'))):
+        return None
+    contexts = [(m['target_id'], m['project'], m['permission']) for m in proof['source_memberships']]
+    return digest(encoded([text, contexts, proof['truth_status'], proof['body_source'],
+        proof['content_evidence'],
+        {k: v for k, v in metadata.items() if k not in ('source', 'original_id', 'source_node_id')},
+        {k: v for k, v in record.items() if k not in ('id', 'code', 'url')}]))
 
 
 def _prefer_body_literal_evidence(store, rows, ranked, plans, projects, limit, cancelled):
@@ -494,17 +518,21 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         pinned = list(dict.fromkeys(i for i in also if i in eligible))
         ranked = [(i, 0.) for i in pinned] + [(i, s) for i, s in ranked if i not in pinned]
     facts, provenance, used = [], [], 0
+    matching_text, repeated_facts, saved_characters = {}, 0, 0
+    compact_text = not also and not latest_query and time_from is None and time_to is None
     def append(text, proof):
         nonlocal used
         remaining = max_context_chars - used
         if remaining <= 0:
-            return
+            return False
         facts.append(text[:remaining]);proof['fact_truncated'] = len(text) > remaining
         provenance.append(proof);used += len(facts[-1])
+        return True
 
     with store.database() as db:
         chosen = []
         for document_id, _score in ranked[:max(0, min(int(max_entities), 10))]:
+            _check(cancelled)
             row = eligible[document_id]
             record, metadata, memberships = _verified_source(db, store, row, projects)
             source_projects = list(dict.fromkeys(m['project'] for m in memberships))
@@ -537,7 +565,17 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             if temporal_selection['mode']=='latest_observation':
                 proof['observation_time']=metadata.get('published_at');proof['observation_basis']='source_published_at'
                 text=observation_note(metadata.get('published_at'),'source_published_at')+text
-            append(text, proof)
+            match = _context_text_key(text, proof, record, metadata) if compact_text else None
+            if match is not None and match in matching_text:
+                representative = provenance[matching_text[match]]
+                group = representative.setdefault('matching_sources', {
+                    'schema': 1, 'policy': CONTEXT_TEXT_POLICY,
+                    'scope': 'context_text_only; originals_not_merged', 'sources': []})
+                proof['fact_truncated'] = False
+                group['sources'].append(proof)
+                repeated_facts += 1; saved_characters += len(text)
+            elif append(text, proof) and match is not None and not proof['fact_truncated']:
+                matching_text[match] = len(provenance) - 1
             chosen.append(document_id)
         if chosen and max_relations > 0:
             marks = ','.join('?' for _ in projects)
@@ -589,6 +627,11 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             'projects': projects, 'eligible_documents': len(rows), 'context_chars': used,
             'unsearchable_documents': len(source_rows) - len(rows),
             'pending_text_versions': sum(not r['text_ready'] for r in source_rows),
+            'context_text_compaction': {'policy': CONTEXT_TEXT_POLICY, 'enabled': compact_text,
+                'repeated_facts_removed': repeated_facts, 'saved_characters': saved_characters,
+                'retained_sources': sum(p['fact_type'] == 'entity' for p in provenance) + repeated_facts,
+                'additional_candidates_scanned': 0,
+                'scope': 'selected_sources_only; original_ids_and_rank_order_unchanged'},
             'time_basis': 'collection_time',
             **({'ranking_policy':'current_version_bound_body_literal_first_v1','body_evidence_coverage':body_coverage}
                if body_coverage and body_coverage['matched'] else {}),

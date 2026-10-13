@@ -196,6 +196,7 @@ jobs:
           tests.test_alden_collection_structure
           tests.test_alden_focus_projection
           tests.test_alden_collection_retrieval
+          tests.test_alden_collection_context_duplicates
           tests.test_alden_korean_search
           tests.test_alden_collection_snapshots
           tests.test_alden_snapshot_return

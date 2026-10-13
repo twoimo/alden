@@ -10,6 +10,26 @@ import alden_voice as voice
 from alden_abort import AbortController,AldenCancelled
 
 class VoiceRetrievalTests(unittest.TestCase):
+    def test_shared_context_sources_survive_voice_boundary_and_share_truncation(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            copy={'fact_type':'entity','entity_id':'copy','note_id':'copy','source_kind':'collected_source',
+                  'source_version':'v-copy','original_id':'post-copy','note_hash':'b'*64,
+                  'provenance_valid':True,'fact_truncated':False}
+            proof={'fact_type':'entity','entity_id':'first','note_id':'first','source_kind':'collected_source',
+                   'source_version':'v-first','provenance_valid':True,
+                   'matching_sources':{'schema':1,'policy':'retained-threads-exact-context-v1',
+                       'scope':'context_text_only; originals_not_merged','sources':[copy]}}
+            result={'facts':['보존된 본문 '*100],'fact_provenance':[proof],'search_mode':'rrf'}
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=result):
+                reference,metrics=voice._voice_knowledge_reference('저장된 자료 출처',[],root,AbortController(root).token())
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            for row in (context['graph_provenance'][0],metrics['graph_provenance'][0]):
+                self.assertTrue(row['fact_truncated'])
+                self.assertTrue(row['matching_sources']['sources'][0]['fact_truncated'])
+                self.assertEqual(row['matching_sources']['sources'][0]['source_version'],'v-copy')
+            self.assertEqual(metrics['note_sources'],2)
+
     def test_collection_source_memberships_and_content_class_survive_model_and_saved_context(self):
         with TemporaryDirectory() as td:
             root=self.root(td)

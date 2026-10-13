@@ -42,6 +42,12 @@ _PROOF_KEYS = frozenset({
     'source_event_ids', 'confirmed_at', 'updated_at', 'valid_from', 'valid_to',
     'note_id', 'note_hash', 'space', 'derived_from', 'conflicts',
     'retrieval_role', 'fact_truncated',
+    'source_version', 'target_version', 'relation_id', 'original_id', 'platform',
+    'projects', 'requested_projects', 'source_memberships', 'scope_basis',
+    'evidence_version', 'content_evidence', 'source_evidence', 'truth_status',
+    'body_source', 'source_author', 'matching_sources', 'lexical_match',
+    'selection_basis', 'text_projection',
+    'observation_time', 'observation_basis',
 })
 
 
@@ -96,12 +102,41 @@ def _attachments(value: list[dict] | None) -> list[dict]:
     return items
 
 
+def _proof_row(row):
+    result = {key: item for key, item in row.items() if key in _PROOF_KEYS}
+    if 'matching_sources' in result:
+        group = result['matching_sources']
+        if (not isinstance(group, dict) or set(group) != {'schema', 'policy', 'scope', 'sources'}
+                or type(group['schema']) is not int or group['schema'] != 1
+                or group['policy'] != 'retained-threads-exact-context-v1'
+                or group['scope'] != 'context_text_only; originals_not_merged'
+                or not isinstance(group['sources'], list) or not 1 <= len(group['sources']) <= 9
+                or result.get('source_kind') != 'collected_source'
+                or result.get('fact_type') != 'entity'
+                or result.get('provenance_valid') is not True
+                or not isinstance(result.get('entity_id'), str) or not result['entity_id']):
+            raise ValueError('turn_provenance_invalid')
+        seen = {result.get('entity_id')}; sources = []
+        for source in group['sources']:
+            if (not isinstance(source, dict) or 'matching_sources' in source
+                    or source.get('source_kind') != 'collected_source'
+                    or source.get('fact_type') != 'entity'
+                    or source.get('provenance_valid') is not True
+                    or not all(isinstance(source.get(k), str) and source[k]
+                               for k in ('entity_id', 'source_version', 'note_hash', 'original_id'))
+                    or source['entity_id'] in seen):
+                raise ValueError('turn_provenance_invalid')
+            seen.add(source['entity_id']); sources.append(_proof_row(source))
+        result['matching_sources'] = {**group, 'sources': sources}
+    return result
+
+
 def _provenance(value: list[dict] | None) -> str | None:
     if value is None:
         return None
     if not isinstance(value, list) or len(value) > 7 or not all(isinstance(row, dict) for row in value):
         raise ValueError('turn_provenance_invalid')
-    rows = [{key: item for key, item in row.items() if key in _PROOF_KEYS} for row in value]
+    rows = [_proof_row(row) for row in value]
     try:
         encoded = json.dumps(rows, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
     except (TypeError, ValueError) as exc:

@@ -1583,8 +1583,11 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         original_facts = [str(fact) for fact in context['graph_facts']]
         context['graph_facts']=[fact[:600] for fact in original_facts]
         for fact, row in zip(original_facts, context['graph_provenance']):
-            if isinstance(row,dict) and len(fact)>600:row['fact_truncated']=True
-        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated','source_version','target_version','relation_id','original_id','platform','projects','requested_projects','source_memberships','scope_basis','evidence_version','content_evidence','source_evidence','truth_status','body_source','source_author')} for row in context['graph_provenance'] if isinstance(row,dict)]
+            if isinstance(row,dict) and len(fact)>600:
+                row['fact_truncated']=True
+                for source in row.get('matching_sources',{}).get('sources',[]):
+                    source['fact_truncated']=True
+        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated','source_version','target_version','relation_id','original_id','platform','projects','requested_projects','source_memberships','scope_basis','evidence_version','content_evidence','source_evidence','truth_status','body_source','source_author','matching_sources','lexical_match','selection_basis','text_projection','observation_time','observation_basis')} for row in context['graph_provenance'] if isinstance(row,dict)]
         # Hashes and raw coordinates are checked by the adapter, rather than by
         # the language model. Keep the full proof in metrics and retain stable
         # identities, edge direction, source kind, time and truncation in input.
@@ -1617,10 +1620,13 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'OSK 노트에는 검증되지 않은 설계 가설도 있다. 저장된 내용을 승인된 사실로 승격하지 마라. '
                    '음성 답변은 서론과 목록 없이 짧은 완결 문장 두 개 이내로 핵심과 한계만 말한다. '
                    'fact_truncated가 참인 자료는 일부만 읽었다고 취급한다. '
+                   'matching_sources는 같은 보존 본문의 개별 출처이며 서로 독립적인 확인 근거라는 뜻은 아니다. '
                    '검색 결과가 없다는 사실을 사용자 발화를 이해하지 못했다는 뜻으로 바꾸지 마라.\n'
                    '<quoted_local_history>'+encoded+'</quoted_local_history>')
         full_provenance=full_provenance[:len(context['graph_facts'])]
-        note_sources=len({row['note_id'] for row in full_provenance if row.get('note_id')})
+        note_sources=len({source['note_id'] for row in full_provenance
+                          for source in [row,*row.get('matching_sources',{}).get('sources',[])]
+                          if source.get('note_id')})
         return reference,{'state':'found','mode':ranked.get('search_mode','bm25_only'),'sources':len(context['quoted_history'])+note_sources,
                           'note_sources':note_sources,'history_sources':len(context['quoted_history']),
                           'graph_provenance':full_provenance,'model_provenance_compact':not proof_requested,
