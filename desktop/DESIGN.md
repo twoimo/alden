@@ -1,5 +1,9 @@
 # Alden desktop design contract
 
+## 0.3.92 — 답변에 쓰는 보관 본문 근거
+
+일반 한국어 질의는 같은 보관 본문에 질의 단어가 모두 있고 현재 버전·scope·출처·콘텐츠 정책을 통과한 후보를 우선한다. 제목도 찾을 수 있으며 source-bound 후보를 의미 정답으로 표시하지 않는다. 명시 최신 요청·ID·dense-only 선택·후보/컨텍스트 예산을 유지하고 검증의 부분 coverage를 분리한다. 이 변경은 화면 배치/관계/원본/모델 설정을 바꾸지 않는다. [실행 검증과 남은 범위](../docs/architecture/alden-rag-body-evidence-20261013.md).
+
 ## 0.3.91 — 가시성과 복원 확인
 
 설정의 그래프는 키보드 포커스 없이 보일 수 있는 데이터 화면이다. native 숨김·페이지 선택·종료를 따르고, blur 하나로 자료 갱신과 미완료 카메라 전이를 중단하지 않는다. 정착 후 RAF 중단과 비상정지 latch는 유지한다. 준비 확인은 화면 사각형만 읽고 상세/종료의 unavailable 상태를 보존한다. 전체 기하 검사는 명시적인 별도 audit에만 수행한다. [실행 검증과 실패 보존](../docs/architecture/alden-graph-restore-20261013.md).
