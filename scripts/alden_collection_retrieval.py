@@ -1,6 +1,7 @@
 """Project-scoped retrieval of retained collection versions, never graph authority."""
 from contextlib import closing
 import json
+import re
 import math
 from pathlib import Path
 import sqlite3
@@ -15,6 +16,37 @@ MAX_TEXT_BYTES = 32 * 1024 * 1024
 MAX_DOCUMENTS = 100000
 BATCH = 8
 MAX_SOURCE_MEMBERSHIPS = 256
+MAX_BODY_EVIDENCE_CHECKS = 100
+
+
+def _prefer_body_literal_evidence(store, rows, ranked, plans, projects, limit, cancelled):
+    """RAG grounding preference; source truth and backend scores stay separate."""
+    matched = set()
+    for row in rows.values():
+        _check(cancelled)
+        if row['body'].strip() and all(korean_literal_matches(plan, '', row['body']) for plan in plans):
+            matched.add(row['id'])
+    ordered = list(dict.fromkeys(identity for identity, _ in ranked if identity in matched))
+    seen = set(ordered)
+    # Unranked admissions have deterministic identity order. Existing backend
+    # rank order remains intact within each evidence tier.
+    ordered.extend(sorted(matched - seen))
+    preferred, checked = set(), 0
+    with store.database() as db:
+        for identity in ordered[:MAX_BODY_EVIDENCE_CHECKS]:
+            _check(cancelled)
+            row = rows[identity]
+            source, metadata, _memberships = _verified_source(db, store, row, projects)
+            checked += 1
+            if content_evidence_class(metadata, row['body'], source=source,
+                                      body_source=row['body_source']) == 'content_candidate':
+                preferred.add(identity)
+    ranked_ids = {identity for identity, _ in ranked}
+    candidates = ranked + [(identity, 0.) for identity in ordered if identity in preferred and identity not in ranked_ids]
+    candidates.sort(key=lambda item: item[0] not in preferred)
+    return candidates[:limit], preferred, {'matched':len(matched), 'verified':checked,
+        'preferred':len(preferred), 'verification_limit':MAX_BODY_EVIDENCE_CHECKS,
+        'truncated':len(ordered)>checked}
 
 
 def _strict_json(value):
@@ -368,9 +400,22 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     ranked = kg._rrf_merge(lexical, dense, k=rrf_k, weights=rrf_weights,
                           recency={r['id']: r['collected_at'] for r in rows}) if mode == 'rrf' else lexical
     from alden_retrieval_time import select_latest, latest_requested, observation_note
+    latest_query = latest_requested(query,time_from,time_to)
+    body_preferred, body_coverage = set(), None
+    # Explicit latest requests keep their publication selection and admission
+    # intact; an archived body must not displace a newer title before that step.
+    if plan and not latest_query and (mode != 'rrf' or kg._validated_rrf_weights(rrf_weights)[0] > 0):
+        # Recall still uses OR, while grounding requires every original query
+        # word in this body. Particle variants are alternatives within a word.
+        words = list(dict.fromkeys(re.findall(r'[0-9a-z가-힣]+', query.casefold())))[:24]
+        body_plans = [korean_literal_plan(kg._fts_query_terms([word])) for word in words]
+        if body_plans and all(body_plans):
+            ranked, body_preferred, body_coverage = _prefer_body_literal_evidence(
+                store, eligible, ranked, body_plans, projects,
+                candidate_limit * (2 if mode == 'rrf' else 1), cancelled)
     temporal_selection={'mode':'all','basis':'relevance'}
     temporal_excluded=set()
-    if ranked and latest_requested(query,time_from,time_to):
+    if ranked and latest_query:
         temporal_records=[]
         with store.database() as source:
             for identity,_score in ranked:
@@ -430,6 +475,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             proof['content_evidence'] = {'policy': CONTENT_POLICY, 'classification': evidence_class}
             if evidence_class != 'content_candidate':
                 proof['truth_status'] = 'source_description; original body unverified'
+            if document_id in body_preferred:
+                proof['selection_basis'] = 'matching_current_version_bound_body; source truth not independently verified'
             if isinstance(record, dict):
                 proof['source_author'] = {key: record[key] for key in ['author', 'handle', 'date', 'url', 'localTextOrigin'] if isinstance(record.get(key), str)}
             text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
@@ -491,5 +538,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             'unsearchable_documents': len(source_rows) - len(rows),
             'pending_text_versions': sum(not r['text_ready'] for r in source_rows),
             'time_basis': 'collection_time',
+            **({'ranking_policy':'current_version_bound_body_literal_first_v1','body_evidence_coverage':body_coverage}
+               if body_coverage and body_coverage['matched'] else {}),
             'temporal_selection':temporal_selection,
             'candidates': [row[0] for row in ranked], 'canonical': 'independent originals; derived collection projection'}

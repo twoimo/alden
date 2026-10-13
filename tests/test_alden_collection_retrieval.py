@@ -18,6 +18,142 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def title_matches(self, count, query='35년'):
+        self.store.ingest(self.allowed,[{'original_id':'title-'+str(i),'label':query+' 영상 '+str(i),'text':''}
+                                       for i in range(count)])
+        return [identity('graph','title-'+str(i)) for i in range(count)]
+
+    def test_retained_body_is_not_crowded_out_by_title_only_candidate_budget(self):
+        titles=self.title_matches(12)
+        doc=self.add(self.allowed,'body-evidence','이자리35년336. 보관된 본문 진술입니다.')
+        self.add(self.other,'forbidden-body','이자리35년336. 허용되지 않은 다른 프로젝트.')
+        result=retrieve(self.root,'35년',projects=['one'],candidate_limit=3,max_relations=0)
+        self.assertEqual(result['fact_provenance'][0]['entity_id'],doc)
+        self.assertEqual(len(result['candidates']),3)
+        self.assertEqual(set(result['candidates'][1:]).issubset(titles),True)
+        proof=result['fact_provenance'][0]
+        self.assertEqual(proof['truth_status'],'source_record; not independently verified')
+        self.assertTrue(proof['provenance_valid']);self.assertEqual(proof['projects'],['one'])
+        self.assertIn('matching_current_version_bound_body',proof['selection_basis'])
+
+    def test_typed_metadata_body_is_not_preferred_over_verified_content(self):
+        self.title_matches(4)
+        self.store.ingest(self.allowed,[{'original_id':'metadata-body','label':'35년','text':'35년',
+                                         'raw':{'kind':'metadata','content_indexed':False}}])
+        doc=self.add(self.allowed,'real-body','이자리35년336. 본문을 보존했습니다.')
+        result=retrieve(self.root,'35년',projects=['one'],max_entities=1,max_relations=0)
+        self.assertEqual(result['fact_provenance'][0]['entity_id'],doc)
+        self.assertEqual(result['body_evidence_coverage']['preferred'],1)
+
+    def test_literal_body_preference_keeps_explicit_pins_and_dense_only_weights(self):
+        titles=self.title_matches(5)
+        doc=self.add(self.allowed,'body-evidence','이자리35년336. 본문 진술입니다.')
+        with self.profile():
+            index_dense(self.root,['one'],embed=lambda values:[[0.,1.] if '본문' in value else [1.,0.] for value in values])
+            normal=retrieve(self.root,'35년',projects=['one'],max_entities=1,max_relations=0,query_embed=lambda _:[1.,0.])
+            self.assertEqual(normal['fact_provenance'][0]['entity_id'],doc)
+            dense=retrieve(self.root,'35년',projects=['one'],max_entities=1,max_relations=0,
+                           query_embed=lambda _:[1.,0.],rrf_weights=[0.,1.])
+            self.assertIn(dense['fact_provenance'][0]['entity_id'],titles)
+            self.assertNotIn('ranking_policy',dense)
+            pinned=retrieve(self.root,'35년',projects=['one'],max_entities=1,max_relations=0,
+                            query_embed=lambda _:[1.,0.],also=[titles[0]])
+            self.assertEqual(pinned['fact_provenance'][0]['entity_id'],titles[0])
+
+    def test_title_lookup_still_works_without_a_matching_body(self):
+        titles=self.title_matches(4)
+        result=retrieve(self.root,'35년',projects=['one'],max_entities=2,max_relations=0)
+        self.assertEqual(len(result['fact_provenance']),2)
+        self.assertTrue(all(p['entity_id'] in titles for p in result['fact_provenance']))
+        self.assertNotIn('ranking_policy',result)
+
+    def test_grounding_requires_all_query_words_in_one_body_and_keeps_particles(self):
+        self.store.ingest(self.allowed,[{'original_id':'split-title-body','label':'사과','text':'35년'},
+            {'original_id':'complete-body','label':'','text':'이자리35년336과 사과에 대한 보관 본문'},
+            {'original_id':'wrong-number','label':'','text':'2035년 사과에 대한 다른 보관 본문'}])
+        result=retrieve(self.root,'35년 사과',projects=['one'],max_entities=1,max_relations=0)
+        self.assertEqual(result['fact_provenance'][0]['entity_id'],identity('graph','complete-body'))
+        self.assertEqual(result['body_evidence_coverage']['matched'],1)
+        particle=retrieve(self.root,'35년은 사과',projects=['one'],max_entities=1,max_relations=0)
+        self.assertEqual(particle['fact_provenance'][0]['entity_id'],identity('graph','complete-body'))
+
+    def test_source_metadata_edit_cannot_promote_raw_noncontent(self):
+        self.title_matches(5)
+        self.store.ingest(self.allowed,[{'original_id':'noncontent','label':'35년','text':'35년',
+            'metadata':{'source':{'kind':'metadata'}},'raw':{'kind':'metadata','content_indexed':False}}])
+        other=self.add(self.allowed,'actual-body','이자리35년336 보관 본문')
+        with self.store.database() as db:
+            row=db.execute('SELECT id,metadata FROM versions WHERE body=?',('35년',)).fetchone()
+            metadata=json.loads(row['metadata']);metadata['source']={'kind':'unknown'}
+            db.execute('UPDATE versions SET metadata=? WHERE id=?',(json.dumps(metadata),row['id']))
+        result=retrieve(self.root,'35년',projects=['one'],max_entities=1,max_relations=0)
+        self.assertEqual(result['fact_provenance'][0]['entity_id'],other)
+        self.assertEqual(result['body_evidence_coverage']['preferred'],1)
+
+    def test_body_evidence_verification_is_bounded_and_reports_partial_coverage(self):
+        self.store.ingest(self.allowed,[{'original_id':'body-'+str(i),'label':'','text':'35년 보관 본문 '+str(i)} for i in range(105)])
+        result=retrieve(self.root,'35년',projects=['one'],candidate_limit=3,max_entities=1,max_relations=0)
+        self.assertEqual(len(result['candidates']),3)
+        self.assertEqual(result['body_evidence_coverage']['matched'],105)
+        self.assertEqual(result['body_evidence_coverage']['verified'],100)
+        self.assertTrue(result['body_evidence_coverage']['truncated'])
+
+    def test_evidence_preference_preserves_rrf_order_inside_both_tiers(self):
+        import alden_collection_retrieval as retrieval
+        titles=self.title_matches(5)
+        self.add(self.allowed,'body-a','이자리35년336. 첫 보관 본문입니다.')
+        self.add(self.allowed,'body-b','이자리35년336. 다음 보관 본문입니다.')
+        with self.profile():
+            index_dense(self.root,['one'],embed=self.embed)
+            kwargs={'projects':['one'],'max_entities':10,'max_relations':0,'query_embed':lambda _:[1.,0.]}
+            with patch.object(retrieval,'_prefer_body_literal_evidence',side_effect=lambda store,rows,ranked,*args:(ranked,set(),None)):
+                before=retrieve(self.root,'35년',**kwargs)
+            after=retrieve(self.root,'35년',**kwargs)
+        for group in (set(titles),set(before['candidates'])-set(titles)):
+            self.assertEqual([i for i in before['candidates'] if i in group],[i for i in after['candidates'] if i in group])
+
+    def test_explicit_latest_keeps_its_time_selection_before_body_preference(self):
+        self.store.ingest(self.allowed,[{'original_id':'old-publication','label':'과거 기록',
+            'text':'아카이브최신약관관련 기록','published_at':'2020-01-01T00:00:00Z'},
+            {'original_id':'new-publication','label':'최신 약관','text':'','published_at':'2026-09-01T00:00:00Z'}])
+        result=retrieve(self.root,'최신 약관',projects=['one'],candidate_limit=1,max_entities=1,max_relations=0)
+        self.assertEqual(result['fact_provenance'][0]['entity_id'],identity('graph','new-publication'))
+        self.assertEqual(result['fact_provenance'][0]['observation_time'],'2026-09-01T00:00:00Z')
+        self.assertNotIn('ranking_policy',result)
+
+    def test_evidence_source_checks_honor_cancellation_and_current_version_changes(self):
+        import alden_collection_retrieval as retrieval
+        self.add(self.allowed,'body-a','35년 보관 본문')
+        self.add(self.allowed,'body-b','35년 보관 본문')
+        original=retrieval._verified_source;stopped=[False]
+        def cancel_after_first(*args):
+            result=original(*args);stopped[0]=True;return result
+        with patch.object(retrieval,'_verified_source',side_effect=cancel_after_first),self.assertRaisesRegex(RuntimeError,'collection_retrieval_cancelled'):
+            retrieve(self.root,'35년',projects=['one'],cancelled=lambda:stopped[0])
+        changed=[False]
+        def change_before_check(*args):
+            if not changed[0]:
+                changed[0]=True
+                row=args[2]
+                self.store.ingest(self.allowed,[{'original_id':row['original_id'],'label':'','text':'다른 개정 본문'}])
+            return original(*args)
+        with patch.object(retrieval,'_verified_source',side_effect=change_before_check),self.assertRaisesRegex(RuntimeError,'collection_graph_version_changed'):
+            retrieve(self.root,'35년',projects=['one'])
+
+    def test_cached_forged_body_cannot_win_the_new_evidence_preference(self):
+        import sqlite3
+        self.title_matches(5)
+        self.store.ingest(self.allowed,[{'original_id':'cache-forgery','label':'',
+           'text':'','raw':{'localOriginalText':'원래 보존된 다른 내용입니다.'}}])
+        doc=identity('graph','cache-forgery')
+        with self.profile():
+            index_dense(self.root,['one'],embed=self.embed)
+            with sqlite3.connect(self.store.root/'retrieval.sqlite3') as db:
+                db.execute('UPDATE texts SET body=? WHERE document_id=?',('가짜35년336 본문',doc))
+            with self.assertRaisesRegex(RuntimeError,'collection_source_integrity'):
+                retrieve(self.root,'35년',projects=['one'],candidate_limit=2,max_entities=1,max_relations=0,
+                         query_embed=lambda _: (_ for _ in ()).throw(RuntimeError('disabled')))
+
     def test_attached_korean_source_is_naturally_retrieved_with_unverified_provenance(self):
         body='이자리35년336 그리고 두번째올해49년814. 서로 다른 식당의 진술입니다.'
         doc=self.add(self.allowed,'attached-claim',body)
