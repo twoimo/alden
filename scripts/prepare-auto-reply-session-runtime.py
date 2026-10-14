@@ -84,6 +84,7 @@ RUNTIME_SCRIPT_NAMES = (
     "alden_content_evidence.py",
     "alden_source_text.py",
     "alden_graph_quality.py",
+    "alden_annotation_candidates.py",
     "alden_normalization_evidence.py",
     "alden_time_normalization.py",
     "alden_quantity_normalization.py",
