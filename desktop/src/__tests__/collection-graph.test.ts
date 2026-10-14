@@ -48,6 +48,15 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const c of owned) c.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('permitted collection graph navigation', () => {
+  it('keeps available memory visible and explicitly labels collection failure as partial',async()=>{
+    const memory={ok:true,nodes:[{id:'remembered',label:'보존된 기억'}],edges:[]};
+    const {c,port}=controller(async()=>{throw new Error('snapshot timeout');},memory);
+    await settle();
+    expect(port.currentGraph.nodes.map(n=>n.id)).toEqual(['memory:remembered']);
+    expect(c.readDiagnostics).toMatchObject({partial:true,collectionAvailable:false,memoryAvailable:true});
+    expect(document.getElementById('knowledge-summary')?.textContent).toContain('일부 표시');
+    expect(document.getElementById('knowledge-mode')?.textContent).toBe('일부 출처 누락');
+  });
   it('reapplies a revalidated identical result when the actual graph lost its cached enrichment', async () => {
     const later = deferred<Record<string, unknown>>(); let calls = 0;
     const { c, port } = controller(async () => page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })) }), undefined,

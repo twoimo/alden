@@ -1203,6 +1203,7 @@ impl PythonBridge {
         let is_history = matches!(
             action,
             "history-rooms" | "history-messages" | "collection-affinity" | "collection-quality"
+                | "collection-graph" | "collection-projects"
         );
         let swap_job_id = token_id.unwrap_or("model-swap");
         if is_swap {

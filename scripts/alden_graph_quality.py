@@ -350,6 +350,10 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         raise ValueError('quality_retrieval_symlink')
     cache_context = closing(sqlite3.connect(retrieval.as_uri() + '?mode=ro', uri=True, timeout=.15)) if retrieval.is_file() else nullcontext(None)
     with store.database() as db, cache_context as cache:
+        # Request-local caches for the private derived stores. The default
+        # ~2 MiB thrashes during the bounded body/vector join; no persistent
+        # database setting, original DB or model allocation is changed.
+        db.execute('PRAGMA cache_size=-65536')
         if cache is not None:
             cache.execute('PRAGMA query_only=ON'); cache.execute('BEGIN')
         cache_tables = {r[0] for r in cache.execute("SELECT name FROM sqlite_master WHERE type='table'")} if cache else set()
@@ -362,6 +366,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         extras=[];joins=[]
         if cache_tables.intersection({'texts','vectors'}):
             db.execute('ATTACH DATABASE ? AS quality_cache',(retrieval.as_uri()+'?mode=ro',))
+            db.execute('PRAGMA quality_cache.cache_size=-32768')
         eligible="""typeof(m.document_id)='text' AND typeof(m.current_version)='text'
             AND d.platform IS NOT NULL AND d.availability='available'
             AND v.document_id=m.document_id AND typeof(v.label)='text' AND typeof(v.body)='text'

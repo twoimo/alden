@@ -1399,7 +1399,8 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         collect_script(window,"JSON.stringify((()=>{const input=document.querySelector('#knowledge-platform');input.value='youtube';input.dispatchEvent(new Event('change'));return {platform:input.value};})())".into(),deadline)?;
     }
     wait_for_audit_state("initial scoped graph", deadline, || collect_script(window,graph_collect_script(),deadline),
-        |state| state["graphPending"]!=true && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0)?;
+        |state| state["graphPending"]!=true && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0
+            && (case!=10 || state["graphRead"]["collectionAvailable"]==true && state["graphRead"]["partial"]==false))?;
     eprintln!("Alden scope {case}: scoped graph ready");
     if case == 9 {
         collect_script(window,r#"JSON.stringify((()=>{

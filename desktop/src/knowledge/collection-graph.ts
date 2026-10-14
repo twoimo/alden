@@ -191,7 +191,8 @@ export class CollectionGraphController {
       const values = reads.map(read => read.status === 'fulfilled' ? read.value : { ok: false });
       const result = unifiedGraph(values[0], values[1], query);
       if (!this.active || this.disposed || epoch !== this.epoch) return null;
-      this.lastRead = { query, epoch, nodes: Array.isArray(result.nodes) ? result.nodes.length : 0 };
+      this.lastRead = { query, epoch, nodes: Array.isArray(result.nodes) ? result.nodes.length : 0,
+        partial: result.partial === true, collectionAvailable: values[0]?.ok === true, memoryAvailable: values[1]?.ok === true };
       return result ?? { ok: false };
     } finally { if (epoch === this.epoch) form?.removeAttribute('aria-busy'); }
   }
@@ -266,9 +267,9 @@ export class CollectionGraphController {
     this.next = typeof payload.next === 'number' ? payload.next : null;
     this.totals = { nodes: typeof payload.total_nodes === 'number' ? payload.total_nodes : next.nodes.length,
       edges: typeof payload.total_edges === 'number' ? payload.total_edges : next.edges.length };
-    this.setText('knowledge-summary', `${this.graph.currentView.nodes.length.toLocaleString('ko-KR')}개 표시`);
+    this.setText('knowledge-summary', `${this.graph.currentView.nodes.length.toLocaleString('ko-KR')}개 ${payload.partial ? '일부 표시' : '표시'}`);
     this.setText('knowledge-sync', payload.partial ? '일부 출처를 불러오지 못했습니다.' : payload.stale ? '자료 확인 필요' : this.collection ? '저장된 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
-    this.setText('knowledge-mode', this.collection ? '수집 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
+    this.setText('knowledge-mode', payload.partial ? '일부 출처 누락' : this.collection ? '수집 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
     this.updateFacets(payload); this.updateTools(); this.describeScope(); this.renderList();
     if (this.collection) this.journal.snapshot(payload.activity_checkpoint, this.graph.currentView.nodes);
     this.queueAffinity();
