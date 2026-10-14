@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { KnowledgeQualityPanel, parseCollectionQuality, parseCollectionAnnotationReview, qualityQueryFromSelection,
+import { KnowledgeQualityPanel, parseCollectionQuality, parseCollectionAnnotationReview, parseAnnotationCandidatePage, qualityQueryFromSelection,
   type QualityQuery } from '../knowledge/quality-panel';
 import { settingsMarkup } from '../ui';
 import type { fetchSettingsAction } from '../runtime';
@@ -126,7 +126,49 @@ function withAnnotationReview() {
   } };
 }
 
+function candidatePage(records=false,offset=0) {
+  const item=(i:number)=>records?{document_id:`graph:${String(i).padStart(64,'a')}`,version:`version:${String(i).padStart(64,'b')}`,
+    original_id:`post-${i}`,label:'',project:'one',body:'같은 보존 원문 <img src=x>',truncated:false,raw_sha256:'c'.repeat(64),
+    projected_body_sha256:'d'.repeat(64),collected_at:1791768900,
+    source_annotations:{policy:'retained-declared-tags-v1',basis:'verified_retained_record',semantic_status:'unverified',
+      fields:{topics:{state:'declared',values:[i===2?'다른 태그':'같은 태그']},entityTags:{state:'undeclared',values:[]}}}}:
+    {group:i,project:'one',projected_body_sha256:'d'.repeat(64),members:7,different_fields:['topics']};
+  return {ok:true,schema:3,policy:'retained-annotation-candidates-v1',kind:records?'annotation_candidate_records':'annotation_candidate_groups',
+    scope:{scope:'all'},review_id:'e'.repeat(64),group:records?0:null,total:7,offset,next_offset:offset+5<7?offset+5:null,
+    checked_at:1791768900,semantic_status:'unverified',source_verification:records?'displayed_current_records':'current_scope_metadata_only',
+    items:Array.from({length:Math.min(5,7-offset)},(_,i)=>item(i+offset))};
+}
+
 describe('manual collection-quality report and fixed native selectors', () => {
+  it('opens a specific candidate and preserves a third different declaration as inert source text', async()=>{
+    const inspection={...withAnnotationReview(),annotation_candidates:candidatePage()};
+    inspection.source_annotation_review.counts.same_projected_body_groups_with_tag_differences=7;
+    inspection.source_annotation_review.counts.same_projected_body_groups_compared=7;
+    inspection.source_annotation_review.counts.source_versions_inspected=20;
+    inspection.versions_scanned=20;
+    inspection.source_annotation_review.counts.same_body_group_members_with_tag_differences=14;
+    inspection.source_annotation_review.fields.topics.declared=19;inspection.source_annotation_review.fields.topics.body_groups_with_different_values=7;
+    inspection.source_annotation_review.fields.entityTags.declared=20;
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(inspection).mockResolvedValueOnce(candidatePage(true));
+    setup(load);info().open=true;button().click();await settle();
+    (report().querySelector('.knowledge-quality-annotations') as HTMLButtonElement).click();await settle();
+    (report().querySelector('button[data-annotation-group="0"]') as HTMLButtonElement).click();await settle();
+    expect(JSON.parse(calls(load)[2][1]!.query!)).toEqual({scope:'all',review_id:'e'.repeat(64),offset:0,group:0});
+    expect(report().querySelectorAll('.knowledge-quality-candidate-record')).toHaveLength(5);
+    expect(report().textContent).toContain('다른 태그');expect(report().querySelector('img')).toBeNull();
+    expect(state()).toBe('complete');
+  });
+
+  it('rejects wrong candidate scope, offset, review, source status and incomplete page counts',()=>{
+    const expected={review_id:'e'.repeat(64),offset:0};
+    expect(parseAnnotationCandidatePage(candidatePage(),all,expected)).not.toBeNull();
+    for(const change of [(p:ReturnType<typeof candidatePage>)=>{p.review_id='f'.repeat(64);},
+      (p:ReturnType<typeof candidatePage>)=>{p.offset=5;},(p:ReturnType<typeof candidatePage>)=>{p.semantic_status='verified';},
+      (p:ReturnType<typeof candidatePage>)=>{p.items.pop();}]){
+      const page=candidatePage();change(page);expect(parseAnnotationCandidatePage(page,all,expected)).toBeNull();
+    }
+    expect(parseAnnotationCandidatePage(candidatePage(),{scope:'project',project:'one'},expected)).toBeNull();
+  });
   it('requests retained tag inspection only on its explicit control and keeps its scope separate', async () => {
     const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(withAnnotationReview());
     setup(load); info().open = true; button().click(); await settle();

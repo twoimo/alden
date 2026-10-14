@@ -41,6 +41,14 @@ type AnnotationReview = {
   fields: Record<'topics' | 'entityTags', { declared: number; undeclared: number; unsupported: number;
     over_budget: number; repeated_values: number; body_groups_with_different_values: number }>;
 };
+type AnnotationGroup = { group: number; project: string; projected_body_sha256: string;
+  different_fields: Array<'topics' | 'entityTags'>; members: number };
+type AnnotationRecord = { document_id: string; version: string; original_id: string; label: string;
+  project: string; body: string; truncated: boolean; raw_sha256: string; collected_at: number;
+  projected_body_sha256: string; source_annotations: SourceAnnotations };
+type AnnotationPage = { kind: 'annotation_candidate_groups' | 'annotation_candidate_records'; review_id: string;
+  group: number | null; total: number; offset: number; next_offset: number | null; checked_at: number;
+  items: Array<AnnotationGroup | AnnotationRecord> };
 type SourceAnnotations = {
   policy: 'retained-declared-tags-v1'; basis: 'verified_retained_record'; semantic_status: 'unverified';
   fields: Record<'topics' | 'entityTags', { state: 'declared' | 'undeclared' | 'unsupported' | 'over_budget'; values: string[] }>;
@@ -91,6 +99,7 @@ export type QualitySuccess = {
   comparison_samples?: ComparisonSamples;
   source_annotation_review?: AnnotationReview;
   annotation_checked_at?: number;
+  annotation_candidates?: AnnotationPage;
 };
 export type QualityFailure = { ok: false; schema: 3; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
@@ -103,6 +112,7 @@ const ERROR_TEXT = {
   quality_report_unavailable: '품질 보고서를 가져오지 못했습니다.',
   quality_query_invalid: '품질 확인 요청 범위가 올바르지 않습니다.',
   quality_comparison_unavailable: '후보의 현재 원문·출처를 대사하지 못했습니다. 다시 검사해 주세요.',
+  quality_annotation_review_unavailable: '태그 후보 목록을 보존하지 못했습니다. 다시 검사해 주세요.',
 } as const;
 
 // Reviewed keys from alden_graph_quality.py. Unknown keys get a generic label;
@@ -320,7 +330,63 @@ function annotationReview(value: unknown, maximum: number): AnnotationReview | n
     counts: Object.fromEntries(names.map(key => [key, c[key]])) as AnnotationReview['counts'], fields: result };
 }
 
-export function parseCollectionAnnotationReview(value: unknown, query: QualityQuery): { review: AnnotationReview; checked_at: number } | null {
+const sha=(value:unknown):value is string=>typeof value==='string' && /^[a-f0-9]{64}$/.test(value);
+
+export function parseAnnotationCandidatePage(value: unknown, query: QualityQuery,
+  expected?: { review_id: string; offset: number; group?: number }): AnnotationPage | null {
+  const row=object(value),scope=object(row?.scope);
+  const group=row?.group;
+  if (!row || row.ok!==true || row.schema!==3 || row.policy!=='retained-annotation-candidates-v1'
+    || !scope || scope.scope!==query.scope || (query.scope==='project' ? scope.project!==query.project : scope.project!==undefined)
+    || row.semantic_status!=='unverified' || !sha(row.review_id) || !count(row.total) || (row.total as number)>100000
+    || !count(row.offset) || (row.offset as number)%5!==0 || !checkedDate(row.checked_at)
+    || !Array.isArray(row.items) || row.items.length>5
+    || !(row.next_offset===null || count(row.next_offset))) return null;
+  const records=row.kind==='annotation_candidate_records';
+  if (row.kind!=='annotation_candidate_groups' && !records
+    || records && (!count(group) || (group as number)>=50000)
+    || !records && group!==null
+    || (records ? row.source_verification!=='displayed_current_records'
+      : row.source_verification!=='current_scope_metadata_only'
+        && !(row.source_verification==='inspection_snapshot_metadata'&&!expected&&row.offset===0))) return null;
+  const total=row.total as number,offset=row.offset as number;
+  if (total>0 && offset>=total || total===0 && offset!==0
+    || row.items.length!==Math.min(5,total-offset)
+    || row.next_offset!==(offset+5<total?offset+5:null)) return null;
+  if (expected && (row.review_id!==expected.review_id || offset!==expected.offset
+    || group!==(expected.group??null))) return null;
+  const items:Array<AnnotationGroup|AnnotationRecord>=[],seen=new Set<string>();
+  for (const [i,item] of row.items.entries()) {
+    const r=object(item);
+    if (!r || typeof r.project!=='string' || !r.project || r.project.length>128
+      || query.scope==='project' && r.project!==query.project || !sha(r.projected_body_sha256)) return null;
+    if (!records) {
+      if (r.group!==offset+i || !count(r.members) || (r.members as number)<2
+        || !Array.isArray(r.different_fields) || !r.different_fields.length || r.different_fields.length>2
+        || new Set(r.different_fields).size!==r.different_fields.length
+        || !r.different_fields.every(v=>v==='topics'||v==='entityTags')) return null;
+      items.push({group:r.group as number,project:r.project,projected_body_sha256:r.projected_body_sha256 as string,
+        members:r.members as number,different_fields:r.different_fields as AnnotationGroup['different_fields']});
+    } else {
+      const annotations=parseSourceAnnotations(r.source_annotations);
+      if (typeof r.document_id!=='string'||!r.document_id||r.document_id.length>256
+        || typeof r.version!=='string'||!/^version:[a-f0-9]{64}$/.test(r.version)
+        || typeof r.original_id!=='string'||!r.original_id||r.original_id.length>1024
+        || typeof r.label!=='string'||r.label.length>1024
+        || typeof r.body!=='string'||Array.from(r.body).length>4000||typeof r.truncated!=='boolean'
+        || !sha(r.raw_sha256)||!checkedDate(r.collected_at)||!annotations
+        || seen.has(r.document_id+'/'+r.version)) return null;
+      seen.add(r.document_id+'/'+r.version);
+      items.push({document_id:r.document_id,version:r.version,original_id:r.original_id,label:r.label,
+        project:r.project,body:r.body,truncated:r.truncated,raw_sha256:r.raw_sha256 as string,
+        collected_at:r.collected_at as number,projected_body_sha256:r.projected_body_sha256 as string,source_annotations:annotations});
+    }
+  }
+  return {kind:row.kind as AnnotationPage['kind'],review_id:row.review_id as string,group:group as number|null,
+    total,offset,next_offset:row.next_offset as number|null,checked_at:row.checked_at as number,items};
+}
+
+export function parseCollectionAnnotationReview(value: unknown, query: QualityQuery): { review: AnnotationReview; checked_at: number; candidates?: AnnotationPage } | null {
   const row = object(value), scope = object(row?.scope);
   if (!row || row.ok !== true || row.schema !== 3 || row.kind !== 'source_annotation_review'
     || !scope || !matchesScope(scope, query, false) || scope.coverage !== 'permitted_current_collection_memberships'
@@ -332,7 +398,10 @@ export function parseCollectionAnnotationReview(value: unknown, query: QualityQu
     || !checkedDate(row.checked_at) || !finiteNonnegative(row.elapsed_ms)
     || !count(row.versions_scanned) || (row.versions_scanned as number) > 100000) return null;
   const review = annotationReview(row.source_annotation_review, row.versions_scanned as number);
-  return review ? { review, checked_at: row.checked_at as number } : null;
+  const candidates=Object.hasOwn(row,'annotation_candidates') ? parseAnnotationCandidatePage(row.annotation_candidates,query) : undefined;
+  if (candidates===null || candidates && (candidates.kind!=='annotation_candidate_groups' || candidates.offset!==0
+    || candidates.total!==review?.counts.same_projected_body_groups_with_tag_differences)) return null;
+  return review ? { review, checked_at: row.checked_at as number,...(candidates?{candidates}:{}) } : null;
 }
 
 export function parseCollectionQuality(value: unknown, query: QualityQuery): QualityResult | null {
@@ -475,7 +544,10 @@ export class KnowledgeQualityPanel {
     this.button.addEventListener('click', () => { void this.request(); }, { signal: this.controls.signal });
     this.report.addEventListener('click', event => {
       const target = event.target as Element | null;
-      if (target?.closest?.('button.knowledge-quality-annotations')) void this.request(false, true);
+      const candidate=target?.closest?.('button[data-annotation-offset]') as HTMLButtonElement|null;
+      if (candidate) void this.requestCandidate(Number(candidate.dataset.annotationOffset),
+        candidate.dataset.annotationGroup===undefined?undefined:Number(candidate.dataset.annotationGroup));
+      else if (target?.closest?.('button.knowledge-quality-annotations')) void this.request(false, true);
       else if (target?.closest?.('button.knowledge-quality-compare')) void this.request(true);
     }, { signal: this.controls.signal });
     this.info.addEventListener('toggle', () => { if (!this.info.open) this.invalidate(); }, { signal: this.controls.signal });
@@ -576,7 +648,8 @@ export class KnowledgeQualityPanel {
         const inspection = parseCollectionAnnotationReview(response, query);
         if (inspection && this.lastReport) {
           const base = { ...this.lastReport }; delete base.comparison_samples;
-          result = { ...base, source_annotation_review: inspection.review, annotation_checked_at: inspection.checked_at };
+          result = { ...base, source_annotation_review: inspection.review, annotation_checked_at: inspection.checked_at,
+            ...(inspection.candidates?{annotation_candidates:inspection.candidates}:{}) };
         } else result = null;
       }
       if (!result || (result.ok && (includeSamples && !result.comparison_samples
@@ -607,6 +680,34 @@ export class KnowledgeQualityPanel {
           this.updateButton();
         }
       }
+    }
+  }
+
+  private async requestCandidate(offset:number,group?:number):Promise<void> {
+    this.syncSelection();
+    const query=qualityQueryFromSelection(this.selection),page=this.lastReport?.annotation_candidates;
+    if (!query||!page||!this.active||this.disposed||!this.info.open||this.pendingEpoch!==null
+      || this.root.getElementById('settings-page-memory')?.hidden) return;
+    const epoch=++this.epoch,selection=this.selection;
+    const expected={review_id:page.review_id,offset,...(group===undefined?{}:{group})};
+    this.pendingEpoch=epoch;this.updateButton();this.report.replaceChildren();this.report.hidden=true;
+    this.report.dataset.state='loading';this.status.textContent='태그 차이 후보의 현재 권한·버전을 확인 중입니다.';
+    try {
+      const response=await this.load('collection-quality',{query:JSON.stringify({...query,...expected})});
+      if (!this.current(epoch,selection)) return;
+      const result=parseAnnotationCandidatePage(response,query,expected);
+      if (!result||!this.lastReport) {
+        this.status.textContent='후보 목록이 바뀌었거나 현재 원문을 검증하지 못했습니다. 보존 원문 태그 검사를 다시 실행해 주세요.';
+        this.report.dataset.state='unavailable';
+      } else {
+        const value={...this.lastReport,annotation_candidates:result};delete value.comparison_samples;
+        this.lastReport=value;this.render(value);this.report.dataset.state='complete';
+        this.status.textContent='선택한 후보 페이지를 확인했습니다. 태그의 의미는 판정하지 않았습니다.';
+      }
+    } catch {
+      if (this.current(epoch,selection)) {this.status.textContent='후보 페이지를 가져오지 못했습니다. 다시 검사해 주세요.';this.report.dataset.state='unavailable';}
+    } finally {
+      if (this.pendingEpoch===epoch) {this.pendingEpoch=null;this.updateButton();}
     }
   }
 
@@ -791,6 +892,44 @@ export class KnowledgeQualityPanel {
         ['인물·기관 태그가 다른 그룹', review.fields.entityTags.body_groups_with_different_values],
       ], 'knowledge-quality-annotations');
       paragraph('검증된 보존 바이트를 가진 허용된 현재 내용 기록만 태그를 비교합니다. 원문·버전 검증에 실패한 기록과 미선언·미지원·한도 초과 필드는 태그 차이로 계산하지 않습니다. 차이·반복은 재검토 후보이며 어느 태그가 맞는지, 같은 인물·기관인지, 실제 중복인지 판정하거나 병합하지 않았습니다.', 'knowledge-quality-limit');
+    }
+    if (value.annotation_candidates) {
+      const page=value.annotation_candidates;
+      const candidateButton=(text:string,offset:number,group?:number)=>{
+        const button=this.root.createElement('button');button.type='button';button.className='knowledge-quality-compare';
+        button.textContent=text;button.dataset.annotationOffset=String(offset);
+        if(group!==undefined)button.dataset.annotationGroup=String(group);elements.push(button);
+      };
+      paragraph(`${page.kind==='annotation_candidate_groups'?'태그 차이 그룹':'선택 그룹의 원문'} · ${page.total}개 중 ${page.total? page.offset+1:0}–${Math.min(page.offset+page.items.length,page.total)}개 표시`, 'knowledge-quality-annotation-page');
+      if(page.kind==='annotation_candidate_groups') {
+        for(const item of page.items as AnnotationGroup[]) {
+          const fields=item.different_fields.map(k=>k==='topics'?'주제':'인물·기관').join(' · ');
+          candidateButton(`${item.group+1}. ${fields} 태그 차이 · 원문 ${item.members}개`,0,item.group);
+        }
+        if(!page.total)paragraph('현재 선언 태그가 다른 같은 본문 그룹은 없습니다. 의미 정확성을 검증한 결과는 아닙니다.');
+      } else {
+        for(const item of page.items as AnnotationRecord[]) {
+          const article=this.root.createElement('article');article.className='knowledge-quality-candidate-record';
+          article.dataset.document=item.document_id;
+          const heading=this.root.createElement('h3');heading.textContent=item.label.trim()||item.body.split('\n').find(line=>line.trim())?.slice(0,96)||'보존 원문';
+          const body=this.root.createElement('pre');body.textContent=item.body;
+          const note=this.root.createElement('p');note.className='knowledge-quality-limit';
+          note.textContent=`현재 버전의 보존 원문${item.truncated?' · 앞부분 4,000자':''}. 선언 태그의 내용·인물·기관 정확성은 미검증입니다.`;
+          article.append(heading,body,note);
+          for(const key of ['topics','entityTags'] as const) {
+            const field=item.source_annotations.fields[key],p=this.root.createElement('p');
+            p.className='knowledge-quality-source-tags';p.textContent=`${key==='topics'?'주제':'인물·기관'}: ${field.state==='declared'?field.values.join(' · ')||'선언된 빈 목록':field.state==='undeclared'?'미선언':field.state==='over_budget'?'한도 초과':'미지원 형식'}`;
+            article.append(p);
+          }
+          const proof=this.root.createElement('details'),summary=this.root.createElement('summary'),text=this.root.createElement('pre');
+          summary.textContent='원문 식별자·버전 확인';text.textContent=`${item.original_id}\n${item.version}\n${item.raw_sha256}`;
+          proof.append(summary,text);article.append(proof);elements.push(article);
+        }
+        candidateButton('태그 차이 그룹 목록',0);
+      }
+      if(page.offset>0)candidateButton('이전 후보 페이지',Math.max(0,page.offset-5),page.group??undefined);
+      if(page.next_offset!==null)candidateButton('다음 후보 페이지',page.next_offset,page.group??undefined);
+      paragraph('후보 목록은 최초 검사 시점의 메타데이터입니다. 페이지 열기에서 현재 범위를 확인하며, 표시할 원문의 버전·바이트를 다시 대사합니다. 변경·권한 철회·만료가 있으면 다시 검사해야 합니다. 태그를 수정하거나 원문·신원을 병합하지 않았습니다.','knowledge-quality-limit');
     }
     paragraph('일반 품질 집계는 해시 참조 기준으로, 원문 바이트를 다시 읽지 않았습니다. 원문 비교는 표시한 원문만, 원문 태그 검사는 허용된 현재 내용 기록의 보존 바이트를 각각 대사합니다. NFC·줄바꿈 차이는 관찰만 하며 본문 공백을 유지하고 수정하지 않습니다. 의미상 중복·타당성·이상 여부는 판정하지 않았습니다.', 'knowledge-quality-limit');
     this.report.replaceChildren(...elements);

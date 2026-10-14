@@ -91,7 +91,7 @@ def _annotation_facts(source):
     return result
 
 
-def _annotation_review(by_member, body_groups, *, inspected, sample_cap, check):
+def _annotation_review(by_member, body_groups, *, inspected, sample_cap, check, candidates=None):
     fields = {key: Counter({state: 0 for state in
         ('declared', 'undeclared', 'unsupported', 'over_budget', 'repeated_values',
          'body_groups_with_different_values')}) for key in ANNOTATION_FIELDS}
@@ -122,6 +122,10 @@ def _annotation_review(by_member, body_groups, *, inspected, sample_cap, check):
         if different_fields:
             different += 1
             members += len(group)
+            if candidates is not None:
+                candidates.append({'project':project,'projected_body_sha256':body_hash,
+                    'different_fields':different_fields,'members':len(group),
+                    'source_versions':[{'document_id':member[1],'version':member[2]} for member in sorted(group)]})
             if taken[project] < sample_cap:
                 samples.append({'project': project, 'projected_body_sha256': body_hash,
                     'different_fields': different_fields, 'members': len(group),
@@ -142,7 +146,7 @@ def _annotation_review(by_member, body_groups, *, inspected, sample_cap, check):
 
 
 def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*1024,
-                      timeout=20, sample_cap=0, cancelled=None):
+                      timeout=20, sample_cap=0, cancelled=None, collect_candidates=False):
     """Source/version-bound tag review; no retrieval vectors or relations scan."""
     if (not isinstance(projects, (list, tuple)) or not 1 <= len(projects) <= 16
             or any(not isinstance(p, str) or not p or len(p) > 128 for p in projects)
@@ -156,6 +160,8 @@ def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*102
     projects = sorted(set(projects)); started = time.monotonic(); next_cancel_check = started
     rows, bytes_read = 0, 0
     annotations, groups, cached, blobs, findings = {}, defaultdict(set), {}, {}, Counter()
+    if type(collect_candidates) is not bool:raise ValueError('quality_budget_invalid')
+    scope_digest=None
     def check():
         nonlocal next_cancel_check
         now = time.monotonic()
@@ -220,13 +226,18 @@ def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*102
                 facts, body_hash = cached[key];member = (project,document,version)
                 annotations[member] = facts
                 if body_hash is not None:groups[(project,body_hash)].add(member)
-    check()
-    return {'schema':1,'mode':'read_only_source_annotations','projects':projects,
+        if collect_candidates:
+            from alden_annotation_candidates import scope_fingerprint
+            scope_digest=scope_fingerprint(db,projects,check)
+    check();candidates=[] if collect_candidates else None
+    result={'schema':1,'mode':'read_only_source_annotations','projects':projects,
         'source_verification_requested':True,'findings':dict(findings),
-        'source_annotation_review':_annotation_review(annotations,groups,inspected=True,sample_cap=sample_cap,check=check),
+        'source_annotation_review':_annotation_review(annotations,groups,inspected=True,sample_cap=sample_cap,check=check,candidates=candidates),
         'coverage':{'status':'complete','source_verification':'retained_canonical_json',
             'scope':'current_permitted_memberships_only','versions_scanned':rows,'bytes_examined':bytes_read},
         'elapsed_s':time.monotonic()-started}
+    if collect_candidates:result.update(candidate_groups=candidates,scope_digest=scope_digest)
+    return result
 
 
 def audit(root, projects, *, verify_sources=False, max_rows=100000,

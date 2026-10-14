@@ -2513,6 +2513,25 @@ fn settings_action_args(
             let value=bounded_arg(query,4096).ok_or(BridgeError::ActionNotAllowed)?;
             let parsed:Value=serde_json::from_str(&value).map_err(|_| BridgeError::ActionNotAllowed)?;
             let object=parsed.as_object().ok_or(BridgeError::ActionNotAllowed)?;
+            if object.contains_key("review_id") {
+                let expected=if object.get("scope").and_then(Value::as_str)==Some("project") {4} else {3};
+                let group_field=usize::from(object.contains_key("group"));
+                let review=object.get("review_id").and_then(Value::as_str).is_some_and(|v|
+                    v.len()==64 && v.bytes().all(|c|c.is_ascii_digit() || (b'a'..=b'f').contains(&c)));
+                let offset=object.get("offset").and_then(Value::as_u64).is_some_and(|v|v<=100000 && v%5==0);
+                let group=object.get("group").is_none_or(|v|v.as_u64().is_some_and(|n|n<50000));
+                let scope=match object.get("scope").and_then(Value::as_str) {
+                    Some("all")=>true,
+                    Some("project")=>object.get("project").and_then(Value::as_str).is_some_and(|p|
+                        !p.is_empty() && p.chars().count()<=128 && p==p.trim() && !p.chars().any(char::is_control)),
+                    _=>false,
+                };
+                if !(review && offset && group && scope && object.len()==expected+group_field) {
+                    return Err(BridgeError::ActionNotAllowed);
+                }
+                args.extend(["--history-query".into(),value]);
+                return Ok(args);
+            }
             let sample_field=usize::from(object.contains_key("include_samples"));
             if object.get("include_samples").is_some_and(|v|!v.is_boolean()) {return Err(BridgeError::ActionNotAllowed);}
             let annotation_field=usize::from(object.contains_key("include_annotation_review"));
@@ -5950,7 +5969,9 @@ mod tests {
         for query in [r#"{"scope":"all"}"#,r#"{"scope":"project","project":"all"}"#,
             r#"{"scope":"all","include_samples":true}"#,r#"{"scope":"project","project":"career","include_samples":false}"#,
             r#"{"scope":"all","include_annotation_review":true}"#,
-            r#"{"scope":"project","project":"career","include_samples":false,"include_annotation_review":true}"#] {
+            r#"{"scope":"project","project":"career","include_samples":false,"include_annotation_review":true}"#,
+            r#"{"scope":"all","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":5}"#,
+            r#"{"scope":"project","project":"career","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":0,"group":3}"#] {
             let args=settings_action_args("collection-quality",Some(query),None,None,None,None,None).unwrap();
             assert!(args.windows(2).any(|p|p==["--history-query",query]));
             assert!(!args.iter().any(|a|a=="--explicit-opt-in" || a=="--model"));
@@ -5958,7 +5979,10 @@ mod tests {
         for query in [None,Some("{}"),Some("[]"),Some(r#"{"scope":"all","project":"private"}"#),Some(r#"{"scope":"project","project":""}"#),Some(r#"{"scope":"all","verify_sources":true}"#),
             Some(r#"{"scope":"all","include_samples":"true"}"#),Some(r#"{"scope":"all","include_samples":true,"extra":true}"#),
             Some(r#"{"scope":"all","include_annotation_review":"true"}"#),
-            Some(r#"{"scope":"all","include_annotation_review":true,"include_samples":true}"#)] {
+            Some(r#"{"scope":"all","include_annotation_review":true,"include_samples":true}"#),
+            Some(r#"{"scope":"all","review_id":"bad","offset":0}"#),
+            Some(r#"{"scope":"all","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":1}"#),
+            Some(r#"{"scope":"all","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":0,"group":null}"#)] {
             assert!(settings_action_args("collection-quality",query,None,None,None,None,None).is_err());
         }
         assert!(settings_action_args("collection-quality",Some(r#"{"scope":"all"}"#),Some("node"),None,None,None,None).is_err());

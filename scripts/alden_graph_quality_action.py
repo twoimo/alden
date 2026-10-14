@@ -16,7 +16,7 @@ COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_cur
               'metadata_description_current_versions')
 ERRORS=frozenset(('quality_scope_unavailable','quality_scan_budget','quality_time_budget',
                  'quality_cancelled','quality_report_unavailable','quality_query_invalid',
-                 'quality_comparison_unavailable'))
+                 'quality_comparison_unavailable','quality_annotation_review_unavailable'))
 
 def _count(value):
     if type(value) is not int or not 0<=value<=9_007_199_254_740_991:
@@ -275,6 +275,11 @@ def read_action(state_root,query_raw,cancelled=None):
     started=time.monotonic()
     scope={'requested_scope':None,'requested_project':None}
     try:
+        try:value=_json(query_raw) if isinstance(query_raw,str) and len(query_raw.encode())<=4096 else None
+        except (ValueError,TypeError,RecursionError):raise ValueError('quality_query_invalid') from None
+        if isinstance(value,dict) and 'review_id' in value:
+            from alden_annotation_candidates import read_review
+            return read_review(state_root,value,cancelled=cancelled)
         mode,project,include_samples,include_annotations=_query(query_raw)
         scope={'requested_scope':mode,'requested_project':project}
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
@@ -289,13 +294,19 @@ def read_action(state_root,query_raw,cancelled=None):
         permissions=_bindings(store,projects)
         if include_annotations:
             verified=audit_annotations(state_root,projects,timeout=20,max_rows=100000,
-                max_bytes=512*1024*1024,cancelled=cancelled)
+                max_bytes=512*1024*1024,cancelled=cancelled,collect_candidates=True)
             review=_annotation_summary(verified,projects,_count(verified['coverage']['versions_scanned']))
             after=store.path.stat()
             if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)
                     or available!=_projects(store,mode,project) or permissions!=_bindings(store,projects)):
                 raise ValueError('quality_scope_unavailable')
             if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
+            from alden_annotation_candidates import create_review, initial_page
+            requested={'scope':mode}|({'project':project} if mode=='project' else {})
+            try:
+                review_id=create_review(state_root,requested,verified)
+                candidates=initial_page(requested,verified,review_id)
+            except (ValueError,RuntimeError,OSError):raise ValueError('quality_annotation_review_unavailable') from None
             checked=time.time();elapsed=(time.monotonic()-started)*1000
             if not math.isfinite(checked) or checked<=0 or not math.isfinite(elapsed) or elapsed<0:
                 raise ValueError('quality_report_unavailable')
@@ -303,7 +314,8 @@ def read_action(state_root,query_raw,cancelled=None):
                 'scope':{**scope,'projects':projects,'coverage':'permitted_current_collection_memberships',
                     'filters':'project_only','source_verification':'retained_canonical_json'},
                 'checked_at':checked,'elapsed_ms':round(elapsed,3),
-                'versions_scanned':verified['coverage']['versions_scanned'],'source_annotation_review':review}
+                'versions_scanned':verified['coverage']['versions_scanned'],'source_annotation_review':review,
+                'annotation_candidates':candidates}
         report=audit(state_root,projects,verify_sources=False,sample_cap=2 if include_samples else 0,
                      timeout=10,max_rows=100000,max_bytes=512*1024*1024,cancelled=cancelled)
         summary=_summary(report,projects)

@@ -298,6 +298,10 @@ impl Output {
                 | "knowledge-quality-comparison-compact-2.png"
                 | "knowledge-quality-annotations-default.png"
                 | "knowledge-quality-annotations-compact.png"
+                | "knowledge-quality-candidates-default.png"
+                | "knowledge-quality-candidates-compact.png"
+                | "knowledge-quality-candidate-record-default.png"
+                | "knowledge-quality-candidate-record-compact.png"
                 | "entity-compare-default.png"
                 | "entity-compare-compact.png"
                 | "entity-applied-default.png"
@@ -1318,6 +1322,37 @@ fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, dead
       return {positioned:true};})())"#.into(),deadline)?;
     publish(output,&format!("knowledge-quality-annotations-{size}.png"),&snapshot(window,deadline)?,deadline)?;
     state["annotationReview"]=annotations;
+    let candidates=collect_script(window,r#"JSON.stringify((()=>{
+      const buttons=[...document.querySelectorAll('button[data-annotation-group]')];
+      return {groups:buttons.length,page:document.querySelector('.knowledge-quality-annotation-page')?.textContent};})())"#.into(),deadline)?;
+    if candidates["groups"].as_u64().is_none_or(|v|v>5) {
+        return Err(format!("annotation candidates page invalid: {candidates}"));
+    }
+    collect_script(window,r#"JSON.stringify((()=>{
+      const heading=document.querySelector('.knowledge-quality-annotation-page');
+      const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+      if(heading)box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+      return {positioned:!!heading};})())"#.into(),deadline)?;
+    publish(output,&format!("knowledge-quality-candidates-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+    if candidates["groups"].as_u64().is_some_and(|v|v>0) {
+        collect_script(window,r#"JSON.stringify((()=>{document.querySelector('button[data-annotation-group]').click();return {requested:true};})())"#.into(),deadline)?;
+        wait()?;
+        let records=collect_script(window,r#"JSON.stringify((()=>{
+          const records=[...document.querySelectorAll('.knowledge-quality-candidate-record')];
+          const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+          if(records[0])box.scrollTop+=records[0].getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+          return {records:records.length,notice:records.every(r=>r.textContent.includes('미검증')),
+            bodyMax:Math.max(0,...records.map(r=>Array.from(r.querySelector('pre')?.textContent??'').length))};})())"#.into(),deadline)?;
+        if !records["records"].as_u64().is_some_and(|v|v>0 && v<=5)
+            || records["notice"]!=true || records["bodyMax"].as_u64().is_none_or(|v|v>4000) {
+            return Err(format!("annotation source records invalid: {records}"));
+        }
+        publish(output,&format!("knowledge-quality-candidate-record-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+        state["candidateRecords"]=records;
+    } else {
+        publish(output,&format!("knowledge-quality-candidate-record-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+    }
+    state["annotationCandidates"]=candidates;
     collect_script(window,r#"JSON.stringify((()=>{
       const button=document.querySelector('.knowledge-quality-compare:not(.knowledge-quality-annotations)');
       if(!button)throw Error('fresh source comparison request unavailable');
