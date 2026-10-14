@@ -1318,6 +1318,11 @@ fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, dead
       return {positioned:true};})())"#.into(),deadline)?;
     publish(output,&format!("knowledge-quality-annotations-{size}.png"),&snapshot(window,deadline)?,deadline)?;
     state["annotationReview"]=annotations;
+    collect_script(window,r#"JSON.stringify((()=>{
+      const button=document.querySelector('.knowledge-quality-compare:not(.knowledge-quality-annotations)');
+      if(!button)throw Error('fresh source comparison request unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    wait()?;
     for index in 0..2 {
         collect_script(window,format!(r#"JSON.stringify((()=>{{
           const group=document.querySelector('.knowledge-quality-comparison');if(group)group.open=true;

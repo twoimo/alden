@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { KnowledgeQualityPanel, parseCollectionQuality, qualityQueryFromSelection,
+import { KnowledgeQualityPanel, parseCollectionQuality, parseCollectionAnnotationReview, qualityQueryFromSelection,
   type QualityQuery } from '../knowledge/quality-panel';
 import { settingsMarkup } from '../ui';
 import type { fetchSettingsAction } from '../runtime';
@@ -110,7 +110,9 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const panel of owned) panel.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 function withAnnotationReview() {
-  return { ...withComparisons(), source_annotation_review: {
+  const base = withComparisons();
+  return { ...base, kind: 'source_annotation_review', versions_scanned: 4,
+    scope: { ...base.scope, source_verification: 'retained_canonical_json' }, source_annotation_review: {
     policy: 'retained-annotation-review-v1', status: 'verified_retained_declarations', semantic_status: 'unverified',
     comparison: 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing',
     scope: 'permitted_current_content_versions_retained_bytes',
@@ -130,11 +132,13 @@ describe('manual collection-quality report and fixed native selectors', () => {
     setup(load); info().open = true; button().click(); await settle();
     expect(JSON.parse(calls(load)[0][1]!.query!)).toEqual({ scope: 'all' });
     (report().querySelector('.knowledge-quality-annotations') as HTMLButtonElement).click(); await settle();
-    expect(JSON.parse(calls(load)[1][1]!.query!)).toEqual({ scope: 'all', include_samples: true, include_annotation_review: true });
+    expect(JSON.parse(calls(load)[1][1]!.query!)).toEqual({ scope: 'all', include_annotation_review: true });
     expect(state()).toBe('complete');
     expect(metric('선언 태그가 다른 같은 본문 그룹')).toBe('1');
     expect(metric('원문·버전 검증 오류 발견 건수')).toBe('1');
     expect(report().textContent).toContain('어느 태그가 맞는지');
+    expect(report().textContent).toContain('별도 요청입니다');
+    expect(report().querySelector('.knowledge-quality-comparison')).toBeNull();
   });
 
   it('does not show completion when explicitly requested tag inspection is missing', async () => {
@@ -153,7 +157,7 @@ describe('manual collection-quality report and fixed native selectors', () => {
       (r: ReturnType<typeof withAnnotationReview>['source_annotation_review']) => { r.binding_findings.source_blob_invalid = -1; },
     ]) {
       const value = withAnnotationReview(); change(value.source_annotation_review);
-      expect(parseCollectionQuality(value, all)).toBeNull();
+      expect(parseCollectionAnnotationReview(value, all)).toBeNull();
     }
   });
   it('shows independently bound tag differences without approving identity or executing markup', async () => {

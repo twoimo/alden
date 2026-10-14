@@ -57,12 +57,13 @@ class QualityActionContractTests(unittest.TestCase):
                 action,'audit_annotations',wraps=quality.audit_annotations) as annotations:
             result=action.read_action(self.root,query)
         self.assertTrue(result['ok'],result)
-        self.assertEqual([c.kwargs['verify_sources'] for c in watched.call_args_list],[False])
+        self.assertEqual(watched.call_count,0)
         self.assertEqual(annotations.call_count,1)
         review=result['source_annotation_review']
         self.assertEqual(review['counts']['same_projected_body_groups_with_tag_differences'],1)
         self.assertEqual(review['semantic_status'],'unverified')
-        self.assertEqual(result['scope']['source_verification'],'hash_references_only')
+        self.assertEqual(result['scope']['source_verification'],'retained_canonical_json')
+        self.assertEqual(result['kind'],'source_annotation_review')
         self.assertNotIn('samples',review)
         self.assertFalse(any(review['binding_findings'].values()))
         self.assertEqual(self.store.path.read_bytes(),before)

@@ -33,6 +33,7 @@ def _query(raw):
     if type(include_samples) is not bool:raise ValueError('quality_query_invalid')
     include_annotations=value.pop('include_annotation_review',False)
     if type(include_annotations) is not bool:raise ValueError('quality_query_invalid')
+    if include_annotations and include_samples:raise ValueError('quality_query_invalid')
     scope=value.get('scope')
     if scope=='all' and set(value)=={'scope'}:return scope,None,include_samples,include_annotations
     project=value.get('project')
@@ -227,7 +228,8 @@ def _summary(report,projects):
             'declared_fields':validate_declared_summary(report.get('declared_field_normalization'),counts['project_current_versions'])}}
 
 def _annotation_summary(report, projects, maximum):
-    if (report.get('projects') != projects or report.get('source_verification_requested') is not True
+    if (report.get('schema') != 1 or report.get('mode') != 'read_only_source_annotations'
+            or report.get('projects') != projects or report.get('source_verification_requested') is not True
             or report.get('coverage', {}).get('status') != 'complete'
             or report.get('coverage', {}).get('source_verification') != 'retained_canonical_json'):
         raise ValueError('quality_report_unavailable')
@@ -285,6 +287,23 @@ def read_action(state_root,query_raw,cancelled=None):
         projects=available if mode=='all' else [project]
         if project is not None and project not in available:raise ValueError('quality_scope_unavailable')
         permissions=_bindings(store,projects)
+        if include_annotations:
+            verified=audit_annotations(state_root,projects,timeout=20,max_rows=100000,
+                max_bytes=512*1024*1024,cancelled=cancelled)
+            review=_annotation_summary(verified,projects,_count(verified['coverage']['versions_scanned']))
+            after=store.path.stat()
+            if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)
+                    or available!=_projects(store,mode,project) or permissions!=_bindings(store,projects)):
+                raise ValueError('quality_scope_unavailable')
+            if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
+            checked=time.time();elapsed=(time.monotonic()-started)*1000
+            if not math.isfinite(checked) or checked<=0 or not math.isfinite(elapsed) or elapsed<0:
+                raise ValueError('quality_report_unavailable')
+            return {'ok':True,'schema':3,'kind':'source_annotation_review',
+                'scope':{**scope,'projects':projects,'coverage':'permitted_current_collection_memberships',
+                    'filters':'project_only','source_verification':'retained_canonical_json'},
+                'checked_at':checked,'elapsed_ms':round(elapsed,3),
+                'versions_scanned':verified['coverage']['versions_scanned'],'source_annotation_review':review}
         report=audit(state_root,projects,verify_sources=False,sample_cap=2 if include_samples else 0,
                      timeout=10,max_rows=100000,max_bytes=512*1024*1024,cancelled=cancelled)
         summary=_summary(report,projects)
@@ -294,13 +313,6 @@ def read_action(state_root,query_raw,cancelled=None):
                 if time.monotonic()-started>10:raise RuntimeError('quality_time_budget')
             check()
             summary['comparison_samples']=_comparison_samples(store,report,projects,check)
-        if include_annotations:
-            remaining = 20 - (time.monotonic() - started)
-            if remaining <= 0:raise RuntimeError('quality_time_budget')
-            verified = audit_annotations(state_root, projects, sample_cap=0,
-                timeout=remaining, max_rows=100000, max_bytes=512*1024*1024, cancelled=cancelled)
-            summary['source_annotation_review'] = _annotation_summary(verified, projects,
-                summary['counts']['project_current_versions'])
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         after=store.path.stat()
         if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)

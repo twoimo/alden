@@ -90,6 +90,7 @@ export type QualitySuccess = {
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified'; declared_fields: DeclaredFields };
   comparison_samples?: ComparisonSamples;
   source_annotation_review?: AnnotationReview;
+  annotation_checked_at?: number;
 };
 export type QualityFailure = { ok: false; schema: 3; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
@@ -319,6 +320,21 @@ function annotationReview(value: unknown, maximum: number): AnnotationReview | n
     counts: Object.fromEntries(names.map(key => [key, c[key]])) as AnnotationReview['counts'], fields: result };
 }
 
+export function parseCollectionAnnotationReview(value: unknown, query: QualityQuery): { review: AnnotationReview; checked_at: number } | null {
+  const row = object(value), scope = object(row?.scope);
+  if (!row || row.ok !== true || row.schema !== 3 || row.kind !== 'source_annotation_review'
+    || !scope || !matchesScope(scope, query, false) || scope.coverage !== 'permitted_current_collection_memberships'
+    || scope.filters !== 'project_only' || scope.source_verification !== 'retained_canonical_json'
+    || !Array.isArray(scope.projects) || !scope.projects.length || scope.projects.length > 16
+    || new Set(scope.projects).size !== scope.projects.length
+    || !scope.projects.every(p => typeof p === 'string' && p.length > 0 && p.length <= 128)
+    || (query.scope === 'project' && (scope.projects.length !== 1 || scope.projects[0] !== query.project))
+    || !checkedDate(row.checked_at) || !finiteNonnegative(row.elapsed_ms)
+    || !count(row.versions_scanned) || (row.versions_scanned as number) > 100000) return null;
+  const review = annotationReview(row.source_annotation_review, row.versions_scanned as number);
+  return review ? { review, checked_at: row.checked_at as number } : null;
+}
+
 export function parseCollectionQuality(value: unknown, query: QualityQuery): QualityResult | null {
   const row = object(value), scope = object(row?.scope);
   if (!row || row.schema !== 3 || !scope) return null;
@@ -446,6 +462,7 @@ export class KnowledgeQualityPanel {
   private disposed = false;
   private epoch = 0;
   private pendingEpoch: number | null = null;
+  private lastReport: QualitySuccess | null = null;
 
   constructor(private readonly load: typeof fetchSettingsAction, private readonly root: Document = document) {
     this.selector = root.getElementById('knowledge-project') as HTMLSelectElement;
@@ -458,7 +475,7 @@ export class KnowledgeQualityPanel {
     this.button.addEventListener('click', () => { void this.request(); }, { signal: this.controls.signal });
     this.report.addEventListener('click', event => {
       const target = event.target as Element | null;
-      if (target?.closest?.('button.knowledge-quality-annotations')) void this.request(true, true);
+      if (target?.closest?.('button.knowledge-quality-annotations')) void this.request(false, true);
       else if (target?.closest?.('button.knowledge-quality-compare')) void this.request(true);
     }, { signal: this.controls.signal });
     this.info.addEventListener('toggle', () => { if (!this.info.open) this.invalidate(); }, { signal: this.controls.signal });
@@ -527,6 +544,7 @@ export class KnowledgeQualityPanel {
 
   private invalidate(): void {
     this.epoch++;
+    this.lastReport = null;
     this.pendingEpoch = null;
     this.report.replaceChildren();
     this.report.hidden = true;
@@ -553,7 +571,14 @@ export class KnowledgeQualityPanel {
         ...(includeSamples ? { include_samples: true } : {}),
         ...(includeAnnotations ? { include_annotation_review: true } : {}) }) });
       if (!this.current(epoch, selection)) return;
-      const result = parseCollectionQuality(response, query);
+      let result = parseCollectionQuality(response, query);
+      if (includeAnnotations && result?.ok !== false) {
+        const inspection = parseCollectionAnnotationReview(response, query);
+        if (inspection && this.lastReport) {
+          const base = { ...this.lastReport }; delete base.comparison_samples;
+          result = { ...base, source_annotation_review: inspection.review, annotation_checked_at: inspection.checked_at };
+        } else result = null;
+      }
       if (!result || (result.ok && (includeSamples && !result.comparison_samples
         || includeAnnotations && !result.source_annotation_review))) {
         this.status.textContent = '품질 보고서를 확인할 수 없습니다. 다시 요청할 수 있습니다.';
@@ -562,6 +587,7 @@ export class KnowledgeQualityPanel {
         this.status.textContent = ERROR_TEXT[result.reason] + ' 다시 요청할 수 있습니다.';
         this.report.dataset.state = 'unavailable';
       } else {
+        this.lastReport = result;
         this.render(result);
         this.status.textContent = '선택한 범위의 현재 수집 기록 확인을 마쳤습니다.';
         this.report.dataset.state = 'complete';
@@ -750,6 +776,10 @@ export class KnowledgeQualityPanel {
     annotationButton.textContent = '보존 원문 태그 검사'; elements.push(annotationButton);
     if (value.source_annotation_review) {
       const review = value.source_annotation_review, c = review.counts;
+      const inspectedAt = checkedDate(value.annotation_checked_at);
+      if (inspectedAt) paragraph(`원문 태그 확인: ${new Intl.DateTimeFormat('ko-KR', {
+        timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'medium',
+      }).format(inspectedAt)} · 위 일반 품질 집계와 별도 요청입니다.`);
       metrics('보존 원문 태그 검토', [
         ['원문·버전 검증 오류 발견 건수', Object.values(review.binding_findings).reduce((sum, count) => sum + count, 0)],
         ['검사한 내용 기록의 현재 버전', c.source_versions_inspected],
