@@ -1,0 +1,18 @@
+# Late attempt observations without stale answers
+
+An installed 0.3.114 controlled handoff exposed a missing observation: an old request produced a real model response, a newer turn completed before the old response was released, and the old answer was correctly suppressed. `reserve_turn` had already marked the old request superseded, so the old worker's `cancel_turn` returned without storing its model-call metadata. An attempted generation could therefore disappear from request-level diagnostics even though no stale answer was committed.
+
+In 0.3.115, the original owning ticket may attach its first bounded generation observation to an already cancelled or superseded request. The same request/conversation/turn/context/owner validation applies. The insert is first-write-only. It does not revive an answer, change the request state, reason or timestamp, replace an existing observation, modify the newer turn, or enrich completed/retracted requests. Successful completion continues to reject stale tickets; it cannot store a stale answer or successful-completion metadata through that path.
+
+The initial installed probes used five actual saved Gemini 3.8 Flash/high/manual application generation calls in a private SQLite-backup clone of an earlier owned test ledger. Controlled barriers delayed a real response or a real stream event; generated output was not mocked. They observed:
+
+- A late old response was superseded, the new response contained the current requested code, and no old assistant row was committed. The old observation was missing; this check remains failed in the original evidence.
+- Cancellation after observing a real response-stream event returned cancelled with no assistant row and retained request metadata. This does not prove provider-side compute termination.
+- Cancellation after a real completed generation but before commit also withheld the answer.
+- Retracting an owning completed document source during an actual followup handoff caused the specific `assistant_file_context_changed` failure and prevented a new assistant row.
+
+Regression coverage checks the late superseded/cancelled observation, existing metadata immutability, the current answer and terminal timestamp, original-owner enforcement, and completed/retracted history. The original stale-success rejection remains. Related backend checks passed 101 tests. A candidate replay used the retained real response with its original request/turn/context identity in another owned clone and confirmed the missing metadata could be retained without a new model request or stale answer. It is not a production backfill or fresh candidate inference.
+
+Task evidence: `outputs/input-races-20261014/`. Installation, installed live verification, native packaging, remote source/CI and preservation are separate gates. The initial private-backup read-only observation failed before model requests; the existing backup was reconciled with the pinned runtime and only the private destination journal mode was changed. Original sources and their journal settings were untouched.
+
+Full18 remains active. These controlled backend probes do not establish natural human voice/barge-in, physical primary input, independent multiple hosts, all source-retention/identity semantics, upstream server cancellation, representative resource/billing results or a signed/notarized production release. The requested Web GPT-6 parallel model is not listed in the current delegation capability; no other model or additional paid capacity was substituted.

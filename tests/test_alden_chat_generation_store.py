@@ -6,7 +6,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'scripts'))
-from alden_chat_turns import reserve_turn,complete_turn,cancel_turn,StaleTurn,get_request
+from alden_chat_turns import reserve_turn,complete_turn,cancel_turn,StaleTurn,TurnConflict,get_request
 from alden_history import database,read
 
 class GenerationStoreTests(unittest.TestCase):
@@ -60,6 +60,49 @@ class GenerationStoreTests(unittest.TestCase):
         with database(self.root) as db:
             self.assertEqual(db.execute('SELECT count(*) FROM alden_chat_generations').fetchone()[0],0)
             self.assertEqual(db.execute("SELECT count(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
+
+    def test_late_superseded_observation_keeps_new_answer_and_terminal_state(self):
+        old=reserve_turn(self.root,'1'*32,None,'이전 질문')
+        new=reserve_turn(self.root,'2'*32,old['conversation_id'],'현재 질문')
+        current=complete_turn(self.root,new,'현재 답변',generation={'schema_version':1})
+        with database(self.root) as db:
+            before=tuple(db.execute('SELECT state,reason,updated_at FROM alden_chat_requests WHERE request_id=?',(old['request_id'],)).fetchone())
+        observation={'schema_version':1,'terminal_state':'superseded','timing':{'elapsed_ms':12}}
+        cancel_turn(self.root,old,reason='superseded',generation=observation)
+        self.assertEqual(get_request(self.root,old['request_id'])['generation'],observation)
+        self.assertEqual(get_request(self.root,new['request_id']),{k:v for k,v in current.items() if k!='owner_id'})
+        with database(self.root) as db:
+            after=tuple(db.execute('SELECT state,reason,updated_at FROM alden_chat_requests WHERE request_id=?',(old['request_id'],)).fetchone())
+            self.assertEqual(before,after)
+            self.assertEqual(db.execute("SELECT count(*) FROM voice_messages WHERE turn_id=? AND role='assistant'",(old['turn_id'],)).fetchone()[0],0)
+
+    def test_late_cancelled_observation_is_first_write_only(self):
+        ticket=reserve_turn(self.root,'1'*32,None,'취소된 질문')
+        cancel_turn(self.root,ticket)
+        observation={'schema_version':1,'terminal_state':'cancelled','timing':{'elapsed_ms':18}}
+        cancel_turn(self.root,ticket,generation=observation)
+        self.assertEqual(get_request(self.root,ticket['request_id'])['generation'],observation)
+        cancel_turn(self.root,ticket,reason='failed',generation={'schema_version':1,'timing':{'elapsed_ms':99}})
+        self.assertEqual(get_request(self.root,ticket['request_id'])['generation'],observation)
+        self.assertEqual(get_request(self.root,ticket['request_id'])['state'],'cancelled')
+
+    def test_late_observation_requires_original_owner(self):
+        old=reserve_turn(self.root,'1'*32,None,'이전 질문')
+        reserve_turn(self.root,'2'*32,old['conversation_id'],'새 질문')
+        foreign={**old,'owner_id':'f'*32}
+        with self.assertRaises(TurnConflict):
+            cancel_turn(self.root,foreign,reason='superseded',generation={'schema_version':1})
+        self.assertNotIn('generation',get_request(self.root,old['request_id']))
+
+    def test_late_failure_metadata_does_not_enrich_completed_or_retracted_answer(self):
+        ticket=reserve_turn(self.root,'1'*32,None,'완료된 질문')
+        complete_turn(self.root,ticket,'보존한 답변')
+        cancel_turn(self.root,ticket,generation={'schema_version':1})
+        self.assertNotIn('generation',get_request(self.root,ticket['request_id']))
+        self.assertEqual(get_request(self.root,ticket['request_id'])['reply'],'보존한 답변')
+        cancel_turn(self.root,ticket,reason='retracted')
+        cancel_turn(self.root,ticket,reason='failed',generation={'schema_version':1})
+        self.assertNotIn('generation',get_request(self.root,ticket['request_id']))
 
     def test_invalid_generation_keeps_pending_state_and_has_no_partial_answer(self):
         ticket=reserve_turn(self.root,'1'*32,None,'질문')

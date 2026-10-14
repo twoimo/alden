@@ -641,6 +641,13 @@ def cancel_turn(state_root: Path, ticket: dict, *, reason: str = 'cancelled', ge
             db.execute('''UPDATE alden_chat_requests SET state='retracted',reason=?,updated_at=?
                           WHERE request_id=? AND state='completed' AND owner_id=?''',
                        (reason, time.time(), row['request_id'], row['owner_id']))
+        elif row['state'] in ('cancelled', 'superseded') and observation is not None:
+            # A new turn may have closed this request before its real adapter
+            # returned. Keep the owning attempt's first observation without
+            # reviving a reply or changing the durable state/reason/timestamp.
+            db.execute('''INSERT INTO alden_chat_generations(request_id,metadata_json,recorded_at)
+                          VALUES(?,?,?) ON CONFLICT(request_id) DO NOTHING''',
+                       (row['request_id'], observation, time.time()))
         return _receipt(db, _row(db, row['request_id']), include_owner=True)
 
 
