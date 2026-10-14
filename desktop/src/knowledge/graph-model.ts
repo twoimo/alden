@@ -46,7 +46,7 @@ export interface KnowledgeNode {
   sourceTarget?: string;
   sourcePlatform?: string;
   sourceUrl?: string;
-  contentEvidence?: 'metadata_only' | 'source_metadata_only' | 'unread_body_marker' | 'metadata_description' | 'content_candidate';
+  contentEvidence?: 'metadata_only' | 'source_metadata_only' | 'unread_body_marker' | 'metadata_description' | 'reference_only' | 'content_candidate';
   degree?: number;
   degreeScope?: string;
   resolution?: KnowledgeResolution;
@@ -178,7 +178,7 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         sourceTarget: stringValue(item.source_target).slice(0, 256),
         sourcePlatform: stringValue(item.source_platform).slice(0, 32),
         sourceUrl: stringValue(item.source_url).slice(0, 4096),
-        contentEvidence: ['metadata_only','source_metadata_only','unread_body_marker','metadata_description','content_candidate'].includes(stringValue(objectValue(item.source_metadata)?.content_evidence))
+        contentEvidence: ['metadata_only','source_metadata_only','unread_body_marker','metadata_description','reference_only','content_candidate'].includes(stringValue(objectValue(item.source_metadata)?.content_evidence))
           ? stringValue(objectValue(item.source_metadata)?.content_evidence) as KnowledgeNode['contentEvidence'] : undefined,
         degree: typeof item.degree === 'number' && Number.isFinite(item.degree) ? Math.max(0, Math.floor(item.degree)) : undefined,
         degreeScope: stringValue(item.degree_scope),

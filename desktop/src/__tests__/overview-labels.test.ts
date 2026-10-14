@@ -4,6 +4,14 @@ import { selectOverviewLabels } from '../knowledge/overview-labels';
 
 const graph = (nodes: Array<Record<string, unknown>>) => parseKnowledgeGraph({nodes,edges:[]});
 describe('overview reading entry labels', () => {
+  it('keeps link references navigable while prioritizing substantive labels', () => {
+    const nodes=graph([
+      {id:'reference',label:'채용 절차 안내 링크',category:'document',degree:9999,source_metadata:{content_evidence:'reference_only'}},
+      {id:'body',label:'채용 절차의 실제 평가 기준',category:'document',degree:1,source_metadata:{content_evidence:'content_candidate'}},
+    ]).nodes;
+    expect(nodes).toHaveLength(2);expect(nodes[0].contentEvidence).toBe('reference_only');
+    expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['body']);
+  });
   it('shows saved subjects rather than high-degree authors and broad buckets', () => {
     const input=graph([
       {id:'a',label:'렉카박멸',category:'source_group',degree:9999,source_target:'one'},

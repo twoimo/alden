@@ -18,6 +18,28 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_bare_reference_is_preserved_but_never_claims_linked_body_or_body_grounding(self):
+        link='https://example.invalid/채용?revision=2#section'
+        reference=self.add(self.allowed,'bare-reference',link)
+        result=retrieve(self.root,'채용',projects=['one'],max_relations=0)
+        proof=next(p for p in result['fact_provenance'] if p.get('entity_id')==reference)
+        self.assertEqual(proof['content_evidence'],{'policy':'source-content-evidence-v5','classification':'reference_only'})
+        self.assertEqual(proof['truth_status'],'link_reference; referenced destination body unverified')
+        self.assertNotIn('selection_basis',proof)
+        self.assertEqual(result['body_evidence_coverage']['preferred'],0)
+        self.assertIn('[링크 참조 · 연결된 페이지 본문 미확인]','\n'.join(result['facts']))
+        self.assertIn(link,'\n'.join(result['facts']))
+
+    def test_real_prose_is_preferred_over_references_and_explicit_reference_lookup_survives(self):
+        references=[self.add(self.allowed,'reference-'+str(i),'https://example.invalid/채용/'+str(i)) for i in range(4)]
+        document=self.add(self.allowed,'prose','채용 평가 기준을 설명하는 실제 보존 본문입니다.')
+        result=retrieve(self.root,'채용',projects=['one'],max_entities=1,max_relations=0)
+        self.assertEqual(result['fact_provenance'][0]['entity_id'],document)
+        self.assertEqual(result['body_evidence_coverage']['preferred'],1)
+        pinned=retrieve(self.root,'채용',projects=['one'],also=[references[0]],max_entities=1,max_relations=0)
+        self.assertEqual(pinned['fact_provenance'][0]['entity_id'],references[0])
+        self.assertEqual(pinned['fact_provenance'][0]['content_evidence']['classification'],'reference_only')
+
     def title_matches(self, count, query='35년'):
         self.store.ingest(self.allowed,[{'original_id':'title-'+str(i),'label':query+' 영상 '+str(i),'text':''}
                                        for i in range(count)])

@@ -267,7 +267,8 @@ def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*102
                     body = projected if projected is not None else row['body']
                     evidence = content_evidence_class(metadata,body,source=source,
                         body_source='retained_record.localOriginalText' if projected is not None else 'stored_body')
-                    if evidence == 'content_candidate':cached[key] = (facts,digest(projected.encode()) if projected is not None else None)
+                    if evidence in ('content_candidate', 'reference_only'):
+                        cached[key] = (facts,digest(projected.encode()) if projected is not None else None)
                 except (ValueError,TypeError,RecursionError):
                     findings['metadata_invalid'] += 1
             if cached[key] is not None:
@@ -514,7 +515,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             evidence_class = content_evidence_class(metadata, effective_body,
                 source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
                 body_source=body_source) if metadata_valid else None
-            if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description'):
+            if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description', 'reference_only'):
                 counts['noncontent_current_versions'] += 1
                 counts[evidence_class + '_current_versions'] += 1
             # Inspect the immutable stored projection, independently of titles
@@ -523,17 +524,18 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
                 body_source='stored_body') if metadata_valid else None
             if (verify_sources and metadata_valid and source_verified.get(blob_key)
-                    and stored_class == 'content_candidate' and projected_originals.get(blob_key)):
+                    and stored_class in ('content_candidate', 'reference_only') and projected_originals.get(blob_key)):
                 projected_body_entries[(row['project'], projected_originals[blob_key])].add(unique)
             if (verify_sources and metadata_valid and source_verified.get(blob_key)
-                    and evidence_class == 'content_candidate'):
+                    and evidence_class in ('content_candidate', 'reference_only')):
                 member_annotations[unique] = source_annotations[blob_key]
-            if (metadata_valid and stored_class == 'content_candidate'
+            if (metadata_valid and stored_class in ('content_candidate', 'reference_only')
                     and _substantive_field(body)
                     and (not verify_sources or source_verified.get(blob_key) is True)):
-                body_counts['eligible_current_versions'] += 1
-                body_counts['without_substantive_label'] += not _substantive_field(label, title=True)
-                reference_only = re.fullmatch(r'(?:https?://[^\s]+\s*)+', body.strip()) is not None
+                reference_only = stored_class == 'reference_only'
+                if not reference_only:
+                    body_counts['eligible_current_versions'] += 1
+                    body_counts['without_substantive_label'] += not _substantive_field(label, title=True)
                 body_counts['reference_only_current_versions'] += reference_only
                 entries = reference_entries if reference_only else body_entries
                 entries[(row['project'], digest(normalized_body(body).encode()))].add(unique)
@@ -756,6 +758,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                    'vector_profiles_mixed_dimensions', 'noncontent_current_versions',
                    'metadata_only_current_versions', 'unread_body_marker_current_versions',
                    'metadata_description_current_versions', 'source_metadata_only_current_versions',
+                   'reference_only_current_versions',
                    'duplicate_text_source_unverified'):
         counts.setdefault(metric, 0)
     check()

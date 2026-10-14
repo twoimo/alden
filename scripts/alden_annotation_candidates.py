@@ -11,7 +11,7 @@ import time
 
 from alden_collection import CollectionStore, encoded, digest, identity, safe_directory
 from alden_source_text import project_source_text
-from alden_content_evidence import declared_source_annotations
+from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations
 
 POLICY='retained-annotation-candidates-v1'
 PAGE_SIZE=5
@@ -200,10 +200,15 @@ def read_review(state_root, query, cancelled=None):
                     record=records[0]
                     raw=store._verified_source_blob(store.blobs,row['raw_path'],16*1024*1024);source=_json(raw)
                     original=source.get('localOriginalText') if isinstance(source,dict) else None
-                    if not isinstance(original,str) or digest(project_source_text(original,source)['body'].encode())!=group['projected_body_sha256']:
+                    if not isinstance(original,str):
                         raise ValueError('annotation_review_source_invalid')
-                    record.pop('source_url',None);record['body']=project_source_text(original,source)['body'][:4000]
-                    record['truncated']=len(project_source_text(original,source)['body'])>4000
+                    projected=project_source_text(original,source)
+                    if digest(projected['body'].encode())!=group['projected_body_sha256']:
+                        raise ValueError('annotation_review_source_invalid')
+                    record.pop('source_url',None);record['body']=projected['body'][:4000]
+                    record['truncated']=len(projected['body'])>4000
+                    record['content_evidence']={'policy':CONTENT_POLICY,'classification':content_evidence_class(
+                        metadata,projected['body'],source=source,body_source='retained_record.localOriginalText')}
                     record['projected_body_sha256']=group['projected_body_sha256']
                     record['project']=project;items.append(record)
                 kind='annotation_candidate_records'

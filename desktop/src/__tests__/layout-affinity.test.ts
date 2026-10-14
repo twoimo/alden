@@ -17,6 +17,10 @@ const sampledPayload = (ids = ['a', 'b']): any => {
 };
 
 describe('source-bound separate layout channel', () => {
+  it('rejects v4 affinities predating reference-only exclusion',()=>{
+    const payload=affinityPayload();payload.content_evidence_policy='source-content-evidence-v4';
+    expect(parseLayoutAffinity(payload,graph().nodes).reason).toBe('affinity_unverified_content_evidence');
+  });
   it('rejects old or unbound content policy instead of reusing filename affinity', () => {
     for (const key of ['content_evidence_policy', 'binding']) {
       const payload: any = affinityPayload(); delete payload[key];

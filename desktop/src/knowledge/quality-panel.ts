@@ -15,6 +15,7 @@ type QualityCounts = {
   metadata_only_current_versions: number;
   unread_body_marker_current_versions: number;
   metadata_description_current_versions: number;
+  reference_only_current_versions: number;
 };
 type QualityCandidates = {
   same_raw_bytes: { groups: number; status: 'hash_references_only' };
@@ -32,7 +33,7 @@ type QualityErrorCode = keyof typeof ERROR_TEXT;
 type AnnotationReview = {
   policy: 'retained-annotation-review-v1'; status: 'verified_retained_declarations'; semantic_status: 'unverified';
   comparison: 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing';
-  scope: 'permitted_current_content_versions_retained_bytes';
+  scope: 'permitted_current_body_records_retained_bytes';
   binding_findings: Record<'source_blob_invalid' | 'source_reference_invalid' | 'metadata_invalid' |
     'version_identity_mismatch' | 'projection_hash_mismatch' | 'retained_text_source_mismatch', number>;
   counts: { source_versions_inspected: number; records_with_repeated_values: number;
@@ -45,7 +46,8 @@ type AnnotationGroup = { group: number; project: string; projected_body_sha256: 
   different_fields: Array<'topics' | 'entityTags'>; members: number };
 type AnnotationRecord = { document_id: string; version: string; original_id: string; label: string;
   project: string; body: string; truncated: boolean; raw_sha256: string; collected_at: number;
-  projected_body_sha256: string; source_annotations: SourceAnnotations };
+  projected_body_sha256: string; source_annotations: SourceAnnotations;
+  content_evidence: {policy:'source-content-evidence-v5';classification:'content_candidate'|'reference_only'} };
 type AnnotationPage = { kind: 'annotation_candidate_groups' | 'annotation_candidate_records'; review_id: string;
   group: number | null; total: number; offset: number; next_offset: number | null; checked_at: number;
   items: Array<AnnotationGroup | AnnotationRecord> };
@@ -58,7 +60,7 @@ type ComparisonRecord = {
   label: string; target_label: string; body: string; body_source: 'stored_body' | 'retained_record.localOriginalText';
   truncated: boolean; matched_body: string; matched_body_truncated: boolean;
   collected_at: number; raw_sha256: string; basis: 'permitted_current_stored_record';
-  content_evidence: { policy: 'source-content-evidence-v4'; classification: string };
+  content_evidence: { policy: 'source-content-evidence-v5'; classification: string };
   source_annotations?: SourceAnnotations;
 };
 type ComparisonSamples = {
@@ -93,7 +95,7 @@ export type QualitySuccess = {
   duplicate_candidates: QualityCandidates;
   body_matches: BodyMatches;
   metadata_matches: Record<'within_context' | 'cross_context', { groups: number; status: 'metadata_match_not_content' }>;
-  content_evidence: { policy: 'source-content-evidence-v4'; status: 'source_declared_exclusions_not_semantic_verdict' };
+  content_evidence: { policy: 'source-content-evidence-v5'; status: 'source_declared_exclusions_not_semantic_verdict' };
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified'; declared_fields: DeclaredFields };
   comparison_samples?: ComparisonSamples;
@@ -253,7 +255,7 @@ function comparisonSamples(value: unknown, projects: string[], maxMembers: numbe
         || typeof record.truncated !== 'boolean' || typeof record.matched_body_truncated !== 'boolean'
         || !['stored_body', 'retained_record.localOriginalText'].includes(String(record.body_source))
         || !checkedDate(record.collected_at) || !sha(record.raw_sha256)
-        || !evidence || evidence.policy !== 'source-content-evidence-v4'
+        || !evidence || evidence.policy !== 'source-content-evidence-v5'
         || !['metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description', 'content_candidate'].includes(String(evidence.classification))
         || evidence.classification !== 'content_candidate'
         || annotations === null
@@ -265,7 +267,7 @@ function comparisonSamples(value: unknown, projects: string[], maxMembers: numbe
         body: record.body, body_source: record.body_source as ComparisonRecord['body_source'], truncated: record.truncated,
         matched_body: record.matched_body, matched_body_truncated: record.matched_body_truncated,
         collected_at: record.collected_at as number, raw_sha256: record.raw_sha256, basis: 'permitted_current_stored_record',
-        content_evidence: { policy: 'source-content-evidence-v4', classification: evidence.classification as string },
+        content_evidence: { policy: 'source-content-evidence-v5', classification: evidence.classification as string },
         ...(annotations ? { source_annotations: annotations } : {}) });
     }
     const pair = JSON.stringify([group.project,[...ids].sort()]);
@@ -300,7 +302,7 @@ function annotationReview(value: unknown, maximum: number): AnnotationReview | n
     || row.policy !== 'retained-annotation-review-v1'
     || row.status !== 'verified_retained_declarations' || row.semantic_status !== 'unverified'
     || row.comparison !== 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing'
-    || row.scope !== 'permitted_current_content_versions_retained_bytes'
+    || row.scope !== 'permitted_current_body_records_retained_bytes'
     || !names.every(key => count(counts[key]))) return null;
   const c = counts as AnnotationReview['counts'];
   if (c.source_versions_inspected > maximum || c.records_with_repeated_values > c.source_versions_inspected
@@ -325,7 +327,7 @@ function annotationReview(value: unknown, maximum: number): AnnotationReview | n
     || c.same_projected_body_groups_with_tag_differences > a + b) return null;
   return { policy: 'retained-annotation-review-v1', status: 'verified_retained_declarations', semantic_status: 'unverified',
     comparison: 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing',
-    scope: 'permitted_current_content_versions_retained_bytes',
+    scope: 'permitted_current_body_records_retained_bytes',
     binding_findings: Object.fromEntries(issueKeys.map(key => [key, issues[key]])) as AnnotationReview['binding_findings'],
     counts: Object.fromEntries(names.map(key => [key, c[key]])) as AnnotationReview['counts'], fields: result };
 }
@@ -368,18 +370,21 @@ export function parseAnnotationCandidatePage(value: unknown, query: QualityQuery
       items.push({group:r.group as number,project:r.project,projected_body_sha256:r.projected_body_sha256 as string,
         members:r.members as number,different_fields:r.different_fields as AnnotationGroup['different_fields']});
     } else {
-      const annotations=parseSourceAnnotations(r.source_annotations);
+      const annotations=parseSourceAnnotations(r.source_annotations),evidence=object(r.content_evidence);
       if (typeof r.document_id!=='string'||!r.document_id||r.document_id.length>256
         || typeof r.version!=='string'||!/^version:[a-f0-9]{64}$/.test(r.version)
         || typeof r.original_id!=='string'||!r.original_id||r.original_id.length>1024
         || typeof r.label!=='string'||r.label.length>1024
         || typeof r.body!=='string'||Array.from(r.body).length>4000||typeof r.truncated!=='boolean'
         || !sha(r.raw_sha256)||!checkedDate(r.collected_at)||!annotations
+        || evidence?.policy!=='source-content-evidence-v5'
+        || !['content_candidate','reference_only'].includes(String(evidence.classification))
         || seen.has(r.document_id+'/'+r.version)) return null;
       seen.add(r.document_id+'/'+r.version);
       items.push({document_id:r.document_id,version:r.version,original_id:r.original_id,label:r.label,
         project:r.project,body:r.body,truncated:r.truncated,raw_sha256:r.raw_sha256 as string,
-        collected_at:r.collected_at as number,projected_body_sha256:r.projected_body_sha256 as string,source_annotations:annotations});
+        collected_at:r.collected_at as number,projected_body_sha256:r.projected_body_sha256 as string,source_annotations:annotations,
+        content_evidence:{policy:'source-content-evidence-v5',classification:evidence.classification as 'content_candidate'|'reference_only'}});
     }
   }
   return {kind:row.kind as AnnotationPage['kind'],review_id:row.review_id as string,group:group as number|null,
@@ -444,21 +449,22 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
     || !['eligible_current_versions', 'without_substantive_label', 'reference_only_current_versions'].every(k => count(bodyCounts[k]))
     || (bodyCounts.eligible_current_versions as number) > (counts.project_current_versions as number)
     || (bodyCounts.without_substantive_label as number) > (bodyCounts.eligible_current_versions as number)
-    || (bodyCounts.reference_only_current_versions as number) > (bodyCounts.eligible_current_versions as number)
+    || (bodyCounts.reference_only_current_versions as number)+(bodyCounts.eligible_current_versions as number) > (counts.project_current_versions as number)
     || ![storedBody, references].every(item => count(item.groups) && count(item.members)
       && item.status === 'text_match_review_only' && (item.groups as number) * 2 <= (item.members as number)
       && Boolean(item.groups) === Boolean(item.members))
-    || (storedBody.members as number) > (bodyCounts.eligible_current_versions as number) - (bodyCounts.reference_only_current_versions as number)
+    || (storedBody.members as number) > (bodyCounts.eligible_current_versions as number)
     || (references.members as number) > (bodyCounts.reference_only_current_versions as number)
     || !(['memberships', 'project_current_versions', 'relations', 'distinct_current_documents', 'bytes_examined',
       'noncontent_current_versions', 'metadata_only_current_versions', 'unread_body_marker_current_versions',
-      'metadata_description_current_versions'] as const)
+      'metadata_description_current_versions','reference_only_current_versions'] as const)
       .every(key => count(counts[key]))
     || (counts.noncontent_current_versions as number) > (counts.project_current_versions as number)
     || (counts.metadata_only_current_versions as number) + (counts.unread_body_marker_current_versions as number)
       + (counts.metadata_description_current_versions as number)
+      + (counts.reference_only_current_versions as number)
       !== counts.noncontent_current_versions
-    || evidence.policy !== 'source-content-evidence-v4' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
+    || evidence.policy !== 'source-content-evidence-v5' || evidence.status !== 'source_declared_exclusions_not_semantic_verdict'
     || !count(metadataWithin.groups) || metadataWithin.status !== 'metadata_match_not_content'
     || !count(metadataCross.groups) || metadataCross.status !== 'metadata_match_not_content'
     || Object.keys(findings).length > 64
@@ -505,7 +511,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       within_context: { groups: metadataWithin.groups as number, status: 'metadata_match_not_content' },
       cross_context: { groups: metadataCross.groups as number, status: 'metadata_match_not_content' },
     },
-    content_evidence: { policy: 'source-content-evidence-v4', status: 'source_declared_exclusions_not_semantic_verdict' },
+    content_evidence: { policy: 'source-content-evidence-v5', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified', declared_fields: declared },
     ...(comparisons ? { comparison_samples: comparisons } : {}),
   };
@@ -844,6 +850,7 @@ export class KnowledgeQualityPanel {
       ['메타데이터만 있는 현재 버전', value.counts.metadata_only_current_versions],
       ['본문 미열람 안내만 있는 현재 버전', value.counts.unread_body_marker_current_versions],
       ['내용 대신 자료 설명만 있는 현재 버전', value.counts.metadata_description_current_versions],
+      ['링크 주소만 보존된 현재 버전', value.counts.reference_only_current_versions],
       ['같은 맥락의 이름·안내문 일치 그룹', value.metadata_matches.within_context.groups],
       ['교차 맥락의 이름·안내문 일치 그룹', value.metadata_matches.cross_context.groups],
     ]);
@@ -883,7 +890,7 @@ export class KnowledgeQualityPanel {
       }).format(inspectedAt)} · 위 일반 품질 집계와 별도 요청입니다.`);
       metrics('보존 원문 태그 검토', [
         ['원문·버전 검증 오류 발견 건수', Object.values(review.binding_findings).reduce((sum, count) => sum + count, 0)],
-        ['검사한 내용 기록의 현재 버전', c.source_versions_inspected],
+        ['태그를 검사한 현재 기록', c.source_versions_inspected],
         ['태그 비교가 가능한 같은 본문 그룹', c.same_projected_body_groups_compared],
         ['선언 태그가 다른 같은 본문 그룹', c.same_projected_body_groups_with_tag_differences],
         ['태그 차이 그룹의 현재 버전', c.same_body_group_members_with_tag_differences],
@@ -911,10 +918,13 @@ export class KnowledgeQualityPanel {
         for(const item of page.items as AnnotationRecord[]) {
           const article=this.root.createElement('article');article.className='knowledge-quality-candidate-record';
           article.dataset.document=item.document_id;
+          article.dataset.contentEvidence=item.content_evidence.classification;
           const heading=this.root.createElement('h3');heading.textContent=item.label.trim()||item.body.split('\n').find(line=>line.trim())?.slice(0,96)||'보존 원문';
           const body=this.root.createElement('pre');body.textContent=item.body;
           const note=this.root.createElement('p');note.className='knowledge-quality-limit';
-          note.textContent=`현재 버전의 보존 원문${item.truncated?' · 앞부분 4,000자':''}. 선언 태그의 내용·인물·기관 정확성은 미검증입니다.`;
+          note.textContent=item.content_evidence.classification==='reference_only'
+            ? '링크 주소만 보존됨 · 연결된 페이지의 본문은 확인하지 않았습니다. 선언 태그의 내용·인물·기관 정확성은 미검증입니다.'
+            : `현재 버전의 보존 원문${item.truncated?' · 앞부분 4,000자':''}. 선언 태그의 내용·인물·기관 정확성은 미검증입니다.`;
           article.append(heading,body,note);
           for(const key of ['topics','entityTags'] as const) {
             const field=item.source_annotations.fields[key],p=this.root.createElement('p');

@@ -8,6 +8,28 @@ from alden_content_evidence import content_evidence_class
 
 
 class ContentEvidenceTests(unittest.TestCase):
+    def test_addresses_are_references_even_when_indexed_or_source_bytes_are_verified(self):
+        for body in ('https://example.org/a?edition=2#section',
+                     ' HTTP://example.org/A\nhttps://example.org/B ',
+                     'https://example.org/한글?q=공기업'):
+            with self.subTest(body=body):
+                self.assertEqual(content_evidence_class({}, body), 'reference_only')
+                self.assertEqual(content_evidence_class({'content_indexed': True}, body,
+                    source={'content_indexed': True, 'localOriginalText': body},
+                    body_source='retained_record.localOriginalText'), 'reference_only')
+
+    def test_prose_quotes_and_short_authored_text_remain_content_candidates(self):
+        for body in ('채용 공고는 https://example.org/apply 에서 확인한다.',
+                     'URL 자체에 대한 주장: https://example.org',
+                     '"https://example.org"', '사과', '1. 절차를 확인한다.'):
+            with self.subTest(body=body):
+                self.assertEqual(content_evidence_class({}, body), 'content_candidate')
+
+    def test_reference_shape_does_not_override_noncontent_declarations(self):
+        body='https://example.org/apply'
+        self.assertEqual(content_evidence_class({'kind':'metadata'}, body), 'metadata_only')
+        self.assertEqual(content_evidence_class({}, body, source={'content_indexed':False}), 'source_metadata_only')
+
     def test_derived_summary_declaration_does_not_certify_original_body(self):
         metadata = {'coverage': 'existing privacy-filtered derived metadata; original bytes not opened'}
         self.assertEqual(content_evidence_class(metadata, 'Shop chassis pointer'),

@@ -565,7 +565,9 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             proof['content_evidence'] = {'policy': CONTENT_POLICY, 'classification': evidence_class}
             if row.get('text_projection') is not None:
                 proof['text_projection'] = {k:v for k,v in row['text_projection'].items() if k != 'separated_tail'}
-            if evidence_class != 'content_candidate':
+            if evidence_class == 'reference_only':
+                proof['truth_status'] = 'link_reference; referenced destination body unverified'
+            elif evidence_class != 'content_candidate':
                 proof['truth_status'] = 'source_description; original body unverified'
             if document_id in body_preferred:
                 proof['selection_basis'] = 'matching_current_version_bound_body; source truth not independently verified'
@@ -578,7 +580,9 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             except ValueError as error:
                 raise RuntimeError('collection_version_integrity') from error
             text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
-            if evidence_class != 'content_candidate':
+            if evidence_class == 'reference_only':
+                text='[링크 참조 · 연결된 페이지 본문 미확인] '+text
+            elif evidence_class != 'content_candidate':
                 text='[자료 설명 · 원래 본문 미확인] '+text
             if temporal_selection['mode']=='latest_observation':
                 proof['observation_time']=metadata.get('published_at');proof['observation_basis']='source_published_at'

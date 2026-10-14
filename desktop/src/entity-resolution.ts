@@ -19,7 +19,7 @@ function reviewableRecord(row: Row, member: Member): boolean {
   return row.basis === 'permitted_current_stored_record'
     && row.target_id === member.target_id && row.document_id === member.document_id && row.version === member.version
     && row.truncated === false && !!body
-    && evidence?.policy === 'source-content-evidence-v4' && evidence.classification === 'content_candidate';
+    && evidence?.policy === 'source-content-evidence-v5' && evidence.classification === 'content_candidate';
 }
 
 function matchesRequestedPlan(value: Row, project: string, members: Member[], reason: string): boolean {

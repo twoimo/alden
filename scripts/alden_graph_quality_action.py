@@ -13,7 +13,7 @@ from alden_normalization_evidence import validate_declared_summary
 
 COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_current_documents','bytes_examined',
               'noncontent_current_versions','metadata_only_current_versions','unread_body_marker_current_versions',
-              'metadata_description_current_versions')
+              'metadata_description_current_versions','reference_only_current_versions')
 ERRORS=frozenset(('quality_scope_unavailable','quality_scan_budget','quality_time_budget',
                  'quality_cancelled','quality_report_unavailable','quality_query_invalid',
                  'quality_comparison_unavailable','quality_annotation_review_unavailable'))
@@ -163,7 +163,7 @@ def _summary(report,projects):
             or counts['project_current_versions']>counts['memberships']):
         raise ValueError('quality_report_unavailable')
     if (counts['noncontent_current_versions']>counts['project_current_versions']
-            or counts['metadata_only_current_versions']+counts['unread_body_marker_current_versions']+counts['metadata_description_current_versions']
+            or counts['metadata_only_current_versions']+counts['unread_body_marker_current_versions']+counts['metadata_description_current_versions']+counts['reference_only_current_versions']
             !=counts['noncontent_current_versions']
             or report.get('content_evidence')!={'policy':POLICY,'status':'source_declared_exclusions_not_semantic_verdict'}):
         raise ValueError('quality_report_unavailable')
@@ -205,8 +205,8 @@ def _summary(report,projects):
     body_counts={key:_count(body['counts'].get(key)) for key in
         ('eligible_current_versions','without_substantive_label','reference_only_current_versions')}
     if (body_counts['eligible_current_versions']>counts['project_current_versions']
-            or any(body_counts[key]>body_counts['eligible_current_versions'] for key in
-                ('without_substantive_label','reference_only_current_versions'))):
+            or body_counts['without_substantive_label']>body_counts['eligible_current_versions']
+            or body_counts['eligible_current_versions']+body_counts['reference_only_current_versions']>counts['project_current_versions']):
         raise ValueError('quality_report_unavailable')
     body_candidates={}
     for key,classification in [('stored_body','stored_body_text_match_not_source_equivalence'),
@@ -216,7 +216,7 @@ def _summary(report,projects):
                 or item.get('classification')!=classification):
             raise ValueError('quality_report_unavailable')
         groups,members=_count(item.get('groups')),_count(item.get('distinct_document_members'))
-        available=body_counts['reference_only_current_versions'] if key=='reference_text' else body_counts['eligible_current_versions']-body_counts['reference_only_current_versions']
+        available=body_counts['reference_only_current_versions'] if key=='reference_text' else body_counts['eligible_current_versions']
         if members>available or groups*2>members or bool(groups)!=bool(members):
             raise ValueError('quality_report_unavailable')
         body_candidates[key]={'groups':groups,'members':members,'status':'text_match_review_only'}
@@ -268,7 +268,7 @@ def _annotation_summary(report, projects, maximum):
          'version_identity_mismatch', 'projection_hash_mismatch', 'retained_text_source_mismatch')}
     return {key: review[key] for key in ('policy', 'status', 'semantic_status', 'comparison')} | {
         'counts': counts, 'fields': fields, 'binding_findings': issues,
-        'scope': 'permitted_current_content_versions_retained_bytes'}
+        'scope': 'permitted_current_body_records_retained_bytes'}
 
 
 def read_action(state_root,query_raw,cancelled=None):

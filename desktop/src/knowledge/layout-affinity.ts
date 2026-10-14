@@ -114,7 +114,7 @@ export function parseLayoutAffinity(raw: unknown, nodes: readonly KnowledgeNode[
     return fail(reason);
   }
   if (value.state !== 'bounded_ready' && value.state !== 'bounded_partial') return fail('affinity_invalid_state');
-  if (value.content_evidence_policy !== 'source-content-evidence-v4'
+  if (value.content_evidence_policy !== 'source-content-evidence-v5'
     || !digest(object(value.binding)?.content_evidence_sha256)) return fail('affinity_unverified_content_evidence');
   const profile = object(value.profile);
   if (!profile || profile.model !== MODEL || profile.endpoint !== ENDPOINT || profile.encoding !== ENCODING || profile.dimension !== 384 || value.profile_sha256 !== PROFILE) return fail('affinity_incompatible_profile');

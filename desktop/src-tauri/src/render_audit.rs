@@ -1341,10 +1341,12 @@ fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, dead
           const records=[...document.querySelectorAll('.knowledge-quality-candidate-record')];
           const box=document.querySelector('#knowledge-info .knowledge-scope-block');
           if(records[0])box.scrollTop+=records[0].getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+          const references=records.filter(r=>r.dataset.contentEvidence==='reference_only');
           return {records:records.length,notice:records.every(r=>r.textContent.includes('미검증')),
+            references:references.length,referenceNotice:references.every(r=>r.textContent.includes('연결된 페이지의 본문은 확인하지 않았습니다')),
             bodyMax:Math.max(0,...records.map(r=>Array.from(r.querySelector('pre')?.textContent??'').length))};})())"#.into(),deadline)?;
         if !records["records"].as_u64().is_some_and(|v|v>0 && v<=5)
-            || records["notice"]!=true || records["bodyMax"].as_u64().is_none_or(|v|v>4000) {
+            || records["notice"]!=true || records["referenceNotice"]!=true || records["bodyMax"].as_u64().is_none_or(|v|v>4000) {
             return Err(format!("annotation source records invalid: {records}"));
         }
         publish(output,&format!("knowledge-quality-candidate-record-{size}.png"),&snapshot(window,deadline)?,deadline)?;

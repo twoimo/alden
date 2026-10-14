@@ -10,6 +10,21 @@ from alden_chat_turns import reserve_turn,complete_turn,cancel_turn,StaleTurn,ge
 from alden_history import database,read
 
 class GenerationStoreTests(unittest.TestCase):
+    def test_historical_v4_and_current_reference_proofs_keep_their_original_qualification(self):
+        for i,evidence in enumerate(({'policy':'source-content-evidence-v4','classification':'content_candidate'},
+                                    {'policy':'source-content-evidence-v5','classification':'reference_only'})):
+            request=str(i+1)*32
+            ticket=reserve_turn(self.root,request,None,'자료를 확인해 줘')
+            proof={'fact_type':'entity','source_kind':'collected_source','entity_id':'graph:reference',
+                   'note_id':'graph:reference','source_version':'version:original','note_hash':'a'*64,
+                   'provenance_valid':True,'content_evidence':evidence,
+                   'truth_status':'link_reference; referenced destination body unverified' if i else 'source_record; not independently verified'}
+            complete_turn(self.root,ticket,'보존된 자료 설명',provenance=[proof])
+            result=read(self.root,Path('/unused'),'voice-history-messages',chat_id=ticket['conversation_id'])
+            answer=next(x for x in result['items'] if x['role']=='assistant')
+            self.assertEqual(answer['retrieval_provenance'][0]['content_evidence'],evidence)
+            self.assertEqual(answer['retrieval_provenance'][0]['truth_status'],proof['truth_status'])
+
     def test_cancelled_observations_are_durable_without_answer_and_not_overwritten(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)

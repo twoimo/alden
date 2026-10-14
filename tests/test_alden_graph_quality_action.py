@@ -28,7 +28,7 @@ from alden_normalization_evidence import validate_declared_summary
 COUNTS = {
     "memberships", "project_current_versions", "relations",
     "distinct_current_documents", "bytes_examined",
-    "noncontent_current_versions", "metadata_only_current_versions", "unread_body_marker_current_versions", "metadata_description_current_versions",
+    "noncontent_current_versions", "metadata_only_current_versions", "unread_body_marker_current_versions", "metadata_description_current_versions", "reference_only_current_versions",
 }
 CANDIDATES = {
     "same_raw_bytes": "hash_references_only",
@@ -291,7 +291,7 @@ class QualityActionContractTests(unittest.TestCase):
         self.assertEqual(result['body_matches'], {
             'policy': 'stored-body-match-v1',
             'basis': 'current_stored_body_projection_not_original_equivalence',
-            'counts': {'eligible_current_versions': 4, 'without_substantive_label': 4,
+            'counts': {'eligible_current_versions': 2, 'without_substantive_label': 2,
                        'reference_only_current_versions': 2},
             'stored_body': {'groups': 1, 'members': 2, 'status': 'text_match_review_only'},
             'reference_text': {'groups': 1, 'members': 2, 'status': 'text_match_review_only'},

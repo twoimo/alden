@@ -1,8 +1,9 @@
 """Source declarations and typed descriptions; candidates are not truth verdicts."""
 import json
+import re
 from alden_collection import normalized_text
 
-POLICY = 'source-content-evidence-v4'
+POLICY = 'source-content-evidence-v5'
 ANNOTATION_POLICY = 'retained-declared-tags-v1'
 ANNOTATION_FIELDS = ('topics', 'entityTags')
 DERIVED_SUMMARY_COVERAGE = 'existing privacy-filtered derived metadata; original bytes not opened'
@@ -106,4 +107,8 @@ def content_evidence_class(metadata, body, *, source=None, body_source='stored_b
         kinds.append(source.get('kind'))
     if any(isinstance(kind, str) and text in METADATA_DESCRIPTIONS.get(kind, ()) for kind in kinds):
         return 'metadata_description'
+    # Literal addresses are retained source references, not fetched articles.
+    # This is a text-shape boundary; URLs and their identifiers stay untouched.
+    if re.fullmatch(r'https?://[^\s]+(?:\s+https?://[^\s]+)*', text, flags=re.IGNORECASE):
+        return 'reference_only'
     return 'content_candidate'

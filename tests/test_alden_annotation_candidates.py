@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from alden_collection import CollectionStore, identity
+from alden_collection import CollectionStore, digest, identity
 from alden_graph_quality import audit_annotations
 from alden_annotation_candidates import create_review, read_review
 
@@ -177,6 +177,24 @@ class AnnotationCandidateContractTests(unittest.TestCase):
         for entry in self.expected.values():
             self.assertNotIn(entry["body"], serialized)
             self.assertNotIn(entry["topic"], serialized)
+
+    def test_reference_pages_qualify_full_body_before_display_truncation(self):
+        link='https://example.invalid/apply?revision=2'
+        long_body=('https://example.invalid/apply ' * 160)+'뒤에 실제 본문 설명이 있습니다.'
+        self.store.ingest(self.one,[self._record('link-a',link,'A'),self._record('link-b',link,'B'),
+                                    self._record('long-a',long_body,'A'),self._record('long-b',long_body,'B')])
+        scope,report,review_id=self._review()
+        before=self._original_hashes()
+        by_hash={g['projected_body_sha256']:i for i,g in enumerate(report['candidate_groups'])}
+        for body,expected in ((link,'reference_only'),(long_body,'content_candidate')):
+            page=read_review(self.root,self._query(scope,review_id,group=by_hash[digest(body.encode())]))
+            self.assertTrue(page['ok'],page)
+            self.assertEqual(len(page['items']),2)
+            for row in page['items']:
+                self.assertEqual(row['content_evidence'],{'policy':'source-content-evidence-v5','classification':expected})
+                self.assertEqual(row['truncated'],len(body)>4000)
+                self.assertEqual(row['body'],body[:4000])
+        self.assertEqual(self._original_hashes(),before)
 
     def test_scan_exports_every_group_and_complete_version_membership(self):
         self._seed_groups()
