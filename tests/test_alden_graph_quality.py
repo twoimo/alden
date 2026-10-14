@@ -14,6 +14,25 @@ from alden_graph_quality import audit, audit_annotations
 
 
 class QualityTests(unittest.TestCase):
+    def test_annotation_cancellation_poll_is_throttled_and_still_observes_later_cancellation(self):
+        self.store.ingest(self.a,[self.annotated(str(i),['AI']) for i in range(100)])
+        with patch('alden_graph_quality.time.monotonic',side_effect=[i*.001 for i in range(2000)]):
+            calls=0
+            def cancelled():
+                nonlocal calls
+                calls+=1
+                return calls>=2
+            with self.assertRaisesRegex(RuntimeError,'quality_cancelled'):
+                audit_annotations(self.root,['one'],cancelled=cancelled)
+            self.assertEqual(calls,2)
+        calls=0
+        def available():
+            nonlocal calls
+            calls+=1
+            return False
+        audit_annotations(self.root,['one'],cancelled=available)
+        self.assertLess(calls,100)
+
     def test_annotation_scan_matches_verified_review_without_opening_retrieval_or_relations(self):
         self.store.ingest(self.a,[self.annotated('a',['AI']),self.annotated('b',['채용'])])
         full=audit(self.root,['one'],verify_sources=True,sample_cap=0)['source_annotation_review']

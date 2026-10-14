@@ -153,12 +153,16 @@ def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*102
         raise ValueError('quality_budget_invalid')
     store = CollectionStore.open_existing(Path(root))
     if store is None or store.schema != 3:raise ValueError('quality_existing_v3_store_required')
-    projects = sorted(set(projects)); started = time.monotonic()
+    projects = sorted(set(projects)); started = time.monotonic(); next_cancel_check = started
     rows, bytes_read = 0, 0
     annotations, groups, cached, blobs, findings = {}, defaultdict(set), {}, {}, Counter()
     def check():
-        if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
-        if time.monotonic()-started > timeout:raise RuntimeError('quality_time_budget')
+        nonlocal next_cancel_check
+        now = time.monotonic()
+        if cancelled is not None and now >= next_cancel_check:
+            next_cancel_check = now + .05
+            if cancelled():raise RuntimeError('quality_cancelled')
+        if now-started > timeout:raise RuntimeError('quality_time_budget')
         if rows > max_rows or bytes_read > max_bytes:raise RuntimeError('quality_scan_budget')
     with store.database() as db:
         marks = ','.join('?' for _ in projects)
