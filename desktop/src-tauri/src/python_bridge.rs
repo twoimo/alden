@@ -753,7 +753,11 @@ mod knowledge_revision_probe {
             }
 
             fn revision(&self) -> String {
-                probe(&self.0).expect("complete temp vault metadata")
+                // Lifecycle/inode semantics must not depend on ambient disk
+                // load. Production keeps MAX_TIME; explicit budget/fallback
+                // tests below exercise the deadline contract separately.
+                probe_with_budget(&self.0, MAX_ENTRIES, Duration::from_secs(3))
+                    .expect("complete temp vault metadata")
             }
         }
 
