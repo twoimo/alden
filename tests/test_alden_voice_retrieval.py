@@ -10,6 +10,19 @@ import alden_voice as voice
 from alden_abort import AbortController,AldenCancelled
 
 class VoiceRetrievalTests(unittest.TestCase):
+    def test_collection_date_bases_reach_model_and_metrics_without_changing_original_dates(self):
+        from alden_retrieval_time import collection_time_evidence,query_time_reference
+        with TemporaryDirectory() as td:
+            root=self.root(td);proof={'fact_type':'entity','source_kind':'collected_source','entity_id':'saved','note_id':'saved',
+                'updated_at':1791721513.554715,'source_author':{'date':'2026-02-17'},
+                'time_evidence':collection_time_evidence(1791721513.554715,'2026-02-17')}
+            clock=query_time_reference(1791922200)
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['26년 2월23일까지 채용'],'fact_provenance':[proof],'search_mode':'rrf'}),mock.patch('alden_retrieval_time.query_time_reference',return_value=clock):
+                reference,metrics=voice._voice_knowledge_reference('저장된 공고의 날짜를 알려줘',[],root,AbortController(root).token())
+            context=json.loads(reference.split('<quoted_local_history>')[1].split('</quoted_local_history>')[0])
+            self.assertEqual(context['graph_provenance'][0],proof);self.assertEqual(metrics['graph_provenance'][0],proof)
+            self.assertIn('원문 날짜 표기를 수집 날짜라고 바꾸어 말하지 마라',reference)
+            self.assertTrue(reference.startswith('이번 조회의 호스트 관측 시각(UTC): '+clock['observed_at_utc']))
     def test_explicit_saved_source_requests_route_without_generic_knowledge_nouns(self):
         requests=('저장된 하나저축은행 IT기획 공고를 근거로 지금 지원 가능한지 알려줘.',
                   '저장해 둔 영상 찾아줘', '수집한 게시물 요약해줘',

@@ -1603,7 +1603,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                 row['fact_truncated']=True
                 for source in row.get('matching_sources',{}).get('sources',[]):
                     source['fact_truncated']=True
-        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated','source_version','target_version','relation_id','original_id','platform','projects','requested_projects','source_memberships','scope_basis','evidence_version','content_evidence','source_evidence','truth_status','body_source','source_author','matching_sources','lexical_match','selection_basis','text_projection','observation_time','observation_basis','source_annotations')} for row in context['graph_provenance'] if isinstance(row,dict)]
+        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated','source_version','target_version','relation_id','original_id','platform','projects','requested_projects','source_memberships','scope_basis','evidence_version','content_evidence','source_evidence','truth_status','body_source','source_author','matching_sources','lexical_match','selection_basis','text_projection','observation_time','observation_basis','source_annotations','time_evidence')} for row in context['graph_provenance'] if isinstance(row,dict)]
         # Hashes and raw coordinates are checked by the adapter, rather than by
         # the language model. Keep the full proof in metrics and retain stable
         # identities, edge direction, source kind, time and truncation in input.
@@ -1640,6 +1640,8 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'system_history는 자동 알림의 기록이며 사람의 발화로 해석하지 않는다. '
                    '출처와 기록 시점을 유지하며, 현재 요청과 직접 관련된 내용만 사용한다. '
                    'query_clock은 호스트의 조회 시각이며 원문의 게시·수집 시각이나 현재 효력의 증명이 아니다. 사용자가 지정한 과거·미래 기간을 조회 시각으로 바꾸지 마라. 현재 지원·이용 가능 여부는 원문의 유효 기간과 확인 범위를 구분하고, 근거가 부족하면 현재 가능하다고 단정하지 마라. '
+                   'collected_source의 source_author.date는 보존 원문의 날짜 표기이며 발행·수집 날짜로 확정되지 않았다. time_evidence.collected_at_utc와 updated_at은 해당 수집 버전의 저장 시각이다. 원문 날짜 표기를 수집 날짜라고 바꾸어 말하지 마라. 수집·저장 시각으로 원문의 최신 효력도 확정하지 마라. '
+                   '현재 접수 가능 여부나 종료 여부를 외부에서 확인하지 않았다면 둘 다 단정하지 마라. 원문상 마감일이 지났다는 설명과 현재 실제 모집 상태 미확인을 함께 구분한다. 과거 날짜 질문에는 당시 원문상 일정만 비교하고 현재 상태를 과거 상태로 덮어쓰지 마라. '
                    'OSK 노트에는 검증되지 않은 설계 가설도 있다. 저장된 내용을 승인된 사실로 승격하지 마라. '
                    '음성 답변은 서론과 목록 없이 짧은 완결 문장 두 개 이내로 핵심과 한계만 말한다. '
                    'fact_truncated가 참인 자료는 일부만 읽었다고 취급한다. '
@@ -1647,6 +1649,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'source_annotations는 원문별 미검증 태그 표기다. annotation_differences가 비어 있지 않으면 같은 본문의 주제·기관 표기도 다르며, 태그를 사실이나 동일인으로 단정하지 마라. '
                    '검색 결과가 없다는 사실을 사용자 발화를 이해하지 못했다는 뜻으로 바꾸지 마라.\n'
                    '<quoted_local_history>'+encoded+'</quoted_local_history>')
+        reference=f"이번 조회의 호스트 관측 시각(UTC): {query_clock['observed_at_utc']}. "+reference
         if partial_reference:
             reference=('입력 한도로 검색 근거 일부만 전달했다. 전달하지 못한 자료를 읽거나 전체 자료를 검토했다고 말하지 마라. '+reference)
         full_provenance=full_provenance[:len(context['graph_facts'])]

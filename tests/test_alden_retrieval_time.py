@@ -1,7 +1,7 @@
 import sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
-from alden_retrieval_time import select_latest,observation_note,query_time_reference
+from alden_retrieval_time import select_latest,observation_note,query_time_reference,collection_time_evidence
 
 NOW=1791500000
 def record(identity,stamp,term='구독 조건',**extras):
@@ -9,6 +9,14 @@ def record(identity,stamp,term='구독 조건',**extras):
             'observed_at':stamp,'time_basis':'record_confirmed_at',**extras}
 
 class ObservationSelectionTests(unittest.TestCase):
+    def test_collection_time_and_unknown_source_label_are_not_publication_or_current_validity(self):
+        proof=collection_time_evidence(1791721513.554715,'2026-02-17')
+        self.assertEqual(proof['collected_at_utc'],'2026-10-11T12:25:13.554715+00:00')
+        self.assertEqual(proof['source_date_label_basis'],'retained_label_publication_unverified')
+        self.assertEqual(collection_time_evidence(1791721513.554715)['source_date_label_basis'],'not_declared')
+        for bad in (None,True,float('nan'),-1,'2026-02-17'):
+            with self.subTest(bad=bad),self.assertRaisesRegex(ValueError,'collection_time_evidence_invalid'):
+                collection_time_evidence(bad,'2026-02-17')
     def test_query_time_is_explicit_utc_without_source_validity_inference(self):
         clock=query_time_reference(1791922200)
         self.assertEqual(clock['observed_at_utc'],'2026-10-13T20:10:00+00:00')

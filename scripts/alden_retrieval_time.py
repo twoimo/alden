@@ -28,6 +28,19 @@ def query_time_reference(now=None):
             'basis': 'host_query_time; not source_date_or_claim_validity'}
 
 
+def collection_time_evidence(collected_at, source_date_label=None):
+    """Name retained-label and current version storage time without promotion."""
+    if type(collected_at) not in (int, float) or not math.isfinite(collected_at) or collected_at <= 0:
+        raise ValueError('collection_time_evidence_invalid')
+    try:
+        utc = query_time_reference(collected_at)['observed_at_utc']
+    except ValueError as error:
+        raise ValueError('collection_time_evidence_invalid') from error
+    return {'policy': 'collection-time-bases-v1', 'collected_at_utc': utc,
+            'source_date_label_basis': 'retained_label_publication_unverified'
+                if isinstance(source_date_label, str) and source_date_label.strip() else 'not_declared'}
+
+
 def _term(value):
     return ''.join(unicodedata.normalize('NFKC',str(value)).casefold().split())
 

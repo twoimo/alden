@@ -120,7 +120,7 @@ def _verified_source(db, store, row, projects):
         if (current['document_id'] != row['id']
                 or identity(current['platform'], current['original_id']) != row['id']
                 or projection != current['projection_sha256'] or expected != current['id']
-                or any(current[k] != row[k] for k in ('label','platform','original_id','raw_sha256','raw_path'))):
+                or any(current[k] != row[k] for k in ('label','platform','original_id','raw_sha256','raw_path','collected_at'))):
             raise ValueError('version_binding')
     except (ValueError, TypeError, UnicodeError, RecursionError) as error:
         raise RuntimeError('collection_version_integrity') from error
@@ -485,7 +485,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     _check(cancelled)
     ranked = kg._rrf_merge(lexical, dense, k=rrf_k, weights=rrf_weights,
                           recency={r['id']: r['collected_at'] for r in rows}) if mode == 'rrf' else lexical
-    from alden_retrieval_time import select_latest, latest_requested, observation_note
+    from alden_retrieval_time import select_latest, latest_requested, observation_note, collection_time_evidence
     latest_query = latest_requested(query,time_from,time_to)
     body_preferred, body_coverage = set(), None
     # Explicit latest requests keep their publication selection and admission
@@ -573,6 +573,10 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 proof['source_author'] = {key: record[key] for key in ['author', 'handle', 'date', 'url', 'localTextOrigin'] if isinstance(record.get(key), str)}
                 if record.get('platform') == 'threads' and record.get('type') == 'source':
                     proof['source_annotations'] = declared_source_annotations(record, max_field_bytes=900)
+            try:
+                proof['time_evidence'] = collection_time_evidence(row['collected_at'], proof.get('source_author', {}).get('date'))
+            except ValueError as error:
+                raise RuntimeError('collection_version_integrity') from error
             text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
             if evidence_class != 'content_candidate':
                 text='[자료 설명 · 원래 본문 미확인] '+text

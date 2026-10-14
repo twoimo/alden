@@ -20,6 +20,7 @@ from pathlib import Path
 
 from alden_history import database
 from alden_content_evidence import validated_source_annotations, ANNOTATION_FIELDS
+from alden_retrieval_time import collection_time_evidence
 
 
 MAX_TEXT_CHARS = 4000
@@ -48,7 +49,7 @@ _PROOF_KEYS = frozenset({
     'evidence_version', 'content_evidence', 'source_evidence', 'truth_status',
     'body_source', 'source_author', 'matching_sources', 'lexical_match',
     'selection_basis', 'text_projection',
-    'observation_time', 'observation_basis', 'source_annotations',
+    'observation_time', 'observation_basis', 'source_annotations', 'time_evidence',
 })
 
 
@@ -105,6 +106,17 @@ def _attachments(value: list[dict] | None) -> list[dict]:
 
 def _proof_row(row):
     result = {key: item for key, item in row.items() if key in _PROOF_KEYS}
+    if 'time_evidence' in result:
+        if (result.get('source_kind') != 'collected_source' or result.get('fact_type') != 'entity'
+                or result.get('provenance_valid') is not True or not isinstance(result.get('source_author', {}), dict)):
+            raise ValueError('turn_provenance_invalid')
+        try:
+            expected = collection_time_evidence(result.get('updated_at'), result.get('source_author', {}).get('date'))
+        except ValueError as error:
+            raise ValueError('turn_provenance_invalid') from error
+        if result['time_evidence'] != expected:
+            raise ValueError('turn_provenance_invalid')
+        result['time_evidence'] = expected
     if 'source_annotations' in result:
         if (result.get('source_kind') != 'collected_source'
                 or result.get('fact_type') != 'entity' or result.get('provenance_valid') is not True):
@@ -147,6 +159,9 @@ def _proof_row(row):
                            source['source_annotations']['fields'][key] for source in sources)]
             if group['annotation_differences'] != differences:
                 raise ValueError('turn_provenance_invalid')
+        rows = [result, *sources]
+        if any('time_evidence' in source for source in rows) and not all('time_evidence' in source for source in rows):
+            raise ValueError('turn_provenance_invalid')
         result['matching_sources'] = {**group, 'sources': sources}
     return result
 

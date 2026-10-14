@@ -62,6 +62,43 @@ class CollectionContextDuplicatesTests(unittest.TestCase):
         self.assertEqual(len(result['candidates']), 2)
         self.assertEqual(original_digest(self.store), before)
 
+    def test_each_original_keeps_its_collection_time_apart_from_source_label_date(self):
+        from alden_retrieval_time import collection_time_evidence
+        a,b=self.add('a'),self.add('b')
+        with self.store.database() as db:
+            for identity,stamp in ((a,1791721513.554715),(b,1791807913.554715)):
+                db.execute('UPDATE versions SET collected_at=? WHERE document_id=?',(stamp,identity))
+        before=original_digest(self.store);result=self.get();self.assertEqual(len(result['facts']),1)
+        proof=result['fact_provenance'][0];sources=[proof,*proof['matching_sources']['sources']]
+        self.assertEqual({p['time_evidence']['collected_at_utc'] for p in sources},
+                         {'2026-10-11T12:25:13.554715+00:00','2026-10-12T12:25:13.554715+00:00'})
+        for source in sources:
+            self.assertEqual(source['source_author']['date'],'2026-02-17')
+            self.assertEqual(source['time_evidence'],collection_time_evidence(source['updated_at'],source['source_author']['date']))
+            self.assertEqual(source['time_evidence']['source_date_label_basis'],'retained_label_publication_unverified')
+        self.assertEqual(original_digest(self.store),before)
+        saved=json.loads(turns._provenance([proof]))[0];self.assertEqual(saved,proof)
+        for change in (lambda p:p['time_evidence'].update(collected_at_utc='2026-02-17T00:00:00+00:00'),
+                       lambda p:p['matching_sources']['sources'][0].pop('time_evidence'),
+                       lambda p:p['time_evidence'].update(source_date_label_basis='confirmed_publication'),
+                       lambda p:p.update(updated_at=True)):
+            with self.subTest(change=change):
+                value=copy.deepcopy(proof);change(value)
+                with self.assertRaisesRegex(ValueError,'turn_provenance_invalid'):turns._provenance([value])
+        legacy=copy.deepcopy(proof);legacy.pop('time_evidence')
+        for source in legacy['matching_sources']['sources']:source.pop('time_evidence')
+        self.assertEqual(json.loads(turns._provenance([legacy]))[0],legacy)
+
+    def test_collection_time_change_after_selected_row_snapshot_is_rejected(self):
+        self.add('a');original=retrieval._rows
+        def changed(*args,**kwargs):
+            rows=original(*args,**kwargs)
+            with self.store.database() as db:
+                db.execute('UPDATE versions SET collected_at=collected_at+86400')
+            return rows
+        with patch.object(retrieval,'_rows',side_effect=changed),self.assertRaisesRegex(RuntimeError,'collection_version_integrity'):
+            self.get()
+
     def test_same_body_different_declared_tags_is_once_with_both_originals(self):
         self.add('a', raw_changes={'topics': ['recruitment_timing'], 'entityTags': ['medical', 'samsung']})
         self.add('b', raw_changes={'topics': ['recruitment_timing', 'public_agency'], 'entityTags': ['gov', 'nh']})
