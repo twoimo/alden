@@ -58,7 +58,7 @@ export function nodeSummary(graph: KnowledgeGraph, node: KnowledgeNode): string 
   return text(node.description) || '저장된 항목입니다. 원문을 확인하고 있습니다.';
 }
 
-function renderBody(container: HTMLElement, body: string, graph: KnowledgeGraph): void {
+function renderBody(container: HTMLElement, body: string, graph: KnowledgeGraph, allowLabelLinks = true): void {
   container.replaceChildren();
   // Parse only saved node links and explicit HTTP(S) URLs. Everything else is
   // literal text, including HTML and unsupported Markdown schemes.
@@ -71,7 +71,8 @@ function renderBody(container: HTMLElement, body: string, graph: KnowledgeGraph)
       const [target, alias] = match[1].split('|', 2);
       const identities = graph.nodes.filter(item => item.id === target || item.id === `osk:${target}` || item.oskId === target);
       const labels = graph.nodes.filter(item => item.label === target);
-      const node = identities.length === 1 ? identities[0] : identities.length === 0 && labels.length === 1 ? labels[0] : null;
+      const node = identities.length === 1 ? identities[0]
+        : allowLabelLinks && identities.length === 0 && labels.length === 1 ? labels[0] : null;
       if (node) {
         const button = document.createElement('button'); button.type = 'button';
         button.className = 'knowledge-note-link'; button.dataset.knowledgeNode = node.id;
@@ -94,7 +95,7 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   if (summary) summary.textContent = text(selected?.summary) || nodeSummary(graph, node);
   const body = root.getElementById('knowledge-node-body');
   const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
-  if (body) { renderBody(body, copy, graph); body.hidden = !copy; }
+  if (body) { renderBody(body, copy, graph, selected?.basis !== 'source_record'); body.hidden = !copy; }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
   const projection = record(selected?.text_projection);
   const tail = projection?.separated_tail;

@@ -29,6 +29,18 @@ type BodyMatches = {
   reference_text: { groups: number; members: number; status: 'text_match_review_only' };
 };
 type QualityErrorCode = keyof typeof ERROR_TEXT;
+type AnnotationReview = {
+  policy: 'retained-annotation-review-v1'; status: 'verified_retained_declarations'; semantic_status: 'unverified';
+  comparison: 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing';
+  scope: 'permitted_current_content_versions_retained_bytes';
+  binding_findings: Record<'source_blob_invalid' | 'source_reference_invalid' | 'metadata_invalid' |
+    'version_identity_mismatch' | 'projection_hash_mismatch' | 'retained_text_source_mismatch', number>;
+  counts: { source_versions_inspected: number; records_with_repeated_values: number;
+    same_projected_body_groups_compared: number; same_projected_body_groups_with_tag_differences: number;
+    same_body_group_members_with_tag_differences: number };
+  fields: Record<'topics' | 'entityTags', { declared: number; undeclared: number; unsupported: number;
+    over_budget: number; repeated_values: number; body_groups_with_different_values: number }>;
+};
 type SourceAnnotations = {
   policy: 'retained-declared-tags-v1'; basis: 'verified_retained_record'; semantic_status: 'unverified';
   fields: Record<'topics' | 'entityTags', { state: 'declared' | 'undeclared' | 'unsupported' | 'over_budget'; values: string[] }>;
@@ -77,6 +89,7 @@ export type QualitySuccess = {
   numeric_review_candidates: { mixed_vector_dimensions: { profiles: number; status: 'review_candidate' } };
   normalization: { method: 'NFC_line_endings_preserving_body_spacing'; semantic_validity: 'unverified'; declared_fields: DeclaredFields };
   comparison_samples?: ComparisonSamples;
+  source_annotation_review?: AnnotationReview;
 };
 export type QualityFailure = { ok: false; schema: 3; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
@@ -265,6 +278,47 @@ function matchesScope(value: Record<string, unknown>, query: QualityQuery, allow
 
 /** Fail closed on missing, wrong-typed, mismatched, or partial reports.
  * No untrusted identifiers or extra backend fields leave this parser. */
+function annotationReview(value: unknown, maximum: number): AnnotationReview | null {
+  const row = object(value), counts = object(row?.counts), fields = object(row?.fields), issues = object(row?.binding_findings);
+  const issueKeys = ['source_blob_invalid', 'source_reference_invalid', 'metadata_invalid',
+    'version_identity_mismatch', 'projection_hash_mismatch', 'retained_text_source_mismatch'] as const;
+  const names = ['source_versions_inspected', 'records_with_repeated_values',
+    'same_projected_body_groups_compared', 'same_projected_body_groups_with_tag_differences',
+    'same_body_group_members_with_tag_differences'] as const;
+  if (!row || !counts || !fields || !issues || !issueKeys.every(key => count(issues[key]))
+    || row.policy !== 'retained-annotation-review-v1'
+    || row.status !== 'verified_retained_declarations' || row.semantic_status !== 'unverified'
+    || row.comparison !== 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing'
+    || row.scope !== 'permitted_current_content_versions_retained_bytes'
+    || !names.every(key => count(counts[key]))) return null;
+  const c = counts as AnnotationReview['counts'];
+  if (c.source_versions_inspected > maximum || c.records_with_repeated_values > c.source_versions_inspected
+    || c.same_projected_body_groups_with_tag_differences > c.same_projected_body_groups_compared
+    || c.same_projected_body_groups_compared * 2 > c.source_versions_inspected
+    || c.same_projected_body_groups_with_tag_differences * 2 > c.same_body_group_members_with_tag_differences
+    || c.same_body_group_members_with_tag_differences > c.source_versions_inspected
+    || Boolean(c.same_projected_body_groups_with_tag_differences) !== Boolean(c.same_body_group_members_with_tag_differences)) return null;
+  const result = {} as AnnotationReview['fields'];
+  for (const key of ['topics', 'entityTags'] as const) {
+    const f = object(fields[key]);
+    const keys = ['declared', 'undeclared', 'unsupported', 'over_budget', 'repeated_values', 'body_groups_with_different_values'] as const;
+    if (!f || !keys.every(k => count(f[k]))) return null;
+    const field = Object.fromEntries(keys.map(k => [k, f[k]])) as AnnotationReview['fields']['topics'];
+    if (field.declared + field.undeclared + field.unsupported + field.over_budget !== c.source_versions_inspected
+      || field.repeated_values > field.declared * 31
+      || field.body_groups_with_different_values > c.same_projected_body_groups_with_tag_differences) return null;
+    result[key] = field;
+  }
+  const a = result.topics.body_groups_with_different_values, b = result.entityTags.body_groups_with_different_values;
+  if (c.same_projected_body_groups_with_tag_differences < Math.max(a, b)
+    || c.same_projected_body_groups_with_tag_differences > a + b) return null;
+  return { policy: 'retained-annotation-review-v1', status: 'verified_retained_declarations', semantic_status: 'unverified',
+    comparison: 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing',
+    scope: 'permitted_current_content_versions_retained_bytes',
+    binding_findings: Object.fromEntries(issueKeys.map(key => [key, issues[key]])) as AnnotationReview['binding_findings'],
+    counts: Object.fromEntries(names.map(key => [key, c[key]])) as AnnotationReview['counts'], fields: result };
+}
+
 export function parseCollectionQuality(value: unknown, query: QualityQuery): QualityResult | null {
   const row = object(value), scope = object(row?.scope);
   if (!row || row.schema !== 3 || !scope) return null;
@@ -334,6 +388,9 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
   const comparisons = Object.hasOwn(row, 'comparison_samples')
     ? comparisonSamples(row.comparison_samples, scope.projects as string[], counts.distinct_current_documents as number) : undefined;
   if (comparisons === null) return null;
+  const annotations = Object.hasOwn(row, 'source_annotation_review')
+    ? annotationReview(row.source_annotation_review, counts.project_current_versions as number) : undefined;
+  if (annotations === null) return null;
   return {
     ok: true, schema: 3,
     scope: {
@@ -344,6 +401,7 @@ export function parseCollectionQuality(value: unknown, query: QualityQuery): Qua
       source_verification: 'hash_references_only',
     },
     checked_at: row.checked_at as number, elapsed_ms: row.elapsed_ms as number,
+    ...(annotations ? { source_annotation_review: annotations } : {}),
     counts: counts as QualityCounts,
     findings: Object.fromEntries(Object.entries(findings)) as Record<string, number>,
     duplicate_candidates: {
@@ -399,7 +457,9 @@ export class KnowledgeQualityPanel {
     this.selection = this.selector.value;
     this.button.addEventListener('click', () => { void this.request(); }, { signal: this.controls.signal });
     this.report.addEventListener('click', event => {
-      if ((event.target as Element | null)?.closest?.('button.knowledge-quality-compare')) void this.request(true);
+      const target = event.target as Element | null;
+      if (target?.closest?.('button.knowledge-quality-annotations')) void this.request(true, true);
+      else if (target?.closest?.('button.knowledge-quality-compare')) void this.request(true);
     }, { signal: this.controls.signal });
     this.info.addEventListener('toggle', () => { if (!this.info.open) this.invalidate(); }, { signal: this.controls.signal });
     // Even an immediate close-and-reopen invalidates the earlier request.
@@ -475,7 +535,7 @@ export class KnowledgeQualityPanel {
     this.updateButton();
   }
 
-  private async request(includeSamples = false): Promise<void> {
+  private async request(includeSamples = false, includeAnnotations = false): Promise<void> {
     this.syncSelection();
     const query = qualityQueryFromSelection(this.selection);
     if (!query || !this.active || this.disposed || !this.info.open
@@ -484,16 +544,18 @@ export class KnowledgeQualityPanel {
     const epoch = ++this.epoch, selection = this.selection;
     this.pendingEpoch = epoch;
     this.button.disabled = true;
-    this.status.textContent = '수집 기록 품질을 확인 중입니다.';
+    this.status.textContent = includeAnnotations ? '보존 원문과 선언 태그를 검사 중입니다.' : '수집 기록 품질을 확인 중입니다.';
     this.report.replaceChildren();
     this.report.hidden = true;
     this.report.dataset.state = 'loading';
     try {
       const response = await this.load('collection-quality', { query: JSON.stringify({ ...query,
-        ...(includeSamples ? { include_samples: true } : {}) }) });
+        ...(includeSamples ? { include_samples: true } : {}),
+        ...(includeAnnotations ? { include_annotation_review: true } : {}) }) });
       if (!this.current(epoch, selection)) return;
       const result = parseCollectionQuality(response, query);
-      if (!result || (result.ok && includeSamples && !result.comparison_samples)) {
+      if (!result || (result.ok && (includeSamples && !result.comparison_samples
+        || includeAnnotations && !result.source_annotation_review))) {
         this.status.textContent = '품질 보고서를 확인할 수 없습니다. 다시 요청할 수 있습니다.';
         this.report.dataset.state = 'unavailable';
       } else if (!result.ok) {
@@ -618,6 +680,9 @@ export class KnowledgeQualityPanel {
           const body = this.root.createElement('pre'); body.textContent = record.body;
           item.append(heading, source, basis, body);
           if (record.source_annotations) {
+            const notice = this.root.createElement('p'); notice.className = 'knowledge-quality-limit';
+            notice.textContent = '보존 원문이 선언한 태그입니다. 내용·인물·기관의 정확성은 확인되지 않았습니다.';
+            item.append(notice);
             const labels = { topics: '주제 태그', entityTags: '인물·기관 등 태그' };
             const statusText = { undeclared: '미선언', unsupported: '지원하지 않는 형식', over_budget: '표시 한도 초과' };
             for (const key of ['topics', 'entityTags'] as const) {
@@ -680,7 +745,24 @@ export class KnowledgeQualityPanel {
       ['검사 한도로 남긴 값·단위', declared.quantity.omitted],
     ], 'knowledge-quality-quantity');
     paragraph('현재 메타데이터에 명시된 필드만 해석합니다. 날짜만 있으면 시각을 만들지 않고, 시간대가 없으면 이 Mac의 시간대를 대입하지 않습니다. 단위가 없으면 본문·주소·식별자에서 추정하지 않습니다. 원문을 유지하며 실제 발행·효력·사실 확인이나 자동 병합으로 사용하지 않습니다.', 'knowledge-quality-limit');
-    paragraph('원본은 해시 참조만 확인하고 원문 바이트를 다시 읽지 않았습니다. NFC·줄바꿈 차이는 관찰만 하며 본문 공백을 유지하고 수정하지 않습니다. 일치 텍스트·차원 혼합은 검토 후보로, 의미상 중복·타당성·이상 여부는 판정하지 않았습니다.', 'knowledge-quality-limit');
+    const annotationButton = this.root.createElement('button');
+    annotationButton.type = 'button'; annotationButton.className = 'knowledge-quality-compare knowledge-quality-annotations';
+    annotationButton.textContent = '보존 원문 태그 검사'; elements.push(annotationButton);
+    if (value.source_annotation_review) {
+      const review = value.source_annotation_review, c = review.counts;
+      metrics('보존 원문 태그 검토', [
+        ['원문·버전 검증 오류 발견 건수', Object.values(review.binding_findings).reduce((sum, count) => sum + count, 0)],
+        ['검사한 내용 기록의 현재 버전', c.source_versions_inspected],
+        ['태그 비교가 가능한 같은 본문 그룹', c.same_projected_body_groups_compared],
+        ['선언 태그가 다른 같은 본문 그룹', c.same_projected_body_groups_with_tag_differences],
+        ['태그 차이 그룹의 현재 버전', c.same_body_group_members_with_tag_differences],
+        ['같은 태그를 반복 선언한 현재 버전', c.records_with_repeated_values],
+        ['주제 태그가 다른 그룹', review.fields.topics.body_groups_with_different_values],
+        ['인물·기관 태그가 다른 그룹', review.fields.entityTags.body_groups_with_different_values],
+      ], 'knowledge-quality-annotations');
+      paragraph('검증된 보존 바이트를 가진 허용된 현재 내용 기록만 태그를 비교합니다. 원문·버전 검증에 실패한 기록과 미선언·미지원·한도 초과 필드는 태그 차이로 계산하지 않습니다. 차이·반복은 재검토 후보이며 어느 태그가 맞는지, 같은 인물·기관인지, 실제 중복인지 판정하거나 병합하지 않았습니다.', 'knowledge-quality-limit');
+    }
+    paragraph('일반 품질 집계는 해시 참조 기준으로, 원문 바이트를 다시 읽지 않았습니다. 원문 비교는 표시한 원문만, 원문 태그 검사는 허용된 현재 내용 기록의 보존 바이트를 각각 대사합니다. NFC·줄바꿈 차이는 관찰만 하며 본문 공백을 유지하고 수정하지 않습니다. 의미상 중복·타당성·이상 여부는 판정하지 않았습니다.', 'knowledge-quality-limit');
     this.report.replaceChildren(...elements);
     this.report.hidden = false;
   }

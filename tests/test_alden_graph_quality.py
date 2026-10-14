@@ -10,10 +10,106 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from alden_collection import CollectionStore, digest, identity
-from alden_graph_quality import audit
+from alden_graph_quality import audit, audit_annotations
 
 
 class QualityTests(unittest.TestCase):
+    def test_annotation_scan_matches_verified_review_without_opening_retrieval_or_relations(self):
+        self.store.ingest(self.a,[self.annotated('a',['AI']),self.annotated('b',['채용'])])
+        full=audit(self.root,['one'],verify_sources=True,sample_cap=0)['source_annotation_review']
+        (self.store.root/'retrieval.sqlite3').write_bytes(b'not a retrieval database')
+        before=self.files();focused=audit_annotations(self.root,['one'])
+        self.assertEqual(focused['source_annotation_review'],full)
+        self.assertEqual(focused['coverage']['versions_scanned'],2)
+        self.assertEqual(self.files(),before)
+        with self.assertRaisesRegex(RuntimeError,'quality_cancelled'):
+            audit_annotations(self.root,['one'],cancelled=lambda:True)
+        with self.assertRaisesRegex(RuntimeError,'quality_scan_budget'):
+            audit_annotations(self.root,['one'],max_rows=1)
+
+    def annotated(self, name, topics=None, entities=None, body='동일한 원문 내용입니다. 날짜 2026-02-20, 단위와 띄어쓰기를 보존합니다.'):
+        raw = {'localOriginalText': body}
+        if topics is not None:
+            raw['topics'] = topics
+        if entities is not None:
+            raw['entityTags'] = entities
+        return self.record(name, body, raw=raw)
+
+    def test_verified_annotation_review_distinguishes_sets_from_semantic_truth(self):
+        self.store.ingest(self.a, [self.annotated('a', ['채용', 'AI'], ['하나저축은행']),
+            self.annotated('b', ['AI', '채용'], ['신한은행']),
+            self.annotated('c', ['공공기관'], ['하나저축은행'])])
+        before = self.files()
+        review = audit(self.root, ['one'], verify_sources=True)['source_annotation_review']
+        self.assertEqual(review['counts'], {'source_versions_inspected': 3,
+            'records_with_repeated_values': 0, 'same_projected_body_groups_compared': 1,
+            'same_projected_body_groups_with_tag_differences': 1,
+            'same_body_group_members_with_tag_differences': 3})
+        self.assertEqual(review['status'], 'verified_retained_declarations')
+        self.assertEqual(review['semantic_status'], 'unverified')
+        self.assertEqual(review['samples'][0]['different_fields'], ['topics', 'entityTags'])
+        self.assertEqual(review['fields']['topics']['body_groups_with_different_values'], 1)
+        self.assertEqual(review['fields']['entityTags']['body_groups_with_different_values'], 1)
+        self.assertNotIn('하나저축은행', json.dumps(review, ensure_ascii=False))
+        self.assertEqual(self.files(), before)
+
+    def test_annotation_review_preserves_case_spacing_and_counts_nfc_repetition(self):
+        self.store.ingest(self.a, [self.annotated('a', ['cafe\u0301', 'café'], ['A', 'A']),
+            self.annotated('b', ['café'], ['A']), self.annotated('c', ['Café'], ['A '])])
+        review = audit(self.root, ['one'], verify_sources=True)['source_annotation_review']
+        self.assertEqual(review['counts']['records_with_repeated_values'], 1)
+        self.assertEqual(review['fields']['topics']['repeated_values'], 1)
+        self.assertEqual(review['fields']['entityTags']['repeated_values'], 1)
+        self.assertEqual(review['fields']['topics']['body_groups_with_different_values'], 1)
+        self.assertEqual(review['fields']['entityTags']['body_groups_with_different_values'], 1)
+        self.store.ingest(self.a, [self.annotated('c', ['café'], ['A'])])
+        review = audit(self.root, ['one'], verify_sources=True)['source_annotation_review']
+        self.assertEqual(review['counts']['same_projected_body_groups_with_tag_differences'], 0)
+
+    def test_annotation_review_missing_unsupported_budget_and_scope_do_not_become_differences(self):
+        self.store.ingest(self.a, [self.annotated('a', ['AI']), self.annotated('missing'),
+            self.annotated('invalid', 'AI'), self.annotated('budget', ['x'] * 33),
+            dict(self.annotated('metadata', ['다른 태그']), kind='metadata')])
+        self.store.ingest(self.b, [self.annotated('other-project', ['다른 태그'])])
+        denied = self.store.register(platform='graph', original_id='denied', kind='source',
+                                     label='denied', projects=['one'])
+        self.store.ingest(denied, [self.annotated('denied-record', ['다른 태그'])])
+        with self.store.database() as db:
+            db.execute("UPDATE target_projects SET permission='denied' WHERE target_id=?", (denied,))
+        before = self.files()
+        review = audit(self.root, ['one'], verify_sources=True)['source_annotation_review']
+        self.assertEqual(review['counts']['source_versions_inspected'], 4)
+        self.assertEqual(review['counts']['same_projected_body_groups_compared'], 0)
+        self.assertEqual(review['counts']['same_projected_body_groups_with_tag_differences'], 0)
+        self.assertEqual({k: review['fields']['topics'][k] for k in
+            ('declared', 'undeclared', 'unsupported', 'over_budget')},
+            {'declared': 1, 'undeclared': 1, 'unsupported': 1, 'over_budget': 1})
+        self.assertEqual(review['fields']['entityTags']['undeclared'], 4)
+        self.assertEqual(self.files(), before)
+
+    def test_annotation_review_hash_only_and_tampered_sources_are_not_inspected(self):
+        self.store.ingest(self.a, [self.annotated('a', ['AI']), self.annotated('b', ['채용'])])
+        review = audit(self.root, ['one'])['source_annotation_review']
+        self.assertEqual(review['status'], 'not_inspected')
+        self.assertEqual(review['counts']['source_versions_inspected'], 0)
+        with self.store.database() as db:
+            raw = db.execute('SELECT raw_path FROM versions WHERE document_id=?', (identity('graph', 'a'),)).fetchone()[0]
+        (self.store.blobs / raw).write_text('{}')
+        report = audit(self.root, ['one'], verify_sources=True)
+        self.assertEqual(report['findings']['source_blob_invalid'], 1)
+        self.assertEqual(report['source_annotation_review']['counts']['source_versions_inspected'], 1)
+        self.assertEqual(report['source_annotation_review']['counts']['same_projected_body_groups_with_tag_differences'], 0)
+
+    def test_annotation_review_sample_cap_does_not_change_total_or_cross_projects(self):
+        for target, prefix in [(self.a, 'one'), (self.b, 'two')]:
+            self.store.ingest(target, [self.annotated(prefix+'a', ['AI']),
+                                     self.annotated(prefix+'b', ['채용'])])
+        review = audit(self.root, ['one', 'two'], verify_sources=True, sample_cap=0)['source_annotation_review']
+        self.assertEqual(review['counts']['source_versions_inspected'], 4)
+        self.assertEqual(review['counts']['same_projected_body_groups_with_tag_differences'], 2)
+        self.assertEqual(review['counts']['same_body_group_members_with_tag_differences'], 4)
+        self.assertEqual(review['samples'], [])
+
     def test_float32_extremes_keep_nonfinite_and_unit_tolerance_findings(self):
         values={'nan':float('nan'),'inf':float('inf'),'largest':3.4e38,
                 'inside':1.0005,'outside':1.0015,'zero':0.0}

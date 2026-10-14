@@ -43,6 +43,60 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
+    def test_annotation_inspection_is_explicit_and_keeps_hash_summary_separate(self):
+        body='같은 보존 원문입니다. 채용 일정을 별도로 확인합니다.'
+        rows=[{'platform':'graph','original_id':name,'label':'원문','text':body,
+            'raw':{'localOriginalText':body,'topics':[tag],'entityTags':[]}}
+            for name,tag in [('annotation-a','채용'),('annotation-b','AI')]]
+        self.store.ingest(self.target(),rows)
+        before=self.store.path.read_bytes()
+        ordinary=action.read_action(self.root,self.project_query('one'))
+        self.assertTrue(ordinary['ok']);self.assertNotIn('source_annotation_review',ordinary)
+        query=json.dumps({'scope':'project','project':'one','include_annotation_review':True})
+        with patch.object(action,'audit',wraps=quality.audit) as watched, patch.object(
+                action,'audit_annotations',wraps=quality.audit_annotations) as annotations:
+            result=action.read_action(self.root,query)
+        self.assertTrue(result['ok'],result)
+        self.assertEqual([c.kwargs['verify_sources'] for c in watched.call_args_list],[False])
+        self.assertEqual(annotations.call_count,1)
+        review=result['source_annotation_review']
+        self.assertEqual(review['counts']['same_projected_body_groups_with_tag_differences'],1)
+        self.assertEqual(review['semantic_status'],'unverified')
+        self.assertEqual(result['scope']['source_verification'],'hash_references_only')
+        self.assertNotIn('samples',review)
+        self.assertFalse(any(review['binding_findings'].values()))
+        self.assertEqual(self.store.path.read_bytes(),before)
+
+    def test_annotation_inspection_rejects_partial_or_semantic_verdict_reports(self):
+        self.store.ingest(self.target(),[{'platform':'graph','original_id':'annotation','label':'원문','text':'원문 내용',
+            'raw':{'localOriginalText':'원문 내용','topics':['AI']}}])
+        query=json.dumps({'scope':'project','project':'one','include_annotation_review':True})
+        for failure in ['semantic_status','coverage','missing_field']:
+            def broken(*args,**options):
+                report=quality.audit_annotations(*args,**options)
+                if failure=='semantic_status':report['source_annotation_review']['semantic_status']='verified'
+                elif failure=='coverage':report['coverage']['status']='partial'
+                else:del report['source_annotation_review']['fields']['topics']['declared']
+                return report
+            with self.subTest(failure=failure),patch.object(action,'audit_annotations',side_effect=broken):
+                self.assert_error(action.read_action(self.root,query),'quality_report_unavailable',mode='project',project='one')
+
+    def test_annotation_inspection_exposes_source_byte_failures(self):
+        self.store.ingest(self.target(),[{'platform':'graph','original_id':'annotation','label':'원문','text':'원문 내용',
+            'raw':{'localOriginalText':'원문 내용','topics':['AI']}}])
+        with self.store.database() as db:raw=db.execute('SELECT raw_path FROM versions WHERE document_id=?',
+            (identity('graph','annotation'),)).fetchone()[0]
+        (self.store.blobs/raw).write_text('{}')
+        result=action.read_action(self.root,json.dumps({'scope':'project','project':'one','include_annotation_review':True}))
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['source_annotation_review']['binding_findings']['source_blob_invalid'],1)
+        self.assertEqual(result['source_annotation_review']['counts']['source_versions_inspected'],0)
+
+    def test_annotation_flag_rejects_wrong_type(self):
+        for value in ['true',1,None,[]]:
+            with self.subTest(value=value):self.assert_error(action.read_action(self.root,
+                json.dumps({'scope':'project','project':'one','include_annotation_review':value})), 'quality_query_invalid')
+
     def comparison_query(self, project=None):
         value={'scope':'project','project':project} if project else {'scope':'all'}
         return json.dumps({**value,'include_samples':True})

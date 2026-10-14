@@ -1,0 +1,17 @@
+# Retained source annotation review
+
+The 0.3.110 candidate distinguishes declared source tags from verified knowledge. The source-graph adapter preserves `topics` and `entityTags` in the raw record and does not generate them. The original producer's classification remains unverified; protected original source paths were not followed.
+
+The quality panel's **보존 원문 태그 검사** control requests a bounded inspection of permitted current content versions. Its tag section verifies the version/projection binding and retained canonical bytes separately from the regular hash-reference quality summary. Repeated NFC-equivalent values and different exact declared sets on identical projected retained bodies are review candidates. Ordering and repeated values do not create a set difference; case and spacing remain meaningful. Missing, unsupported and over-budget declarations are separate states. No tag, body, ID, relationship, identity or permission is rewritten or merged.
+
+`audit_annotations` skips retrieval vectors and relationships. It uses the existing read-only collection transaction, version/blob caches, cancellation, row/byte limits and remaining request time. Caches retain bounded annotation facts, content declarations and projected bodies, rather than full raw records. The response retains an unverified semantic status and exposes source/version binding findings. Existing pre/post binding checks reject scope changes.
+
+Inspection is explicit and has a 20-second overall backend budget inside the existing 25-second read bridge. Ordinary quality requests do not read all source bytes. The first implementation repeated vector/relationship checks and failed the whole-project time limit; this failure is retained. The corrected five-project candidate run completed in 18.880 seconds (n=1), a bounded execution observation rather than a stable latency/resource improvement claim.
+
+The observed five-project scope has 14,089 admitted content versions. Of 35 same projected-body groups with comparable declarations, 20 groups containing 66 current versions have different declared tag sets: 17 topic groups and 12 entity-tag groups, with overlap. There are 1,551 versions with undeclared fields. No repeated declared values or source/version binding findings were observed. These are declaration-review candidates, not incorrect-tag verdicts, independent-source counts, semantic gold or identity equivalence.
+
+Every displayed source tag includes an uncertainty notice. A collected `source_record` body can resolve `[[target]]` as an internal navigation link only through a unique explicit stable ID. A matching display name alone remains literal text. Existing saved-note label navigation and explicit HTTP(S) links are preserved. Navigation creates no stored relationship or identity merge.
+
+Web GPT-6/xhigh reviewed prior UI consumers read-only. Similarity/layout channel S can form a cluster without a stored relationship R; placement and color do not establish identity or truth. The review's cited Markdown link format was reconciled with the actual `[[target]]` parser before implementation. Upstream tag generation and broader semantic/identity/time gold remain open.
+
+Task evidence: `outputs/annotation-review-20261014/`. Source, synthetic tests, actual retained-store inspection, owned native rendering, installation and production are separate gates. Final CI/native/preservation receipts determine delivery; this document does not prove it.

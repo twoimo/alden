@@ -7,7 +7,7 @@ import time
 import unicodedata
 
 from alden_collection import CollectionStore, digest, encoded, identity, normalized_body
-from alden_graph_quality import _json, audit
+from alden_graph_quality import _json, audit, audit_annotations
 from alden_content_evidence import POLICY
 from alden_normalization_evidence import validate_declared_summary
 
@@ -31,13 +31,15 @@ def _query(raw):
     if not isinstance(value,dict):raise ValueError('quality_query_invalid')
     include_samples=value.pop('include_samples',False)
     if type(include_samples) is not bool:raise ValueError('quality_query_invalid')
+    include_annotations=value.pop('include_annotation_review',False)
+    if type(include_annotations) is not bool:raise ValueError('quality_query_invalid')
     scope=value.get('scope')
-    if scope=='all' and set(value)=={'scope'}:return scope,None,include_samples
+    if scope=='all' and set(value)=={'scope'}:return scope,None,include_samples,include_annotations
     project=value.get('project')
     if (scope=='project' and set(value)=={'scope','project'} and isinstance(project,str)
             and 0<len(project)<=128 and project==project.strip()
             and not any(unicodedata.category(c)=='Cc' for c in project)):
-        return scope,project,include_samples
+        return scope,project,include_samples,include_annotations
     raise ValueError('quality_query_invalid')
 
 def _comparison_samples(store,report,projects,check):
@@ -224,11 +226,54 @@ def _summary(report,projects):
         'normalization':{'method':'NFC_line_endings_preserving_body_spacing','semantic_validity':'unverified',
             'declared_fields':validate_declared_summary(report.get('declared_field_normalization'),counts['project_current_versions'])}}
 
+def _annotation_summary(report, projects, maximum):
+    if (report.get('projects') != projects or report.get('source_verification_requested') is not True
+            or report.get('coverage', {}).get('status') != 'complete'
+            or report.get('coverage', {}).get('source_verification') != 'retained_canonical_json'):
+        raise ValueError('quality_report_unavailable')
+    review = report.get('source_annotation_review')
+    if (not isinstance(review, dict) or review.get('policy') != 'retained-annotation-review-v1'
+            or review.get('status') != 'verified_retained_declarations'
+            or review.get('semantic_status') != 'unverified'
+            or review.get('comparison') != 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing'):
+        raise ValueError('quality_report_unavailable')
+    names = ('source_versions_inspected', 'records_with_repeated_values',
+        'same_projected_body_groups_compared', 'same_projected_body_groups_with_tag_differences',
+        'same_body_group_members_with_tag_differences')
+    counts = {key: _count(review['counts'][key]) for key in names}
+    records, compared, different, members = (counts[key] for key in
+        ('source_versions_inspected', 'same_projected_body_groups_compared',
+         'same_projected_body_groups_with_tag_differences', 'same_body_group_members_with_tag_differences'))
+    if (records > maximum or counts['records_with_repeated_values'] > records
+            or different > compared or compared * 2 > records
+            or different * 2 > members or members > records or bool(different) != bool(members)):
+        raise ValueError('quality_report_unavailable')
+    fields = {}
+    for key in ('topics', 'entityTags'):
+        field = review['fields'][key]
+        row = {name: _count(field[name]) for name in ('declared', 'undeclared', 'unsupported',
+            'over_budget', 'repeated_values', 'body_groups_with_different_values')}
+        if (sum(row[name] for name in ('declared', 'undeclared', 'unsupported', 'over_budget')) != records
+                or row['repeated_values'] > row['declared'] * 31
+                or row['body_groups_with_different_values'] > different):
+            raise ValueError('quality_report_unavailable')
+        fields[key] = row
+    if not max(fields[key]['body_groups_with_different_values'] for key in fields) <= different <= sum(
+            fields[key]['body_groups_with_different_values'] for key in fields):
+        raise ValueError('quality_report_unavailable')
+    issues = {key: _count(report['findings'].get(key, 0)) for key in
+        ('source_blob_invalid', 'source_reference_invalid', 'metadata_invalid',
+         'version_identity_mismatch', 'projection_hash_mismatch', 'retained_text_source_mismatch')}
+    return {key: review[key] for key in ('policy', 'status', 'semantic_status', 'comparison')} | {
+        'counts': counts, 'fields': fields, 'binding_findings': issues,
+        'scope': 'permitted_current_content_versions_retained_bytes'}
+
+
 def read_action(state_root,query_raw,cancelled=None):
     started=time.monotonic()
     scope={'requested_scope':None,'requested_project':None}
     try:
-        mode,project,include_samples=_query(query_raw)
+        mode,project,include_samples,include_annotations=_query(query_raw)
         scope={'requested_scope':mode,'requested_project':project}
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         store=CollectionStore.open_existing(Path(state_root))
@@ -249,6 +294,13 @@ def read_action(state_root,query_raw,cancelled=None):
                 if time.monotonic()-started>10:raise RuntimeError('quality_time_budget')
             check()
             summary['comparison_samples']=_comparison_samples(store,report,projects,check)
+        if include_annotations:
+            remaining = 20 - (time.monotonic() - started)
+            if remaining <= 0:raise RuntimeError('quality_time_budget')
+            verified = audit_annotations(state_root, projects, sample_cap=0,
+                timeout=remaining, max_rows=100000, max_bytes=512*1024*1024, cancelled=cancelled)
+            summary['source_annotation_review'] = _annotation_summary(verified, projects,
+                summary['counts']['project_current_versions'])
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         after=store.path.stat()
         if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)

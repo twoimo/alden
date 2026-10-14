@@ -296,6 +296,8 @@ impl Output {
                 | "knowledge-quality-comparison-default-2.png"
                 | "knowledge-quality-comparison-compact-1.png"
                 | "knowledge-quality-comparison-compact-2.png"
+                | "knowledge-quality-annotations-default.png"
+                | "knowledge-quality-annotations-compact.png"
                 | "entity-compare-default.png"
                 | "entity-compare-compact.png"
                 | "entity-applied-default.png"
@@ -1292,6 +1294,30 @@ fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, dead
         return Err(format!("quality comparison scope/geometry invalid: {state}"));
     }
     eprintln!("Alden quality comparison {size}: bounded geometry ready");
+    let mut state=state;
+    collect_script(window,r#"JSON.stringify((()=>{
+      const button=document.querySelector('button.knowledge-quality-annotations');
+      if(!button)throw Error('retained annotation control unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    wait()?;
+    let annotations=collect_script(window,r#"JSON.stringify((()=>{
+      const heading=document.querySelector('#knowledge-quality-annotations');
+      const list=heading?.nextElementSibling;
+      return {present:!!heading,rows:list?.querySelectorAll('dt').length??0,
+        content:list?.textContent,
+        separateScope:document.querySelector('#knowledge-quality-report').textContent.includes('일반 품질 집계는 해시 참조'),
+        noSemanticVerdict:document.querySelector('#knowledge-quality-report').textContent.includes('어느 태그가 맞는지')};})())"#.into(),deadline)?;
+    if annotations["present"]!=true || annotations["rows"]!=8
+        || annotations["separateScope"]!=true || annotations["noSemanticVerdict"]!=true {
+        return Err(format!("retained annotation inspection invalid: {annotations}"));
+    }
+    collect_script(window,r#"JSON.stringify((()=>{
+      const heading=document.querySelector('#knowledge-quality-annotations');
+      const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+      box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+      return {positioned:true};})())"#.into(),deadline)?;
+    publish(output,&format!("knowledge-quality-annotations-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+    state["annotationReview"]=annotations;
     for index in 0..2 {
         collect_script(window,format!(r#"JSON.stringify((()=>{{
           const group=document.querySelector('.knowledge-quality-comparison');if(group)group.open=true;

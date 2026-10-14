@@ -49,6 +49,18 @@ describe('selected-node explanations',()=>{
     expect(document.querySelector('button.knowledge-note-link')).toBeNull();
     expect(document.getElementById('knowledge-node-body')!.textContent).toBe('[[같은 이름]]');
   });
+  it('requires a stable ID for collected source body links even when an institution label is unique',()=>{
+    const notes=parseKnowledgeGraph({nodes:[{id:'post',label:'채용 공고',category:'post',source_version:'v1'},
+      {id:'institution:a',label:'하나저축은행',category:'organization'}],edges:[]});
+    renderNodeDetails(notes,notes.nodes[0],{details:{node_id:'post',basis:'source_record',version:'v1',
+      body:'[[하나저축은행]] · [[institution:a|저장된 기관 ID]]'}});
+    expect(document.querySelectorAll('button.knowledge-note-link')).toHaveLength(1);
+    expect(document.querySelector<HTMLButtonElement>('button.knowledge-note-link')!.dataset.knowledgeNode).toBe('institution:a');
+    expect(document.getElementById('knowledge-node-body')!.textContent).toContain('[[하나저축은행]]');
+    expect(notes.edges).toEqual([]);
+    renderNodeDetails(notes,notes.nodes[0],{details:{node_id:'post',basis:'note',body:'[[하나저축은행]]'}});
+    expect(document.querySelector<HTMLButtonElement>('button.knowledge-note-link')!.dataset.knowledgeNode).toBe('institution:a');
+  });
   it('displays traceable original text and excludes another room, account and same-name actor',()=>{
     const payload={details:{node_id:id,scope_room_id:'42',summary:'선택한 방의 참여자',basis:'snapshot'},sources:[source,source,{...source,source_id:`kakao:${account}:room:84:log:2`,content:'다른 방'},{...source,source_id:`kakao:${other}:room:42:log:3`,content:'다른 계정'},{...source,author_id:'8',source_id:`kakao:${account}:room:42:log:4`,content:'동명이인'}]};
     renderNodeDetails(graph,graph.nodes[0],payload);

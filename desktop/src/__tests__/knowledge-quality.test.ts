@@ -109,7 +109,53 @@ function metric(label: string) {
 beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(); });
 afterEach(() => { for (const panel of owned) panel.dispose(); owned.length = 0; vi.useRealTimers(); });
 
+function withAnnotationReview() {
+  return { ...withComparisons(), source_annotation_review: {
+    policy: 'retained-annotation-review-v1', status: 'verified_retained_declarations', semantic_status: 'unverified',
+    comparison: 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing',
+    scope: 'permitted_current_content_versions_retained_bytes',
+    binding_findings: { source_blob_invalid: 1, source_reference_invalid: 0, metadata_invalid: 0,
+      version_identity_mismatch: 0, projection_hash_mismatch: 0, retained_text_source_mismatch: 0 },
+    counts: { source_versions_inspected: 4, records_with_repeated_values: 1,
+      same_projected_body_groups_compared: 1, same_projected_body_groups_with_tag_differences: 1,
+      same_body_group_members_with_tag_differences: 2 },
+    fields: { topics: { declared: 3, undeclared: 1, unsupported: 0, over_budget: 0, repeated_values: 1, body_groups_with_different_values: 1 },
+      entityTags: { declared: 4, undeclared: 0, unsupported: 0, over_budget: 0, repeated_values: 0, body_groups_with_different_values: 0 } },
+  } };
+}
+
 describe('manual collection-quality report and fixed native selectors', () => {
+  it('requests retained tag inspection only on its explicit control and keeps its scope separate', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(withAnnotationReview());
+    setup(load); info().open = true; button().click(); await settle();
+    expect(JSON.parse(calls(load)[0][1]!.query!)).toEqual({ scope: 'all' });
+    (report().querySelector('.knowledge-quality-annotations') as HTMLButtonElement).click(); await settle();
+    expect(JSON.parse(calls(load)[1][1]!.query!)).toEqual({ scope: 'all', include_samples: true, include_annotation_review: true });
+    expect(state()).toBe('complete');
+    expect(metric('선언 태그가 다른 같은 본문 그룹')).toBe('1');
+    expect(metric('원문·버전 검증 오류 발견 건수')).toBe('1');
+    expect(report().textContent).toContain('어느 태그가 맞는지');
+  });
+
+  it('does not show completion when explicitly requested tag inspection is missing', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(withComparisons());
+    setup(load); info().open = true; button().click(); await settle();
+    (report().querySelector('.knowledge-quality-annotations') as HTMLButtonElement).click(); await settle();
+    expect(state()).toBe('unavailable');
+  });
+
+  it('rejects a semantic verdict, incomplete counters and forged source inspection scopes', () => {
+    for (const change of [
+      (r: ReturnType<typeof withAnnotationReview>['source_annotation_review']) => { r.semantic_status = 'verified'; },
+      (r: ReturnType<typeof withAnnotationReview>['source_annotation_review']) => { r.counts.source_versions_inspected = 40; },
+      (r: ReturnType<typeof withAnnotationReview>['source_annotation_review']) => { r.fields.topics.declared = 2; },
+      (r: ReturnType<typeof withAnnotationReview>['source_annotation_review']) => { r.scope = 'all_original_sources'; },
+      (r: ReturnType<typeof withAnnotationReview>['source_annotation_review']) => { r.binding_findings.source_blob_invalid = -1; },
+    ]) {
+      const value = withAnnotationReview(); change(value.source_annotation_review);
+      expect(parseCollectionQuality(value, all)).toBeNull();
+    }
+  });
   it('shows independently bound tag differences without approving identity or executing markup', async () => {
     const value = withComparisons();
     for (const [index, record] of value.comparison_samples.groups[0].records.entries()) {

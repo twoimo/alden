@@ -11,9 +11,10 @@ import sqlite3
 import stat
 import struct
 import time
+import unicodedata
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, normalized_body, normalized_text, RELATION_HISTORY_MATCH
-from alden_content_evidence import POLICY, content_evidence_class
+from alden_content_evidence import POLICY, content_evidence_class, declared_source_annotations, ANNOTATION_FIELDS
 from alden_normalization_evidence import DeclaredFieldSummary
 from alden_source_text import TEXT_VERSION, POLICY as SOURCE_TEXT_POLICY, project_source_text
 
@@ -78,6 +79,152 @@ def _blob(folder, name):
         os.close(parent)
 
 
+def _annotation_facts(source):
+    """Bounded retained declarations, not a verdict about the source body."""
+    fields = declared_source_annotations(source)['fields']
+    result = {}
+    for key, field in fields.items():
+        values = {unicodedata.normalize('NFC', value) for value in field['values']}
+        result[key] = {'state': field['state'],
+                       'signature': digest(encoded(sorted(values))) if field['state'] == 'declared' else None,
+                       'repeated_values': len(field['values']) - len(values)}
+    return result
+
+
+def _annotation_review(by_member, body_groups, *, inspected, sample_cap, check):
+    fields = {key: Counter({state: 0 for state in
+        ('declared', 'undeclared', 'unsupported', 'over_budget', 'repeated_values',
+         'body_groups_with_different_values')}) for key in ANNOTATION_FIELDS}
+    repeated = 0
+    for values in by_member.values():
+        check()
+        repeated += any(field['repeated_values'] for field in values.values())
+        for key, field in values.items():
+            fields[key][field['state']] += 1
+            fields[key]['repeated_values'] += field['repeated_values']
+    compared, different, members = 0, 0, 0
+    samples, taken = [], Counter()
+    for (project, body_hash), group in sorted(body_groups.items()):
+        check()
+        group = group.intersection(by_member)
+        if len(group) < 2:
+            continue
+        compared_fields, different_fields = [], []
+        for key in ANNOTATION_FIELDS:
+            values = [by_member[member][key]['signature'] for member in group
+                      if member in by_member and by_member[member][key]['state'] == 'declared']
+            if len(values) >= 2:
+                compared_fields.append(key)
+                if len(set(values)) > 1:
+                    different_fields.append(key)
+                    fields[key]['body_groups_with_different_values'] += 1
+        compared += bool(compared_fields)
+        if different_fields:
+            different += 1
+            members += len(group)
+            if taken[project] < sample_cap:
+                samples.append({'project': project, 'projected_body_sha256': body_hash,
+                    'different_fields': different_fields, 'members': len(group),
+                    'document_ids': sorted({member[1] for member in group})[:sample_cap],
+                    'source_versions': [{'document_id': member[1], 'version': member[2]}
+                                        for member in sorted(group)[:sample_cap]]})
+                taken[project] += 1
+    return {'policy': 'retained-annotation-review-v1',
+            'status': 'verified_retained_declarations' if inspected else 'not_inspected',
+            'semantic_status': 'unverified',
+            'comparison': 'NFC_exact_values_as_unordered_sets_preserving_case_and_spacing',
+            'counts': {'source_versions_inspected': len(by_member),
+                       'records_with_repeated_values': repeated,
+                       'same_projected_body_groups_compared': compared,
+                       'same_projected_body_groups_with_tag_differences': different,
+                       'same_body_group_members_with_tag_differences': members},
+            'fields': {key: dict(value) for key, value in fields.items()}, 'samples': samples}
+
+
+def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*1024,
+                      timeout=20, sample_cap=0, cancelled=None):
+    """Source/version-bound tag review; no retrieval vectors or relations scan."""
+    if (not isinstance(projects, (list, tuple)) or not 1 <= len(projects) <= 16
+            or any(not isinstance(p, str) or not p or len(p) > 128 for p in projects)
+            or type(max_rows) is not int or not 1 <= max_rows <= 100000
+            or type(max_bytes) is not int or not 1 <= max_bytes <= 512*1024*1024
+            or type(sample_cap) is not int or not 0 <= sample_cap <= 10
+            or type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 120):
+        raise ValueError('quality_budget_invalid')
+    store = CollectionStore.open_existing(Path(root))
+    if store is None or store.schema != 3:raise ValueError('quality_existing_v3_store_required')
+    projects = sorted(set(projects)); started = time.monotonic()
+    rows, bytes_read = 0, 0
+    annotations, groups, cached, blobs, findings = {}, defaultdict(set), {}, {}, Counter()
+    def check():
+        if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
+        if time.monotonic()-started > timeout:raise RuntimeError('quality_time_budget')
+        if rows > max_rows or bytes_read > max_bytes:raise RuntimeError('quality_scan_budget')
+    with store.database() as db:
+        marks = ','.join('?' for _ in projects)
+        scoped = db.execute('''SELECT DISTINCT p.project,m.document_id,m.current_version
+            FROM memberships m JOIN target_projects p ON p.target_id=m.target_id
+            JOIN documents d ON d.id=m.document_id
+            WHERE m.availability='available' AND d.availability='available'
+            AND p.permission!='denied' AND p.project IN ('''+marks+''')
+            ORDER BY p.project,m.document_id,m.current_version''',projects)
+        for project, document, version in scoped:
+            rows += 1;check()
+            key = (document, version)
+            if key not in cached:
+                cached[key] = None
+                row = db.execute('''SELECT d.platform,d.original_id,v.* FROM documents d
+                    JOIN versions v ON v.document_id=d.id WHERE d.id=? AND v.id=?''',key).fetchone()
+                if row is None:
+                    findings['version_identity_mismatch'] += 1;continue
+                try:
+                    bytes_read += sum(len(v.encode()) for v in
+                        (row['metadata'], row['label'], row['body']) if isinstance(v, str));check()
+                    metadata = _json(row['metadata'])
+                    if not isinstance(metadata, dict):raise ValueError('metadata')
+                    projection = digest(encoded([row['label'],row['body'],
+                        {k:v for k,v in metadata.items() if k != 'source'}]))
+                    expected = identity('version',encoded([document,row['raw_sha256'],
+                        row['processing_version'],projection]).decode())
+                    if (identity(row['platform'],row['original_id']) != document or expected != version
+                            or projection != row['projection_sha256']):
+                        findings['version_identity_mismatch'] += 1;continue
+                    name = row['raw_path']
+                    if not isinstance(name,str) or name != row['raw_sha256']+'.json':
+                        findings['source_reference_invalid'] += 1;continue
+                    if name not in blobs:
+                        blobs[name] = None
+                        try:
+                            raw = _blob(store.blobs,name);bytes_read += len(raw);check()
+                            source = _json(raw)
+                            original = source.get('localOriginalText') if isinstance(source,dict) else None
+                            projected = project_source_text(original,source)['body'] if isinstance(original,str) and original.strip() else None
+                            declarations = {key:source[key] for key in ('kind','content_indexed')
+                                if isinstance(source,dict) and key in source}
+                            blobs[name] = (_annotation_facts(source),declarations,projected)
+                        except (OSError,ValueError,RecursionError):
+                            findings['source_blob_invalid'] += 1
+                    if blobs[name] is None:continue
+                    facts, source, projected = blobs[name]
+                    body = projected if projected is not None else row['body']
+                    evidence = content_evidence_class(metadata,body,source=source,
+                        body_source='retained_record.localOriginalText' if projected is not None else 'stored_body')
+                    if evidence == 'content_candidate':cached[key] = (facts,digest(projected.encode()) if projected is not None else None)
+                except (ValueError,TypeError,RecursionError):
+                    findings['metadata_invalid'] += 1
+            if cached[key] is not None:
+                facts, body_hash = cached[key];member = (project,document,version)
+                annotations[member] = facts
+                if body_hash is not None:groups[(project,body_hash)].add(member)
+    check()
+    return {'schema':1,'mode':'read_only_source_annotations','projects':projects,
+        'source_verification_requested':True,'findings':dict(findings),
+        'source_annotation_review':_annotation_review(annotations,groups,inspected=True,sample_cap=sample_cap,check=check),
+        'coverage':{'status':'complete','source_verification':'retained_canonical_json',
+            'scope':'current_permitted_memberships_only','versions_scanned':rows,'bytes_examined':bytes_read},
+        'elapsed_s':time.monotonic()-started}
+
+
 def audit(root, projects, *, verify_sources=False, max_rows=100000,
           max_bytes=512 * 1024 * 1024, timeout=120, sample_cap=5, cancelled=None):
     if (not isinstance(projects, (list, tuple)) or not 1 <= len(projects) <= 16
@@ -103,6 +250,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     membership_contexts, source_tags, scoped_versions = defaultdict(set), {}, defaultdict(set)
     seen, profiles, originals, source_verified = set(), defaultdict(Counter), {}, {}
     source_declarations = {}
+    source_annotations, member_annotations = {}, {}
     degree, directed_relations = defaultdict(Counter), Counter()
     declared_fields = DeclaredFieldSummary()
     projected_originals, numeric_tails, projected_body_entries = {}, set(), defaultdict(set)
@@ -265,6 +413,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                     if digest(data) != row['raw_sha256']:
                         raise ValueError('raw_hash')
                     source = _json(data)
+                    source_annotations[blob_key] = _annotation_facts(source)
                     source_declarations[blob_key] = {name: source[name] for name in ('kind', 'content_indexed')
                         if isinstance(source, dict) and name in source}
                     original = source.get('localOriginalText') if isinstance(source, dict) else None
@@ -313,6 +462,9 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             if (verify_sources and metadata_valid and source_verified.get(blob_key)
                     and stored_class == 'content_candidate' and projected_originals.get(blob_key)):
                 projected_body_entries[(row['project'], projected_originals[blob_key])].add(unique)
+            if (verify_sources and metadata_valid and source_verified.get(blob_key)
+                    and evidence_class == 'content_candidate'):
+                member_annotations[unique] = source_annotations[blob_key]
             if (metadata_valid and stored_class == 'content_candidate'
                     and _substantive_field(body)
                     and (not verify_sources or source_verified.get(blob_key) is True)):
@@ -544,11 +696,14 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                    'duplicate_text_source_unverified'):
         counts.setdefault(metric, 0)
     check()
+    annotation_review = _annotation_review(member_annotations, projected_body_entries,
+        inspected=verify_sources, sample_cap=sample_cap, check=check)
     return {'schema': 4, 'mode': 'read_only_current_versions', 'projects': projects,
             'source_verification_requested': verify_sources, 'counts': dict(sorted(counts.items())),
             'findings': dict(sorted(findings.items())), 'samples': dict(sorted(samples.items())),
             'duplicate_candidates': candidates, 'metadata_matches': metadata_matches,
             'body_matches':body_matches,
+            'source_annotation_review': annotation_review,
             'content_evidence': {'policy': POLICY, 'status': 'source_declared_exclusions_not_semantic_verdict'},
             'scoped_revision_variants': revision_report,
             'numeric_review_candidates': numeric_review,
@@ -580,6 +735,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                        'Identical text or bytes does not establish independent sources, semantic truth, common source/identity or permission to merge.',
                        'Reciprocal directed edges and mixed vector dimensions are descriptive review candidates, not contradictory claims or confirmed semantic outliers.',
                        'Vector format/unit norm does not prove semantic quality, same force/direction or cluster validity.',
+                       'Verified retained tag declarations remain semantically unverified. NFC-equivalent repeated values and different declared sets on identical projected retained bodies are review candidates, not incorrect tags, contradictory claims or merge authority. Undeclared/unsupported/over-budget fields are counted separately and do not establish a difference.',
                        'Degree tails and isolation are descriptive statistics; legitimate hubs and separate sources are not labelled semantic anomalies.',
                        'No source/store/index/model/queue edits; no semantic similarity inference or model loading.']}
 
