@@ -13,3 +13,11 @@ Independent Web GPT-6/xhigh work wrote nine synthetic contract regressions in on
 An initial admitted review exposed 20 groups and 66 member versions. Its complete traversal made 28 requests with no group/member omission or duplicate in the observed store. This is current retained-source readback, not independent semantic gold or evidence that the declared tags are correct. Initial pre-binding evidence is retained separately; final bound review, installed API, native render, preservation and CI receipts determine delivery.
 
 Evidence: task `outputs/annotation-candidates-20261014/`. Upstream tag generation, human meaning/identity/temporal evaluation, primary physical interactions, representative resource measurements and production signing/deployment remain open.
+
+## Bounded source scan in 0.3.112
+
+The 0.3.111 installed API and final native inspection both reached the existing 20-second tag scan budget under ambient load. A profile identified per-record parent-path checks and individual version queries. The 0.3.112 scan opens each ancestor with directory-relative `O_NOFOLLOW`, pins one directory descriptor for the request and rechecks its device/inode on successful completion. Each leaf still checks its name, `O_NOFOLLOW`/`O_NONBLOCK`, regular-file shape, byte limit, stable file metadata and SHA256. Exception paths close descriptors. The version rows are fetched by one scoped SQL join in the same read transaction, preserving missing-version findings, ordering, permissions and budgets.
+
+One sequential profiled pair used the same pinned Python, admitted projects, 26,625 current versions and 43,586,907 examined bytes. Source findings, tag review, scope digest and all candidate/member metadata matched exactly. Wall time was 23.35s before and 10.67s after; process CPU time was 15.65s and 6.29s. SQL execute calls were 26,634 and 9; `is_symlink` calls were 266,260 and 10. Ambient machine load was uncontrolled and n=1 per condition. These are bounded scan measurements, not representative whole-app latency, GPU, battery, semantic quality or quota savings.
+
+Optimization evidence and final 0.3.112 delivery gates are in task `outputs/annotation-scan-20261014/`; earlier failures and successful 0.3.111 observations remain intact in the candidate evidence.

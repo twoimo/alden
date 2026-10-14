@@ -1,6 +1,6 @@
 """Read-only, current-version collection audit; candidates never authorize merging."""
 from collections import Counter, defaultdict
-from contextlib import closing, nullcontext
+from contextlib import closing, contextmanager, nullcontext
 import argparse
 import json
 import math
@@ -56,27 +56,72 @@ def _substantive_field(value, *, title=False):
     return True
 
 
-def _blob(folder, name):
+def _read_blob(parent, name):
     if not isinstance(name, str) or not re.fullmatch(r"[0-9a-f]{64}\.json", name):
         raise ValueError("quality_blob_name")
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    with os.fdopen(fd, "rb") as handle:
+        before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_RECORD_BYTES:
+            raise ValueError("quality_blob_shape")
+        data = handle.read(MAX_RECORD_BYTES + 1)
+        after = os.fstat(handle.fileno())
+        if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("quality_blob_changed")
+    if len(data) > MAX_RECORD_BYTES or digest(data) + ".json" != name:
+        raise ValueError("quality_blob_hash")
+    return data
+
+
+def _blob(folder, name):
     if any(p.is_symlink() for p in [folder, *folder.parents]):
         raise ValueError("quality_blob_symlink")
     parent = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
-        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
-        with os.fdopen(fd, "rb") as handle:
-            before = os.fstat(handle.fileno())
-            if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_RECORD_BYTES:
-                raise ValueError("quality_blob_shape")
-            data = handle.read(MAX_RECORD_BYTES + 1)
-            after = os.fstat(handle.fileno())
-            if (before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns):
-                raise ValueError("quality_blob_changed")
-        if len(data) > MAX_RECORD_BYTES or digest(data) + ".json" != name:
-            raise ValueError("quality_blob_hash")
-        return data
+        return _read_blob(parent, name)
     finally:
         os.close(parent)
+
+
+def _open_blob_directory(folder):
+    folder = Path(folder)
+    if not folder.is_absolute() or '..' in folder.parts:
+        raise ValueError('quality_blob_name')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    fd = os.open(folder.anchor, flags)
+    try:
+        for component in folder.parts[1:]:
+            child = os.open(component, flags, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+@contextmanager
+def _pinned_blobs(folder):
+    """Anchor one scan to a no-symlink directory; recheck identity on success."""
+    fd = _open_blob_directory(folder)
+    active = True
+    def read(name):
+        if not active:
+            raise ValueError('quality_blob_closed')
+        return _read_blob(fd, name)
+    try:
+        before = os.fstat(fd)
+        yield read
+        current = _open_blob_directory(folder)
+        try:
+            after = os.fstat(current)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise ValueError('quality_blob_changed')
+        finally:
+            os.close(current)
+    finally:
+        active = False
+        os.close(fd)
 
 
 def _annotation_facts(source):
@@ -170,22 +215,25 @@ def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*102
             if cancelled():raise RuntimeError('quality_cancelled')
         if now-started > timeout:raise RuntimeError('quality_time_budget')
         if rows > max_rows or bytes_read > max_bytes:raise RuntimeError('quality_scan_budget')
-    with store.database() as db:
+    with store.database() as db, _pinned_blobs(store.blobs) as read_blob:
         marks = ','.join('?' for _ in projects)
-        scoped = db.execute('''SELECT DISTINCT p.project,m.document_id,m.current_version
+        scoped = db.execute('''WITH scoped AS (SELECT DISTINCT p.project,m.document_id,m.current_version
             FROM memberships m JOIN target_projects p ON p.target_id=m.target_id
             JOIN documents d ON d.id=m.document_id
             WHERE m.availability='available' AND d.availability='available'
-            AND p.permission!='denied' AND p.project IN ('''+marks+''')
-            ORDER BY p.project,m.document_id,m.current_version''',projects)
-        for project, document, version in scoped:
+            AND p.permission!='denied' AND p.project IN ('''+marks+'''))
+            SELECT s.project AS scoped_project,s.document_id AS scoped_document,
+                s.current_version AS scoped_version,d.platform,d.original_id,v.*
+            FROM scoped s JOIN documents d ON d.id=s.document_id
+            LEFT JOIN versions v ON v.document_id=d.id AND v.id=s.current_version
+            ORDER BY s.project,s.document_id,s.current_version''',projects)
+        for row in scoped:
+            project, document, version = row['scoped_project'], row['scoped_document'], row['scoped_version']
             rows += 1;check()
             key = (document, version)
             if key not in cached:
                 cached[key] = None
-                row = db.execute('''SELECT d.platform,d.original_id,v.* FROM documents d
-                    JOIN versions v ON v.document_id=d.id WHERE d.id=? AND v.id=?''',key).fetchone()
-                if row is None:
+                if row['id'] is None:
                     findings['version_identity_mismatch'] += 1;continue
                 try:
                     bytes_read += sum(len(v.encode()) for v in
@@ -205,7 +253,7 @@ def audit_annotations(root, projects, *, max_rows=100000, max_bytes=512*1024*102
                     if name not in blobs:
                         blobs[name] = None
                         try:
-                            raw = _blob(store.blobs,name);bytes_read += len(raw);check()
+                            raw = read_blob(name);bytes_read += len(raw);check()
                             source = _json(raw)
                             original = source.get('localOriginalText') if isinstance(source,dict) else None
                             projected = project_source_text(original,source)['body'] if isinstance(original,str) and original.strip() else None

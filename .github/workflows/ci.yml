@@ -187,6 +187,7 @@ jobs:
           tests.test_alden_chat_metrics
           tests.test_alden_graph_quality_action
           tests.test_alden_annotation_candidates
+          tests.test_alden_retained_blob_reader
           tests.test_alden_quality_menu
           tests.test_alden_model_routes
           tests.test_alden_routed_llm
