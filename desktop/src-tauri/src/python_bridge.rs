@@ -2920,8 +2920,12 @@ fn voice_session_from_process_table(
             .trim()
             .split_once(char::is_whitespace)
             .ok_or(BridgeError::VoiceProcessCheck)?;
+        // Darwin ps formats UID with signed %d, so a valid high uid_t such as
+        // nobody appears as -2. Preserve its 32-bit identity before comparing;
+        // malformed/out-of-range values must still fail the process check.
         let uid = uid
             .parse::<libc::uid_t>()
+            .or_else(|_| uid.parse::<i32>().map(|value| value as libc::uid_t))
             .map_err(|_| BridgeError::VoiceProcessCheck)?;
         // Never read argv for another user's Python processes: macOS may deny
         // KERN_PROCARGS2 even though ps can list them. Keep all same-user Python
@@ -7291,6 +7295,26 @@ mod tests {
     }
 
     #[test]
+    fn voice_process_table_accepts_signed_darwin_uids_without_reading_foreign_argv() {
+        let table = b"-2 40 S /usr/bin/python3\n4294967294 41 S /usr/bin/python3\n501 42 S /usr/bin/python3\n";
+        let args = voice_process_fixture(&[
+            "python3", "scripts/alden_voice.py", "--state-root", "/state",
+        ]);
+        for (uid, expected) in [(501, vec![42]), (libc::uid_t::MAX - 1, vec![40, 41])] {
+            let mut inspected = Vec::new();
+            let result = voice_session_from_process_table(
+                Path::new("/state"), uid, voice_ps_output(true, table), |pid| {
+                    assert!(expected.contains(&pid), "foreign-user argv must not be queried");
+                    inspected.push(pid);
+                    Ok(Some(args.clone()))
+                },
+            );
+            assert!(result.unwrap());
+            assert_eq!(inspected, expected);
+        }
+    }
+
+    #[test]
     fn voice_session_enumeration_failures_never_spawn() {
         let spawned = std::cell::Cell::new(0);
         for output in [
@@ -7302,6 +7326,8 @@ mod tests {
             voice_ps_output(true, b""),
             voice_ps_output(true, b"\xff"),
             voice_ps_output(true, b"bad 42 S /usr/bin/python3\n"),
+            voice_ps_output(true, b"-2147483649 42 S /usr/bin/python3\n"),
+            voice_ps_output(true, b"4294967296 42 S /usr/bin/python3\n"),
             voice_ps_output(true, b"501 bad S /usr/bin/python3\n"),
             voice_ps_output(true, b"501 42 S\n"),
             voice_ps_output(true, b"501 42 S /usr/bin/python3\n"),
