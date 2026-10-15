@@ -1169,6 +1169,36 @@ fn observe_graph_rest_with_budget(window: &tauri::WebviewWindow, deadline: Insta
     )
 }
 
+// Clone the observed navigation before the fixed click in the same JS task.
+// A screenshot can flush layout between an earlier readiness sample and that
+// click; Back must restore the origin saved at the action, not that old sample.
+const GRAPH_ACTION_ORIGIN: &str = r#"JSON.stringify((()=>{
+  const before=JSON.parse(__AUDIT_GRAPH_COLLECT__).navigation;
+  __AUDIT_GRAPH_ACTION__;
+  return {before,after:JSON.parse(__AUDIT_GRAPH_COLLECT__).navigation};
+})())"#;
+
+fn navigation_context_matches(origin: &Value, earlier: &Value) -> bool {
+    let (Some(origin), Some(earlier)) = (origin.as_object(), earlier.as_object()) else {
+        return false;
+    };
+    let valid_pose = |navigation: &serde_json::Map<String, Value>| {
+        let Some(targets) = navigation.get("targets").and_then(Value::as_object) else {
+            return false;
+        };
+        targets.len() == 2 && ["camera", "lookAt"].iter().all(|key| {
+            targets.get(*key).and_then(Value::as_array).is_some_and(|values| {
+                values.len() == 3 && values.iter().all(|v| v.as_f64().is_some_and(f64::is_finite))
+            })
+        })
+    };
+    ["focused", "focusId", "source", "focusedSourceVersion", "focusSlot", "hops",
+        "canGoBack", "nodeCount", "edgeCount", "overviewLimit", "overviewOffset", "hasMoreContexts"]
+        .iter().all(|key| origin.contains_key(*key) && earlier.contains_key(*key))
+        && valid_pose(origin) && valid_pose(earlier) && origin.len() == earlier.len()
+        && origin.iter().all(|(key, value)| key == "targets" || earlier.get(key) == Some(value))
+}
+
 fn graph_step(
     window: &tauri::WebviewWindow,
     action: &str,
@@ -1196,18 +1226,26 @@ fn graph_step(
         _ => return Err("unknown internal graph action".into()),
         }.to_string(),
     };
-    collect_script(window, format!("{script};{}", graph_collect_script()), deadline)?;
+    let origin = collect_script(
+        window,
+        GRAPH_ACTION_ORIGIN
+            .replace("__AUDIT_GRAPH_COLLECT__", &graph_collect_script())
+            .replace("__AUDIT_GRAPH_ACTION__", &script),
+        deadline,
+    )?;
     std::thread::sleep(Duration::from_millis(250));
     // Match bounded source-read budgets; readiness is observed, never forced.
     let settle = deadline.min(Instant::now() + Duration::from_secs(25));
     loop {
-        let state = collect_script(window, graph_collect_script(), deadline)?;
+        let mut state = collect_script(window, graph_collect_script(), deadline)?;
         let graph_pending = collect_script(window,"JSON.stringify({pending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중'})".into(),deadline)?;
         if graph_pending["pending"] != true
             && state["graphRead"]["navigationPending"] != true
             && (state["notePane"]["hidden"] != false
                 || state["notePane"]["focusState"] != "loading")
         {
+            state["actionOrigin"] = origin["before"].clone();
+            state["actionImmediateNavigation"] = origin["after"].clone();
             return Ok(state);
         }
         if Instant::now() >= settle {
@@ -1674,9 +1712,10 @@ fn audit_settings(
             return Err("native overview expansion did not expose bounded extra contexts".into());
         }
         let restored = graph_step(&window, "back", deadline)?;
-        if restored["navigation"] != initial["navigation"] {
+        if !navigation_context_matches(&more["actionOrigin"], &initial["navigation"])
+            || restored["navigation"] != more["actionOrigin"] {
             return Err(format!("native overview expansion did not restore prior context selection: before={}, restored={}",
-                initial["navigation"], restored["navigation"]));
+                more["actionOrigin"], restored["navigation"]));
         }
         more
     } else {
@@ -1730,6 +1769,9 @@ fn audit_settings(
     let back_first = graph_step(&window, "back", deadline)?;
     let back_overview = graph_step(&window, "back", deadline)?;
     if first["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
+        || !navigation_context_matches(&first["actionOrigin"], &initial["navigation"])
+        || !navigation_context_matches(&expanded["actionOrigin"], &first["navigation"])
+        || !navigation_context_matches(&second["actionOrigin"], &expanded["navigation"])
         || first["navigation"]["hops"] != 0
         || expanded["navigation"]["hops"]
             != if initial["navigation"]["source"] == "collection" {
@@ -1742,9 +1784,9 @@ fn audit_settings(
         || (!secondary_required && second["navigation"] != expanded["navigation"])
         || back_expanded
             .as_ref()
-            .is_some_and(|state| state["navigation"] != expanded["navigation"])
-        || back_first["navigation"] != first["navigation"]
-        || back_overview["navigation"] != initial["navigation"]
+            .is_some_and(|state| state["navigation"] != second["actionOrigin"])
+        || back_first["navigation"] != expanded["actionOrigin"]
+        || back_overview["navigation"] != first["actionOrigin"]
         || back_overview["backDisabled"] != true
         || back_overview["clearedDetail"] != true
     {
@@ -1752,6 +1794,7 @@ fn audit_settings(
             "native graph back navigation did not restore view and targets: {}",
             json!({
                 "initial":initial["navigation"],"first":first["navigation"],"expanded":expanded["navigation"],
+                "clickOrigins":{"first":first["actionOrigin"],"expand":expanded["actionOrigin"],"second":second["actionOrigin"]},
                 "second":second["navigation"],"backExpanded":back_expanded.as_ref().map(|state| &state["navigation"]),
                 "backFirst":back_first["navigation"],"backOverview":back_overview["navigation"],
                 "backDisabled":back_overview["backDisabled"],"clearedDetail":back_overview["clearedDetail"]
@@ -1863,6 +1906,10 @@ fn audit_settings(
         "schema":1,"scope":"owned read-only WKWebView with persisted application data; not the primary process, physical voice, lock or production",
         "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
         "navigation":{"initial":initial["navigation"],"expanded":expanded["navigation"],"backOverview":back_overview["navigation"]},
+        "navigationOrigins":{"beforeFirst":first["actionOrigin"],"beforeExpand":expanded["actionOrigin"],"beforeSecond":second["actionOrigin"],
+            "earlyFirst":first["navigation"],"earlyExpanded":expanded["navigation"],
+            "backFirst":back_first["navigation"],"backExpanded":back_expanded.as_ref().map(|state| &state["navigation"]),
+            "backOverview":back_overview["navigation"]},
         "connectionsDefault":expanded_capture,"connectionsCompact":compact_connections_capture,
         "compactConnectionsNavigation":compact_connections["navigation"]
     })).map_err(|_| "workspace readback JSON failed")?,deadline)?;
@@ -2749,6 +2796,45 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
 
 #[cfg(test)]
 mod tests {
+    fn navigation_origin_fixture() -> serde_json::Value {
+        serde_json::json!({"focused":true,"focusId":"anonymous-source","source":"collection",
+            "focusedSourceVersion":"anonymous-version","focusSlot":0,"hops":0,"canGoBack":true,
+            "nodeCount":2048,"edgeCount":3789,"overviewLimit":2048,"overviewOffset":0,"hasMoreContexts":true,
+            "targets":{"camera":[0.006948,0.007377,4.842555],"lookAt":[0.006948,0.007377,0.002936]}})
+    }
+
+    #[test]
+    fn navigation_origin_allows_pose_motion_without_admitting_context_drift() {
+        let early = navigation_origin_fixture();
+        let mut origin = early.clone();
+        origin["targets"] = serde_json::json!({"camera":[0.035840,-0.009356,4.788133],"lookAt":[0.035840,-0.009356,0.050362]});
+        assert!(super::navigation_context_matches(&origin, &early));
+        assert_ne!(origin, early);
+        for (key, value) in [("focusedSourceVersion",serde_json::json!("other-version")),
+            ("focusId",serde_json::json!("other-source")),("hops",serde_json::json!(1)),
+            ("overviewOffset",serde_json::json!(1984)),("nodeCount",serde_json::json!(5)),
+            ("source",serde_json::json!("legacy")),("canGoBack",serde_json::json!(false))] {
+            let mut wrong = origin.clone(); wrong[key] = value;
+            assert!(!super::navigation_context_matches(&wrong, &early), "{key}");
+        }
+    }
+
+    #[test]
+    fn navigation_origin_rejects_incomplete_context_and_malformed_pose() {
+        let early = navigation_origin_fixture();
+        for pose in [serde_json::Value::Null,
+            serde_json::json!({"camera":[0,0],"lookAt":[0,0,0]}),
+            serde_json::json!({"camera":[0,null,3.6],"lookAt":[0,0,0]}),
+            serde_json::json!({"camera":[0,0,3.6],"lookAt":[0,0,0],"unexpected":true})] {
+            let mut origin = early.clone(); origin["targets"] = pose;
+            assert!(!super::navigation_context_matches(&origin, &early));
+        }
+        let mut missing = early.clone();missing.as_object_mut().unwrap().remove("source");
+        assert!(!super::navigation_context_matches(&missing, &missing));
+        let mut extra = early.clone();extra["newScope"] = serde_json::json!("other");
+        assert!(!super::navigation_context_matches(&extra, &early));
+    }
+
     #[test]
     fn links_audit_is_explicit_and_uses_isolated_assistant_admission() {
         let request=super::parse_args(["--audit-own-assistant-links","/private/tmp/alden-links-audit"].map(std::ffi::OsString::from).into_iter()).unwrap().unwrap();
