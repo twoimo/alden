@@ -23,6 +23,54 @@ function changed(a: ReadonlyMap<string, Point3>, b: ReadonlyMap<string, Point3>,
 }
 
 describe('bounded semantic overview layout', () => {
+  it('does not pull a fresh dense community toward arbitrary provisional ID seeds', () => {
+    const count = 64;
+    const edges = Array.from({ length: count }, (_, a) =>
+      Array.from({ length: count - a - 1 }, (_, offset) => R(a, a + offset + 1))).flat();
+    const engine = new SemanticLayoutEngine(), view = scene(count, edges);
+    const original = JSON.stringify(view), result = engine.layout(view, empty());
+    expect(new Set(result.clusterIds.values()).size).toBe(1);
+    const target = new Map(engine.checkpoint().centers).get(result.clusterIds.get('n0000')!)!;
+    const mean = [...result.anchors.values()].reduce((sum, point) => ({
+      x: sum.x + point.x / count, y: sum.y + point.y / count, z: sum.z + point.z / count,
+    }), { x: 0, y: 0, z: 0 });
+    // With no prior placement to preserve, the group should stay near its own
+    // chosen center rather than drift toward the unrelated per-ID seed mean.
+    expect(Math.hypot(mean.x - target.x, mean.y - target.y, mean.z - target.z)).toBeLessThan(.08);
+    expect(JSON.stringify(view)).toBe(original);
+  });
+
+  it('keeps arrival cohorts together while protecting pins and unrelated communities', () => {
+    const id = (i: number) => `n${String(i).padStart(4, '0')}`;
+    const old = Array.from({ length: 16 }, (_, i) => i);
+    const fresh = Array.from({ length: 16 }, (_, i) => i + 16);
+    const other = Array.from({ length: 32 }, (_, i) => i + 32);
+    const make = (ids: number[]) => {
+      const edges = ids.flatMap((a, at) => ids.slice(at + 1)
+        .filter(b => (a < 32) === (b < 32)).map(b => R(a, b)));
+      const view = scene(64, edges), selected = new Set(ids.map(id));
+      return { ...view, nodes: view.nodes.filter(node => selected.has(node.id)) };
+    };
+    for (const batches of [[16], [4, 8, 12, 16]]) {
+      const engine = new SemanticLayoutEngine();
+      let result = engine.layout(make([...old, ...other]), empty());
+      const protectedPoints = new Map([0, ...other].map(i => [id(i), result.anchors.get(id(i))!]));
+      for (const count of batches) result = engine.layout(
+        make([...old, ...fresh.slice(0, count), ...other]), result.anchors, [], { pinnedIds: new Set([id(0)]) });
+      const mean = (members: number[]) => members.reduce((sum, i) => {
+        const p = result.anchors.get(id(i))!, depth = 4.75 - p.z;
+        return { x: sum.x + p.x / depth / members.length, y: sum.y + p.y / depth / members.length };
+      }, { x: 0, y: 0 });
+      const a = mean(old), n = mean(fresh), b = mean(other);
+      const cohortDistance = Math.hypot(a.x - n.x, a.y - n.y);
+      const communityDistance = Math.hypot((a.x + n.x) / 2 - b.x, (a.y + n.y) / 2 - b.y);
+      expect(cohortDistance).toBeLessThan(communityDistance);
+      expect(result.clusterIds.get(id(0))).toBe(result.clusterIds.get(id(16)));
+      expect(result.clusterIds.get(id(0))).not.toBe(result.clusterIds.get(id(32)));
+      for (const [key, point] of protectedPoints) expect(result.anchors.get(key)).toEqual(point);
+    }
+  });
+
   it('uses real R links to cluster and move a cross-source pair, without mutating facts', () => {
     const view = scene(6, [R(0, 1)]), original = JSON.stringify(view);
     const plain = new SemanticLayoutEngine().layout(scene(), empty());

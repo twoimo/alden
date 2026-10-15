@@ -283,6 +283,10 @@ export class SemanticLayoutEngine {
     const movableCount = movable.filter(Boolean).length, collisionSeeds = ids.map(id => hash(id));
     const points = ids.map(id => bound(anchors.get(id)!));
     const origins = ids.map(id => bound(base.get(id)!));
+    // A fresh ID seed is a provisional starting point, not a prior placement.
+    // Holding a whole new community toward those unrelated seeds pulls its
+    // center inward. Preserve positions only after a solve or an explicit prior.
+    const hasPrior = ids.map(id => finite(previousPositions.get(id)) || this.positions.has(id));
     const clusterCenters = ids.map(id => centers.get(clusterIds.get(id)!)!);
     const indexedPairs = pairs.map(pair => ({ ...pair, a: index.get(pair.source)!, b: index.get(pair.target)! }));
     const forces = new Float64Array(ids.length * 3);
@@ -296,9 +300,9 @@ export class SemanticLayoutEngine {
       ids.forEach((_, i) => {
         if (!movable[i]) return;
         const p = points[i], origin = origins[i], c = clusterCenters[i];
-        forces[i * 3] = .12 * (c.x - p.x) + .08 * (origin.x - p.x);
-        forces[i * 3 + 1] = .12 * (c.y - p.y) + .08 * (origin.y - p.y);
-        forces[i * 3 + 2] = .12 * (c.z - p.z) + .08 * (origin.z - p.z);
+        forces[i * 3] = .12 * (c.x - p.x) + (hasPrior[i] ? .08 * (origin.x - p.x) : 0);
+        forces[i * 3 + 1] = .12 * (c.y - p.y) + (hasPrior[i] ? .08 * (origin.y - p.y) : 0);
+        forces[i * 3 + 2] = .12 * (c.z - p.z) + (hasPrior[i] ? .08 * (origin.z - p.z) : 0);
       });
       for (const pair of indexedPairs) {
         const { a, b } = pair;
