@@ -36,6 +36,9 @@ LEGACY_TEXT_VERSION = "retained-local-original-text-v1"
 TEXT_BINDING_POLICY = 'verified-current-projection-and-legacy-raw-v2'
 MAX_NODES = 2048
 MAX_INPUT_BYTES = 2 * 1024 * 1024
+CANDIDATE_SELECTION_POLICY = "incidence-degree-v1"
+# Match SemanticLayoutEngine's endpoint cap, so candidates survive consumption.
+CANDIDATE_DEGREE_LIMIT = 4
 
 
 @dataclass(frozen=True)
@@ -397,6 +400,38 @@ def _project_matchings(groups, node_count, pair_cap, guard):
                     return
 
 
+def _select_candidate_pairs(ranked, cap, guard):
+    """Bound incidence and endpoint degree within the already admitted union.
+
+    Inputs are unique non-self pairs from the validated sampler. This is a
+    deterministic greedy allocation, not optimal coverage or semantic validation.
+    A star can exhaust endpoint capacity before filling the cap. Keep the
+    existing score/ID order in the returned subset.
+    """
+    selected, degree = set(), Counter()
+    for minimum_new in (2, 1, 0):
+        for index, pair in enumerate(ranked):
+            if index % 64 == 0:
+                guard.check()
+            if pair in selected or any(degree[node] >= CANDIDATE_DEGREE_LIMIT for node in pair):
+                continue
+            if sum(degree[node] == 0 for node in pair) >= minimum_new:
+                selected.add(pair)
+                degree.update(pair)
+                if len(selected) == cap:
+                    break
+        if len(selected) == cap:
+            break
+    result = []
+    for index, pair in enumerate(ranked):
+        if index % 64 == 0:
+            guard.check()
+        if pair in selected:
+            result.append(pair)
+    guard.check()
+    return result
+
+
 def _candidates(loaded, budgets, threshold, guard):
     loaded = sorted(loaded, key=lambda entry: entry[0]["id"])
     heaps = [[] for _ in loaded]
@@ -436,14 +471,23 @@ def _candidates(loaded, budgets, threshold, guard):
         for score, j in heap:
             pairs[min(i, j), max(i, j)] = score
     ranked = sorted(pairs, key=lambda key: (-pairs[key], proofs[key[0]]["id"], proofs[key[1]]["id"]))
+    selected = _select_candidate_pairs(ranked, budgets.max_candidates, guard)
+    available_nodes = {node for pair in ranked for node in pair}
+    selected_degree = Counter(node for pair in selected for node in pair)
     candidates = [{"kind": "semantic_layout_affinity", "source": proofs[i]["id"], "target": proofs[j]["id"],
                    "cosine": pairs[i, j], "projects": sorted(set(proofs[i]["projects"]) & set(proofs[j]["projects"]))}
-                  for i, j in ranked[:budgets.max_candidates]]
+                  for i, j in selected]
     return candidates, {"possible_vector_pairs": len(loaded) * (len(loaded) - 1) // 2,
         "eligible_same_project_pairs": eligible, "pairs_evaluated": evaluated,
         "dimension_products": evaluated * E5Profile().dimension, "pairs_above_threshold": passing,
         "neighbor_union_candidates": len(ranked), "candidates_returned": len(candidates),
-        "candidates_truncated": max(0, len(ranked) - budgets.max_candidates),
+        "candidates_truncated": len(ranked) - len(candidates),
+        "candidate_selection": CANDIDATE_SELECTION_POLICY,
+        "candidate_degree_limit": CANDIDATE_DEGREE_LIMIT,
+        "candidate_nodes_available": len(available_nodes),
+        "candidate_nodes_selected": len(selected_degree),
+        "candidate_nodes_omitted": len(available_nodes) - len(selected_degree),
+        "candidate_max_degree": max(selected_degree.values(), default=0),
         "pair_coverage": evaluated / eligible if eligible else None,
         "pair_budget_exhausted": evaluated < eligible,
         "pair_sampling": "project-round-robin-v1",
