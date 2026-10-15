@@ -205,7 +205,13 @@ export class PlasticityLayout {
       let fx = this.forces[at], fy = this.forces[at + 1], fz = this.forces[at + 2];
       const force = Math.hypot(fx, fy, fz);
       const scale = force > 24 ? 24 / force : 1;
-      for (let axis = 0; axis < 3; axis++) this.velocity[at + axis] = damping * (this.velocity[at + axis] + h * this.forces[at + axis] * scale * this.inverseMass[i]);
+      // A zero-degree node is a singleton component: no spring or pair force
+      // acts on it. Match damping to its anchor stiffness/mass instead of the
+      // coupled network's slower overdamped tail. Keep all caps, contact
+      // constraints and screen-space rest thresholds unchanged.
+      const nodeDamping = this.degree[i] === 0
+        ? Math.exp(-2 * Math.sqrt(18 * this.inverseMass[i]) * h) : damping;
+      for (let axis = 0; axis < 3; axis++) this.velocity[at + axis] = nodeDamping * (this.velocity[at + axis] + h * this.forces[at + axis] * scale * this.inverseMass[i]);
       const speed = Math.hypot(this.velocity[at], this.velocity[at + 1], this.velocity[at + 2]);
       const speedScale = speed > 1.4 ? 1.4 / speed : 1;
       for (let axis = 0; axis < 3; axis++) this.velocity[at + axis] *= speedScale;

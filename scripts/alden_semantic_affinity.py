@@ -27,6 +27,7 @@ import time
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity
 from alden_content_evidence import POLICY as CONTENT_EVIDENCE_POLICY, content_evidence_class
 from alden_source_text import TEXT_VERSION, project_source_text
+from alden_graph_quality import _json as _strict_json
 
 MODEL = "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0"
 ENDPOINT = digest(b"http://127.0.0.1:11236/v1/embeddings")
@@ -136,14 +137,16 @@ def _sql_errors(guard):
 
 
 def _json(raw):
-    def reject(_):
-        raise ValueError("affinity_nonfinite_json")
     try:
-        return json.loads(raw, parse_constant=reject)
+        return _strict_json(raw)
     except RecursionError as error:
         # Malformed record data must not discard unrelated usable nodes.
         # Keep resource/cancellation RuntimeErrors outside this conversion.
         raise ValueError("affinity_json_nesting") from error
+    except ValueError as error:
+        if str(error) in ('nonfinite_json', 'duplicate_json_key'):
+            raise ValueError('affinity_' + str(error)) from error
+        raise
 
 
 def _regular_path(path):
