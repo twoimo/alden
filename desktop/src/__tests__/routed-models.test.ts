@@ -12,7 +12,7 @@ const payload={ok:true,model:gemini,reasoning_effort:'high',mode:'manual',models
 ]};
 let controller:RoutedModels;
 beforeEach(()=>{document.body.innerHTML=settingsMarkup();});
-afterEach(()=>controller?.dispose());
+afterEach(()=>{controller?.dispose();vi.restoreAllMocks();});
 function mount(fail=false){
   const load=vi.fn<typeof fetchSettingsAction>(async(action,input)=>action==='routed-models'?payload:
     fail?{ok:false,reason:'local_model_not_ready'}:{ok:true,stored:true,...JSON.parse(input!.query!),action});
@@ -38,5 +38,36 @@ describe('live model choices and distinct availability',()=>{
     document.querySelector<HTMLButtonElement>('[data-route-model="gpt-6-astra"]')!.click();
     await vi.waitFor(()=>expect(document.getElementById('routed-model-status')!.textContent).toContain('현재 선택은 유지'));
     expect(document.getElementById('routed-model-name')!.textContent).toBe(before);
+  });
+  it('keeps an open menu bounded after resize and scroll without extra catalog reads',async()=>{
+    const load=mount();await controller.refresh();
+    const picker=document.getElementById('routed-model-picker') as HTMLDetailsElement;
+    const menu=picker.querySelector<HTMLElement>('.routed-model-menu')!;
+    let bounds=new DOMRect(200,582,400,40),height=728;
+    vi.spyOn(picker,'getBoundingClientRect').mockImplementation(()=>bounds);
+    vi.spyOn(window,'innerHeight','get').mockImplementation(()=>height);
+    picker.open=true;picker.dispatchEvent(new Event('toggle'));
+    await vi.waitFor(()=>expect(menu.style.maxHeight).toBe('430px'));
+    const reads=load.mock.calls.length;
+    bounds=new DOMRect(161,350,350,44);height=648;
+    window.dispatchEvent(new Event('resize'));
+    expect(picker.dataset.placement).toBe('above');expect(menu.style.maxHeight).toBe('338px');
+    bounds=new DOMRect(161,100,350,44);
+    document.dispatchEvent(new Event('scroll'));
+    expect(picker.dataset.placement).toBe('below');expect(menu.style.maxHeight).toBe('430px');
+    expect(load.mock.calls.length).toBe(reads);
+  });
+  it('does not reflow the menu after disposal',async()=>{
+    mount();await controller.refresh();
+    const picker=document.getElementById('routed-model-picker') as HTMLDetailsElement;
+    const menu=picker.querySelector<HTMLElement>('.routed-model-menu')!;
+    let bounds=new DOMRect(200,582,400,40);
+    vi.spyOn(picker,'getBoundingClientRect').mockImplementation(()=>bounds);
+    vi.spyOn(window,'innerHeight','get').mockReturnValue(728);
+    picker.open=true;picker.dispatchEvent(new Event('toggle'));
+    await vi.waitFor(()=>expect(menu.style.maxHeight).toBe('430px'));
+    controller.dispose();bounds=new DOMRect(161,100,350,44);
+    window.dispatchEvent(new Event('resize'));document.dispatchEvent(new Event('scroll'));
+    expect(picker.dataset.placement).toBe('above');expect(menu.style.maxHeight).toBe('430px');
   });
 });

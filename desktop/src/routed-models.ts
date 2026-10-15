@@ -23,15 +23,12 @@ export class RoutedModels {
     const signal = this.events.signal;
     root.getElementById('routed-model-picker')?.addEventListener('toggle', () => {
       if ((root.getElementById('routed-model-picker') as HTMLDetailsElement).open) {
-        const picker = root.getElementById('routed-model-picker')!;
-        const bounds = picker.getBoundingClientRect(), below = (root.defaultView?.innerHeight ?? 800) - bounds.bottom;
-        const above = below < 260 && bounds.top > below;
-        picker.dataset.placement = above ? 'above' : 'below';
-        const menu = picker.querySelector<HTMLElement>('.routed-model-menu');
-        if (menu) menu.style.maxHeight = Math.max(90, Math.min(430, (above ? bounds.top : below) - 12)) + 'px';
+        this.placeMenu();
         void this.refresh();
       }
     }, { signal });
+    root.defaultView?.addEventListener('resize', () => this.placeMenu(), { signal });
+    root.addEventListener('scroll', () => this.placeMenu(), { signal, capture:true, passive:true });
     root.getElementById('routed-model-search')?.addEventListener('input', () => this.renderList(), { signal });
     root.getElementById('routed-model-list')?.addEventListener('click', event => {
       const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button[data-route-model]') : null;
@@ -50,6 +47,17 @@ export class RoutedModels {
   }
 
   dispose(): void { this.disposed = true; this.epoch++; this.events.abort(); }
+
+  private placeMenu(): void {
+    if (this.disposed) return;
+    const picker = this.root.getElementById('routed-model-picker') as HTMLDetailsElement | null;
+    if (!picker?.open) return;
+    const bounds = picker.getBoundingClientRect(), below = (this.root.defaultView?.innerHeight ?? 800) - bounds.bottom;
+    const above = below < 260 && bounds.top > below;
+    picker.dataset.placement = above ? 'above' : 'below';
+    const menu = picker.querySelector<HTMLElement>('.routed-model-menu');
+    if (menu) menu.style.maxHeight = Math.max(90, Math.min(430, (above ? bounds.top : below) - 12)) + 'px';
+  }
 
   async refresh(): Promise<void> {
     if (this.disposed || this.busy) return;
@@ -139,6 +147,7 @@ export class RoutedModels {
       status.title = row.status === 'connected' ? '라우터와 모델 목록을 확인했습니다. 실제 응답은 요청할 때 확인합니다.' : row.status === 'available' ? '최근 5분 안에 실제 응답을 확인했습니다.' : row.status === 'running' ? '가중치가 준비된 실행 상태를 확인했습니다.' : status.textContent;
       button.append(label, status); list.append(button);
     }
+    this.placeMenu();
   }
 
   private text(id: string, value: string): void { const element = this.root.getElementById(id); if (element) element.textContent = value; }

@@ -962,12 +962,23 @@ fn capture_workspaces(
             collect_script(window,"JSON.stringify((()=>{const p=document.querySelector('#routed-model-picker');p?.scrollIntoView({block:'center'});if(p)p.open=true;return {opened:!!p};})())".into(),deadline)?;
             let ready_by = Instant::now() + Duration::from_secs(5);
             loop {
-                let models = collect_script(window,"JSON.stringify({count:document.querySelectorAll('#routed-model-list [data-route-model]').length})".into(),deadline)?;
-                if models["count"].as_u64().unwrap_or(0) > 0 {
+                let models = collect_script(window,r#"JSON.stringify((()=>{
+                  const picker=document.querySelector('#routed-model-picker');
+                  const menu=document.querySelector('.routed-model-menu')?.getBoundingClientRect();
+                  const search=document.querySelector('#routed-model-search')?.getBoundingClientRect();
+                  const contained=r=>!!r&&r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;
+                  const rect=r=>r?{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}:null;
+                  return {count:document.querySelectorAll('#routed-model-list [data-route-model]').length,
+                    open:!!picker?.open,contained:!!picker?.open&&contained(menu)&&contained(search),
+                    menu:rect(menu),search:rect(search),viewport:{width:innerWidth,height:innerHeight}};
+                })())"#.into(),deadline)?;
+                if models["count"].as_u64().unwrap_or(0) > 0 && models["contained"].as_bool()==Some(true) {
+                    publish(output,&format!("alden-model-menu-{size}.json"),
+                        &serde_json::to_vec_pretty(&models).map_err(|_|"model menu geometry JSON failed")?,deadline)?;
                     break;
                 }
                 if Instant::now() >= ready_by {
-                    return Err("native model catalog did not settle".into());
+                    return Err("native model catalog/menu bounds did not settle".into());
                 }
                 std::thread::sleep(Duration::from_millis(25));
             }
