@@ -20,6 +20,38 @@ from alden_normalization_evidence import DeclaredFieldSummary
 from alden_source_text import TEXT_VERSION, POLICY as SOURCE_TEXT_POLICY, project_source_text
 
 
+@contextmanager
+def _quality_sql_budget(db, check):
+    """Observe the request budget while SQLite is joining or sorting rows."""
+    if db is None:
+        yield
+        return
+    interrupted = None
+
+    def observe():
+        nonlocal interrupted
+        try:
+            check()
+        except BaseException as error:
+            # sqlite3 masks callback exceptions as OperationalError. Retain
+            # the original cancellation/deadline (or caller failure) instead.
+            interrupted = error
+            return 1
+        return 0
+
+    db.set_progress_handler(observe, 1000)
+    try:
+        yield
+        if interrupted is not None:
+            raise interrupted from None
+    except sqlite3.OperationalError:
+        if interrupted is not None:
+            raise interrupted from None
+        raise
+    finally:
+        db.set_progress_handler(None, 0)
+
+
 def _quality_read_cache(db, schema):
     # Only these already read-only, derived DB connections are configured.
     # Mapping shares clean OS pages instead of duplicating the working set in
@@ -378,7 +410,8 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     if any(p.is_symlink() for p in [retrieval, *retrieval.parents]):
         raise ValueError('quality_retrieval_symlink')
     cache_context = closing(sqlite3.connect(retrieval.as_uri() + '?mode=ro', uri=True, timeout=.15)) if retrieval.is_file() else nullcontext(None)
-    with store.database() as db, cache_context as cache:
+    with store.database() as db, cache_context as cache, \
+            _quality_sql_budget(db, check), _quality_sql_budget(cache, check):
         # Request-local read settings for derived stores only. No persistent
         # database setting, original DB or model allocation is changed.
         _quality_read_cache(db, 'main')

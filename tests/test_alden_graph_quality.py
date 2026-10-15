@@ -1,19 +1,78 @@
 import json
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 import sqlite3
 import struct
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from alden_collection import CollectionStore, digest, identity
-from alden_graph_quality import audit, audit_annotations
+from alden_graph_quality import audit, audit_annotations, _quality_sql_budget
 
 
 class QualityTests(unittest.TestCase):
+    def test_caught_sqlite_interruption_cannot_turn_into_success_and_handler_is_cleared(self):
+        def stop():
+            raise RuntimeError('quality_cancelled')
+
+        with closing(sqlite3.connect(':memory:')) as db:
+            with self.assertRaisesRegex(RuntimeError, '^quality_cancelled$'):
+                with _quality_sql_budget(db, stop):
+                    try:
+                        db.execute('''WITH RECURSIVE work(n) AS (
+                            SELECT 1 UNION ALL SELECT n+1 FROM work WHERE n<10000)
+                            SELECT sum(n) FROM work''').fetchone()
+                    except sqlite3.OperationalError:
+                        pass  # An internal SQL fallback must not erase cancellation.
+            self.assertEqual(db.execute('SELECT 1').fetchone(), (1,))
+
+    def test_sqlite_work_observes_cancellation_before_returning_its_first_sorted_row(self):
+        self.assert_sqlite_interruption('quality_cancelled')
+
+    def test_sqlite_work_observes_deadline_before_returning_its_first_sorted_row(self):
+        self.assert_sqlite_interruption('quality_time_budget')
+
+    def assert_sqlite_interruption(self, reason):
+        self.store.ingest(self.a, [self.record('x'), self.record('y')], relations=[
+            {'source_platform': 'graph', 'source_id': 'x', 'target_platform': 'graph',
+             'target_id': 'y', 'type': f'reference-{i}', 'evidence': {'index': i}}
+            for i in range(300)])
+        # A real SQLite view/UDF exposes work done before ORDER BY can yield a
+        # row. No sleep, user's DB, background process or live sending is used.
+        with self.store.database() as db:
+            db.execute('ALTER TABLE relations RENAME TO quality_test_relations')
+            db.execute('''CREATE VIEW relations AS SELECT id,target_id,source,target,type,
+                evidence,version,quality_test_tick(active) AS active FROM quality_test_relations''')
+        before = self.files()
+        state = {'visited': 0, 'now': 0.0}
+
+        def tick(value):
+            state['visited'] += 1
+            state['now'] += .001
+            return value
+
+        database = CollectionStore.database
+
+        @contextmanager
+        def instrumented(store, **options):
+            with database(store, **options) as db:
+                db.create_function('quality_test_tick', 1, tick)
+                yield db
+
+        cancelled = (lambda: state['visited'] >= 50) if reason == 'quality_cancelled' else None
+        timeout = 120 if cancelled is not None else .05
+        with patch.object(CollectionStore, 'database', instrumented), patch(
+                'alden_graph_quality.time', SimpleNamespace(monotonic=lambda: state['now'])):
+            with self.assertRaisesRegex(RuntimeError, '^' + reason + '$'):
+                audit(self.root, ['one'], timeout=timeout, cancelled=cancelled)
+        self.assertGreaterEqual(state['visited'], 50)
+        self.assertLess(state['visited'], 300, 'SQLite finished the complete sort before observing interruption')
+        self.assertEqual(self.files(), before)
+
     def test_annotation_cancellation_poll_is_throttled_and_still_observes_later_cancellation(self):
         self.store.ingest(self.a,[self.annotated(str(i),['AI']) for i in range(100)])
         with patch('alden_graph_quality.time.monotonic',side_effect=[i*.001 for i in range(2000)]):
