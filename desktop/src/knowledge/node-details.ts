@@ -1,4 +1,5 @@
 import type { KnowledgeGraph, KnowledgeNode } from './graph-model';
+import { isNumericToken, separateReadingNoise } from './reading-text';
 
 function text(value: unknown, limit = 1200): string {
   return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, limit) : '';
@@ -95,7 +96,8 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   if (summary) summary.textContent = text(selected?.summary) || nodeSummary(graph, node);
   const body = root.getElementById('knowledge-node-body');
   const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
-  if (body) { renderBody(body, copy, graph, selected?.basis !== 'source_record'); body.hidden = !copy; }
+  const reading = copy ? separateReadingNoise(copy).reading : '';
+  if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
   const projection = record(selected?.text_projection);
   const tail = projection?.separated_tail;
@@ -143,12 +145,13 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     }
     note.append(sources); resolutionAnchor.after(note); resolutionAnchor = note;
   }
-  if (summary) summary.hidden = Boolean(body && copy);
+  if (summary) summary.hidden = Boolean(body && reading);
   const kind = root.getElementById('knowledge-node-kind'); if (kind) kind.textContent = nodeKind(node);
   const facts = root.getElementById('knowledge-node-facts'); facts?.replaceChildren();
   const values = selected?.key_facts;
   if (Array.isArray(values)) for (const value of [...new Set(values.filter(value => typeof value === 'string'))].slice(0, 6)) {
-    if (text(value, 600)) facts?.append(element('li', '', text(value, 600)));
+    const fact = text(value, 600);
+    if (fact && !isNumericToken(fact)) facts?.append(element('li', '', fact));
   }
   if (facts) facts.hidden = facts.children.length === 0;
   const evidence = root.getElementById('knowledge-node-evidence'); evidence?.replaceChildren();

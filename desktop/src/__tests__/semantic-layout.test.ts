@@ -302,4 +302,14 @@ describe('bounded semantic overview layout', () => {
     const result = new SemanticLayoutEngine().layout(view, empty());
     expect(result.diagnostics.affinityPairs).toBe(1); expect(view.edges).toEqual([]);
   });
+
+  it('pulls equal-energy nodes that share a direction closer than a hub spoke', () => {
+    const edges = [R(0, 1), R(0, 2), R(0, 3), R(0, 4)];
+    const hub = new SemanticLayoutEngine().layout(scene(5, edges), empty());
+    const aligned = new SemanticLayoutEngine().layout(scene(5, edges), empty(), [S(1, 2, .96)]);
+    expect(distance(aligned.anchors, 'n0001', 'n0002')).toBeLessThan(distance(hub.anchors, 'n0001', 'n0002'));
+    expect(distance(aligned.anchors, 'n0001', 'n0002')).toBeLessThan(distance(aligned.anchors, 'n0001', 'n0003'));
+    expect(distance(aligned.anchors, 'n0001', 'n0002')).toBeGreaterThan(.05);
+    expect(aligned.anchors.size).toBe(5);
+  });
 });

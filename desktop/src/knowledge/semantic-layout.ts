@@ -173,13 +173,19 @@ export class SemanticLayoutEngine {
         const a = index.get(raw.source)!, b = index.get(raw.target)!;
         const p = nextPairs.get(key) ?? { key, source: raw.source, target: raw.target, r: 0, s: 0, weight: 0, rest: 0 };
         p[kind] = scale * raw.value / Math.sqrt(Math.max(1, degree[a]) * Math.max(1, degree[b]));
+        // Unequal endpoint energy is a hub spoke. Keep the link, but do not
+        // let it outrank a pair whose force magnitude and direction agree.
+        if (kind === 'r') {
+          const similar = Math.min(degree[a], degree[b]) / Math.max(degree[a], degree[b]);
+          p.r *= 0.35 + 0.65 * similar;
+        }
         p.weight = p.r + p.s; nextPairs.set(key, p);
       }
     // Normalize stiffness, but retain raw strength in rest lengths. Otherwise
     // uniform cosine/weight changes at high degree cancel out of normalization.
     for (const p of nextPairs.values()) {
       const realRest = .3 + .45 * (1 - (r.get(p.key)?.value ?? 0));
-      const semanticRest = .9 - .25 * (s.get(p.key)?.value ?? 0);
+      const semanticRest = .62 - .35 * (s.get(p.key)?.value ?? 0);
       p.rest = (p.r * realRest + p.s * semanticRest) / p.weight;
     }
     const pairs = [...nextPairs.values()].sort((a, b) => order(a.key, b.key));
