@@ -4,6 +4,21 @@ import { projectedLayoutMetrics } from '../knowledge/projected-layout-metrics';
 
 const viewport = { left: 0, top: 0, width: 640, height: 480 };
 describe('settled projected display collision correction', () => {
+  it('leaves a readable gap between tiny cores while respecting a pin', () => {
+    const points = [{ x: 100, y: 100, radius: .6 }, { x: 102, y: 100, radius: .6 }];
+    const before = JSON.stringify(points);
+    for (const pinned of [new Set<number>(), new Set([0])]) {
+      const result = relaxProjectedCircles(points, viewport, pinned);
+      const a = { x: points[0].x + result.offsets[0], y: points[0].y + result.offsets[1] };
+      const b = { x: points[1].x + result.offsets[2], y: points[1].y + result.offsets[3] };
+      expect(Math.hypot(a.x - b.x, a.y - b.y) - points[0].radius - points[1].radius).toBeGreaterThanOrEqual(2);
+      if (pinned.has(0)) expect(a).toEqual({ x: 100, y: 100 });
+      expect(result.diagnostics.maxShift).toBeLessThanOrEqual(10);
+      expect(result.diagnostics.pairTests).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.pairTests);
+    }
+    expect(JSON.stringify(points)).toBe(before);
+  });
+
   it('retains settled offsets for unaffected nodes without accumulating displacement', () => {
     const points=[{x:100,y:100,radius:1},{x:400,y:400,radius:1}];
     const seeded=relaxProjectedCircles(points,viewport,new Set(),new Float64Array([4,-2,0,0]));
