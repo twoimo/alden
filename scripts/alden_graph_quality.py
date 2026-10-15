@@ -10,6 +10,7 @@ import re
 import sqlite3
 import stat
 import struct
+from threading import local
 import time
 import unicodedata
 
@@ -30,29 +31,43 @@ def _quality_read_cache(db, schema):
     db.execute(f'PRAGMA {schema}.cache_size=-{kib}')
 
 
-def _json(value):
-    def reject(value):
+def _reject_json_constant(value):
+    raise ValueError("nonfinite_json")
+
+
+def _finite_json_float(value):
+    result = float(value)
+    if not math.isfinite(result):
         raise ValueError("nonfinite_json")
+    return result
 
-    def finite_float(value):
-        result = float(value)
-        if not math.isfinite(result):
-            raise ValueError("nonfinite_json")
-        return result
 
-    def unique_object(pairs):
-        result = {}
-        for key, item in pairs:
-            if key in result:
-                raise ValueError("duplicate_json_key")
-            result[key] = item
-        return result
+def _unique_json_object(pairs):
+    result = {}
+    for key, item in pairs:
+        if key in result:
+            raise ValueError("duplicate_json_key")
+        result[key] = item
+    return result
 
-    # A matching byte hash cannot make an ambiguous object authoritative.
-    # parse_constant alone also misses finite JSON literals such as 1e400
-    # that overflow the parser's float representation, including nested ones.
-    return json.loads(value, parse_constant=reject, parse_float=finite_float,
-                      object_pairs_hook=unique_object)
+
+# Reuse parsing policy, not source objects. A decoder belongs to its calling
+# thread; scanner internals are never shared by overlapping worker threads.
+_JSON_DECODERS = local()
+
+
+def _json(value):
+    if isinstance(value, str):
+        try:
+            decoder = _JSON_DECODERS.decoder
+        except AttributeError:
+            decoder = _JSON_DECODERS.decoder = json.JSONDecoder(
+                parse_constant=_reject_json_constant, parse_float=_finite_json_float,
+                object_pairs_hook=_unique_json_object)
+        return decoder.decode(value)
+    # Preserve json.loads' bytes/bytearray encoding detection and type errors.
+    return json.loads(value, parse_constant=_reject_json_constant,
+        parse_float=_finite_json_float, object_pairs_hook=_unique_json_object)
 
 
 def _substantive_field(value, *, title=False):
@@ -324,6 +339,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
     allowed, checked_blobs = defaultdict(set), set()
     membership_contexts, source_tags, scoped_versions = defaultdict(set), {}, defaultdict(set)
     seen, profiles, originals, source_verified = set(), defaultdict(Counter), {}, {}
+    profile_hashes = {}
     source_declarations = {}
     source_annotations, member_annotations = {}, {}
     degree, directed_relations = defaultdict(Counter), Counter()
@@ -349,11 +365,13 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
 
     def examine(*values):
         # Count malformed BLOBs too, before any row can be skipped.
+        size = 0
         for value in values:
             if isinstance(value, str):
-                counts['bytes_examined'] += len(value.encode())
+                size += len(value.encode())
             elif isinstance(value, bytes):
-                counts['bytes_examined'] += len(value)
+                size += len(value)
+        counts['bytes_examined'] += size
         check()
 
     retrieval = store.root / 'retrieval.sqlite3'
@@ -535,9 +553,12 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 counts[evidence_class + '_current_versions'] += 1
             # Inspect the immutable stored projection, independently of titles
             # and disposable search-cache bodies. This is text equality only.
-            stored_class = content_evidence_class(metadata,body,
-                source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
-                body_source='stored_body') if metadata_valid else None
+            if body_source == 'stored_body' and effective_body == body:
+                stored_class = evidence_class
+            else:
+                stored_class = content_evidence_class(metadata,body,
+                    source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
+                    body_source='stored_body') if metadata_valid else None
             if (verify_sources and metadata_valid and source_verified.get(blob_key)
                     and stored_class in ('content_candidate', 'reference_only') and projected_originals.get(blob_key)):
                 projected_body_entries[(row['project'], projected_originals[blob_key])].add(unique)
@@ -588,7 +609,16 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                 profile_valid = all(isinstance(v, str) and v for v in vector[1:4])
                 if not profile_valid:
                     flag('vector_profile_invalid', key)
-                profile = digest(encoded(vector[1:4])) if profile_valid else None
+                profile = None
+                if profile_valid:
+                    profile_key = vector[1:4]
+                    profile = profile_hashes.get(profile_key)
+                    if profile is None:
+                        profile = digest(encoded(profile_key))
+                        # Request-local reuse of exact validated descriptors;
+                        # vectors, dimensions and findings are always checked.
+                        if len(profile_hashes) < 64:
+                            profile_hashes[profile_key] = profile
                 raw = vector[4]
                 if not isinstance(raw, bytes) or not 4 <= len(raw) <= 8192 or len(raw) % 4:
                     flag('vector_shape_invalid', key)
