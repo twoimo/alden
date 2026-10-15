@@ -25,8 +25,21 @@ describe('overview reading entry labels', () => {
       {id:'i',label:'돈 벌어주는 스파미 일반 영상 133개',category:'index',degree:9999},
     ]);
     const before=JSON.stringify(input);
-    expect(selectOverviewLabels(input.nodes).map(n=>n.label)).toEqual(['연봉·복리후생','면접 질문을 준비하는 방법','이력서·서류']);
+    expect(selectOverviewLabels(input.nodes).map(n=>n.label)).toEqual(['연봉·복리후생','이력서·서류','면접 질문을 준비하는 방법']);
     expect(JSON.stringify(input)).toBe(before);expect(input.nodes).toHaveLength(9);
+  });
+  it('fills the overview with connected subjects before headlines and amount fragments', () => {
+    const nodes=graph([
+      {id:'low',label:'경력·이직',category:'topic',degree:10,source_target:'career'},
+      {id:'high',label:'채용공고·지원시기',category:'topic',degree:3000,source_target:'career'},
+      {id:'bucket',label:'홍보·안내',category:'topic',degree:9000,source_target:'career'},
+      {id:'link',label:'외부 자료·링크',category:'topic',degree:8000,source_target:'career'},
+      {id:'claim',label:'115,700원은 편집자막 금액',category:'source_claim',degree:1,source_target:'clips'},
+      {id:'title',label:'다 먹으면 평생 공짜기 사장님이 남긴 말',category:'video',degree:50,source_target:'channel'},
+    ]).nodes;
+    expect(selectOverviewLabels(nodes,2).map(n=>n.id)).toEqual(['high','low']);
+    expect(selectOverviewLabels(nodes).map(n=>n.id).slice(0,2)).toEqual(['high','low']);
+    expect(nodes).toHaveLength(6);
   });
   it('deduplicates display text without merging nodes, and preserves project coverage', () => {
     const nodes=graph([
