@@ -23,6 +23,7 @@ from alden_source_text import project_source_text
 
 
 SCHEMA = 3
+_GRAPH_REFERENCES = object()  # Internal capability, never a JSON query flag.
 SNAPSHOT_RECORD_BUDGET = 100000
 MAX_RECORD_BYTES = 2 * 1024 * 1024
 MAX_BATCH_RECORDS = 2000
@@ -903,12 +904,19 @@ class CollectionStore:
               WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id
               AND p.permission!='denied' AND p.project IN (""" + ",".join("?" for _ in projects) + ")) ORDER BY t.label,t.id", projects)]
 
+    def graph_references(self, **options) -> dict:
+        """Internal affinity selection; the ordinary graph view stays complete."""
+        return self.graph_page(**options, _references_only=_GRAPH_REFERENCES)
+
     def graph_page(self, *, projects: list[str], limit=120, offset=0, focus=None, hops=1, query="",
                    target_id=None, platform=None, node_type=None, relation=None, since=None, until=None,
-                   details=False, expected_version=None, overview=False) -> dict:
+                   details=False, expected_version=None, overview=False, _references_only=False) -> dict:
         if type(limit) is not int or not 1 <= limit <= (1984 if overview is True and not focus else 120) or type(offset) is not int or offset < 0 or type(hops) is not int or not 0 <= hops <= 3:
             raise ValueError("collection_graph_budget_invalid")
         if type(overview) is not bool:
+            raise ValueError("collection_graph_budget_invalid")
+        if (_references_only is not False and _references_only is not _GRAPH_REFERENCES
+                or _references_only is _GRAPH_REFERENCES and details):
             raise ValueError("collection_graph_budget_invalid")
         for value in (focus, target_id, node_type, relation, expected_version):
             if value is not None and (not isinstance(value, str) or not value or len(value) > 256):
@@ -928,6 +936,9 @@ class CollectionStore:
             db.create_function('alden_content_class',2,lambda meta,body:content_evidence_class(json.loads(meta),body),deterministic=True)
             checkpoint, _, _, _ = self._activity_scope(db, projects, target_id, platform)
             if not projects:
+                if _references_only:
+                    return {"ok": True, "nodes": [], "total_nodes": 0, "total_edges": 0,
+                            "next": None, "revision": 0, "projection": "current_graph_references"}
                 return {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0,
                         "next": None, "activity_checkpoint": checkpoint}
             marks = ",".join("?" for _ in projects)
@@ -1032,7 +1043,12 @@ class CollectionStore:
                   (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128)),
                   (SELECT COUNT(*) FROM permitted_relationships WHERE history_bound!=1)""", (*args, *pick_args, limit)).fetchone()
                 if invalid_relations: raise RuntimeError('collection_relation_integrity')
-                rows, edge_rows = json.loads(nodes_json), json.loads(edges_json)
+                rows = json.loads(nodes_json)
+                # JSON1 already validates and constructs the same edge JSON.
+                # An affinity caller needs its selected refs, not thousands of
+                # additional Python edge dictionaries or their display payload.
+                edge_rows = [] if _references_only else json.loads(edges_json)
+                del nodes_json, edges_json
                 ids = [r["id"] for r in rows]
             else:
                 total, total_edges, kinds, types, first_neighbors, focus_exists, invalid_relations = db.execute(cte + """, focus_neighbors AS (
@@ -1073,6 +1089,9 @@ class CollectionStore:
                         break
                 more = False
             if not ids:
+                if _references_only:
+                    return {"ok": True, "nodes": [], "total_nodes": total, "total_edges": total_edges,
+                            "next": None, "revision": 0, "projection": "current_graph_references"}
                 return {"ok": True, "nodes": [], "edges": [], "total_nodes": total, "total_edges": total_edges,
                         "next": None, "facets": facets, "activity_checkpoint": checkpoint}
             selected = ",".join("?" for _ in ids)
@@ -1092,7 +1111,8 @@ class CollectionStore:
                     + ") AND target IN (" + selected + ") ORDER BY id COLLATE BINARY LIMIT 144))",
                     (*incident_args, *ids, *ids, *ids)).fetchone()
                 rows = json.loads(nodes_json)
-                edge_rows = json.loads(edges_json)
+                edge_rows = [] if _references_only else json.loads(edges_json)
+                del nodes_json, edges_json
                 # JSON1 formats REAL values with fewer significant digits than
                 # SQLite's native float read. Keep the source clock exact using
                 # one bounded primary-key lookup in this same read snapshot.
@@ -1121,6 +1141,8 @@ class CollectionStore:
               ORDER BY m.document_id,p.project,m.target_id,m.current_version"""
             for association in db.execute(contexts_sql, (*ids, *projects, target_id, target_id, platform, platform,
                                                          node_type, node_type, since, since, until, until)):
+                if _references_only:
+                    continue  # Keep the SQL/error boundary without retaining display contexts.
                 source_contexts.setdefault(association["document_id"], []).append({
                     "project": association["project"], "target_id": association["target_id"],
                     "version": association["current_version"], "label": association["label"]})
@@ -1129,13 +1151,22 @@ class CollectionStore:
                 meta = json.loads(row["metadata"]) if isinstance(row["metadata"], str) else row["metadata"]
                 kind = meta.get("kind")
                 kind = kind[:256] if isinstance(kind, str) and kind else "document"
+                description = row["body"][:2400]
+                space = ", ".join(target_spaces.get(row["target_id"], []))
+                evidence_class = row.get('content_evidence') or content_evidence_class(meta,row['body'])
+                if _references_only:
+                    # Identical ordered IDs/versions/targets and validation to
+                    # the displayed page; no alternate sampling or authority.
+                    nodes.append({"id": row["id"], "source_version": row["visible_version"],
+                                  "source_target": row["target_id"]})
+                    continue
                 nodes.append({"id": row["id"], "label": row["label"] or row["original_id"], "category": kind,
-                              "importance": 20, "updated_at": row["collected_at"], "description": row["body"][:2400],
-                              "space": ", ".join(target_spaces.get(row["target_id"], [])), "source_version": row["visible_version"],
+                              "importance": 20, "updated_at": row["collected_at"], "description": description,
+                              "space": space, "source_version": row["visible_version"],
                               "source_url": row["source_url"], "source_target": row["target_id"], "source_platform": row["platform"],
                               "source_contexts": source_contexts.get(row["id"], []),
                               "degree": row["degree"], "degree_scope": "permitted filtered graph",
-                              "source_metadata": {"kind": kind, "content_evidence": row.get('content_evidence') or content_evidence_class(meta,row['body'])}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
+                              "source_metadata": {"kind": kind, "content_evidence": evidence_class}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
             edges = [{"id": row["id"], "source": row["source"], "target": row["target"], "relation": row["type"], "context": "explicit source relationship", "weight": 1, "purpose": "reference", "evidence_message_id": row["id"], "evidence": {"kind": "snapshot", "source_event_ids": [row["id"]], "chat_id": "", "confirmed_at": None, "retracted": False}}
                      for row in edge_rows]
             result = {"ok": True, "nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": total_edges,
@@ -1143,6 +1174,9 @@ class CollectionStore:
                     "facets": facets, "targets": self.targets(projects),
                     "revision": (db.execute("SELECT e.sequence FROM events e WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id AND p.permission!='denied' AND p.project IN (" + marks + ")) ORDER BY e.sequence DESC LIMIT 1", projects).fetchone() or [0])[0],
                     "display_scope": "bounded derived projection; not full graph", "activity_checkpoint": checkpoint}
+            if _references_only:
+                return {key: result[key] for key in ('ok', 'nodes', 'total_nodes', 'total_edges', 'next', 'revision')} | {
+                    'projection': 'current_graph_references'}
             if details and focus:
                 row = next(r for r in rows if r["id"] == focus)
                 detail = self._record_details(db, row, expected_version)

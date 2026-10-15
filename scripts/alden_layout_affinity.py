@@ -228,7 +228,7 @@ def _on_reads(owner, options):
     if not isinstance(projects, list) or len(projects) > 16 or any(not isinstance(p, str) or p not in known for p in projects):
         raise ValueError("collection_project_scope_invalid")
     projects = sorted(set(projects))
-    page = store.graph_page(projects=projects, limit=options.get("limit", 120), offset=options.get("offset", 0),
+    page = store.graph_references(projects=projects, limit=options.get("limit", 120), offset=options.get("offset", 0),
                             focus=options.get("focus"), hops=options.get("hops", 1), query=options.get("search", ""),
                             target_id=options.get("target_id"), platform=options.get("platform"),
                             node_type=options.get("node_type"), relation=options.get("relation"),
