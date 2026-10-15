@@ -21,4 +21,6 @@ The final serial Rust run initially failed its owned synthetic-process native ch
 
 After that repair, the full serial Rust suite passed 142 tests and strict Clippy passed. Final package and installed verification remain separately recorded in the task evidence.
 
+The next native audit reached the new default menu-containment observation but failed when publishing its geometry JSON: the two exact receipt names were missing from the private output allowlist. Its 16 captures are partial failure evidence, not a complete visual pass. Both exact names are now admitted under the existing byte cap, private-directory, no-symlink and exclusive-write rules. The output regression also checks their size rejection, immutable bytes, private modes and rejection of any other menu JSON name. The audit still refuses production control writes.
+
 Full18 remains active. These controlled backend probes do not establish natural human voice/barge-in, physical primary input, independent multiple hosts, all source-retention/identity semantics, upstream server cancellation, representative resource/billing results or a signed/notarized production release. The requested Web GPT-6 parallel model is not listed in the current delegation capability; no other model or additional paid capacity was substituted.

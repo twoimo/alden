@@ -240,6 +240,8 @@ impl Output {
                 | "assistant-turn-3.png"
                 | "alden-model-menu-default.png"
                 | "alden-model-menu-compact.png"
+                | "alden-model-menu-default.json"
+                | "alden-model-menu-compact.json"
                 | "workspace-memory-default.png"
                 | "workspace-conversation-default.png"
                 | "workspace-reply-default.png"
@@ -3266,6 +3268,14 @@ mod tests {
             0o600
         );
         assert!(output.write("other", b"{}").is_err());
+        for name in ["alden-model-menu-default.json", "alden-model-menu-compact.json"] {
+            assert!(output.write(name, &vec![0; MAX_BYTES + 1]).is_err());
+            output.write(name, b"{\"contained\":true}").unwrap();
+            assert!(output.write(name, b"changed").is_err());
+            assert_eq!(std::fs::read(path.join(name)).unwrap(), b"{\"contained\":true}");
+            assert_eq!(std::fs::metadata(path.join(name)).unwrap().mode() & 0o777, 0o600);
+        }
+        assert!(output.write("alden-model-menu-other.json", b"{}").is_err());
         assert!(output
             .write("alden-core-before.png", &vec![0; MAX_BYTES + 1])
             .is_err());
