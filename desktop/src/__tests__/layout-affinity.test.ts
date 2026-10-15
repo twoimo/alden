@@ -17,9 +17,11 @@ const sampledPayload = (ids = ['a', 'b']): any => {
 };
 
 describe('source-bound separate layout channel', () => {
-  it('rejects v4 affinities predating reference-only exclusion',()=>{
-    const payload=affinityPayload();payload.content_evidence_policy='source-content-evidence-v4';
-    expect(parseLayoutAffinity(payload,graph().nodes).reason).toBe('affinity_unverified_content_evidence');
+  it('rejects old affinities predating reference-only or empty-body exclusion',()=>{
+    for (const policy of ['source-content-evidence-v4', 'source-content-evidence-v5']) {
+      const payload=affinityPayload();payload.content_evidence_policy=policy;
+      expect(parseLayoutAffinity(payload,graph().nodes).reason).toBe('affinity_unverified_content_evidence');
+    }
   });
   it('rejects old or unbound content policy instead of reusing filename affinity', () => {
     for (const key of ['content_evidence_policy', 'binding']) {

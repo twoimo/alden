@@ -12,7 +12,7 @@ from alden_history import database,read
 class GenerationStoreTests(unittest.TestCase):
     def test_historical_v4_and_current_reference_proofs_keep_their_original_qualification(self):
         for i,evidence in enumerate(({'policy':'source-content-evidence-v4','classification':'content_candidate'},
-                                    {'policy':'source-content-evidence-v5','classification':'reference_only'})):
+                                    {'policy':'source-content-evidence-v6','classification':'reference_only'})):
             request=str(i+1)*32
             ticket=reserve_turn(self.root,request,None,'자료를 확인해 줘')
             proof={'fact_type':'entity','source_kind':'collected_source','entity_id':'graph:reference',

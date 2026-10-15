@@ -13,7 +13,7 @@ from alden_normalization_evidence import validate_declared_summary
 
 COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_current_documents','bytes_examined',
               'noncontent_current_versions','metadata_only_current_versions','unread_body_marker_current_versions',
-              'metadata_description_current_versions','reference_only_current_versions')
+              'metadata_description_current_versions','reference_only_current_versions','empty_body_current_versions')
 ERRORS=frozenset(('quality_scope_unavailable','quality_scan_budget','quality_time_budget',
                  'quality_cancelled','quality_report_unavailable','quality_query_invalid',
                  'quality_comparison_unavailable','quality_annotation_review_unavailable'))
@@ -163,7 +163,7 @@ def _summary(report,projects):
             or counts['project_current_versions']>counts['memberships']):
         raise ValueError('quality_report_unavailable')
     if (counts['noncontent_current_versions']>counts['project_current_versions']
-            or counts['metadata_only_current_versions']+counts['unread_body_marker_current_versions']+counts['metadata_description_current_versions']+counts['reference_only_current_versions']
+            or counts['metadata_only_current_versions']+counts['unread_body_marker_current_versions']+counts['metadata_description_current_versions']+counts['reference_only_current_versions']+counts['empty_body_current_versions']
             !=counts['noncontent_current_versions']
             or report.get('content_evidence')!={'policy':POLICY,'status':'source_declared_exclusions_not_semantic_verdict'}):
         raise ValueError('quality_report_unavailable')

@@ -28,7 +28,7 @@ from alden_normalization_evidence import validate_declared_summary
 COUNTS = {
     "memberships", "project_current_versions", "relations",
     "distinct_current_documents", "bytes_examined",
-    "noncontent_current_versions", "metadata_only_current_versions", "unread_body_marker_current_versions", "metadata_description_current_versions", "reference_only_current_versions",
+    "noncontent_current_versions", "metadata_only_current_versions", "unread_body_marker_current_versions", "metadata_description_current_versions", "reference_only_current_versions", "empty_body_current_versions",
 }
 CANDIDATES = {
     "same_raw_bytes": "hash_references_only",
@@ -43,6 +43,19 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
+    def test_empty_body_is_counted_without_hiding_title_or_mutating_source(self):
+        self.store.ingest(self.target(), [
+            {'platform': 'graph', 'original_id': 'only-title', 'label': '찾을 수 있는 영상 제목', 'text': ''},
+            {'platform': 'graph', 'original_id': 'body', 'label': '자료', 'text': '실제로 보존된 짧은 본문'},
+        ])
+        before = self.store.path.read_bytes()
+        result = action.read_action(self.root, self.project_query('one'))
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['counts']['project_current_versions'], 2)
+        self.assertEqual(result['counts']['empty_body_current_versions'], 1)
+        self.assertEqual(result['counts']['noncontent_current_versions'], 1)
+        self.assertEqual(self.store.path.read_bytes(), before)
+
     def test_annotation_inspection_is_explicit_and_keeps_hash_summary_separate(self):
         body='같은 보존 원문입니다. 채용 일정을 별도로 확인합니다.'
         rows=[{'platform':'graph','original_id':name,'label':'원문','text':body,

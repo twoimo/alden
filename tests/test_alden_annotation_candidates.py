@@ -191,7 +191,7 @@ class AnnotationCandidateContractTests(unittest.TestCase):
             self.assertTrue(page['ok'],page)
             self.assertEqual(len(page['items']),2)
             for row in page['items']:
-                self.assertEqual(row['content_evidence'],{'policy':'source-content-evidence-v5','classification':expected})
+                self.assertEqual(row['content_evidence'],{'policy':'source-content-evidence-v6','classification':expected})
                 self.assertEqual(row['truncated'],len(body)>4000)
                 self.assertEqual(row['body'],body[:4000])
         self.assertEqual(self._original_hashes(),before)

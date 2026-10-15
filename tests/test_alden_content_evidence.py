@@ -8,6 +8,23 @@ from alden_content_evidence import content_evidence_class
 
 
 class ContentEvidenceTests(unittest.TestCase):
+    def test_empty_or_whitespace_body_cannot_be_upgraded_by_index_or_title(self):
+        for body in ('', ' ', '\n\t', '\u3000\u00a0'):
+            for metadata in ({}, {'content_indexed': True}, {'label': '실제로 보이는 제목'}):
+                with self.subTest(body=body, metadata=metadata):
+                    self.assertEqual(content_evidence_class(metadata, body,
+                        source={'kind': 'video', 'title': '실제로 보이는 제목'}), 'empty_body')
+
+    def test_explicit_noncontent_precedence_is_retained_for_empty_body(self):
+        self.assertEqual(content_evidence_class({'kind': 'metadata'}, ''), 'metadata_only')
+        self.assertEqual(content_evidence_class({}, '', source={'content_indexed': False}),
+                         'source_metadata_only')
+
+    def test_short_nonempty_authored_body_is_not_an_empty_body(self):
+        for body in ('0', '사과', 'Yes', '1. 절차를 확인한다.'):
+            with self.subTest(body=body):
+                self.assertEqual(content_evidence_class({}, body), 'content_candidate')
+
     def test_addresses_are_references_even_when_indexed_or_source_bytes_are_verified(self):
         for body in ('https://example.org/a?edition=2#section',
                      ' HTTP://example.org/A\nhttps://example.org/B ',

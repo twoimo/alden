@@ -17,6 +17,19 @@ from alden_source_text import TEXT_VERSION as PRODUCER_TEXT_VERSION, project_sou
 
 
 class SemanticAffinityTests(unittest.TestCase):
+    def test_title_only_identical_vectors_do_not_substantiate_body_affinity(self):
+        nodes = [self.make_evidence(name, label='실제로 보존된 제목', body=body,
+                 raw={'kind': 'video'}) for name, body in [('title-a', ''), ('title-b', ' \n\t')]]
+        before = self.cache.read_bytes()
+        report = self.run_affinity(nodes)
+        self.assertEqual(report['coverage']['usable_vector_nodes'], 0)
+        self.assertEqual(report['coverage']['content_exclusion_reasons']['empty_body'], 2)
+        self.assertEqual(report['nodes'], [])
+        self.assertEqual(report['candidates'], [])
+        self.assertEqual(self.cache.read_bytes(), before)
+        with self.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM documents').fetchone()[0], 2)
+
     def test_identical_url_bodies_do_not_supply_semantic_vectors_or_similarity_candidates(self):
         link='https://example.invalid/한글?topic=채용#part'
         nodes=[self.make_evidence(name,body=link,raw={'localOriginalText':link,'id':name,'content_indexed':True})

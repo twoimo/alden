@@ -548,7 +548,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
             evidence_class = content_evidence_class(metadata, effective_body,
                 source=source_declarations.get(blob_key) if verify_sources and source_verified.get(blob_key) else None,
                 body_source=body_source) if metadata_valid else None
-            if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description', 'reference_only'):
+            if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description', 'reference_only', 'empty_body'):
                 counts['noncontent_current_versions'] += 1
                 counts[evidence_class + '_current_versions'] += 1
             # Inspect the immutable stored projection, independently of titles
@@ -803,7 +803,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
                    'vector_profiles_mixed_dimensions', 'noncontent_current_versions',
                    'metadata_only_current_versions', 'unread_body_marker_current_versions',
                    'metadata_description_current_versions', 'source_metadata_only_current_versions',
-                   'reference_only_current_versions',
+                   'reference_only_current_versions', 'empty_body_current_versions',
                    'duplicate_text_source_unverified'):
         counts.setdefault(metric, 0)
     check()

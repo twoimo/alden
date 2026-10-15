@@ -18,12 +18,25 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_title_only_lookup_keeps_source_but_marks_body_unavailable(self):
+        ids = self.title_matches(2)
+        before = self.store.path.read_bytes()
+        result = retrieve(self.root, '35년', projects=['one'], max_relations=0)
+        self.assertEqual({p['entity_id'] for p in result['fact_provenance']}, set(ids))
+        for proof in result['fact_provenance']:
+            self.assertEqual(proof['content_evidence'],
+                {'policy': 'source-content-evidence-v6', 'classification': 'empty_body'})
+            self.assertEqual(proof['truth_status'], 'title_or_label_reference; original body unavailable')
+            self.assertNotIn('selection_basis', proof)
+        self.assertTrue(all(text.startswith('[제목·이름 참조 · 본문 없음] ') for text in result['facts']))
+        self.assertEqual(self.store.path.read_bytes(), before)
+
     def test_bare_reference_is_preserved_but_never_claims_linked_body_or_body_grounding(self):
         link='https://example.invalid/채용?revision=2#section'
         reference=self.add(self.allowed,'bare-reference',link)
         result=retrieve(self.root,'채용',projects=['one'],max_relations=0)
         proof=next(p for p in result['fact_provenance'] if p.get('entity_id')==reference)
-        self.assertEqual(proof['content_evidence'],{'policy':'source-content-evidence-v5','classification':'reference_only'})
+        self.assertEqual(proof['content_evidence'],{'policy':'source-content-evidence-v6','classification':'reference_only'})
         self.assertEqual(proof['truth_status'],'link_reference; referenced destination body unverified')
         self.assertNotIn('selection_basis',proof)
         self.assertEqual(result['body_evidence_coverage']['preferred'],0)

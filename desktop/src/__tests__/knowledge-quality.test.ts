@@ -21,7 +21,7 @@ function success(query: QualityQuery = all) {
     checked_at: 1_791_768_900.125, elapsed_ms: 25.125,
     counts: { memberships: 42, project_current_versions: 39, relations: 11,
       distinct_current_documents: 30, bytes_examined: 8000,
-      noncontent_current_versions: 15, metadata_only_current_versions: 9, unread_body_marker_current_versions: 2, metadata_description_current_versions: 4,reference_only_current_versions:0 },
+      noncontent_current_versions: 15, metadata_only_current_versions: 9, unread_body_marker_current_versions: 2, metadata_description_current_versions: 4,reference_only_current_versions:0,empty_body_current_versions:0 },
     findings: { normalization_mismatch: 2, relation_evidence_invalid: 3 },
     duplicate_candidates: {
       same_raw_bytes: { groups: 4, status: 'hash_references_only' },
@@ -39,7 +39,7 @@ function success(query: QualityQuery = all) {
       within_context: { groups: 8, status: 'metadata_match_not_content' },
       cross_context: { groups: 1, status: 'metadata_match_not_content' },
     },
-    content_evidence: { policy: 'source-content-evidence-v5', status: 'source_declared_exclusions_not_semantic_verdict' },
+    content_evidence: { policy: 'source-content-evidence-v6', status: 'source_declared_exclusions_not_semantic_verdict' },
     normalization: { method: 'NFC_line_endings_preserving_body_spacing', semantic_validity: 'unverified',
       declared_fields: { policy: 'source-declared-fields-v1', time_policy: 'source-declared-time-v1', quantity_policy: 'source-declared-quantity-v1',
         scope: 'explicit_metadata_fields_only', truth_status: 'syntax_conversion_not_semantic_verdict', records_checked: 39,
@@ -70,7 +70,7 @@ function withComparisons() {
         target_label: '취업 자료', body: '보존 원문', body_source: 'retained_record.localOriginalText',
         truncated: false, matched_body: '저장된 요약', matched_body_truncated: false,
         collected_at: value.checked_at, raw_sha256: 'b'.repeat(64), basis: 'permitted_current_stored_record',
-        content_evidence: { policy: 'source-content-evidence-v5', classification: 'content_candidate' },
+        content_evidence: { policy: 'source-content-evidence-v6', classification: 'content_candidate' },
       })) }],
   } };
 }
@@ -130,7 +130,7 @@ function candidatePage(records=false,offset=0) {
   const item=(i:number)=>records?{document_id:`graph:${String(i).padStart(64,'a')}`,version:`version:${String(i).padStart(64,'b')}`,
     original_id:`post-${i}`,label:'',project:'one',body:'같은 보존 원문 <img src=x>',truncated:false,raw_sha256:'c'.repeat(64),
     projected_body_sha256:'d'.repeat(64),collected_at:1791768900,
-    content_evidence:{policy:'source-content-evidence-v5',classification:'content_candidate'},
+    content_evidence:{policy:'source-content-evidence-v6',classification:'content_candidate'},
     source_annotations:{policy:'retained-declared-tags-v1',basis:'verified_retained_record',semantic_status:'unverified',
       fields:{topics:{state:'declared',values:[i===2?'다른 태그':'같은 태그']},entityTags:{state:'undeclared',values:[]}}}}:
     {group:i,project:'one',projected_body_sha256:'d'.repeat(64),members:7,different_fields:['topics']};
@@ -445,7 +445,7 @@ describe('manual collection-quality report and fixed native selectors', () => {
     empty.findings = {} as typeof empty.findings;
     empty.counts = { memberships: 0, project_current_versions: 0, relations: 0,
       distinct_current_documents: 0, bytes_examined: 0,
-      noncontent_current_versions: 0, metadata_only_current_versions: 0, unread_body_marker_current_versions: 0, metadata_description_current_versions: 0,reference_only_current_versions:0 };
+      noncontent_current_versions: 0, metadata_only_current_versions: 0, unread_body_marker_current_versions: 0, metadata_description_current_versions: 0,reference_only_current_versions:0,empty_body_current_versions:0 };
     empty.body_matches.counts = { eligible_current_versions: 0,
       without_substantive_label: 0, reference_only_current_versions: 0 };
     empty.body_matches.stored_body = { groups: 0, members: 0, status: 'text_match_review_only' };
@@ -552,6 +552,21 @@ describe('manual collection-quality report and fixed native selectors', () => {
 });
 
 describe('schema and scope validation must fail closed', () => {
+  it('requires a reconciled empty-body count and rejects the old content policy', () => {
+    const value = success();
+    value.counts.noncontent_current_versions += 1;
+    value.counts.empty_body_current_versions = 1;
+    expect(parseCollectionQuality(value, all)?.ok).toBe(true);
+    value.counts.empty_body_current_versions = 2;
+    expect(parseCollectionQuality(value, all)).toBeNull();
+    value.counts.empty_body_current_versions = 1;
+    (value.content_evidence.policy as string) = 'source-content-evidence-v5';
+    expect(parseCollectionQuality(value, all)).toBeNull();
+    value.content_evidence.policy = 'source-content-evidence-v6';
+    delete (value.counts as Partial<typeof value.counts>).empty_body_current_versions;
+    expect(parseCollectionQuality(value, all)).toBeNull();
+  });
+
   it('separates a project literally named all from the union and handles scoped errors', () => {
     const one = { scope: 'project', project: 'all' } as const;
     expect(parseCollectionQuality(success(one), one)).toMatchObject({ ok: true });
