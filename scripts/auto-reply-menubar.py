@@ -2727,12 +2727,13 @@ def main():
         return 0
     if routed_action == "collection-affinity":
         from alden_layout_affinity import read_action
-        from alden_abort import read_abort_state
+        from alden_abort import abort_state_reader
         root_raw = _argv_flag_value("--state-root")
         root = Path(root_raw).expanduser() if root_raw else _DEFAULT_STATE_ROOT
-        cancelled = lambda: read_abort_state(root / "alden-abort.json").latched
         try:
-            _print_json(read_action(root, _argv_flag_value("--history-query"), cancelled=cancelled))
+            with abort_state_reader(root / "alden-abort.json") as read_state:
+                _print_json(read_action(root, _argv_flag_value("--history-query"),
+                    cancelled=lambda: read_state().latched))
         except (ValueError, RuntimeError, OSError) as error:
             _print_json({"ok": False, "reason": str(error)[:96]})
         return 0

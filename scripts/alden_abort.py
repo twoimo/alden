@@ -102,8 +102,7 @@ def _strict_json_loads(raw: bytes) -> object:
     return json.loads(raw.decode("utf-8"), object_pairs_hook=no_duplicate_keys)
 
 
-def _validate_root_fd(fd: int) -> str | None:
-    info = os.fstat(fd)
+def _validate_root_info(info: os.stat_result) -> str | None:
     if not stat.S_ISDIR(info.st_mode):
         return "state_root_type"
     if info.st_uid != os.geteuid():
@@ -111,6 +110,10 @@ def _validate_root_fd(fd: int) -> str | None:
     if stat.S_IMODE(info.st_mode) != 0o700:
         return "state_root_mode"
     return None
+
+
+def _validate_root_fd(fd: int) -> str | None:
+    return _validate_root_info(os.fstat(fd))
 
 
 def _open_root(root: Path, *, create: bool) -> tuple[int | None, str | None]:
@@ -128,7 +131,11 @@ def _open_root(root: Path, *, create: bool) -> tuple[int | None, str | None]:
         return None, None
     except OSError as exc:
         return None, f"state_root_open:{exc.errno}"
-    error = _validate_root_fd(fd)
+    try:
+        error = _validate_root_fd(fd)
+    except BaseException:
+        os.close(fd)
+        raise
     if error is not None:
         os.close(fd)
         return None, error
@@ -162,7 +169,9 @@ def _read_bounded(fd: int) -> bytes:
     raise ValueError("state_too_large")
 
 
-def _read_abort_state_at(root_fd: int, name: str) -> AbortState:
+def _read_abort_state_at(
+    root_fd: int, name: str, *, decode: Callable[[bytes], AbortState] | None = None
+) -> AbortState:
     try:
         fd = os.open(name, os.O_RDONLY | _OPEN_COMMON, dir_fd=root_fd)
     except FileNotFoundError:
@@ -177,7 +186,7 @@ def _read_abort_state_at(root_fd: int, name: str) -> AbortState:
             return _error_state("state_too_large")
         try:
             raw = _read_bounded(fd)
-            return _safe_state(_strict_json_loads(raw))
+            return decode(raw) if decode is not None else _safe_state(_strict_json_loads(raw))
         except UnicodeError:
             return _error_state("state_utf8")
         except json.JSONDecodeError:
@@ -202,6 +211,81 @@ def read_abort_state(path: Path) -> AbortState:
         return _read_abort_state_at(root_fd, path.name)
     finally:
         os.close(root_fd)
+
+
+class _ScopedAbortReader:
+    """Reuse a root descriptor and parsing, never a file read or safety check."""
+
+    def __init__(self, path: Path):
+        self._path = path.absolute()
+        self._root_fd: int | None = None
+        self._identity: tuple[int, int] | None = None
+        self._root_error: str | None = None
+        self._raw: bytes | None = None
+        self._state: AbortState | None = None
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def _check_root(self) -> str | None:
+        if self._root_error is not None:
+            return self._root_error
+        try:
+            info = os.stat(self._path.parent, follow_symlinks=False)
+            error = _validate_root_info(info)
+            if error is None and (info.st_dev, info.st_ino) != self._identity:
+                error = "state_root_replaced"
+        except OSError as exc:
+            error = f"state_root_stat:{exc.errno}"
+        if error is not None:
+            self._root_error = error
+        return error
+
+    def _decode(self, raw: bytes) -> AbortState:
+        if raw != self._raw:
+            state = _safe_state(_strict_json_loads(raw))
+            self._raw, self._state = raw, state
+        assert self._state is not None
+        return self._state
+
+    def __call__(self) -> AbortState:
+        with self._lock:
+            if self._closed:
+                return _error_state("state_reader_closed")
+            if self._root_fd is None:
+                fd, error = _open_root(self._path.parent, create=False)
+                if error is not None:
+                    return _error_state(error)
+                if fd is None:
+                    # Absence is checked again on the very next poll.
+                    return AbortState()
+                self._root_fd = fd
+                info = os.fstat(fd)
+                self._identity = (info.st_dev, info.st_ino)
+            error = self._check_root()
+            if error is not None:
+                return _error_state(error)
+            state = _read_abort_state_at(self._root_fd, self._path.name, decode=self._decode)
+            # Also reject a root swap or permission change during the file read.
+            error = self._check_root()
+            return _error_state(error) if error is not None else state
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            if self._root_fd is not None:
+                os.close(self._root_fd)
+                self._root_fd = None
+            self._raw = self._state = None
+
+
+@contextmanager
+def abort_state_reader(path: Path):
+    """Poll fresh private state for one request; callbacks fail closed after exit."""
+    reader = _ScopedAbortReader(path)
+    try:
+        yield reader
+    finally:
+        reader.close()
 
 
 def _encode_state(state: AbortState) -> bytes:
