@@ -6512,6 +6512,20 @@ mod tests {
         assert!(matches!(result, Err(BridgeError::Timeout)));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn mapped_worker_fault_rejects_success_shaped_stdout() {
+        let root = std::env::temp_dir().join(format!("alden-mapped-worker-fault-{}", std::process::id()));
+        fs::create_dir(&root).unwrap();
+        let code = "import mmap,resource,sys\nresource.setrlimit(resource.RLIMIT_CORE,(0,0))\nwith open(sys.argv[1],'x+b') as file:\n file.write(b'x'*16384);file.flush()\n region=mmap.mmap(file.fileno(),16384,access=mmap.ACCESS_READ)\n print('{\"ok\":true}',flush=True)\n file.truncate(0);region[8192]\n";
+        let result = run_process(
+            "python3", &["-B".into(), "-c".into(), code.into(), root.join("owned.bin").to_str().unwrap().into()],
+            Duration::from_secs(3), 1024, Arc::new(AtomicBool::new(false)),
+        );
+        fs::remove_dir_all(root).unwrap();
+        assert!(matches!(result, Err(BridgeError::Exit)));
+    }
+
     #[test]
     fn browser_task_uses_stdin_and_never_argv() {
         let task = "private browser task 가";

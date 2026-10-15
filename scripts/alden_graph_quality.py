@@ -19,6 +19,17 @@ from alden_normalization_evidence import DeclaredFieldSummary
 from alden_source_text import TEXT_VERSION, POLICY as SOURCE_TEXT_POLICY, project_source_text
 
 
+def _quality_read_cache(db, schema):
+    # Only these already read-only, derived DB connections are configured.
+    # Mapping shares clean OS pages instead of duplicating the working set in
+    # private SQLite buffers. Keep the previous cache if mapping is unavailable.
+    fallback = {'main': 65536, 'quality_cache': 32768}[schema]
+    admitted = db.execute(f'PRAGMA {schema}.mmap_size=268435456').fetchone()
+    mapped = admitted is not None and type(admitted[0]) is int and admitted[0] >= 268435456
+    kib = 8192 if mapped else fallback
+    db.execute(f'PRAGMA {schema}.cache_size=-{kib}')
+
+
 def _json(value):
     def reject(value):
         raise ValueError("nonfinite_json")
@@ -350,10 +361,9 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         raise ValueError('quality_retrieval_symlink')
     cache_context = closing(sqlite3.connect(retrieval.as_uri() + '?mode=ro', uri=True, timeout=.15)) if retrieval.is_file() else nullcontext(None)
     with store.database() as db, cache_context as cache:
-        # Request-local caches for the private derived stores. The default
-        # ~2 MiB thrashes during the bounded body/vector join; no persistent
+        # Request-local read settings for derived stores only. No persistent
         # database setting, original DB or model allocation is changed.
-        db.execute('PRAGMA cache_size=-65536')
+        _quality_read_cache(db, 'main')
         if cache is not None:
             cache.execute('PRAGMA query_only=ON'); cache.execute('BEGIN')
         cache_tables = {r[0] for r in cache.execute("SELECT name FROM sqlite_master WHERE type='table'")} if cache else set()
@@ -366,7 +376,7 @@ def audit(root, projects, *, verify_sources=False, max_rows=100000,
         extras=[];joins=[]
         if cache_tables.intersection({'texts','vectors'}):
             db.execute('ATTACH DATABASE ? AS quality_cache',(retrieval.as_uri()+'?mode=ro',))
-            db.execute('PRAGMA quality_cache.cache_size=-32768')
+            _quality_read_cache(db, 'quality_cache')
         eligible="""typeof(m.document_id)='text' AND typeof(m.current_version)='text'
             AND d.platform IS NOT NULL AND d.availability='available'
             AND v.document_id=m.document_id AND typeof(v.label)='text' AND typeof(v.body)='text'

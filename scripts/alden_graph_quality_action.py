@@ -316,6 +316,14 @@ def read_action(state_root,query_raw,cancelled=None):
                 'checked_at':checked,'elapsed_ms':round(elapsed,3),
                 'versions_scanned':verified['coverage']['versions_scanned'],'source_annotation_review':review,
                 'annotation_candidates':candidates}
+        retrieval=store.root/'retrieval.sqlite3'
+        def cache_identity():
+            try:
+                value=retrieval.lstat()
+            except FileNotFoundError:
+                return None
+            return value.st_dev,value.st_ino,value.st_mode
+        cache_before=cache_identity()
         report=audit(state_root,projects,verify_sources=False,sample_cap=2 if include_samples else 0,
                      timeout=10,max_rows=100000,max_bytes=512*1024*1024,cancelled=cancelled)
         summary=_summary(report,projects)
@@ -328,6 +336,7 @@ def read_action(state_root,query_raw,cancelled=None):
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         after=store.path.stat()
         if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)
+                or cache_before!=cache_identity()
                 or available!=_projects(store,mode,project) or permissions!=_bindings(store,projects)):
             raise ValueError('quality_scope_unavailable')
         checked=time.time();elapsed=(time.monotonic()-started)*1000
