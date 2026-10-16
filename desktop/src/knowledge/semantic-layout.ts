@@ -19,6 +19,11 @@ export interface SemanticLayoutDiagnostics {
   nodes: number; omittedNodes: number; removedNodes: number; invalidPreviousPositions: number;
   relationPairs: number; affinityPairs: number; ignoredRelations: number; rejectedAffinities: number;
   relationPairsDropped: number; affinityPairsDropped: number; inputTruncated: boolean;
+  semanticHighPairs: number; semanticLowPairs: number;
+  semanticHighMedianDistance: number | null; semanticLowMedianDistance: number | null;
+  semanticCosineMin: number | null; semanticCosineMedian: number | null; semanticCosineMax: number | null;
+  semanticUpperPairs: number; semanticLowerPairs: number;
+  semanticUpperMedianDistance: number | null; semanticLowerMedianDistance: number | null;
   affectedNodes: number; dirtyNodes: number; pinnedNodes: number; clusters: number;
   communityPasses: number; communityMoves: number; communityVisits: number;
   solverIterations: number; springEvaluations: number; collisionTests: number;
@@ -56,6 +61,14 @@ const order = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 const pairKey = (a: string, b: string): string => JSON.stringify(a < b ? [a, b] : [b, a]);
 const finite = (p: Point3 | undefined): p is Point3 => !!p && [p.x, p.y, p.z].every(Number.isFinite);
 const copy = (p: Point3): Point3 => ({ x: p.x, y: p.y, z: p.z });
+const SEMANTIC_HIGH_COSINE = 0.7;
+const SEMANTIC_LOW_COSINE = 0.4;
+function medianDistance(values: number[]): number | null {
+  if (!values.length) return null;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = sorted.length >>> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
 function hash(value: string, salt = 2166136261): number {
   for (let i = 0; i < value.length; i++) salt = Math.imul(salt ^ value.charCodeAt(i), 16777619);
   salt = Math.imul(salt ^ (salt >>> 16), 0x7feb352d);
@@ -119,6 +132,11 @@ export class SemanticLayoutEngine {
       nodes: 0, omittedNodes: 0, removedNodes: 0, invalidPreviousPositions: 0,
       relationPairs: 0, affinityPairs: 0, ignoredRelations: 0, rejectedAffinities: 0,
       relationPairsDropped: 0, affinityPairsDropped: 0,
+      semanticHighPairs: 0, semanticLowPairs: 0,
+      semanticHighMedianDistance: null, semanticLowMedianDistance: null,
+      semanticCosineMin: null, semanticCosineMedian: null, semanticCosineMax: null,
+      semanticUpperPairs: 0, semanticLowerPairs: 0,
+      semanticUpperMedianDistance: null, semanticLowerMedianDistance: null,
       inputTruncated: view.nodes.length > limits.inputNodes || view.edges.length > limits.inputEdges || validatedPairs.length > limits.inputAffinities,
       affectedNodes: 0, dirtyNodes: 0, pinnedNodes: 0, clusters: 0,
       communityPasses: 0, communityMoves: 0, communityVisits: 0, solverIterations: 0,
@@ -471,6 +489,37 @@ export class SemanticLayoutEngine {
     this.positions = new Map([...anchors].map(([id, p]) => [id, copy(p)]));
     this.labels = new Map(clusterIds); this.centers = centers; this.pairs = nextPairs; this.pins = pinned;
     d.dirtyNodes = dirtyIds.size; d.cachedNodes = this.positions.size; d.cachedPairs = this.pairs.size; d.cachedClusters = centers.size;
+    const highDistances: number[] = [], lowDistances: number[] = [];
+    for (const [, raw] of semantic) {
+      const p = anchors.get(raw.source), q = anchors.get(raw.target);
+      if (!p || !q) continue;
+      const distance = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z);
+      if (raw.value >= SEMANTIC_HIGH_COSINE) highDistances.push(distance);
+      else if (raw.value <= SEMANTIC_LOW_COSINE) lowDistances.push(distance);
+    }
+    d.semanticHighPairs = highDistances.length;
+    d.semanticLowPairs = lowDistances.length;
+    d.semanticHighMedianDistance = medianDistance(highDistances);
+    d.semanticLowMedianDistance = medianDistance(lowDistances);
+    const admitted: Array<{ cosine: number; distance: number }> = [];
+    for (const [, raw] of semantic) {
+      const p = anchors.get(raw.source), q = anchors.get(raw.target);
+      if (!p || !q) continue;
+      admitted.push({ cosine: raw.value, distance: Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z) });
+    }
+    if (admitted.length) {
+      const cosines = admitted.map(pair => pair.cosine);
+      const cosineMedian = medianDistance(cosines)!;
+      const upper = admitted.filter(pair => pair.cosine >= cosineMedian).map(pair => pair.distance);
+      const lower = admitted.filter(pair => pair.cosine < cosineMedian).map(pair => pair.distance);
+      d.semanticCosineMin = Math.min(...cosines);
+      d.semanticCosineMedian = cosineMedian;
+      d.semanticCosineMax = Math.max(...cosines);
+      d.semanticUpperPairs = upper.length;
+      d.semanticLowerPairs = lower.length;
+      d.semanticUpperMedianDistance = medianDistance(upper);
+      d.semanticLowerMedianDistance = medianDistance(lower);
+    }
     return { anchors, clusterIds, dirtyIds, diagnostics: d };
   }
 }

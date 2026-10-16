@@ -312,4 +312,24 @@ describe('bounded semantic overview layout', () => {
     expect(distance(aligned.anchors, 'n0001', 'n0002')).toBeGreaterThan(.05);
     expect(aligned.anchors.size).toBe(5);
   });
+
+  it('reports final median distance of high-cosine pairs below low-cosine pairs', () => {
+    const pairs: LayoutAffinityPair[] = [];
+    for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) {
+      const same = a < 4 === b < 4;
+      pairs.push(S(a, b, same ? .95 : .2));
+    }
+    const result = new SemanticLayoutEngine().layout(scene(8), empty(), pairs);
+    const d = result.diagnostics;
+    expect(d.semanticHighPairs).toBeGreaterThan(0);
+    expect(d.semanticLowPairs).toBeGreaterThan(0);
+    expect(d.semanticHighMedianDistance).not.toBeNull();
+    expect(d.semanticLowMedianDistance).not.toBeNull();
+    expect(d.semanticHighMedianDistance!).toBeLessThan(d.semanticLowMedianDistance!);
+    expect(d.semanticHighMedianDistance!).toBeGreaterThan(.05);
+    expect(d.semanticUpperPairs).toBeGreaterThan(0);
+    expect(d.semanticLowerPairs).toBeGreaterThan(0);
+    expect(d.semanticUpperMedianDistance!).toBeLessThan(d.semanticLowerMedianDistance!);
+    expect(d.semanticCosineMax).toBeGreaterThan(d.semanticCosineMin!);
+  });
 });
