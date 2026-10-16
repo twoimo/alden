@@ -19,6 +19,8 @@ describe('selected-node explanations',()=>{
     expect(document.getElementById('knowledge-node-body')!.textContent).toBe(details.body);
     const disclosure=document.querySelector<HTMLDetailsElement>('.knowledge-separated-tail')!;
     expect(disclosure.open).toBe(false); expect(disclosure.querySelector('pre')!.textContent).toBe(tail);
+    expect(disclosure.parentElement?.id).toBe('knowledge-node-evidence');
+    expect(document.getElementById('knowledge-node-body')!.nextElementSibling?.className).not.toBe('knowledge-separated-tail');
     disclosure.open=true;
     renderNodeDetails(notes,notes.nodes[0],{details:{...details,version:'old'}});
     expect(document.querySelector('.knowledge-separated-tail')).toBeNull();

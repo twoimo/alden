@@ -15,6 +15,23 @@ function date(value: unknown): string {
   return Number.isFinite(epoch) && epoch > 0 ? new Date(epoch).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' }) : '시점 미확인';
 }
 
+function separatedNumericTail(selected: Record<string, unknown> | null, root: Document): HTMLElement | null {
+  const projection = record(selected?.text_projection);
+  const tail = projection?.separated_tail;
+  if (!selected || selected.basis !== 'source_record' || !projection
+    || projection.policy !== 'threads-separated-numeric-tail-v1'
+    || projection.status !== 'structural_tail_candidate' || projection.original_preserved !== true
+    || projection.semantic_validity !== 'unverified' || typeof tail !== 'string' || tail.length === 0 || tail.length > 128
+    || projection.removed_characters !== tail.length
+    || !['original_body_sha256', 'body_sha256', 'separated_tail_sha256'].every(key => typeof projection[key] === 'string' && /^[0-9a-f]{64}$/.test(projection[key] as string))
+    || !/^[0-9a-f]{64}$/.test(text(selected.raw_sha256))) return null;
+  const note = root.createElement('details'); note.className = 'knowledge-separated-tail';
+  note.append(element('summary', '', '본문에서 뺀 숫자 묶음'));
+  note.append(element('p', '', '화면에서 추출된 숫자로 보이는 부분을 본문과 분리했습니다. 원문은 보존했습니다.'));
+  note.append(element('pre', 'knowledge-separated-tail-text', tail));
+  return note;
+}
+
 const boundPanes = new WeakSet<HTMLElement>();
 
 function prepareNotePane(root: Document, nodeId: string, initial: boolean): void {
@@ -99,20 +116,6 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const reading = copy ? separateReadingNoise(copy).reading : '';
   if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
-  const projection = record(selected?.text_projection);
-  const tail = projection?.separated_tail;
-  if (body && selected?.basis === 'source_record' && projection?.policy === 'threads-separated-numeric-tail-v1'
-    && projection.status === 'structural_tail_candidate' && projection.original_preserved === true
-    && projection.semantic_validity === 'unverified' && typeof tail === 'string' && tail.length > 0 && tail.length <= 128
-    && projection.removed_characters === tail.length
-    && ['original_body_sha256', 'body_sha256', 'separated_tail_sha256'].every(key => typeof projection[key] === 'string' && /^[0-9a-f]{64}$/.test(projection[key] as string))
-    && /^[0-9a-f]{64}$/.test(text(selected.raw_sha256))) {
-    const disclosure = root.createElement('details'); disclosure.className = 'knowledge-separated-tail';
-    disclosure.append(element('summary', '', '본문 뒤 숫자 묶음 · 펼쳐서 확인'));
-    disclosure.append(element('p', '', '화면에서 추출된 숫자로 보이는 부분을 본문과 분리했습니다. 원문은 보존했습니다.'));
-    disclosure.append(element('pre', 'knowledge-separated-tail-text', tail));
-    body.after(disclosure);
-  }
   root.querySelectorAll('.knowledge-resolution-note').forEach(note => note.remove());
   const resolutions = node.resolutionContexts?.length
     ? node.resolutionContexts.map(context => ({ resolution: context, context }))
@@ -207,6 +210,8 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
       }
     } catch { /* Records without a public URL retain local evidence. */ }
     evidence?.append(receipt);
+    const tailNote = separatedNumericTail(selected, root);
+    if (tailNote) evidence?.append(tailNote);
     if (disclosure) disclosure.hidden = false;
     if (heading) heading.textContent = '보존 근거';
     if (basis) basis.textContent = '수집된 기록과 해시를 확인했습니다. 내용의 사실 여부를 검증한 것은 아닙니다.';
