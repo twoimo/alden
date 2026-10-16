@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "version": "0.3.31",
+  "runtime_source_commit": "e45fe3e93d105bec2c378ca7459e30880ee6778a",
+  "installed_path": "/Applications/Alden.app",
+  "bundle_files": 47,
+  "candidate_files_equal": true,
+  "strict_deep_signature_passed": true,
+  "signing": "ad-hoc; not notarized production",
+  "preserved_config_files": 3,
+  "existing_local_model_services_preserved": true,
+  "installed_native_readback": {
+    "success": true,
+    "workspace_views": 14,
+    "source_detail_read_receipt_confirmed": true,
+    "baseline_historical_activity": 0,
+    "overview_nodes": 120,
+    "overview_edges": 25,
+    "permitted_record_count": 26622,
+    "permitted_relationship_count": 48355,
+    "navigation_restore_passed": true,
+    "default_and_compact_layout_passed": true,
+    "compact_note_pixels_inspected": true,
+    "synthetic_hidden_checks": [
+      { "signal": "display-sleep", "hidden_render_delta": 0, "sample_ms": 350, "stop_observation_upper_bound_ms": 26.75 },
+      { "signal": "session-inactive", "hidden_render_delta": 0, "sample_ms": 350, "stop_observation_upper_bound_ms": 24.75 }
+    ],
+    "scope": "installed executable in owned read-only native WKWebView; no primary physical gestures, physical lock, Retina, voice or shortcut attestation"
+  },
+  "primary_managed_process_running": true,
+  "primary_cua_access_verified": false,
+  "primary_cua_observed_error": "timeoutReached (-10005)",
+  "live_user_source_mutation_tested": false,
+  "controlled_save_receipt_test": "alden-activity-readback-20261008.json; debug fixture, separate from installed read-only result",
+  "full_goal_completed": false
+}

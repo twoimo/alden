@@ -1,0 +1,133 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.92 · 정규화·가역 검토·검색",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "normalization92",
+      "label": "구현 경로와 확인 상태"
+    }
+  ],
+  "mainPath": [
+    "normalization92_0",
+    "normalization92_1",
+    "normalization92_2",
+    "normalization92_3",
+    "normalization92_4",
+    "normalization92_5"
+  ],
+  "nodes": [
+    {
+      "id": "normalization92_0",
+      "lane": "normalization92",
+      "col": 0,
+      "type": "external",
+      "label": "원문과 식별자",
+      "sublabel": "바이트·단위·작성자 구분",
+      "width": 132
+    },
+    {
+      "id": "normalization92_1",
+      "lane": "normalization92",
+      "col": 1,
+      "type": "backend",
+      "label": "보존형 정규화",
+      "sublabel": "NFC·줄바꿈·표기 보존",
+      "width": 132
+    },
+    {
+      "id": "normalization92_2",
+      "lane": "normalization92",
+      "col": 2,
+      "type": "security",
+      "label": "중복·이상치 검토",
+      "sublabel": "자료 설명·명시 관계 분리",
+      "width": 132
+    },
+    {
+      "id": "normalization92_3",
+      "lane": "normalization92",
+      "col": 3,
+      "type": "database",
+      "label": "버전·권한 저장",
+      "sublabel": "현재 source 결속·CAS",
+      "width": 132
+    },
+    {
+      "id": "normalization92_4",
+      "lane": "normalization92",
+      "col": 4,
+      "type": "backend",
+      "label": "검색 근거 선택",
+      "sublabel": "본문 단어·BM25/RRF",
+      "width": 132
+    },
+    {
+      "id": "normalization92_5",
+      "lane": "normalization92",
+      "col": 5,
+      "type": "frontend",
+      "label": "불확실성 유지",
+      "sublabel": "인용·최신 요청·원문 상태",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "normalization92_edge0",
+      "from": "normalization92_0",
+      "to": "normalization92_1",
+      "label": "범위 확인",
+      "role": "main"
+    },
+    {
+      "id": "normalization92_edge1",
+      "from": "normalization92_1",
+      "to": "normalization92_2",
+      "label": "대사",
+      "role": "main"
+    },
+    {
+      "id": "normalization92_edge2",
+      "from": "normalization92_2",
+      "to": "normalization92_3",
+      "label": "확정",
+      "role": "main"
+    },
+    {
+      "id": "normalization92_edge3",
+      "from": "normalization92_3",
+      "to": "normalization92_4",
+      "label": "검증",
+      "role": "main"
+    },
+    {
+      "id": "normalization92_edge4",
+      "from": "normalization92_4",
+      "to": "normalization92_5",
+      "label": "반환",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "가역적인 변경",
+      "items": [
+        "동명이인·유사한 이름만으로 합치지 않는다. 검토 계획과 적용/되돌리기는 source CAS에 결속한다.",
+        "관계 방향·이력·원문/본문 버전과 권한을 대사하고 malformed 근거는 거절한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "후보는 의미 정답이 아니다",
+      "items": [
+        "본문 우선은 같은 질의 단어의 현재 버전 결속이며 원문 진실 판정이 아니다.",
+        "독립 원문·사람 gold와 동명이인·철회·시간 유효성의 넓은 평가는 미완료다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "repository": "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+  "revision": "901aa73a1ff5456752c02e55582609e0040ca470",
+  "scope": "14 local core configuration, tokenizer and weight files; optional drafter and repository extras excluded",
+  "ok": true,
+  "directory_identity_unchanged": true,
+  "checked_files": 14,
+  "matched_files": 14,
+  "total_expected_bytes": 18219586850,
+  "checked_at_epoch": 1791111598,
+  "elapsed_seconds": 9.21591691696085,
+  "rows": [
+    {
+      "path": "chat_template.jinja",
+      "expected_bytes": 8952,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 8952,
+      "digest": "c0c686f9c38d70d179fb7b5f5aa7530bc913dda3",
+      "reason": "ok"
+    },
+    {
+      "path": "config.json",
+      "expected_bytes": 3809,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 3809,
+      "digest": "f26bb96bf8b9326257697dc2f3ec919f00795abd",
+      "reason": "ok"
+    },
+    {
+      "path": "generation_config.json",
+      "expected_bytes": 202,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 202,
+      "digest": "023756cfadf88e5bf69eefeee3e172f38c448d64",
+      "reason": "ok"
+    },
+    {
+      "path": "merges.txt",
+      "expected_bytes": 3353259,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 3353259,
+      "digest": "a494e019ca1502219fd0128658b979e5f05ae8e8",
+      "reason": "ok"
+    },
+    {
+      "path": "model-00001.safetensors",
+      "expected_bytes": 5392792083,
+      "algorithm": "sha256",
+      "match": true,
+      "actual_bytes": 5392792083,
+      "digest": "996629e682e96e9c3df8082b6e340111d13f029a9da9fe35f414e14733ce70b3",
+      "reason": "ok"
+    },
+    {
+      "path": "model-00002.safetensors",
+      "expected_bytes": 5384057263,
+      "algorithm": "sha256",
+      "match": true,
+      "actual_bytes": 5384057263,
+      "digest": "e4036e56486133c3c9961844bf8879d7a46fc87137c7d97e433480defaa76062",
+      "reason": "ok"
+    },
+    {
+      "path": "model-00003.safetensors",
+      "expected_bytes": 5374469267,
+      "algorithm": "sha256",
+      "match": true,
+      "actual_bytes": 5374469267,
+      "digest": "1713ee61d25b11f45ac61110b6f8545870926459103eab24bbc20d466292d605",
+      "reason": "ok"
+    },
+    {
+      "path": "model-00004.safetensors",
+      "expected_bytes": 2045159041,
+      "algorithm": "sha256",
+      "match": true,
+      "actual_bytes": 2045159041,
+      "digest": "04435341a3e748688689f4c3e86c3253642bff6840614f85541d647e589b782a",
+      "reason": "ok"
+    },
+    {
+      "path": "model.safetensors.index.json",
+      "expected_bytes": 192192,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 192192,
+      "digest": "57b7d35c56c8b9a5a40eac593cb220dd222c4c83",
+      "reason": "ok"
+    },
+    {
+      "path": "preprocessor_config.json",
+      "expected_bytes": 390,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 390,
+      "digest": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64",
+      "reason": "ok"
+    },
+    {
+      "path": "tokenizer.json",
+      "expected_bytes": 12809320,
+      "algorithm": "sha256",
+      "match": true,
+      "actual_bytes": 12809320,
+      "digest": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+      "reason": "ok"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "expected_bytes": 17928,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 17928,
+      "digest": "5de744b3fca2129d7186979ae47c06be33903243",
+      "reason": "ok"
+    },
+    {
+      "path": "video_preprocessor_config.json",
+      "expected_bytes": 385,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 385,
+      "digest": "3ba673a5ad7d4d13f54155ecd38b2a94a6dac8fe",
+      "reason": "ok"
+    },
+    {
+      "path": "vocab.json",
+      "expected_bytes": 6722759,
+      "algorithm": "git_blob_sha1",
+      "match": true,
+      "actual_bytes": 6722759,
+      "digest": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176",
+      "reason": "ok"
+    }
+  ],
+  "network_requests": 0,
+  "model_loads": 0,
+  "model_file_writes": 0,
+  "runtime_inference_or_residency_verified": false,
+  "local_model_path_omitted": true,
+  "publisher_metadata_sha256": "c96f6db8340f09323ecb04912146c1773e5fc77ce759aa0e4e7476da87b8202a",
+  "publisher_license_sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a"
+}

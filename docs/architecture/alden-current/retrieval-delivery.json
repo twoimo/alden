@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/private/tmp/alden-current-diagrams-20261005/retrieval.sequence.json",
+  "output": "/private/tmp/alden-current-diagrams-20261005/retrieval.html",
+  "specification": {
+    "sha256": "56c1b6894440411887d15c3187a6d54092e7d4cda80caa0b57878183677b839f",
+    "bytes": 3863
+  },
+  "artifact": {
+    "sha256": "c9e6e65ad086b42e7b35af21e391df3a9077408190676cb67f9dd358c5471b4a",
+    "bytes": 808934
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  }
+}

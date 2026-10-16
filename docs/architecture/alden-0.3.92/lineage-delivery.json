@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "dataflow",
+  "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-central-density-20261011/docs/architecture/alden-0.3.92/lineage.dataflow.json",
+  "output": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-central-density-20261011/docs/architecture/alden-0.3.92/lineage.html",
+  "specification": {
+    "sha256": "fff3f7d9bf6266ba962b187ebd9848ce50d3aaea89d3a3fec45665ee0eac3ce9",
+    "bytes": 4421
+  },
+  "artifact": {
+    "sha256": "363b47c56552e3bc33656cd8654d73fd3aa41f996bd89ddce2e83e2f258c95fc",
+    "bytes": 809184
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  }
+}
