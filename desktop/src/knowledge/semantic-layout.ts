@@ -96,6 +96,67 @@ function center(ids: readonly string[], points: ReadonlyMap<string, Point3>): Po
   for (const id of ids) { const p = bound(points.get(id)!); x += p.x / ids.length; y += p.y / ids.length; z += p.z / ids.length; }
   return { x, y, z };
 }
+function ellipsoidRadius(p: Point3, ax = 2.05, ay = 1.35, az = .95): number {
+  return Math.hypot(p.x / ax, p.y / ay, p.z / az);
+}
+/** Push centers of communities that actually have peers apart, then put their
+ * centroid back. Singleton @id communities stay where they are: packing every
+ * isolated identity into the view box only draws a shell. Rest lengths are not
+ * an input here. */
+function separateMultiMemberCenters(centers: Map<string, Point3>, membersByLabel: ReadonlyMap<string, readonly string[]>): void {
+  const labels = [...membersByLabel.entries()].filter(([, members]) => members.length >= 2).map(([label]) => label).sort(order);
+  if (labels.length < 2) return;
+  const points = labels.map(label => copy(centers.get(label)!));
+  const centroid = points.reduce((sum, p) => ({
+    x: sum.x + p.x / points.length, y: sum.y + p.y / points.length, z: sum.z + p.z / points.length,
+  }), { x: 0, y: 0, z: 0 });
+  const minimum = Math.min(1.05, Math.max(.62, 1.7 / Math.cbrt(labels.length)));
+  for (let pass = 0; pass < 16; pass++) {
+    let moved = false;
+    for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
+      let dx = points[j].x - points[i].x, dy = points[j].y - points[i].y, dz = points[j].z - points[i].z;
+      let length = Math.hypot(dx, dy, dz);
+      if (length >= minimum) continue;
+      if (length < 1e-8) {
+        const v = seed(labels[i] + '\0' + labels[j]);
+        dx = v.x; dy = v.y; dz = v.z; length = Math.max(1e-8, Math.hypot(dx, dy, dz));
+      }
+      const push = (minimum - length) / 2 / length;
+      points[i].x -= dx * push; points[i].y -= dy * push; points[i].z -= dz * push;
+      points[j].x += dx * push; points[j].y += dy * push; points[j].z += dz * push;
+      moved = true;
+    }
+    const now = points.reduce((sum, p) => ({
+      x: sum.x + p.x / points.length, y: sum.y + p.y / points.length, z: sum.z + p.z / points.length,
+    }), { x: 0, y: 0, z: 0 });
+    const sx = centroid.x - now.x, sy = centroid.y - now.y, sz = centroid.z - now.z;
+    for (const p of points) { p.x += sx; p.y += sy; p.z += sz; }
+    if (!moved) break;
+  }
+  // Clamp only the center that leaves the inset ellipsoid. A global scale
+  // would drag every other community back into one ball.
+  const clampToInset = (p: Point3): Point3 => {
+    const dx = p.x - centroid.x, dy = p.y - centroid.y, dz = p.z - centroid.z;
+    if (ellipsoidRadius(p) <= 1) return p;
+    let lo = 0, hi = 1;
+    for (let step = 0; step < 12; step++) {
+      const mid = (lo + hi) / 2;
+      const q = { x: centroid.x + dx * mid, y: centroid.y + dy * mid, z: centroid.z + dz * mid };
+      if (ellipsoidRadius(q) <= 1) lo = mid; else hi = mid;
+    }
+    return { x: centroid.x + dx * lo, y: centroid.y + dy * lo, z: centroid.z + dz * lo };
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < points.length; i++) points[i] = clampToInset(points[i]);
+    const now = points.reduce((sum, p) => ({
+      x: sum.x + p.x / points.length, y: sum.y + p.y / points.length, z: sum.z + p.z / points.length,
+    }), { x: 0, y: 0, z: 0 });
+    const sx = centroid.x - now.x, sy = centroid.y - now.y, sz = centroid.z - now.z;
+    for (const p of points) { p.x += sx; p.y += sy; p.z += sz; }
+  }
+  // The restore above is the last word. Clamping again would move the centroid.
+  labels.forEach((label, i) => centers.set(label, copy(points[i])));
+}
 function unionFind(count: number) {
   const parent = Int32Array.from({ length: count }, (_, i) => i);
   const find = (i: number): number => {
@@ -297,6 +358,12 @@ export class SemanticLayoutEngine {
       const hasPrior = members.some(id => finite(previousPositions.get(id)) || this.positions.has(id));
       centers.set(label, copy(options.reflow ? seed(label) : oldCenter ?? (hasPrior ? center(members, base) : seed(label))));
     });
+    const membersByLabel = new Map<string, string[]>();
+    for (const [id, label] of clusterIds) {
+      const members = membersByLabel.get(label) ?? [];
+      members.push(id); membersByLabel.set(label, members);
+    }
+    separateMultiMemberCenters(centers, membersByLabel);
     d.clusters = centers.size;
     const anchors = new Map<string, Point3>();
     for (const id of ids) {
@@ -363,7 +430,7 @@ export class SemanticLayoutEngine {
         const p = points[i], origin = origins[i], c = clusterCenters[i];
         // A reached hop already has a ring target. Community-center pull collapses those radii.
         const onRing = depthRoot >= 0 && relationDepth[i] > 0;
-        const clusterGain = onRing ? 0 : .12;
+        const clusterGain = onRing ? 0 : .28;
         forces[i * 3] = clusterGain * (c.x - p.x) + (hasPrior[i] ? .08 * (origin.x - p.x) : 0);
         forces[i * 3 + 1] = clusterGain * (c.y - p.y) + (hasPrior[i] ? .08 * (origin.y - p.y) : 0);
         forces[i * 3 + 2] = clusterGain * (c.z - p.z) + (hasPrior[i] ? .08 * (origin.z - p.z) : 0);

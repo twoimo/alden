@@ -324,6 +324,53 @@ describe('bounded semantic overview layout', () => {
     expect(distance(result.anchors, 'n0000', 'n0003')).toBeGreaterThan(.2);
   });
 
+  it('separates two cliques joined by one unequal spoke farther than an intra-clique pair', () => {
+    const edges = [];
+    for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) edges.push(R(a, b));
+    for (let a = 8; a < 11; a++) for (let b = a + 1; b < 11; b++) edges.push(R(a, b));
+    edges.push(R(0, 8));
+    const result = new SemanticLayoutEngine().layout(scene(11, edges), empty());
+    expect(result.clusterIds.get('n0000')).toBe(result.clusterIds.get('n0001'));
+    expect(result.clusterIds.get('n0008')).toBe(result.clusterIds.get('n0009'));
+    expect(result.clusterIds.get('n0000')).not.toBe(result.clusterIds.get('n0008'));
+    const mean = (ids: string[]) => ids.reduce((sum, id) => {
+      const point = result.anchors.get(id)!;
+      return { x: sum.x + point.x / ids.length, y: sum.y + point.y / ids.length, z: sum.z + point.z / ids.length };
+    }, { x: 0, y: 0, z: 0 });
+    const left = mean(['n0000', 'n0001', 'n0002', 'n0003', 'n0004', 'n0005', 'n0006', 'n0007']);
+    const right = mean(['n0008', 'n0009', 'n0010']);
+    const gap = Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
+    expect(gap).toBeGreaterThan(distance(result.anchors, 'n0000', 'n0001'));
+    expect(gap).toBeGreaterThan(distance(result.anchors, 'n0008', 'n0009'));
+    expect(result.diagnostics.relationPairs).toBe(edges.length);
+  });
+
+  it('preserves the centroid while separating outer multi-member centers', () => {
+    const edges = [];
+    for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) edges.push(R(a, b));
+    for (let a = 8; a < 11; a++) for (let b = a + 1; b < 11; b++) edges.push(R(a, b));
+    edges.push(R(0, 8));
+    const engine = new SemanticLayoutEngine();
+    const view = scene(11, edges);
+    const first = engine.layout(view, empty());
+    const left = first.clusterIds.get('n0000')!;
+    const right = first.clusterIds.get('n0008')!;
+    expect(left).not.toBe(right);
+    const checkpoint = engine.checkpoint();
+    checkpoint.centers = checkpoint.centers.map(([label, point]) => {
+      if (label === left) return [label, { x: 1.8, y: 0, z: 0 }] as [string, Point3];
+      if (label === right) return [label, { x: 1.9, y: 0, z: 0 }] as [string, Point3];
+      return [label, point] as [string, Point3];
+    });
+    engine.restore(checkpoint);
+    engine.layout(view, first.anchors);
+    const next = new Map(engine.checkpoint().centers);
+    const a = next.get(left)!, b = next.get(right)!;
+    expect(Math.abs((a.x + b.x) / 2 - 1.85)).toBeLessThan(1e-6);
+    expect(Math.abs(a.y + b.y)).toBeLessThan(1e-6);
+    expect(Math.abs(a.z + b.z)).toBeLessThan(1e-6);
+  });
+
   it('keeps later relation hops farther from one pinned focus', () => {
     const edges = [R(0, 1), R(1, 2), R(2, 3)];
     const result = new SemanticLayoutEngine().layout(scene(4, edges), empty(), [], { pinnedIds: new Set(['n0000']) });
