@@ -283,6 +283,14 @@ export class KnowledgeHologram {
     this.invalidateFrame();
   }
 
+  /** Repack the visible overview from verified R/S geometry on demand. */
+  reflowOverview(): void {
+    if (this.disposed || !this.requestedAnimation || this.view.hops !== 0 || !this.view.nodes.length) return;
+    this.fitAfterSemanticLayout = true;
+    this.semanticLayout.request(this.view, this.positions, this.layoutChanged,
+      new Set(this.view.focusId ? [this.view.focusId] : []), this.provisionalOverviewPositions, true);
+  }
+
   private invalidateFrame(): void {
     if (!this.disposed && this.requestedAnimation && this.view.nodes.length > 0) this.loop.start();
   }
