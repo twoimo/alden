@@ -5,7 +5,7 @@ import type { SemanticLayoutCheckpoint, SemanticLayoutDiagnostics } from './sema
 import { relationCurrentlyValid } from './relation-validity';
 
 export interface LayoutRequest { id: number; view: KnowledgeView; previous: Array<[string, Point3]>;
-  pairs: readonly LayoutAffinityPair[]; changed: string[]; pinned: string[]; checkpoint?: SemanticLayoutCheckpoint }
+  pairs: readonly LayoutAffinityPair[]; changed: string[]; pinned: string[]; reflow?: boolean; checkpoint?: SemanticLayoutCheckpoint }
 export interface LayoutResponse { id: number; anchors?: Array<[string, Point3]>;
   diagnostics?: SemanticLayoutDiagnostics; checkpoint?: SemanticLayoutCheckpoint; wallMs?: number; error?: string }
 export interface LayoutWorkerPort { onmessage: ((event: MessageEvent<LayoutResponse>) => void) | null;
@@ -46,7 +46,7 @@ export class SemanticLayoutDriver {
   }
 
   request(view: KnowledgeView, previous: ReadonlyMap<string, Point3>, changed: ReadonlySet<string>, pinned: ReadonlySet<string>,
-    provisional: ReadonlySet<string> = new Set()): void {
+    provisional: ReadonlySet<string> = new Set(), reflow = false): void {
     const pairs = view.layoutAffinity?.pairs ?? [];
     const visibleIds=new Set(view.nodes.filter(node=>!node.evidence.retracted).map(node=>node.id));
     const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, label: n.id, description: '', facts: [] })),
@@ -60,9 +60,9 @@ export class SemanticLayoutDriver {
     }
     const pinKey=JSON.stringify(pinCoordinates());
     const changedVisible=[...changed].filter(id=>visibleIds.has(id)).sort();
-    const inputs=JSON.stringify([key,pinKey,changedVisible,[...provisional].filter(id=>visibleIds.has(id)).sort()]);
+    const inputs=JSON.stringify([key,pinKey,changedVisible,[...provisional].filter(id=>visibleIds.has(id)).sort(),reflow]);
     const restore = [...previous.keys()].some(id => visibleIds.has(id)&&provisional.has(id));
-    if(key===this.appliedKey&&!restore&&!changedVisible.length&&pinKey===this.appliedPins){
+    if(!reflow&&key===this.appliedKey&&!restore&&!changedVisible.length&&pinKey===this.appliedPins){
       if(this.busy)this.stop();
       this.requestedKey=key;this.state={...this.completedState,state:'cached',generation:this.generation};return;
     }
@@ -77,7 +77,7 @@ export class SemanticLayoutDriver {
       // A boundary can pass while the main thread is unable to run its timer.
       // Discard that reply before publishing any position or membership state.
       if(snapshotKey(view,pinned)!==key||JSON.stringify(pinCoordinates())!==pinKey){
-        this.request(view,previous,changed,pinned,provisional);return;
+        this.request(view,previous,changed,pinned,provisional,reflow);return;
       }
       if (event.data.error || !event.data.anchors || !event.data.diagnostics || !event.data.checkpoint) {
         this.state = { state: 'failed', reason: event.data.error ?? 'semantic_layout_invalid_reply' }; return;
@@ -106,7 +106,7 @@ export class SemanticLayoutDriver {
       restoredProvisionalNodes:[...visibleIds].filter(key=>provisional.has(key)&&solved.has(key)&&!pinned.has(key)).length};
     this.state={...this.state,...priorBasis};
     worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
-      pairs, changed: [...changed], pinned: [...pinned], checkpoint: this.checkpoint });
+      pairs, changed: [...changed], pinned: [...pinned], reflow, checkpoint: this.checkpoint });
   }
 
   stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.requestedKey = ''; this.requestedInputs=''; }
