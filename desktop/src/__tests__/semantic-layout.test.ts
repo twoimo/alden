@@ -441,4 +441,39 @@ describe('bounded semantic overview layout', () => {
     expect(d.semanticHighMedianDistance).not.toBeNull();
     expect(d.semanticHighMedianDistance!).toBeLessThan(d.semanticLowMedianDistance!);
   });
+
+  it('places a fresh dense overview on energy rays instead of one filled ellipsoid', () => {
+    const edges = [];
+    for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) edges.push(R(a, b));
+    for (let a = 8; a < 16; a++) for (let b = a + 1; b < 16; b++) edges.push(R(a, b));
+    for (let spoke = 16; spoke < 20; spoke++) edges.push(R(0, spoke));
+    const result = new SemanticLayoutEngine().layout(scene(256, edges), empty());
+    const id = (n: number) => `n${String(n).padStart(4, '0')}`;
+    const mean = (nums: number[]) => nums.reduce((sum, n) => {
+      const point = result.anchors.get(id(n))!;
+      return { x: sum.x + point.x / nums.length, y: sum.y + point.y / nums.length, z: sum.z + point.z / nums.length };
+    }, { x: 0, y: 0, z: 0 });
+    const unit = (point: { x: number; y: number; z: number }) => {
+      const length = Math.hypot(point.x, point.y, point.z) || 1;
+      return { x: point.x / length, y: point.y / length, z: point.z / length, radius: length };
+    };
+    const ellip = (n: number) => {
+      const point = result.anchors.get(id(n))!;
+      return Math.hypot(point.x / 2.3, point.y / 1.55, point.z / 1.1);
+    };
+    const left = unit(mean([1, 2, 3, 4, 5, 6, 7]));
+    const right = unit(mean([8, 9, 10, 11, 12, 13, 14, 15]));
+    const spokes = unit(mean([16, 17, 18, 19]));
+    const dot = (a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }) => a.x * b.x + a.y * b.y + a.z * b.z;
+    expect(result.clusterIds.get(id(1))).toBe(result.clusterIds.get(id(2)));
+    expect(result.clusterIds.get(id(1))).not.toBe(result.clusterIds.get(id(8)));
+    expect(result.clusterIds.get(id(16))).not.toBe(result.clusterIds.get(id(0)));
+    expect(dot(left, right)).toBeLessThan(.35);
+    expect(dot(spokes, left)).toBeGreaterThan(.75);
+    expect(dot(spokes, right)).toBeLessThan(dot(spokes, left));
+    const cliqueRadius = [1, 2, 3, 4, 5, 6, 7].map(ellip).sort((a, b) => a - b)[3];
+    const isolateRadius = Array.from({ length: 80 }, (_, n) => ellip(40 + n)).sort((a, b) => a - b)[40];
+    expect(isolateRadius).toBeGreaterThan(cliqueRadius + .2);
+    expect(distance(result.anchors, id(1), id(2))).toBeLessThan(distance(result.anchors, id(1), id(8)));
+  });
 });

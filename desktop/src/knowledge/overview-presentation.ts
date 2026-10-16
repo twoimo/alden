@@ -4,7 +4,7 @@ import type { Point3 } from './plasticity';
 // retain their original authority. Local and sparse views use exact positions.
 // Conservative Euclidean derivative bound of the ellipsoidal radial mapping.
 // Include it in the existing pixel-motion stop criterion.
-const DISPLAY_EXPONENT = .7;
+const DISPLAY_EXPONENT = .15;
 export const OVERVIEW_DISPLAY_GAIN = Math.pow(.1, -DISPLAY_EXPONENT) * (1 + DISPLAY_EXPONENT * 2.3 / 1.1);
 function displayAspect(width:number,height:number):number {
   return Number.isFinite(width)&&Number.isFinite(height)&&width>0&&height>0

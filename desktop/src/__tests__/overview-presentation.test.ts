@@ -9,7 +9,8 @@ describe('dense overview display projection', () => {
   it('opens the inner quarter of a dense cloud without replacing its source coordinates', () => {
     const source={x:2.3*.25,y:0,z:0},saved={...source};
     const point=overviewDisplayPoint(source,964,586,true,{x:0,y:0,z:0});
-    expect(Math.hypot(point.x/2.3,point.y/1.55,point.z/1.1)).toBeGreaterThanOrEqual(.5);
+    expect(Math.hypot(point.x/2.3,point.y/1.55,point.z/1.1)).toBeGreaterThan(.25);
+    expect(Math.hypot(point.x/2.3,point.y/1.55,point.z/1.1)).toBeLessThan(.4);
     expect(source).toEqual(saved);
   });
 

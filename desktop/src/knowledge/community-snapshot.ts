@@ -21,13 +21,13 @@ export function communitySnapshot(ids:readonly string[],labels:unknown,
   }
   const ranked=[...memberships].filter(([,members])=>members.length>1)
     .sort((a,b)=>b[1].length-a[1].length||(a[0]<b[0]?-1:a[0]>b[0]?1:0));
-  const major=ranked.slice(0,4),slots=new Map<string,number>(),used=new Set<number>();
+  const major=ranked.slice(0,8),slots=new Map<string,number>(),used=new Set<number>();
   for(const [id] of major){
     const slot=previousSlots.get(id);
-    if(slot!==undefined&&Number.isInteger(slot)&&slot>=1&&slot<=4&&!used.has(slot)){slots.set(id,slot);used.add(slot);}
+    if(slot!==undefined&&Number.isInteger(slot)&&slot>=1&&slot<=8&&!used.has(slot)){slots.set(id,slot);used.add(slot);}
   }
   for(const [id] of major)if(!slots.has(id)){
-    const slot=[1,2,3,4].find(slot=>!used.has(slot))!;slots.set(id,slot);used.add(slot);
+    const slot=[1,2,3,4,5,6,7,8].find(slot=>!used.has(slot))!;slots.set(id,slot);used.add(slot);
   }
   const colors=new Map<string,number>(),groups=major.map(([id,members])=>({id,count:members.length,slot:slots.get(id)!}));
   for(const [cluster,members] of memberships)for(const id of members)colors.set(id,slots.get(cluster)??0);

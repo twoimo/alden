@@ -6,10 +6,10 @@ import { parseKnowledgeGraph,overviewGraph } from '../knowledge/graph-model';
 const rows=Array.from({length:17},(_,i)=>[`synthetic-${i}`,`c:${Math.floor(i/3).toString(16)}:a`] as [string,string]);
 const ids=rows.map(([id])=>id);
 describe('computed community metadata boundary',()=>{
-  it('covers every identity, gives only four major groups colors and retains the aggregate remainder',()=>{
+  it('covers every identity, gives at most eight major groups colors and retains the aggregate remainder',()=>{
     const result=communitySnapshot(ids,rows)!;
-    expect(result.groups).toHaveLength(4);expect(new Set(result.groups.map(g=>g.slot)).size).toBe(4);
-    expect(result.colors.size).toBe(17);expect(result.otherNodes).toBe(5);
+    expect(result.groups).toHaveLength(6);expect(new Set(result.groups.map(g=>g.slot)).size).toBe(6);
+    expect(result.colors.size).toBe(17);expect(result.otherNodes).toBe(0);
     expect(result.multiNodeClusters).toBe(6);
     const before=JSON.stringify(rows);
     const reversed=communitySnapshot([...ids].reverse(),[...rows].reverse())!;
@@ -29,7 +29,7 @@ describe('computed community metadata boundary',()=>{
     const changed=rows.map(([id,cluster],i)=>[id,i>=12?'c:9:b':cluster] as [string,string]);
     const next=communitySnapshot(ids,changed,first.slots)!;
     for(const g of next.groups)if(first.slots.has(g.id))expect(g.slot).toBe(first.slots.get(g.id));
-    expect(next.slots.size).toBeLessThanOrEqual(4);expect(next.colors.size).toBe(ids.length);
+    expect(next.slots.size).toBeLessThanOrEqual(8);expect(next.colors.size).toBe(ids.length);
   });
   it('uses actual S-only solver memberships without introducing source facts or same-entity claims',()=>{
     const graph=overviewGraph(parseKnowledgeGraph({nodes:[{id:'a',label:'one'},{id:'b',label:'another'}],edges:[]}));

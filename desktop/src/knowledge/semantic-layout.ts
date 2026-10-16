@@ -157,6 +157,64 @@ function separateMultiMemberCenters(centers: Map<string, Point3>, membersByLabel
   // The restore above is the last word. Clamping again would move the centroid.
   labels.forEach((label, i) => centers.set(label, copy(points[i])));
 }
+/** A fresh unfocused overview otherwise fills the ellipsoid with unrelated
+ * seeds. Put the largest equal-energy groups on widely separated rays and
+ * move communities that actually connect to them onto the same ray. A label
+ * is outer dust only when none of its pairs reach those groups. Membership
+ * and rest lengths are unchanged. */
+function spreadFreshEnergy(
+  clusterIds: ReadonlyMap<string, string>,
+  membersByLabel: ReadonlyMap<string, readonly string[]>,
+  centers: Map<string, Point3>,
+  pairs: readonly Pair[],
+): void {
+  const multi = [...membersByLabel.entries()]
+    .filter(([, members]) => members.length >= 2)
+    .sort((a, b) => b[1].length - a[1].length || order(a[0], b[0]));
+  const ringCount = Math.min(multi.length, 8);
+  const ringLabels = new Set<string>();
+  const ray = new Map<string, Point3>();
+  for (let i = 0; i < ringCount; i++) {
+    const angle = -Math.PI / 2 + (i / ringCount) * Math.PI * 2;
+    const label = multi[i][0];
+    const raw = { x: Math.cos(angle), y: Math.sin(angle) * .72, z: ((i % 3) - 1) * .08 };
+    const rawLength = Math.hypot(raw.x, raw.y, raw.z) || 1;
+    const direction = { x: raw.x / rawLength, y: raw.y / rawLength, z: raw.z / rawLength };
+    ringLabels.add(label); ray.set(label, direction);
+    centers.set(label, { x: direction.x * .9, y: direction.y * .9, z: direction.z * .9 });
+  }
+  const pull = new Map<string, { x: number; y: number; z: number; w: number }>();
+  for (const pair of pairs) {
+    const left = clusterIds.get(pair.source), right = clusterIds.get(pair.target);
+    if (!left || !right || left === right) continue;
+    const leftHub = ringLabels.has(left), rightHub = ringLabels.has(right);
+    if (leftHub === rightHub) continue;
+    const spoke = leftHub ? right : left;
+    const hub = ray.get(leftHub ? left : right);
+    if (!hub) continue;
+    const acc = pull.get(spoke) ?? { x: 0, y: 0, z: 0, w: 0 };
+    acc.x += hub.x * pair.weight; acc.y += hub.y * pair.weight; acc.z += hub.z * pair.weight; acc.w += pair.weight;
+    pull.set(spoke, acc);
+  }
+  for (const [label, acc] of pull) {
+    if (ringLabels.has(label)) continue;
+    const length = Math.hypot(acc.x, acc.y, acc.z);
+    if (!(length > 1e-8)) continue;
+    const dist = (membersByLabel.get(label)?.length ?? 1) >= 2 ? 1.2 : 1.45;
+    const jitter = seed(label);
+    centers.set(label, {
+      x: acc.x / length * dist + jitter.x * .02,
+      y: acc.y / length * dist + jitter.y * .02,
+      z: acc.z / length * dist + jitter.z * .015,
+    });
+  }
+  for (const [label, members] of membersByLabel) {
+    if (ringLabels.has(label) || pull.has(label)) continue;
+    const dir = seed(members[0] ?? label);
+    const length = Math.hypot(dir.x, dir.y, dir.z) || 1;
+    centers.set(label, bound({ x: dir.x / length * 1.7, y: dir.y / length * 1.7, z: dir.z / length * 1.7 }));
+  }
+}
 function unionFind(count: number) {
   const parent = Int32Array.from({ length: count }, (_, i) => i);
   const find = (i: number): number => {
@@ -364,11 +422,16 @@ export class SemanticLayoutEngine {
       members.push(id); membersByLabel.set(label, members);
     }
     separateMultiMemberCenters(centers, membersByLabel);
+    const freshOverview = ids.length >= 256
+      && (options.pinnedIds?.size ?? 0) !== 1
+      && ids.every(id => !finite(previousPositions.get(id)) && !this.positions.has(id));
+    if (freshOverview) spreadFreshEnergy(clusterIds, membersByLabel, centers, pairs);
     d.clusters = centers.size;
     const anchors = new Map<string, Point3>();
     for (const id of ids) {
       const c = centers.get(clusterIds.get(id)!)!, offset = seed(id), prior = finite(previousPositions.get(id)) || this.positions.has(id);
-      anchors.set(id, prior ? copy(base.get(id)!) : bound({ x: c.x + offset.x * .2, y: c.y + offset.y * .2, z: c.z + offset.z * .2 }));
+      const radialJitter = freshOverview ? .05 : .2;
+      anchors.set(id, prior ? copy(base.get(id)!) : bound({ x: c.x + offset.x * radialJitter, y: c.y + offset.y * radialJitter, z: c.z + offset.z * radialJitter }));
     }
     const movable = ids.map((id, i) => active[i] && !pinned.has(id));
     // Imported coincident coordinates carry no ordering authority. Give each

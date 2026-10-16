@@ -20,6 +20,7 @@ const GROUP_COLORS = COMMUNITY_COLORS.map(value=>new THREE.Color(value));
 const CONNECTED = new THREE.Color(GRAPH_CONNECTED_COLOR);
 const ISOLATED = new THREE.Color(GRAPH_ISOLATED_COLOR);
 const UNRELATED = new THREE.Color(GRAPH_UNRELATED_COLOR);
+const DUST = new THREE.Color('#241f2c');
 
 /** World-space floor at the camera target, measured in CSS pixels, not device pixels. */
 export function minimumStarRadius(cameraDistance: number, verticalFov: number, viewportHeight: number, visibleCount: number): number {
@@ -194,7 +195,7 @@ export class ConstellationNodes extends THREE.Group {
       const id = this.slotIds[slot], point = id === null ? undefined : positions.get(id);
       const x = Math.fround(point?.x ?? NaN), y = Math.fround(point?.y ?? NaN), z = Math.fround(point?.z ?? NaN);
       const valid = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
-      const radius = valid ? Math.fround(Math.min(this.maximumRadius, Math.max(this.minimumRadius,this.radii[slot]*this.displayRadiusScale))) : 0;
+      const radius = valid && id !== null ? Math.fround(this.shownRadius(id, slot)) : 0;
       const px = valid ? x : 0, py = valid ? y : 0, pz = valid ? z : 0, at = slot * 16;
       visible ||= valid;
       if (matrices[at] === radius && matrices[at+5] === radius && matrices[at+10] === radius
@@ -267,6 +268,9 @@ export class ConstellationNodes extends THREE.Group {
             : this.communityColors.has(nodeId) ? GROUP_COLORS[this.communityColors.get(nodeId)!]
             : this.adjacency.get(nodeId)!.size > 0 ? CONNECTED : ISOLATED;
           if (nodeId === this.selectedId && depth === undefined) color = DEPTH_COLORS[0];
+          const degree = this.adjacency.get(nodeId)!.size;
+          const major = (this.communityColors.get(nodeId) ?? 0) > 0;
+          if (this.slots.size > 120 && depth === undefined && !major && degree <= 1 && nodeId !== this.selectedId && !neighbours?.has(nodeId)) color = DUST;
         }
       }
       const event = nodeId === null ? undefined : this.activity.get(nodeId);
@@ -282,7 +286,15 @@ export class ConstellationNodes extends THREE.Group {
   /** Base sphere radius for the owner's picker; absent/capped/retracted IDs return zero. */
   radius(id: string): number {
     const slot = this.slots.get(id);
-    return slot === undefined ? 0 : Math.min(this.maximumRadius, Math.max(this.minimumRadius, this.radii[slot]*this.displayRadiusScale));
+    return slot === undefined ? 0 : this.shownRadius(id, slot);
+  }
+
+  /** Weak remainder dots stay visible but stop covering the equal-energy groups. */
+  private shownRadius(id: string, slot: number): number {
+    const degree = this.adjacency.get(id)?.size ?? 0;
+    const major = (this.communityColors.get(id) ?? 0) > 0;
+    const floor = this.slots.size > 120 && !major && degree <= 1 ? this.minimumRadius * .42 : this.minimumRadius;
+    return Math.min(this.maximumRadius, Math.max(floor, this.radii[slot] * this.displayRadiusScale));
   }
 
   private clearInstances(): void {
