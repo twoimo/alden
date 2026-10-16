@@ -48,6 +48,9 @@ describe('owned asynchronous semantic layout', () => {
     expect(worker.requests).toHaveLength(2);
     expect(worker.requests[1].reflow).toBe(true);
     expect(driver.settled).toBe(false);
+    driver.request(source, new Map(first.anchors), new Set(), new Set());
+    expect(worker.requests).toHaveLength(2);
+    expect(worker.terminate).not.toHaveBeenCalled();
     const redone = worker.flush();
     expect(redone.diagnostics.reflow).toBe(true);
     expect(new Set(redone.anchors.map(([id]) => id))).toEqual(new Set(source.nodes.map(node => node.id)));
