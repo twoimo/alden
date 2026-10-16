@@ -8040,10 +8040,11 @@ def _parse_response_time_distribution(raw: object, expected_sample_count: int) -
     components = []
     represented = 0
     total_weight = 0.0
+    if len(RESPONSE_TIME_DISTRIBUTION_COMPONENT_NAMES) != len(raw_components):
+        raise ValueError("response-time mixture component schema")
     for expected_name, component in zip(
         RESPONSE_TIME_DISTRIBUTION_COMPONENT_NAMES,
         raw_components,
-        strict=True,
     ):
         if (
             not isinstance(component, dict)
