@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
-import { selectOverviewLabels } from '../knowledge/overview-labels';
+import { internalGraphLabel, selectOverviewLabels } from '../knowledge/overview-labels';
 
 const graph = (nodes: Array<Record<string, unknown>>) => parseKnowledgeGraph({nodes,edges:[]});
 describe('overview reading entry labels', () => {
@@ -47,6 +47,9 @@ describe('overview reading entry labels', () => {
       {id:'raw',label:'career-public-graph:node:source',category:'document',degree:9999,source_target:'files'},
     ]).nodes;
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic']);
+    expect(internalGraphLabel('career-public-graph:node:source')).toBe(true);
+    expect(internalGraphLabel('graph:000f30c5b24a8f33fe528ad55586d77a3f0f53e32a1ded9d1b6bfb7baec5b349')).toBe(true);
+    expect(internalGraphLabel('자소서')).toBe(false);
   });
   it('deduplicates display text without merging nodes, and preserves project coverage', () => {
     const nodes=graph([

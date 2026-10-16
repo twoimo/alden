@@ -23,7 +23,7 @@ import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
-import { selectOverviewLabels } from './overview-labels';
+import { internalGraphLabel, selectOverviewLabels } from './overview-labels';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
@@ -670,22 +670,23 @@ export class KnowledgeHologram {
       this.nodeMeshes.set(node.id, mesh);
       // Global pick spheres are CPU targets. Keeping thousands of invisible
       // objects in the rendered scene needlessly traverses them each frame.
+      const shownLabel = internalGraphLabel(node.label) ? null : node.label;
       if (accessible) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "knowledge-a11y-node";
         button.dataset.nodeId = node.id;
-        button.textContent = node.label;
-        button.setAttribute("aria-label", `${node.label} 선택`);
+        button.textContent = shownLabel ?? '자료';
+        button.setAttribute("aria-label", (shownLabel ?? '자료') + ' 선택');
         button.onclick = () => this.clickNode(node.id);
         accessible.append(button);
       }
-      if (labelLayer && (!global || this.globalLabels.has(node.id) || focused)) {
+      if (labelLayer && shownLabel && (!global || this.globalLabels.has(node.id) || focused)) {
         const label = document.createElement("span");
         label.className = "knowledge-node-label";
         label.hidden = true;
-        label.textContent = node.label;
-        label.title = node.label;
+        label.textContent = shownLabel;
+        label.title = shownLabel;
         label.dataset.focused = String(focused);
         label.dataset.view='overview';
         labelLayer.append(label);
@@ -832,7 +833,7 @@ export class KnowledgeHologram {
     const layer=this.canvas.parentElement?.querySelector('.knowledge-node-labels');
     for(const id of wanted){
       if(this.labels.has(id)||!layer)continue;
-      const node=this.view.nodes.find(node=>node.id===id);if(!node)continue;
+      const node=this.view.nodes.find(node=>node.id===id);if(!node||internalGraphLabel(node.label))continue;
       const label=document.createElement('span');label.className='knowledge-node-label';
       label.hidden=true;
       label.textContent=node.label;label.title=node.label;label.dataset.view='overview';
