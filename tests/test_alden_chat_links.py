@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -17,10 +18,14 @@ from alden_history import database
 from alden_link_content import html_preview
 from tests.test_alden_chat_files import attachment
 
+SHARE = 'https://www.threads.com/share/__d5u19Yw/'
+POST = 'https://www.threads.com/@fixture/post/POST123'
+POST_TEXT = 'Previously collected fixture post: quantity 42.'
+
 
 class LinkChatTests(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name)
+        self.temp=tempfile.TemporaryDirectory();self.root=Path(self.temp.name).resolve()
         self.token=AbortToken(self.root/'alden-abort.json');self.calls=[];self.fetches=[]
         self.patcher=patch.object(links,'fetch_current',side_effect=self.fetch);self.patcher.start()
     def tearDown(self):self.patcher.stop();self.temp.cleanup()
@@ -34,6 +39,133 @@ class LinkChatTests(unittest.TestCase):
         return chat.process_input(self.root,{'request_id':f'{n:032x}','conversation_id':cid,'text':text,
             'images':[],'files':files or []},self.token,generate=generate or self.generate,
             select_model=lambda root:{'transport':'opencodex','model':'selected/model'})
+    def collected_post(self, *, url=POST, code='POST123', body=POST_TEXT, platform='threads'):
+        from alden_collection import CollectionStore, identity, encoded
+        store = CollectionStore(self.root)
+        target = store.register(platform=platform, original_id='fixture', kind='fixture',
+                                label='Fixture', projects=['fixture'])
+        raw = {'url': url, 'code': code, 'text': body}
+        if platform == 'graph':
+            raw.update(platform='threads', type='source', localTextOrigin='local_corpus_json', localOriginalText=body)
+        store.ingest(target, [{'platform': platform, 'original_id': 'fixture-post', 'url': url,
+                              'kind': 'post', 'label': '', 'text': body, 'raw': raw}])
+        return store, identity(platform, 'fixture-post'), hashlib.sha256(encoded(raw)).hexdigest()
+
+    def fetch_threads(self, root, urls, token, *, redirect=None):
+        from alden_link_fetch import fetch_bytes
+        from tests.test_alden_link_fetch import address, Connection, Response
+        records = []
+        for url in urls:
+            trace = []
+            def opener(parsed, *args):
+                response = (Response(status=302, headers={'Location': redirect})
+                            if redirect and parsed.path.startswith('/share/') else
+                            Response(body=('<title>Threads</title><p>Log in to see more</p>'
+                                           '<link rel="canonical" href="' + POST + '">').encode()))
+                return Connection(), response
+            raw, _ = fetch_bytes(url, time.monotonic()+2, redirects_left=2,
+                                 resolver=lambda *args: address(), opener=opener,
+                                 allow_redirect=lambda old, new: new.startswith('https://'), trace=trace)
+            records.append(links.cache_observation(root, url, raw, html_preview(url, raw), None, trace, token))
+        return records
+
+    def prompt_link(self):
+        return json.loads(links.link_prompt(self.calls[-1]).splitlines()[-1])['links'][0]
+
+    def test_threads_share_without_redirect_stays_unread_even_with_local_post_and_canonical_hint(self):
+        for n, (url, code) in enumerate(((POST, 'POST123'),
+                                        ('https://www.threads.com/@fixture/post/__d5u19Yw', '__d5u19Yw')), 1):
+            self.collected_post(code=code, url=url)
+            with patch.object(links, 'fetch_current', side_effect=self.fetch_threads):
+                result = self.send(n, text=SHARE)
+            self.assertTrue(result['ok'], result)
+            value = self.prompt_link()
+            self.assertTrue(value['complete']); self.assertFalse(value['post_body_read'])
+            self.assertEqual(value['observation']['content_scope'], ['metadata'])
+            self.assertEqual(value['text'], ''); self.assertNotIn('collected_post', value)
+            self.assertNotIn(POST_TEXT, links.link_prompt(self.calls[-1]))
+            self.assertIn('게시물 본문은 읽지 못했다고', links.link_prompt(self.calls[-1]))
+
+    def test_threads_redirect_cites_bound_collected_source_and_preserves_followup_snapshot(self):
+        store, evidence_id, source_hash = self.collected_post(platform='graph')
+        before = store.path.read_bytes()
+        with patch.object(links, 'fetch_current', side_effect=lambda *args: self.fetch_threads(*args, redirect=POST)):
+            first = self.send(text=SHARE)
+        self.assertTrue(first['ok'], first)
+        value = self.prompt_link(); citation = value['collected_post']
+        self.assertEqual((citation['url'], citation['shortcode'], citation['text']), (POST, 'POST123', POST_TEXT))
+        self.assertEqual((citation['evidence_id'], citation['source_sha256']), (evidence_id, source_hash))
+        self.assertNotEqual(source_hash, value['observation']['source_sha256'])
+        self.assertTrue(value['complete']); self.assertFalse(value['post_body_read'])
+        self.assertEqual(value['observation']['content_scope'], ['metadata'])
+        self.assertEqual(first['generation']['link_context']['collected_posts'], 1)
+        self.assertEqual(store.path.read_bytes(), before)
+        self.collected_post(platform='graph', body='A later collected version.')
+        with patch.object(links, 'fetch_current', side_effect=AssertionError('refetched')):
+            followup = self.send(2, first['conversation_id'], 'What did the stored post say?')
+        self.assertTrue(followup['ok'], followup)
+        self.assertEqual(self.prompt_link()['collected_post'], citation)
+
+    def test_threads_redirect_requires_exact_collected_url_and_shortcode(self):
+        for n, (url, code) in enumerate(((POST, '__d5u19Yw'), (POST, None),
+                                        (POST.replace('@fixture', '@other'), 'POST123'),
+                                        (POST + '?source=share', 'POST123'), (POST, 'POST123')), 1):
+            with self.subTest(url=url, code=code):
+                self.collected_post(url=url, code=code)
+                with patch.object(links, 'fetch_current', side_effect=lambda *args: self.fetch_threads(*args, redirect=POST)):
+                    result = self.send(n, text=SHARE)
+                self.assertTrue(result['ok'], result)
+                self.assertEqual('collected_post' in self.prompt_link(), url == POST and code == 'POST123')
+
+    def test_threads_redirect_without_collected_post_stays_unread(self):
+        from alden_collection import CollectionStore
+        with patch.object(links, 'fetch_current', side_effect=lambda *args: self.fetch_threads(*args, redirect=POST)), \
+                patch.object(CollectionStore, 'open_existing', wraps=CollectionStore.open_existing) as open_store:
+            result = self.send(text=SHARE)
+        open_store.assert_called_once_with(self.root)
+        self.assertTrue(result['ok'], result)
+        self.assertNotIn('collected_post', self.prompt_link())
+        self.assertTrue(self.prompt_link()['complete']); self.assertFalse(self.prompt_link()['post_body_read'])
+        self.assertFalse((self.root/'knowledge').exists())
+
+    def test_denied_or_corrupt_collected_threads_source_cannot_supply_text(self):
+        store, _, source_hash = self.collected_post()
+        for n, denied in enumerate((True, False), 1):
+            with store.database() as db:
+                db.execute('UPDATE target_projects SET permission=?', ('denied' if denied else 'public',))
+            if not denied:
+                (store.blobs/(source_hash+'.json')).write_bytes(b'corrupted fixture')
+            with patch.object(links, 'fetch_current', side_effect=lambda *args: self.fetch_threads(*args, redirect=POST)):
+                result = self.send(n, text=SHARE)
+            self.assertTrue(result['ok'], result)
+            self.assertNotIn('collected_post', self.prompt_link())
+
+    def test_threads_trace_must_prove_https_redirect_to_exact_post(self):
+        self.collected_post()
+        for trace in ([], [{'url': SHARE, 'status': 200}],
+                      [{'url': SHARE, 'status': 200}, {'url': POST, 'status': 200}],
+                      [{'url': 'https://example.com/', 'status': 302}, {'url': POST, 'status': 200}],
+                      [{'url': SHARE, 'status': 302}, {'url': POST.replace('https:', 'http:'), 'status': 200}],
+                      [{'url': SHARE, 'status': 302}, {'url': POST, 'status': 403}],
+                      [{'url': SHARE, 'status': 302}, {'url': POST+'?login=1', 'status': 200}]):
+            with self.subTest(trace=trace):
+                self.assertIsNone(links.collected_threads_post(self.root, SHARE, trace, self.token))
+
+    def test_collected_threads_text_shares_prompt_budget_and_preserves_provenance(self):
+        body = POST_TEXT * 600
+        _, evidence_id, source_hash = self.collected_post(body=body)
+        with patch.object(links, 'fetch_current', side_effect=lambda *args: self.fetch_threads(*args, redirect=POST)):
+            result = self.send(text=SHARE+' https://www.threads.com/share/another/',
+                               files=[attachment(data=b'Document text '*1200)])
+        self.assertTrue(result['ok'], result)
+        from alden_chat_files import document_prompt
+        ticket = self.calls[-1]
+        self.assertLessEqual(len((document_prompt(ticket)+links.link_prompt(ticket)).encode()), links.MAX_CONTEXT_BYTES)
+        for row in ticket['link_context']['selected']:
+            post = row['observation']['collected_post']
+            self.assertTrue(post['truncated']); self.assertTrue(body.startswith(post['text']))
+            self.assertEqual(post['text_sha256'], hashlib.sha256(post['text'].encode()).hexdigest())
+            self.assertEqual((post['evidence_id'], post['source_sha256']), (evidence_id, source_hash))
     def test_link_and_followup_receive_snapshot_without_refetch(self):
         first=self.send();self.assertTrue(first['ok'],first)
         second=self.send(2,first['conversation_id'],'What was the quantity?');self.assertTrue(second['ok'],second)

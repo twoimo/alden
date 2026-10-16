@@ -176,8 +176,9 @@ def generate_input(state_root, ticket, text, token, paths, selection):
     from types import SimpleNamespace
     from alden_chat_files import document_prompt, verify_file_bytes
     from alden_chat_links import link_prompt, verify_link_bytes
-    from alden_chat_turns import verify_history_file_sources
+    from alden_chat_turns import verify_history_file_sources, verify_history_link_sources
     verify_history_file_sources(state_root, ticket)
+    verify_history_link_sources(state_root, ticket)
     verify_file_bytes(state_root, ticket)
     verify_link_bytes(state_root, ticket)
     documents = document_prompt(ticket) + link_prompt(ticket)
@@ -188,6 +189,10 @@ def generate_input(state_root, ticket, text, token, paths, selection):
         verify_history_image_sources(state_root, ticket)
         verify_history_file_sources(state_root, ticket)
         verify_file_bytes(state_root, ticket)
+        # Retrieval can outlive a source retraction; reject its link evidence
+        # before passing the prepared prompt to the model, not only at commit.
+        verify_history_link_sources(state_root, ticket)
+        verify_link_bytes(state_root, ticket)
         adapter = OpenCodexLlm(selection['model'], selection.get('reasoning_effort'), state_root)
         try:
             reply = adapter._generate(text, token, history=ticket['history'], turn=turn, image_paths=paths,

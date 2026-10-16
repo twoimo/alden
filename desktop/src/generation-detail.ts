@@ -44,6 +44,10 @@ export function generationDetail(value: unknown): string[] {
     const omitted = record(links.omitted);
     const missing = count(omitted.unavailable_snapshot);
     if (missing !== null && missing > 0 && missing <= 2) lines.push(`이전 링크 ${missing}개 제외 · 저장 자료 접근 실패`);
+    const collected = count(links.collected_posts);
+    if (collected !== null && 0 < collected && collected <= 4) {
+      lines.push(`수집된 게시물 ${collected}개 · 공유 페이지 본문은 아님`);
+    }
   }
   return lines;
 }

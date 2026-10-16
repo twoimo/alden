@@ -192,6 +192,90 @@ class AssistantInputTests(unittest.TestCase):
         unrelated = self.run_input(request(3))
         self.assertTrue(unrelated['ok']); self.assertEqual(self.calls[-1][2], [])
 
+    def test_followup_rechecks_sources_after_concurrent_retraction(self):
+        import alden_chat_links as links
+        from alden_chat_turns import cancel_turn, get_request
+        from alden_link_content import html_preview
+
+        def fetch(root, urls, token):
+            raw = b'<p>Private link quantity 73</p>'
+            return [links.cache_observation(root, url, raw, html_preview(url, raw),
+                    None, [{'url': url, 'status': 200}], token) for url in urls]
+
+        for index, kind in enumerate(('image', 'file', 'link'), 1):
+            with self.subTest(kind=kind), patch.object(links, 'fetch_current', side_effect=fetch):
+                number = index * 10
+                value = request(number, text='Source attachment')
+                if kind == 'image':
+                    value['images'] = [{'name': 'private.png', 'mime': 'image/png',
+                                        'data': base64.b64encode(png()).decode()}]
+                elif kind == 'file':
+                    value['files'] = [{'name': 'private.txt', 'mime': 'text/plain',
+                                       'data': base64.b64encode(b'Private file quantity 53').decode()}]
+                else:
+                    value['text'] = 'https://example.com/private'
+                first = self.run_input(value)
+                self.assertTrue(first['ok'], first)
+                original = self.calls[-1][0]
+                entered, release = threading.Event(), threading.Event()
+                results = []
+
+                def retrieve(text, *args):
+                    if text == 'Paused followup':
+                        entered.set()
+                        if not release.wait(5):
+                            raise RuntimeError('test retrieval gate expired')
+                    return '', {}
+
+                with patch('alden_voice._voice_knowledge_reference', side_effect=retrieve), \
+                     patch('alden_routed_llm.OpenCodexLlm._generate', return_value='Fixture reply') as adapter:
+                    healthy = self.run_input(request(number + 1, first['conversation_id'], 'Reuse attachment'),
+                                             generate=chat.generate_input)
+                    self.assertTrue(healthy['ok'], healthy)
+                    sent = adapter.call_args.kwargs
+                    self.assertEqual((sent['turn'].conversation_id, sent['turn'].turn_id,
+                                      sent['turn'].context_version, sent['turn'].source),
+                                     (first['conversation_id'], 2, 3, 'text'))
+                    if kind == 'image':
+                        self.assertEqual([path.read_bytes() for path in sent['image_paths']], [png()])
+                        self.assertEqual(sent['image_evidence'][0]['source_request_id'], original['request_id'])
+                        self.assertIn('완료된 이전 턴, 대화 턴 1.', sent['system_prompt'])
+                    else:
+                        self.assertIn('Private ' + kind + ' quantity', sent['system_prompt'])
+                        self.assertIn('"source_turn_id": 1' if kind == 'file' else '"source_turn_id":1',
+                                      sent['system_prompt'])
+                        self.assertIn(original['request_id'], sent['system_prompt'])
+                    adapter.reset_mock()
+                    pending = request(number + 2, first['conversation_id'], 'Paused followup')
+                    worker = threading.Thread(target=lambda: results.append(
+                        self.run_input(pending, generate=chat.generate_input)))
+                    worker.start()
+                    try:
+                        self.assertTrue(entered.wait(5))
+                        other = self.run_input(request(number + 3, text='Unrelated conversation'),
+                                               generate=chat.generate_input)
+                        self.assertTrue(other['ok'], other)
+                        sent = adapter.call_args.kwargs
+                        self.assertEqual(sent['turn'].conversation_id, other['conversation_id'])
+                        self.assertEqual(sent['history'], [])
+                        self.assertEqual(sent['image_paths'], [])
+                        self.assertEqual(sent['image_evidence'], [])
+                        self.assertNotIn('Private ', sent['system_prompt'])
+                        self.assertNotIn(original['request_id'], sent['system_prompt'])
+                        cancel_turn(self.root, original, reason='retracted')
+                    finally:
+                        release.set()
+                        worker.join(5)
+                    self.assertFalse(worker.is_alive())
+                    self.assertEqual(len(results), 1)
+                    self.assertEqual(results[0]['error_code'], f'assistant_{kind}_context_changed')
+                    self.assertEqual(results[0]['conversation_id'], first['conversation_id'])
+                    receipt = get_request(self.root, pending['request_id'])
+                    self.assertEqual((receipt['turn_id'], receipt['context_version'], receipt['source']), (3, 5, 'text'))
+                    self.assertEqual(receipt['state'], 'failed')
+                    self.assertNotIn('reply', receipt)
+                    self.assertEqual(adapter.call_count, 1, 'revoked evidence reached the model adapter')
+
     def test_mime_mismatch_and_unsafe_cache_path_do_not_reach_model(self):
         data = b'GIF89a' + b'\x00'*18
         bad = {'name':'fixture.png','mime':'image/png','data':base64.b64encode(data).decode()}

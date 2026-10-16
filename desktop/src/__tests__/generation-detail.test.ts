@@ -6,6 +6,8 @@ describe('generation evidence display',()=>{
     expect(generationDetail({schema_version:1,link_context:{parsed:2,metadata_only:1,unavailable:['http_failed'],omitted:{unavailable_snapshot:1}}}))
       .toEqual(['링크 자료 · 응답 텍스트 1개 · 메타데이터 1개','링크 1개 접근 실패 · 본문 미확인','이전 링크 1개 제외 · 저장 자료 접근 실패']);
     expect(generationDetail({schema_version:1,link_context:{parsed:1,metadata_only:2}})).toEqual([]);
+    expect(generationDetail({schema_version:1,link_context:{parsed:1,metadata_only:1,collected_posts:1}}))
+      .toEqual(['링크 자료 · 응답 텍스트 0개 · 메타데이터 1개','수집된 게시물 1개 · 공유 페이지 본문은 아님']);
   });
   it('does not turn a requested model into an observed response',()=>{
     const lines=generationDetail({schema_version:1,selection:{model_id:'selected/model'}});

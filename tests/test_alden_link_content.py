@@ -40,6 +40,17 @@ class LinkWorkerTests(unittest.TestCase):
         self.assertEqual(preview['observation']['content_scope'], ['metadata'])
         self.assertNotIn('loadPrivateBody', preview['text'])
 
+    def test_threads_metadata_keeps_worker_retrieval_gate_open_when_title_exists(self):
+        url = 'https://www.threads.com/share/__d5u19Yw/'
+        for title in (b'<title>Threads</title>', b''):
+            raw = title + b'<p>Log in to see more</p><script>loadPost()</script>'
+            with self.subTest(title=title), patch.object(self.worker, '_fetch_pinned_http', return_value=(raw, len(raw))):
+                preview, _ = self.worker._fetch_link_preview_once(url, time.monotonic()+3)
+            self.assertEqual(preview['complete'], bool(title))
+            self.assertEqual(preview['observation']['content_scope'], ['metadata'])
+            self.assertEqual(preview['text'], '')
+            self.assertEqual(self.worker.links_fully_retrieved(url, [preview]), bool(title))
+
     def test_prompt_trim_discloses_excerpt_and_preserves_identity(self):
         preview = self.preview('검수 설명 ' * 1000)
         fitted = self.worker._fit_prompt_to_budget({'incoming_message': '요약해줘', 'link_previews': [preview]}, 2200)
@@ -118,6 +129,26 @@ class LinkWorkerTests(unittest.TestCase):
 
 
 class LinkParsingTests(unittest.TestCase):
+    def test_threads_shells_never_supply_post_text(self):
+        from alden_link_content import html_preview, validated_preview, trim_preview
+        for url in ('https://www.threads.com/share/__d5u19Yw/',
+                    'https://www.threads.com/@fixture/post/POST123'):
+            for shell in ('<title>Threads</title><script>loadPost()</script>',
+                          '<title>Threads</title><p>Log in to see more</p>',
+                          '<title>Threads</title><p>Accept all cookies</p>',
+                          '<title>Threads</title><p>A short visible phrase</p>',
+                          '<meta property="og:description" content="Unverified preview">'):
+                with self.subTest(url=url, shell=shell):
+                    raw = shell.encode()
+                    preview = html_preview(url, raw)
+                    self.assertEqual(preview['complete'], bool(preview['title']))
+                    self.assertEqual(preview['observation']['content_scope'], ['metadata'])
+                    self.assertEqual(preview['text'], '')
+                    self.assertEqual(preview['observation']['source_sha256'], hashlib.sha256(raw).hexdigest())
+                    self.assertIsNotNone(validated_preview(preview))
+                    self.assertEqual(trim_preview(preview), preview)
+                    self.assertIsNone(validated_preview({**preview, 'complete': not preview['complete']}))
+
     def test_source_and_delivered_text_digests_have_distinct_bases(self):
         from alden_link_content import html_preview, validated_preview
         raw = b'<title>Test</title><p>A &amp; B</p>'
