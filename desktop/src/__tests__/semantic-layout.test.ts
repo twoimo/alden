@@ -327,6 +327,29 @@ describe('bounded semantic overview layout', () => {
     expect(radius('n0003')).toBeGreaterThan(radius('n0002'));
   });
 
+  it('keeps an off-center pin fixed and does not clamp its outer hop back into the origin box', () => {
+    const edges = [R(0, 1), R(1, 2), R(2, 3)];
+    const view = scene(4, edges);
+    const pin = { x: 3, y: 0, z: 0 };
+    const positions = new Map<string, { x: number; y: number; z: number }>([
+      ['n0000', pin],
+      ['n0001', { x: 3.42, y: 0, z: 0 }],
+      ['n0002', { x: 3.86, y: 0, z: 0 }],
+      ['n0003', { x: 4.28, y: 0, z: 0 }],
+    ]);
+    const result = new SemanticLayoutEngine().layout(view, positions, [], { pinnedIds: new Set(['n0000']) });
+    expect(result.anchors.get('n0000')).toEqual(pin);
+    expect(result.diagnostics.pinnedNodes).toBe(1);
+    expect(result.diagnostics.depthRingNodes).toBe(3);
+    const radius = (id: string) => {
+      const point = result.anchors.get(id)!;
+      return Math.hypot(point.x - pin.x, point.y - pin.y, point.z - pin.z);
+    };
+    expect(radius('n0002')).toBeGreaterThan(radius('n0001'));
+    expect(radius('n0003')).toBeGreaterThan(radius('n0002'));
+    expect(result.anchors.get('n0003')!.x).toBeGreaterThan(2.4);
+  });
+
   it('reports final median distance of high-cosine pairs below low-cosine pairs', () => {
     const pairs: LayoutAffinityPair[] = [];
     for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) {
@@ -345,5 +368,19 @@ describe('bounded semantic overview layout', () => {
     expect(d.semanticLowerPairs).toBeGreaterThan(0);
     expect(d.semanticUpperMedianDistance!).toBeLessThan(d.semanticLowerMedianDistance!);
     expect(d.semanticCosineMax).toBeGreaterThan(d.semanticCosineMin!);
+  });
+
+  it('keeps stronger semantic pairs closer while one pinned focus forms rings', () => {
+    const pairs: LayoutAffinityPair[] = [];
+    for (let a = 1; a < 8; a++) for (let b = a + 1; b < 8; b++) {
+      const same = a < 4 === b < 4;
+      pairs.push(S(a, b, same ? .95 : .2));
+    }
+    const result = new SemanticLayoutEngine().layout(scene(8, [R(0, 1), R(1, 2)]), empty(), pairs, { pinnedIds: new Set(['n0000']) });
+    const d = result.diagnostics;
+    expect(d.pinnedNodes).toBe(1);
+    expect(d.depthRingNodes).toBeGreaterThan(0);
+    expect(d.semanticHighMedianDistance).not.toBeNull();
+    expect(d.semanticHighMedianDistance!).toBeLessThan(d.semanticLowMedianDistance!);
   });
 });

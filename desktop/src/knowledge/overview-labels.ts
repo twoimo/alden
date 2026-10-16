@@ -5,6 +5,15 @@ const BUCKET = /^(?:홍보(?:[·\s]+안내)?|외부\s*자료(?:[·\s]+링크)?)$
 const PEOPLE = /^(?:author|person|creator|channel|source_group|인물|사람|대화 상대|화자)$/i;
 const TOPIC = /^(?:topic|concept|subject|주제|개념)$/i;
 const CLAIM = /^(?:claim|source_claim|memory|note|knowledge|지식|기억)$/i;
+const CHANNEL_TITLE = /(?:채널|티비|tv|channel)$/i;
+const MEDIA_BUCKET = /(?:^|[·\s/])(?:(?:일반|전체)\s*(?:동)?영상|(?:동)?영상\s*(?:모음|목록)|snippets?)(?:\s*\d+\s*(?:개|편|건)?)?$/i;
+
+function overviewDisplayPriority(label: string): 0 | 1 {
+  const terms = label.split(/[·\s/]+/).filter(term => /[A-Za-z가-힣]{2}/.test(term));
+  // Prefer descriptive saved titles; ambiguous labels remain fallbacks.
+  // This is a display heuristic, not a person or content classification.
+  return terms.length >= 2 && !CHANNEL_TITLE.test(label) && !MEDIA_BUCKET.test(label) ? 0 : 1;
+}
 
 /** Saved routing ids are not titles. Callers still keep the node itself. */
 export function internalGraphLabel(label: string): boolean {
@@ -27,8 +36,9 @@ export function selectOverviewLabels(nodes: readonly KnowledgeNode[], cap = 8): 
       || /^@[^\s]+$/.test(label) || internalGraphLabel(label) || label.length < 2) return [];
     const tier = TOPIC.test(node.category) ? 0 : CLAIM.test(node.category) ? 1 : node.category === 'code' ? 3 : 2;
     if (tier >= 2 && label.length < 8) return [];
-    return [{node, label, tier, group: node.sourceTarget || node.space || 'unscoped:' + node.id}];
-  }).sort((a, b) => a.tier - b.tier
+    return [{node, label, tier, priority: overviewDisplayPriority(label),
+      group: node.sourceTarget || node.space || 'unscoped:' + node.id}];
+  }).sort((a, b) => a.priority - b.priority || a.tier - b.tier
     || (b.node.degree ?? 0) - (a.node.degree ?? 0)
     || a.label.localeCompare(b.label) || a.node.id.localeCompare(b.node.id));
   const chosen: KnowledgeNode[] = [], groups = new Set<string>(), labels = new Set<string>();
@@ -36,10 +46,13 @@ export function selectOverviewLabels(nodes: readonly KnowledgeNode[], cap = 8): 
     if (labels.has(item.label) || chosen.length >= limit) return false;
     chosen.push(item.node); labels.add(item.label); groups.add(item.group); return true;
   };
-  // Saved subjects fill the overview by their actual connections. Another
-  // source gets a slot only after those subjects, then remaining titles.
-  for (const item of candidates) if (item.tier === 0) add(item);
-  for (const item of candidates) if (!groups.has(item.group)) add(item);
-  for (const item of candidates) add(item);
+  // Fill descriptive titles before fallbacks, including during source coverage.
+  // Within each group, retain subject, connection and source preferences.
+  for (const priority of [0, 1]) {
+    const pool = candidates.filter(item => item.priority === priority);
+    for (const item of pool) if (item.tier === 0) add(item);
+    for (const item of pool) if (!groups.has(item.group)) add(item);
+    for (const item of pool) add(item);
+  }
   return chosen;
 }

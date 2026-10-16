@@ -85,6 +85,11 @@ function bound(p: Point3): Point3 {
   const scale = Math.max(1, Math.hypot(q.x / 2.3, q.y / 1.55, q.z / 1.1));
   return { x: q.x / scale, y: q.y / scale, z: q.z / scale };
 }
+/** Keep one pinned focus fixed and give its rings the same room the origin has. */
+function boundNear(p: Point3, origin: Point3): Point3 {
+  const local = bound({ x: p.x - origin.x, y: p.y - origin.y, z: p.z - origin.z });
+  return { x: local.x + origin.x, y: local.y + origin.y, z: local.z + origin.z };
+}
 function center(ids: readonly string[], points: ReadonlyMap<string, Point3>): Point3 {
   // Divide before summing, so ordinary large imported coordinates do not overflow.
   let x = 0, y = 0, z = 0;
@@ -305,8 +310,8 @@ export class SemanticLayoutEngine {
       anchors.set(id, bound({ x: p.x + v.x * gain, y: p.y + v.y * gain, z: p.z + v.z * gain }));
     });
     const movableCount = movable.filter(Boolean).length, collisionSeeds = ids.map(id => hash(id));
-    const points = ids.map(id => bound(anchors.get(id)!));
-    const origins = ids.map(id => bound(base.get(id)!));
+    const points = ids.map(id => copy(anchors.get(id)!));
+    const origins = ids.map(id => copy(base.get(id)!));
     // A fresh ID seed is a provisional starting point, not a prior placement.
     // Holding a whole new community toward those unrelated seeds pulls its
     // center inward. Preserve positions only after a solve or an explicit prior.
@@ -333,6 +338,12 @@ export class SemanticLayoutEngine {
       d.depthRingNodes = relationDepth.reduce((count, depth) => count + (depth > 0 ? 1 : 0), 0);
     }
     const depthRadius = [0, .42, .86, 1.28, 1.66];
+    const pinOrigin = depthRoot >= 0 ? copy(points[depthRoot]) : null;
+    for (let i = 0; i < points.length; i++) {
+      if (pinOrigin && i === depthRoot) continue;
+      points[i] = pinOrigin ? boundNear(points[i], pinOrigin) : bound(points[i]);
+      origins[i] = pinOrigin ? boundNear(origins[i], pinOrigin) : bound(origins[i]);
+    }
     const forces = new Float64Array(ids.length * 3);
     // Bounded 32^3 cell keys. Reuse direct slots during this snapshot rather
     // than hashing 27 neighbor keys per occupied cell on every solver pass.
@@ -344,9 +355,12 @@ export class SemanticLayoutEngine {
       ids.forEach((_, i) => {
         if (!movable[i]) return;
         const p = points[i], origin = origins[i], c = clusterCenters[i];
-        forces[i * 3] = .12 * (c.x - p.x) + (hasPrior[i] ? .08 * (origin.x - p.x) : 0);
-        forces[i * 3 + 1] = .12 * (c.y - p.y) + (hasPrior[i] ? .08 * (origin.y - p.y) : 0);
-        forces[i * 3 + 2] = .12 * (c.z - p.z) + (hasPrior[i] ? .08 * (origin.z - p.z) : 0);
+        // A reached hop already has a ring target. Community-center pull collapses those radii.
+        const onRing = depthRoot >= 0 && relationDepth[i] > 0;
+        const clusterGain = onRing ? 0 : .12;
+        forces[i * 3] = clusterGain * (c.x - p.x) + (hasPrior[i] ? .08 * (origin.x - p.x) : 0);
+        forces[i * 3 + 1] = clusterGain * (c.y - p.y) + (hasPrior[i] ? .08 * (origin.y - p.y) : 0);
+        forces[i * 3 + 2] = clusterGain * (c.z - p.z) + (hasPrior[i] ? .08 * (origin.z - p.z) : 0);
         if (depthRoot >= 0 && relationDepth[i] > 0) {
           const root = points[depthRoot];
           let dx = p.x - root.x, dy = p.y - root.y, dz = p.z - root.z;
@@ -495,7 +509,8 @@ export class SemanticLayoutEngine {
         if (!movable[i]) return;
         const p = points[i], at = i * 3;
         const gain = .08 / Math.max(1, Math.hypot(forces[at], forces[at + 1], forces[at + 2]));
-        const next = bound({ x: p.x + gain * forces[at], y: p.y + gain * forces[at + 1], z: p.z + gain * forces[at + 2] });
+        const step = { x: p.x + gain * forces[at], y: p.y + gain * forces[at + 1], z: p.z + gain * forces[at + 2] };
+        const next = pinOrigin ? boundNear(step, pinOrigin) : bound(step);
         points[i] = next; anchors.set(id, next);
       });
     }
@@ -509,7 +524,8 @@ export class SemanticLayoutEngine {
       const p = anchors.get(id)!;
       if (Math.hypot(p.x - origin.x, p.y - origin.y, p.z - origin.z) >= .07) return;
       const v = seed(id), gain = .14 / Math.max(1e-9, Math.hypot(v.x, v.y, v.z));
-      anchors.set(id, bound({x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain}));
+      const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
+      anchors.set(id, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated));
     });
     const dirtyIds = new Set<string>();
     for (const id of ids) {

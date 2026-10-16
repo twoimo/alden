@@ -278,6 +278,7 @@ export class KnowledgeHologram {
   resetCamera(): void {
     this.restoredWindowSize=null;
     if (this.view.focusId && this.view.hops > 0) this.focusCamera(this.view.focusId);
+    else if (this.view.focusId) this.framePinnedOverview();
     else this.resetOverviewCamera();
     this.invalidateFrame();
   }
@@ -336,8 +337,10 @@ export class KnowledgeHologram {
     for (const id of this.displayedPositions.keys()) if (!ids.has(id)) this.displayedPositions.delete(id);
     this.view = navigation ? this.drilldown.restore(graph, navigation) : this.drilldown.replaceGraph(graph);
     this.rebuildGraph();
-    if (navigation || focus && !ids.has(focus)) this.resetOverviewCamera();
+    const refit = Boolean(navigation || (focus && !ids.has(focus)));
+    if (refit) this.resetOverviewCamera();
     if (navigation && this.view.focusId && this.view.hops > 0) this.focusCamera(this.view.focusId);
+    else if (refit && this.view.focusId && this.view.hops === 0) this.framePinnedOverview();
     if (viewpoint && [viewpoint.camera, viewpoint.lookAt].every(values => values.length === 3 && values.every(Number.isFinite))) {
       const camera = new THREE.Vector3().fromArray(viewpoint.camera);
       const lookAt = new THREE.Vector3().fromArray(viewpoint.lookAt);
@@ -455,7 +458,7 @@ export class KnowledgeHologram {
     const previousCamera = this.navigationTargets;
     this.view = this.drilldown.openNote(nodeId);
     this.rebuildGraph();
-    this.resetOverviewCamera();this.invalidateFrame();
+    this.framePinnedOverview();this.invalidateFrame();
     this.onFocus({ node, view: this.view, previousCamera });
     return this.view;
   }
@@ -488,6 +491,7 @@ export class KnowledgeHologram {
     this.view = this.drilldown.back();
     this.rebuildGraph();
     if (this.view.focusId&&this.view.hops>0) this.focusCamera(this.view.focusId);
+    else if (this.view.focusId) this.framePinnedOverview();
     else {
       this.resetOverviewCamera();
       this.invalidateFrame();
@@ -577,7 +581,9 @@ export class KnowledgeHologram {
     this.preparePositionMotion();
     // A fit made from temporary seed points may miss the later worker anchors.
     // Finish that explicit sparse fit once; never override an orbit or saved pose.
-    if (this.fitAfterSemanticLayout && !this.orbitActive && !this.restoredWindowSize) this.resetOverviewCamera();
+    if (this.fitAfterSemanticLayout && !this.orbitActive && !this.restoredWindowSize) {
+      if (this.view.focusId) this.framePinnedOverview(); else this.resetOverviewCamera();
+    }
     this.fitAfterSemanticLayout = false;
     this.loop.start(); this.invalidateFrame();
   }
@@ -935,6 +941,22 @@ export class KnowledgeHologram {
     this.orbit.maxDistance = Math.max(12,distance+.5);
   }
 
+  /** Frame the open note's depth rings. The pin itself stays where the solver left it. */
+  private framePinnedOverview(): void {
+    const id = this.view.hops === 0 ? this.view.focusId : null;
+    const position = id ? this.anchors.get(id) ?? this.positions.get(id) : undefined;
+    if (!position) { this.resetOverviewCamera(); return; }
+    this.displayRelaxationPending = true;
+    this.desiredLookAt.copy(position);
+    const ring = 1.9;
+    const distance = overviewCameraDistance(
+      [{ x: -ring, y: -ring * .72, z: 0 }, { x: ring, y: ring * .72, z: 0 }],
+      this.viewport.width, this.viewport.height, this.camera.fov, .16, false);
+    this.desiredCamera.set(position.x, position.y, position.z + distance);
+    this.fitAfterSemanticLayout = false;
+    this.orbit.maxDistance = Math.max(12, distance + .5);
+  }
+
   private resize(resetCamera = true): void {
     if (this.disposed) return;
     const rect = this.canvas.getBoundingClientRect();
@@ -953,7 +975,9 @@ export class KnowledgeHologram {
     if(this.restoredWindowSize && (this.restoredWindowSize.width!==window.innerWidth || this.restoredWindowSize.height!==window.innerHeight))this.restoredWindowSize=null;
     // Opening/closing the note pane can notify ResizeObserver after a history
     // restore. Preserve its saved pose; a real window resize still refits.
-    if (resetCamera && !this.restoredWindowSize && this.view.hops===0 && (previousWidth !== this.viewport.width || previousHeight !== this.viewport.height)) this.resetOverviewCamera();
+    if (resetCamera && !this.restoredWindowSize && this.view.hops===0 && (previousWidth !== this.viewport.width || previousHeight !== this.viewport.height)) {
+      if (this.view.focusId) this.framePinnedOverview(); else this.resetOverviewCamera();
+    }
     for (const orb of this.orbMeshes.values()) orb.setViewportHeight(this.viewport.height * this.renderer.getPixelRatio());
     for (const box of this.labelBounds) box.width = 0;
     // Overlay geometry is read only on resize/selection layout changes.
