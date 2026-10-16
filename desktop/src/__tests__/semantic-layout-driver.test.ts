@@ -48,7 +48,7 @@ describe('owned asynchronous semantic layout', () => {
     expect(worker.requests).toHaveLength(2);
     expect(worker.requests[1].reflow).toBe(true);
     expect(driver.settled).toBe(false);
-    driver.request(source, new Map(first.anchors), new Set(), new Set());
+    driver.request(source, new Map(first.anchors), new Set(['a']), new Set(), new Set(['b']));
     expect(worker.requests).toHaveLength(2);
     expect(worker.terminate).not.toHaveBeenCalled();
     const redone = worker.flush();
