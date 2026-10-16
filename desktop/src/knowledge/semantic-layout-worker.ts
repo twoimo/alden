@@ -9,7 +9,7 @@ scope.onmessage = event => {
     if (request.checkpoint) engine.restore(request.checkpoint);
     const started = performance.now();
     const result = engine.layout(request.view, new Map(request.previous), request.pairs,
-      { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned) });
+      { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), reflow: request.reflow === true });
     scope.postMessage({ id: request.id, anchors: [...result.anchors], diagnostics: result.diagnostics,
       checkpoint: engine.checkpoint(), wallMs: performance.now() - started });
   } catch { scope.postMessage({ id: request.id, error: 'semantic_layout_failed' }); }
