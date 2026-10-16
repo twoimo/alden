@@ -313,6 +313,20 @@ describe('bounded semantic overview layout', () => {
     expect(aligned.anchors.size).toBe(5);
   });
 
+  it('keeps later relation hops farther from one pinned focus', () => {
+    const edges = [R(0, 1), R(1, 2), R(2, 3)];
+    const result = new SemanticLayoutEngine().layout(scene(4, edges), empty(), [], { pinnedIds: new Set(['n0000']) });
+    const root = result.anchors.get('n0000')!;
+    const radius = (id: string) => {
+      const point = result.anchors.get(id)!;
+      return Math.hypot(point.x - root.x, point.y - root.y, point.z - root.z);
+    };
+    expect(result.diagnostics.depthRingNodes).toBe(3);
+    expect(radius('n0001')).toBeGreaterThan(.12);
+    expect(radius('n0002')).toBeGreaterThan(radius('n0001'));
+    expect(radius('n0003')).toBeGreaterThan(radius('n0002'));
+  });
+
   it('reports final median distance of high-cosine pairs below low-cosine pairs', () => {
     const pairs: LayoutAffinityPair[] = [];
     for (let a = 0; a < 8; a++) for (let b = a + 1; b < 8; b++) {

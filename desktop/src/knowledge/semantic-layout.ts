@@ -24,7 +24,7 @@ export interface SemanticLayoutDiagnostics {
   semanticCosineMin: number | null; semanticCosineMedian: number | null; semanticCosineMax: number | null;
   semanticUpperPairs: number; semanticLowerPairs: number;
   semanticUpperMedianDistance: number | null; semanticLowerMedianDistance: number | null;
-  affectedNodes: number; dirtyNodes: number; pinnedNodes: number; clusters: number;
+  affectedNodes: number; dirtyNodes: number; pinnedNodes: number; clusters: number; depthRingNodes: number;
   communityPasses: number; communityMoves: number; communityVisits: number;
   solverIterations: number; springEvaluations: number; collisionTests: number;
   densityEvaluations: number; neighborhoodDensityEvaluations: number; crowdedCells: number; collisionBudgetExhausted: boolean; collisionCandidatesTruncated: boolean;
@@ -138,7 +138,7 @@ export class SemanticLayoutEngine {
       semanticUpperPairs: 0, semanticLowerPairs: 0,
       semanticUpperMedianDistance: null, semanticLowerMedianDistance: null,
       inputTruncated: view.nodes.length > limits.inputNodes || view.edges.length > limits.inputEdges || validatedPairs.length > limits.inputAffinities,
-      affectedNodes: 0, dirtyNodes: 0, pinnedNodes: 0, clusters: 0,
+      affectedNodes: 0, dirtyNodes: 0, pinnedNodes: 0, clusters: 0, depthRingNodes: 0,
       communityPasses: 0, communityMoves: 0, communityVisits: 0, solverIterations: 0,
       springEvaluations: 0, collisionTests: 0, densityEvaluations: 0, neighborhoodDensityEvaluations: 0, crowdedCells: 0,
       collisionBudgetExhausted: false, collisionCandidatesTruncated: false,
@@ -313,6 +313,26 @@ export class SemanticLayoutEngine {
     const hasPrior = ids.map(id => finite(previousPositions.get(id)) || this.positions.has(id));
     const clusterCenters = ids.map(id => centers.get(clusterIds.get(id)!)!);
     const indexedPairs = pairs.map(pair => ({ ...pair, a: index.get(pair.source)!, b: index.get(pair.target)! }));
+    const relationDepth = new Int16Array(ids.length).fill(-1);
+    let depthRoot = -1;
+    if (pinned.size === 1) {
+      depthRoot = index.get([...pinned][0])!;
+      relationDepth[depthRoot] = 0;
+      const relationAdjacency: number[][] = ids.map(() => []);
+      for (const pair of indexedPairs) if (pair.r > 0) {
+        relationAdjacency[pair.a].push(pair.b); relationAdjacency[pair.b].push(pair.a);
+      }
+      const queue = [depthRoot];
+      for (let head = 0; head < queue.length; head++) {
+        const at = queue[head];
+        if (relationDepth[at] >= 4) continue;
+        for (const next of relationAdjacency[at]) if (relationDepth[next] < 0) {
+          relationDepth[next] = relationDepth[at] + 1; queue.push(next);
+        }
+      }
+      d.depthRingNodes = relationDepth.reduce((count, depth) => count + (depth > 0 ? 1 : 0), 0);
+    }
+    const depthRadius = [0, .42, .86, 1.28, 1.66];
     const forces = new Float64Array(ids.length * 3);
     // Bounded 32^3 cell keys. Reuse direct slots during this snapshot rather
     // than hashing 27 neighbor keys per occupied cell on every solver pass.
@@ -327,6 +347,17 @@ export class SemanticLayoutEngine {
         forces[i * 3] = .12 * (c.x - p.x) + (hasPrior[i] ? .08 * (origin.x - p.x) : 0);
         forces[i * 3 + 1] = .12 * (c.y - p.y) + (hasPrior[i] ? .08 * (origin.y - p.y) : 0);
         forces[i * 3 + 2] = .12 * (c.z - p.z) + (hasPrior[i] ? .08 * (origin.z - p.z) : 0);
+        if (depthRoot >= 0 && relationDepth[i] > 0) {
+          const root = points[depthRoot];
+          let dx = p.x - root.x, dy = p.y - root.y, dz = p.z - root.z;
+          let length = Math.hypot(dx, dy, dz);
+          if (length < 1e-6) {
+            const v = seed(ids[i]); dx = v.x; dy = v.y; dz = v.z;
+            length = Math.max(1e-9, Math.hypot(dx, dy, dz));
+          }
+          const gain = .55 * (depthRadius[relationDepth[i]] - length) / length;
+          forces[i * 3] += gain * dx; forces[i * 3 + 1] += gain * dy; forces[i * 3 + 2] += gain * dz;
+        }
       });
       for (const pair of indexedPairs) {
         const { a, b } = pair;
