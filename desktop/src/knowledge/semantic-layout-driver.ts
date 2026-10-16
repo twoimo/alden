@@ -67,7 +67,7 @@ export class SemanticLayoutDriver {
     // An ordinary redraw cannot cancel a user-requested reflow of the same
     // content and pins while its worker is still solving.
     if (!reflow && this.busy && this.pendingReflow && key === this.requestedKey
-      && !restore && !changedVisible.length && pinKey === this.requestedPins) return;
+      && pinKey === this.requestedPins) return;
     if(!reflow&&key===this.appliedKey&&!restore&&!changedVisible.length&&pinKey===this.appliedPins){
       if(this.busy)this.stop();
       this.requestedKey=key;this.state={...this.completedState,state:'cached',generation:this.generation};return;
