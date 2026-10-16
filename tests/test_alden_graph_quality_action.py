@@ -111,6 +111,39 @@ class QualityActionContractTests(unittest.TestCase):
             with self.subTest(value=value):self.assert_error(action.read_action(self.root,
                 json.dumps({'scope':'project','project':'one','include_annotation_review':value})), 'quality_query_invalid')
 
+    def test_source_projection_counts_review_candidates_without_merging_or_editing(self):
+        prefix=('서류에서 높은 점수를 받는 지원자 특징입니다. '
+            '채용공고의 방향을 그대로 옮기지 않고 경험과 결과를 연결해야 합니다. '
+            '첫 문장부터 핵심이 보여야 합니다.')
+        noisy=prefix+chr(0xA0)+chr(10)+'1'+chr(10)+'/'+chr(10)+'2'+chr(10)+'6'+chr(10)+'1'+chr(10)+'3'
+        raw={'platform':'threads','type':'source','localTextOrigin':'local_corpus_json','localOriginalText':noisy,
+            'url':'https://www.threads.com/@allpass_everything/post/ABC_def-12','code':'ABC_def-12'}
+        self.store.ingest(self.target(),[
+            self.record('tail-a',text=prefix,raw=raw),
+            self.record('tail-b',text=prefix,raw=dict(raw)),
+        ])
+        before=self.store.path.read_bytes()
+        ordinary=action.read_action(self.root,self.project_query('one'))
+        self.assertTrue(ordinary['ok'],ordinary)
+        self.assertNotIn('source_text_projection',ordinary)
+        result=action.read_action(self.root,json.dumps({'scope':'project','project':'one','include_source_projection':True}))
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['kind'],'source_text_projection')
+        self.assertEqual(result['scope']['source_verification'],'retained_canonical_json')
+        projection=result['source_text_projection']
+        self.assertEqual(projection['status'],'verified_retained_records')
+        self.assertEqual(projection['numeric_tail_candidates'],1)
+        self.assertEqual(projection['same_projected_body_groups'],1)
+        self.assertEqual(projection['originals'],'preserved')
+        self.assertEqual(projection['merge'],'not_performed')
+        self.assertEqual(projection['semantic_validity'],'review_candidates_not_confirmed_duplicates')
+        self.assertEqual(self.store.path.read_bytes(),before)
+        for extra in ({'include_samples':True},{'include_annotation_review':True}):
+            query={'scope':'project','project':'one','include_source_projection':True}
+            query.update(extra)
+            self.assert_error(action.read_action(self.root,json.dumps(query)),'quality_query_invalid')
+        self.assert_error(action.read_action(self.root,json.dumps({'scope':'project','project':'one','include_source_projection':'true'})),'quality_query_invalid')
+
     def comparison_query(self, project=None):
         value={'scope':'project','project':project} if project else {'scope':'all'}
         return json.dumps({**value,'include_samples':True})

@@ -72,6 +72,15 @@ type ComparisonSamples = {
   groups: Array<{ kind: 'stored_body' | 'canonical_record'; project: string; match_sha256: string;
     members: number; status: 'review_only_not_confirmed_duplicate'; records: ComparisonRecord[] }>;
 };
+type SourceProjection = {
+  policy: 'threads-separated-numeric-tail-v1';
+  status: 'verified_retained_records';
+  numeric_tail_candidates: number;
+  same_projected_body_groups: number;
+  semantic_validity: 'review_candidates_not_confirmed_duplicates';
+  originals: 'preserved';
+  merge: 'not_performed';
+};
 type DeclaredFields = {
   policy: 'source-declared-fields-v1'; time_policy: 'source-declared-time-v1'; quantity_policy: 'source-declared-quantity-v1';
   scope: 'explicit_metadata_fields_only'; truth_status: 'syntax_conversion_not_semantic_verdict';
@@ -103,6 +112,8 @@ export type QualitySuccess = {
   source_annotation_review?: AnnotationReview;
   annotation_checked_at?: number;
   annotation_candidates?: AnnotationPage;
+  source_text_projection?: SourceProjection;
+  projection_checked_at?: number;
 };
 export type QualityFailure = { ok: false; schema: 3; reason: QualityErrorCode; scope: RequestedScope };
 export type QualityResult = QualitySuccess | QualityFailure;
@@ -410,6 +421,32 @@ export function parseCollectionAnnotationReview(value: unknown, query: QualityQu
   return review ? { review, checked_at: row.checked_at as number,...(candidates?{candidates}:{}) } : null;
 }
 
+export function parseCollectionSourceProjection(value: unknown, query: QualityQuery): { projection: SourceProjection; checked_at: number } | null {
+  const row = object(value), scope = object(row?.scope), projection = object(row?.source_text_projection);
+  if (!row || row.ok !== true || row.schema !== 3 || row.kind !== 'source_text_projection'
+    || !scope || !matchesScope(scope, query, false)
+    || scope.coverage !== 'permitted_current_collection_memberships'
+    || scope.filters !== 'project_only' || scope.source_verification !== 'retained_canonical_json'
+    || !Array.isArray(scope.projects) || !scope.projects.length || scope.projects.length > 16
+    || new Set(scope.projects).size !== scope.projects.length
+    || !scope.projects.every(p => typeof p === 'string' && p.length > 0 && p.length <= 128)
+    || (query.scope === 'project' && (scope.projects.length !== 1 || scope.projects[0] !== query.project))
+    || !checkedDate(row.checked_at) || !finiteNonnegative(row.elapsed_ms)
+    || !count(row.versions_scanned) || (row.versions_scanned as number) > 100000
+    || !projection || projection.policy !== 'threads-separated-numeric-tail-v1'
+    || projection.status !== 'verified_retained_records'
+    || projection.semantic_validity !== 'review_candidates_not_confirmed_duplicates'
+    || projection.originals !== 'preserved' || projection.merge !== 'not_performed'
+    || !count(projection.numeric_tail_candidates) || !count(projection.same_projected_body_groups)
+    || (projection.numeric_tail_candidates as number) > (row.versions_scanned as number)
+    || (projection.same_projected_body_groups as number) * 2 > (row.versions_scanned as number)) return null;
+  return { checked_at: row.checked_at as number, projection: {
+    policy: 'threads-separated-numeric-tail-v1', status: 'verified_retained_records',
+    numeric_tail_candidates: projection.numeric_tail_candidates as number,
+    same_projected_body_groups: projection.same_projected_body_groups as number,
+    semantic_validity: 'review_candidates_not_confirmed_duplicates', originals: 'preserved', merge: 'not_performed' } };
+}
+
 export function parseCollectionQuality(value: unknown, query: QualityQuery): QualityResult | null {
   const row = object(value), scope = object(row?.scope);
   if (!row || row.schema !== 3 || !scope) return null;
@@ -557,6 +594,7 @@ export class KnowledgeQualityPanel {
         candidate.dataset.annotationGroup===undefined?undefined:Number(candidate.dataset.annotationGroup));
       else if (target?.closest?.('button.knowledge-quality-annotations')) void this.request(false, true);
       else if (target?.closest?.('button.knowledge-quality-compare')) void this.request(true);
+      else if (target?.closest?.('button.knowledge-quality-projection')) void this.request(false, false, true);
     }, { signal: this.controls.signal });
     this.info.addEventListener('toggle', () => { if (!this.info.open) this.invalidate(); }, { signal: this.controls.signal });
     // Even an immediate close-and-reopen invalidates the earlier request.
@@ -633,7 +671,7 @@ export class KnowledgeQualityPanel {
     this.updateButton();
   }
 
-  private async request(includeSamples = false, includeAnnotations = false): Promise<void> {
+  private async request(includeSamples = false, includeAnnotations = false, includeProjection = false): Promise<void> {
     this.syncSelection();
     const query = qualityQueryFromSelection(this.selection);
     if (!query || !this.active || this.disposed || !this.info.open
@@ -642,14 +680,16 @@ export class KnowledgeQualityPanel {
     const epoch = ++this.epoch, selection = this.selection;
     this.pendingEpoch = epoch;
     this.button.disabled = true;
-    this.status.textContent = includeAnnotations ? '보존 원문과 선언 태그를 검사 중입니다.' : '수집 기록 품질을 확인 중입니다.';
+    this.status.textContent = includeProjection ? '보존 원문의 숫자 꼬리와 같은 본문을 검사 중입니다.'
+      : includeAnnotations ? '보존 원문과 선언 태그를 검사 중입니다.' : '수집 기록 품질을 확인 중입니다.';
     this.report.replaceChildren();
     this.report.hidden = true;
     this.report.dataset.state = 'loading';
     try {
       const response = await this.load('collection-quality', { query: JSON.stringify({ ...query,
         ...(includeSamples ? { include_samples: true } : {}),
-        ...(includeAnnotations ? { include_annotation_review: true } : {}) }) });
+        ...(includeAnnotations ? { include_annotation_review: true } : {}),
+        ...(includeProjection ? { include_source_projection: true } : {}) }) });
       if (!this.current(epoch, selection)) return;
       let result = parseCollectionQuality(response, query);
       if (includeAnnotations && result?.ok !== false) {
@@ -660,8 +700,16 @@ export class KnowledgeQualityPanel {
             ...(inspection.candidates?{annotation_candidates:inspection.candidates}:{}) };
         } else result = null;
       }
+      if (includeProjection && result?.ok !== false) {
+        const inspection = parseCollectionSourceProjection(response, query);
+        if (inspection && this.lastReport) {
+          const base = { ...this.lastReport }; delete base.comparison_samples;
+          result = { ...base, source_text_projection: inspection.projection, projection_checked_at: inspection.checked_at };
+        } else result = null;
+      }
       if (!result || (result.ok && (includeSamples && !result.comparison_samples
-        || includeAnnotations && !result.source_annotation_review))) {
+        || includeAnnotations && !result.source_annotation_review
+        || includeProjection && !result.source_text_projection))) {
         this.status.textContent = '품질 보고서를 확인할 수 없습니다. 다시 요청할 수 있습니다.';
         this.report.dataset.state = 'unavailable';
       } else if (!result.ok) {
@@ -775,6 +823,19 @@ export class KnowledgeQualityPanel {
       ['교차 맥락 제목·본문 후보 그룹', value.duplicate_candidates.cross_context_search_text.groups],
       ['벡터 차원 혼합 프로필', value.numeric_review_candidates.mixed_vector_dimensions.profiles],
     ]);
+    if (!value.source_text_projection) {
+      const projection = this.root.createElement('button');
+      projection.type = 'button'; projection.className = 'knowledge-quality-projection';
+      projection.textContent = '원문 꼬리·같은 본문 검토';
+      elements.push(projection);
+    } else {
+      const observed = value.source_text_projection;
+      metrics('보존 원문 검토 후보', [
+        ['숫자 꼬리 후보', observed.numeric_tail_candidates],
+        ['같은 본문 후보 그룹', observed.same_projected_body_groups],
+      ]);
+      paragraph('숫자 꼬리와 같은 본문 그룹은 검토 후보입니다. 병합하지 않았고 원문은 유지했습니다.', 'knowledge-quality-limit');
+    }
     if (!value.comparison_samples) {
       const compare = this.root.createElement('button');
       compare.type = 'button'; compare.className = 'knowledge-quality-compare';

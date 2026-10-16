@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { KnowledgeQualityPanel, parseCollectionQuality, parseCollectionAnnotationReview, parseAnnotationCandidatePage, qualityQueryFromSelection,
+import { KnowledgeQualityPanel, parseCollectionQuality, parseCollectionAnnotationReview, parseCollectionSourceProjection, parseAnnotationCandidatePage, qualityQueryFromSelection,
   type QualityQuery } from '../knowledge/quality-panel';
 import { settingsMarkup } from '../ui';
 import type { fetchSettingsAction } from '../runtime';
@@ -203,6 +203,37 @@ describe('manual collection-quality report and fixed native selectors', () => {
     expect(report().textContent).toContain('어느 태그가 맞는지');
     expect(report().textContent).toContain('별도 요청입니다');
     expect(report().querySelector('.knowledge-quality-comparison')).toBeNull();
+  });
+
+  it('requests retained source projection only on its explicit control and does not merge candidates', async () => {
+    const projection = {
+      ok: true, schema: 3, kind: 'source_text_projection',
+      scope: {
+        requested_scope: 'all', requested_project: null, projects: ['one', 'all'],
+        coverage: 'permitted_current_collection_memberships', filters: 'project_only',
+        source_verification: 'retained_canonical_json',
+      },
+      checked_at: 1_791_768_900.125, elapsed_ms: 40, versions_scanned: 80,
+      source_text_projection: {
+        policy: 'threads-separated-numeric-tail-v1', status: 'verified_retained_records',
+        numeric_tail_candidates: 9, same_projected_body_groups: 35,
+        semantic_validity: 'review_candidates_not_confirmed_duplicates',
+        originals: 'preserved', merge: 'not_performed',
+      },
+    };
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success()).mockResolvedValueOnce(projection);
+    setup(load); info().open = true; button().click(); await settle();
+    expect(report().querySelector('.knowledge-quality-projection')).not.toBeNull();
+    (report().querySelector('.knowledge-quality-projection') as HTMLButtonElement).click(); await settle();
+    expect(JSON.parse(calls(load)[1][1]!.query!)).toEqual({ scope: 'all', include_source_projection: true });
+    expect(state()).toBe('complete');
+    expect(metric('숫자 꼬리 후보')).toBe('9');
+    expect(metric('같은 본문 후보 그룹')).toBe('35');
+    expect(report().textContent).toContain('병합하지 않았고 원문은 유지했습니다.');
+    expect(report().querySelector('.knowledge-quality-projection')).toBeNull();
+    const forged = { ...projection, source_text_projection: { ...projection.source_text_projection, merge: 'performed' } };
+    expect(parseCollectionSourceProjection(forged, all)).toBeNull();
+    expect(parseCollectionSourceProjection({ ...projection, source_text_projection: { ...projection.source_text_projection, status: 'not_inspected', numeric_tail_candidates: 0, same_projected_body_groups: 0 } }, all)).toBeNull();
   });
 
   it('does not show completion when explicitly requested tag inspection is missing', async () => {

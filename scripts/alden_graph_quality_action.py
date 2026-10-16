@@ -7,7 +7,7 @@ import time
 import unicodedata
 
 from alden_collection import CollectionStore, digest, encoded, identity, normalized_body
-from alden_graph_quality import _json, audit, audit_annotations
+from alden_graph_quality import SOURCE_TEXT_POLICY, _json, audit, audit_annotations
 from alden_content_evidence import POLICY
 from alden_normalization_evidence import validate_declared_summary
 
@@ -33,14 +33,16 @@ def _query(raw):
     if type(include_samples) is not bool:raise ValueError('quality_query_invalid')
     include_annotations=value.pop('include_annotation_review',False)
     if type(include_annotations) is not bool:raise ValueError('quality_query_invalid')
-    if include_annotations and include_samples:raise ValueError('quality_query_invalid')
+    include_projection=value.pop('include_source_projection',False)
+    if type(include_projection) is not bool:raise ValueError('quality_query_invalid')
+    if sum((include_samples, include_annotations, include_projection))>1:raise ValueError('quality_query_invalid')
     scope=value.get('scope')
-    if scope=='all' and set(value)=={'scope'}:return scope,None,include_samples,include_annotations
+    if scope=='all' and set(value)=={'scope'}:return scope,None,include_samples,include_annotations,include_projection
     project=value.get('project')
     if (scope=='project' and set(value)=={'scope','project'} and isinstance(project,str)
             and 0<len(project)<=128 and project==project.strip()
             and not any(unicodedata.category(c)=='Cc' for c in project)):
-        return scope,project,include_samples,include_annotations
+        return scope,project,include_samples,include_annotations,include_projection
     raise ValueError('quality_query_invalid')
 
 def _comparison_samples(store,report,projects,check):
@@ -271,6 +273,36 @@ def _annotation_summary(report, projects, maximum):
         'scope': 'permitted_current_body_records_retained_bytes'}
 
 
+def _projection_summary(report, projects):
+    """Retained-text review counts. A match is not a merge and does not edit bytes."""
+    if (not isinstance(report, dict) or report.get('schema') != 4
+            or report.get('mode') != 'read_only_current_versions'
+            or report.get('projects') != projects
+            or report.get('source_verification_requested') is not True):
+        raise ValueError('quality_report_unavailable')
+    coverage = report.get('coverage') or {}
+    if (coverage.get('status') != 'complete'
+            or coverage.get('scope') != 'current_permitted_memberships_only'
+            or coverage.get('source_verification') != 'retained_canonical_json'
+            or coverage.get('projects') != len(projects)):
+        raise ValueError('quality_report_unavailable')
+    projection = report.get('source_text_projection')
+    if (not isinstance(projection, dict) or projection.get('policy') != SOURCE_TEXT_POLICY
+            or projection.get('status') != 'verified_retained_records'
+            or projection.get('semantic_validity') != 'review_candidates_not_confirmed_duplicates'):
+        raise ValueError('quality_report_unavailable')
+    tails = _count(projection.get('numeric_tail_candidates'))
+    groups = _count(projection.get('same_projected_body_groups'))
+    versions = _count(report['counts']['project_current_versions'])
+    blobs = _count(report['counts']['source_blobs_verified'])
+    if versions > _count(report['counts']['memberships']) or blobs > versions or tails > blobs or groups * 2 > versions:
+        raise ValueError('quality_report_unavailable')
+    return {'policy': projection['policy'], 'status': 'verified_retained_records',
+        'numeric_tail_candidates': tails, 'same_projected_body_groups': groups,
+        'semantic_validity': 'review_candidates_not_confirmed_duplicates',
+        'originals': 'preserved', 'merge': 'not_performed'}
+
+
 def read_action(state_root,query_raw,cancelled=None):
     started=time.monotonic()
     scope={'requested_scope':None,'requested_project':None}
@@ -280,7 +312,7 @@ def read_action(state_root,query_raw,cancelled=None):
         if isinstance(value,dict) and 'review_id' in value:
             from alden_annotation_candidates import read_review
             return read_review(state_root,value,cancelled=cancelled)
-        mode,project,include_samples,include_annotations=_query(query_raw)
+        mode,project,include_samples,include_annotations,include_projection=_query(query_raw)
         scope={'requested_scope':mode,'requested_project':project}
         if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
         store=CollectionStore.open_existing(Path(state_root))
@@ -316,6 +348,24 @@ def read_action(state_root,query_raw,cancelled=None):
                 'checked_at':checked,'elapsed_ms':round(elapsed,3),
                 'versions_scanned':verified['coverage']['versions_scanned'],'source_annotation_review':review,
                 'annotation_candidates':candidates}
+        if include_projection:
+            verified=audit(state_root,projects,verify_sources=True,sample_cap=0,timeout=100,
+                max_rows=100000,max_bytes=512*1024*1024,cancelled=cancelled)
+            projection=_projection_summary(verified,projects)
+            after=store.path.stat()
+            if ((before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino)
+                    or available!=_projects(store,mode,project) or permissions!=_bindings(store,projects)):
+                raise ValueError('quality_scope_unavailable')
+            if cancelled is not None and cancelled():raise RuntimeError('quality_cancelled')
+            checked=time.time();elapsed=(time.monotonic()-started)*1000
+            if not math.isfinite(checked) or checked<=0 or not math.isfinite(elapsed) or elapsed<0:
+                raise ValueError('quality_report_unavailable')
+            return {'ok':True,'schema':3,'kind':'source_text_projection',
+                'scope':{**scope,'projects':projects,'coverage':'permitted_current_collection_memberships',
+                    'filters':'project_only','source_verification':'retained_canonical_json'},
+                'checked_at':checked,'elapsed_ms':round(elapsed,3),
+                'versions_scanned':_count(verified['counts']['project_current_versions']),
+                'source_text_projection':projection}
         retrieval=store.root/'retrieval.sqlite3'
         def cache_identity():
             try:

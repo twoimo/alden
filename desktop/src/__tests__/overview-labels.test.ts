@@ -28,7 +28,7 @@ describe('overview reading entry labels', () => {
     expect(selectOverviewLabels(input.nodes).map(n=>n.label)).toEqual(['연봉·복리후생','이력서·서류','면접 질문을 준비하는 방법']);
     expect(JSON.stringify(input)).toBe(before);expect(input.nodes).toHaveLength(9);
   });
-  it.each(['topic', 'claim', 'source_claim'])('prefers multi-term titles over high-degree ambiguous %s labels', category => {
+  it.each(['topic', 'claim', 'source_claim'])('excludes high-degree ambiguous %s labels when multi-term titles exist', category => {
     const nodes=graph([
       {id:'slogan',label:'렉카박멸',category,degree:99999,source_target:'channel'},
       {id:'person',label:'홍민태',category,degree:99998,source_target:'person'},
@@ -44,12 +44,12 @@ describe('overview reading entry labels', () => {
     const before=JSON.stringify(nodes);
     const selected=selectOverviewLabels(nodes,2);
     expect(selected.map(n=>n.label)).toEqual(['생산·제조','자소서·면접']);
-    expect(selectOverviewLabels(nodes).slice(0,2)).toEqual(selected);
-    expect(selectOverviewLabels([...nodes].reverse(),2)).toEqual(selected);
+    expect(selectOverviewLabels(nodes)).toEqual(selected);
+    expect(selectOverviewLabels([...nodes].reverse())).toEqual(selected);
     expect(selected[0]).toBe(nodes[8]);expect(selected[1]).toBe(nodes[9]);
     expect(JSON.stringify(nodes)).toBe(before);expect(nodes).toHaveLength(10);
   });
-  it('fills substantive titles before using ambiguous topics or another source for coverage', () => {
+  it('keeps spare slots empty instead of adding ambiguous topics or buckets for source coverage', () => {
     const nodes=graph([
       {id:'person',label:'홍민태',category:'topic',degree:9999,source_target:'person'},
       {id:'channel',label:'홍민태 채널',category:'source_claim',degree:9999,source_target:'channel'},
@@ -58,7 +58,28 @@ describe('overview reading entry labels', () => {
       {id:'claim',label:'제조 공정의 오류를 줄이는 조건',category:'source_claim',degree:1,source_target:'project'},
     ]).nodes;
     expect(selectOverviewLabels(nodes,2).map(n=>n.id)).toEqual(['topic','claim']);
-    expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic','claim','person','channel','media']);
+    expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic','claim']);
+  });
+  it.each(['topic', 'claim', 'source_claim'])('keeps eligible %s fallbacks when no descriptive title is available', category => {
+    const nodes=graph([
+      {id:'slogan',label:'렉카박멸',category,degree:99999},
+      {id:'person',label:'홍민태',category,degree:99998},
+      {id:'subject',label:'면접',category,degree:1},
+      {id:'generic',label:'기타·미분류',category,degree:999999},
+      {id:'channel',label:'홍민태 채널',category,degree:999997},
+      {id:'tv',label:'렉카박멸 TV',category,degree:999996},
+      {id:'media',label:'일반 동영상',category,degree:999995},
+      {id:'snippets',label:'snippets',category,degree:999994},
+      {id:'media-count',label:'돈 벌어주는 스파미 일반 영상 133개',category,degree:999993},
+      {id:'snippets-count',label:'검색 snippets 133',category,degree:999992},
+      {id:'unread',label:'읽지 않은 문서 제목',category,source_metadata:{content_evidence:'reference_only'}},
+    ]).nodes;
+    const before=JSON.stringify(nodes);
+    const selected=selectOverviewLabels(nodes);
+    expect(selected.map(n=>n.id)).toEqual(['slogan','person','subject']);
+    expect(selectOverviewLabels([...nodes].reverse())).toEqual(selected);
+    expect(selectOverviewLabels(nodes,2)).toEqual(selected.slice(0,2));
+    expect(JSON.stringify(nodes)).toBe(before);expect(nodes).toHaveLength(11);
   });
   it('keeps substantive titles about channels and media in the preferred group', () => {
     const nodes=graph([
@@ -67,7 +88,7 @@ describe('overview reading entry labels', () => {
       {id:'video',label:'일반 동영상 분류 기준',category:'topic',degree:2},
       {id:'snippets',label:'Snippets improve retrieval precision',category:'source_claim',degree:1},
     ]).nodes;
-    expect(selectOverviewLabels(nodes,3).map(n=>n.id)).toEqual(['channel','video','snippets']);
+    expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['channel','video','snippets']);
   });
   it('fills the overview with connected subjects before headlines and amount fragments', () => {
     const nodes=graph([
@@ -112,9 +133,9 @@ describe('overview reading entry labels', () => {
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['c','d']);expect(nodes).toHaveLength(4);
     expect(nodes[0].contentEvidence).toBe('metadata_description');expect(nodes[3].contentEvidence).toBeUndefined();
   });
-  it('keeps meaningful short subjects and uncertain claims, with no generated text', () => {
+  it('uses a single descriptive claim exclusively and retains short subjects as fallbacks', () => {
     const nodes=graph([{id:'a',label:'면접',category:'topic'},{id:'b',label:'미확인 조건에서 발생할 수 있는 실패',category:'source_claim'}]).nodes;
-    expect(selectOverviewLabels(nodes).map(n=>n.label)).toEqual(['미확인 조건에서 발생할 수 있는 실패','면접']);
+    expect(selectOverviewLabels(nodes).map(n=>n.label)).toEqual(['미확인 조건에서 발생할 수 있는 실패']);
     expect(selectOverviewLabels(nodes.slice(0,1)).map(n=>n.label)).toEqual(['면접']);
   });
   it('ignores retracted and identifier labels while retaining all stored targets', () => {

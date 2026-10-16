@@ -20,6 +20,7 @@ use thiserror::Error;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(8);
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(25);
+const SOURCE_PROJECTION_TIMEOUT: Duration = Duration::from_secs(110);
 const BROWSER_TOOL_TIMEOUT: Duration = Duration::from_secs(90);
 const BROWSER_TOOL_ABORT_GRACE: Duration = Duration::from_secs(2);
 const MODEL_SWAP_TIMEOUT: Duration = Duration::from_secs(120);
@@ -1209,6 +1210,10 @@ impl PythonBridge {
             "history-rooms" | "history-messages" | "collection-affinity" | "collection-quality"
                 | "collection-graph" | "collection-projects"
         );
+        let source_projection = action == "collection-quality"
+            && query.and_then(|value| serde_json::from_str::<Value>(value).ok())
+                .and_then(|parsed| parsed.get("include_source_projection").and_then(Value::as_bool))
+                == Some(true);
         let swap_job_id = token_id.unwrap_or("model-swap");
         if is_swap {
             self.begin_job(swap_job_id, "model_swap", "swap", 0.9);
@@ -1220,6 +1225,8 @@ impl PythonBridge {
                     MODEL_SWAP_TIMEOUT
                 } else if is_mlx_launch {
                     MLX_LAUNCH_TIMEOUT
+                } else if source_projection {
+                    SOURCE_PROJECTION_TIMEOUT
                 } else if is_history {
                     SNAPSHOT_TIMEOUT
                 } else {
@@ -2541,11 +2548,17 @@ fn settings_action_args(
             if object.get("include_samples").is_some_and(|v|!v.is_boolean()) {return Err(BridgeError::ActionNotAllowed);}
             let annotation_field=usize::from(object.contains_key("include_annotation_review"));
             if object.get("include_annotation_review").is_some_and(|v|!v.is_boolean()) {return Err(BridgeError::ActionNotAllowed);}
-            if object.get("include_annotation_review").and_then(Value::as_bool)==Some(true)
-                && object.get("include_samples").and_then(Value::as_bool)==Some(true) {return Err(BridgeError::ActionNotAllowed);}
+            let projection_field=usize::from(object.contains_key("include_source_projection"));
+            if object.get("include_source_projection").is_some_and(|v|!v.is_boolean()) {return Err(BridgeError::ActionNotAllowed);}
+            let exclusive=[
+                object.get("include_samples").and_then(Value::as_bool)==Some(true),
+                object.get("include_annotation_review").and_then(Value::as_bool)==Some(true),
+                object.get("include_source_projection").and_then(Value::as_bool)==Some(true),
+            ].into_iter().filter(|enabled| *enabled).count();
+            if exclusive>1 {return Err(BridgeError::ActionNotAllowed);}
             let valid=match object.get("scope").and_then(Value::as_str) {
-                Some("all") => object.len()==1+sample_field+annotation_field,
-                Some("project") => object.len()==2+sample_field+annotation_field && object.get("project").and_then(Value::as_str).is_some_and(|project| {
+                Some("all") => object.len()==1+sample_field+annotation_field+projection_field,
+                Some("project") => object.len()==2+sample_field+annotation_field+projection_field && object.get("project").and_then(Value::as_str).is_some_and(|project| {
                     !project.is_empty() && project.chars().count()<=128 && project==project.trim() && !project.chars().any(char::is_control)
                 }),
                 _ => false,
@@ -5979,6 +5992,8 @@ mod tests {
             r#"{"scope":"all","include_samples":true}"#,r#"{"scope":"project","project":"career","include_samples":false}"#,
             r#"{"scope":"all","include_annotation_review":true}"#,
             r#"{"scope":"project","project":"career","include_samples":false,"include_annotation_review":true}"#,
+            r#"{"scope":"all","include_source_projection":true}"#,
+            r#"{"scope":"project","project":"career","include_source_projection":false}"#,
             r#"{"scope":"all","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":5}"#,
             r#"{"scope":"project","project":"career","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":0,"group":3}"#] {
             let args=settings_action_args("collection-quality",Some(query),None,None,None,None,None).unwrap();
@@ -5989,6 +6004,9 @@ mod tests {
             Some(r#"{"scope":"all","include_samples":"true"}"#),Some(r#"{"scope":"all","include_samples":true,"extra":true}"#),
             Some(r#"{"scope":"all","include_annotation_review":"true"}"#),
             Some(r#"{"scope":"all","include_annotation_review":true,"include_samples":true}"#),
+            Some(r#"{"scope":"all","include_source_projection":"true"}"#),
+            Some(r#"{"scope":"all","include_source_projection":true,"include_samples":true}"#),
+            Some(r#"{"scope":"all","include_source_projection":true,"include_annotation_review":true}"#),
             Some(r#"{"scope":"all","review_id":"bad","offset":0}"#),
             Some(r#"{"scope":"all","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":1}"#),
             Some(r#"{"scope":"all","review_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","offset":0,"group":null}"#)] {
