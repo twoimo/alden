@@ -17,6 +17,7 @@ export function selectOverviewLabels(nodes: readonly KnowledgeNode[], cap = 8): 
       || PEOPLE.test(node.category) || ['collection','hub','index','metadata'].includes(node.category)
       || GENERIC.test(label) || BUCKET.test(label) || !/[A-Za-z가-힣]/.test(label)
       || /^@[^\s]+$/.test(label) || /^(?:graph|source|target|version|youtube|threads|files|memory):/i.test(label)
+      || /:(?:node|series|dir|hub):/i.test(label)
       || /^[0-9a-f]{32,}$/i.test(label) || label.length < 2) return [];
     const tier = TOPIC.test(node.category) ? 0 : CLAIM.test(node.category) ? 1 : node.category === 'code' ? 3 : 2;
     if (tier >= 2 && label.length < 8) return [];

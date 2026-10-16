@@ -41,6 +41,13 @@ describe('overview reading entry labels', () => {
     expect(selectOverviewLabels(nodes).map(n=>n.id).slice(0,2)).toEqual(['high','low']);
     expect(nodes).toHaveLength(6);
   });
+  it('does not spend an overview slot on an internal node id', () => {
+    const nodes=graph([
+      {id:'topic',label:'자소서',category:'topic',degree:10,source_target:'career'},
+      {id:'raw',label:'career-public-graph:node:source',category:'document',degree:9999,source_target:'files'},
+    ]).nodes;
+    expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic']);
+  });
   it('deduplicates display text without merging nodes, and preserves project coverage', () => {
     const nodes=graph([
       {id:'a',label:'서류 준비',category:'topic',source_target:'a'},
