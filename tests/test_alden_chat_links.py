@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import alden_chat as chat
@@ -115,7 +116,8 @@ class LinkChatTests(unittest.TestCase):
                 with patch.object(links, 'fetch_current', side_effect=lambda *args: self.fetch_threads(*args, redirect=POST)):
                     result = self.send(n, text=SHARE)
                 self.assertTrue(result['ok'], result)
-                self.assertEqual('collected_post' in self.prompt_link(), url == POST and code == 'POST123')
+                same_post = urlsplit(url).path == urlsplit(POST).path and code == 'POST123'
+                self.assertEqual('collected_post' in self.prompt_link(), same_post)
 
     def test_threads_redirect_without_collected_post_stays_unread(self):
         from alden_collection import CollectionStore
@@ -147,9 +149,12 @@ class LinkChatTests(unittest.TestCase):
                       [{'url': 'https://example.com/', 'status': 302}, {'url': POST, 'status': 200}],
                       [{'url': SHARE, 'status': 302}, {'url': POST.replace('https:', 'http:'), 'status': 200}],
                       [{'url': SHARE, 'status': 302}, {'url': POST, 'status': 403}],
-                      [{'url': SHARE, 'status': 302}, {'url': POST+'?login=1', 'status': 200}]):
+                      [{'url': SHARE, 'status': 302}, {'url': POST + '/extra', 'status': 200}]):
             with self.subTest(trace=trace):
                 self.assertIsNone(links.collected_threads_post(self.root, SHARE, trace, self.token))
+        tracked = [{'url': SHARE, 'status': 302}, {'url': POST + '?xmt=tracking&slof=1', 'status': 200}]
+        found = links.collected_threads_post(self.root, SHARE, tracked, self.token)
+        self.assertEqual((found['url'], found['shortcode'], found['text']), (POST, 'POST123', POST_TEXT))
 
     def test_collected_threads_text_shares_prompt_budget_and_preserves_provenance(self):
         body = POST_TEXT * 600

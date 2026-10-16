@@ -86,18 +86,25 @@ def redirected_threads_post(url, trace):
     """A share token is opaque; only the recorded redirect can identify a post."""
     parsed = urlsplit(url)
     if (not threads_url(url) or not re.fullmatch(r'/share/[A-Za-z0-9_-]+/', parsed.path)
+            or parsed.username or parsed.password or parsed.port is not None
             or not 2 <= len(trace) <= 3 or trace[0]['url'] != url
             or any(row['status'] not in {301, 302, 303, 307, 308} for row in trace[:-1])
             or not 200 <= trace[-1]['status'] < 300
             or any(urlsplit(row['url']).scheme != 'https' for row in trace)):
         return None
-    canonical = trace[-1]['url']
-    target = urlsplit(canonical)
-    path = re.fullmatch(r'/@[A-Za-z0-9_.]+/post/([A-Za-z0-9_-]+)', target.path)
-    if (not threads_url(canonical) or target.username or target.password
-            or target.port is not None or target.query or target.fragment or path is None):
+    return threads_post_identity(trace[-1]['url'])
+
+
+def threads_post_identity(url):
+    """Post identity is the public path. Tracking query and fragment are not part of it."""
+    if not isinstance(url, str):
         return None
-    return canonical, path[1]
+    target = urlsplit(url)
+    path = re.fullmatch(r'/@[A-Za-z0-9_.]+/post/([A-Za-z0-9_-]+)', target.path or '')
+    if (target.scheme != 'https' or target.username or target.password or target.port is not None
+            or not threads_url(url) or path is None):
+        return None
+    return f'https://{target.hostname}{target.path}', path[1]
 
 
 def collected_threads_post(root, url, trace, token):
@@ -122,14 +129,18 @@ def collected_threads_post(root, url, trace, token):
                 FROM (''' + store._scope_versions(projects) + ''') s
                 JOIN documents d ON d.id=s.document_id JOIN versions v ON v.id=s.current_version
                 WHERE d.availability='available' AND
-                  (d.platform='threads' AND json_extract(v.metadata,'$.url')=? OR d.platform='graph')
+                  (d.platform='threads' AND (
+                    json_extract(v.metadata,'$.url')=?
+                    OR (instr(json_extract(v.metadata,'$.url'), ?)=1
+                        AND substr(json_extract(v.metadata,'$.url'), length(?)+1, 1) IN ('?', '#')))
+                    OR d.platform='graph')
                 ORDER BY CASE WHEN json_extract(v.metadata,'$.url')=? THEN 0 ELSE 1 END,d.id
-                LIMIT ?''', (*projects, target[0], target[0], MAX_COLLECTED_CANDIDATES)).fetchall()
+                LIMIT ?''', (*projects, target[0], target[0], target[0], target[0], MAX_COLLECTED_CANDIDATES)).fetchall()
             for candidate in rows:
                 token.raise_if_cancelled()
                 row = {**dict(candidate), 'body_source': 'stored_body'}
                 record, metadata, _ = _verified_source(db, store, row, projects)
-                if not isinstance(record, dict) or record.get('url') != target[0]:
+                if not isinstance(record, dict) or threads_post_identity(record.get('url')) != target:
                     continue
                 codes = [record[key] for key in ('code', 'shortcode') if key in record]
                 if not codes or any(code != target[1] for code in codes):
