@@ -48,7 +48,7 @@ describe('dense overview display projection', () => {
     stars.setMinimumRadius(.003,1,cap);stars.update(point);
     const radius=stars.radius('hub');
     expect(radius).toBeLessThan(radiusBefore);expect(radius).toBeLessThanOrEqual(cap);
-    expect(radius*510/(2*4.7*Math.tan(38*Math.PI/360))).toBeCloseTo(1.6);
+    expect(radius*510/(2*4.7*Math.tan(38*Math.PI/360))).toBeCloseTo(2.4);
     const batch=stars.children[0] as import('three').InstancedMesh;
     expect(batch.instanceMatrix.array[0]).toBeCloseTo(radius,7);
     expect(batch.instanceMatrix.array[5]).toBeCloseTo(radius,7);

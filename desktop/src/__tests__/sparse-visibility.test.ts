@@ -59,8 +59,8 @@ afterEach(() => {
 });
 
 describe('sparse-visibility world-space minimum', () => {
-  it('uses 1.5 CSS-pixel radius for 1 through 24 nodes and the existing 0.6 for 25+', () => {
-    for (const [count, expected] of [[1, 1.5], [12, 1.5], [24, 1.5], [25, .6], [120, .6], [2048, .6]] as const) {
+  it('uses 1.5 CSS-pixel radius for 1 through 24 nodes and 1.35 for 25+', () => {
+    for (const [count, expected] of [[1, 1.5], [12, 1.5], [24, 1.5], [25, 1.35], [120, 1.35], [2048, 1.35]] as const) {
       const radius = minimumStarRadius(4, 50, 240, count);
       expect(radius).toBeGreaterThan(0);
       expect(projectedCssRadius(radius, 4, 50, 480, 240)).toBeCloseTo(expected, 9);
@@ -77,7 +77,7 @@ describe('sparse-visibility world-space minimum', () => {
       { distance: 4, fov: 50, width: 1440, height: 720 },
     ];
     for (const scene of scenes) {
-      for (const [count, pixels] of [[1, 1.5], [24, 1.5], [25, .6]] as const) {
+      for (const [count, pixels] of [[1, 1.5], [24, 1.5], [25, 1.35]] as const) {
         const radius = minimumStarRadius(scene.distance, scene.fov, scene.height, count);
         expect(projectedCssRadius(radius, scene.distance, scene.fov, scene.width, scene.height))
           .toBeCloseTo(pixels, 9);
@@ -151,7 +151,7 @@ describe('sparse-visibility world-space minimum', () => {
       expect(frame.renderedFrames).toBe(2);
       expect(frame.renderedNodeCount).toBe(25);
       expect(frame.renderedVisibleNodeCount).toBeNull();
-      expect(projectedCssRadius(value.radius('n0'), 4, 50, 480, 240)).toBeCloseTo(.6, 5);
+      expect(projectedCssRadius(value.radius('n0'), 4, 50, 480, 240)).toBeCloseTo(1.35, 5);
       view.nodes = nodes.slice(0, 24);
       Object.assign(frame, { renderer: { render: () => { throw new Error('synthetic render failure'); } } });
       expect(() => frame.render(1 / 60)).toThrow('synthetic render failure');

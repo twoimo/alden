@@ -27,7 +27,9 @@ export function minimumStarRadius(cameraDistance: number, verticalFov: number, v
     || !Number.isFinite(verticalFov) || verticalFov <= 0 || verticalFov >= 180
     || !Number.isFinite(viewportHeight) || viewportHeight <= 0
     || !Number.isSafeInteger(visibleCount) || visibleCount <= 0) return 0;
-  const cssRadius = visibleCount <= 24 ? 1.5 : .6;
+  // Dense overview used to floor at 0.6 CSS px, which left 2,048 stars as
+  // subpixel dust. Stay under the 1.5 px sparse star so a focus still reads larger.
+  const cssRadius = visibleCount <= 24 ? 1.5 : 1.35;
   return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * cssRadius;
 }
 
@@ -36,7 +38,7 @@ export function maximumOverviewStarRadius(cameraDistance: number, verticalFov: n
   if (!Number.isFinite(cameraDistance) || cameraDistance <= 0
     || !Number.isFinite(verticalFov) || verticalFov <= 0 || verticalFov >= 180
     || !Number.isFinite(viewportHeight) || viewportHeight <= 0) return Infinity;
-  return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * 1.6;
+  return cameraDistance * 2 * Math.tan(verticalFov * Math.PI / 360) / viewportHeight * 2.4;
 }
 
 /**
@@ -85,11 +87,11 @@ export class ConstellationNodes extends THREE.Group {
           }`,
         fragmentShader:`uniform float uReference; varying vec2 vPoint; varying vec3 vTint;
           void main(){float r=length(vPoint);if(r>1.)discard;
-            float core=1.-smoothstep(.16,.38,r);
-            float glow=exp(-7.*r*r)*(1.-smoothstep(.75,1.,r));
+            float core=1.-smoothstep(.2,.62,r);
+            float glow=exp(-4.5*r*r)*(1.-smoothstep(.8,1.,r));
             gl_FragColor= uReference>.5
               ? vec4(vTint,1.-smoothstep(.16,.38,r))
-              : vec4(mix(vTint,vec3(1.),core*.35),core*.85+glow*.35);
+              : vec4(mix(vTint,vec3(1.),core*.45),min(1.,core+glow*.55));
             #include <colorspace_fragment>
           }`,
       }) : new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x35475a, emissiveIntensity: .18, metalness: .12, roughness: .56, toneMapped: false }),
