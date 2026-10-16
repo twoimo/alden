@@ -30,6 +30,8 @@ export class SemanticLayoutDriver {
   private requestedInputs = '';
   private appliedPins = '';
   private busy = false;
+  private pendingReflow = false;
+  private requestedPins = '';
   private state: Record<string, unknown> = { state: 'idle' };
   private completedState:Record<string,unknown>={state:'idle'};
   constructor(private readonly apply: (result: LayoutResponse) => void,
@@ -62,6 +64,10 @@ export class SemanticLayoutDriver {
     const changedVisible=[...changed].filter(id=>visibleIds.has(id)).sort();
     const inputs=JSON.stringify([key,pinKey,changedVisible,[...provisional].filter(id=>visibleIds.has(id)).sort(),reflow]);
     const restore = [...previous.keys()].some(id => visibleIds.has(id)&&provisional.has(id));
+    // An ordinary redraw cannot cancel a user-requested reflow of the same
+    // content and pins while its worker is still solving.
+    if (!reflow && this.busy && this.pendingReflow && key === this.requestedKey
+      && !restore && !changedVisible.length && pinKey === this.requestedPins) return;
     if(!reflow&&key===this.appliedKey&&!restore&&!changedVisible.length&&pinKey===this.appliedPins){
       if(this.busy)this.stop();
       this.requestedKey=key;this.state={...this.completedState,state:'cached',generation:this.generation};return;
@@ -70,10 +76,11 @@ export class SemanticLayoutDriver {
     // Cancel obsolete work immediately; restore only the last completed cache.
     if (this.busy) this.stop();
     const worker = this.worker ?? this.create(); this.worker = worker;
-    const id = ++this.generation; this.busy = true; this.requestedKey = key; this.requestedInputs=inputs; this.state = { state: 'pending', generation: id };
+    const id = ++this.generation; this.busy = true; this.pendingReflow = reflow; this.requestedPins = pinKey;
+    this.requestedKey = key; this.requestedInputs=inputs; this.state = { state: 'pending', generation: id };
     worker.onmessage = event => {
       if (this.worker !== worker || event.data.id !== id || id !== this.generation) return;
-      this.busy = false;
+      this.busy = false; this.pendingReflow = false;
       // A boundary can pass while the main thread is unable to run its timer.
       // Discard that reply before publishing any position or membership state.
       if(snapshotKey(view,pinned)!==key||JSON.stringify(pinCoordinates())!==pinKey){
@@ -89,7 +96,7 @@ export class SemanticLayoutDriver {
     };
     worker.onerror = () => {
       if (this.worker !== worker || id !== this.generation) return;
-      this.busy = false; this.state = { state: 'failed', reason: 'semantic_layout_worker_failed' };
+      this.busy = false; this.pendingReflow = false; this.state = { state: 'failed', reason: 'semantic_layout_worker_failed' };
     };
     // A new identity's ID seed is provisional even after another page solved.
     // Retain completed identities and explicit pins; unrelated cached IDs do
@@ -109,6 +116,6 @@ export class SemanticLayoutDriver {
       pairs, changed: [...changed], pinned: [...pinned], reflow, checkpoint: this.checkpoint });
   }
 
-  stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.requestedKey = ''; this.requestedInputs=''; }
+  stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.pendingReflow = false; this.requestedPins = ''; this.requestedKey = ''; this.requestedInputs=''; }
   clear(): void { this.stop(); this.checkpoint = undefined; this.appliedKey = ''; this.appliedPins=''; this.state = { state: 'idle' };this.completedState={state:'idle'}; }
 }
