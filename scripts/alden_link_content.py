@@ -105,10 +105,10 @@ def html_preview(url, raw, *, readme=''):
         raise LinkContentUnavailable('link_binary_content')
     parser = _Text(); parser.feed(source); parser.close()
     title = _clean(''.join(parser.title)) or parser.meta.get('og:title', '')
-    # Generic visible text cannot distinguish a Threads post from its login,
-    # cookie or JavaScript shell. Keep metadata until a post-aware reader exists.
     if threads_url(url):
-        return observed_preview(url, raw, title=title, text='', scopes=['metadata'])
+        # Body text is the login or cookie shell. Keep only the declared description.
+        description = _clean(parser.meta.get('og:description', ''))
+        return observed_preview(url, raw, title=title, text=description, scopes=['metadata'])
     body = _clean(' '.join(parser.parts))
     description = _clean(parser.meta.get('og:description', ''))
     scopes = ['page_text'] if body else ['metadata']
@@ -132,7 +132,7 @@ def validated_preview(value):
         if (parsed.scheme not in {'http', 'https'} or not parsed.hostname or parsed.username or parsed.password
                 or not isinstance(value['title'], str) or len(value['title']) > 160
                 or type(value['complete']) is not bool or value['complete'] != bool(value['title'] or text)
-                or threads_url(url) and (text or o['content_scope'] != ['metadata'])
+                or threads_url(url) and o['content_scope'] != ['metadata']
                 or len(data) > MAX_TEXT_BYTES or type(o['truncated']) is not bool
                 or any(unicodedata.category(c) == 'Cc' and c not in '\n\r\t' for c in text + value['title'])
                 or ('captions' in value and type(value['captions']) is not bool)

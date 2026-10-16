@@ -50,6 +50,23 @@ class LinkWorkerTests(unittest.TestCase):
             self.assertEqual(preview['observation']['content_scope'], ['metadata'])
             self.assertEqual(preview['text'], '')
             self.assertEqual(self.worker.links_fully_retrieved(url, [preview]), bool(title))
+        described = '<title>Threads</title><p>Log in to see more</p><meta property="og:description" content="공유된 문장 42">'.encode()
+        with patch.object(self.worker, '_fetch_pinned_http', return_value=(described, len(described))):
+            preview, _ = self.worker._fetch_link_preview_once(url, time.monotonic()+3)
+        self.assertEqual(preview['text'], '공유된 문장 42')
+        self.assertNotIn('Log in', preview['text'])
+        self.assertEqual(preview['observation']['content_scope'], ['metadata'])
+        self.assertTrue(self.worker.links_fully_retrieved(url, [preview]))
+
+    def test_threads_description_is_not_described_as_the_post(self):
+        from alden_link_content import html_preview
+        raw = '<title>Threads</title><p>Log in to see more</p><meta property="og:description" content="공유된 문장 42">'.encode()
+        preview = html_preview('https://www.threads.com/share/__d5u19Yw/', raw)
+        result, captured, count = self.generation([preview])
+        self.assertEqual((result['reason'], count), ('link_answer', 1))
+        self.assertEqual(captured[0][1]['link_previews'][0]['text'], '공유된 문장 42')
+        self.assertIn('not the post body', captured[0][0])
+        self.assertNotIn('Log in', json.dumps(captured[0][1]))
 
     def test_prompt_trim_discloses_excerpt_and_preserves_identity(self):
         preview = self.preview('검수 설명 ' * 1000)
@@ -136,8 +153,7 @@ class LinkParsingTests(unittest.TestCase):
             for shell in ('<title>Threads</title><script>loadPost()</script>',
                           '<title>Threads</title><p>Log in to see more</p>',
                           '<title>Threads</title><p>Accept all cookies</p>',
-                          '<title>Threads</title><p>A short visible phrase</p>',
-                          '<meta property="og:description" content="Unverified preview">'):
+                          '<title>Threads</title><p>A short visible phrase</p>'):
                 with self.subTest(url=url, shell=shell):
                     raw = shell.encode()
                     preview = html_preview(url, raw)
@@ -148,6 +164,12 @@ class LinkParsingTests(unittest.TestCase):
                     self.assertIsNotNone(validated_preview(preview))
                     self.assertEqual(trim_preview(preview), preview)
                     self.assertIsNone(validated_preview({**preview, 'complete': not preview['complete']}))
+        raw = '<meta property="og:description" content="Unverified preview"><p>Log in</p>'.encode()
+        preview = html_preview('https://www.threads.com/share/__d5u19Yw/', raw)
+        self.assertEqual(preview['text'], 'Unverified preview')
+        self.assertEqual(preview['observation']['content_scope'], ['metadata'])
+        self.assertNotIn('Log in', preview['text'])
+        self.assertIsNotNone(validated_preview(preview))
 
     def test_source_and_delivered_text_digests_have_distinct_bases(self):
         from alden_link_content import html_preview, validated_preview
