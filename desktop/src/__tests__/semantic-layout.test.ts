@@ -196,6 +196,22 @@ describe('bounded semantic overview layout', () => {
     expect(changed(a.anchors, b.anchors, ['n0002', 'n0003']).length).toBeGreaterThan(0);
   });
 
+  it('explicit overview reflow forgets dense legacy coordinates but preserves every identity', () => {
+    const view = scene(512), original = JSON.stringify(view);
+    const crowded = new Map(view.nodes.map(node => [node.id, { x: 0, y: 0, z: 0 }]));
+    const engine = new SemanticLayoutEngine();
+    const persisted = engine.layout(view, crowded);
+    const reflowed = engine.layout(view, persisted.anchors, [], { reflow: true });
+    const coldReflow = new SemanticLayoutEngine().layout(view, empty(), [], { reflow: true });
+    expect(reflowed.anchors).toEqual(coldReflow.anchors);
+    expect(reflowed.anchors.size).toBe(512);
+    expect(new Set(reflowed.clusterIds.values()).size).toBe(512);
+    const nearCore = [...reflowed.anchors.values()].filter(point => Math.hypot(point.x, point.y) < .25).length;
+    expect(nearCore).toBeLessThan(view.nodes.length * .2);
+    expect(reflowed.diagnostics.reflow).toBe(true);
+    expect(JSON.stringify(view)).toBe(original);
+  });
+
   it('is a no-op on identical snapshots and supports explicit local invalidation', () => {
     const engine = new SemanticLayoutEngine(), view = scene(12, [R(0, 1)]);
     const a = engine.layout(view, empty()), b = engine.layout(view, a.anchors);
