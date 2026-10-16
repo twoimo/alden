@@ -60,7 +60,7 @@ describe('overview reading entry labels', () => {
     expect(selectOverviewLabels(nodes,2).map(n=>n.id)).toEqual(['topic','claim']);
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic','claim']);
   });
-  it.each(['topic', 'claim', 'source_claim'])('keeps eligible %s fallbacks when no descriptive title is available', category => {
+  it.each(['topic', 'claim', 'source_claim'])('omits ambiguous %s names when no descriptive overview title is available', category => {
     const nodes=graph([
       {id:'slogan',label:'렉카박멸',category,degree:99999},
       {id:'person',label:'홍민태',category,degree:99998},
@@ -76,9 +76,9 @@ describe('overview reading entry labels', () => {
     ]).nodes;
     const before=JSON.stringify(nodes);
     const selected=selectOverviewLabels(nodes);
-    expect(selected.map(n=>n.id)).toEqual(['slogan','person','subject']);
+    expect(selected).toEqual([]);
     expect(selectOverviewLabels([...nodes].reverse())).toEqual(selected);
-    expect(selectOverviewLabels(nodes,2)).toEqual(selected.slice(0,2));
+    expect(selectOverviewLabels(nodes,2)).toEqual([]);
     expect(JSON.stringify(nodes)).toBe(before);expect(nodes).toHaveLength(11);
   });
   it('keeps substantive titles about channels and media in the preferred group', () => {
@@ -105,7 +105,7 @@ describe('overview reading entry labels', () => {
   });
   it('does not spend an overview slot on an internal node id', () => {
     const nodes=graph([
-      {id:'topic',label:'자소서',category:'topic',degree:10,source_target:'career'},
+      {id:'topic',label:'자소서 준비',category:'topic',degree:10,source_target:'career'},
       {id:'raw',label:'career-public-graph:node:source',category:'document',degree:9999,source_target:'files'},
     ]).nodes;
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic']);
@@ -133,10 +133,10 @@ describe('overview reading entry labels', () => {
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['c','d']);expect(nodes).toHaveLength(4);
     expect(nodes[0].contentEvidence).toBe('metadata_description');expect(nodes[3].contentEvidence).toBeUndefined();
   });
-  it('uses a single descriptive claim exclusively and retains short subjects as fallbacks', () => {
+  it('uses a single descriptive claim and does not elevate an ambiguous short subject', () => {
     const nodes=graph([{id:'a',label:'면접',category:'topic'},{id:'b',label:'미확인 조건에서 발생할 수 있는 실패',category:'source_claim'}]).nodes;
     expect(selectOverviewLabels(nodes).map(n=>n.label)).toEqual(['미확인 조건에서 발생할 수 있는 실패']);
-    expect(selectOverviewLabels(nodes.slice(0,1)).map(n=>n.label)).toEqual(['면접']);
+    expect(selectOverviewLabels(nodes.slice(0,1))).toEqual([]);
   });
   it('ignores retracted and identifier labels while retaining all stored targets', () => {
     const nodes=graph([{id:'a',label:'source:author:123',category:'source'},
