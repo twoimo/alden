@@ -424,12 +424,13 @@ export class SemanticLayoutEngine {
     separateMultiMemberCenters(centers, membersByLabel);
     const freshOverview = ids.length >= 256
       && (options.pinnedIds?.size ?? 0) !== 1
-      && ids.every(id => !finite(previousPositions.get(id)) && !this.positions.has(id));
+      && (options.reflow === true || ids.every(id => !finite(previousPositions.get(id)) && !this.positions.has(id)));
     if (freshOverview) spreadFreshEnergy(clusterIds, membersByLabel, centers, pairs);
     d.clusters = centers.size;
     const anchors = new Map<string, Point3>();
     for (const id of ids) {
-      const c = centers.get(clusterIds.get(id)!)!, offset = seed(id), prior = finite(previousPositions.get(id)) || this.positions.has(id);
+      const c = centers.get(clusterIds.get(id)!)!, offset = seed(id);
+      const prior = (pinned.has(id) || !options.reflow) && (finite(previousPositions.get(id)) || this.positions.has(id));
       const radialJitter = freshOverview ? .05 : .2;
       anchors.set(id, prior ? copy(base.get(id)!) : bound({ x: c.x + offset.x * radialJitter, y: c.y + offset.y * radialJitter, z: c.z + offset.z * radialJitter }));
     }
@@ -451,7 +452,8 @@ export class SemanticLayoutEngine {
     // A fresh ID seed is a provisional starting point, not a prior placement.
     // Holding a whole new community toward those unrelated seeds pulls its
     // center inward. Preserve positions only after a solve or an explicit prior.
-    const hasPrior = ids.map(id => finite(previousPositions.get(id)) || this.positions.has(id));
+    const hasPrior = ids.map(id => (pinned.has(id) || !options.reflow)
+      && (finite(previousPositions.get(id)) || this.positions.has(id)));
     const clusterCenters = ids.map(id => centers.get(clusterIds.get(id)!)!);
     const indexedPairs = pairs.map(pair => ({ ...pair, a: index.get(pair.source)!, b: index.get(pair.target)! }));
     const relationDepth = new Int16Array(ids.length).fill(-1);
