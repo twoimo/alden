@@ -461,6 +461,7 @@ export async function setupKnowledgeGraph(
   const expand = document.querySelector<HTMLButtonElement>("#knowledge-expand-hop");
   const back = document.querySelector<HTMLButtonElement>("#knowledge-back");
   const overview = document.querySelector<HTMLButtonElement>("#knowledge-overview");
+  const reflow = document.querySelector<HTMLButtonElement>("#knowledge-reflow");
   if (!canvas || !expand) return null;
   if (graph.nodes.length === 0) {
     document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open','false');
@@ -497,6 +498,7 @@ export async function setupKnowledgeGraph(
     document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open',String(node!==null));
     if (back) back.disabled = !hologram.canGoBack;
     if (overview) overview.disabled = view.focusId === null && (view.overviewOffset??0)===0;
+    if (reflow) reflow.disabled = view.nodes.length === 0 || view.hops !== 0;
     const cameraReset = document.getElementById('knowledge-camera-reset') as HTMLButtonElement | null;
     if (cameraReset) cameraReset.disabled = view.nodes.length === 0;
     expand.disabled = view.focusId === null ? !view.hasMoreContexts : view.hops >= MAX_FOCUS_HOPS;
@@ -564,6 +566,7 @@ export async function setupKnowledgeGraph(
   back?.addEventListener("click", () => { if (!hooks?.navigate('back')) hologram.back(); }, { signal: controls.signal });
   overview?.addEventListener("click", () => { if (!hooks?.navigate('reset')) hologram.reset(); }, { signal: controls.signal });
   document.getElementById('knowledge-focus-close')?.addEventListener('click', () => { if (!hooks?.navigate('clear')) hologram.reset(); }, { signal: controls.signal });
+  reflow?.addEventListener('click', () => hologram.reflowOverview(), { signal: controls.signal });
   document.getElementById('knowledge-camera-reset')?.addEventListener('click', () => hologram.resetCamera(), { signal: controls.signal });
   const reduceMotion = document.getElementById('knowledge-reduce-motion') as HTMLInputElement | null;
   if (reduceMotion) {
@@ -571,6 +574,7 @@ export async function setupKnowledgeGraph(
     reduceMotion.addEventListener('change', () => hologram.setReducedMotion(reduceMotion.checked), { signal: controls.signal });
   }
   expand.disabled=!hologram.currentView.hasMoreContexts;
+  if (reflow) reflow.disabled = hologram.currentView.nodes.length === 0 || hologram.currentView.hops !== 0;
 
   return hologram;
 }
