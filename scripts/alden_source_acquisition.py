@@ -6,6 +6,7 @@ Cancelling the client discards its result; the host may finish its read remotely
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -96,9 +97,14 @@ def _decode(raw):
             value[key] = item
         return value
     def finite(_): raise ValueError('nonfinite')
+    def finite_float(literal):
+        value = float(literal)
+        if not math.isfinite(value): raise ValueError('nonfinite')
+        return value
     try:
         text = raw.decode('utf-8').lstrip()
-        value, end = json.JSONDecoder(object_pairs_hook=unique, parse_constant=finite).raw_decode(text)
+        value, end = json.JSONDecoder(object_pairs_hook=unique, parse_constant=finite,
+                                      parse_float=finite_float).raw_decode(text)
         trailer = re.sub(r'\x1b\[[0-9;]*m', '', text[end:]).strip()
         if trailer and not re.fullmatch(r'\[ok \| [0-9]+(?:\.[0-9]+)?ms\]', trailer): raise ValueError('trailer')
         if not isinstance(value, dict): raise ValueError('shape')
