@@ -12,7 +12,7 @@ class WorkerStub implements LayoutWorkerPort {
   flush() {
     const request = this.requests.at(-1)!, engine = new SemanticLayoutEngine();
     if (request.checkpoint) engine.restore(request.checkpoint);
-    const result = engine.layout(request.view, new Map(request.previous), request.pairs, { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned) });
+    const result = engine.layout(request.view, new Map(request.previous), request.pairs, { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), reflow: request.reflow === true });
     const response = { id: request.id, anchors: [...result.anchors], diagnostics: result.diagnostics, checkpoint: engine.checkpoint(), wallMs: 1 };
     this.onmessage?.({ data: response } as MessageEvent<LayoutResponse>);
     return response;
@@ -37,6 +37,23 @@ describe('owned asynchronous semantic layout', () => {
     driver.request(source,moved,new Set(),new Set(['a']));
     expect(worker.requests).toHaveLength(2);
     expect(worker.flush().anchors.find(([id])=>id==='a')![1]).toEqual(moved.get('a'));
+    driver.clear();
+  });
+
+  it('runs an explicit reflow on an unchanged completed graph and returns to cached mode afterward', () => {
+    const worker = new WorkerStub(), driver = new SemanticLayoutDriver(vi.fn(), () => worker), source = view();
+    driver.request(source, new Map(), new Set(), new Set());
+    const first = worker.flush();
+    driver.request(source, new Map(first.anchors), new Set(), new Set(), new Set(), true);
+    expect(worker.requests).toHaveLength(2);
+    expect(worker.requests[1].reflow).toBe(true);
+    expect(driver.settled).toBe(false);
+    const redone = worker.flush();
+    expect(redone.diagnostics.reflow).toBe(true);
+    expect(new Set(redone.anchors.map(([id]) => id))).toEqual(new Set(source.nodes.map(node => node.id)));
+    driver.request(source, new Map(redone.anchors), new Set(), new Set());
+    expect(worker.requests).toHaveLength(2);
+    expect(driver.settled).toBe(true);
     driver.clear();
   });
 
