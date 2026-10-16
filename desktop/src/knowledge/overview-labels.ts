@@ -46,10 +46,10 @@ export function selectOverviewLabels(nodes: readonly KnowledgeNode[], cap = 8): 
     if (labels.has(item.label) || chosen.length >= limit) return false;
     chosen.push(item.node); labels.add(item.label); groups.add(item.group); return true;
   };
-  // Use fallbacks only when no descriptive title is available.
-  // Within each group, retain subject, connection and source preferences.
-  const priority = candidates.some(item => item.priority === 0) ? 0 : 1;
-  const pool = candidates.filter(item => item.priority === priority
+  // A bare name or category is not an evidence-backed overview title.
+  // Preserve its node and drilldown target, but leave the overview slot empty
+  // when no descriptive subject is available from the current graph page.
+  const pool = candidates.filter(item => item.priority === 0
     && !CHANNEL_TITLE.test(item.label) && !MEDIA_BUCKET.test(item.label));
   for (const item of pool) if (item.tier === 0) add(item);
   for (const item of pool) if (!groups.has(item.group)) add(item);
