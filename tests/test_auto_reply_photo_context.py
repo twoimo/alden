@@ -212,6 +212,31 @@ class PhotoContextTests(unittest.TestCase):
         self.assertFalse(result['model_invoked'])
         self.assertEqual(result['evidence_ids'], [])
         acquire.assert_not_called()
+        self.assertEqual(result['input_observation'], {
+            'kind': 'image', 'stage': 'access', 'cause': 'image_stat_failed',
+        })
+
+    def test_invalid_media_evidence_is_a_receipt_failure(self):
+        w = self.worker
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(w, '_operator_state_root', return_value=Path(temporary)), \
+                mock.patch.object(w, 'runner_is_trusted', return_value=True), \
+                mock.patch.object(w, '_image_path_within_cap', return_value=True), \
+                mock.patch.object(w, '_acquire_model_call_slot') as acquire:
+            image = Path(temporary) / 'image.png'
+            image.write_bytes(b'png')
+            result = w.generate_reply(
+                '[사진]', [], [], [], [], attachment='image',
+                image_paths=[image],
+                media_evidence_id='not-an-evidence-id',
+            )
+        self.assertEqual(result['reason'], 'image_unavailable')
+        self.assertEqual(result['input_observation'], {
+            'kind': 'image', 'stage': 'receipt', 'cause': 'image_evidence_id_invalid',
+        })
+        self.assertFalse(result['model_invoked'])
+        self.assertEqual(result['evidence_ids'], [])
+        acquire.assert_not_called()
 
 
 if __name__ == '__main__':
