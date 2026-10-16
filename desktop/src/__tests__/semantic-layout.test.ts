@@ -313,6 +313,17 @@ describe('bounded semantic overview layout', () => {
     expect(aligned.anchors.size).toBe(5);
   });
 
+  it('keeps unequal hub spokes out of the hub community and farther apart than an equal pair', () => {
+    const edges = [R(0, 1), R(0, 2), R(0, 3), R(0, 4), R(0, 5)];
+    const result = new SemanticLayoutEngine().layout(scene(6, edges), empty(), [S(1, 2, .96)]);
+    const hub = result.clusterIds.get('n0000');
+    expect(result.clusterIds.get('n0001')).toBe(result.clusterIds.get('n0002'));
+    expect(result.clusterIds.get('n0001')).not.toBe(hub);
+    for (const id of ['n0003', 'n0004', 'n0005']) expect(result.clusterIds.get(id)).not.toBe(hub);
+    expect(distance(result.anchors, 'n0001', 'n0002')).toBeLessThan(distance(result.anchors, 'n0000', 'n0003'));
+    expect(distance(result.anchors, 'n0000', 'n0003')).toBeGreaterThan(.2);
+  });
+
   it('keeps later relation hops farther from one pinned focus', () => {
     const edges = [R(0, 1), R(1, 2), R(2, 3)];
     const result = new SemanticLayoutEngine().layout(scene(4, edges), empty(), [], { pinnedIds: new Set(['n0000']) });

@@ -216,8 +216,14 @@ export class SemanticLayoutEngine {
     const current = unionFind(ids.length), impact = unionFind(ids.length);
     for (const p of pairs) {
       const a = index.get(p.source)!, b = index.get(p.target)!;
-      adjacency[a].push({ to: b, weight: p.weight }); adjacency[b].push({ to: a, weight: p.weight });
-      current.join(a, b); impact.join(a, b);
+      const similar = rDegree[a] + rDegree[b] === 0 ? 1 : Math.min(rDegree[a], rDegree[b]) / Math.max(rDegree[a], rDegree[b]);
+      // Community membership follows shared energy. Unequal spokes stay
+      // attached by springs, without inheriting the hub's center.
+      if (similar >= 0.5) {
+        adjacency[a].push({ to: b, weight: p.weight }); adjacency[b].push({ to: a, weight: p.weight });
+        current.join(a, b);
+      }
+      impact.join(a, b);
     }
     for (const p of this.pairs.values()) if (index.has(p.source) && index.has(p.target)) impact.join(index.get(p.source)!, index.get(p.target)!);
     const touched = new Set<number>();
