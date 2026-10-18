@@ -6,7 +6,7 @@
 
 [설치 임베딩 경로의 shadow 점검](docs/embedding-shadow-0.3.153.md)은 기존 warm E5 응답103개와 별도 가상64자료로 producer 저장 벡터64개를 대사했습니다. 실험 후 같은 고정 revision의 디스크7파일을 복구·해시 검증했고 기존 listener를 보존했습니다. 실제 의미 정답·새 표현 우위·cold restart는 별도 미완료입니다.
 
-[Graphify 도입 검토](docs/graphify-adoption-audit-20261019.md)는 공식0.9.92 소스를 고정해 자동 병합·대표 라벨·군집의 반례를 재현하고, 전체 대체와 코드 adapter·패턴 선별 도입을 비교합니다. GPT-6 Pro Deep Research thesis가 시작됐으며 Gemini 반대감사·최종 역검증과 실제 제품 도입은 미완료입니다.
+[Graphify 도입 검토](docs/graphify-adoption-audit-20261019.md)는 공식0.9.92 소스를 고정해 자동 병합·대표 라벨·군집·캐시의 반례를 재현하고, 전체 대체와 코드 adapter·패턴 선별 도입을 비교합니다. GPT-6 Pro Deep Research thesis 전문63,019bytes를 저장·해시 검증했고, 제안의 byte span·동일성 facet·캐시 조건을 보강했습니다. Gemini 반대감사·최종 역검증과 실제 제품 도입은 미완료입니다.
 
 ## Alden 0.3.153 — 숫자 원문 보존과 중복 표시 정리
 

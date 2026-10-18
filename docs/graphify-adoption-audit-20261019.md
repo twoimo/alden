@@ -2,6 +2,8 @@
 
 2026-10-19. **로컬 재현을 마친 조건부 방향이며 외부 교차감사는 아직 미완료다.** Graphify 전체 도입이나 Alden 알고리즘 교체를 승인한 문서가 아니다. 설치 Alden 0.3.153/runtime `c3871f3aa203bebb9a8b0d5bba6b9f3fc908b0b8`을 유지한다. 기존 [알고리즘 감사](graph-algorithm-audit-0.3.153.md)와 [후속 실험](graph-algorithm-audit-0.3.153-followup.md)을 잇는다.
 
+현재 단계는 **ChatGPT thesis 전문 저장·로컬 판정 완료 / Gemini 반대감사 대기 / ChatGPT 최종 역검증 미시작**이다. 원래 전송·모드·첨부·연구 시작·완료·export UI 도구 결과8개를 해당 대화ID가 일치하는 원본 transcript에서 추출해 `ui-evidence-index.json`에 결속했다. 부모의 독립 byte/hash 대조 영수증도 공통 completion manifest에 연결했다. 이는 독립 제품 수리나 최종 외부 합의의 증거가 아니다.
+
 ## 조사 대상과 의도
 
 사용자가 원하는 결과는 유용한 주제 라벨, 덜 겹치는 탐색, 출처를 잃지 않는 정규화와 중복 판정, 신뢰할 수 있는 의미 관계다. Graphify의 예쁜 화면이나 저장 노드 수는 이 결과의 증거가 아니다.
@@ -89,3 +91,25 @@ Graphify는 이전 ChatGPT 논문에 없던 material delta이므로 공개 upstr
 현재 Gemini는 공유 슬롯 부족으로 추가 dispatch되지 않았다. 해당 단계를 ‘대기’로 남기며 thesis 완료도 3단계 검증 완료로 합산하지 않는다. 최종 결정 행에는 외부 지적→판정→현재 source→실제 조치/조건→검증을 결속한다. 모든 gate가 충족되기 전 세계 최고 수준이나 교체 방향 검증 완료를 선언하지 않는다.
 
 실제 새 thesis URL은 [Graphify 적용 심층 연구](https://chatgpt.com/c/6ad519f8-d304-83ee-9a11-dc34d6b9152c), 공유 예약은 `ba8b26d99d8e87908cb15b8c`다. 제출 master SHA256 `d8804394043fe71da492effe35c068f9aab30be93e58300c4d0ff8ceb42df757`, bundle SHA256 `407de68f601765dba13b9f2067d90316cc113f0496f7636607e06dbcddf6d692`/286,994bytes. 원래 userturn1개를 Pro ledger에, 실제 research start는 별도 meter에 기록했다. 계정 숫자 할당량·reset과 연구 내부 backend 신원은 노출되지 않아 미확인이다. `research-start.json`은 실제 시작 영수증이며 전문 완료 영수증이 아니다.
+
+### 완료한 thesis와 후속 로컬 판정
+
+이후 원래 연구가8m 완료 카드로 전환됐다. 정식 Markdown export63,019bytes를 수정 없이 `outputs/graphify-audit-20261019/chatgpt_6_pro_full_review.md`에 저장하고 다운로드 원본과 byte-identical임을 확인했다. SHA256은 `489f235f507b5976834b59f5e9fdda0c7f7505884ecfb41747f0f670f6da117e`다. 저장 직후 소유 예약을 completed로 정상 해제했다. 최초 제출본과 이 후속 판정을 혼동하지 않는다.
+
+보고서는 전체 대체REJECT, 코드 producerCONDITIONAL, 선별 패턴ACCEPT, 자동 병합REJECT, 군집CONDITIONAL, graph expansionDEFER로 판정했다. 이를 제품 승격 승인이나 외부3단계 완료로 해석하지 않는다. `adjudication.json`은 GF01~07을 근거·조건·기존A01~07·native 검증·복구에 매핑한다. 다음 추가 조건을 반영했다.
+
+- GF01의 제안 `startByte/endByte`는 실제 tiny AST 결과의 `source_location=L…`와 다르다. byte 범위를 만들어 넣지 않는다. 현재 줄 위치 수준을 명시하고, UTF-8 원문과 parser node 범위를 검증한 경우에만 byte-precise라고 표시한다.
+- GF02의 근거 tag도 producer가 낸 주장이다. 현재 source version과 실제 위치/관계 구문을 대사한 범위에서 직접 관찰이라고 표시하며, enum만으로 resolver의 대상 결정을 신뢰하지 않는다.
+- GF03의 `cannot_link`는 node 종류별 동일성 기준으로 제한한다. 같은 사람의 직무·주장·수량·시간이 달라지는 것은 동일인을 갈라야 할 일반 규칙이 아니다. entity identity와 서로 다른 claim occurrence를 분리한다. 보고서의 모든 facet을 모든 entity에 기계 적용하는 schema는 채택하지 않는다.
+- GF04의 첫 무변화 probe는 **다른5노드 A5+K5**, 변화 probe는 **6노드 A6+K20**이다. 같은 A에서 K 크기만 바꾼 실험이 아니다. 원본 두 결과를 유지한다. 삼각형 A6의 두 후보 modularity 차이를 exact Fraction과 NetworkX로 검산했으며 m7에서5/14, m197에서-345/77618로 일치했다. 같은 알려진 A6를 component별 Graphify Louvain으로 호출하면 K20 추가 후에도 두 삼각형이 분리됐다. 이 한 regression의 제한된 prototype이며 제품 패치·새 holdout·Leiden 결과가 아니다.
+- GF06의 cache 본문은 최초 외부 bundle에 없었다. 후속으로 실제 함수를 점검했고, 아래의 preserved-mtime 반례를 별도 근거로 추가했다. 논문이 독립 실행했다고 주장하지 않은 점과 저자 benchmark/Cloud/OSS 경계는 유지한다.
+
+### 추가 GF06 반례: 과거 mtime을 복원한 같은 길이 수정
+
+같은 공식 revision의 `file_hash`와 `extract`를 실제 audit 파일시스템에서 호출했다. `def alpha()`를 저장하고 mtime을 과거로 고정해 캐시한 뒤, 같은 길이의 `def omega()`로 바꾸고 원래 mtime을 복원했다. 원문 SHA256과 ctime은 바뀌었는데 cache key와 추출 결과는 `alpha()` 그대로였다. 일반 mtime 변경 대조에서는 새 key와 `omega()`로 갱신됐다. 개인 자료·Alden store를 사용하지 않았다.
+
+이는 같은 프로세스의 명시적 추출/cache API에서 재현한 것이다. 전체 CLI의 detection 경로·다른 프로세스·Graphify Cloud의 동작으로 확대하지 않는다. 원인은 해당 stat fastpath가 size/mtime/indexed-at로 freshness를 판정하는 경계다. 현재 producer에 그 캐시 판정을 그대로 위임하는 것은 **REJECT**다. Alden source version의 현재 바이트를 검증한 manifest/격리 snapshot을 먼저 사용하거나 검증 불가능한 cache reuse를 거절해야 한다. 단순 ctime 추가만으로 모든 race를 해결했다고 주장하지 않는다.
+
+재현 소스 `cache-preserved-mtime-probe.py`, `cache-preserved-mtime-results.json`, 일반 변화 대조와 원본 code/grammar pin은 audit 폴더에 있다. component/math 검산은 `component-experiment.py/.json`이다. 이 두 보강 실험은 이미 완료된 ChatGPT thesis 제출 이후의 delta이며, 새 Gemini 반대감사와 최종 ChatGPT 역검증에서 반드시 별도 확인해야 한다.
+
+새 Gemini 입력은 원문 thesis를 그대로 포함한 master88,540bytes/SHA256 `c8f6c20f9ac2700af0a58846fb4570311c8253d1ff14ff58d564b99e500bf1bd`, source bundle325,956bytes/SHA256 `d2d0d663f82405be06fd6a8462af7d92c906ab4b20996ec4aed46e2cd8671dca`다. 최초 보고서에 없던 AST/export/component/cache 실험과 scoped 공식 source excerpt를 별도 post-thesis delta로 담았다. job `alden-c387-graphify-0992-antithesis-20261019`, request `4a2990ac990ad93c20b539cc`가 공유 FIFO에 queued됐으며 **업로드/전송/연구 시작은 없다.** 빈 슬롯0·기존3실행을 보존한다. 실제 dispatch 전 계정·Argon 최고·Deep Research·할당량을 새로 확인해야 한다. 원래137461c와 maturity-r2를 철회하거나 재전송하지 않았다.
