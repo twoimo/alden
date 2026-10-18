@@ -135,9 +135,6 @@ def normalize_declared_quantity(value, unit) -> dict:
         return _result("invalid", "value-not-decimal")
     if not number.is_finite():
         return _result("invalid", "value-not-finite")
-    if abs(number.as_tuple().exponent) > _MAX_ABS_EXPONENT:
-        return _result("invalid", "exponent-out-of-range")
-
     dimension, factor = unit_definition
     # The maximum coefficient length plus the largest factor fits this
     # precision. A local context avoids default-precision silent rounding.
@@ -148,9 +145,17 @@ def normalize_declared_quantity(value, unit) -> dict:
         exact = Context(prec=_MAX_VALUE_CHARS + 32, Emin=-1000, Emax=1000,
                         rounding=ROUND_HALF_EVEN, clamp=0, traps=[Inexact, InvalidOperation])
         with localcontext(exact):
-            scaled = number * factor
-            if abs(scaled.as_tuple().exponent) > _MAX_ABS_EXPONENT:
+            # Insignificant coefficient zeroes do not consume fractional
+            # precision. Inspect the reduced representation in this exact
+            # context, before and after conversion. The declared scientific
+            # power and final canonical exponent still have their own bounds.
+            # Do not reject large input magnitudes here: e.g. 100e100 mg is a
+            # previously accepted down-conversion to the in-budget 1e99 g.
+            reduced = number.normalize()
+            if (number.as_tuple().exponent > _MAX_ABS_EXPONENT
+                    or reduced.as_tuple().exponent < -_MAX_ABS_EXPONENT):
                 return _result("invalid", "exponent-out-of-range")
+            scaled = reduced * factor
             normalized = scaled.normalize()
             if abs(normalized.as_tuple().exponent) > _MAX_ABS_EXPONENT:
                 return _result("invalid", "exponent-out-of-range")

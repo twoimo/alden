@@ -46,6 +46,20 @@ class DeclaredEvidenceTests(unittest.TestCase):
         self.assertEqual(result['quantity_omitted'], 5)
         self.assertEqual(len(source['quantities']), 20)
 
+    def test_equivalent_quantity_spellings_count_as_conversions_without_source_edits(self):
+        metadata = {'quantities': [{'value': value, 'unit': 'µg'}
+                                  for value in ('1e-90', '1.0000000000e-90')]}
+        before = copy.deepcopy(metadata)
+        summary = DeclaredFieldSummary()
+        result = summary.add(metadata)
+        report = validate_declared_summary(summary.report(), 1)
+        self.assertEqual(metadata, before)
+        self.assertEqual(report['quantity']['normalized'], 2)
+        self.assertEqual(report['quantity']['invalid'], 0)
+        self.assertEqual(result['quantity'][0]['canonical_value'],
+                         result['quantity'][1]['canonical_value'])
+        self.assertEqual(report['truth_status'], 'syntax_conversion_not_semantic_verdict')
+
     def test_missing_declarations_are_separate_from_explicit_missing_values(self):
         summary = DeclaredFieldSummary(); summary.add({})
         summary.add({'published_at': None, 'quantity': None})

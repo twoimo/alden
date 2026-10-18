@@ -118,6 +118,30 @@ class DeclaredQuantityNormalizationTests(unittest.TestCase):
         self.assert_normalized("-0", "mg", "-0", "mass", "g")
         self.assert_normalized("1.5e+2", "mm", "0.15", "length", "m")
 
+    def test_insignificant_zeroes_do_not_consume_fractional_exponent_budget(self):
+        samples = (
+            ("1e-90", "1.0000000000e-90", "µg", "0." + "0" * 95 + "1"),
+            ("1e-100", "1.000e-100", "g", "0." + "0" * 99 + "1"),
+            ("1e-100", "0." + "0" * 99 + "1000", "g", "0." + "0" * 99 + "1"),
+            ("0", "0.000e-100", "µg", "0"),
+            ("-0", "-0.000e-100", "mg", "-0"),
+        )
+        for short, expanded, unit, expected in samples:
+            with self.subTest(short=short, expanded=expanded, unit=unit):
+                self.assert_normalized(short, unit, expected, "mass", "g")
+                self.assert_normalized(expanded, unit, expected, "mass", "g")
+
+    def test_zero_reduction_keeps_declared_power_and_canonical_limits(self):
+        # The declared scientific power is a syntax budget, not the input's
+        # adjusted magnitude. Preserve a previously accepted down-conversion.
+        self.assert_normalized("100e100", "mg", "1" + "0" * 99, "mass", "g")
+        self.assert_normalized("1" + "0" * 102, "mg", "1" + "0" * 99, "mass", "g")
+        for value, unit in (("1e100", "kg"), ("1e-101", "kg"),
+                            ("0.000e-101", "g"), ("1e101", "mg"),
+                            ("0." + "0" * 100 + "1", "g")):
+            with self.subTest(value=value, unit=unit):
+                self.assert_rejected(value, unit, "invalid")
+
     def test_only_absent_or_blank_arguments_are_missing(self):
         for value, unit in ((None, "kg"), ("", "kg"), ("  ", "kg"),
                             ("1", None), ("1", ""), ("1", "  ")):
