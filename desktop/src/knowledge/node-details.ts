@@ -33,6 +33,22 @@ function separatedNumericTail(selected: Record<string, unknown> | null, root: Do
 
 const boundPanes = new WeakSet<HTMLElement>();
 
+function readingCandidate(selected: Record<string, unknown> | null, copy: string): {reading:string;tail:string} | null {
+  const value = record(selected?.reading_projection);
+  if (selected?.basis !== 'source_record' || selected.body_format !== 'retained_original_text'
+    || !/^[0-9a-f]{64}$/.test(text(selected.raw_sha256)) || !value
+    || value.policy !== 'legacy-threads-reading-tail-v1' || value.status !== 'unverified_presentation_candidate'
+    || value.basis !== 'verified_retained_legacy_threads_record' || value.original_preserved !== true
+    || value.semantic_validity !== 'unverified' || typeof value.reading !== 'string' || !value.reading
+    || typeof value.tail !== 'string' || !value.tail || value.tail.length > 128
+    || value.reading + value.tail !== copy
+    || !['body_sha256','reading_sha256','tail_sha256'].every(key => typeof value[key] === 'string' && /^[0-9a-f]{64}$/.test(value[key] as string))) return null;
+  const tokens = value.tail.trim().split(/\s+/);
+  if (tokens.length < 2 || tokens.length > 8 || tokens.some(token => !/^(?:[0-9]{1,4}|\/)$/.test(token))
+    || tokens.filter(token => token !== '/').length < (tokens.includes('/') ? 3 : 2)) return null;
+  return {reading:value.reading,tail:value.tail};
+}
+
 function prepareNotePane(root: Document, nodeId: string, initial: boolean): void {
   const pane = root.getElementById('knowledge-note-pane');
   if (!pane) return;
@@ -114,9 +130,17 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
   // Source-specific projection is already bound to retained bytes by the
   // backend. Numeric shape alone cannot distinguish chrome from source data.
-  const reading = copy;
+  const candidate = readingCandidate(selected, copy);
+  const reading = candidate?.reading ?? copy;
   if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
+  if (body && candidate) {
+    const note = root.createElement('details'); note.className = 'knowledge-separated-tail knowledge-reading-tail';
+    note.append(element('summary', '', '원문의 숫자 부분 보기 · 의미 미확인'));
+    note.append(element('p', '', '수집 형식상 별도 숫자 묶음일 수 있어 접었습니다. 본문인지 화면 수치인지는 미확인입니다. 원문은 보존됩니다.'));
+    note.append(element('pre', 'knowledge-separated-tail-text', candidate.tail));
+    body.after(note);
+  }
   root.querySelectorAll('.knowledge-resolution-note').forEach(note => note.remove());
   const resolutions = node.resolutionContexts?.length
     ? node.resolutionContexts.map(context => ({ resolution: context, context }))

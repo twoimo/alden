@@ -1051,7 +1051,7 @@ const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
     depthLegend:(()=>{const e=document.querySelector('.knowledge-depth-legend');const r=e?.getBoundingClientRect();return e?{hidden:e.hidden,entries:e.children.length,left:r.left,top:r.top,width:r.width,height:r.height,scrollWidth:e.scrollWidth}:null;})(),
     nodeActivity:d?.nodeActivity??null,activityJournal:d?.activityJournal??null,
     canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
-    notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth,focusState:n.dataset.focusState,nodeId:n.dataset.nodeId,bodyChars:document.querySelector('#knowledge-node-body')?.textContent?.length??0}:null;})(),
+    notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();const t=n?.querySelector('.knowledge-reading-tail');return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth,focusState:n.dataset.focusState,nodeId:n.dataset.nodeId,bodyChars:document.querySelector('#knowledge-node-body')?.textContent?.length??0,readingTail:t?{open:t.open,characters:t.querySelector('pre')?.textContent?.length??0}:null}:null;})(),
     backDisabled:document.querySelector('#knowledge-back')?.disabled,
     overviewDisabled:document.querySelector('#knowledge-overview')?.disabled,
     expandDisabled:document.querySelector('#knowledge-expand-hop')?.disabled,

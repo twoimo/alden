@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from alden_source_text import project_source_text, TEXT_VERSION
+from alden_source_text import project_source_text, reading_tail_presentation, TEXT_VERSION
 from alden_collection import CollectionStore, identity
 from alden_collection_retrieval import index_text, retrieve
 from alden_graph_quality import audit
@@ -32,6 +32,29 @@ def source(body):
 
 
 class SourceTextTests(unittest.TestCase):
+    def test_reading_candidate_preserves_exact_body_and_unverified_status(self):
+        for suffix in ('\n11\n2', ' 1 / 2 6 1 3', '\n1\n/\n2\n9\n2'):
+            body = BODY + suffix
+            result = reading_tail_presentation(body, source(body))
+            self.assertIsNotNone(result)
+            self.assertEqual(result['reading'] + result['tail'], body)
+            self.assertEqual(result['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+            self.assertTrue(result['original_preserved'])
+            self.assertEqual(result['semantic_validity'], 'unverified')
+            self.assertIsNone(project_source_text(body, source(body))['projection'])
+
+    def test_reading_candidate_requires_verified_legacy_source_shape(self):
+        body = BODY + '\n11\n2'
+        for change in ({'platform':'files'}, {'type':'note'}, {'localTextOrigin':'unknown'},
+                       {'localOriginalText':body+'x'}, {'code':'different'}, {'url':'https://example.com/post/a'}):
+            self.assertIsNone(reading_tail_presentation(body, {**source(body), **change}))
+        self.assertIsNone(reading_tail_presentation(body, None))
+
+    def test_single_year_ratio_code_and_unbounded_numeric_data_stay_unfolded(self):
+        for body in (BODY+'\n2026', BODY+'\n1\n/\n2', BODY+'\n```\n11\n2',
+                     BODY+'\n'+'1\n'*9+'2', BODY+'\n123456\n2', '본문\n11\n2',
+                     '본문'*6001+'\n11\n2'):
+            self.assertIsNone(reading_tail_presentation(body, source(body)))
     def test_future_source_graph_import_preserves_raw_and_declares_projection(self):
         raw=source(BODY+TAIL)
         records,edges=source_graph({'original_id':'career'}, {'nodes':[raw],'edges':[]}, {'sha256':'1'*64})
@@ -118,6 +141,18 @@ class SourceProjectionIntegrationTests(unittest.TestCase):
         self.assertEqual(result['fact_provenance'][0]['text_projection']['original_body_sha256'], detail['text_projection']['original_body_sha256'])
         self.assertNotIn('separated_tail', result['fact_provenance'][0]['text_projection'])
         self.assertEqual(self.store.path.read_bytes(), before); self.assertEqual(raw_path.read_bytes(), original)
+
+    def test_reading_candidate_changes_neither_detail_body_nor_search_extraction(self):
+        body = BODY+'\n11\n2'
+        self.store.ingest(self.target,[{**self.record,'text':body,'raw':source(body)}])
+        detail = self.store.graph_page(projects=['one'],focus=self.doc,details=True)['details']
+        self.assertEqual(detail['body'],body)
+        self.assertIsNone(detail['text_projection'])
+        self.assertEqual(detail['reading_projection']['reading']+detail['reading_projection']['tail'],body)
+        index_text(self.root,['one'])
+        result=retrieve(self.root,'채용공고',projects=['one'],max_relations=0,
+                        query_embed=lambda _: (_ for _ in ()).throw(RuntimeError('disabled')))
+        self.assertIn(body,result['facts'])
 
     def test_corrupt_clean_cache_cannot_pass_source_hash_binding(self):
         index_text(self.root, ['one'])

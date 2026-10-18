@@ -7,6 +7,28 @@ POLICY = 'threads-separated-numeric-tail-v1'
 TEXT_VERSION = 'retained-local-original-text-v2'
 
 
+def _legacy_threads_source(body, source):
+    if (not isinstance(source, dict) or source.get('platform') != 'threads'
+            or source.get('type') != 'source'
+            or source.get('localTextOrigin') != 'local_corpus_json'
+            or source.get('localOriginalText') != body):
+        return False
+    url = source.get('url')
+    if not isinstance(url, str):
+        return False
+    try:
+        parsed = urlsplit(url)
+        path = re.fullmatch(r'/@[A-Za-z0-9_.]+/post/([A-Za-z0-9_-]+)', parsed.path)
+        if (parsed.scheme != 'https' or parsed.hostname not in {'threads.com', 'www.threads.com', 'threads.net', 'www.threads.net'}
+                or parsed.username or parsed.password or parsed.port is not None
+                or parsed.query or parsed.fragment or path is None
+                or source.get('code') != path[1]):
+            return False
+    except ValueError:
+        return False
+    return True
+
+
 def project_source_text(body, source):
     """Separate a narrow legacy Threads UI-tail candidate, not all numbers.
 
@@ -16,23 +38,7 @@ def project_source_text(body, source):
     if not isinstance(body, str):
         raise ValueError('source_text_invalid')
     unchanged = {'body': body, 'projection': None}
-    if (not isinstance(source, dict) or source.get('platform') != 'threads'
-            or source.get('type') != 'source'
-            or source.get('localTextOrigin') != 'local_corpus_json'
-            or source.get('localOriginalText') != body):
-        return unchanged
-    url = source.get('url')
-    if not isinstance(url, str):
-        return unchanged
-    try:
-        parsed = urlsplit(url)
-        path = re.fullmatch(r'/@[A-Za-z0-9_.]+/post/([A-Za-z0-9_-]+)', parsed.path)
-        if (parsed.scheme != 'https' or parsed.hostname not in {'threads.com', 'www.threads.com', 'threads.net', 'www.threads.net'}
-                or parsed.username or parsed.password or parsed.port is not None
-                or parsed.query or parsed.fragment or path is None
-                or source.get('code') != path[1]):
-            return unchanged
-    except ValueError:
+    if not _legacy_threads_source(body, source):
         return unchanged
     # Legacy exports have NBSP at a sentence end or on its own line. Require
     # that exact boundary followed by a newline; ordinary blanks cannot match.
@@ -63,3 +69,37 @@ def project_source_text(body, source):
         'removed_characters': len(tail), 'counter_count': len(values) - 3,
         'original_preserved': True, 'semantic_validity': 'unverified',
     }}
+
+
+def reading_tail_presentation(body, source):
+    """Optional reversible folding for a verified legacy source, never indexing.
+
+    Numeric shape remains semantically unverified. Return exact displayed
+    parts; do not change the authoritative body or search extraction policy.
+    """
+    if (not isinstance(body, str) or len(body) > 12000
+            or not _legacy_threads_source(body, source)
+            or '```' in body or '~~~' in body):
+        return None
+    display = body.strip()
+    match = re.search(r'(?:\r?\n[ \t\u00a0]*(?:[0-9]{1,4}|/)[ \t\u00a0]*)+[ \t\r\n\u00a0]*\Z', display)
+    if match is None:
+        match = re.search(r'\s+[0-9]{1,4}\s+/\s+[0-9]{1,4}(?:\s+[0-9]{1,4})+\s*\Z', display)
+    if match is None:
+        return None
+    reading = display[:match.start()].rstrip()
+    tail = display[len(reading):]
+    tokens = tail.split()
+    if (len(reading) < 80 or not re.search(r'[A-Za-z가-힣]', reading)
+            or len(tail) > 128 or not 2 <= len(tokens) <= 8
+            or sum(token != '/' for token in tokens) < 2
+            or '/' in tokens and sum(token != '/' for token in tokens) < 3):
+        return None
+    sha = lambda value: hashlib.sha256(value.encode('utf-8')).hexdigest()
+    return {'policy': 'legacy-threads-reading-tail-v1',
+            'status': 'unverified_presentation_candidate',
+            'basis': 'verified_retained_legacy_threads_record',
+            'original_preserved': True, 'semantic_validity': 'unverified',
+            'reading': reading, 'tail': tail,
+            'body_sha256': sha(display), 'reading_sha256': sha(reading),
+            'tail_sha256': sha(tail)}

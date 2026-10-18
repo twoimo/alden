@@ -19,7 +19,7 @@ import tempfile
 import time
 import unicodedata
 import uuid
-from alden_source_text import project_source_text
+from alden_source_text import project_source_text, reading_tail_presentation
 
 
 SCHEMA = 3
@@ -1212,6 +1212,7 @@ class CollectionStore:
                                      "body": body[:12000], "truncated": len(body) > 12000,
                                      "body_format": body_format,
                                      "text_projection": projected['projection'],
+                                     "reading_projection": reading_tail_presentation(body, record),
                                      "version": row["visible_version"], "collected_at": row["collected_at"],
                                      "raw_sha256": row["raw_sha256"], "source_url": row["source_url"],
                                      "target_id": row["target_id"], "platform": row["platform"],

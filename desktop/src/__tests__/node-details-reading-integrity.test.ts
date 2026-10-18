@@ -11,6 +11,24 @@ function render(body:string, extras:Record<string,unknown>={}) {
   renderNodeDetails(graph,graph.nodes[0],{details:{node_id:'record',basis:'source_record',version:'v1',body,raw_sha256:'a'.repeat(64),...extras}});
 }
 describe('source-backed reading and numeric facts',()=>{
+  it('folds only an explicit source-bound candidate and retains its exact expandable tail',()=>{
+    const reading='서류에서 높은 점수를 받는 지원자 특징과 준비 방법입니다.',tail='\n11\n2',body=reading+tail;
+    const projection={policy:'legacy-threads-reading-tail-v1',status:'unverified_presentation_candidate',
+      basis:'verified_retained_legacy_threads_record',original_preserved:true,semantic_validity:'unverified',reading,tail,
+      body_sha256:'b'.repeat(64),reading_sha256:'c'.repeat(64),tail_sha256:'d'.repeat(64)};
+    render(body,{body_format:'retained_original_text',reading_projection:projection});
+    const note=document.querySelector<HTMLDetailsElement>('.knowledge-reading-tail')!;
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe(reading);
+    expect(note.open).toBe(false);expect(note.querySelector('pre')!.textContent).toBe(tail);
+    expect(note.textContent).toContain('의미 미확인');
+    note.open=true;expect(note.querySelector('pre')!.textContent).toBe(tail);
+    render(body,{basis:'note',body_format:'retained_original_text',reading_projection:projection});
+    expect(document.querySelector('.knowledge-reading-tail')).toBeNull();
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe(body);
+    render(body,{body_format:'retained_original_text',reading_projection:{...projection,tail:'\n33\n4'}});
+    expect(document.querySelector('.knowledge-reading-tail')).toBeNull();
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe(body);
+  });
   for(const [name,body] of [
     ['year','기준 연도\n2026'],
     ['measurements','분기별 관측값\n125\n180\n240'],
