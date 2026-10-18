@@ -29,6 +29,8 @@ README의 ‘임베딩 없음’은 CLI graph 표현 설명이다. `BENCHMARKS.m
 
 ## 실제 로컬 반례
 
+후속 [실제 검색 단계 추적](miracl-stage-trace-20261019.md)은 기존213질의의 네 방법 전체 순위를 재현하고, 제품 lexical·동점·본문 근거·consumer를 분리했다. 이는 Graphify의 검색을 실행한 결과가 아니다. Graphify 도입 시에도 이처럼 동등 입력·단계·예산을 분리해야 하며, 현재 E5/FTS를 제거할 근거는 추가되지 않았다. 새 별도 외부 delta 보고서에는 화면 모델과 보고서 자기소개가 충돌하므로 요청 모델 감사 충족으로 세지 않는다. 기존 Graphify thesis 전문과 대기 중 Gemini 입력은 그대로 보존한다.
+
 [재현 도구](audits/graphify_probe.py)는 공식 revision과 변경 여부를 확인하고 upstream 함수를 직접 호출한다. 개인 자료·API 키·LLM 호출을 사용하지 않는다. 근거는 task root의 `outputs/graphify-audit-20261019/`에 보관한다.
 
 | 입력 | 실제 결과 | 적용 한계 |
