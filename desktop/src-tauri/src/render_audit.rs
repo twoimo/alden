@@ -1118,6 +1118,24 @@ fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Resul
     observe_graph_rest_with_budget(window,deadline,Duration::from_secs(15))
 }
 
+fn focused_graph_settled(state: &Value, expected: &str) -> bool {
+    state["focused"] == true && state["focusId"] == expected
+        && matches!(state["worker"].as_str(), Some("ready" | "cached"))
+        && state["pendingTargets"] == 0
+        && ["camera", "physics", "transition"].iter().all(|key| state["motion"][key] == false)
+}
+
+fn observe_focused_graph(window: &tauri::WebviewWindow, deadline: Instant, expected: &str) -> Result<Value, String> {
+    let bounded = deadline.min(Instant::now() + Duration::from_secs(30));
+    wait_for_audit_state("focused graph final placement", bounded, || collect_script(window,
+        r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;return {
+          focused:d?.focused??null,focusId:d?.focusId??null,
+          worker:d?.semanticLayout?.worker?.state??null,
+          pendingTargets:d?.semanticLayout?.pendingTargets??null,
+          motion:d?.motion??null,renderCount:d?.renderCount??null};})())"#.into(),bounded),
+        |state| focused_graph_settled(state, expected))
+}
+
 fn observe_graph_rest_with_budget(window: &tauri::WebviewWindow, deadline: Instant, observation_budget: Duration) -> Result<Value, String> {
     let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
       return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
@@ -1774,6 +1792,8 @@ fn audit_settings(
             &serde_json::to_vec_pretty(&first).map_err(|e|e.to_string())?)?;
         return Err("native source detail did not emit its confirmed read receipt".into());
     }
+    let first_settled = observe_focused_graph(&window, deadline,
+        first["navigation"]["focusId"].as_str().ok_or("focused note ID missing")?)?;
     publish(
         output,
         "alden-note-default.png",
@@ -1915,6 +1935,8 @@ fn audit_settings(
     {
         return Err("native compact note reader is hidden or overflows".into());
     }
+    let compact_note_settled = observe_focused_graph(&window, deadline,
+        compact_note["navigation"]["focusId"].as_str().ok_or("compact focused note ID missing")?)?;
     publish(
         output,
         "alden-note-compact.png",
@@ -2045,6 +2067,7 @@ fn audit_settings(
         "backFirst":back_first,"backOverview":back_overview,"reset":reset,"compact":compact,"nativeCompact":native_compact,"workspaceSignals":hidden_samples,"reopened":reopened,
         "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
         "overviewMore":overview_more,"compactNote":compact_note,
+        "firstSettled":first_settled,"compactNoteSettled":compact_note_settled,
         "scope":"real persisted graph and renderer/navigation in owned floating audit window without key-window activation; runtime snapshot/GraphRAG focus lookup intentionally unavailable; captures private"}),
     )
 }
@@ -2781,7 +2804,7 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
                 // horizon is separate from production action/cancel deadlines.
                 // Scope 10 adds current tag-group/member pages at two sizes,
                 // including two bounded full source scans and 12 captures.
-                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode && matches!(graph_scope,Some(0)|Some(10)) {150} else if workspaces_mode && graph_scope.is_none() {120} else if workspaces_mode {96}else{40});
+                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode || workspaces_mode && graph_scope.is_none() {180} else if workspaces_mode && matches!(graph_scope,Some(0)|Some(10)) {150} else if workspaces_mode {96}else{40});
                 let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode,graph_scope) } else { audit(&handle, &output, deadline) };
                 if let Err(reason) = &result {
                     // One write keeps the original failure intact even if the
@@ -2824,6 +2847,24 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn focused_capture_rejects_transient_or_stale_selection() {
+        let ready=serde_json::json!({"focused":true,"focusId":"selected","worker":"ready","pendingTargets":0,
+            "motion":{"camera":false,"physics":false,"transition":false}});
+        assert!(super::focused_graph_settled(&ready,"selected"));
+        assert!(!super::focused_graph_settled(&ready,"other"));
+        assert!(!super::focused_graph_settled(&serde_json::Value::Null,"selected"));
+        for field in ["camera","physics","transition"] {
+            let mut moving=ready.clone();moving["motion"][field]=serde_json::json!(true);
+            assert!(!super::focused_graph_settled(&moving,"selected"),"{field}");
+        }
+        for worker in ["pending","failed","idle"] {
+            let mut pending=ready.clone();pending["worker"]=serde_json::json!(worker);
+            assert!(!super::focused_graph_settled(&pending,"selected"),"{worker}");
+        }
+        let mut pending=ready;pending["pendingTargets"]=serde_json::json!(1);
+        assert!(!super::focused_graph_settled(&pending,"selected"));
+    }
     fn navigation_origin_fixture() -> serde_json::Value {
         serde_json::json!({"focused":true,"focusId":"anonymous-source","source":"collection",
             "focusedSourceVersion":"anonymous-version","focusSlot":0,"hops":0,"canGoBack":true,
