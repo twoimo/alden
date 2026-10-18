@@ -87,7 +87,7 @@
 - **A03 CONDITIONAL/부분 완료:** 공식 reference와 새 seed120조건의 실행·코드/selection 고정 완료. semantic/mixed 채널, LFR·새 크기·가중치·증분/호스트 검증은 미완료.
 - **A04 CONDITIONAL/부분 완료:** pooling producer 경로와 같은 warm endpoint의103실제 벡터/32가상 probe를 확인했다. 설치 producer64개 packed vector가 기준 pooling과 일치했다. 작은 과제에서는 네 방식 우위가 없었으며 단계별 recall·독립 실제 gold·디스크 가중치 재검증은 남아 있다. 기존 모델 유지.
 - **A05 CONDITIONAL/미완료:** 현재 zoom/라벨과 semantic hierarchy의 구분을 명시했다. 구현·물리 검증 남음.
-- **A06 CONDITIONAL/미완료:** 회귀27질의·실제 질의·공개 benchmark를 구분했다. 독립 실제 질의·live encoder·비용 평가 남음.
+- **A06 CONDITIONAL/미완료:** 회귀27질의·실제 질의·공개 benchmark를 구분했다. 이후 [MIRACL 한국어213질의](miracl-retrieval-baseline-20261019.md)의 실제 E5/설치 consumer 평가와 NIST 지표 검산을 완료했다. 판정 문서 집합의 기준선이며, 개인 실사용·미사용 holdout·비용 평가와 외부 교차감사는 남아 있다.
 - **A07 DEFER/미완료:** 기존 설치153·서명/원문 보존을 유지한다. 새 후보 제품 승격·물리/자원 검증·Gemini+최종reverse·운영 릴리스는 열려 있다.
 
 새 연구 전문·판정·실행 결과와 실제 pooling producer를 결속한 다음 반대감사/역검증 입력을 준비한다. 원래 Gemini를 취소하거나 복제하지 않고 공유 admission을 따르며, 실제 외부 실행 전 계정/모드/할당량을 재확인한다. 준비·대기·완료 상태는 각각 기록한다.
