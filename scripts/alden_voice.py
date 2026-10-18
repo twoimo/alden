@@ -1026,7 +1026,20 @@ class AldenVoicePipeline:
                 db.execute("BEGIN")
                 if db.execute("SELECT 1 FROM voice_sessions WHERE id=?", (conversation_id,)).fetchone() is None:
                     raise RuntimeError("voice_conversation_unavailable")
-                rows = db.execute("SELECT role,content FROM voice_messages WHERE session_id=? AND state='confirmed' AND role IN ('user','assistant') ORDER BY turn_id DESC, CASE role WHEN 'assistant' THEN 1 ELSE 0 END DESC LIMIT ?", (conversation_id, VOICE_CONTEXT_TURNS * 2)).fetchall()
+                # Legacy voice-only databases have no text request table.
+                retraction_filter = ""
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='alden_chat_requests'").fetchone() is not None:
+                    retraction_filter = """ AND NOT EXISTS (
+                        SELECT 1 FROM alden_chat_requests AS r
+                        WHERE r.conversation_id=voice_messages.session_id
+                          AND r.turn_id=voice_messages.turn_id AND r.state='retracted')"""
+                rows = db.execute(
+                    "SELECT role,content FROM voice_messages WHERE session_id=? AND state='confirmed' AND role IN ('user','assistant')"
+                    + retraction_filter
+                    + " ORDER BY turn_id DESC, CASE role WHEN 'assistant' THEN 1 ELSE 0 END DESC LIMIT ?",
+                    (conversation_id, VOICE_CONTEXT_TURNS * 2),
+                ).fetchall()
+                # Retraction hides context, not counters: never reuse an existing turn ID.
                 counters = db.execute("SELECT COALESCE(MAX(turn_id),0),COALESCE(MAX(context_version),0) FROM voice_messages WHERE session_id=?", (conversation_id,)).fetchone()
             with self.token.commit_guard():
                 self.token.raise_if_cancelled()
@@ -1962,12 +1975,14 @@ class LocalMlxLlm:
 
 
 def configured_voice_model(state_root: Path) -> dict[str, str | None]:
-    """Snapshot the saved local choice; never repair/write it or select a fallback."""
+    """Snapshot the saved route or explicit default; never repair/write settings."""
     path = Path(state_root) / "reply-model.json"
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
     except FileNotFoundError:
-        return {"model": QWEN38_27B_MODEL_ID, "base_url": LOCAL_LLM_BASE_URL,
+        from alden_model_routes import DEFAULT_EFFORT, DEFAULT_MODEL, ROUTER
+        return {"model": DEFAULT_MODEL, "base_url": ROUTER,
+                "reasoning_effort": DEFAULT_EFFORT, "mode": "manual", "transport": "opencodex",
                 "source": "documented_default", "configuration_sha256": None}
     except OSError as exc:
         raise RuntimeError("voice_model_configuration_invalid") from exc

@@ -2,6 +2,7 @@
 import io
 import json
 import os
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -9,6 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import alden_voice as voice
+import alden_model_routes as routes
 from alden_abort import AbortController
 
 class Response(io.BytesIO):
@@ -25,9 +27,84 @@ class VoiceModelSelectionTests(unittest.TestCase):
 
     def test_documented_default_is_used_only_when_config_is_absent(self):
         result=voice.configured_voice_model(self.root)
-        self.assertEqual(result['model'],voice.QWEN38_27B_MODEL_ID)
+        self.assertEqual(result['model'],routes.DEFAULT_MODEL)
+        self.assertEqual(result['reasoning_effort'],'high')
+        self.assertEqual(result['mode'],'manual')
+        self.assertEqual(result['transport'],'opencodex')
+        self.assertEqual(result['base_url'],routes.ROUTER)
         self.assertEqual(result['source'],'documented_default')
         self.assertIsNone(result['configuration_sha256'])
+        self.assertFalse(self.path.exists())
+
+    @contextmanager
+    def remote_response(self):
+        requests = []
+        catalog = {'models': [{'id': routes.DEFAULT_MODEL, 'local': False,
+                              'selectable': True, 'efforts': ['high']}]}
+        def transport(request, *_args, **_kwargs):
+            requests.append(request)
+            return Response(json.dumps({
+                'id': 'fixture-response', 'model': routes.DEFAULT_MODEL, 'status': 'completed',
+                'output': [{'type': 'message', 'role': 'assistant',
+                            'content': [{'type': 'output_text', 'text': '모의 응답'}]}],
+            }).encode())
+        with patch('alden_routed_llm.catalog', return_value=catalog), \
+             patch('alden_routed_llm.CancellableLocalResponse', side_effect=transport), \
+             patch('alden_voice.LocalMlxLlm', side_effect=AssertionError('unexpected local adapter')):
+            yield requests
+
+    def assert_default_request(self, request):
+        self.assertEqual(request.full_url, routes.ROUTER + '/responses')
+        body = json.loads(request.data)
+        self.assertEqual(body['model'], routes.DEFAULT_MODEL)
+        self.assertEqual(body['reasoning'], {'effort': 'high'})
+
+    def test_absent_config_routes_actual_voice_caller_to_flash_high(self):
+        llm = voice.ConfiguredLocalMlxLlm(self.root)
+        turn = voice.VoiceTurn('c' * 32, 1, 1, 'microphone', voice.VoiceTurnToken(self.token))
+        with self.remote_response() as requests:
+            self.assertEqual(llm.generate_for_turn('질문', self.token, turn=turn), '모의 응답')
+        self.assertEqual(len(requests), 1)
+        self.assert_default_request(requests[0])
+        self.assertEqual(llm.last_metrics['model_selection']['mode'], 'manual')
+        self.assertFalse(self.path.exists())
+
+    def test_absent_config_routes_actual_text_caller_to_flash_high(self):
+        from alden_chat import process_input
+        value = {'request_id': 'd' * 32, 'conversation_id': None, 'text': '질문', 'images': []}
+        with self.remote_response() as requests:
+            receipt = process_input(self.root, value, self.token)
+        self.assertEqual(receipt['state'], 'completed', receipt)
+        self.assertEqual(receipt['reply'], '모의 응답')
+        self.assertEqual(len(requests), 1)
+        self.assert_default_request(requests[0])
+        self.assertFalse(self.path.exists())
+
+    def test_nonexistent_state_root_gets_explicit_defaults_without_creating_state(self):
+        root = self.root / 'new-state'
+        result = voice.configured_voice_model(root)
+        self.assertEqual((result['model'], result.get('reasoning_effort'), result.get('mode')),
+                         (routes.DEFAULT_MODEL, 'high', 'manual'))
+        self.assertEqual(result.get('transport'), 'opencodex')
+        self.assertFalse(root.exists())
+
+    def test_absent_and_saved_manual_defaults_have_the_same_route(self):
+        absent = voice.configured_voice_model(self.root)
+        self.path.write_text(json.dumps({'model': routes.DEFAULT_MODEL, 'reasoning_effort': 'high',
+                                        'mode': 'manual', 'transport': 'opencodex'}))
+        catalog = {'models': [{'id': routes.DEFAULT_MODEL, 'local': False,
+                              'selectable': True, 'efforts': ['high']}]}
+        with patch('alden_model_routes.catalog', return_value=catalog):
+            saved = voice.configured_voice_model(self.root)
+        keys = ('model', 'reasoning_effort', 'mode', 'transport', 'base_url')
+        self.assertEqual({k: absent.get(k) for k in keys}, {k: saved[k] for k in keys})
+        self.assertEqual(saved['source'], 'saved_configuration')
+        self.assertIsNotNone(saved['configuration_sha256'])
+
+    def test_direct_local_adapter_keeps_its_27b_default(self):
+        adapter = voice.LocalMlxLlm()
+        self.assertEqual(adapter.model, voice.QWEN38_27B_MODEL_ID)
+        self.assertEqual(adapter.base_url, voice.LOCAL_LLM_BASE_URL)
 
     def test_each_fixed_choice_and_prefixless_alias_has_exact_service(self):
         for model in voice.LOCAL_LLM_ALLOWED_MODEL_IDS:
@@ -47,8 +124,12 @@ class VoiceModelSelectionTests(unittest.TestCase):
         for text in ('bad-json','[]','{}','{"model":7}',json.dumps({'model':'cloud/remote'}),'x'*8193):
             with self.subTest(text=text[:40]):
                 self.path.write_text(text)
-                with patch('alden_voice._local_urlopen') as network:
-                    with self.assertRaises(RuntimeError):adapter.generate('request',self.token)
+                expected = ('voice_model_selection_unavailable' if text == json.dumps({'model':'cloud/remote'})
+                            else 'voice_model_configuration_invalid')
+                with patch('alden_voice._local_urlopen') as network, \
+                     patch('alden_model_routes.selection', side_effect=AssertionError('invalid configuration must not use defaults')):
+                    with self.assertRaisesRegex(RuntimeError, '^' + expected + '$'):
+                        adapter.generate('request',self.token)
                     network.assert_not_called()
                 self.assertEqual(self.path.read_text(),text)
                 self.assertEqual(adapter.last_metrics['request']['state'],'failed')

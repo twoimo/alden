@@ -1,11 +1,13 @@
 import sys
 import unittest
+import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from alden_abort import AbortController
+from alden_history import database, record_voice
 from alden_voice import AldenVoicePipeline, VoiceState, VoiceStatusStore, run_microphone_session
 
 
@@ -129,6 +131,119 @@ class ManualVoiceTests(unittest.TestCase):
             self.assertTrue(audio.closed)
             stt.return_value.transcribe.assert_not_called()
             tts.return_value.speak.assert_not_called()
+
+
+class VoiceContextRestorationTests(unittest.TestCase):
+    """Restore private SQLite fixtures without starting audio/model adapters."""
+
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.conversation_id = "a" * 32
+        self.other_id = "b" * 32
+        self.token = AbortController(self.root).token()
+        with database(self.root, write=True) as db:
+            for conversation_id in (self.conversation_id, self.other_id):
+                db.execute("INSERT INTO voice_sessions VALUES(?,?,?,?)",
+                           (conversation_id, 1, "private fixture", "microphone"))
+        self.pipeline = AldenVoicePipeline(
+            stt=object(), llm=object(), tts=object(), token=self.token,
+            manual_listen=True, status=VoiceStatusStore(self.root),
+        )
+        self.addCleanup(self.pipeline.close)
+        self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((self.root / "alden-history.sqlite3").stat().st_mode & 0o777, 0o600)
+
+    def text_turn(self, text, state="completed", conversation_id=None):
+        from alden_chat_turns import reserve_turn, complete_turn, cancel_turn
+        with self.token.commit_guard():
+            ticket = reserve_turn(self.root, uuid.uuid4().hex,
+                                  conversation_id or self.conversation_id, text)
+            if state in {"completed", "retracted"}:
+                complete_turn(self.root, ticket, text + " 답변")
+            if state in {"cancelled", "failed", "retracted"}:
+                cancel_turn(self.root, ticket, reason=state)
+        return ticket
+
+    def snapshot(self):
+        with database(self.root) as db:
+            return "\n".join(db.iterdump())
+
+    def test_restore_omits_retracted_pairs_and_preserves_valid_history_and_counters(self):
+        record_voice(self.root, self.conversation_id, 1, "user", "음성 질문", 1)
+        record_voice(self.root, self.conversation_id, 1, "assistant", "음성 답변", 2)
+        self.text_turn("완료 질문")
+        self.text_turn("취소된 응답의 질문", "cancelled")
+        self.text_turn("실패한 응답의 질문", "failed")
+        self.text_turn("대체된 응답의 질문", "pending")
+        self.text_turn("새 질문")
+        self.text_turn("철회한 질문", "retracted")
+        # A retraction in another conversation must not hide the same turn ID here.
+        self.text_turn("다른 대화의 철회", "retracted", self.other_id)
+        before = self.snapshot()
+
+        self.pipeline.restore_selected_conversation(self.conversation_id)
+
+        self.assertEqual(self.pipeline._recent_conversation(), [
+            {"role": "assistant", "content": "음성 답변"},
+            {"role": "user", "content": "완료 질문"},
+            {"role": "assistant", "content": "완료 질문 답변"},
+            {"role": "user", "content": "취소된 응답의 질문"},
+            {"role": "user", "content": "실패한 응답의 질문"},
+            {"role": "user", "content": "대체된 응답의 질문"},
+            {"role": "user", "content": "새 질문"},
+            {"role": "assistant", "content": "새 질문 답변"},
+        ])
+        self.assertEqual((self.pipeline.turn_id, self.pipeline.context_version), (7, 11))
+        self.assertEqual(self.pipeline.state, VoiceState.IDLE)
+        next_turn = self.pipeline._begin_turn("microphone", "after-restore")
+        self.assertEqual((next_turn.conversation_id, next_turn.turn_id), (self.conversation_id, 8))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_all_retracted_context_stays_empty_without_reusing_turn_ids(self):
+        self.text_turn("철회한 첫 질문", "retracted")
+        self.text_turn("철회한 다음 질문", "retracted")
+        before = self.snapshot()
+
+        self.pipeline.restore_selected_conversation(self.conversation_id)
+
+        self.assertEqual(self.pipeline._recent_conversation(), [])
+        self.assertEqual((self.pipeline.turn_id, self.pipeline.context_version), (2, 4))
+        self.assertEqual(self.pipeline._begin_turn("microphone", "next").turn_id, 3)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_legacy_voice_only_schema_keeps_confirmed_order_and_does_not_migrate(self):
+        record_voice(self.root, self.conversation_id, 4, "user", "가" * 700, 7)
+        record_voice(self.root, self.conversation_id, 4, "assistant", "나" * 700, 8)
+        record_voice(self.root, self.conversation_id, 5, "user", "미확정", 9, state="pending")
+        with database(self.root) as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='alden_chat_requests'").fetchone())
+        before = self.snapshot()
+
+        self.pipeline.restore_selected_conversation(self.conversation_id)
+
+        self.assertEqual(self.pipeline._recent_conversation(), [
+            {"role": "user", "content": "가" * 600},
+            {"role": "assistant", "content": "나" * 600},
+        ])
+        self.assertEqual((self.pipeline.turn_id, self.pipeline.context_version), (5, 9))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_pending_confirmed_input_is_kept_when_only_its_answer_is_unfinished(self):
+        self.text_turn("이전 완료")
+        self.text_turn("진행 중인 응답의 질문", "pending")
+        before = self.snapshot()
+
+        self.pipeline.restore_selected_conversation(self.conversation_id)
+
+        self.assertEqual(self.pipeline._recent_conversation(), [
+            {"role": "user", "content": "이전 완료"},
+            {"role": "assistant", "content": "이전 완료 답변"},
+            {"role": "user", "content": "진행 중인 응답의 질문"},
+        ])
+        self.assertEqual((self.pipeline.turn_id, self.pipeline.context_version), (2, 3))
+        self.assertEqual(self.snapshot(), before)
 
 
 if __name__ == "__main__":

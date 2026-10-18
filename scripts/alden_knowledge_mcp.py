@@ -95,6 +95,11 @@ class KnowledgeServer(StdioServer):
             if 'focus' in args:
                 options['focus'], options['hops'] = args['focus'], 1
             result = read_action(self.root, action, json.dumps(options))
+            if action == 'collection-history':
+                # The UI catalog is global; MCP exposes only this request's projects.
+                requested = frozenset(args['projects'])
+                result = {**result, 'projects': [project for project in result['projects']
+                                                if project['project'] in requested]}
         _check(control)
         return result
 
