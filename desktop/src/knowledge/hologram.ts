@@ -24,7 +24,7 @@ import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxa
 import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
 import { internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
-import { labelZoomLevel, labelZoomStyle, type LabelZoom } from './label-zoom';
+import { labelZoomLevel, labelZoomStyle, selectProjectedLabels, type LabelZoom, type ProjectedLabelCandidate } from './label-zoom';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
@@ -858,7 +858,7 @@ export class KnowledgeHologram {
   }
   private refreshOverviewLabels(): void {
     if(this.view.hops!==0)return;
-    const wanted=new Set(this.zoomLabels?.size ? this.zoomLabels : this.globalLabels);
+    const wanted=new Set(this.zoomLabelCandidates?.length ? this.zoomLabels : this.globalLabels);
     if(this.hoveredId)wanted.add(this.hoveredId);
     if(this.view.focusId)wanted.add(this.view.focusId);
     for(const [id,label] of this.labels)if(!wanted.has(id)){label.remove();this.labels.delete(id);}
@@ -877,8 +877,8 @@ export class KnowledgeHologram {
     if (this.view.hops !== 0 || !this.zoomLabelCandidates?.length) return;
     const ratio = this.labelFitDistance / Math.max(.01, this.camera.position.distanceTo(this.lookAt));
     const level = labelZoomLevel(ratio, this.labelZoom);
-    const style = labelZoomStyle(level, this.viewport.width, this.viewport.height);
-    const wanted = new Set<string>();
+    const style = labelZoomStyle(level, this.viewport.width, this.viewport.height, ratio);
+    const projected: ProjectedLabelCandidate[] = [];
     const reserved = new Set([this.view.focusId, this.hoveredId].filter(Boolean)).size;
     // Project only saved eligible candidates; keep a bounded DOM and collision
     // budget. A zoomed-in viewport can discover titles absent from the overview.
@@ -889,9 +889,12 @@ export class KnowledgeHologram {
       this.projected.copy(p).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
       if (Math.abs(this.projected.x) > .96 || Math.abs(this.projected.y) > .96
         || this.projected.z < -1 || this.projected.z > 1) continue;
-      wanted.add(node.id);
-      if (wanted.size >= Math.min(style.budget, 24 - reserved)) break;
+      if (node.id === this.view.focusId || node.id === this.hoveredId) continue;
+      projected.push({id: node.id, x: (this.projected.x + 1) * this.viewport.width / 2,
+        y: (1 - this.projected.y) * this.viewport.height / 2, topic: this.globalLabels.has(node.id),
+        rank: this.globalLabelRanks.get(node.id) ?? projected.length});
     }
+    const wanted = selectProjectedLabels(projected, Math.min(style.budget, 24 - reserved), this.zoomLabels);
     const changed = wanted.size !== this.zoomLabels.size || [...wanted].some(id => !this.zoomLabels.has(id));
     this.zoomLabels = wanted;
     if (changed) this.refreshOverviewLabels();
@@ -901,13 +904,13 @@ export class KnowledgeHologram {
       const box = this.labelBounds[index++];
       const prominent = id === this.view.focusId || id === this.hoveredId;
       const topic = this.globalLabels.has(id);
-      const size = prominent ? 14 : topic ? style.topicSize : style.detailSize;
+      const size = prominent ? Math.max(15, style.topicSize + .5) : topic ? style.topicSize : style.detailSize;
       label.dataset.level = String(level);
       label.dataset.role = prominent ? 'active' : topic ? 'topic' : 'title';
       label.style.fontSize = `${size}px`;
-      label.style.fontWeight = prominent ? '650' : topic ? '600' : '450';
+      label.style.fontWeight = prominent ? '650' : topic ? '550' : '450';
       label.style.opacity = String(prominent ? 1 : style.opacity);
-      const maxWidth = prominent || !topic ? 224 : 196;
+      const maxWidth = prominent || !topic ? 240 : 220;
       if (label.style.maxWidth !== `${maxWidth}px`) {
         label.style.maxWidth = `${maxWidth}px`;
         if (box) box.width = 0;
@@ -1185,7 +1188,8 @@ export class KnowledgeHologram {
       const offset = Math.min(54, extent * height / (2 * Math.tan(this.camera.fov * Math.PI / 360) * Math.max(.1, this.camera.position.distanceTo(position))) + 8);
       box.top = Math.min(y + height - labelHeight, y + (1 - this.projected.y) * height / 2 + offset);
       if (this.view.hops === 0) {
-        placeOverviewLabel(box, this.viewport, this.excludedLabelBounds, this.labelBounds, index - 1);
+        placeOverviewLabel(box, this.viewport, this.excludedLabelBounds, this.labelBounds, index - 1,
+          this.zoomLabelCandidates?.length ? id === this.view.focusId || id === this.hoveredId ? 'active' : 'anchored' : 'legacy');
       } else {
         // Keep local/drilldown collision behavior unchanged.
         let collision = box.width > width || labelHeight > height;

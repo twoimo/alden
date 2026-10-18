@@ -16,6 +16,9 @@ const OFFSETS = [
   [-1, 0], [1, 0], [-1, -1], [1, -1], [-1, 1], [1, 1],
   [-1, -2], [1, -2],
 ] as const;
+const ANCHORED_OFFSETS = [[0, 0], [0, -1], [0, 1], [-1, 0], [1, 0],
+  [-1, -1], [1, -1], [-1, 1], [1, 1]] as const;
+export type LabelPlacement = 'legacy' | 'anchored' | 'active';
 
 export function compareOverviewLabelPriority(
   first: string,
@@ -39,6 +42,7 @@ export function placeOverviewLabel(
   exclusions: readonly LabelExclusion[],
   earlierBoxes: readonly LabelBox[],
   earlierCount: number,
+  placement: LabelPlacement = 'legacy',
 ): void {
   box.visible = false;
   const height = box.height ?? LABEL_HEIGHT;
@@ -51,9 +55,15 @@ export function placeOverviewLabel(
   const maxTop = viewport.y + viewport.height - height;
   const verticalStep = Math.max(VERTICAL_STEP, height + LABEL_GAP + 1);
 
-  for (const [horizontal, row] of OFFSETS) {
-    const left = Math.max(viewport.x, Math.min(maxLeft, preferredLeft + horizontal * (box.width + 10)));
+  const anchored = placement !== 'legacy';
+  const offsets = anchored ? ANCHORED_OFFSETS : OFFSETS;
+  for (const [horizontal, row] of offsets) {
+    const left = Math.max(viewport.x, Math.min(maxLeft, preferredLeft + horizontal * (anchored ? 18 : box.width + 10)));
     const top = Math.max(viewport.y, Math.min(maxTop, preferredTop + row * verticalStep));
+    // A topic must remain beside its own projected node. Cull crowded labels
+    // instead of manufacturing a detached list up to three rows away.
+    if (anchored && (Math.abs(left - preferredLeft) > 18 || Math.abs(top - preferredTop) >
+      (placement === 'active' ? 54 : 36))) continue;
     let blocked = false;
     for (const exclusion of exclusions) {
       if (exclusion.right > exclusion.left &&
