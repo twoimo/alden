@@ -66,7 +66,7 @@
 | ALG153-GLOBAL-005 | REJECT: 단순 global 복귀 | native-source A+K5 counter-proof로 무관 component 영향 재현 | A03: global은 reference로만; 기존 경계 유지 |
 | ALG153-LMOD-006 | CONDITIONAL | 공식 구현으로120조건 실행 완료. 같은 component objective에서도 결과가 달라짐 | A03: 실제 의미·채널·계산 예산·호스트 경로 검증 전 미채택 |
 | ALG153-LCPM-007 | CONDITIONAL | dev30에서gamma .01 고정 후 새 seed120 실행 | A03: 새 가족·가중치 scale·semantic graph·실제 gold/호스트 전 미채택 |
-| SEM153-E5-008 | DEFER | producer 소스 위치를 추가 확인. 원 보고서의 입력 부족과 제품 부재를 구분 | A04: collection/OSK pooling+E5 server 전문을 다음 감사 입력에 포함; 같은 모델의 실제 장문 비교 남음 |
+| SEM153-E5-008 | DEFER | producer 소스 위치와 실제 warm endpoint의 작은 가상 shadow 실험 확인. 원 보고서의 입력 부족과 제품 부재를 구분 | A04: 설치 producer64벡터 일치와32가상 probe는 [별도 근거](embedding-shadow-0.3.153.md). 실제 독립 의미 gold·디스크 가중치/재시작 검증 남음 |
 | SEM153-SPARSE-009 | ACCEPT | raw encoder→sampled pairs→producer cap→consumer cap→cluster를 분리 평가하는 계약 추가 | A04: 각 단계 pair/neighbor recall·실제 유효 비교 범위 측정 남음 |
 | ID153-DUP-010 | ACCEPT | 원문 중복/검색 텍스트/동일 주장/동일 실체의 gold 구분과 명시 overlay 유지 | A02: 독립 사람 판정·가족별 split·실제 merge/revert 전 범위 남음 |
 | UX153-ZOOM-011 | ACCEPT | 현재는 screen-space policy라는 표현으로 정정. extractive 대표 라벨 baseline 우선 | A05: 대표성/차별성/편집 안정성·물리 탐색 성공 검증 남음 |
@@ -85,7 +85,7 @@
 - **A01 ACCEPT/부분 완료:** 도구·입력 해시, 알려진 반례 regression, native objective probe 완료. 새 가족/의미 반례 확장 남음.
 - **A02 CONDITIONAL/미완료:** 판정 정책·표본 계약을 수정했다. 기존44후보는 미검토다. 사람이 판정한 독립 gold를 생성 모델로 채우지 않는다.
 - **A03 CONDITIONAL/부분 완료:** 공식 reference와 새 seed120조건의 실행·코드/selection 고정 완료. semantic/mixed 채널, LFR·새 크기·가중치·증분/호스트 검증은 미완료.
-- **A04 CONDITIONAL/미완료:** pooling producer가 실제로 있는 경로를 확인했다. 단계별 recall과 같은 모델의 shadow 표현 평가는 아직 없다. 기존 모델 유지.
+- **A04 CONDITIONAL/부분 완료:** pooling producer 경로와 같은 warm endpoint의103실제 벡터/32가상 probe를 확인했다. 설치 producer64개 packed vector가 기준 pooling과 일치했다. 작은 과제에서는 네 방식 우위가 없었으며 단계별 recall·독립 실제 gold·디스크 가중치 재검증은 남아 있다. 기존 모델 유지.
 - **A05 CONDITIONAL/미완료:** 현재 zoom/라벨과 semantic hierarchy의 구분을 명시했다. 구현·물리 검증 남음.
 - **A06 CONDITIONAL/미완료:** 회귀27질의·실제 질의·공개 benchmark를 구분했다. 독립 실제 질의·live encoder·비용 평가 남음.
 - **A07 DEFER/미완료:** 기존 설치153·서명/원문 보존을 유지한다. 새 후보 제품 승격·물리/자원 검증·Gemini+최종reverse·운영 릴리스는 열려 있다.
