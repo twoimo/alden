@@ -1,6 +1,6 @@
 # Graphify를 Alden에 적용할지에 대한 검토
 
-2026-10-19. **로컬 재현을 마친 조건부 방향이며 외부 교차감사는 아직 미완료다.** Graphify 전체 도입이나 Alden 알고리즘 교체를 승인한 문서가 아니다. 설치 Alden 0.3.153/runtime `c3871f3aa203bebb9a8b0d5bba6b9f3fc908b0b8`을 유지한다. 기존 [알고리즘 감사](graph-algorithm-audit-0.3.153.md)와 [후속 실험](graph-algorithm-audit-0.3.153-followup.md)을 잇는다.
+2026-10-19. **로컬 재현을 마친 조건부 방향이며 외부 교차감사는 아직 미완료다.** Graphify 전체 도입이나 Alden 알고리즘 교체를 승인한 문서가 아니다. 감사 입력은 Alden 0.3.153/runtime `c3871f3aa203bebb9a8b0d5bba6b9f3fc908b0b8`에 결속한다. 현재 설치본은 별도 [Threads 갱신 호환 수정](threads-source-refresh-0.3.154.md)을 포함한0.3.154/runtime `659d3b5cfea08fe26e856d55cdd1f5dac7fd67a8`이며, 그래프 알고리즘과 정규화 정책은 이번 호환 수정으로 바꾸지 않았다. 기존 [알고리즘 감사](graph-algorithm-audit-0.3.153.md)와 [후속 실험](graph-algorithm-audit-0.3.153-followup.md)을 잇는다.
 
 현재 단계는 **ChatGPT thesis 전문 저장·로컬 판정 완료 / Gemini 반대감사 대기 / ChatGPT 최종 역검증 미시작**이다. 원래 전송·모드·첨부·연구 시작·완료·export UI 도구 결과8개를 해당 대화ID가 일치하는 원본 transcript에서 추출해 `ui-evidence-index.json`에 결속했다. 부모의 독립 byte/hash 대조 영수증도 공통 completion manifest에 연결했다. 이는 독립 제품 수리나 최종 외부 합의의 증거가 아니다.
 
