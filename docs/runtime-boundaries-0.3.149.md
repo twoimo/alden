@@ -1,10 +1,29 @@
-# Affinity authority, pin geometry and attachment controls (0.3.149)
+# Alden 0.3.149: zoom reading and layout boundaries
 
-The graph driver previously treated identical node/edge/pair values as the same snapshot even when affinity presence, state, input key or profile key changed. This could reuse old membership metadata or an old worker engine under new evidence authority. `ALD-WORKER-SCOPE-004` now includes these authority fields in snapshot identity, drops checkpoints and replaces the persistent worker on authority changes. Completed coordinates remain a geometric prior; they do not retain old labels or authority. In-flight key mutation, pending reflow, same-authority coalescing, hidden work and explicit clear are covered.
+Runtime source: `00999414c21ce3c351edd273cdefa46d4323bdb0`. Core implementation: `6926aae9bdfefa757b681548f7d8489815f411ca`. Installed locally with the existing Apple Development signing identity.
 
-The solver's public pins were exact while its spring calculations used origin-clamped pin proxies. `ALD-PIN-FRAME-003` / F02 now uses authoritative pin geometry. Extreme connected components scale all force terms together and use compensated accumulation for cancelling huge attractions. Sparse collision cells and single-focus-relative centroids avoid the numeric-grid exception; pins too far from movable contacts remain real spring endpoints and are excluded only from impossible local contacts. Limits, source records and exact public pins are retained. Offsets below floating-point spacing at astronomical coordinates remain unrepresentable.
+## Graph reading
 
-The unpinned numeric-grid collision kernel is separate from the special pinned path. The final source preserves all 56 tested no-pin lifecycle results and checkpoints exactly. An initial generic implementation showed a synthetic median regression; its receipts and the intermediate unsuccessful micro-optimization are retained. After kernel specialization, 24 alternating baseline/candidate Node cold solves produced:
+The [zoom presentation rules](zoom-labels-0.3.148.md) continue in this release: four distant subjects, eight overview subjects, then viewport-local subjects and saved titles at closer distances. Topic text grows from 12 to 15px; title text stays 11.5–12px. Five percent hysteresis prevents rapid threshold switching. Selected and hovered entries retain priority, and the navy background remains.
+
+The design follows [Sigma's label visibility rules](https://www.sigmajs.org/how-to/labels/styles-positioning/) and [Cytoscape's minimum zoomed font size](https://js.cytoscape.org/#style/labels). Alden retains its own projected labels and does not add either library.
+
+| Installed viewport | Distant | Overview | Context | Detail |
+|---|---:|---:|---:|---:|
+| Default |4|8|15|24|
+| Compact |4|8|12|13|
+
+All eight installed graph captures were inspected directly. Label rectangle overlap, clipping and visible unpositioned labels were zero. These are owned WKWebView windows with controlled wheel input, not physical trackpad measurements.
+
+## Corrected boundaries
+
+- `ALD-WORKER-SCOPE-004`: affinity presence, state, input key and profile key now participate in authority identity. Changes discard old membership/checkpoints and replace the worker. Previous positions can seed geometry only. Nineteen new regression failures reproduced the old behavior; all 39 driver tests now pass. In-flight key mutation, pending reflow, same-authority coalescing, hidden work and explicit clear are covered.
+- `ALD-PIN-FRAME-003`: multiple authoritative pins retain their actual spring endpoints. Common force scaling, compensated accumulation and sparse collision cells handle extreme finite coordinates. Pins too far from movable contacts are excluded only from impossible local contacts. Public pin coordinates stay exact. The engine has 61 passing tests. Offsets below floating-point precision remain unrepresentable; screen position does not establish semantic truth.
+- A common collision kernel avoids the intermediate candidate's measured no-pin regression. Full results and checkpoints match the previous engine for 56 lifecycle states. Both the initial generic implementation's regression and the unsuccessful micro-optimization receipts remain preserved.
+- Native audit captures now require the selected graph to finish camera, physics, worker and target transitions. Earlier transient captures are retained; their rectangular concentration is not recorded as a confirmed product defect.
+- Photo/document picker controls use Korean labels and visible keyboard focus styling. Native file inputs and existing input limits remain.
+
+Twenty-four alternating baseline/candidate Node cold solves produced:
 
 | Synthetic input | Baseline median | Candidate median | Baseline p95 | Candidate p95 |
 |---|---:|---:|---:|---:|
@@ -12,16 +31,16 @@ The unpinned numeric-grid collision kernel is separate from the special pinned p
 | 2,048 nodes, relation groups | 118.38ms | 102.55ms | 149.97ms | 113.45ms |
 | 2,048 isolated nodes | 69.44ms | 65.80ms | 95.74ms | 71.33ms |
 
-These are same-process synthetic solver measurements and exact-output checks. They are not whole-app, field, FPS/GPU/battery or semantic-gold measurements. Background load affects absolute timing; the paired comparison scope is explicit.
+These are same-process synthetic solver measurements. Background load affects absolute timing; they do not measure whole-app FPS, GPU, battery or semantic quality. Raw worker and main receipts remain under `outputs/worker-authority-20261018/`, `outputs/pin-geometry-fix-20261018/` and `outputs/runtime-boundaries-20261018/`.
 
-The existing native file inputs now have Korean photo/document action labels, shared button styling and a visible keyboard focus ring. Native input IDs, accepted types, byte limits, change events, disabled state and selected-file previews remain in place. The input itself stays the hit target; no new attachment transport or picker API is introduced.
+## Verification and delivery
 
-## Evidence and delivery gates
+UI 971 tests, desktop Rust 146 tests and strict Clippy passed. [Exact-source CI 39136286507](https://github.com/twoimo/alden/actions/runs/39136286507) passed all four jobs. Candidate and installed focused workspace protocols each produced 34 captures with successful final settling checks. The two selected installed views, eight zoom views and three document views were directly reviewed.
 
-The driver owner reproduced 19 new failures, then passed 39 driver and 51 integration tests. The pin owner passed 61 engine and 39 driver tests. Main integration after performance specialization passed all 971 UI tests and the 56-state exact baseline comparison. Source and raw receipts are under `outputs/worker-authority-20261018/`, `outputs/pin-geometry-fix-20261018/` and `outputs/runtime-boundaries-20261018/`.
+Installed document input answered 53, retained 53 in a follow-up, then answered 67 from a new CSV. Earlier 0.3.148 native tests also exercised images and links. Controlled late-response/cancellation checks used actual model generations before holding the commit boundary. These are bounded fixtures, not exhaustive media or concurrency coverage. The requested default Gemini Flash/high/manual route remained selected; no local model was loaded or substituted for these tests.
 
-Before this update, installed 0.3.148 completed nine actual native image/file/link inputs on the saved Google Gemini 3.8 Flash high/manual route: image color and visual followup, prior number recall, UTF-8 document and CSV values, a pinned public document URL and its snapshot followup. The private SQLite ledgers confirm all nine requests completed in their original conversations. Three additional real generations exercised controlled post-inference ordering: a superseded answer could not overwrite the latest answer, and cancellation committed no assistant message. One earlier harness alias assertion failed after a real generation; its original evidence is retained. Requested route and returned basename are separate observations.
+All 77 installed files/modes matched the candidate. Strict deep signature, unchanged designated requirement, independent 0.3.148 recovery and protected model/enrollment/emergency settings plus seven collection targets/policies passed. Original source stores and sending queues were preserved.
 
-These media tests use owned programmatic WKWebView inputs or controlled process ordering, not physical file-picker/microphone/TTS/sending proof. They use isolated derived state and do not certify all media types, URLs or production workloads. Evidence is under `outputs/media-installed-20261018/`.
+Local evidence: `outputs/runtime-boundaries-20261018/verification.json`, `installed-visual-review-final.json`, `preservation-installed-final.json`, and `outputs/cross-audit-20261018/completion-manifest.json`. The manifest retains the superseded unfrozen worker-artifact hash separately from the finalized artifact.
 
-Canonical signed build, installed file/configuration reconciliation, native graph/focus/attachment-control captures and exact-source CI remain delivery gates for this version. The completed ChatGPT thesis input predates this delta; the original Gemini full report and final reciprocal reverse audit remain incomplete. Neither implementation readiness nor local installation establishes the whole 18-part objective or public notarized release.
+The original Gemini adversarial report and final ChatGPT reverse review remain incomplete. The completed ChatGPT thesis predates this implementation and is not certification of it. Physical primary AX/file-picker/microphone/TTS input, independent human semantic/identity/time gold, representative resource/p95 measurements, valid worker activation proof and Developer ID/notarized production delivery remain separate open gates. All 18 goal requirements remain active.

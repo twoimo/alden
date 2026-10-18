@@ -1,5 +1,7 @@
 # Zoom-adaptive knowledge graph labels (0.3.148)
 
+Historical0.3.148 delivery record. [The0.3.149 follow-up](runtime-boundaries-0.3.149.md) corrects F02 multi-pin and worker authority boundaries and records fresh installed verification.
+
 The graph previously kept eight 11px labels at every camera distance. This made the overview weakly legible and zooming in did not reveal saved document titles. The scoped outcome is readable topic hierarchy and viewport-local discovery, while keeping the navy field, source records, graph identities, selection and keyboard targets intact.
 
 ## Reading rules
