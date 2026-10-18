@@ -892,6 +892,8 @@ export class KnowledgeHologram {
       if (node.id === this.view.focusId || node.id === this.hoveredId) continue;
       projected.push({id: node.id, x: (this.projected.x + 1) * this.viewport.width / 2,
         y: (1 - this.projected.y) * this.viewport.height / 2, topic: this.globalLabels.has(node.id),
+        width: Math.min(this.globalLabels.has(node.id) ? 220 : 240,
+          8 + node.label.length * (this.globalLabels.has(node.id) ? style.topicSize : style.detailSize) * .9),
         rank: this.globalLabelRanks.get(node.id) ?? projected.length});
     }
     const wanted = selectProjectedLabels(projected, Math.min(style.budget, 24 - reserved), this.zoomLabels);

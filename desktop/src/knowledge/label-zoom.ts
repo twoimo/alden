@@ -22,7 +22,7 @@ export function labelZoomStyle(level: LabelZoom, width: number, height: number, 
     detail: level >= 2, opacity: [.88, .96, 1, 1][level] };
 }
 
-export type ProjectedLabelCandidate = { id: string; x: number; y: number; topic: boolean; rank: number };
+export type ProjectedLabelCandidate = { id: string; x: number; y: number; topic: boolean; rank: number; width?: number };
 
 /** Screen-space decluttering only: never changes graph membership or meaning.
  * A small retention preference avoids swapping equally ranked titles on pan.
@@ -41,7 +41,8 @@ export function selectProjectedLabels(
   for (const candidate of ordered) {
     if (chosen.length >= limit) break;
     if (chosen.some(other => other.id === candidate.id
-      || ((other.x - candidate.x) / 172) ** 2 + ((other.y - candidate.y) / 42) ** 2 < 1)) continue;
+      || ((other.x - candidate.x) / (((other.width ?? 162) + (candidate.width ?? 162)) / 2 + 10)) ** 2
+        + ((other.y - candidate.y) / (other.topic && candidate.topic ? 22 : 38)) ** 2 < 1)) continue;
     chosen.push(candidate);
   }
   return new Set(chosen.map(candidate => candidate.id));

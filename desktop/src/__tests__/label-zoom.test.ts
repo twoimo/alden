@@ -45,6 +45,13 @@ describe('screen-space graph reading levels',()=>{
     expect([...selectProjectedLabels(candidates,24,new Set(['b']))]).toEqual(['topic','b']);
     expect(selectProjectedLabels([...candidates,{id:'bad',x:NaN,y:20,topic:true,rank:0}],100,new Set()).size).toBe(2);
   });
+  it('keeps short nearby subjects eligible while spacing longer titles more generously',()=>{
+    const subjects=[{id:'a',x:200,y:200,topic:true,rank:0,width:55},
+      {id:'b',x:200,y:228,topic:true,rank:1,width:55},
+      {id:'c',x:285,y:200,topic:true,rank:2,width:55}];
+    expect(selectProjectedLabels(subjects,8,new Set()).size).toBe(3);
+    expect(selectProjectedLabels(subjects.map(c=>({...c,topic:false,width:230})),8,new Set()).size).toBe(1);
+  });
   it('keeps useful off-overview titles eligible without generic or duplicate labels or source mutation',()=>{
     const g=parseKnowledgeGraph({nodes:[
       ...Array.from({length:8},(_,i)=>({id:'t'+i,label:'저장 주제 '+i,category:'topic',degree:100})),
