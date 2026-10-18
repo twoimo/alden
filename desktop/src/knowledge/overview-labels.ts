@@ -5,14 +5,16 @@ const BUCKET = /^(?:홍보(?:[·\s]+안내)?|외부\s*자료(?:[·\s]+링크)?)$
 const PEOPLE = /^(?:author|person|creator|channel|source_group|인물|사람|대화 상대|화자)$/i;
 const TOPIC = /^(?:topic|concept|subject|주제|개념)$/i;
 const CLAIM = /^(?:claim|source_claim|memory|note|knowledge|지식|기억)$/i;
+// Concise saved subjects used by the career graph, not inferred person names.
+const CONCISE_SUBJECTS = new Set(['자소서', '면접']);
 const CHANNEL_TITLE = /(?:채널|티비|tv|channel)$/i;
 const MEDIA_BUCKET = /(?:^|[·\s/])(?:(?:일반|전체)\s*(?:동)?영상|(?:동)?영상\s*(?:모음|목록)|snippets?)(?:\s*\d+\s*(?:개|편|건)?)?$/i;
 
-function overviewDisplayPriority(label: string): 0 | 1 {
+function descriptiveOverviewLabel(label: string): boolean {
   const terms = label.split(/[·\s/]+/).filter(term => /[A-Za-z가-힣]{2}/.test(term));
-  // Prefer descriptive saved titles; ambiguous labels remain fallbacks.
+  // Ambiguous single-term labels stay on their nodes for hover/focus access.
   // This is a display heuristic, not a person or content classification.
-  return terms.length >= 2 && !CHANNEL_TITLE.test(label) && !MEDIA_BUCKET.test(label) ? 0 : 1;
+  return terms.length >= 2 && !CHANNEL_TITLE.test(label) && !MEDIA_BUCKET.test(label);
 }
 
 /** Saved routing ids are not titles. Callers still keep the node itself. */
@@ -33,26 +35,25 @@ export function selectOverviewLabels(nodes: readonly KnowledgeNode[], cap = 8): 
     if (node.evidence.retracted || (node.contentEvidence && node.contentEvidence !== 'content_candidate')
       || PEOPLE.test(node.category) || ['collection','hub','index','metadata'].includes(node.category)
       || GENERIC.test(label) || BUCKET.test(label) || !/[A-Za-z가-힣]/.test(label)
-      || /^@[^\s]+$/.test(label) || internalGraphLabel(label) || label.length < 2) return [];
+      || /^@[^\s]+$/.test(label) || internalGraphLabel(label)
+      || !(descriptiveOverviewLabel(label) || TOPIC.test(node.category) && CONCISE_SUBJECTS.has(label))) return [];
     const tier = TOPIC.test(node.category) ? 0 : CLAIM.test(node.category) ? 1 : node.category === 'code' ? 3 : 2;
     if (tier >= 2 && label.length < 8) return [];
-    return [{node, label, tier, priority: overviewDisplayPriority(label),
+    return [{node, label, tier,
       group: node.sourceTarget || node.space || 'unscoped:' + node.id}];
-  }).sort((a, b) => a.priority - b.priority || a.tier - b.tier
+  }).sort((a, b) => a.tier - b.tier
     || (b.node.degree ?? 0) - (a.node.degree ?? 0)
     || a.label.localeCompare(b.label) || a.node.id.localeCompare(b.node.id));
   const chosen: KnowledgeNode[] = [], groups = new Set<string>(), labels = new Set<string>();
   const add = (item: typeof candidates[number]): boolean => {
+    // Compare NFC/whitespace keys only; keep saved text, case and punctuation.
     if (labels.has(item.label) || chosen.length >= limit) return false;
     chosen.push(item.node); labels.add(item.label); groups.add(item.group); return true;
   };
-  // A bare name or category is not an evidence-backed overview title.
-  // Preserve its node and drilldown target, but leave the overview slot empty
-  // when no descriptive subject is available from the current graph page.
-  const pool = candidates.filter(item => item.priority === 0
-    && !CHANNEL_TITLE.test(item.label) && !MEDIA_BUCKET.test(item.label));
-  for (const item of pool) if (item.tier === 0) add(item);
-  for (const item of pool) if (!groups.has(item.group)) add(item);
-  for (const item of pool) add(item);
+  // Leave unused slots empty when no descriptive saved labels are available.
+  // Retain subject, connection and source preferences among eligible labels.
+  for (const item of candidates) if (item.tier === 0) add(item);
+  for (const item of candidates) if (!groups.has(item.group)) add(item);
+  for (const item of candidates) add(item);
   return chosen;
 }

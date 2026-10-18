@@ -385,7 +385,9 @@ export class KnowledgeHologram {
     projectedCorrection:this.projectedRelaxation,
     communities:this.communityState?{state:'computed',nodes:this.communityState.nodes,clusters:this.communityState.clusters,
       multiNodeClusters:this.communityState.multiNodeClusters,majorGroups:this.communityState.groups.length,
-      majorNodes:this.communityState.nodes-this.communityState.otherNodes,otherNodes:this.communityState.otherNodes}:null,
+      majorNodes:this.communityState.nodes-this.communityState.otherNodes,otherNodes:this.communityState.otherNodes,
+      secondaryClusters:this.communityState.secondaryClusters,secondaryNodes:this.communityState.secondaryNodes,
+      singletonNodes:this.communityState.singletonNodes}:null,
     affinity: this.graph.layoutAffinity ? { state: this.graph.layoutAffinity.state, pairs: this.graph.layoutAffinity.pairs.length,
       usable: this.graph.layoutAffinity.usableNodes, requested: this.graph.layoutAffinity.requestedNodes,
       pairSampling: this.graph.layoutAffinity.pairSampling ?? null,
@@ -754,7 +756,7 @@ export class KnowledgeHologram {
     legend.removeAttribute('title');legend.removeAttribute('aria-label');
     if(!state)return;
     legend.setAttribute('aria-label','현재 화면의 주요 연결 모임과 자료 수. 내용 비교는 부분 결과입니다.');
-    legend.title='현재 표시한 자료의 관계와 사용 가능한 내용 비교로 계산한 모임입니다. 내용 비교는 부분 결과입니다. 기타에는 여러 모임과 독립 자료가 포함됩니다. 원본 자료와 사람은 각각 유지됩니다.';
+    legend.title='현재 표시한 자료의 관계와 사용 가능한 내용 비교로 계산한 배치입니다. 내용 비교는 부분 결과이며 색은 여러 모임에서 반복됩니다. 개별 배치는 연결이 없다는 뜻이 아닙니다. 원본 자료와 사람은 각각 유지됩니다.';
     const title=document.createElement('span');title.textContent=state.groups.length?'주요 모임 · 일부':'계산된 모임 없음';legend.append(title);
     for(const group of state.groups){
       const entry=document.createElement('span'),marker=document.createElement('i');
@@ -762,10 +764,15 @@ export class KnowledgeHologram {
       entry.setAttribute('aria-label',`모임 ${group.slot}, ${group.count}개 자료`);
       entry.append(marker,`${group.slot} · ${group.count.toLocaleString()}`);legend.append(entry);
     }
-    if(state.otherNodes){
+    if(state.secondaryClusters){
+      const entry=document.createElement('span');
+      entry.textContent=`작은 모임 ${state.secondaryClusters.toLocaleString()} · ${state.secondaryNodes.toLocaleString()}개`;
+      legend.append(entry);
+    }
+    if(state.singletonNodes){
       const entry=document.createElement('span'),marker=document.createElement('i');
       marker.style.backgroundColor=COMMUNITY_COLORS[0];marker.setAttribute('aria-hidden','true');
-      entry.append(marker,`${state.groups.length?'기타':'독립'} ${state.otherNodes.toLocaleString()}`);legend.append(entry);
+      entry.append(marker,`개별 배치 ${state.singletonNodes.toLocaleString()}`);legend.append(entry);
     }
   }
 

@@ -2,6 +2,14 @@ export interface CommunityGroup { id:string; count:number; slot:number }
 export interface CommunitySnapshot {
   colors:Map<string,number>; groups:CommunityGroup[]; slots:Map<string,number>;
   nodes:number; clusters:number; multiNodeClusters:number; otherNodes:number;
+  secondaryClusters:number; secondaryNodes:number; singletonNodes:number;
+}
+
+// A bounded palette may repeat. Reusing a colour never combines memberships.
+function secondarySlot(id:string):number {
+  let hash=2166136261;
+  for(let i=0;i<id.length;i++)hash=Math.imul(hash^id.charCodeAt(i),16777619);
+  return 1+((hash>>>0)%8);
 }
 
 /** Worker geometry labels, never entity identity or stored knowledge groups.
@@ -30,7 +38,13 @@ export function communitySnapshot(ids:readonly string[],labels:unknown,
     const slot=[1,2,3,4,5,6,7,8].find(slot=>!used.has(slot))!;slots.set(id,slot);used.add(slot);
   }
   const colors=new Map<string,number>(),groups=major.map(([id,members])=>({id,count:members.length,slot:slots.get(id)!}));
-  for(const [cluster,members] of memberships)for(const id of members)colors.set(id,slots.get(cluster)??0);
+  for(const [cluster,members] of memberships){
+    const slot=slots.get(cluster)??(members.length>1?secondarySlot(cluster):0);
+    for(const id of members)colors.set(id,slot);
+  }
+  const secondary=ranked.slice(8),secondaryNodes=secondary.reduce((sum,[,members])=>sum+members.length,0);
+  const singletonNodes=memberships.size-ranked.length;
   return {colors,groups,slots,nodes:ids.length,clusters:memberships.size,multiNodeClusters:ranked.length,
-    otherNodes:ids.length-groups.reduce((sum,g)=>sum+g.count,0)};
+    otherNodes:ids.length-groups.reduce((sum,g)=>sum+g.count,0),
+    secondaryClusters:secondary.length,secondaryNodes,singletonNodes};
 }

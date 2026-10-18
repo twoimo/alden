@@ -1,5 +1,7 @@
+// @vitest-environment happy-dom
 import { describe, expect, it } from 'vitest';
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
+import { KnowledgeHologram } from '../knowledge/hologram';
 import { internalGraphLabel, selectOverviewLabels } from '../knowledge/overview-labels';
 
 const graph = (nodes: Array<Record<string, unknown>>) => parseKnowledgeGraph({nodes,edges:[]});
@@ -60,11 +62,11 @@ describe('overview reading entry labels', () => {
     expect(selectOverviewLabels(nodes,2).map(n=>n.id)).toEqual(['topic','claim']);
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic','claim']);
   });
-  it.each(['topic', 'claim', 'source_claim'])('omits ambiguous %s names when no descriptive overview title is available', category => {
+  it.each(['topic', 'claim', 'source_claim'])('leaves overview slots empty when only ambiguous or generic %s labels are saved', category => {
     const nodes=graph([
       {id:'slogan',label:'렉카박멸',category,degree:99999},
       {id:'person',label:'홍민태',category,degree:99998},
-      {id:'subject',label:'면접',category,degree:1},
+      {id:'subject',label:'홍길동',category,degree:1},
       {id:'generic',label:'기타·미분류',category,degree:999999},
       {id:'channel',label:'홍민태 채널',category,degree:999997},
       {id:'tv',label:'렉카박멸 TV',category,degree:999996},
@@ -105,7 +107,7 @@ describe('overview reading entry labels', () => {
   });
   it('does not spend an overview slot on an internal node id', () => {
     const nodes=graph([
-      {id:'topic',label:'자소서 준비',category:'topic',degree:10,source_target:'career'},
+      {id:'topic',label:'자소서·면접',category:'topic',degree:10,source_target:'career'},
       {id:'raw',label:'career-public-graph:node:source',category:'document',degree:9999,source_target:'files'},
     ]).nodes;
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['topic']);
@@ -123,6 +125,75 @@ describe('overview reading entry labels', () => {
     const result=selectOverviewLabels(nodes,3);
     expect(result.map(n=>n.sourceTarget)).toEqual(['a','b','c']); expect(nodes).toHaveLength(4);
   });
+  it('deduplicates canonical Unicode and whitespace while keeping the chosen saved node and provenance', () => {
+    const input=graph([
+      {id:'saved',label:'  면접\t준비  ',category:'topic',degree:30,source_target:'career',source_version:'version-a',
+        source_platform:'files',source_url:'https://example.test/career',osk_id:'osk-a',canonical_id:'canonical-a',
+        description:'저장된 면접 준비 자료',facts:['원문에 기록한 조건'],
+        evidence:{kind:'ledger',source_event_ids:['event-a'],chat_id:'room-a',confirmed_at:'2026-10-18T00:00:00Z'}},
+      {id:'duplicate',label:'면접 준비'.normalize('NFD'),category:'topic',degree:20,source_target:'other',source_version:'version-b',
+        evidence:{kind:'snapshot',source_event_ids:['event-b'],chat_id:'room-b'}},
+      {id:'other',label:'채용 일정',category:'topic',degree:10,source_target:'other'},
+    ]);
+    const before=JSON.stringify(input);
+    const selected=selectOverviewLabels(input.nodes);
+    expect(selected.map(node=>node.id)).toEqual(['saved','other']);
+    expect(selectOverviewLabels([...input.nodes].reverse())).toEqual(selected);
+    expect(selected[0]).toBe(input.nodes[0]);
+    expect(selected[0].label).toBe('  면접\t준비  ');
+    expect(selected[0].evidence).toBe(input.nodes[0].evidence);
+    expect(selected[0]).toMatchObject({sourceTarget:'career',sourceVersion:'version-a',sourcePlatform:'files',
+      sourceUrl:'https://example.test/career',oskId:'osk-a',canonicalId:'canonical-a'});
+    expect(input.nodes[1].sourceTarget).toBe('other');
+    expect(input.nodes[1].evidence.sourceEventIds).toEqual(['event-b']);
+    expect(JSON.stringify(input)).toBe(before);expect(input.nodes).toHaveLength(3);
+  });
+  it('keeps case, punctuation, numbers and compatibility characters distinct in display text', () => {
+    const labels=['US 채용','us 채용','Rust: 설치','Rust 설치','채용 일정 2026','채용 일정 2027','GPU ① 구성','GPU 1 구성'];
+    const nodes=graph(labels.map((label,index)=>({id:String(index),label,category:'topic',degree:labels.length-index}))).nodes;
+    expect(selectOverviewLabels(nodes).map(node=>node.label)).toEqual(labels);
+    expect(selectOverviewLabels([...nodes].reverse()).map(node=>node.label)).toEqual(labels);
+  });
+  it.each(['slogan','person','duplicate'])('keeps suppressed %s labels reachable through the production hover and focus label path', id => {
+    const input=parseKnowledgeGraph({nodes:[
+      {id:'slogan',label:'렉카박멸',category:'topic',degree:9999,source_target:'channel'},
+      {id:'person',label:'홍민태',category:'source_claim',degree:9998,source_target:'person'},
+      {id:'subject',label:'생산·제조',category:'topic',degree:2,source_target:'project'},
+      {id:'duplicate',label:'생산·제조',category:'topic',degree:1,source_target:'another-project',source_version:'saved-version',
+        evidence:{kind:'ledger',source_event_ids:['saved-event']}},
+    ],edges:[
+      {source:'slogan',target:'subject',relation:'관련 자료'},
+      {source:'person',target:'subject',relation:'관련 자료'},
+      {source:'duplicate',target:'subject',relation:'관련 자료'},
+    ]});
+    const before=JSON.stringify(input);
+    const selected=selectOverviewLabels(input.nodes);
+    expect(selected.map(node=>node.id)).toEqual(['subject']);
+    const saved=input.nodes.find(node=>node.id===id)!;
+    expect(internalGraphLabel(saved.label)).toBe(false);
+    const shell=document.createElement('div'),canvas=document.createElement('canvas'),layer=document.createElement('div');
+    layer.className='knowledge-node-labels';shell.append(canvas,layer);document.body.append(shell);
+    const state={canvas,view:{...input,hops:0,focusId:null as string|null},hoveredId:null as string|null,
+      globalLabels:new Set(selected.map(node=>node.id)),globalLabelRanks:new Map(selected.map((node,index)=>[node.id,index])),
+      labels:new Map<string,HTMLSpanElement>(),labelBounds:[]};
+    const hologram=Object.assign(Object.create(KnowledgeHologram.prototype),state) as typeof state & {refreshOverviewLabels():void};
+    try {
+      hologram.refreshOverviewLabels();
+      expect([...hologram.labels.keys()]).toEqual(['subject']);
+      hologram.hoveredId=id;hologram.refreshOverviewLabels();
+      expect(hologram.labels.get(id)?.textContent).toBe(saved.label);
+      expect(hologram.labels.get(id)?.title).toBe(saved.label);
+      hologram.hoveredId=null;hologram.refreshOverviewLabels();
+      expect(hologram.labels.has(id)).toBe(false);
+      hologram.view.focusId=id;hologram.refreshOverviewLabels();
+      expect(hologram.labels.get(id)?.textContent).toBe(saved.label);
+      expect(hologram.labels.get(id)?.dataset.focused).toBe('true');
+      expect(hologram.view.nodes.find(node=>node.id===id)).toBe(saved);
+      hologram.view.focusId=null;hologram.refreshOverviewLabels();
+      expect([...hologram.labels.keys()]).toEqual(['subject']);
+      expect(JSON.stringify(input)).toBe(before);expect(input.nodes).toHaveLength(4);expect(input.edges).toHaveLength(3);
+    } finally { shell.remove(); }
+  });
   it('keeps declared unread metadata out of representatives without fabricating content', () => {
     const nodes=graph([
       {id:'a',label:'돈 벌어주는 스파미 일반 영상 133개',category:'document',source_metadata:{content_evidence:'metadata_description'}},
@@ -133,10 +204,14 @@ describe('overview reading entry labels', () => {
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['c','d']);expect(nodes).toHaveLength(4);
     expect(nodes[0].contentEvidence).toBe('metadata_description');expect(nodes[3].contentEvidence).toBeUndefined();
   });
-  it('uses a single descriptive claim and does not elevate an ambiguous short subject', () => {
+  it('retains concise saved career subjects without admitting single-term names', () => {
     const nodes=graph([{id:'a',label:'면접',category:'topic'},{id:'b',label:'미확인 조건에서 발생할 수 있는 실패',category:'source_claim'}]).nodes;
-    expect(selectOverviewLabels(nodes).map(n=>n.label)).toEqual(['미확인 조건에서 발생할 수 있는 실패']);
-    expect(selectOverviewLabels(nodes.slice(0,1))).toEqual([]);
+    expect(selectOverviewLabels(nodes).map(n=>n.label)).toEqual(['면접','미확인 조건에서 발생할 수 있는 실패']);
+    expect(selectOverviewLabels(nodes.slice(0,1)).map(n=>n.label)).toEqual(['면접']);
+    const subjects=graph([{id:'resume',label:'자소서',category:'topic'},
+      {id:'name',label:'홍민태',category:'topic'},{id:'slogan',label:'렉카박멸',category:'topic'},
+      {id:'author',label:'면접',category:'author'}]).nodes;
+    expect(selectOverviewLabels(subjects).map(n=>n.id)).toEqual(['resume']);
   });
   it('ignores retracted and identifier labels while retaining all stored targets', () => {
     const nodes=graph([{id:'a',label:'source:author:123',category:'source'},

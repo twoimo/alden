@@ -9,7 +9,7 @@ SI prefix factors follow BIPM; binary data prefixes follow IEC 80000-13.
 This module deliberately supports only the small declared-unit table below.
 """
 
-from decimal import Decimal, Inexact, InvalidOperation, localcontext
+from decimal import Context, Decimal, Inexact, InvalidOperation, ROUND_HALF_EVEN, localcontext
 import re
 
 
@@ -142,9 +142,12 @@ def normalize_declared_quantity(value, unit) -> dict:
     # The maximum coefficient length plus the largest factor fits this
     # precision. A local context avoids default-precision silent rounding.
     try:
-        with localcontext() as context:
-            context.prec = _MAX_VALUE_CHARS + 32
-            context.traps[Inexact] = True
+        # A caller's Decimal exponent limits, clamp and traps must not change
+        # the canonical value or leak exceptions for an otherwise valid unit.
+        # Input bounds above are much smaller than this private exact context.
+        exact = Context(prec=_MAX_VALUE_CHARS + 32, Emin=-1000, Emax=1000,
+                        rounding=ROUND_HALF_EVEN, clamp=0, traps=[Inexact, InvalidOperation])
+        with localcontext(exact):
             scaled = number * factor
             if abs(scaled.as_tuple().exponent) > _MAX_ABS_EXPONENT:
                 return _result("invalid", "exponent-out-of-range")

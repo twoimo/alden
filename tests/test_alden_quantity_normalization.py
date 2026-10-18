@@ -1,6 +1,6 @@
 """Contract and boundary tests for the pure declared-quantity normalizer."""
 
-from decimal import Decimal
+from decimal import Clamped, Decimal, Inexact, Subnormal, localcontext
 import unittest
 
 from scripts.alden_quantity_normalization import POLICY, normalize_declared_quantity
@@ -90,6 +90,26 @@ class DeclaredQuantityNormalizationTests(unittest.TestCase):
         self.assert_normalized("0.5", "µs", "0.0000005", "duration", "s")
         long_fraction = "0." + "123456789012345678901234567890" * 3 + "1"
         self.assert_normalized(long_fraction, "g", long_fraction, "mass", "g")
+
+    def test_caller_decimal_limits_and_traps_do_not_change_exact_values(self):
+        samples = (
+            ({"Emax": 2}, "1.00", "kg", "1000", "mass", "g"),
+            ({"Emin": -2}, "0.5", "µs", "0.0000005", "duration", "s"),
+            ({"Emax": 2, "clamp": 1}, "1.00", "g", "1", "mass", "g"),
+        )
+        for settings, value, unit, expected, dimension, canonical_unit in samples:
+            with self.subTest(settings=settings), localcontext() as caller:
+                caller.prec = 2
+                for key, setting in settings.items():
+                    setattr(caller, key, setting)
+                caller.traps[Subnormal] = True
+                caller.traps[Clamped] = True
+                caller.flags[Inexact] = True
+                before = repr(caller)
+                try:
+                    self.assert_normalized(value, unit, expected, dimension, canonical_unit)
+                finally:
+                    self.assertEqual(repr(caller), before)
 
     def test_signed_values_are_not_credibility_assertions(self):
         self.assert_normalized("-1.25", "kg", "-1250", "mass", "g")

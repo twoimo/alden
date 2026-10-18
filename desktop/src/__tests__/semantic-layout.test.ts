@@ -23,6 +23,16 @@ function changed(a: ReadonlyMap<string, Point3>, b: ReadonlyMap<string, Point3>,
 }
 
 describe('bounded semantic overview layout', () => {
+  it('retains semantic affinity when structural hub degrees differ', () => {
+    const view = scene(40, Array.from({ length: 30 }, (_, i) => R(0, i + 1)));
+    const original = JSON.stringify(view);
+    const plain = new SemanticLayoutEngine().layout(view, empty(), [], { nowMs: 1000 });
+    const semantic = new SemanticLayoutEngine().layout(view, empty(), [S(0, 1, .95)], { nowMs: 1000 });
+    expect(plain.clusterIds.get('n0000')).not.toBe(plain.clusterIds.get('n0001'));
+    expect(semantic.clusterIds.get('n0000')).toBe(semantic.clusterIds.get('n0001'));
+    expect(semantic.diagnostics.affinityPairs).toBe(1);
+    expect(JSON.stringify(view)).toBe(original);
+  });
   it('does not pull a fresh dense community toward arbitrary provisional ID seeds', () => {
     const count = 64;
     const edges = Array.from({ length: count }, (_, a) =>

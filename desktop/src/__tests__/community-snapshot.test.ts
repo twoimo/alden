@@ -6,6 +6,21 @@ import { parseKnowledgeGraph,overviewGraph } from '../knowledge/graph-model';
 const rows=Array.from({length:17},(_,i)=>[`synthetic-${i}`,`c:${Math.floor(i/3).toString(16)}:a`] as [string,string]);
 const ids=rows.map(([id])=>id);
 describe('computed community metadata boundary',()=>{
+  it('keeps small computed groups coloured and distinguishes singleton placements from an aggregate remainder',()=>{
+    const rows=Array.from({length:27},(_,i)=>[`n${i}`,`c:${(i<24?Math.floor(i/2):i).toString(16)}:a`] as [string,string]);
+    const ids=rows.map(([id])=>id),before=JSON.stringify(rows);
+    const result=communitySnapshot(ids,rows)!;
+    expect(result.groups).toHaveLength(8);
+    expect(result.secondaryClusters).toBe(4);expect(result.secondaryNodes).toBe(8);
+    expect(result.singletonNodes).toBe(3);expect(result.otherNodes).toBe(11);
+    for(let i=0;i<24;i+=2){
+      expect(result.colors.get(`n${i}`)).toBeGreaterThan(0);
+      expect(result.colors.get(`n${i}`)).toBe(result.colors.get(`n${i+1}`));
+    }
+    for(let i=24;i<27;i++)expect(result.colors.get(`n${i}`)).toBe(0);
+    expect(communitySnapshot([...ids].reverse(),[...rows].reverse())!.colors).toEqual(result.colors);
+    expect(JSON.stringify(rows)).toBe(before);
+  });
   it('covers every identity, gives at most eight major groups colors and retains the aggregate remainder',()=>{
     const result=communitySnapshot(ids,rows)!;
     expect(result.groups).toHaveLength(6);expect(new Set(result.groups.map(g=>g.slot)).size).toBe(6);

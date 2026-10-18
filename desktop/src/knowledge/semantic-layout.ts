@@ -336,9 +336,10 @@ export class SemanticLayoutEngine {
     for (const p of pairs) {
       const a = index.get(p.source)!, b = index.get(p.target)!;
       const similar = rDegree[a] + rDegree[b] === 0 ? 1 : Math.min(rDegree[a], rDegree[b]) / Math.max(rDegree[a], rDegree[b]);
-      // Community membership follows shared energy. Unequal spokes stay
-      // attached by springs, without inheriting the hub's center.
-      if (similar >= 0.5) {
+      // Structural degree imbalance identifies hub spokes, not dissimilar
+      // content. A validated semantic pair remains independent evidence for
+      // layout even when one endpoint has many more stored relations.
+      if (p.s > 0 || similar >= 0.5) {
         adjacency[a].push({ to: b, weight: p.weight }); adjacency[b].push({ to: a, weight: p.weight });
         current.join(a, b);
       }
