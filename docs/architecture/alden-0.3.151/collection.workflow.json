@@ -1,0 +1,196 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.151 · 다중 대상·다중 출처 수집",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "a151_collection_input",
+      "label": "입력·검사"
+    },
+    {
+      "id": "a151_collection_state",
+      "label": "상태·처리"
+    },
+    {
+      "id": "a151_collection_output",
+      "label": "반영·결과"
+    },
+    {
+      "id": "a151_collection_boundary",
+      "label": "조건·별도 경로",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "a151_collection_target",
+    "a151_collection_admit",
+    "a151_collection_capture",
+    "a151_collection_version",
+    "a151_collection_index",
+    "a151_collection_readback"
+  ],
+  "nodes": [
+    {
+      "id": "a151_collection_target",
+      "lane": "a151_collection_input",
+      "col": 0,
+      "type": "database",
+      "label": "선언한 target",
+      "sublabel": "프로젝트·출처·범위",
+      "width": 180
+    },
+    {
+      "id": "a151_collection_admit",
+      "lane": "a151_collection_input",
+      "col": 1,
+      "type": "security",
+      "label": "실행 조건",
+      "sublabel": "중단·권한·단일 실행",
+      "width": 180
+    },
+    {
+      "id": "a151_collection_capture",
+      "lane": "a151_collection_state",
+      "col": 1,
+      "type": "backend",
+      "label": "접근 가능한 입력",
+      "sublabel": "취득·현재 내용 근거",
+      "width": 180
+    },
+    {
+      "id": "a151_collection_version",
+      "lane": "a151_collection_state",
+      "col": 2,
+      "type": "database",
+      "label": "레코드·버전 저장",
+      "sublabel": "JSON·membership·FTS",
+      "width": 180
+    },
+    {
+      "id": "a151_collection_index",
+      "lane": "a151_collection_output",
+      "col": 2,
+      "type": "backend",
+      "label": "capture·선택 dense",
+      "sublabel": "별도 바이트 보존·index",
+      "width": 180
+    },
+    {
+      "id": "a151_collection_readback",
+      "lane": "a151_collection_output",
+      "col": 3,
+      "type": "frontend",
+      "label": "설치 앱 재조회",
+      "sublabel": "이력·검색·그래프 범위",
+      "width": 180
+    },
+    {
+      "id": "a151_collection_request",
+      "lane": "a151_collection_boundary",
+      "col": 0,
+      "type": "messagebus",
+      "label": "영속 수집 요청",
+      "sublabel": "주기·수동 요청·중복 억제",
+      "width": 180
+    },
+    {
+      "id": "a151_collection_pause",
+      "lane": "a151_collection_boundary",
+      "col": 2,
+      "type": "security",
+      "label": "대기·실패·중단",
+      "sublabel": "체크포인트·backoff 보존",
+      "width": 180
+    }
+  ],
+  "edges": [
+    {
+      "id": "a151_collection_edge_0",
+      "from": "a151_collection_target",
+      "to": "a151_collection_admit",
+      "label": "대상 범위",
+      "role": "main"
+    },
+    {
+      "id": "a151_collection_edge_1",
+      "from": "a151_collection_admit",
+      "to": "a151_collection_capture",
+      "label": "허용된 취득",
+      "role": "main"
+    },
+    {
+      "id": "a151_collection_edge_2",
+      "from": "a151_collection_capture",
+      "to": "a151_collection_version",
+      "label": "추가·개정·유지",
+      "role": "main"
+    },
+    {
+      "id": "a151_collection_edge_3",
+      "from": "a151_collection_version",
+      "to": "a151_collection_index",
+      "label": "색인 준비",
+      "role": "main"
+    },
+    {
+      "id": "a151_collection_edge_4",
+      "from": "a151_collection_index",
+      "to": "a151_collection_readback",
+      "label": "저장 확인",
+      "role": "main"
+    },
+    {
+      "id": "a151_collection_edge_5",
+      "from": "a151_collection_request",
+      "to": "a151_collection_admit",
+      "label": "대상별 요청",
+      "role": "async",
+      "variant": "dashed"
+    },
+    {
+      "id": "a151_collection_edge_6",
+      "from": "a151_collection_admit",
+      "to": "a151_collection_pause",
+      "label": "중지·권한 없음",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "a151_collection_edge_7",
+      "from": "a151_collection_capture",
+      "to": "a151_collection_pause",
+      "label": "접근·파싱 실패",
+      "role": "error",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "보존과 갱신",
+      "items": [
+        "sources의 레코드 JSON과 capture 바이트를 구분",
+        "현재 native 자동취득은 기존 YouTube 단일 영상"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "중복·재시도",
+      "items": [
+        "request/run/원본 ID로 반복 구분",
+        "실패·정지 상태를 성공 건수로 세지 않음"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "남은 실행",
+      "items": [
+        "모든 플랫폼·계정의 자동 탐색은 아님",
+        "넓은 재취득·두 독립 host 실행은 미완료"
+      ]
+    }
+  ]
+}

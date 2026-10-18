@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Alden 0.3.151 · 원본 계보와 통합 탐색",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ]
+  },
+  "stages": [
+    {
+      "label": "독립 원본"
+    },
+    {
+      "label": "수집·버전"
+    },
+    {
+      "label": "계보 대사"
+    },
+    {
+      "label": "논리 통합"
+    },
+    {
+      "label": "탐색·근거"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "a151_lineage_employment",
+      "type": "external",
+      "label": "취업 지식 원본",
+      "sublabel": "독립 정본·원문·권한",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "a151_lineage_employment_version",
+      "type": "database",
+      "label": "보존 레코드·버전",
+      "sublabel": "JSON·원본 ID·hash·소속",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "a151_lineage_spark",
+      "type": "external",
+      "label": "Spark Universe 원본",
+      "sublabel": "독립 정본·원문·권한",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "a151_lineage_spark_version",
+      "type": "database",
+      "label": "메타데이터 export",
+      "sublabel": "보호 본문 제외·원본 소속",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "a151_lineage_business",
+      "type": "external",
+      "label": "장사의신 지식 원본",
+      "sublabel": "독립 정본·원문·권한",
+      "stage": 0,
+      "row": 2
+    },
+    {
+      "id": "a151_lineage_business_version",
+      "type": "database",
+      "label": "보존 레코드·버전",
+      "sublabel": "JSON·원본 ID·hash·소속",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "a151_lineage_union",
+      "type": "security",
+      "label": "계보·권한 대사",
+      "sublabel": "원본과 현재 버전 연결",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "a151_lineage_projection",
+      "type": "database",
+      "label": "하나의 논리 투영",
+      "sublabel": "프로젝트·출처 필터 유지",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "a151_lineage_graph",
+      "type": "frontend",
+      "label": "3D·목록 탐색",
+      "sublabel": "실제 노드·저장 관계",
+      "stage": 4,
+      "row": 0
+    },
+    {
+      "id": "a151_lineage_retrieval",
+      "type": "backend",
+      "label": "검색·읽기 전용 MCP",
+      "sublabel": "BM25/E5/RRF·출처 응답",
+      "stage": 4,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "id": "a151_lineage_employment_capture",
+      "from": "a151_lineage_employment",
+      "to": "a151_lineage_employment_version",
+      "label": "범위 있는 취득"
+    },
+    {
+      "id": "a151_lineage_employment_lineage",
+      "from": "a151_lineage_employment_version",
+      "to": "a151_lineage_union",
+      "label": "출처별 버전"
+    },
+    {
+      "id": "a151_lineage_spark_capture",
+      "from": "a151_lineage_spark",
+      "to": "a151_lineage_spark_version",
+      "label": "범위 있는 취득"
+    },
+    {
+      "id": "a151_lineage_spark_lineage",
+      "from": "a151_lineage_spark_version",
+      "to": "a151_lineage_union",
+      "label": "출처별 버전",
+      "labelAt": [
+        510,
+        314
+      ]
+    },
+    {
+      "id": "a151_lineage_business_capture",
+      "from": "a151_lineage_business",
+      "to": "a151_lineage_business_version",
+      "label": "범위 있는 취득"
+    },
+    {
+      "id": "a151_lineage_business_lineage",
+      "from": "a151_lineage_business_version",
+      "to": "a151_lineage_union",
+      "label": "출처별 버전"
+    },
+    {
+      "id": "a151_lineage_verified",
+      "from": "a151_lineage_union",
+      "to": "a151_lineage_projection",
+      "label": "검증한 자료만"
+    },
+    {
+      "id": "a151_lineage_display",
+      "from": "a151_lineage_projection",
+      "to": "a151_lineage_graph",
+      "label": "제한된 표시 범위"
+    },
+    {
+      "id": "a151_lineage_query",
+      "from": "a151_lineage_projection",
+      "to": "a151_lineage_retrieval",
+      "label": "현재 권한·근거"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "보존",
+      "items": [
+        "레코드 JSON·capture 입력 바이트를 구분",
+        "원본과 OSK vault는 독립 정본으로 보존"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "서로 다른 근거",
+      "items": [
+        "Spark export는 보호 본문을 포함하지 않음",
+        "구조 관계·의미 유사도·공간 위치를 구분"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "미완료 조건",
+      "items": [
+        "모든 원본과 여러 host의 완전 대사는 별도",
+        "독립 사람 gold·동명이인/시간 검증은 남음"
+      ]
+    }
+  ]
+}
