@@ -29,14 +29,14 @@ describe('selected-node explanations',()=>{
     renderNodeDetails(notes,notes.nodes[0],{details:{...details,text_projection:{...details.text_projection,removed_characters:999}}});
     expect(document.querySelector('.knowledge-separated-tail')).toBeNull();
   });
-  it('hides trailing digit-only lines in the reading body without rewriting the saved text', () => {
+  it('preserves unclassified numeric source content and facts without a projection receipt', () => {
     const notes = parseKnowledgeGraph({ nodes: [{ id: 'post', label: '서류 특징', category: 'document', source_version: 'v1' }], edges: [] });
     const saved = '서류에서 높은 점수를 받는 지원자 특징.\n1. 채용공고의 JD를 그대로 옮겨 쓰지 않는다.\n1\n2\n6\n1\n3';
     renderNodeDetails(notes, notes.nodes[0], { details: { node_id: 'post', basis: 'source_record', version: 'v1', body: saved, raw_sha256: 'a'.repeat(64), key_facts: ['핵심 문장', '1'] } });
     const shown = document.getElementById('knowledge-node-body')!.textContent || '';
     expect(shown).toContain('1. 채용공고의 JD를 그대로 옮겨 쓰지 않는다.');
-    expect(shown.endsWith('않는다.')).toBe(true);
-    expect([...document.getElementById('knowledge-node-facts')!.children].map(item => item.textContent)).toEqual(['핵심 문장']);
+    expect(shown).toBe(saved);
+    expect([...document.getElementById('knowledge-node-facts')!.children].map(item => item.textContent)).toEqual(['핵심 문장','1']);
     expect(saved.endsWith('3')).toBe(true);
   });
   it('reads saved body with stable node links and keeps hostile markup inert',()=>{

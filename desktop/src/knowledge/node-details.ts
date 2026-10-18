@@ -1,5 +1,4 @@
 import type { KnowledgeGraph, KnowledgeNode } from './graph-model';
-import { isNumericToken, separateReadingNoise } from './reading-text';
 
 function text(value: unknown, limit = 1200): string {
   return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, limit) : '';
@@ -113,7 +112,9 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   if (summary) summary.textContent = text(selected?.summary) || nodeSummary(graph, node);
   const body = root.getElementById('knowledge-node-body');
   const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
-  const reading = copy ? separateReadingNoise(copy).reading : '';
+  // Source-specific projection is already bound to retained bytes by the
+  // backend. Numeric shape alone cannot distinguish chrome from source data.
+  const reading = copy;
   if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
   root.querySelectorAll('.knowledge-resolution-note').forEach(note => note.remove());
@@ -152,9 +153,15 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const kind = root.getElementById('knowledge-node-kind'); if (kind) kind.textContent = nodeKind(node);
   const facts = root.getElementById('knowledge-node-facts'); facts?.replaceChildren();
   const values = selected?.key_facts;
-  if (Array.isArray(values)) for (const value of [...new Set(values.filter(value => typeof value === 'string'))].slice(0, 6)) {
+  const factKeys = new Set<string>();
+  if (Array.isArray(values)) for (const value of values) {
     const fact = text(value, 600);
-    if (fact && !isNumericToken(fact)) facts?.append(element('li', '', fact));
+    if (!fact) continue;
+    const key = fact.normalize('NFC').replace(/\s+/g, ' ');
+    if (factKeys.has(key)) continue;
+    factKeys.add(key);
+    facts?.append(element('li', '', fact));
+    if (factKeys.size === 6) break;
   }
   if (facts) facts.hidden = facts.children.length === 0;
   const evidence = root.getElementById('knowledge-node-evidence'); evidence?.replaceChildren();
