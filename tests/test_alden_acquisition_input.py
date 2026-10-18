@@ -11,7 +11,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from alden_abort import AbortController, AldenCancelled
 from alden_collection import CollectionStore, safe_directory
-from alden_collect import receive_input, collect_target, json_snapshot
+from alden_collect import receive_input, collect_target, capture_source, json_snapshot
 
 
 class AcquisitionInputTests(unittest.TestCase):
@@ -125,6 +125,105 @@ class AcquisitionInputTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'access_not_confirmed'):
             receive_input(self.store, tid, self.incoming, hashlib.sha256(raw).hexdigest(), token=self.token)
         self.assertEqual(current.read_bytes(), raw)
+
+    def legacy_post(self, *, retained=True):
+        folder = safe_directory(self.root / 'knowledge/acquisition-inputs/legacy-post')
+        current = folder / 'current.json'
+        value = {'schema': 1, 'host': 'local', 'posts': [{
+            'id': 'DeKQ2ljD3ZO', 'url': 'https://www.threads.com/@choi.openai/post/DeKQ2ljD3ZO',
+            'author_handle': 'choi.openai', 'text': 'retained original',
+            'availability': 'available', 'coverage': 'main post only',
+            'acquisition': {'input_url': 'https://www.threads.com/share/example/'}}]}
+        self.write(current, value)
+        tid = self.store.register(platform='threads', original_id='DeKQ2ljD3ZO', kind='post',
+            label='legacy', projects=['two'], config={'adapter': 'threads-post', 'path': str(current)})
+        collect_target(self.store, tid)
+        if retained:
+            capture_source(self.store, tid)
+        incoming = json.loads(json.dumps(value))
+        incoming['observed_at'] = (datetime.now(timezone.utc) + timedelta(seconds=1)).isoformat()
+        incoming['posts'][0]['text'] = 'fresh observed original 1/14'
+        self.write(self.incoming, incoming)
+        return current, tid, current.read_bytes(), incoming
+
+    def test_legacy_threads_refresh_uses_verified_retention_bound_without_inventing_old_time(self):
+        current, tid, old, _ = self.legacy_post()
+        before = self.store.target(tid)
+        sha = hashlib.sha256(old).hexdigest()
+        result = receive_input(self.store, tid, self.incoming, sha, token=self.token)
+        self.assertEqual(result['state'], 'received')
+        self.assertFalse(result['collected'])
+        self.assertEqual(result['previous_observation']['basis'], 'retained_input_read')
+        self.assertEqual(result['previous_observation']['source_sha256'], sha)
+        self.assertEqual(Path(result['backup']).read_bytes(), old)
+        self.assertNotIn('observed_at', json.loads(Path(result['backup']).read_bytes()))
+        self.assertEqual(current.read_bytes(), self.incoming.read_bytes())
+        self.assertEqual(self.store.target(tid), before)
+        self.assertEqual(receive_input(self.store, tid, self.incoming,
+            hashlib.sha256(current.read_bytes()).hexdigest(), token=self.token)['state'], 'unchanged')
+
+    def test_legacy_threads_without_retained_evidence_cannot_publish(self):
+        current, tid, old, _ = self.legacy_post(retained=False)
+        with self.assertRaisesRegex(ValueError, 'legacy_observation_unproven'):
+            receive_input(self.store, tid, self.incoming, hashlib.sha256(old).hexdigest(), token=self.token)
+        self.assertEqual(current.read_bytes(), old)
+        self.assertFalse((current.parent / 'history').exists())
+
+    def test_legacy_threads_rejects_observation_before_retained_read(self):
+        current, tid, old, incoming = self.legacy_post()
+        bound = json.loads(self.store.target(tid)['cursor'])['source_observation']['observed_at']
+        incoming['observed_at'] = datetime.fromtimestamp(bound - 1, timezone.utc).isoformat()
+        self.write(self.incoming, incoming)
+        with self.assertRaisesRegex(ValueError, 'observation_stale'):
+            receive_input(self.store, tid, self.incoming, hashlib.sha256(old).hexdigest(), token=self.token)
+        self.assertEqual(current.read_bytes(), old)
+
+    def test_legacy_threads_does_not_use_missing_time_fallback_for_invalid_explicit_time(self):
+        current, tid, old, _ = self.legacy_post()
+        value = json.loads(old); value['observed_at'] = None; self.write(current, value)
+        collect_target(self.store, tid); capture_source(self.store, tid)
+        raw = current.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'observation_required'):
+            receive_input(self.store, tid, self.incoming, hashlib.sha256(raw).hexdigest(), token=self.token)
+        self.assertEqual(current.read_bytes(), raw)
+
+    def test_legacy_threads_requires_matching_bounded_cursor_evidence(self):
+        current, tid, old, _ = self.legacy_post()
+        original = json.loads(self.store.target(tid)['cursor'])
+        for part, field, value in [
+            (None, 'complete', False), (None, 'source_revision', '0' * 64),
+            ('source_observation', 'source_revision', '0' * 64),
+            ('source_observation', 'observed_at', True),
+            ('source_observation', 'observed_at', float('nan')),
+            ('source_observation', 'observed_at', datetime.now(timezone.utc).timestamp() + 3600),
+            ('source_capture', 'sha256', '0' * 64),
+            ('source_capture', 'byte_scope', 'partial capture'),
+        ]:
+            cursor = json.loads(json.dumps(original))
+            (cursor[part] if part else cursor)[field] = value
+            with self.store.database() as db:
+                db.execute('UPDATE targets SET cursor=? WHERE id=?', (json.dumps(cursor), tid))
+            with self.subTest(part=part, field=field, value=value), self.assertRaisesRegex(ValueError, 'legacy_observation_unproven'):
+                receive_input(self.store, tid, self.incoming, hashlib.sha256(old).hexdigest(), token=self.token)
+            self.assertEqual(current.read_bytes(), old)
+        self.assertFalse((current.parent / 'history').exists())
+
+    def test_legacy_threads_rejects_corrupt_retained_bytes(self):
+        current, tid, old, _ = self.legacy_post()
+        sha = hashlib.sha256(old).hexdigest()
+        archive = self.store.root / 'source-captures' / (sha + '.json')
+        archive.write_bytes(b'corrupt retained evidence')
+        with self.assertRaisesRegex(RuntimeError, 'source_integrity'):
+            receive_input(self.store, tid, self.incoming, sha, token=self.token)
+        self.assertEqual(current.read_bytes(), old)
+
+    def test_legacy_threads_requires_current_available_membership(self):
+        current, tid, old, _ = self.legacy_post()
+        with self.store.database() as db:
+            db.execute("UPDATE memberships SET availability='access_failed' WHERE target_id=?", (tid,))
+        with self.assertRaisesRegex(RuntimeError, 'projection_changed'):
+            receive_input(self.store, tid, self.incoming, hashlib.sha256(old).hexdigest(), token=self.token)
+        self.assertEqual(current.read_bytes(), old)
 
 
 if __name__ == '__main__': unittest.main()

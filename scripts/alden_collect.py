@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -60,6 +61,46 @@ def input_destination(store, target):
     return destination
 
 
+def _retained_threads_read_bound(store, target, previous, old_source, old_raw):
+    """A local retention/read bound, never a fabricated site observation time."""
+    threads_post_snapshot(target, previous, old_source)
+    cursor = json.loads(target['cursor'] or '{}')
+    if not isinstance(cursor, dict):
+        raise ValueError('collection_input_legacy_observation_unproven')
+    observation = cursor.get('source_observation', {})
+    capture = cursor.get('source_capture', {})
+    sha = old_source['sha256']
+    bound = observation.get('observed_at') if isinstance(observation, dict) else None
+    if (not isinstance(cursor, dict) or cursor.get('complete') is not True
+            or cursor.get('source_revision') != sha or not isinstance(observation, dict)
+            or observation.get('source_revision') != sha or not isinstance(capture, dict)
+            or capture.get('schema') != 1 or capture.get('sha256') != sha
+            or capture.get('byte_scope') != 'exact original JSON file bytes'
+            or type(bound) not in (int, float) or not math.isfinite(bound)
+            or not 0 < bound <= time.time() + 300):
+        raise ValueError('collection_input_legacy_observation_unproven')
+    folder = store.root / 'source-captures'
+    manifest = json.loads(store._verified_source_blob(folder, capture.get('manifest'), 16 * 1024 * 1024))
+    if (not isinstance(manifest, dict) or manifest.get('adapter') != 'threads-post' or manifest.get('origin') != old_source['path']
+            or manifest.get('byte_scope') != 'exact original JSON file bytes'
+            or store._verified_source_blob(folder, sha + '.json', MAX_SNAPSHOT_BYTES) != old_raw):
+        raise RuntimeError('collection_source_integrity')
+    available = " AND m.availability='available'" if store.schema >= 3 else ''
+    with store.database() as db:
+        row = db.execute('''SELECT m.target_id,m.document_id AS id,
+            m.current_version AS visible_version,v.raw_sha256 FROM memberships m
+            JOIN versions v ON v.id=m.current_version WHERE m.target_id=? AND m.document_id=?'''
+            + available, (target['id'], identity('threads', target['original_id']))).fetchone()
+        if row is None or row['raw_sha256'] != hashlib.sha256(encoded(previous['posts'][0])).hexdigest():
+            raise RuntimeError('collection_source_projection_changed')
+        reference = store._source_capture_reference(db, row)
+    if (reference is None or reference['source_sha256'] != sha
+            or reference['byte_scope'] != 'exact original JSON file bytes'):
+        raise RuntimeError('collection_source_integrity')
+    return bound, {'basis': 'retained_input_read', 'observed_at': bound,
+                   'source_sha256': sha, 'original_site_observation': 'unavailable'}
+
+
 def receive_input(store: CollectionStore, target_id: str, source_path: Path,
                   expected_current_sha256: str, *, token: AbortToken, publication_guard=None):
     """Receive fresh host bytes for one existing sample; never collect/index.
@@ -105,7 +146,17 @@ def receive_input(store: CollectionStore, target_id: str, source_path: Path,
             if parsed.tzinfo is None or parsed.timestamp() > time.time() + 300:
                 raise ValueError('collection_input_observation_invalid')
             return parsed.timestamp()
-        incoming_time, old_time = observed(incoming), observed(previous)
+        incoming_time = observed(incoming)
+        previous_observation = None
+        prior_acquisition = previous['posts'][0].get('acquisition', {}) if adapter == 'threads-post' else {}
+        if adapter == 'threads-post' and not isinstance(prior_acquisition, dict):
+            raise ValueError('collection_input_observation_invalid')
+        if (adapter == 'threads-post' and 'observed_at' not in previous
+                and 'observed_at' not in prior_acquisition):
+            old_time, previous_observation = _retained_threads_read_bound(
+                store, target, previous, old_source, old_raw)
+        else:
+            old_time = observed(previous)
         if adapter == 'youtube-video' and incoming['videos'][0].get('captions', {}).get('availability') == 'available':
             caption_time = observed(incoming, 'captionObservedAt')
             if old_caption.get('availability') == 'available' and caption_time < observed(previous, 'captionObservedAt'):
@@ -138,6 +189,7 @@ def receive_input(store: CollectionStore, target_id: str, source_path: Path,
             if os.path.exists(temporary): os.unlink(temporary)
         return {'state': 'received', 'target_id': target_id, 'source_sha256': source['sha256'],
                 'previous_sha256': old_source['sha256'], 'backup': str(backup),
+                **({'previous_observation': previous_observation} if previous_observation else {}),
                 'collected': False, 'scope': 'one declared sample; durable input only, not storage/index completion'}
 
 
