@@ -13,6 +13,40 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]/'scripts'))
 import alden_build_receipt as build
 
 
+class LocalSigningProfileTests(unittest.TestCase):
+    def setUp(self):
+        temp = TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        self.profile = Path(temp.name)/'signing-identity.txt'
+
+    def test_missing_profile_keeps_unsigned_default(self):
+        self.assertEqual(build.local_signing_environment({'OTHER': 'kept'}, self.profile),
+                         {'OTHER': 'kept'})
+
+    def test_explicit_unsigned_adhoc_or_named_identity_wins(self):
+        self.profile.write_text('invalid local configuration')
+        for identity in ('', '-', 'Explicit Signing Identity'):
+            env = {'OPENKAKAO_SIGN_IDENTITY': identity}
+            self.assertEqual(build.local_signing_environment(env, self.profile), env)
+
+    def test_fingerprint_is_inherited_without_mutating_callers_environment(self):
+        self.profile.write_text('ab'*20+'\n')
+        env = {'OTHER': 'kept'}
+        resolved = build.local_signing_environment(env, self.profile)
+        self.assertEqual(resolved, {'OTHER': 'kept', 'OPENKAKAO_SIGN_IDENTITY': 'AB'*20})
+        self.assertEqual(env, {'OTHER': 'kept'})
+
+    def test_invalid_or_multiline_profile_fails_without_silent_fallback(self):
+        for text in ('', 'ab'*19, 'ab'*20+'\n'+'cd'*20, '$(command)', 'gh'*20):
+            self.profile.write_text(text)
+            with self.assertRaisesRegex(RuntimeError, 'requires_certificate_fingerprint'):
+                build.local_signing_environment({}, self.profile)
+
+    def test_symlink_profile_is_not_followed(self):
+        self.profile.symlink_to(self.profile.parent/'missing')
+        with self.assertRaisesRegex(RuntimeError, 'symlink'):
+            build.local_signing_environment({}, self.profile)
+
+
 class BuildReceiptTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory(); self.addCleanup(temp.cleanup)

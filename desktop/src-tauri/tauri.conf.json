@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Alden",
-  "version": "0.3.145",
+  "version": "0.3.146",
   "identifier": "com.openkakao.alden.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -54,6 +54,7 @@
   },
   "bundle": {
     "active": true,
+    "icon": ["icons/alden-app-icon-v1.png", "icons/alden-app-icon-v1.icns"],
     "targets": [
       "app"
     ],

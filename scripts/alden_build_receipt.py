@@ -26,6 +26,26 @@ CANONICAL_TARGETS = (
 OPTIONAL_WATCH_DIRECTORY = 'desktop/src-tauri/capabilities'
 
 
+def local_signing_environment(environment, profile):
+    """Use an explicitly configured local certificate without changing CI defaults.
+
+    Store only the certificate fingerprint, never a key or executable config.
+    Explicit environment settings, including unsigned/ad-hoc choices, win.
+    """
+    result = dict(environment)
+    if 'OPENKAKAO_SIGN_IDENTITY' in result:
+        return result
+    if profile.is_symlink():
+        raise RuntimeError('local_signing_profile_symlink_unsafe')
+    if not profile.exists():
+        return result
+    value = profile.read_text(encoding='ascii').strip()
+    if not re.fullmatch(r'[0-9A-Fa-f]{40}', value):
+        raise RuntimeError('local_signing_profile_requires_certificate_fingerprint')
+    result['OPENKAKAO_SIGN_IDENTITY'] = value.upper()
+    return result
+
+
 def watched_directory_state(path):
     if any(item.is_symlink() for item in (path, *path.parents)):
         raise RuntimeError(f'build_dependency_symlink_unsafe: {path}')
@@ -288,6 +308,8 @@ def verified(root, receipt):
     return subprocess.run(['codesign','--verify','--deep','--strict',str(app)],capture_output=True).returncode==0
 
 def main():
+    os.environ.update(local_signing_environment(os.environ,
+        Path.home()/'Library/Application Support/openkakao/alden-signing-identity.txt'))
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('mode',choices=['key','check','record','run','stage-cli'])
     parser.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1]);parser.add_argument('--expected-key')
     args=parser.parse_args();root=args.root.resolve();path=root/'desktop/src-tauri/target/alden-build-receipt.json'

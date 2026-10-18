@@ -1,0 +1,13 @@
+# Local app identity, permissions and icon
+
+The user's navy graph preference is restored in 0.3.145 by removing the later black-field override. Both installed native audit sizes were directly inspected; each shows 2,048 nodes and eight labels, with zero measured circle/label overlaps or clipping. This is a read-only owned WKWebView observation, not proof of primary-window physical input, FPS or battery improvement. Its 41 relevant UI checks and all four CI jobs passed.
+
+Version 0.3.146 adds the [generated Alden constellation icon](../desktop/branding/README.md). The Tauri bundle explicitly selects the new PNG and ICNS. The previous icon remains in source.
+
+On macOS 26.6.2 the installed 0.3.145 app was absent from Full Disk Access. At the user's explicit request, System Settings added `/Applications/Alden.app` after the user completed macOS authentication. The switch was observed on, and the operating system's Quit and Reopen action was used. [Apple documents](https://developer.apple.com/documentation/security/accessing-files-from-the-macos-app-sandbox) that the cross-container prompt's permission lasts until the process exits, and that Full Disk Access requires a grant in System Settings.
+
+The local ad-hoc designated requirement depended on a changing code hash. An already valid Apple Development identity exists on this Mac. A private local profile at `~/Library/Application Support/openkakao/alden-signing-identity.txt` selects its certificate fingerprint for canonical builds. It contains no private key. The wrapper resolves this before build receipt calculation and passes the same effective signing environment through the locked build. Explicit `OPENKAKAO_SIGN_IDENTITY` settings still win, including unsigned and ad-hoc choices; an absent profile preserves existing CI defaults. Invalid or linked profiles fail rather than silently selecting another signer. The 33 receipt/signing regression tests pass.
+
+The 0.3.146 candidate's designated requirement names the stable bundle identifier and Apple development certificate, and strict deep signature verification passes. This does not supply Developer ID notarization or a public release. Full Disk Access must be reconciled against this newly signed installed app; future certificate, identity or macOS policy changes can still require a new grant. Do not suppress macOS protections, modify TCC databases, or automate password entry.
+
+Private delivery evidence is under `outputs/graph-navy-20261018/` and `outputs/app-icon-20261018/`. Source, candidate, installed, permission readback and future update recurrence remain separate observations.
