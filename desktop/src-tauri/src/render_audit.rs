@@ -268,6 +268,9 @@ impl Output {
                 | "graph-scope-compact.png"
                 | "graph-scope-default.json"
                 | "graph-scope-compact.json"
+                | "graph-zoom-default.json" | "graph-zoom-compact.json"
+                | "graph-zoom-default-distant.png" | "graph-zoom-default-context.png" | "graph-zoom-default-detail.png"
+                | "graph-zoom-compact-distant.png" | "graph-zoom-compact-context.png" | "graph-zoom-compact-detail.png"
                 | "graph-projected-default.json"
                 | "graph-projected-compact.json"
                 | "graph-physics-default.json"
@@ -1012,7 +1015,7 @@ const LABEL_GEOMETRY_COLLECT: &str = r#"JSON.stringify((()=>{
   const boxes=all.slice(0,24).map((el,index)=>{
     const r=el.getBoundingClientRect(),s=getComputedStyle(el);
     return {index,positioned:!!el.style.transform,visible:!el.hidden&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0,
-      focused:el.dataset.focused==='true',view:el.dataset.view??null,
+      focused:el.dataset.focused==='true',view:el.dataset.view??null,level:el.dataset.level??null,role:el.dataset.role??null,
       left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height,
       fontSize:s.fontSize,lineHeight:s.lineHeight,fontWeight:s.fontWeight};
   });
@@ -1594,9 +1597,34 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         if case==10 {state["qualityComparison"]=audit_quality_comparison(window,output,deadline,size)?;}
         publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
         eprintln!("Alden scope {case}: {size} files delivered");
+        if case==0 {audit_graph_zoom(window,output,deadline,size)?;}
         states.push(state);
     }
     Ok(json!({"case":case,"states":states,"scope":"fixed observed projects/filter/next-page, two owned window sizes, read-only"}))
+}
+
+// Fixed synthetic wheel input in this read-only owned WKWebView. This tests
+// actual OrbitControls and the product projection path, not physical gestures.
+fn audit_graph_zoom(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, size: &str) -> Result<(),String> {
+    let mut states=Vec::new();
+    for (name,ratio,expected) in [("distant",0.55_f64,0),("context",1.7,2),("detail",2.5,3)] {
+        collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-camera-reset').click();return {reset:true};})())".into(),deadline)?;
+        wait_for_audit_state("zoom reset",deadline,||collect_script(window,graph_collect_script(),deadline),
+            |s|s["motion"]["camera"]==false&&s["motion"]["labelZoomRatio"].as_f64().is_some_and(|r|(r-1.0).abs()<0.02))?;
+        let delta:f64=-ratio.ln()/(-0.95_f64.ln()*0.7*0.01);
+        collect_script(window,format!(r#"JSON.stringify((()=>{{const c=document.querySelector('#knowledge-graph-canvas'),r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{{deltaY:{delta},deltaMode:0,clientX:r.x+r.width/2,clientY:r.y+r.height/2,bubbles:true,cancelable:true}}));return {{syntheticWheel:true}};}})())"#),deadline)?;
+        let navigation=wait_for_audit_state("zoom labels paint",deadline,||collect_script(window,graph_collect_script(),deadline),
+            |s|s["motion"]["camera"]==false && s["motion"]["labelZoom"]==expected)?;
+        let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
+        if labels["overlapPairs"]!=0 || labels["clippedLabels"]!=0 || labels["visibleUnpositionedLabels"]!=0 || labels["truncated"]!=false {
+            return Err(format!("zoom label geometry failed: {labels}"));
+        }
+        publish(output,&format!("graph-zoom-{size}-{name}.png"),&snapshot(window,deadline)?,deadline)?;
+        states.push(json!({"level":name,"requestedRatio":ratio,"navigation":navigation,"labels":labels}));
+    }
+    publish(output,&format!("graph-zoom-{size}.json"),&serde_json::to_vec_pretty(&json!({"states":states,
+        "scope":"owned native synthetic wheel input; actual product camera and labels; no physical gesture or FPS proof"})).map_err(|_|"zoom JSON failed")?,deadline)?;
+    Ok(())
 }
 
 fn scoped_blur_preserved(state: &Value) -> bool {
@@ -2753,7 +2781,7 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
                 // horizon is separate from production action/cancel deadlines.
                 // Scope 10 adds current tag-group/member pages at two sizes,
                 // including two bounded full source scans and 12 captures.
-                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode && graph_scope == Some(10) {150} else if workspaces_mode && graph_scope.is_none() {120} else if workspaces_mode {96}else{40});
+                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode {180} else if workspaces_mode && matches!(graph_scope,Some(0)|Some(10)) {150} else if workspaces_mode && graph_scope.is_none() {120} else if workspaces_mode {96}else{40});
                 let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode,graph_scope) } else { audit(&handle, &output, deadline) };
                 if let Err(reason) = &result {
                     // One write keeps the original failure intact even if the

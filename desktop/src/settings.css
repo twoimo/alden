@@ -113,7 +113,9 @@ body.settings-view #app { height: 100%; min-height: 0; }
 .settings-view .knowledge-focus-card { position:relative; width:auto; max-width:100%; min-width:0; min-height:0; max-height:none; margin:0; padding:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-gutter:stable; border:0; border-left:1px solid var(--border); border-radius:0; background:var(--surface); box-shadow:none; overflow-wrap:anywhere; }
 .settings-view .knowledge-focus-card:focus-visible, .settings-view #knowledge-graph-canvas:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
 .knowledge-node-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
-.knowledge-node-label[data-view="overview"] { background:none; border:0; border-radius:0; color:#a5b5c9; font-size:11px; font-weight:500; padding:2px 0; }
+.knowledge-node-label[data-view="overview"] { background:none; border:0; border-radius:0; color:#c8d5e7; font-size:13px; font-weight:600; line-height:1.5; padding:2px 0; text-shadow:0 1px 3px #081323, 0 0 6px #081323, 0 0 12px #081323; }
+.knowledge-node-label[data-view="overview"][data-role="title"] { color:#aebed5; }
+.knowledge-node-label[data-view="overview"][data-role="active"] { color:#edf4ff; }
 .knowledge-node-label { position: absolute; top: 0; left: 0; max-width: 156px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text); padding: 3px 6px; background: color-mix(in srgb, var(--canvas) 86%, transparent); border-radius: 4px; }
 .knowledge-node-label[data-focused="true"] { color: var(--accent-ink); font-weight: 650; }
 @media (max-width: 720px) { .knowledge-heading { top: 90px; left: 22px; } .knowledge-heading h1 { font-size: 22px; } }

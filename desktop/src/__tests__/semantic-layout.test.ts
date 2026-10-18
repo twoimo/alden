@@ -23,6 +23,30 @@ function changed(a: ReadonlyMap<string, Point3>, b: ReadonlyMap<string, Point3>,
 }
 
 describe('bounded semantic overview layout', () => {
+  it('reactivates the affected component when an existing pin moves without a changed-ID hint',()=>{
+    const view=scene(6,[R(0,1),R(1,2),R(3,4),R(4,5)]),pins=new Set(['n0000']);
+    const initial=new SemanticLayoutEngine();
+    const a=initial.layout(view,empty(),[],{pinnedIds:pins,nowMs:1000});
+    const positions=new Map(a.anchors),old=positions.get('n0000')!;
+    positions.set('n0000',{x:old.x+.35,y:old.y-.2,z:old.z+.1});
+    const implicit=new SemanticLayoutEngine(),explicit=new SemanticLayoutEngine();
+    implicit.restore(initial.checkpoint());explicit.restore(initial.checkpoint());
+    const actual=implicit.layout(view,positions,[],{pinnedIds:pins,nowMs:1001});
+    const control=explicit.layout(view,positions,[],{pinnedIds:pins,changedIds:new Set(['n0000']),nowMs:1001});
+    expect(actual.diagnostics.affectedNodes).toBe(3);
+    expect(actual.anchors).toEqual(control.anchors);
+    expect(actual.anchors.get('n0000')).toEqual(positions.get('n0000'));
+    for(const id of ['n0003','n0004','n0005'])expect(actual.anchors.get(id)).toEqual(a.anchors.get(id));
+  });
+  it('does not reintroduce suppressed structural community weight through an admitted semantic pair',()=>{
+    const view=scene(4,[R(0,1),R(0,2),R(0,3),R(1,2)]),before=JSON.stringify(view);
+    // The 0–3 structural degree ratio is 1/3. Its validated S channel is
+    // independent; it must not also enable the excluded R weight in modularity.
+    const result=new SemanticLayoutEngine().layout(view,empty(),[S(0,3,.65)],{nowMs:1000});
+    expect(new Set(result.clusterIds.values()).size).toBe(1);
+    expect(result.diagnostics.affinityPairs).toBe(1);
+    expect(JSON.stringify(view)).toBe(before);
+  });
   it('retains semantic affinity when structural hub degrees differ', () => {
     const view = scene(40, Array.from({ length: 30 }, (_, i) => R(0, i + 1)));
     const original = JSON.stringify(view);

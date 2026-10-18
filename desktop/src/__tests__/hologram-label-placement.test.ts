@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { PositionTransition } from "../knowledge/position-transition";
 import { describe, expect, it, vi } from "vitest";
 import { KnowledgeHologram } from "../knowledge/hologram";
+import { parseKnowledgeGraph } from '../knowledge/graph-model';
 
 // Deliberately uses synthetic geometry. It exercises the native render label
 // pipeline without a WebGL context, real accounts, or a physical window.
@@ -21,6 +22,7 @@ function setup(
   opts: {
     focus?: string | null; hover?: string | null; width?: number; height?: number;
     globalIds?: string[]; ranks?: string[]; exclusions?: Bounds[];
+    zoom?: number;
   } = {},
 ) {
   const shell = document.createElement("div");
@@ -91,6 +93,14 @@ function setup(
     loop, renderer: { render: vi.fn() },
   });
 
+  if (opts.zoom) {
+    camera.position.z = 5 / opts.zoom;
+    Object.assign(fake, {desiredCamera:camera.position.clone(), labelFitDistance:5,
+      labelZoom:1, zoomLabels:new Set(),
+      zoomLabelCandidates:parseKnowledgeGraph({nodes:specs.map(node=>({id:node.id,
+        label:'실제 자료 ' + node.id, category:opts.globalIds?.includes(node.id)?'topic':'document'})),edges:[]}).nodes});
+  }
+
   fake.refreshOverviewLabels();
   fake.render(1 / 60);
   const boxes = new Map([...fake.labels].map(([id], index) => [id, fake.labelBounds[index]]));
@@ -98,6 +108,29 @@ function setup(
 }
 
 describe("overview labels in the native hologram projection loop", () => {
+  it('reveals saved titles only after zooming in, with readable topic hierarchy and bounded boxes', () => {
+    const specs=Array.from({length:20},(_,i)=>({id:'n'+i,x:(i%5-2)*.25,y:(Math.floor(i/5)-1.5)*.25}));
+    const topics=specs.slice(0,8).map(n=>n.id);
+    for(const zoom of [.55,1,1.7,2.5]) {
+      const r=setup(specs,{globalIds:topics,ranks:specs.map(n=>n.id),zoom,width:1000,height:600});
+      try {
+        const labels=[...r.fake.labels.values()];
+        expect(labels.length).toBeLessThanOrEqual(zoom<.7?4:zoom<1.4?8:24);
+        const titles=labels.filter(l=>l.dataset.role==='title');
+        expect(titles.length>0).toBe(zoom>1.4);
+        for(const label of labels) {
+          expect(parseFloat(label.style.fontSize)).toBeGreaterThanOrEqual(11.5);
+          if(label.dataset.role==='topic') expect(parseFloat(label.style.fontSize)).toBeGreaterThanOrEqual(12);
+        }
+        const boxes=r.fake.labelBounds.filter(b=>b.visible);
+        for(let i=0;i<boxes.length;i++) for(let j=i+1;j<boxes.length;j++) {
+          const a=boxes[i],b=boxes[j];
+          expect(a.left<b.left+b.width&&a.left+a.width>b.left&&a.top<b.top+24&&a.top+24>b.top).toBe(false);
+        }
+        expect(r.accessible.querySelectorAll('button')).toHaveLength(20);
+      } finally {r.shell.remove();}
+    }
+  });
   it("promotes selected labels ahead of earlier general candidates", () => {
     const r = setup([{ id: "ordinary" }, { id: "selected" }], {
       focus: "selected", ranks: ["ordinary", "selected"], height: 24,

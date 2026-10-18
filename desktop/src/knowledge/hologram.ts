@@ -23,7 +23,8 @@ import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
-import { internalGraphLabel, selectOverviewLabels } from './overview-labels';
+import { internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
+import { labelZoomLevel, labelZoomStyle, type LabelZoom } from './label-zoom';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
@@ -111,6 +112,10 @@ export class KnowledgeHologram {
   private readonly constellationNodes = new ConstellationNodes(OVERVIEW_LOD_CAP);
   private readonly globalLabels = new Set<string>();
   private readonly globalLabelRanks = new Map<string, number>();
+  private zoomLabelCandidates: readonly KnowledgeNode[] = [];
+  private zoomLabels = new Set<string>();
+  private labelZoom: LabelZoom = 1;
+  private labelFitDistance = 0;
   private hoveredId:string|null=null;
   private hoverFrame: number | null = null;
   private hoverX = 0;
@@ -444,6 +449,8 @@ export class KnowledgeHologram {
         || this.lookAt.distanceToSquared(this.desiredLookAt) > .000001,
       requestedCameraDistance: this.desiredCamera.distanceTo(this.desiredLookAt),
       cameraMinDistance: this.orbit.minDistance, cameraMaxDistance: this.orbit.maxDistance,
+      labelZoom: this.labelZoom ?? 1,
+      labelZoomRatio: this.labelFitDistance / Math.max(.01, this.camera.position.distanceTo(this.lookAt)),
       physics: this.plasticity.moving, transition: this.positionTransition.moving || this.displayTransition.moving,
       bridges: this.synapses.moving, overviewBridges: this.overviewSynapses.moving,
       regions: this.nebulae.moving, orbit: this.orbitActive,
@@ -653,6 +660,10 @@ export class KnowledgeHologram {
     for (const node of selectOverviewLabels(this.view.nodes)) {
       this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
     }
+    this.zoomLabelCandidates = global ? selectZoomLabelCandidates(this.view.nodes) : [];
+    for (const node of this.zoomLabelCandidates) if (!this.globalLabelRanks.has(node.id))
+      this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
+    this.zoomLabels.clear(); this.labelZoom = 1;
     this.rootNodeId = relationCenterId(this.view);
 
     this.preparePositionMotion();
@@ -847,7 +858,7 @@ export class KnowledgeHologram {
   }
   private refreshOverviewLabels(): void {
     if(this.view.hops!==0)return;
-    const wanted=new Set(this.globalLabels);
+    const wanted=new Set(this.zoomLabels?.size ? this.zoomLabels : this.globalLabels);
     if(this.hoveredId)wanted.add(this.hoveredId);
     if(this.view.focusId)wanted.add(this.view.focusId);
     for(const [id,label] of this.labels)if(!wanted.has(id)){label.remove();this.labels.delete(id);}
@@ -861,6 +872,47 @@ export class KnowledgeHologram {
       label.dataset.focused=String(id===this.view.focusId);layer.append(label);this.labels.set(id,label);
     }
     this.prioritizeOverviewLabels();
+  }
+  private updateZoomLabels(): void {
+    if (this.view.hops !== 0 || !this.zoomLabelCandidates?.length) return;
+    const ratio = this.labelFitDistance / Math.max(.01, this.camera.position.distanceTo(this.lookAt));
+    const level = labelZoomLevel(ratio, this.labelZoom);
+    const style = labelZoomStyle(level, this.viewport.width, this.viewport.height);
+    const wanted = new Set<string>();
+    const reserved = new Set([this.view.focusId, this.hoveredId].filter(Boolean)).size;
+    // Project only saved eligible candidates; keep a bounded DOM and collision
+    // budget. A zoomed-in viewport can discover titles absent from the overview.
+    for (const node of this.zoomLabelCandidates) {
+      if (!style.detail && !this.globalLabels.has(node.id)) continue;
+      const p = this.displayedPositions.get(node.id) ?? this.positions.get(node.id);
+      if (!p) continue;
+      this.projected.copy(p).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
+      if (Math.abs(this.projected.x) > .96 || Math.abs(this.projected.y) > .96
+        || this.projected.z < -1 || this.projected.z > 1) continue;
+      wanted.add(node.id);
+      if (wanted.size >= Math.min(style.budget, 24 - reserved)) break;
+    }
+    const changed = wanted.size !== this.zoomLabels.size || [...wanted].some(id => !this.zoomLabels.has(id));
+    this.zoomLabels = wanted;
+    if (changed) this.refreshOverviewLabels();
+    this.labelZoom = level;
+    let index = 0;
+    for (const [id, label] of this.labels) {
+      const box = this.labelBounds[index++];
+      const prominent = id === this.view.focusId || id === this.hoveredId;
+      const topic = this.globalLabels.has(id);
+      const size = prominent ? 14 : topic ? style.topicSize : style.detailSize;
+      label.dataset.level = String(level);
+      label.dataset.role = prominent ? 'active' : topic ? 'topic' : 'title';
+      label.style.fontSize = `${size}px`;
+      label.style.fontWeight = prominent ? '650' : topic ? '600' : '450';
+      label.style.opacity = String(prominent ? 1 : style.opacity);
+      const maxWidth = prominent || !topic ? 224 : 196;
+      if (label.style.maxWidth !== `${maxWidth}px`) {
+        label.style.maxWidth = `${maxWidth}px`;
+        if (box) box.width = 0;
+      }
+    }
   }
   private readonly clearHover=():void=>{
     this.cancelHover();
@@ -949,6 +1001,7 @@ export class KnowledgeHologram {
     const distance=overviewCameraDistance(relative,this.viewport.width,this.viewport.height,this.camera.fov,
       this.view.hops===0?.08:.32,this.view.hops===0&&this.view.nodes.length>120);
     this.desiredCamera.set(x,y,z+distance);this.desiredLookAt.set(x,y,z);
+    if (this.view.hops === 0) this.labelFitDistance = distance;
     this.fitAfterSemanticLayout = this.view.hops === 0 && this.view.nodes.length > 0
       && (this.view.nodes.length <= 24 || this.provisionalOverviewPositions.size > 0);
     // Orbit controls must admit the fitted overview; otherwise every frame
@@ -1099,12 +1152,13 @@ export class KnowledgeHologram {
       this.renderedVisibleNodeCount = visible;
     }
     const { x, y, width, height } = this.viewport;
+    this.updateZoomLabels();
     let index = 0;
     for (const [id, label] of this.labels) {
       const box = this.labelBounds[index++];
       const wasVisible = box.visible, previousLeft = box.left, previousTop = box.top;
       box.visible = false;
-      if(!this.neuronDetail&&!this.globalLabels.has(id)&&id!==this.hoveredId&&id!==this.view.focusId){label.hidden=true;continue;}
+      if(!this.neuronDetail&&!this.globalLabels.has(id)&&!this.zoomLabels?.has(id)&&id!==this.hoveredId&&id!==this.view.focusId){label.hidden=true;continue;}
       const position = this.displayedPositions.get(id) ?? this.positions.get(id);
       if (!position) continue;
       this.projected.copy(position).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);

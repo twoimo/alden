@@ -35,7 +35,7 @@ function fixture() {
     view,graph:view,positions,anchors:positions,displayedPositions:new Map(),
     graphRoot:root,canvas,constellationNodes:constellation,synapses,overviewSynapses:overview,
     nodeMeshes:new Map(),neuronMeshes:new Map(),neuronPorts:new Map(),orbMeshes:new Map(),
-    labels:new Map(),labelBounds:[],globalLabels:new Set(),globalLabelRanks:new Map(),
+    labels:new Map(),labelBounds:[],globalLabels:new Set(),globalLabelRanks:new Map(),zoomLabels:new Set(),
     pickGeometry:null,pickMaterial:null,orbit:{mouseButtons:{}},hoveredId:null,
     nebulae:{set:vi.fn(),update:vi.fn()},motion:{matches:true},reducedMotion:true,
     layoutPositions:vi.fn(),preparePositionMotion:vi.fn(),cancelHover:vi.fn(),

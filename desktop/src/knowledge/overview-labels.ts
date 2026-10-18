@@ -30,6 +30,15 @@ export function internalGraphLabel(label: string): boolean {
  */
 export function selectOverviewLabels(nodes: readonly KnowledgeNode[], cap = 8): KnowledgeNode[] {
   const limit = Math.min(8, Math.max(0, Math.floor(Number.isFinite(cap) ? cap : 0)));
+  return selectSavedLabels(nodes, limit);
+}
+
+/** Ranked once per graph. Screen-space selection, not a new semantic claim. */
+export function selectZoomLabelCandidates(nodes: readonly KnowledgeNode[]): KnowledgeNode[] {
+  return selectSavedLabels(nodes, 2048);
+}
+
+function selectSavedLabels(nodes: readonly KnowledgeNode[], limit: number): KnowledgeNode[] {
   const candidates = nodes.flatMap(node => {
     const label = node.label.normalize('NFC').replace(/\s+/g, ' ').trim();
     if (node.evidence.retracted || (node.contentEvidence && node.contentEvidence !== 'content_candidate')

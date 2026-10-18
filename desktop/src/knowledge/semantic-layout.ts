@@ -339,8 +339,9 @@ export class SemanticLayoutEngine {
       // Structural degree imbalance identifies hub spokes, not dissimilar
       // content. A validated semantic pair remains independent evidence for
       // layout even when one endpoint has many more stored relations.
-      if (p.s > 0 || similar >= 0.5) {
-        adjacency[a].push({ to: b, weight: p.weight }); adjacency[b].push({ to: a, weight: p.weight });
+      const communityWeight = p.s + (similar >= 0.5 ? p.r : 0);
+      if (communityWeight > 0) {
+        adjacency[a].push({ to: b, weight: communityWeight }); adjacency[b].push({ to: a, weight: communityWeight });
         current.join(a, b);
       }
       impact.join(a, b);
@@ -348,7 +349,12 @@ export class SemanticLayoutEngine {
     for (const p of this.pairs.values()) if (index.has(p.source) && index.has(p.target)) impact.join(index.get(p.source)!, index.get(p.target)!);
     const touched = new Set<number>();
     const touch = (id: string) => { const at = index.get(id); if (at !== undefined) touched.add(at); };
-    for (const id of ids) if (!this.positions.has(id) || options.changedIds?.has(id) || pinned.has(id) !== this.pins.has(id)) touch(id);
+    for (const id of ids) {
+      const supplied = previousPositions.get(id), cached = this.positions.get(id);
+      const pinMoved = pinned.has(id) && finite(supplied) && finite(cached)
+        && (supplied.x !== cached.x || supplied.y !== cached.y || supplied.z !== cached.z);
+      if (!cached || options.changedIds?.has(id) || pinned.has(id) !== this.pins.has(id) || pinMoved) touch(id);
+    }
     for (const [key, p] of nextPairs) { const old = this.pairs.get(key); if (!old || p.r !== old.r || p.s !== old.s || p.rest !== old.rest) { touch(p.source); touch(p.target); } }
     for (const [key, p] of this.pairs) if (!nextPairs.has(key)) { touch(p.source); touch(p.target); }
     const roots = new Set([...touched].map(i => impact.find(i)));
