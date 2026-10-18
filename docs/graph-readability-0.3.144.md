@@ -25,7 +25,9 @@ Declared-unit normalization uses its own exact Decimal context. Caller exponent 
 | Circle overlap pairs, both sizes | 0 | 0 |
 | Label overlaps/clipping, both sizes | 0 | 0 |
 
-Eight useful labels were visible. In the installed sample, 158 secondary computed groups with 490 nodes retain colour; 1,494 individually placed nodes remain neutral. All 2,048 visible identities are accounted for. Colour reuse does not combine groups. The solver retains 496 admitted affinity pairs; this is a bounded content comparison, not semantic gold or complete coverage.
+Eight useful labels were visible. In the installed sample, 158 secondary computed groups with 489 nodes retain colour; 1,495 individually placed nodes remain neutral. All 2,048 visible identities are accounted for. Colour reuse does not combine groups. The solver retains 496 admitted affinity pairs; this is a bounded content comparison, not semantic gold or complete coverage.
+
+The candidate's store hashes matched the baseline exactly: native central fractions were 50.732%/45.215%, with zero overlaps and nondecreasing spacing. Existing collection/indexing continued during installation. The installed audit admitted 349 usable vectors and rejected one stale entry, compared with 350/zero for the baseline/candidate. The table therefore reports installed observations rather than an exact-data causal performance comparison; the separate frozen calculation below supplies the controlled-data comparison. The candidate group counts were 490 secondary nodes/1,494 singletons, before this admission difference.
 
 A separate frozen 1,984-node collection subset retained identical source objects and cached anchors. Projected central fraction changed 44.708%→40.020% for fresh input and 49.748%→44.808% for R→S input, with corrected circle overlaps zero. These are local calculation observations, not native frame-time improvements. Actual semantic upper/lower distance ordering is not universally improved; independent topic/identity/time evaluation remains open.
 

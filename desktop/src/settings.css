@@ -607,9 +607,7 @@ body.settings-view {
   .knowledge-note-body { padding:16px 18px 20px; }
 }
 
-/* The graph is a quiet black field; source colours belong to real data. */
-.settings-shell[data-settings-page="memory"] .knowledge-hologram-shell { background:#09090b; }
-.settings-shell[data-settings-page="memory"] { --canvas:#07090c; --surface:#0e1218; --border:#26303b; }
+/* Keep the graph on the observatory's navy field defined above. */
 .knowledge-node-label[data-focused="true"] { color:#f4f2f7; border-color:#f4f2f740; }
 
 .knowledge-depth-legend {
@@ -617,7 +615,7 @@ body.settings-view {
   display:flex; align-items:center; flex-wrap:wrap; gap:7px 14px;
   width:fit-content; max-width:calc(100% - 32px); box-sizing:border-box;
   padding:7px 10px; border:1px solid #ffffff12; border-radius:6px;
-  background:#09090be8; color:#b8b6c0; font:11px/1.4 var(--font-ui);
+  background:#0b1322e8; color:#a5b2c7; font:11px/1.4 var(--font-ui);
   pointer-events:none;
 }
 .knowledge-depth-legend[hidden] { display:none; }
