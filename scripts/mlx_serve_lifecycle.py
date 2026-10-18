@@ -1035,6 +1035,10 @@ def ownership_status(
         if not reason:
             return report("app_owned", True, record.model)
         if reason in {"attest_not_alive", "attest_not_listening"}:
+            # A historical owner record cannot identify a replacement runtime.
+            # Report the live listener without attributing the old model to it.
+            if runtime.listeners(port):
+                return report("foreign_listener", False, None)
             return report("stopped", False, record.model)
         return report("state_stale", False, record.model)
     listeners = runtime.listeners(port)

@@ -1007,6 +1007,42 @@ class OwnershipStatusTests(unittest.TestCase):
             self.assertEqual(status["owner_state"], "stopped")
             self.assertFalse(status["app_owned"])
 
+    def test_old_owner_does_not_hide_a_replacement_listener(self) -> None:
+        for port in (MLX_SERVE_DEFAULT_PORT, MLX_SERVE_FLASH_NEXT_IQ_PORT):
+            for old_owner_alive in (False, True):
+                with self.subTest(port=port, old_owner_alive=old_owner_alive):
+                    with TemporaryDirectory() as raw:
+                        root = Path(raw)
+                        spec = make_iq_spec(root) if port == MLX_SERVE_FLASH_NEXT_IQ_PORT else make_spec(root)
+                        harness = Harness(spec)
+                        state_root = root / "state"
+                        record = AppOwnedServerRecord(
+                            harness.pid, spec.host, spec.port, spec.resident_model_name,
+                            spec.prefix(), spec.command_digest(), harness.clock.now(),
+                            spec.command() if port == MLX_SERVE_FLASH_NEXT_IQ_PORT else None,
+                        )
+                        write_app_owned_state(state_root, record, port=port)
+                        state_path = state_root / (
+                            MLX_SERVE_FLASH_NEXT_IQ_STATE_NAME
+                            if port == MLX_SERVE_FLASH_NEXT_IQ_PORT else MLX_SERVE_STATE_NAME
+                        )
+                        before = state_path.read_bytes()
+                        harness.listeners.add(9999)
+                        harness.alive.add(9999)
+                        if old_owner_alive:
+                            harness.alive.add(harness.pid)
+                            harness.commands[harness.pid] = " ".join(spec.command())
+
+                        status = ownership_status(state_root, port=port, hooks=harness.hooks())
+
+                        self.assertEqual(status["owner_state"], "foreign_listener")
+                        self.assertFalse(status["app_owned"])
+                        self.assertIsNone(status["model"])
+                        self.assertEqual(state_path.read_bytes(), before)
+                        self.assertEqual(harness.spawn_calls, [])
+                        self.assertEqual(harness.signals, [])
+                        self.assertEqual(harness.catalog_calls, 0)
+
     def test_drifted_command_reports_state_stale(self) -> None:
         with TemporaryDirectory() as raw:
             root = Path(raw)
