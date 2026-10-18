@@ -39,3 +39,18 @@ Two executable regressions failed on 0.3.147 source and were corrected alongside
 Original independent audit receipts remain in `outputs/pin-boundary-20261018/` and `outputs/community-boundary-20261018/`. One exact Astra/max worker disconnected after steering; its replacement was closed before source freeze after preparing read-only baseline evidence. The final small source changes and failing/passing native-runner regressions were performed by the main session. Do not count an unfinished worker as a completed review.
 
 F02 (multiple out-of-envelope pins using internal bounded proxies) remains open. The naive skip-clamp change crashes extreme finite inputs and was not applied. The product UI currently supplies one selected focus; this does not prove the general multi-pin engine API safe at every extreme. Current-source thesis findings about worker authority, policy-dependent label evidence and quantity symbols require separate adjudication; the completed thesis is not blanket certification of this newer source.
+
+## Delivered verification
+
+Runtime source `a498179246165425d8a7d07e2f33c03b05152545`, installed version 0.3.148. UI 929 tests, Rust source 145 tests and strict Clippy passed. [Exact-source CI39129847245](https://github.com/twoimo/alden/actions/runs/39129847245) passed all four jobs.
+
+| Native viewport | Distant | Overview | Context | Detail |
+|---|---:|---:|---:|---:|
+| Default | 4 | 8 | 15 | 24 |
+| Compact | 4 | 8 | 12 | 12 |
+
+Candidate and installed captures both passed, sixteen PNGs directly reviewed. Every captured label rectangle had zero overlap, clipping and visible unpositioned entries. Small screens reduce capacity; collision culling can keep fewer than the cap. This is actual product rendering with synthetic wheel input, not physical gesture/FPS proof.
+
+All 77 installed files/modes matched the candidate. Strict deep development signature, identical designated requirement, independent 0.3.147 recovery and protected settings/collection configuration reconciliation passed. Public Developer ID/notarized release remains separate. The primary app AX observer timed out after installation; it was not restarted to conceal observation failure.
+
+An initial full-suite prototype fixture omitted the new class field and was repaired. A subsequent unrelated neuron test exceeded 5 seconds during concurrent compilation; the complete suite with two workers passed. Initial canonical input dep-info referenced a removed dist asset; a second canonical build generated and verified the receipt. Original failed diagnostic receipts remain preserved.
