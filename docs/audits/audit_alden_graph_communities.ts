@@ -3,6 +3,12 @@ import { SemanticLayoutEngine } from '../../desktop/src/knowledge/semantic-layou
 import { parseKnowledgeGraph } from '../../desktop/src/knowledge/graph-model';
 
 const choose2 = (n: number) => n * (n - 1) / 2;
+const includeInputs = process.argv.includes('--include-inputs');
+const argumentInt = (name: string, fallback: number, max: number) => {
+  const at=process.argv.indexOf(name);const value=at<0?fallback:Number(process.argv[at+1]);
+  if(!Number.isSafeInteger(value)||value<1||value>max)throw new Error('invalid '+name);return value;
+};
+const seedStart=argumentInt('--seed-start',1,1_000_000),seedCount=argumentInt('--seed-count',5,30);
 function ari(truth: number[], found: string[]): number {
   const rows = new Map<number, number>(), cols = new Map<string, number>(), cells = new Map<string, number>();
   truth.forEach((v, i) => {
@@ -30,7 +36,7 @@ const cases = [
   {name:'structural-hub', within:.55, between:.02, hub:true},
 ];
 const results: unknown[] = [];
-for (const scenario of cases) for (let seed = 1; seed <= 5; seed++) {
+for (const scenario of cases) for (let seed = seedStart; seed < seedStart+seedCount; seed++) {
   const rng = random(seed), n = 96, width = 24;
   const truth = Array.from({length:n}, (_,i) => Math.floor(i/width));
   const ids = truth.map((_,i) => 'audit:'+String(i).padStart(4,'0'));
@@ -45,7 +51,8 @@ for (const scenario of cases) for (let seed = 1; seed <= 5; seed++) {
   const nodes = ids.map(id=>({id,label:'Synthetic audit node',source_target:'audit',source_version:'v1'}));
   const view = {...parseKnowledgeGraph({nodes,edges}),focusId:null,hops:0};
   const start = performance.now();
-  const result = new SemanticLayoutEngine().layout(view,new Map(),[],{nowMs:1000});
+  const engine = new SemanticLayoutEngine();
+  const result = engine.layout(view,new Map(),[],{nowMs:1000});
   const elapsed = performance.now()-start;
   const predicted = ids.map(id=>result.clusterIds.get(id)!);
   const reversed = {...parseKnowledgeGraph({nodes:nodes.slice().reverse(),edges:edges.slice().reverse()}),focusId:null,hops:0};
@@ -72,13 +79,28 @@ for (const scenario of cases) for (let seed = 1; seed <= 5; seed++) {
     }}
     if(seen.size!==members.length)disconnectedInRawUnion++;
   }
+  let referenceInput: unknown;
+  if (includeInputs) {
+    if (result.diagnostics.relationPairs !== edges.length || result.diagnostics.affinityPairs !== 0
+      || result.diagnostics.nodes !== n) throw new Error('reference export requires complete structural-only fixture');
+    const rawDegree=new Map(ids.map(id=>[id,0]));
+    for(const e of edges) for(const id of [e.source,e.target]) rawDegree.set(id,rawDegree.get(id)!+e.weight/(1+e.weight));
+    const communityEdges=engine.checkpoint().pairs.flatMap(([,p])=>{
+      if(p.s!==0)throw new Error('reference export does not reconstruct semantic admission');
+      const a=rawDegree.get(p.source)!,b=rawDegree.get(p.target)!;
+      const similar=a+b===0?1:Math.min(a,b)/Math.max(a,b);
+      return similar>=.5?[{source:p.source,target:p.target,weight:p.r}]:[];
+    });
+    referenceInput={ids,plantedMembership:truth,currentMembership:predicted,rawEdges:edges,communityEdges,
+      scope:'Exact checkpoint-normalized weights with structural degree-imbalance gate reconstructed for complete positive uniform fixtures only'};
+  }
   results.push({scenario:scenario.name,seed,nodes:n,edges:edges.length,plantedGroups:4,
     predictedGroups:groups.size,adjustedRand:ari(truth,predicted),permutationEqual,relabelPartitionARI,
     disconnectedInRawUnion,finite:[...result.anchors.values()].every(p=>[p.x,p.y,p.z].every(Number.isFinite)),
-    elapsedMs:elapsed,diagnostics:result.diagnostics});
+    elapsedMs:elapsed,diagnostics:result.diagnostics,referenceInput});
 }
-console.log(JSON.stringify({schema:1,scope:'30 synthetic planted structural graphs; no semantic encoder, real-source gold, UI or installed flow',
-  seedPolicy:'xorshift32 seeds1..5; no parameter tuning; fixed96 nodes/4blocks',
+console.log(JSON.stringify({schema:1,scope:cases.length*seedCount+' synthetic planted structural graphs; no semantic encoder, real-source gold, UI or installed flow',
+  seedPolicy:{generator:'xorshift32',seedStart,seedCount,nodes:96,blocks:4},
   metrics:{adjustedRand:'chance-adjusted partition agreement with planted generation labels',
     disconnectedInRawUnion:'one-sided counterexample check; zero is not filtered-community connectivity proof',
     elapsedMs:'single-process exploratory CPU observation, not performance comparison'},results},null,2));
