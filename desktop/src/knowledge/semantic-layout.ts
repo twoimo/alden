@@ -61,6 +61,18 @@ const order = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
 const pairKey = (a: string, b: string): string => JSON.stringify(a < b ? [a, b] : [b, a]);
 const finite = (p: Point3 | undefined): p is Point3 => !!p && [p.x, p.y, p.z].every(Number.isFinite);
 const copy = (p: Point3): Point3 => ({ x: p.x, y: p.y, z: p.z });
+// Subtract first to retain close-coordinate precision; opposite finite extremes
+// can overflow that subtraction, in which case divide before subtracting.
+function scaledDifference(a: number, b: number, scale: number): number {
+  const delta = a - b;
+  if (scale === 1) return delta;
+  return Number.isFinite(delta) ? delta / scale : a / scale - b / scale;
+}
+function addCompensated(sum: Float64Array, correction: Float64Array, at: number, value: number): void {
+  const old = sum[at], next = old + value;
+  correction[at] += Math.abs(old) >= Math.abs(value) ? (old - next) + value : (value - next) + old;
+  sum[at] = next;
+}
 const SEMANTIC_HIGH_COSINE = 0.7;
 const SEMANTIC_LOW_COSINE = 0.4;
 function medianDistance(values: number[]): number | null {
@@ -229,6 +241,128 @@ function unionFind(count: number) {
 /** R/S are geometry inputs only. The caller owns permission/version/profile
  * validation and must clear this bounded instance when its authority changes.
  * Reuse the instance across snapshots; never call it from an animation frame. */
+/** Preserve the bounded numeric-grid kernel for the common unpinned view.
+ * Extreme pinned contacts use the separately guarded sparse/world-frame pass. */
+function denseCollisionPass(ids: readonly string[], points: Point3[], movable: boolean[],
+  forces: Float64Array, d: SemanticLayoutDiagnostics, movableCount: number, iteration: number,
+  sampleSlots: Array<CollisionCell | undefined>, neighborSlots: Array<CollisionNeighborhood | undefined>,
+  collisionSeeds: readonly number[]): void {
+  const limits = SEMANTIC_LAYOUT_LIMITS, neighborhoodCrowdThreshold = 24;
+  if (d.collisionTests < limits.collisionTests) {
+    // Numeric cells and one candidate list per occupied cell avoid repeating
+    // 27 string lookups for every node. Rotate crowded representatives and
+    // reserve a share of the snapshot budget for every pass and movable ID.
+    const cellKey = (x: number, y: number, z: number) => ((x + 16) * 32 + y + 16) * 32 + z + 16;
+    const cells = new Map<number, CollisionCell>();
+    const nodeCells = new Int32Array(ids.length);
+    const shiftX = iteration * .061 % .16 - .08, shiftY = iteration * .043 % .16 - .08, shiftZ = iteration * .097 % .16 - .08;
+    points.forEach((p, i) => {
+      const x = Math.floor((p.x + shiftX) / .16), y = Math.floor((p.y + shiftY) / .16), z = Math.floor((p.z + shiftZ) / .16), key = cellKey(x, y, z);
+      const cell = cells.get(key) ?? { x, y, z, members: [], sample: [], sumX: 0, sumY: 0, sumZ: 0 };
+      cell.members.push(i); cell.sumX += p.x; cell.sumY += p.y; cell.sumZ += p.z; cells.set(key, cell); nodeCells[i] = key;
+    });
+    // One coarse density evaluation per crowded movable ID, not an
+    // unreported all-pairs search. Shift the grid each pass so cell planes
+    // do not become artificial packing boundaries. This is geometry only.
+    for (const cell of cells.values()) {
+      const count = cell.members.length;
+      if (count < 2) continue;
+      const x = cell.sumX / count, y = cell.sumY / count, z = cell.sumZ / count;
+      const radius = .14 * Math.cbrt(count);
+      for (const a of cell.members) {
+        if (!movable[a]) continue;
+        d.densityEvaluations++;
+        const p = points[a]; let dx = p.x - x, dy = p.y - y, dz = p.z - z;
+        const separation = Math.sqrt(dx * dx + dy * dy + dz * dz); let length = separation;
+        if (length < 1e-9) {
+          const v = seed(ids[a]); dx = v.x; dy = v.y; dz = v.z;
+          length = Math.max(1e-9, Math.hypot(dx, dy, dz));
+        }
+        const gain = 3 * Math.max(0, radius - separation) / length;
+        forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz;
+      }
+    }
+    sampleSlots.fill(undefined); neighborSlots.fill(undefined);
+    for (const [key, cell] of cells) {
+      const members = cell.members, sample: number[] = [];
+      if (members.length > limits.cellOccupancy) {
+        d.crowdedCells += members.length - limits.cellOccupancy; d.collisionCandidatesTruncated = true;
+      }
+      const start = iteration * limits.cellOccupancy % members.length;
+      for (let i = 0; i < Math.min(members.length, limits.cellOccupancy); i++) sample.push(members[(start + i) % members.length]);
+      cell.sample = sample;
+      sampleSlots[key] = cell;
+    }
+    for (const [key, cell] of cells) {
+      // Keep at most 27 sample references and cumulative lengths. Copying
+      // all sampled IDs into every neighboring cell dominated snapshot CPU;
+      // binary lookup retains the exact flattened order and rotated quota.
+      const samples: number[][] = [], ends: number[] = [];
+      let total = 0;
+      let count = 0, sumX = 0, sumY = 0, sumZ = 0;
+      for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
+        const neighborKey = cellKey(cell.x + x, cell.y + y, cell.z + z);
+        const neighbor = sampleSlots[neighborKey];
+        if (neighbor) {
+          samples.push(neighbor.sample); total += neighbor.sample.length; ends.push(total);
+          count += neighbor.members.length;
+          sumX += neighbor.sumX; sumY += neighbor.sumY; sumZ += neighbor.sumZ;
+        }
+      }
+      // A locally crowded neighborhood can straddle many lightly filled
+      // cells. Pressure its centroid only above 24 nodes in the 3x3x3
+      // neighborhood, without changing the cloud's global scale or pins.
+      neighborSlots[key] = { samples, ends, total, density: count > neighborhoodCrowdThreshold
+        ? { x: sumX / count, y: sumY / count, z: sumZ / count,
+          pressure: .4 * Math.min(1, (count - neighborhoodCrowdThreshold) / neighborhoodCrowdThreshold) }
+        : null };
+    }
+    const passBudget = Math.floor((limits.collisionTests - d.collisionTests) / (limits.solverIterations - iteration));
+    const perNode = Math.max(1, Math.floor(passBudget / movableCount));
+    let passTests = 0;
+    for (let a = 0; a < ids.length; a++) {
+      if (!movable[a]) continue;
+      const neighborhood = neighborSlots[nodeCells[a]]!;
+      const total = neighborhood.total, p = points[a];
+      const density = neighborhood.density;
+      if (density) {
+        d.neighborhoodDensityEvaluations++;
+        let dx = p.x - density.x, dy = p.y - density.y, dz = p.z - density.z;
+        let length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (length < 1e-9) {
+          const v = seed(ids[a]), scale = .14 / Math.max(1e-9, Math.hypot(v.x, v.y, v.z));
+          dx = v.x * scale; dy = v.y * scale; dz = v.z * scale; length = .14;
+        }
+        const gain = density.pressure / Math.max(.14, length);
+        forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz;
+      }
+      if (total > perNode) d.collisionCandidatesTruncated = true;
+      const start = (collisionSeeds[a] + iteration * 17) % total;
+      let tests = 0;
+      // A directed sample updates only this movable node. Every movable ID
+      // owns its quota; a popular early representative cannot absorb it.
+      for (let trial = 0; trial < Math.min(total, perNode + 1) && tests < perNode && passTests < passBudget; trial++) {
+        const b = sampledMember(neighborhood, (start + trial) % total);
+        if (a === b) continue;
+        tests++; passTests++; d.collisionTests++;
+        const q = points[b];
+        let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
+        const square = dx * dx + dy * dy + dz * dz;
+        if (square >= .0196) continue;
+        const separation = Math.sqrt(square);
+        let length = separation;
+        if (length < 1e-9) {
+          const v = seed(ids[a]); dx = -v.x; dy = -v.y; dz = -v.z;
+          length = Math.max(1e-9, Math.hypot(dx, dy, dz));
+        }
+        const densityScale = Math.min(4, Math.max(1, total / perNode));
+        const gain = 1.5 * densityScale * (.14 - separation) / length;
+        forces[a * 3] -= gain * dx; forces[a * 3 + 1] -= gain * dy; forces[a * 3 + 2] -= gain * dz;
+      }
+    }
+  } else d.collisionBudgetExhausted = true;
+}
+
 export class SemanticLayoutEngine {
   private positions = new Map<string, Point3>();
   private labels = new Map<string, string>();
@@ -485,27 +619,46 @@ export class SemanticLayoutEngine {
     const depthRadius = [0, .42, .86, 1.28, 1.66];
     const pinOrigin = depthRoot >= 0 ? copy(points[depthRoot]) : null;
     for (let i = 0; i < points.length; i++) {
-      if (pinOrigin && i === depthRoot) continue;
+      if (pinned.has(ids[i])) continue;
       points[i] = pinOrigin ? boundNear(points[i], pinOrigin) : bound(points[i]);
       origins[i] = pinOrigin ? boundNear(origins[i], pinOrigin) : bound(origins[i]);
     }
+    // Keep authoritative pins in world coordinates. Scale ALL force terms in
+    // an extreme component together, including rest lengths and collisions;
+    // per-pin clipping would lose relative attraction (e.g. +MAX vs -MAX/2).
+    // Ordinary components retain the original arithmetic. With at most 8192
+    // admitted pairs, 1e100 also leaves ample headroom for squares and sums.
+    const componentScales = new Map<number, number>();
+    if (pinned.size) for (let i = 0; i < points.length; i++) {
+      const p = points[i], o = origins[i], c = clusterCenters[i];
+      const magnitude = Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z),
+        Math.abs(o.x), Math.abs(o.y), Math.abs(o.z), Math.abs(c.x), Math.abs(c.y), Math.abs(c.z));
+      if (magnitude > 1e100) {
+        const root = impact.find(i);
+        componentScales.set(root, Math.max(componentScales.get(root) ?? 1, magnitude));
+      }
+    }
+    const forceScales = ids.map((_, i) => componentScales.get(impact.find(i)) ?? 1);
     const forces = new Float64Array(ids.length * 3);
+    const corrections = componentScales.size ? new Float64Array(forces.length) : null;
     // Bounded 32^3 cell keys. Reuse direct slots during this snapshot rather
-    // than hashing 27 neighbor keys per occupied cell on every solver pass.
-    const sampleSlots: Array<CollisionCell | undefined> = movableCount ? new Array(32768) : [];
-    const neighborSlots: Array<CollisionNeighborhood | undefined> = movableCount ? new Array(32768) : [];
+    // than hashing 27 neighbor keys per occupied cell on every solver pass in
+    // the unchanged no-pin path. Pins use at most one sparse cell per node.
+    const denseGrid = pinned.size === 0;
+    const sampleSlots: Array<CollisionCell | undefined> = movableCount && denseGrid ? new Array(32768) : [];
+    const neighborSlots: Array<CollisionNeighborhood | undefined> = movableCount && denseGrid ? new Array(32768) : [];
     const neighborhoodCrowdThreshold = 24;
     if (movable.some(Boolean)) for (let iteration = 0; iteration < limits.solverIterations; iteration++) {
-      d.solverIterations++; forces.fill(0);
+      d.solverIterations++; forces.fill(0); corrections?.fill(0);
       ids.forEach((_, i) => {
         if (!movable[i]) return;
-        const p = points[i], origin = origins[i], c = clusterCenters[i];
+        const p = points[i], origin = origins[i], c = clusterCenters[i], scale = forceScales[i];
         // A reached hop already has a ring target. Community-center pull collapses those radii.
         const onRing = depthRoot >= 0 && relationDepth[i] > 0;
         const clusterGain = onRing ? 0 : .28;
-        forces[i * 3] = clusterGain * (c.x - p.x) + (hasPrior[i] ? .08 * (origin.x - p.x) : 0);
-        forces[i * 3 + 1] = clusterGain * (c.y - p.y) + (hasPrior[i] ? .08 * (origin.y - p.y) : 0);
-        forces[i * 3 + 2] = clusterGain * (c.z - p.z) + (hasPrior[i] ? .08 * (origin.z - p.z) : 0);
+        forces[i * 3] = clusterGain * scaledDifference(c.x, p.x, scale) + (hasPrior[i] ? .08 * scaledDifference(origin.x, p.x, scale) : 0);
+        forces[i * 3 + 1] = clusterGain * scaledDifference(c.y, p.y, scale) + (hasPrior[i] ? .08 * scaledDifference(origin.y, p.y, scale) : 0);
+        forces[i * 3 + 2] = clusterGain * scaledDifference(c.z, p.z, scale) + (hasPrior[i] ? .08 * scaledDifference(origin.z, p.z, scale) : 0);
         if (depthRoot >= 0 && relationDepth[i] > 0) {
           const root = points[depthRoot];
           let dx = p.x - root.x, dy = p.y - root.y, dz = p.z - root.z;
@@ -514,7 +667,7 @@ export class SemanticLayoutEngine {
             const v = seed(ids[i]); dx = v.x; dy = v.y; dz = v.z;
             length = Math.max(1e-9, Math.hypot(dx, dy, dz));
           }
-          const gain = .55 * (depthRadius[relationDepth[i]] - length) / length;
+          const gain = .55 * (depthRadius[relationDepth[i]] - length) / length / scale;
           forces[i * 3] += gain * dx; forces[i * 3 + 1] += gain * dy; forces[i * 3 + 2] += gain * dz;
         }
       });
@@ -522,30 +675,72 @@ export class SemanticLayoutEngine {
         const { a, b } = pair;
         if (!movable[a] && !movable[b]) continue;
         d.springEvaluations++;
-        const p = points[a], q = points[b];
-        let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
-        // Solver points are bounded before each pass. Their squared distance
-        // cannot overflow, so one square root avoids two general hypot calls
-        // per spring while retaining the exact-coincidence fallback.
-        let length = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (length < 1e-9) {
-          const v = seed(pair.key); dx = v.x * .001; dy = v.y * .001; dz = v.z * .001;
-          length = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const p = points[a], q = points[b], scale = forceScales[a], minimum = 1e-9 / scale;
+        let dx = scaledDifference(q.x, p.x, scale), dy = scaledDifference(q.y, p.y, scale), dz = scaledDifference(q.z, p.z, scale);
+        // Scaling bounds large deltas. Hypot also retains tiny movable-movable
+        // deltas within an extreme component instead of underflowing squares.
+        let length = scale === 1 ? Math.sqrt(dx * dx + dy * dy + dz * dz) : Math.hypot(dx, dy, dz);
+        const tied = length < minimum;
+        if (tied) {
+          const v = seed(pair.key); dx = v.x * .001 / scale; dy = v.y * .001 / scale; dz = v.z * .001 / scale;
+          length = scale === 1 ? Math.sqrt(dx * dx + dy * dy + dz * dz) : Math.hypot(dx, dy, dz);
         }
-        length = Math.max(1e-9, length);
-        const gain = 2 * pair.weight * (length - pair.rest) / length;
+        length = Math.max(minimum, length);
+        if (scale !== 1) {
+          // Expand k * (q - p - rest * direction) before accumulating. Forming
+          // q-p or length-rest first loses the small restoring term next to an
+          // extreme pin. Compensation keeps it when opposite pins cancel.
+          const stiffness = 2 * pair.weight;
+          for (const [axis, coordinate, delta] of [[0, 'x', dx], [1, 'y', dy], [2, 'z', dz]] as const) {
+            const terms = tied ? [stiffness * delta] : [stiffness * (q[coordinate] / scale), -stiffness * (p[coordinate] / scale)];
+            terms.push(-stiffness * (pair.rest / scale) * (delta / length));
+            for (const term of terms) {
+              if (movable[a]) addCompensated(forces, corrections!, a * 3 + axis, term);
+              if (movable[b]) addCompensated(forces, corrections!, b * 3 + axis, -term);
+            }
+          }
+          continue;
+        }
+        const gain = 2 * pair.weight * (length - pair.rest / scale) / length;
         if (movable[a]) { forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz; }
         if (movable[b]) { forces[b * 3] -= gain * dx; forces[b * 3 + 1] -= gain * dy; forces[b * 3 + 2] -= gain * dz; }
       }
-      if (d.collisionTests < limits.collisionTests) {
+      if (corrections) for (let i = 0; i < ids.length; i++) if (forceScales[i] !== 1) {
+        forces[i * 3] += corrections[i * 3];
+        forces[i * 3 + 1] += corrections[i * 3 + 1];
+        forces[i * 3 + 2] += corrections[i * 3 + 2];
+      }
+      if (denseGrid) denseCollisionPass(ids, points, movable, forces, d, movableCount, iteration, sampleSlots, neighborSlots, collisionSeeds);
+      else if (d.collisionTests < limits.collisionTests) {
         // Numeric cells and one candidate list per occupied cell avoid repeating
         // 27 string lookups for every node. Rotate crowded representatives and
         // reserve a share of the snapshot budget for every pass and movable ID.
-        const cellKey = (x: number, y: number, z: number) => ((x + 16) * 32 + y + 16) * 32 + z + 16;
-        const cells = new Map<number, CollisionCell>();
-        const nodeCells = new Int32Array(ids.length);
+        const cellKey = (x: number, y: number, z: number): number | string => denseGrid
+          ? ((x + 16) * 32 + y + 16) * 32 + z + 16 : `${x},${y},${z}`;
+        const cells = new Map<number | string, CollisionCell>();
+        const nodeCells: Array<number | string> = new Array(ids.length);
+        const neighborhoods = new Map<number | string, CollisionNeighborhood>();
+        // Translate collision arithmetic around a single focus, including cell
+        // centroids. Summing its world coordinates can overflow even when every
+        // member is finite. Multi-pin movables retain the existing origin bound.
+        const collisionPoints = pinOrigin ? points.map(p => ({
+          x: p.x - pinOrigin.x, y: p.y - pinOrigin.y, z: p.z - pinOrigin.z,
+        })) : points;
+        let minX = Infinity, minY = Infinity, minZ = Infinity;
+        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        if (!denseGrid) for (let i = 0; i < points.length; i++) if (movable[i]) {
+          const p = collisionPoints[i];
+          minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); minZ = Math.min(minZ, p.z);
+          maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); maxZ = Math.max(maxZ, p.z);
+        }
         const shiftX = iteration * .061 % .16 - .08, shiftY = iteration * .043 % .16 - .08, shiftZ = iteration * .097 % .16 - .08;
-        points.forEach((p, i) => {
+        collisionPoints.forEach((p, i) => {
+          // A point more than two cell widths outside the movable envelope
+          // cannot enter any queried 3x3x3 neighborhood, at any grid shift.
+          // Reject it before division/indexing, never clamp it into a contact.
+          // It remains an authoritative endpoint in the spring pass above.
+          if (!denseGrid && pinned.has(ids[i]) && (p.x < minX - .32 || p.x > maxX + .32
+            || p.y < minY - .32 || p.y > maxY + .32 || p.z < minZ - .32 || p.z > maxZ + .32)) return;
           const x = Math.floor((p.x + shiftX) / .16), y = Math.floor((p.y + shiftY) / .16), z = Math.floor((p.z + shiftZ) / .16), key = cellKey(x, y, z);
           const cell = cells.get(key) ?? { x, y, z, members: [], sample: [], sumX: 0, sumY: 0, sumZ: 0 };
           cell.members.push(i); cell.sumX += p.x; cell.sumY += p.y; cell.sumZ += p.z; cells.set(key, cell); nodeCells[i] = key;
@@ -561,13 +756,13 @@ export class SemanticLayoutEngine {
           for (const a of cell.members) {
             if (!movable[a]) continue;
             d.densityEvaluations++;
-            const p = points[a]; let dx = p.x - x, dy = p.y - y, dz = p.z - z;
+            const p = collisionPoints[a]; let dx = p.x - x, dy = p.y - y, dz = p.z - z;
             const separation = Math.sqrt(dx * dx + dy * dy + dz * dz); let length = separation;
             if (length < 1e-9) {
               const v = seed(ids[a]); dx = v.x; dy = v.y; dz = v.z;
               length = Math.max(1e-9, Math.hypot(dx, dy, dz));
             }
-            const gain = 3 * Math.max(0, radius - separation) / length;
+            const gain = 3 * Math.max(0, radius - separation) / length / forceScales[a];
             forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz;
           }
         }
@@ -580,7 +775,7 @@ export class SemanticLayoutEngine {
           const start = iteration * limits.cellOccupancy % members.length;
           for (let i = 0; i < Math.min(members.length, limits.cellOccupancy); i++) sample.push(members[(start + i) % members.length]);
           cell.sample = sample;
-          sampleSlots[key] = cell;
+          if (denseGrid) sampleSlots[key as number] = cell;
         }
         for (const [key, cell] of cells) {
           // Keep at most 27 sample references and cumulative lengths. Copying
@@ -591,7 +786,7 @@ export class SemanticLayoutEngine {
           let count = 0, sumX = 0, sumY = 0, sumZ = 0;
           for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
             const neighborKey = cellKey(cell.x + x, cell.y + y, cell.z + z);
-            const neighbor = sampleSlots[neighborKey];
+            const neighbor = denseGrid ? sampleSlots[neighborKey as number] : cells.get(neighborKey);
             if (neighbor) {
               samples.push(neighbor.sample); total += neighbor.sample.length; ends.push(total);
               count += neighbor.members.length;
@@ -601,18 +796,20 @@ export class SemanticLayoutEngine {
           // A locally crowded neighborhood can straddle many lightly filled
           // cells. Pressure its centroid only above 24 nodes in the 3x3x3
           // neighborhood, without changing the cloud's global scale or pins.
-          neighborSlots[key] = { samples, ends, total, density: count > neighborhoodCrowdThreshold
+          const neighborhood = { samples, ends, total, density: count > neighborhoodCrowdThreshold
             ? { x: sumX / count, y: sumY / count, z: sumZ / count,
               pressure: .4 * Math.min(1, (count - neighborhoodCrowdThreshold) / neighborhoodCrowdThreshold) }
             : null };
+          if (denseGrid) neighborSlots[key as number] = neighborhood;
+          else neighborhoods.set(key, neighborhood);
         }
         const passBudget = Math.floor((limits.collisionTests - d.collisionTests) / (limits.solverIterations - iteration));
         const perNode = Math.max(1, Math.floor(passBudget / movableCount));
         let passTests = 0;
         for (let a = 0; a < ids.length; a++) {
           if (!movable[a]) continue;
-          const neighborhood = neighborSlots[nodeCells[a]]!;
-          const total = neighborhood.total, p = points[a];
+          const neighborhood = denseGrid ? neighborSlots[nodeCells[a] as number]! : neighborhoods.get(nodeCells[a])!;
+          const total = neighborhood.total, p = collisionPoints[a];
           const density = neighborhood.density;
           if (density) {
             d.neighborhoodDensityEvaluations++;
@@ -622,7 +819,7 @@ export class SemanticLayoutEngine {
               const v = seed(ids[a]), scale = .14 / Math.max(1e-9, Math.hypot(v.x, v.y, v.z));
               dx = v.x * scale; dy = v.y * scale; dz = v.z * scale; length = .14;
             }
-            const gain = density.pressure / Math.max(.14, length);
+            const gain = density.pressure / Math.max(.14, length) / forceScales[a];
             forces[a * 3] += gain * dx; forces[a * 3 + 1] += gain * dy; forces[a * 3 + 2] += gain * dz;
           }
           if (total > perNode) d.collisionCandidatesTruncated = true;
@@ -634,7 +831,7 @@ export class SemanticLayoutEngine {
             const b = sampledMember(neighborhood, (start + trial) % total);
             if (a === b) continue;
             tests++; passTests++; d.collisionTests++;
-            const q = points[b];
+            const q = collisionPoints[b];
             let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
             const square = dx * dx + dy * dy + dz * dz;
             if (square >= .0196) continue;
@@ -645,7 +842,7 @@ export class SemanticLayoutEngine {
               length = Math.max(1e-9, Math.hypot(dx, dy, dz));
             }
             const densityScale = Math.min(4, Math.max(1, total / perNode));
-            const gain = 1.5 * densityScale * (.14 - separation) / length;
+            const gain = 1.5 * densityScale * (.14 - separation) / length / forceScales[a];
             forces[a * 3] -= gain * dx; forces[a * 3 + 1] -= gain * dy; forces[a * 3 + 2] -= gain * dz;
           }
         }
@@ -654,7 +851,13 @@ export class SemanticLayoutEngine {
         if (!movable[i]) return;
         const p = points[i], at = i * 3;
         const gain = .08 / Math.max(1, Math.hypot(forces[at], forces[at + 1], forces[at + 2]));
-        const step = { x: p.x + gain * forces[at], y: p.y + gain * forces[at + 1], z: p.z + gain * forces[at + 2] };
+        const scale = forceScales[i];
+        // Do not form .08 / a subnormal denominator: that reciprocal can
+        // overflow. Divide each scaled force first; the ratio is at most one.
+        const divisor = scale === 1 ? 1 : Math.max(1 / scale, Math.hypot(forces[at], forces[at + 1], forces[at + 2]));
+        const step = scale === 1
+          ? { x: p.x + gain * forces[at], y: p.y + gain * forces[at + 1], z: p.z + gain * forces[at + 2] }
+          : { x: p.x + .08 * (forces[at] / divisor), y: p.y + .08 * (forces[at + 1] / divisor), z: p.z + .08 * (forces[at + 2] / divisor) };
         const next = pinOrigin ? boundNear(step, pinOrigin) : bound(step);
         points[i] = next; anchors.set(id, next);
       });

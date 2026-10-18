@@ -230,14 +230,12 @@ export function wireAssistantComposer(
   filePicker.multiple = true;
   filePicker.setAttribute('aria-label', '문서 첨부 선택 (사진과 합계 최대 4개)');
   filePicker.style.maxWidth = '100%';
-  const imageLabel = create('label', 'assistant-composer-image-label');
-  imageLabel.textContent = '사진 '; imageLabel.append(imagePicker);
-  const fileLabel = create('label', 'assistant-composer-file-label');
-  fileLabel.textContent = '문서 '; fileLabel.append(filePicker);
-  for (const field of [imageLabel, fileLabel]) {
-    field.style.display = 'inline-flex'; field.style.flexWrap = 'wrap';
-    field.style.alignItems = 'center'; field.style.gap = '8px'; field.style.maxWidth = '100%';
-  }
+  const imageLabel = create('label', 'assistant-composer-image-label', 'assistant-attachment-picker');
+  imageLabel.textContent = '사진 추가'; imageLabel.append(imagePicker);
+  const fileLabel = create('label', 'assistant-composer-file-label', 'assistant-attachment-picker');
+  fileLabel.textContent = '문서 추가'; fileLabel.append(filePicker);
+  const attachmentControls = create('div', 'assistant-composer-attachment-controls', 'assistant-attachment-controls');
+  attachmentControls.append(imageLabel, fileLabel);
 
   const send = create('button', 'assistant-composer-send', 'preferences-save');
   send.type = 'submit';
@@ -257,7 +255,7 @@ export function wireAssistantComposer(
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   status.style.flex = '1 1 100%';
-  form.append(label, imageLabel, fileLabel, send, cancel, preview, limits, status);
+  form.append(label, attachmentControls, send, cancel, preview, limits, status);
   reader.append(form);
 
   let disposed = false;

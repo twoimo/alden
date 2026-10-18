@@ -11,11 +11,16 @@ export interface LayoutResponse { id: number; anchors?: Array<[string, Point3]>;
 export interface LayoutWorkerPort { onmessage: ((event: MessageEvent<LayoutResponse>) => void) | null;
   onerror: ((event: Event) => void) | null; postMessage(value: LayoutRequest): void; terminate(): void }
 
+function affinityAuthorityKey(view:KnowledgeView):string {
+  const affinity=view.layoutAffinity;
+  return JSON.stringify(affinity?[affinity.state,affinity.inputKey,affinity.profileKey]:null);
+}
+
 function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>):string {
   const now=Date.now();
   return JSON.stringify([view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance,n.evidence.retracted]),
     view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted,relationCurrentlyValid(e,now)]),
-    view.layoutAffinity?.pairs??[],[...pinned].sort()]);
+    affinityAuthorityKey(view),view.layoutAffinity?.pairs??[],[...pinned].sort()]);
 }
 
 /** One latest snapshot, one owned worker; superseded/hidden jobs cannot apply.
@@ -24,6 +29,8 @@ function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>):string {
 export class SemanticLayoutDriver {
   private worker: LayoutWorkerPort | null = null;
   private checkpoint?: SemanticLayoutCheckpoint;
+  private completedPositions?: SemanticLayoutCheckpoint['positions'];
+  private affinityAuthority?: string;
   private generation = 0;
   private appliedKey = '';
   private requestedKey = '';
@@ -49,6 +56,15 @@ export class SemanticLayoutDriver {
 
   request(view: KnowledgeView, previous: ReadonlyMap<string, Point3>, changed: ReadonlySet<string>, pinned: ReadonlySet<string>,
     provisional: ReadonlySet<string> = new Set(), reflow = false): void {
+    const authority=affinityAuthorityKey(view);
+    if(this.affinityAuthority!==undefined&&this.affinityAuthority!==authority){
+      // Workers retain their engines even without a restore checkpoint. Drop
+      // that engine and all membership metadata before any cache/pin shortcut.
+      // Completed coordinates remain only a geometric prior, never labels.
+      const positions=this.completedPositions;
+      this.clear();this.completedPositions=positions;
+    }
+    this.affinityAuthority=authority;
     const pairs = view.layoutAffinity?.pairs ?? [];
     const visibleIds=new Set(view.nodes.filter(node=>!node.evidence.retracted).map(node=>node.id));
     const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, label: n.id, description: '', facts: [] })),
@@ -90,6 +106,7 @@ export class SemanticLayoutDriver {
         this.state = { state: 'failed', reason: event.data.error ?? 'semantic_layout_invalid_reply' }; return;
       }
       this.appliedKey = key; this.appliedPins=pinKey; this.checkpoint = event.data.checkpoint;
+      this.completedPositions=this.checkpoint.positions;
       this.state = { state: 'ready', generation: id, wallMs: event.data.wallMs, ...event.data.diagnostics, ...priorBasis };
       this.completedState={...this.state};
       this.apply(event.data);
@@ -101,12 +118,14 @@ export class SemanticLayoutDriver {
     // A new identity's ID seed is provisional even after another page solved.
     // Retain completed identities and explicit pins; unrelated cached IDs do
     // not make new seeds an authoritative prior community center.
-    const solved = new Map(this.checkpoint?.positions ?? []);
+    const solved = new Map(this.completedPositions ?? []);
     // Animation/physics coordinates depend on when an asynchronous affinity
     // reply arrives. Preserve the completed solver snapshot as the next solve's
     // prior; only an explicit pin takes the currently shown source position.
+    // With no authority-valid checkpoint, explicitly send known solver points
+    // for provisional identities; their current presentation seeds stay out.
     const retained = [...previous].filter(([id]) => visibleIds.has(id)
-      && (pinned.has(id) || solved.has(id) && !provisional.has(id)))
+      && (pinned.has(id) || solved.has(id) && (!provisional.has(id) || !this.checkpoint)))
       .map(([id,p]) => [id,pinned.has(id)?p:solved.get(id)!] as [string,Point3]);
     const priorBasis={priorSource:'completed_solver_or_explicit_pin',retainedPriorNodes:retained.length,
       explicitPinPriorNodes:retained.filter(([key])=>pinned.has(key)).length,
@@ -117,5 +136,5 @@ export class SemanticLayoutDriver {
   }
 
   stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.pendingReflow = false; this.requestedPins = ''; this.requestedKey = ''; this.requestedInputs=''; }
-  clear(): void { this.stop(); this.checkpoint = undefined; this.appliedKey = ''; this.appliedPins=''; this.state = { state: 'idle' };this.completedState={state:'idle'}; }
+  clear(): void { this.stop(); this.checkpoint = undefined; this.completedPositions=undefined; this.affinityAuthority=undefined; this.appliedKey = ''; this.appliedPins=''; this.state = { state: 'idle' };this.completedState={state:'idle'}; }
 }

@@ -21,8 +21,229 @@ function distance(p: ReadonlyMap<string, Point3>, a: string, b: string): number 
 function changed(a: ReadonlyMap<string, Point3>, b: ReadonlyMap<string, Point3>, ids = [...a.keys()]): string[] {
   return ids.filter(id => JSON.stringify(a.get(id)) !== JSON.stringify(b.get(id)));
 }
+function expectFiniteSolve(result: ReturnType<SemanticLayoutEngine['layout']>, pins: ReadonlyMap<string, Point3>): void {
+  for (const [id, point] of result.anchors) {
+    expect(Object.values(point).every(Number.isFinite), id).toBe(true);
+    if (pins.has(id)) {
+      expect(point).toEqual(pins.get(id));
+      expect(result.dirtyIds.has(id)).toBe(false);
+    }
+  }
+  const d = result.diagnostics;
+  expect(d.solverIterations).toBeLessThanOrEqual(limits.solverIterations);
+  expect(d.springEvaluations).toBeLessThanOrEqual((d.relationPairs + d.affinityPairs) * limits.solverIterations);
+  expect(d.collisionTests).toBeLessThanOrEqual(limits.collisionTests);
+  expect(d.densityEvaluations).toBeLessThanOrEqual((d.nodes - d.pinnedNodes) * limits.solverIterations);
+  expect(d.neighborhoodDensityEvaluations).toBeLessThanOrEqual((d.nodes - d.pinnedNodes) * limits.solverIterations);
+}
 
 describe('bounded semantic overview layout', () => {
+  it('ALD-PIN-FRAME-003 uses distinct authoritative multi-pin spring endpoints at x=2.4 and x=6', () => {
+    const view = scene(3, [R(0, 2)]), pinnedIds = new Set(['n0000', 'n0001']);
+    const solve = (x: number) => {
+      const previous = new Map([
+        ['n0000', { x, y: 0, z: 0 }], ['n0001', { x: -3, y: 0, z: 0 }],
+        ['n0002', { x: 2, y: 0, z: 0 }],
+      ]);
+      const engine = new SemanticLayoutEngine();
+      const result = engine.layout(view, previous, [], { pinnedIds, nowMs: 1000 });
+      for (const id of pinnedIds) {
+        expect(result.anchors.get(id)).toEqual(previous.get(id));
+        expect(new Map(engine.checkpoint().positions).get(id)).toEqual(previous.get(id));
+        expect(result.dirtyIds.has(id)).toBe(false);
+      }
+      return result.anchors.get('n0002')!;
+    };
+    expect(solve(6).x - solve(2.4).x).toBeGreaterThan(.05);
+  });
+
+  it('ALD-PIN-FRAME-003 preserves relative attraction from unequal extreme finite pins', () => {
+    const view = scene(3, [R(0, 2), R(1, 2)]);
+    for (const magnitude of [1e155, Number.MAX_VALUE]) {
+      const previous = new Map([
+        ['n0000', { x: magnitude, y: 0, z: 0 }],
+        ['n0001', { x: -magnitude / 2, y: 0, z: 0 }],
+        ['n0002', { x: 0, y: 0, z: 0 }],
+      ]);
+      const result = new SemanticLayoutEngine().layout(view, previous, [], {
+        pinnedIds: new Set(['n0000', 'n0001']), nowMs: 1000,
+      });
+      expect(result.anchors.get('n0002')!.x).toBeGreaterThan(.5);
+      for (const point of result.anchors.values()) expect(Object.values(point).every(Number.isFinite)).toBe(true);
+    }
+  });
+
+  it('ALD-PIN-FRAME-003 keeps a single extreme focus finite through collision handling', () => {
+    const view = scene(4, [R(0, 1), R(1, 2), R(2, 3)]);
+    for (const magnitude of [3, -3, 1e15, 2 ** 54, -(2 ** 54), 2 ** 55, 1e155, -1e155, Number.MAX_VALUE, -Number.MAX_VALUE]) {
+      const pin = { x: magnitude, y: magnitude, z: magnitude };
+      const engine = new SemanticLayoutEngine();
+      const result = engine.layout(view, new Map([['n0000', pin]]), [], {
+        pinnedIds: new Set(['n0000']), nowMs: 1000,
+      });
+      expect(result.anchors.get('n0000')).toEqual(pin);
+      expect(result.diagnostics.depthRingNodes).toBe(3);
+      for (const point of result.anchors.values()) expect(Object.values(point).every(Number.isFinite)).toBe(true);
+      expect(() => new SemanticLayoutEngine().restore(engine.checkpoint())).not.toThrow();
+    }
+  });
+
+  it('ALD-PIN-FRAME-003 retains local restoring forces when opposite extreme pin forces cancel', () => {
+    const view = scene(3, [R(0, 2), R(1, 2)]);
+    for (const magnitude of [1e155, Number.MAX_VALUE]) {
+      const previous = new Map([
+        ['n0000', { x: magnitude, y: 0, z: 0 }],
+        ['n0001', { x: -magnitude, y: 0, z: 0 }],
+        ['n0002', { x: 1, y: 0, z: 0 }],
+      ]);
+      const result = new SemanticLayoutEngine().layout(view, previous, [], {
+        pinnedIds: new Set(['n0000', 'n0001']), nowMs: 1000,
+      });
+      // The two large translations cancel, but each spring still restores the
+      // movable endpoint toward their midpoint. It must not freeze at x=1.
+      expect(result.anchors.get('n0002')!.x).toBeLessThan(.5);
+    }
+  });
+
+  it.each([Number.MIN_VALUE, 1e-300, 1e15, 2 ** 54, 2 ** 55, 1e99, 1e100, 1e101, 1e154, 1e155, 1e200, Number.MAX_VALUE])(
+    'ALD-PIN-FRAME-003 handles mixed pins and movable imports on all axes at %s', magnitude => {
+      const view = scene(6, [R(0, 3), R(1, 3), R(2, 4), R(3, 4)]), affinities = [S(4, 5)];
+      const previous = new Map([
+        ['n0000', { x: magnitude, y: magnitude, z: -magnitude }],
+        ['n0001', { x: -magnitude, y: magnitude, z: -magnitude }],
+        ['n0002', { x: magnitude / 2, y: -magnitude, z: magnitude }],
+        ['n0003', { x: -magnitude / 2, y: magnitude / 2, z: 0 }],
+        ['n0004', { x: 0, y: 0, z: 0 }],
+        ['n0005', { x: magnitude / 4, y: -magnitude / 4, z: magnitude / 4 }],
+      ]);
+      const pins = new Map([...previous].slice(0, 3)), pinnedIds = new Set(pins.keys());
+      const sourceBefore = structuredClone([view, affinities, previous]);
+      const engine = new SemanticLayoutEngine();
+      const first = engine.layout(view, previous, affinities, { pinnedIds, nowMs: 1000 });
+      expectFiniteSolve(first, pins);
+      expect(first.diagnostics.invalidPreviousPositions).toBe(0);
+      for (const [id, point] of first.anchors) if (!pins.has(id)) {
+        expect(Math.hypot(point.x / 2.3, point.y / 1.55, point.z / 1.1)).toBeLessThanOrEqual(1 + 1e-14);
+      }
+      const checkpoint = structuredClone(engine.checkpoint()), restored = new SemanticLayoutEngine();
+      restored.restore(checkpoint);
+      const cached = restored.layout(view, first.anchors, affinities, { pinnedIds, nowMs: 1000 });
+      expect(cached.anchors).toEqual(first.anchors);
+      expect(cached.diagnostics.solverIterations).toBe(0);
+      expect(cached.dirtyIds.size).toBe(0);
+      const reflowed = restored.layout(view, cached.anchors, affinities, { pinnedIds, reflow: true, nowMs: 1000 });
+      expectFiniteSolve(reflowed, pins);
+      for (const [id, point] of pins) expect(new Map(restored.checkpoint().positions).get(id)).toEqual(point);
+      expect([view, affinities, previous]).toEqual(sourceBefore);
+      expect(checkpoint.positions).toEqual([...first.anchors]);
+    },
+  );
+
+  it('ALD-PIN-FRAME-003 retains nearby pin collisions and rejects unreachable pins without phantom contacts', () => {
+    const view = scene(3), pinnedIds = new Set(['n0000', 'n0001']);
+    const solve = (x: number) => new SemanticLayoutEngine().layout(view, new Map([
+      ['n0000', { x, y: 0, z: 0 }], ['n0001', { x: -1e155, y: 0, z: 0 }],
+      ['n0002', { x: 2.3, y: 0, z: 0 }],
+    ]), [], { pinnedIds, nowMs: 1000 });
+    const near = solve(2.35), far = solve(6), extreme = solve(Number.MAX_VALUE);
+    expect(near.diagnostics.collisionTests).toBeGreaterThan(0);
+    expect(near.anchors.get('n0002')!.x).toBeLessThan(2.29);
+    expect(near.anchors.get('n0000')!.x).toBe(2.35);
+    expect(far.anchors.get('n0002')).toEqual(extreme.anchors.get('n0002'));
+    expect(far.anchors.get('n0002')).toEqual({ x: 2.3, y: 0, z: 0 });
+    expect(far.diagnostics.collisionTests).toBe(0);
+    expect(extreme.diagnostics.collisionTests).toBe(0);
+  });
+
+  it('ALD-PIN-FRAME-003 does not rescale an unrelated active component because another component has an extreme pin', () => {
+    const view = scene(6, [R(0, 2), R(3, 4), R(4, 5)]), pinnedIds = new Set(['n0000', 'n0001']);
+    const solve = (x: number) => new SemanticLayoutEngine().layout(view, new Map([
+      ['n0000', { x, y: 0, z: 0 }], ['n0001', { x: -6, y: 0, z: 0 }],
+      ['n0002', { x: 2, y: 0, z: 0 }], ['n0003', { x: -1, y: 1, z: 0 }],
+      ['n0004', { x: -1.2, y: 1, z: 0 }], ['n0005', { x: -1.4, y: 1, z: 0 }],
+    ]), [], { pinnedIds, nowMs: 1000 });
+    const ordinary = solve(6), extreme = solve(Number.MAX_VALUE);
+    for (const id of ['n0003', 'n0004', 'n0005']) expect(extreme.anchors.get(id)).toEqual(ordinary.anchors.get(id));
+  });
+
+  it('ALD-PIN-FRAME-003 preserves F01, unrelated cached components and checkpoints across incremental changes and reflow', () => {
+    const edges = [R(0, 2), R(2, 3), R(4, 5)], view = scene(8, edges);
+    const pinnedIds = new Set(['n0000', 'n0001']);
+    const pins = new Map([['n0000', { x: 2.4, y: 0, z: 0 }], ['n0001', { x: -3, y: 0, z: 0 }]]);
+    const engine = new SemanticLayoutEngine(), first = engine.layout(view, pins, [], { pinnedIds, nowMs: 1000 });
+    const checkpoint = structuredClone(engine.checkpoint()), prior = new Map(first.anchors);
+    pins.set('n0000', { x: 6, y: 0, z: 0 }); prior.set('n0000', pins.get('n0000')!);
+    const implicit = new SemanticLayoutEngine(), explicit = new SemanticLayoutEngine();
+    implicit.restore(checkpoint); explicit.restore(checkpoint);
+    const moved = implicit.layout(view, prior, [], { pinnedIds, nowMs: 1000 });
+    const control = explicit.layout(view, prior, [], { pinnedIds, changedIds: new Set(['n0000']), nowMs: 1000 });
+    expect(moved.anchors).toEqual(control.anchors);
+    expect(moved.diagnostics.affectedNodes).toBe(3);
+    expect(changed(first.anchors, moved.anchors, ['n0002', 'n0003']).length).toBeGreaterThan(0);
+    for (const id of ['n0001', 'n0004', 'n0005', 'n0006', 'n0007']) expect(moved.anchors.get(id)).toEqual(first.anchors.get(id));
+    const grown = scene(9, [...edges, R(3, 8)]);
+    const added = implicit.layout(grown, moved.anchors, [S(2, 3, .8)], { pinnedIds, nowMs: 1000 });
+    expect(added.anchors.has('n0008')).toBe(true);
+    expectFiniteSolve(added, pins);
+    expect(added.anchors.get('n0005')).toEqual(first.anchors.get('n0005'));
+    const removed = implicit.layout(view, added.anchors, [], { pinnedIds, nowMs: 1000 });
+    expect(removed.anchors.has('n0008')).toBe(false);
+    expect(new Map(implicit.checkpoint().positions).has('n0008')).toBe(false);
+    expectFiniteSolve(removed, pins);
+    const reflowed = implicit.layout(view, removed.anchors, [S(2, 3, .9)], { pinnedIds, reflow: true, nowMs: 1000 });
+    expect(reflowed.diagnostics.affectedNodes).toBe(8);
+    expectFiniteSolve(reflowed, pins);
+    const restored = new SemanticLayoutEngine(); restored.restore(structuredClone(implicit.checkpoint()));
+    const unchanged = restored.layout(view, reflowed.anchors, [S(2, 3, .9)], { pinnedIds, nowMs: 1000 });
+    expect(unchanged.anchors).toEqual(reflowed.anchors);
+    expect(unchanged.diagnostics.solverIterations).toBe(0);
+    expect(engine.checkpoint()).toEqual(checkpoint);
+  });
+
+  it('ALD-PIN-FRAME-003 honors authoritative geometry for semantic-only springs without changing source facts', () => {
+    const view = scene(3), affinities = [S(0, 2, .9)], sourceBefore = structuredClone([view, affinities]);
+    const solve = (x: number) => new SemanticLayoutEngine().layout(view, new Map([
+      ['n0000', { x, y: 0, z: 0 }], ['n0001', { x: -3, y: 0, z: 0 }],
+      ['n0002', { x: 2, y: 0, z: 0 }],
+    ]), affinities, { pinnedIds: new Set(['n0000', 'n0001']), nowMs: 1000 });
+    const near = solve(2.4), far = solve(6);
+    expect(far.anchors.get('n0002')!.x - near.anchors.get('n0002')!.x).toBeGreaterThan(.05);
+    expect(far.diagnostics.relationPairs).toBe(0);
+    expect(far.diagnostics.affinityPairs).toBe(1);
+    expect([view, affinities]).toEqual(sourceBefore);
+  });
+
+  it('ALD-PIN-FRAME-003 keeps all-pinned extremes exact without inventing movable or collision work', () => {
+    const view = scene(3, [R(0, 1), R(1, 2)]);
+    const pins = new Map([
+      ['n0000', { x: Number.MAX_VALUE, y: -Number.MAX_VALUE, z: Number.MIN_VALUE }],
+      ['n0001', { x: -Number.MAX_VALUE, y: Number.MAX_VALUE, z: -Number.MIN_VALUE }],
+      ['n0002', { x: 0, y: -0, z: 0 }],
+    ]);
+    const engine = new SemanticLayoutEngine();
+    const result = engine.layout(view, pins, [], { pinnedIds: new Set(pins.keys()), reflow: true, nowMs: 1000 });
+    expectFiniteSolve(result, pins);
+    expect(result.anchors).toEqual(pins);
+    expect(result.diagnostics.solverIterations).toBe(0);
+    expect(result.diagnostics.collisionTests).toBe(0);
+    expect(() => new SemanticLayoutEngine().restore(engine.checkpoint())).not.toThrow();
+  });
+
+  it('ALD-PIN-FRAME-003 keeps a full mixed extreme/crowded snapshot within existing budgets', () => {
+    const view = scene(limits.nodes, Array.from({ length: limits.nodes - 1 }, (_, i) => R(i, i + 1)));
+    const previous = new Map(view.nodes.map((node, i) => [node.id,
+      i < 16 ? { x: i % 2 ? -Number.MAX_VALUE : Number.MAX_VALUE, y: 0, z: 0 } : { x: 0, y: 0, z: 0 },
+    ]));
+    const pins = new Map([...previous].slice(0, 32)), engine = new SemanticLayoutEngine();
+    const result = engine.layout(view, previous, [], { pinnedIds: new Set(pins.keys()), nowMs: 1000 });
+    expectFiniteSolve(result, pins);
+    expect(result.anchors.size).toBe(limits.nodes);
+    expect(result.diagnostics.collisionTests).toBeGreaterThan(0);
+    expect(result.diagnostics.collisionCandidatesTruncated).toBe(true);
+    expect(changed(previous, result.anchors, ['n2046', 'n2047'])).toHaveLength(2);
+    expect(() => new SemanticLayoutEngine().restore(engine.checkpoint())).not.toThrow();
+  });
+
   it('reactivates the affected component when an existing pin moves without a changed-ID hint',()=>{
     const view=scene(6,[R(0,1),R(1,2),R(3,4),R(4,5)]),pins=new Set(['n0000']);
     const initial=new SemanticLayoutEngine();

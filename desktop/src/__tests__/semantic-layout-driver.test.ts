@@ -4,13 +4,14 @@ import { SemanticLayoutEngine } from '../knowledge/semantic-layout';
 import { parseKnowledgeGraph, overviewGraph, type KnowledgeView } from '../knowledge/graph-model';
 
 class WorkerStub implements LayoutWorkerPort {
+  constructor(private readonly engine?: SemanticLayoutEngine) {}
   onmessage: ((event: MessageEvent<LayoutResponse>) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   requests: LayoutRequest[] = [];
   terminate = vi.fn();
   postMessage(request: LayoutRequest) { this.requests.push(request); }
   flush() {
-    const request = this.requests.at(-1)!, engine = new SemanticLayoutEngine();
+    const request = this.requests.at(-1)!, engine = this.engine ?? new SemanticLayoutEngine();
     if (request.checkpoint) engine.restore(request.checkpoint);
     const result = engine.layout(request.view, new Map(request.previous), request.pairs, { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), reflow: request.reflow === true });
     const response = { id: request.id, anchors: [...result.anchors], diagnostics: result.diagnostics, checkpoint: engine.checkpoint(), wallMs: 1 };
@@ -238,5 +239,161 @@ describe('owned asynchronous semantic layout', () => {
     driver.request(view(), new Map(), new Set(), new Set()); expect(workers[0].requests).toHaveLength(1);
     driver.clear(); driver.request(view(), new Map(), new Set(), new Set());
     expect(workers[1].requests[0].checkpoint).toBeUndefined(); driver.clear();
+  });
+});
+
+// The real worker retains its engine, and postMessage snapshots its inputs.
+class AuthorityWorkerStub extends WorkerStub {
+  constructor() { super(new SemanticLayoutEngine()); }
+  override postMessage(request: LayoutRequest) { super.postMessage(structuredClone(request)); }
+}
+
+const authorityChanges = [
+  ['state', { state: 'bounded_partial' }],
+  ['profileKey', { profileKey: 'c'.repeat(64) }],
+  ['inputKey', { inputKey: 'd'.repeat(64) }],
+] as const;
+const authorityFixture = () => {
+  const workers: AuthorityWorkerStub[] = [], apply = vi.fn();
+  const driver = new SemanticLayoutDriver(apply, () => {
+    const worker = new AuthorityWorkerStub(); workers.push(worker); return worker;
+  });
+  return { workers, apply, driver };
+};
+
+describe('affinity worker authority boundary ALD-WORKER-SCOPE-004', () => {
+  it.each(authorityChanges)('rejects completed labels when only %s changes', (_field, delta) => {
+    const { driver, workers } = authorityFixture(), source = withAffinity(view());
+    driver.request(source, new Map(), new Set(), new Set());
+    const first = workers[0].flush();
+    const next = { ...source, layoutAffinity: { ...source.layoutAffinity!, ...delta } };
+    expect(next.nodes).toBe(source.nodes); expect(next.edges).toBe(source.edges);
+    expect(next.layoutAffinity.pairs).toBe(source.layoutAffinity!.pairs);
+    expect(driver.labelsFor(next, new Set())).toBeUndefined();
+    expect(driver.labelsFor(source, new Set())).toEqual(first.checkpoint.labels);
+    driver.clear();
+  });
+
+  it.each(authorityChanges)('restarts an identical completed graph when only %s changes', (_field, delta) => {
+    const { driver, workers, apply } = authorityFixture(), source = withAffinity(view());
+    const pinned = new Set(['a']), initial = new Map([['a', { x: .3, y: .2, z: 0 }]]);
+    driver.request(source, initial, new Set(), pinned);
+    const first = workers[0].flush(), previous = new Map(first.anchors);
+    previous.set('b', { x: .7, y: .6, z: .5 });
+    previous.set('outside', { x: 9, y: 9, z: 9 });
+    const next = { ...source, layoutAffinity: { ...source.layoutAffinity!, ...delta } };
+    const before = structuredClone({ source, next, previous });
+    driver.request(next, previous, new Set(), pinned);
+    expect(driver.diagnostics.state).toBe('pending');
+    expect(driver.ready).toBe(false); expect(driver.settled).toBe(false);
+    expect(workers).toHaveLength(2); expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    const request = workers[1].requests[0];
+    expect(request.checkpoint).toBeUndefined();
+    expect(request.previous).toEqual(first.anchors);
+    expect(request.pairs).toEqual(source.layoutAffinity!.pairs);
+    expect(request.pinned).toEqual(['a']); expect(request.view.nodes).toHaveLength(source.nodes.length);
+    expect(request.view.nodes.every(node => node.label === node.id && node.description === '' && node.facts?.length === 0)).toBe(true);
+    expect(request.view.edges.every(edge => edge.context === '' && edge.evidenceMessageId === '' && !edge.evidence.sourceEventIds.length)).toBe(true);
+    workers[0].flush(); expect(apply).toHaveBeenCalledTimes(1);
+    const current = workers[1].flush();
+    expect(current.anchors.find(([id]) => id === 'a')![1]).toEqual(initial.get('a'));
+    expect(driver.labelsFor(next, pinned)).toEqual(current.checkpoint.labels);
+    expect(driver.labelsFor(source, pinned)).toBeUndefined();
+    expect({ source, next, previous }).toEqual(before);
+    driver.clear();
+  });
+
+  it.each(authorityChanges)('drops the checkpoint and worker engine on a forced solve after %s changes', (_field, delta) => {
+    const { driver, workers } = authorityFixture(), source = withAffinity(view());
+    driver.request(source, new Map(), new Set(), new Set());
+    const first = workers[0].flush();
+    const next = { ...source, layoutAffinity: { ...source.layoutAffinity!, ...delta } };
+    driver.request(next, new Map(first.anchors), new Set(), new Set(), new Set(), true);
+    expect(workers.flatMap(worker => worker.requests).at(-1)!.checkpoint).toBeUndefined();
+    expect(workers).toHaveLength(2); expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    expect(workers[1].requests[0].reflow).toBe(true);
+    workers[1].flush(); expect(driver.settled).toBe(true); driver.clear();
+  });
+
+  it.each(authorityChanges)('supersedes an in-flight reflow when only %s changes', (_field, delta) => {
+    const { driver, workers, apply } = authorityFixture(), source = withAffinity(view());
+    driver.request(source, new Map(), new Set(), new Set(), new Set(), true);
+    source.layoutAffinity = { ...source.layoutAffinity!, ...delta };
+    driver.request(source, new Map(), new Set(), new Set());
+    expect(workers).toHaveLength(2); expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    expect(workers[1].requests[0].id).toBeGreaterThan(workers[0].requests[0].id);
+    expect(workers[1].requests[0].checkpoint).toBeUndefined();
+    workers[0].flush(); expect(apply).not.toHaveBeenCalled();
+    const current = workers[1].flush(); expect(apply).toHaveBeenCalledTimes(1);
+    expect(driver.labelsFor(source, new Set())).toEqual(current.checkpoint.labels); driver.clear();
+  });
+
+  it.each(authorityChanges)('rejects a reply if %s mutates before the caller queues its replacement', (_field, delta) => {
+    const { driver, workers, apply } = authorityFixture(), source = withAffinity(view());
+    driver.request(source, new Map(), new Set(), new Set());
+    Object.assign(source.layoutAffinity!, delta);
+    workers[0].flush();
+    expect(apply).not.toHaveBeenCalled();
+    expect(driver.labelsFor(source, new Set())).toBeUndefined();
+    expect(workers).toHaveLength(2); expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    expect(workers[1].requests[0].checkpoint).toBeUndefined();
+    workers[1].flush(); expect(apply).toHaveBeenCalledTimes(1); driver.clear();
+  });
+
+  it.each([false, true])('invalidates empty-pair authority when affinity presence changes (initially present: %s)', present => {
+    const plain = view(), affinity = withAffinity(plain);
+    affinity.layoutAffinity!.pairs = [];
+    const source = present ? affinity : plain, next = present ? plain : affinity;
+    const { driver, workers } = authorityFixture();
+    driver.request(source, new Map(), new Set(), new Set());
+    const first = workers[0].flush();
+    expect(driver.labelsFor(next, new Set())).toBeUndefined();
+    driver.request(next, new Map(first.anchors), new Set(), new Set());
+    expect(workers).toHaveLength(2); expect(workers[1].requests[0].checkpoint).toBeUndefined();
+    workers[1].flush(); expect(driver.settled).toBe(true); driver.clear();
+  });
+
+  it('retains same-authority caching, in-flight coalescing and completed checkpoints', () => {
+    const { driver, workers, apply } = authorityFixture(), source = withAffinity(view());
+    driver.request(source, new Map(), new Set(), new Set());
+    driver.request(structuredClone(source), new Map(), new Set(), new Set());
+    expect(workers[0].requests).toHaveLength(1);
+    const first = workers[0].flush(), previous = new Map(first.anchors);
+    const same = { ...source, layoutAffinity: { ...source.layoutAffinity!, evaluatedPairs: 2 } };
+    driver.request(same, previous, new Set(), new Set());
+    expect(driver.diagnostics.state).toBe('cached'); expect(driver.settled).toBe(true);
+    expect(driver.labelsFor(same, new Set())).toEqual(first.checkpoint.labels);
+    driver.request(same, previous, new Set(), new Set(), new Set(), true);
+    expect(workers[0].requests[1].checkpoint).toEqual(first.checkpoint);
+    driver.request(same, previous, new Set(), new Set());
+    expect(workers[0].requests).toHaveLength(2); expect(workers[0].terminate).not.toHaveBeenCalled();
+    workers[0].flush(); expect(apply).toHaveBeenCalledTimes(2); driver.clear();
+  });
+
+  it('does not resurrect completed authority after cancelling its replacement', () => {
+    const { driver, workers, apply } = authorityFixture(), source = withAffinity(view());
+    driver.request(source, new Map(), new Set(), new Set());
+    const first = workers[0].flush(), previous = new Map(first.anchors);
+    const next = { ...source, layoutAffinity: { ...source.layoutAffinity!, profileKey: 'c'.repeat(64) } };
+    driver.request(next, previous, new Set(), new Set()); driver.stop();
+    expect(driver.ready).toBe(false); expect(driver.labelsFor(source, new Set())).toBeUndefined();
+    driver.request(source, previous, new Set(), new Set());
+    expect(workers).toHaveLength(3); expect(workers[2].requests[0].checkpoint).toBeUndefined();
+    expect(workers[2].requests[0].previous).toEqual(first.anchors);
+    workers[0].flush(); workers[1].flush(); expect(apply).toHaveBeenCalledTimes(1);
+    workers[2].flush(); expect(apply).toHaveBeenCalledTimes(2); driver.clear();
+  });
+
+  it('revokes the old checkpoint even when the new authority has an unavailable pin', () => {
+    const { driver, workers } = authorityFixture(), source = withAffinity(view()), pinned = new Set(['a']);
+    driver.request(source, new Map([['a', { x: .3, y: .2, z: 0 }]]), new Set(), pinned);
+    const first = workers[0].flush();
+    const next = { ...source, layoutAffinity: { ...source.layoutAffinity!, inputKey: 'd'.repeat(64) } };
+    driver.request(next, new Map(), new Set(), pinned);
+    expect(driver.diagnostics).toMatchObject({ state: 'failed', reason: 'semantic_layout_pin_unavailable' });
+    expect(driver.ready).toBe(false); expect(driver.labelsFor(source, pinned)).toBeUndefined();
+    driver.request(next, new Map(first.anchors), new Set(), pinned);
+    expect(workers[1].requests[0].checkpoint).toBeUndefined();
+    workers[1].flush(); expect(driver.settled).toBe(true); driver.clear();
   });
 });
