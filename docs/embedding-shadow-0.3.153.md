@@ -68,3 +68,11 @@ manager의 원래 JSON은 같은 출력 폴더의 `manager-status.json`으로 �
 검증한 경계는 실제 local HTTP/설치 어댑터, fixture source/version, 실제 설치 producer의 별도 SQLite, 원래 응답 cache/packed 벡터, 완료 후 readback이다. 실제 사용자 자료·1차 앱 UI/물리 입력·두 knowledge host/MCP·multimodal indexing·새 알고리즘 채택·성능 p95·운영 배포는 이 실험의 coverage에 없다. latencies는 matched 전후 비교가 아니어서 속도 향상 수치로 보고하지 않는다.
 
 다음 결정은 현행 pooling 유지, 독립 실사용 gold와 더 어려운 문서/상충 과제 준비, encoder→후보 sampler→consumer→cluster 단계별 recall 평가다. Gemini 반대감사와 최종 역검증에는 이 실제 근거와 명확한 한계를 결속한다.
+
+## 실험 후 같은 revision의 디스크 자산 복구
+
+실험 당시 missing snapshot이라는 관측은 그대로 보존한다. 이후 공식 Hugging Face client0.36.2로 **같은 고정 revision**의7파일만 받아252,568,869bytes를 복구했다. 공식 tree의 LFS SHA256/Git blob SHA1과 크기, 별도 SHA256, owner·쓰기 권한·blob cache 내부 경로를 대사했다. 새 다운로드나 모델 전환 없이 복구 영수증의7파일 해시를 다시 읽어 일치시켰다.
+
+복구 후 manager는 `ok=true`, issues0, exact model/revision·384차원·ready를 반환했다. listener와 launchd PID는 기존1121 그대로다. 이 상태 검사는 실제 embedding1개를 추가 요청했다. 따라서 이전 shadow+warm+초기 상태 점검의16요청/105입력과 별도로 **복구 후 상태 점검1요청/1입력**이 있다. 다른 앱의 요청이나 계정 전체 사용량을 포함하는 집계가 아니다.
+
+`asset-recovery.json`, `asset-recovery-independent-readback.json`, `manager-status-after-recovery.json`은 이 세 경계를 구분한다: 디스크7파일 검증 완료, 기존 warm 서비스 기능 확인, **cold restart/loading은 미검증**. 기존 프로세스를 재시작하지 않았으므로 RAM에 이미 있던 가중치와 새 파일의 동일성이나 재부팅 성공을 소급해 주장하지 않는다. f2adee7의 CI39156314890은 네 작업 모두 통과했으며 제품 runtime은c3871f3/153 그대로다.
