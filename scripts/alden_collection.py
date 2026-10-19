@@ -50,6 +50,25 @@ def normalized_text(value: str) -> str:
     return " ".join(unicodedata.normalize("NFC", value).split())
 
 
+_GENERIC_OVERVIEW_LABELS = {'snippets', 'sections', 'config', 'templates', 'assets', 'layout', 'locales', 'src', 'dist', 'node_modules', 'index', 'readme'}
+_ASSET_OVERVIEW_LABEL = re.compile(r'(?i)^[A-Za-z0-9_.-]{1,80}[.](?:liquid|json|js|css|scss|svg|md)$')
+
+
+def overview_label_tier(label) -> int:
+    """Rank saved labels for the overview sample. 0 is a readable subject.
+
+    Empty labels and bare asset or directory names stay in the store and in
+    search. They only lose the first slots of an unfiltered overview.
+    """
+    text = label.strip() if isinstance(label, str) else ''
+    if not text or not re.search(r'[A-Za-z가-힣]', text):
+        return 2
+    folded = text.casefold()
+    if folded in _GENERIC_OVERVIEW_LABELS or _ASSET_OVERVIEW_LABEL.fullmatch(text):
+        return 1
+    return 0
+
+
 def normalized_body(value: str) -> str:
     # Indentation, tabs, blank lines and Markdown hard breaks carry meaning.
     # Original bytes stay in the source blob; only Unicode composition and
@@ -934,6 +953,7 @@ class CollectionStore:
             db.create_function('alden_relation_digest', 1, relation_evidence_digest, deterministic=True)
             from alden_content_evidence import content_evidence_class
             db.create_function('alden_content_class',2,lambda meta,body:content_evidence_class(json.loads(meta),body),deterministic=True)
+            db.create_function('alden_overview_tier', 1, overview_label_tier, deterministic=True)
             checkpoint, _, _, _ = self._activity_scope(db, projects, target_id, platform)
             if not projects:
                 if _references_only:
@@ -1011,8 +1031,8 @@ class CollectionStore:
                     # Interleave real source targets so a large project's hubs
                     # cannot occupy the whole unified overview. No fake links.
                     picking = """SELECT id FROM (SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.target_id
-                      ORDER BY COALESCE(d.degree,0) DESC,s.id) AS source_slot
-                      FROM shown s LEFT JOIN degrees d ON d.id=s.id) ORDER BY source_slot,id"""
+                      ORDER BY alden_overview_tier(v.label), COALESCE(d.degree,0) DESC, s.id) AS source_slot
+                      FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version) ORDER BY source_slot,id"""
                 search_cte = cte
                 if plan:
                     contains, params = korean_literal_sql(plan)

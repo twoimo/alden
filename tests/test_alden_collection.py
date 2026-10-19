@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from alden_collection import CollectionStore, TargetBusy, identity, read_action
+from alden_collection import overview_label_tier
 from alden_collect import capture_source, collect_target
 
 
@@ -38,6 +39,19 @@ class CollectionTests(unittest.TestCase):
             self.store.graph_page(projects=["one"], limit=1985, overview=True)
         with self.assertRaises(ValueError):
             self.store.graph_page(projects=["one"], limit=1984, overview=True, focus=result["nodes"][0]["id"])
+
+    def test_overview_keeps_blank_and_asset_labels_but_does_not_give_them_the_first_slot(self):
+        self.assertEqual([overview_label_tier(value) for value in ['채용공고 지원시기', 'theme.liquid', 'snippets', '', '12']], [0, 1, 1, 2, 2])
+        target = self.target()
+        self.store.ingest(target, [
+            {**self.record('count', text='숫자만 있는 원문입니다. 삭제하지 않습니다.'), 'label': '12'},
+            {**self.record('asset', text='테마 파일 원문입니다.'), 'label': 'theme.liquid'},
+            {**self.record('topic', text='채용 일정과 서류 기준을 적은 원문입니다.'), 'label': '채용공고 지원시기'},
+        ])
+        page = self.store.graph_page(projects=['one'], limit=1, overview=True)
+        self.assertEqual(page['total_nodes'], 3)
+        self.assertEqual(page['nodes'][0]['label'], '채용공고 지원시기')
+        self.assertEqual({node['label'] for node in self.store.graph_page(projects=['one'], limit=1984, overview=True)['nodes']}, {'12', 'theme.liquid', '채용공고 지원시기'})
 
     def test_first_target_change_after_other_target_stages_is_not_a_pruning_reset(self):
         allowed, other = self.target(), self.target("elsewhere", "other")
