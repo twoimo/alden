@@ -567,12 +567,28 @@ export class SemanticLayoutEngine {
       && (options.pinnedIds?.size ?? 0) !== 1
       && (options.reflow === true || ids.every(id => !finite(previousPositions.get(id)) && !this.positions.has(id)));
     if (freshOverview) spreadFreshEnergy(clusterIds, membersByLabel, centers, pairs);
+    // A few hundred members on the inner ring become one ball at the camera
+    // center. Keep small test cliques where they are and move only a large
+    // fresh community farther along the ray it already occupies.
+    if (freshOverview) {
+      for (const [label, members] of membersByLabel) {
+        if (members.length < 24) continue;
+        const current = centers.get(label)!;
+        const length = Math.hypot(current.x, current.y, current.z) || 1;
+        const dist = Math.min(1.85, 1.2 + .018 * Math.sqrt(members.length));
+        centers.set(label, bound({ x: current.x / length * dist, y: current.y / length * dist, z: current.z / length * dist }));
+      }
+    }
     d.clusters = centers.size;
     const anchors = new Map<string, Point3>();
     for (const id of ids) {
       const c = centers.get(clusterIds.get(id)!)!, offset = seed(id);
+      const group = membersByLabel.get(clusterIds.get(id)!) ?? [];
+      const span = Math.hypot(offset.x, offset.y, offset.z) || 1;
       const prior = (pinned.has(id) || !options.reflow) && (finite(previousPositions.get(id)) || this.positions.has(id));
-      const radialJitter = freshOverview ? .05 : .2;
+      const radialJitter = !freshOverview ? .2
+        : group.length < 24 ? .05
+        : Math.min(.42, .04 * Math.sqrt(group.length)) / span;
       anchors.set(id, prior ? copy(base.get(id)!) : bound({ x: c.x + offset.x * radialJitter, y: c.y + offset.y * radialJitter, z: c.z + offset.z * radialJitter }));
     }
     const movable = ids.map((id, i) => active[i] && !pinned.has(id));
@@ -655,7 +671,8 @@ export class SemanticLayoutEngine {
         const p = points[i], origin = origins[i], c = clusterCenters[i], scale = forceScales[i];
         // A reached hop already has a ring target. Community-center pull collapses those radii.
         const onRing = depthRoot >= 0 && relationDepth[i] > 0;
-        const clusterGain = onRing ? 0 : .28;
+        const groupSize = membersByLabel.get(clusterIds.get(ids[i])!)?.length ?? 1;
+        const clusterGain = onRing ? 0 : freshOverview && groupSize >= 24 ? .08 : .28;
         forces[i * 3] = clusterGain * scaledDifference(c.x, p.x, scale) + (hasPrior[i] ? .08 * scaledDifference(origin.x, p.x, scale) : 0);
         forces[i * 3 + 1] = clusterGain * scaledDifference(c.y, p.y, scale) + (hasPrior[i] ? .08 * scaledDifference(origin.y, p.y, scale) : 0);
         forces[i * 3 + 2] = clusterGain * scaledDifference(c.z, p.z, scale) + (hasPrior[i] ? .08 * scaledDifference(origin.z, p.z, scale) : 0);

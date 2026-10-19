@@ -747,4 +747,27 @@ describe('bounded semantic overview layout', () => {
     expect(isolateRadius).toBeGreaterThan(cliqueRadius + .15);
     expect(distance(result.anchors, id(1), id(2))).toBeLessThan(distance(result.anchors, id(1), id(8)));
   });
+
+  it('keeps two large fresh stars apart and open instead of one central point', () => {
+    const edges = [];
+    for (let member = 1; member <= 40; member++) edges.push(R(0, member));
+    for (let member = 42; member <= 81; member++) edges.push(R(41, member));
+    const result = new SemanticLayoutEngine().layout(scene(256, edges), empty());
+    const id = (n: number) => `n${String(n).padStart(4, '0')}`;
+    const mean = (nums: number[]) => nums.reduce((sum, n) => {
+      const point = result.anchors.get(id(n))!;
+      return { x: sum.x + point.x / nums.length, y: sum.y + point.y / nums.length, z: sum.z + point.z / nums.length };
+    }, { x: 0, y: 0, z: 0 });
+    const left = mean([1, 2, 3, 4, 5, 6, 7, 8]);
+    const right = mean([42, 43, 44, 45, 46, 47, 48, 49]);
+    const dot = left.x * right.x + left.y * right.y + left.z * right.z;
+    const leftLength = Math.hypot(left.x, left.y, left.z) || 1;
+    const rightLength = Math.hypot(right.x, right.y, right.z) || 1;
+    expect(result.clusterIds.get(id(1))).not.toBe(result.clusterIds.get(id(42)));
+    expect(dot / (leftLength * rightLength)).toBeLessThan(.35);
+    const spread = [1, 2, 3, 4, 5, 6, 7, 8].map(n => distance(result.anchors, id(0), id(n)));
+    spread.sort((a, b) => a - b);
+    expect(spread[4]).toBeGreaterThan(.2);
+    expectFiniteSolve(result, empty());
+  });
 });
