@@ -22,7 +22,7 @@ import { PositionTransition } from './position-transition';
 import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout-metrics';
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { projectedOffsetGain } from './projected-display-offset';
-import { compareOverviewLabelPriority, outwardLabelPoint, placeOverviewLabel, ringLabelPoint, type LabelBox } from './label-placement';
+import { compareOverviewLabelPriority, outwardLabelPoint, placeOverviewLabel, ringLabelPoint, spreadRingCaptions, type LabelBox } from './label-placement';
 import { communityCaptionNodes, internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
 import { labelReadingFrame, labelZoomLevel, labelZoomStyle, selectProjectedLabels, type LabelZoom, type ProjectedLabelCandidate } from './label-zoom';
 import type { LayoutAffinity } from './layout-affinity';
@@ -115,6 +115,7 @@ export class KnowledgeHologram {
   private zoomLabelCandidates: readonly KnowledgeNode[] = [];
   private zoomLabels = new Set<string>();
   private labelZoom: LabelZoom = 1;
+  private topicRingPoints = new Map<string, { x: number; y: number }>();
   private labelFitDistance = 0;
   private hoveredId:string|null=null;
   private hoverFrame: number | null = null;
@@ -901,6 +902,13 @@ export class KnowledgeHologram {
         width: reading.width, height: reading.height,
         rank: this.globalLabelRanks.get(node.id) ?? projected.length});
     }
+    this.topicRingPoints = level <= 1
+      ? spreadRingCaptions(projected.filter(item => item.topic).map(item => ({id: item.id, x: item.x, y: item.y})), this.viewport)
+      : new Map();
+    if (level <= 1) for (const item of projected) {
+      const spread = this.topicRingPoints.get(item.id);
+      if (spread) { item.x = spread.x; item.y = spread.y; }
+    }
     const wanted = selectProjectedLabels(projected, Math.min(style.budget, 24 - reserved), this.zoomLabels);
     const changed = wanted.size !== this.zoomLabels.size || [...wanted].some(id => !this.zoomLabels.has(id));
     this.zoomLabels = wanted;
@@ -1199,9 +1207,8 @@ export class KnowledgeHologram {
         const screenX = x + (this.projected.x + 1) * width / 2;
         const screenY = y + (1 - this.projected.y) * height / 2 + offset;
         const topic = this.globalLabels.has(id);
-        // Far and mid zoom keep saved topic names on a quiet ring. Closer zoom
-        // returns each name to its own node.
-        const shifted = topic && this.labelZoom <= 1
+        const spread = topic && this.labelZoom <= 1 ? this.topicRingPoints.get(id) : undefined;
+        const shifted = spread ? spread : topic && this.labelZoom <= 1
           ? ringLabelPoint(screenX, screenY, this.viewport, .78)
           : outwardLabelPoint(screenX, screenY, this.viewport, topic ? 46 : 20);
         box.left = Math.max(x, Math.min(x + width - box.width, shifted.x - box.width / 2));

@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {placeOverviewLabel,type LabelBox} from '../knowledge/label-placement';
-import {outwardLabelPoint,ringLabelPoint} from '../knowledge/label-placement';
+import {outwardLabelPoint,ringLabelPoint,spreadRingCaptions} from '../knowledge/label-placement';
 
 describe('node-adjacent overview labels',()=>{
   const viewport={x:0,y:0,width:900,height:600};
@@ -24,6 +24,19 @@ describe('node-adjacent overview labels',()=>{
     const invalid=ringLabelPoint(Number.NaN,12,viewport,.78);
     expect(Number.isNaN(invalid.x)).toBe(true);
     expect(invalid.y).toBe(12);
+  });
+  it('separates topic captions that share a direction and keeps a distant caption near its ray', () => {
+    const viewport = {x:0,y:0,width:964,height:586};
+    const spread = spreadRingCaptions([
+      {id:'near-a',x:700,y:280},{id:'near-b',x:720,y:290},{id:'far',x:200,y:80},
+    ], viewport);
+    const a = spread.get('near-a')!, b = spread.get('near-b')!, far = spread.get('far')!;
+    expect(Math.hypot(a.x-b.x, a.y-b.y)).toBeGreaterThan(80);
+    const center = {x:482,y:293};
+    const angle = (point:{x:number,y:number}) => Math.atan2(point.y-center.y, point.x-center.x);
+    const raw = ringLabelPoint(200,80,viewport,.78);
+    const difference = Math.atan2(Math.sin(angle(far)-angle(raw)), Math.cos(angle(far)-angle(raw)));
+    expect(Math.abs(difference)).toBeLessThan(.5);
   });
   it('culls a crowded label instead of displacing it far from its source node',()=>{
     const earlier:LabelBox[]=[];

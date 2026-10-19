@@ -131,3 +131,46 @@ export function ringLabelPoint(
   if (length >= ring) return { x: screenX, y: screenY };
   return { x: centerX + dx / length * ring, y: centerY + dy / length * ring };
 }
+
+/** Keep far-zoom topic captions near their own direction, but not on top of
+ * each other. A caption with no direction is left unchanged. */
+export function spreadRingCaptions(
+  points: readonly { id: string; x: number; y: number }[],
+  viewport: LabelViewport,
+  ringRatio = .78,
+  minRadians = .42,
+): Map<string, { x: number; y: number }> {
+  const placed = new Map<string, { x: number; y: number }>();
+  if (!Number.isFinite(viewport.width) || !Number.isFinite(viewport.height)
+      || viewport.width <= 0 || viewport.height <= 0) return placed;
+  const centerX = viewport.x + viewport.width / 2, centerY = viewport.y + viewport.height / 2;
+  const ring = Math.min(viewport.width, viewport.height) * (Number.isFinite(ringRatio) ? Math.max(.2, Math.min(.92, ringRatio)) : .78) / 2;
+  const directed: { id: string; angle: number }[] = [];
+  for (const point of points) {
+    const onRing = ringLabelPoint(point.x, point.y, viewport, ringRatio);
+    const dx = onRing.x - centerX, dy = onRing.y - centerY;
+    const length = Math.hypot(dx, dy);
+    if (!(length > 8)) { placed.set(point.id, { x: point.x, y: point.y }); continue; }
+    directed.push({ id: point.id, angle: Math.atan2(dy, dx) });
+  }
+  directed.sort((a, b) => a.angle - b.angle || a.id.localeCompare(b.id));
+  const gap = directed.length > 1
+    ? Math.min(Number.isFinite(minRadians) && minRadians > 0 ? minRadians : .42, Math.PI * 1.84 / directed.length)
+    : 0;
+  for (let index = 1; index < directed.length; index++) {
+    const previous = directed[index - 1].angle;
+    if (directed[index].angle < previous + gap) directed[index].angle = previous + gap;
+  }
+  if (directed.length > 1) {
+    const overflow = directed[directed.length - 1].angle - (directed[0].angle + Math.PI * 2 - gap);
+    if (overflow > 0) for (let index = 0; index < directed.length; index++)
+      directed[index].angle -= overflow * (index + 1) / directed.length;
+  }
+  for (const item of directed) {
+    placed.set(item.id, {
+      x: centerX + Math.cos(item.angle) * ring,
+      y: centerY + Math.sin(item.angle) * ring,
+    });
+  }
+  return placed;
+}
