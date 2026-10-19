@@ -53,7 +53,9 @@ class CollectionTests(unittest.TestCase):
         page = self.store.graph_page(projects=['one'], limit=1, overview=True)
         self.assertEqual(page['total_nodes'], 3)
         self.assertEqual(page['nodes'][0]['label'], '채용공고 지원시기')
-        self.assertEqual({node['label'] for node in self.store.graph_page(projects=['one'], limit=1984, overview=True)['nodes']}, {'12', 'theme.liquid', '채용공고 지원시기'})
+        self.assertEqual({node['label'] for node in self.store.graph_page(projects=['one'], limit=1984, overview=True)['nodes']}, {'12', '채용공고 지원시기'})
+        stored = {node['label'] for node in self.store.graph_page(projects=['one'], limit=120)['nodes']}
+        self.assertIn('theme.liquid', stored)
 
     def test_blank_source_label_gets_a_display_line_without_rewriting_the_version(self):
         body = 'allpass_everything\n12시간\n사무실 야경을 보며 일한 기록입니다. 원문은 유지합니다.'
@@ -96,6 +98,8 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(overview_sample_tier('overlay', 'hub'), 3)
         self.assertEqual(overview_sample_tier('스토어와 브랜드', 'hub'), 0)
         self.assertEqual(overview_sample_tier('src/app.py', 'source'), 3)
+        self.assertEqual(overview_sample_tier('theme.liquid', 'document'), 3)
+        self.assertEqual(overview_sample_tier('shop-presets.json', 'metadata'), 3)
         self.assertEqual(overview_sample_tier('A plain English title', 'source'), 0)
         self.assertEqual(overview_sample_tier('notes/보고서.md', 'source'), 0)
         self.assertEqual(overview_sample_tier('- 링크: https://www.threads.com/@allpass_everything/post/DaPgW1NGRpL', 'source'), 3)

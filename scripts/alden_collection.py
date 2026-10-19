@@ -102,7 +102,7 @@ def overview_sample_tier(label, kind) -> int:
     text = label.strip() if isinstance(label, str) else ''
     folded = text.replace('\\', '/')
     path_like = '/' in folded or bool(re.search(r'\.[A-Za-z0-9]{1,8}$', text))
-    if not re.search(r'[가-힣]', text) and (kind in {'hub', 'code'} or (kind == 'source' and path_like)):
+    if not re.search(r'[가-힣]', text) and (kind in {'hub', 'code'} or path_like):
         return 3
     if re.search(r'https?://', text, re.I):
         remainder = re.sub(r'https?://\S+', ' ', text, flags=re.I)
