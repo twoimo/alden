@@ -24,7 +24,7 @@ import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxa
 import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, placeOverviewLabel, type LabelBox } from './label-placement';
 import { internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
-import { labelZoomLevel, labelZoomStyle, selectProjectedLabels, type LabelZoom, type ProjectedLabelCandidate } from './label-zoom';
+import { labelReadingFrame, labelZoomLevel, labelZoomStyle, selectProjectedLabels, type LabelZoom, type ProjectedLabelCandidate } from './label-zoom';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
 import { VoiceEnvelope } from "./voice-envelope";
@@ -890,10 +890,11 @@ export class KnowledgeHologram {
       if (Math.abs(this.projected.x) > .96 || Math.abs(this.projected.y) > .96
         || this.projected.z < -1 || this.projected.z > 1) continue;
       if (node.id === this.view.focusId || node.id === this.hoveredId) continue;
+      const topic = this.globalLabels.has(node.id);
+      const reading = labelReadingFrame(topic ? 'topic' : 'title', level, node.label, topic ? style.topicSize : style.detailSize);
       projected.push({id: node.id, x: (this.projected.x + 1) * this.viewport.width / 2,
-        y: (1 - this.projected.y) * this.viewport.height / 2, topic: this.globalLabels.has(node.id),
-        width: Math.min(this.globalLabels.has(node.id) ? 220 : 240,
-          8 + node.label.length * (this.globalLabels.has(node.id) ? style.topicSize : style.detailSize) * .9),
+        y: (1 - this.projected.y) * this.viewport.height / 2, topic,
+        width: reading.width, height: reading.height,
         rank: this.globalLabelRanks.get(node.id) ?? projected.length});
     }
     const wanted = selectProjectedLabels(projected, Math.min(style.budget, 24 - reserved), this.zoomLabels);
@@ -912,9 +913,10 @@ export class KnowledgeHologram {
       label.style.fontSize = `${size}px`;
       label.style.fontWeight = prominent ? '650' : topic ? '550' : '450';
       label.style.opacity = String(prominent ? 1 : style.opacity);
-      const maxWidth = prominent || !topic ? 240 : 220;
-      if (label.style.maxWidth !== `${maxWidth}px`) {
-        label.style.maxWidth = `${maxWidth}px`;
+      const reading = labelReadingFrame(prominent ? 'active' : topic ? 'topic' : 'title', level, label.textContent ?? '', size);
+      if (label.style.maxWidth !== `${reading.maxWidth}px` || label.dataset.lines !== String(reading.lines)) {
+        label.style.maxWidth = `${reading.maxWidth}px`;
+        label.dataset.lines = String(reading.lines);
         if (box) box.width = 0;
       }
     }

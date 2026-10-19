@@ -1,5 +1,5 @@
 import {describe,it,expect} from 'vitest';
-import {labelZoomLevel,labelZoomStyle,selectProjectedLabels} from '../knowledge/label-zoom';
+import {labelReadingFrame,labelZoomLevel,labelZoomStyle,selectProjectedLabels} from '../knowledge/label-zoom';
 import {selectZoomLabelCandidates} from '../knowledge/overview-labels';
 import {parseKnowledgeGraph} from '../knowledge/graph-model';
 
@@ -64,5 +64,27 @@ describe('screen-space graph reading levels',()=>{
     const before=JSON.stringify(g);
     expect(selectZoomLabelCandidates(g.nodes).map(n=>n.id)).toEqual([...Array.from({length:8},(_,i)=>'t'+i),'doc']);
     expect(JSON.stringify(g)).toBe(before);
+  });
+  it('wraps a long close-zoom title onto two lines and keeps short subjects on one',()=>{
+    const sentence='간만 50년 진술을 모든 점포 업력으로 확장하면 안 되는 이유';
+    const far=labelReadingFrame('title',0,sentence,13);
+    const near=labelReadingFrame('title',3,sentence,13);
+    const topic=labelReadingFrame('topic',3,'준비 태도',15.25);
+    expect(far.lines).toBe(1);
+    expect(near.lines).toBe(2);
+    expect(near.maxWidth).toBe(280);
+    expect(near.width).toBeLessThanOrEqual(280);
+    expect(near.height).toBe(far.height*2);
+    expect(topic.lines).toBe(1);
+    expect(topic.maxWidth).toBe(220);
+    const before=sentence;
+    labelReadingFrame('title',3,sentence,13);
+    expect(sentence).toBe(before);
+    const crowded=[
+      {id:'a',x:100,y:100,topic:false,rank:1,width:near.width,height:near.height},
+      {id:'b',x:100,y:130,topic:false,rank:2,width:near.width,height:near.height},
+      {id:'c',x:420,y:100,topic:false,rank:3,width:near.width,height:near.height},
+    ];
+    expect([...selectProjectedLabels(crowded,8,new Set())]).toEqual(['a','c']);
   });
 });

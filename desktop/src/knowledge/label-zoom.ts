@@ -22,7 +22,20 @@ export function labelZoomStyle(level: LabelZoom, width: number, height: number, 
     detail: level >= 2, opacity: [.88, .96, 1, 1][level] };
 }
 
-export type ProjectedLabelCandidate = { id: string; x: number; y: number; topic: boolean; rank: number; width?: number };
+export type ProjectedLabelCandidate = { id: string; x: number; y: number; topic: boolean; rank: number; width?: number; height?: number };
+
+export type LabelReadingRole = 'topic' | 'title' | 'active';
+
+/** How much of a saved label fits on screen. The stored string is unchanged. */
+export function labelReadingFrame(role: LabelReadingRole, level: LabelZoom, text: string, fontSize: number): { maxWidth: number; lines: 1 | 2; width: number; height: number } {
+  const size = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 13;
+  const glyphs = [...text.normalize('NFC').replace(/\s+/g, ' ').trim()].length;
+  const natural = 8 + glyphs * size * .9;
+  const maxWidth = role === 'topic' ? 220 : role === 'active' ? 260 : level >= 2 ? 280 : 240;
+  const lines: 1 | 2 = role === 'title' && level >= 2 && natural > maxWidth ? 2 : 1;
+  const line = Math.ceil(size * 1.45 + 4);
+  return { maxWidth, lines, width: Math.min(maxWidth, natural), height: line * lines };
+}
 
 /** Screen-space decluttering only: never changes graph membership or meaning.
  * A small retention preference avoids swapping equally ranked titles on pan.
@@ -40,9 +53,13 @@ export function selectProjectedLabels(
   const chosen: ProjectedLabelCandidate[] = [];
   for (const candidate of ordered) {
     if (chosen.length >= limit) break;
-    if (chosen.some(other => other.id === candidate.id
-      || ((other.x - candidate.x) / (((other.width ?? 162) + (candidate.width ?? 162)) / 2 + 10)) ** 2
-        + ((other.y - candidate.y) / (other.topic && candidate.topic ? 22 : 38)) ** 2 < 1)) continue;
+    if (chosen.some(other => {
+      const vertical = other.topic && candidate.topic ? 22
+        : other.height && candidate.height ? (other.height + candidate.height) / 2 + 8 : 38;
+      return other.id === candidate.id
+        || ((other.x - candidate.x) / (((other.width ?? 162) + (candidate.width ?? 162)) / 2 + 10)) ** 2
+          + ((other.y - candidate.y) / vertical) ** 2 < 1;
+    })) continue;
     chosen.push(candidate);
   }
   return new Set(chosen.map(candidate => candidate.id));
