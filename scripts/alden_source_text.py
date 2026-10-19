@@ -10,7 +10,7 @@ TEXT_VERSION = 'retained-local-original-text-v2'
 def _legacy_threads_source(body, source):
     if (not isinstance(source, dict) or source.get('platform') != 'threads'
             or source.get('type') != 'source'
-            or source.get('localTextOrigin') != 'local_corpus_json'
+            or source.get('localTextOrigin') not in {'local_corpus_json', 'incremental_json'}
             or source.get('localOriginalText') != body):
         return False
     url = source.get('url')

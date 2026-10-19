@@ -58,6 +58,14 @@ class SourceTextTests(unittest.TestCase):
             self.assertEqual(result['semantic_validity'], 'unverified')
             self.assertIsNone(project_source_text(body, source(body))['projection'])
 
+
+    def test_incremental_json_threads_capture_uses_the_same_reading_fold(self):
+        body = BODY + '\n11\n2'
+        record = {**source(body), 'localTextOrigin': 'incremental_json'}
+        result = reading_tail_presentation(body, record)
+        self.assertEqual(result['reading'] + result['tail'], body)
+        self.assertEqual(result['semantic_validity'], 'unverified')
+
     def test_reading_candidate_requires_verified_legacy_source_shape(self):
         body = BODY + '\n11\n2'
         for change in ({'platform':'files'}, {'type':'note'}, {'localTextOrigin':'unknown'},
