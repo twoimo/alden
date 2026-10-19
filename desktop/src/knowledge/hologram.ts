@@ -23,7 +23,7 @@ import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, outwardLabelPoint, placeOverviewLabel, ringLabelPoint, type LabelBox } from './label-placement';
-import { internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
+import { communityCaptionNodes, internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
 import { labelReadingFrame, labelZoomLevel, labelZoomStyle, selectProjectedLabels, type LabelZoom, type ProjectedLabelCandidate } from './label-zoom';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
@@ -653,11 +653,15 @@ export class KnowledgeHologram {
     const depths = relationDepths(this.view);
     this.constellationNodes.setRelationDepths(depths);
     this.updateDepthLegend(depths);
-    if(global)this.applyCommunityLabels(this.semanticLayout.labelsFor(this.view,new Set(focusId?[focusId]:[])));
+    const layoutLabels=global?this.semanticLayout.labelsFor(this.view,new Set(focusId?[focusId]:[])):undefined;
+    if(global)this.applyCommunityLabels(layoutLabels);
     else this.communityState=null;
     this.constellationNodes.visible=true;this.neuronDetail=false;
     this.orbit.enableRotate=true;this.orbit.mouseButtons.LEFT=THREE.MOUSE.ROTATE;
     for (const node of selectOverviewLabels(this.view.nodes)) {
+      this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
+    }
+    if (global) for (const node of communityCaptionNodes(this.view.nodes, layoutLabels, this.globalLabels, Math.max(0, 8 - this.globalLabels.size))) {
       this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
     }
     this.zoomLabelCandidates = global ? selectZoomLabelCandidates(this.view.nodes) : [];

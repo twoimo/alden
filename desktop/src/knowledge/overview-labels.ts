@@ -49,6 +49,44 @@ export function selectZoomLabelCandidates(nodes: readonly KnowledgeNode[]): Know
   return selectSavedLabels(nodes, 2048);
 }
 
+/** One short saved title for a large unnamed community. Display only. */
+export function communityCaptionNodes(
+  nodes: readonly KnowledgeNode[],
+  rows: readonly (readonly [string, string])[] | undefined,
+  named: ReadonlySet<string>,
+  limit = 2,
+): KnowledgeNode[] {
+  if (!rows || rows.length !== nodes.length || limit <= 0) return [];
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  const groups = new Map<string, KnowledgeNode[]>();
+  for (const [id, cluster] of rows) {
+    const node = byId.get(id);
+    if (!node || typeof cluster !== 'string') continue;
+    const members = groups.get(cluster) ?? [];
+    members.push(node);
+    groups.set(cluster, members);
+  }
+  const used = new Set([...named].flatMap(id => {
+    const label = byId.get(id)?.label;
+    return label ? [label.normalize('NFC').replace(/\s+/g, ' ').trim()] : [];
+  }));
+  const ordered = [...groups.values()]
+    .filter(members => members.length >= 8 && members.every(node => !named.has(node.id)))
+    .sort((a, b) => b.length - a.length || a[0].id.localeCompare(b[0].id));
+  const chosen: KnowledgeNode[] = [];
+  for (const members of ordered) {
+    if (chosen.length >= limit) break;
+    const caption = selectZoomLabelCandidates(members).find(node => {
+      const text = node.label.normalize('NFC').replace(/\s+/g, ' ').trim();
+      return [...text].length <= 18 && !used.has(text);
+    });
+    if (!caption) continue;
+    chosen.push(caption);
+    used.add(caption.label.normalize('NFC').replace(/\s+/g, ' ').trim());
+  }
+  return chosen;
+}
+
 function selectSavedLabels(nodes: readonly KnowledgeNode[], limit: number): KnowledgeNode[] {
   const candidates = nodes.flatMap(node => {
     const label = node.label.normalize('NFC').replace(/\s+/g, ' ').trim();

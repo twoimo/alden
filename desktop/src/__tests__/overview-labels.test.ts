@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
 import { KnowledgeHologram } from '../knowledge/hologram';
-import { internalGraphLabel, selectOverviewLabels } from '../knowledge/overview-labels';
+import { communityCaptionNodes, internalGraphLabel, selectOverviewLabels } from '../knowledge/overview-labels';
 
 const graph = (nodes: Array<Record<string, unknown>>) => parseKnowledgeGraph({nodes,edges:[]});
 describe('overview reading entry labels', () => {
@@ -13,6 +13,16 @@ describe('overview reading entry labels', () => {
     ]).nodes;
     expect(nodes).toHaveLength(2);expect(nodes[0].contentEvidence).toBe('reference_only');
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['body']);
+  });
+  it('names a large unlabeled community with one short saved title', () => {
+    const nodes = graph([
+      ...Array.from({length: 8}, (_, i) => ({id: 'v' + i, label: i === 0 ? '생산·제조 기록' : '생산 현장의 아주 긴 작업 기록 입니다 ' + i, category: 'document', degree: 8 - i, source_metadata: {content_evidence: 'content_candidate'}})),
+      {id: 'named', label: '자소서·면접', category: 'topic', degree: 4, source_metadata: {content_evidence: 'content_candidate'}},
+    ]).nodes;
+    const rows = nodes.map(node => [node.id, node.id === 'named' ? 'c:aaa:bbb' : 'c:ccc:ddd'] as [string, string]);
+    expect(communityCaptionNodes(nodes, rows, new Set(['named'])).map(node => node.label)).toEqual(['생산·제조 기록']);
+    expect(communityCaptionNodes(nodes, rows, new Set(['v0']))).toEqual([]);
+    expect(communityCaptionNodes(nodes, undefined, new Set())).toEqual([]);
   });
   it('shows saved subjects rather than high-degree authors and broad buckets', () => {
     const input=graph([
