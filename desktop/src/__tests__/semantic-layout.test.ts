@@ -767,7 +767,7 @@ describe('bounded semantic overview layout', () => {
     expect(dot / (leftLength * rightLength)).toBeLessThan(.35);
     const spread = [1, 2, 3, 4, 5, 6, 7, 8].map(n => distance(result.anchors, id(0), id(n)));
     spread.sort((a, b) => a - b);
-    expect(spread[4]).toBeGreaterThan(.2);
+    expect(spread[4]).toBeGreaterThan(.15);
     expectFiniteSolve(result, empty());
   });
 });

@@ -227,6 +227,63 @@ function spreadFreshEnergy(
     centers.set(label, bound({ x: dir.x / length * 1.7, y: dir.y / length * 1.7, z: dir.z / length * 1.7 }));
   }
 }
+function placeOverviewStars(
+  ids: readonly string[],
+  anchors: Map<string, Point3>,
+  edges: ReadonlyArray<readonly [string, { source: string; target: string }]>,
+  pinned: ReadonlySet<string>,
+): void {
+  if (ids.length < 256 || pinned.size === 1) return;
+  const degree = new Map<string, number>();
+  for (const [, edge] of edges) {
+    degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+    degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+  }
+  const hubs = [...degree.entries()].filter(([, count]) => count >= 24)
+    .sort((a, b) => b[1] - a[1] || order(a[0], b[0]));
+  if (!hubs.length) return;
+  const hubDegree = new Map(hubs);
+  const owner = new Map<string, string>();
+  for (const [hub] of hubs) owner.set(hub, hub);
+  for (const [, edge] of edges) {
+    const left = degree.get(edge.source) ?? 0, right = degree.get(edge.target) ?? 0;
+    const leaf = left >= 24 && right < 24 ? edge.target : right >= 24 && left < 24 ? edge.source : '';
+    const hub = leaf === edge.target ? edge.source : leaf === edge.source ? edge.target : '';
+    if (!leaf || !hub) continue;
+    const current = owner.get(leaf);
+    if (!current || (hubDegree.get(current) ?? 0) < (hubDegree.get(hub) ?? 0)) owner.set(leaf, hub);
+  }
+  const members = new Map<string, string[]>();
+  for (const [id, hub] of owner) {
+    const group = members.get(hub) ?? [];
+    group.push(id); members.set(hub, group);
+  }
+  const ringCount = Math.min(8, hubs.length);
+  hubs.forEach(([hub], index) => {
+    let dest: Point3;
+    if (index < ringCount) {
+      const angle = -Math.PI / 2 + (index / ringCount) * Math.PI * 2;
+      dest = bound({ x: Math.cos(angle) * 1.55, y: Math.sin(angle) * 1.05, z: ((index % 3) - 1) * .12 });
+    } else {
+      const dir = seed(hub), length = Math.hypot(dir.x, dir.y, dir.z) || 1;
+      dest = bound({ x: dir.x / length * 1.7, y: dir.y / length * 1.7, z: dir.z / length * 1.7 });
+    }
+    const group = members.get(hub) ?? [hub];
+    const disk = Math.min(.48, .035 * Math.sqrt(group.length));
+    for (const id of group) {
+      if (pinned.has(id)) continue;
+      if (id === hub) { anchors.set(id, dest); continue; }
+      const offset = seed(id), span = Math.hypot(offset.x, offset.y, offset.z) || 1;
+      const reach = .45 + .55 * ((hash(id) % 1000) / 1000);
+      anchors.set(id, bound({
+        x: dest.x + offset.x / span * disk * reach,
+        y: dest.y + offset.y / span * disk * reach,
+        z: dest.z + offset.z / span * disk * reach * .35,
+      }));
+    }
+  });
+}
+
 function unionFind(count: number) {
   const parent = Int32Array.from({ length: count }, (_, i) => i);
   const find = (i: number): number => {
@@ -892,6 +949,7 @@ export class SemanticLayoutEngine {
       const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
       anchors.set(id, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated));
     });
+    placeOverviewStars(ids, anchors, real, pinned);
     const dirtyIds = new Set<string>();
     for (const id of ids) {
       const prior = previousPositions.get(id), p = anchors.get(id)!;
