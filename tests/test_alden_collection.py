@@ -98,6 +98,11 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(overview_sample_tier('https://recruit.kepco.co.kr/frt/frt0001/view.do', 'source'), 3)
         self.assertEqual(overview_sample_tier('취업은 어떻게 포장하고 전달하느냐가 중요합니다.', 'source'), 0)
         self.assertEqual(overview_sample_tier('26년 온라인 특강 1회 안내 https://form.naver.com/response/example', 'source'), 0)
+        self.assertEqual(overview_sample_tier('일반 동영상', 'source_group'), 3)
+        self.assertEqual(overview_sample_tier('기타·미분류', 'topic'), 3)
+        self.assertEqual(overview_sample_tier('렉카박멸', 'source_group'), 3)
+        self.assertEqual(overview_sample_tier('채용공고·지원시기', 'topic'), 0)
+        self.assertEqual(overview_sample_tier('라이브 아카이브', 'source_group'), 0)
         target = self.target()
         records = [{**self.record('topic', text='채용 일정과 서류 기준을 적은 원문입니다.'), 'label': '채용공고·지원시기', 'kind': 'topic'}]
         records.append({**self.record('hub', text='코드 허브 원문입니다.'), 'label': 'overlay', 'kind': 'hub'})
