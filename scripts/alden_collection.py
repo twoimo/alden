@@ -96,6 +96,32 @@ def overview_display_label(label, body=None) -> str:
     return ''
 
 
+def overview_routing_hub(node) -> bool:
+    """A saved bucket can stay in the graph without being an overview attractor.
+
+    File names, generic media buckets and one-word source groups pull unrelated
+    notes into one star. They remain stored and available in detail views.
+    """
+    label = node.get("label") if isinstance(node, dict) else ""
+    text = label.strip() if isinstance(label, str) else ""
+    if text in _GENERIC_OVERVIEW_LABELS or text in {
+        "기타", "미분류", "기타·미분류", "일반 동영상", "전체 동영상", "동영상", "영상",
+        "홍보·안내", "외부 자료·링크",
+    } or overview_label_tier(text) >= 1:
+        return True
+    if node.get("category") != "source_group":
+        return False
+    terms = [term for term in re.split(r"[·\s/]+", text) if re.search(r"[A-Za-z가-힣]{2}", term)]
+    return len(terms) < 2
+
+
+def overview_draw_edges(edges, nodes):
+    """Overview lines only. Stored relations and non-overview pages are unchanged."""
+    hidden = {node.get("id") for node in nodes if overview_routing_hub(node)}
+    hidden.discard(None)
+    return [edge for edge in edges if edge.get("source") not in hidden and edge.get("target") not in hidden]
+
+
 def normalized_body(value: str) -> str:
     # Indentation, tabs, blank lines and Markdown hard breaks carry meaning.
     # Original bytes stay in the source blob; only Unicode composition and
@@ -1223,7 +1249,7 @@ class CollectionStore:
             if draw_topical_edges:
                 topical = [edge for edge in edges if edge["relation"] not in {"contains", "in-group", "imports", "generated-import"}]
                 if topical:
-                    edges = topical
+                    edges = overview_draw_edges(topical, nodes)
             result = {"ok": True, "nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": total_edges,
                     "next": offset+limit if more else None, "focus": focus, "scope": projects,
                     "facets": facets, "targets": self.targets(projects),

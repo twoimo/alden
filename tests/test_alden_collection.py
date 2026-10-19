@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from alden_collection import CollectionStore, TargetBusy, identity, read_action
 from alden_collection import overview_label_tier
 from alden_collection import overview_display_label
+from alden_collection import overview_draw_edges, overview_routing_hub
 from alden_collect import capture_source, collect_target
 
 
@@ -84,6 +85,28 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual({edge['relation'] for edge in overview['edges']}, {'source-topic'})
         page = self.store.graph_page(projects=['one'], limit=120)
         self.assertEqual({edge['relation'] for edge in page['edges']}, {'source-topic', 'contains'})
+
+    def test_overview_hides_routing_hub_lines_without_deleting_edges(self):
+        self.assertTrue(overview_routing_hub({"id": "bucket", "label": "일반 동영상", "category": "source_group"}))
+        self.assertTrue(overview_routing_hub({"id": "name", "label": "렉카박멸", "category": "source_group"}))
+        self.assertFalse(overview_routing_hub({"id": "topic", "label": "채용공고·지원시기", "category": "topic"}))
+        target = self.target()
+        records = [
+            {**self.record('bucket', text='일반 영상 묶음 원문입니다.'), 'label': '일반 동영상', 'kind': 'source_group'},
+            {**self.record('topic', text='채용 일정 원문입니다.'), 'label': '채용공고·지원시기', 'kind': 'topic'},
+        ]
+        records += [{**self.record('v' + str(i), text='영상 원문 ' + str(i) + ' 입니다.'), 'label': '영상 ' + str(i)} for i in range(3)]
+        records += [{**self.record('d' + str(i), text='채용 자료 ' + str(i) + ' 원문입니다.'), 'label': '자료 ' + str(i)} for i in range(3)]
+        relations = [{"source_platform": "youtube", "source_id": "bucket", "target_platform": "youtube", "target_id": "v" + str(i), "type": "in-series"} for i in range(3)]
+        relations += [{"source_platform": "youtube", "source_id": "topic", "target_platform": "youtube", "target_id": "d" + str(i), "type": "source-topic"} for i in range(3)]
+        self.store.ingest(target, records, relations=relations)
+        overview = self.store.graph_page(projects=['one'], limit=1984, overview=True)
+        self.assertEqual(overview['total_edges'], 6)
+        self.assertEqual(sorted(edge['relation'] for edge in overview['edges']), ['source-topic', 'source-topic', 'source-topic'])
+        drawn = overview_draw_edges(overview['edges'], overview['nodes'])
+        self.assertEqual(len(drawn), 3)
+        page = self.store.graph_page(projects=['one'], limit=120)
+        self.assertEqual(len(page['edges']), 6)
 
     def test_first_target_change_after_other_target_stages_is_not_a_pruning_reset(self):
         allowed, other = self.target(), self.target("elsewhere", "other")
