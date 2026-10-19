@@ -303,9 +303,9 @@ body.panel-view {
 }
 .settings-shell[data-settings-page="memory"] .knowledge-hologram-shell,
 .panel-view .alden-panel {
-  background:radial-gradient(ellipse at 58% 46%,#25344b70,transparent 62%),
-    radial-gradient(ellipse at 12% 85%,#28264248,transparent 58%),
-    linear-gradient(145deg,#060b16,#0c1628 60%,#07111f);
+  background:radial-gradient(ellipse at 52% 46%,#2a4d78 0%,transparent 62%),
+    radial-gradient(ellipse at 16% 84%,#24365c 0%,transparent 54%),
+    linear-gradient(160deg,#10233f 0%,#17345c 52%,#0e2244 100%);
 }
 .settings-shell[data-settings-page="memory"] .settings-topbar {
   background:linear-gradient(180deg,#080e1cf2,#080e1c90); border-color:#a2b5cf1c;
