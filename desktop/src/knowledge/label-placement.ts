@@ -92,3 +92,20 @@ export function placeOverviewLabel(
     return;
   }
 }
+
+/** Shift a screen point away from the viewport center. Near the center, stay put.
+ * Display placement only; stored graph coordinates are untouched. */
+export function outwardLabelPoint(
+  screenX: number, screenY: number, viewport: LabelViewport, distance: number,
+): { x: number; y: number } {
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY) || !Number.isFinite(distance) || distance <= 0
+      || !Number.isFinite(viewport.width) || !Number.isFinite(viewport.height) || viewport.width <= 0 || viewport.height <= 0) {
+    return { x: screenX, y: screenY };
+  }
+  const centerX = viewport.x + viewport.width / 2, centerY = viewport.y + viewport.height / 2;
+  let dx = screenX - centerX, dy = screenY - centerY;
+  const length = Math.hypot(dx, dy);
+  if (!(length > 64)) return { x: screenX, y: screenY };
+  const step = Math.min(distance, length * .22);
+  return { x: screenX + dx / length * step, y: screenY + dy / length * step };
+}

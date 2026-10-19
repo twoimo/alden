@@ -1,8 +1,18 @@
 import {describe,it,expect} from 'vitest';
 import {placeOverviewLabel,type LabelBox} from '../knowledge/label-placement';
+import {outwardLabelPoint} from '../knowledge/label-placement';
 
 describe('node-adjacent overview labels',()=>{
   const viewport={x:0,y:0,width:900,height:600};
+  it('moves an off-center label farther from the viewport center and leaves a central label',()=>{
+    const outer=outwardLabelPoint(700,120,viewport,46);
+    const center=outwardLabelPoint(450,300,viewport,46);
+    expect(Math.hypot(outer.x-450,outer.y-300)).toBeGreaterThan(Math.hypot(700-450,120-300));
+    expect(center).toEqual({x:450,y:300});
+    const invalid=outwardLabelPoint(Number.NaN,10,viewport,46);
+    expect(Number.isNaN(invalid.x)).toBe(true);
+    expect(invalid.y).toBe(10);
+  });
   it('culls a crowded label instead of displacing it far from its source node',()=>{
     const earlier:LabelBox[]=[];
     for(let i=0;i<12;i++) {
