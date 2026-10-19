@@ -288,7 +288,7 @@ function placeOverviewStars(
 }
 
 function placeDuplicateLabels(
-  nodes: readonly { id?: string; label?: string }[],
+  nodes: readonly { id?: string; label?: string; category?: string }[],
   anchors: Map<string, Point3>,
   owned: ReadonlySet<string>,
   pinned: ReadonlySet<string>,
@@ -297,7 +297,9 @@ function placeDuplicateLabels(
   const groups = new Map<string, string[]>();
   for (const node of nodes) {
     if (!node.id || owned.has(node.id) || pinned.has(node.id) || typeof node.label !== 'string') continue;
-    const label = node.label.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+    const raw = node.label.normalize('NFC').replace(/\s+/g, ' ').trim();
+    if ((node.category === 'hub' || node.category === 'code') && !/[가-힣]/.test(raw)) continue;
+    const label = raw.toLowerCase();
     if (label.length < 2 || label.length > 80) continue;
     const list = groups.get(label) ?? [];
     list.push(node.id); groups.set(label, list);

@@ -109,6 +109,8 @@ def overview_routing_hub(node) -> bool:
         "홍보·안내", "외부 자료·링크",
     } or overview_label_tier(text) >= 1:
         return True
+    if node.get("category") in {"hub", "code"} and not re.search(r"[가-힣]", text):
+        return True
     if node.get("category") != "source_group":
         return False
     terms = [term for term in re.split(r"[·\s/]+", text) if re.search(r"[A-Za-z가-힣]{2}", term)]

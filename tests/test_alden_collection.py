@@ -90,6 +90,8 @@ class CollectionTests(unittest.TestCase):
         self.assertTrue(overview_routing_hub({"id": "bucket", "label": "일반 동영상", "category": "source_group"}))
         self.assertTrue(overview_routing_hub({"id": "name", "label": "렉카박멸", "category": "source_group"}))
         self.assertFalse(overview_routing_hub({"id": "topic", "label": "채용공고·지원시기", "category": "topic"}))
+        self.assertTrue(overview_routing_hub({"id": "code", "label": "overlay", "category": "hub"}))
+        self.assertFalse(overview_routing_hub({"id": "shop", "label": "스토어와 브랜드", "category": "hub"}))
         target = self.target()
         records = [
             {**self.record('bucket', text='일반 영상 묶음 원문입니다.'), 'label': '일반 동영상', 'kind': 'source_group'},

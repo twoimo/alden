@@ -784,4 +784,19 @@ describe('bounded semantic overview layout', () => {
     expect(distance(result.anchors, id(0), id(11))).toBeLessThan(.5);
     expectFiniteSolve(result, empty());
   });
+
+  it('does not gather ascii code hubs while repeated topic labels stay together', () => {
+    const nodes = Array.from({ length: 256 }, (_, i) => ({
+      id: `n${String(i).padStart(4, '0')}`,
+      label: i < 12 ? 'overlay' : i < 24 ? '반복 주제' : `distinct ${i}`,
+      category: i < 12 ? 'hub' : 'document',
+      source_target: 'source-a', space: 'same source', source_version: 'v1', importance: 20,
+    }));
+    const view = { ...parseKnowledgeGraph({ nodes, edges: [] }), focusId: null, hops: 0 };
+    const result = new SemanticLayoutEngine().layout(view, empty());
+    const id = (n: number) => `n${String(n).padStart(4, '0')}`;
+    expect(distance(result.anchors, id(12), id(13))).toBeLessThan(.5);
+    expect(distance(result.anchors, id(0), id(1))).toBeGreaterThan(distance(result.anchors, id(12), id(13)));
+    expectFiniteSolve(result, empty());
+  });
 });
