@@ -232,8 +232,9 @@ function placeOverviewStars(
   anchors: Map<string, Point3>,
   edges: ReadonlyArray<readonly [string, { source: string; target: string }]>,
   pinned: ReadonlySet<string>,
-): void {
-  if (ids.length < 256 || pinned.size === 1) return;
+): Set<string> {
+  const owned = new Set<string>();
+  if (ids.length < 256 || pinned.size === 1) return owned;
   const degree = new Map<string, number>();
   for (const [, edge] of edges) {
     degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
@@ -241,7 +242,7 @@ function placeOverviewStars(
   }
   const hubs = [...degree.entries()].filter(([, count]) => count >= 24)
     .sort((a, b) => b[1] - a[1] || order(a[0], b[0]));
-  if (!hubs.length) return;
+  if (!hubs.length) return owned;
   const hubDegree = new Map(hubs);
   const owner = new Map<string, string>();
   for (const [hub] of hubs) owner.set(hub, hub);
@@ -272,13 +273,49 @@ function placeOverviewStars(
     const disk = Math.min(.48, .035 * Math.sqrt(group.length));
     for (const id of group) {
       if (pinned.has(id)) continue;
-      if (id === hub) { anchors.set(id, dest); continue; }
+      if (id === hub) { anchors.set(id, dest); owned.add(id); continue; }
       const offset = seed(id), span = Math.hypot(offset.x, offset.y, offset.z) || 1;
       const reach = .45 + .55 * ((hash(id) % 1000) / 1000);
       anchors.set(id, bound({
         x: dest.x + offset.x / span * disk * reach,
         y: dest.y + offset.y / span * disk * reach,
         z: dest.z + offset.z / span * disk * reach * .35,
+      }));
+      owned.add(id);
+    }
+  });
+  return owned;
+}
+
+function placeDuplicateLabels(
+  nodes: readonly { id?: string; label?: string }[],
+  anchors: Map<string, Point3>,
+  owned: ReadonlySet<string>,
+  pinned: ReadonlySet<string>,
+): void {
+  if (nodes.length < 256 || pinned.size === 1) return;
+  const groups = new Map<string, string[]>();
+  for (const node of nodes) {
+    if (!node.id || owned.has(node.id) || pinned.has(node.id) || typeof node.label !== 'string') continue;
+    const label = node.label.normalize('NFC').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (label.length < 2 || label.length > 80) continue;
+    const list = groups.get(label) ?? [];
+    list.push(node.id); groups.set(label, list);
+  }
+  const usable = [...groups.entries()].filter(([, ids]) => ids.length >= 2 && ids.length <= 120 && ids.length / nodes.length < .25)
+    .sort((a, b) => b[1].length - a[1].length || order(a[0], b[0])).slice(0, 8);
+  usable.forEach(([, ids], index) => {
+    const angle = -Math.PI / 2 + ((index + .5) / Math.max(8, usable.length)) * Math.PI * 2;
+    const dest = bound({ x: Math.cos(angle) * 1.15, y: Math.sin(angle) * .78, z: ((index % 3) - 1) * .08 });
+    const disk = Math.min(.42, .03 * Math.sqrt(ids.length));
+    for (const id of ids) {
+      if (pinned.has(id)) continue;
+      const offset = seed(id), span = Math.hypot(offset.x, offset.y, offset.z) || 1;
+      const reach = id === ids[0] ? 0 : .4 + .6 * ((hash(id) % 1000) / 1000);
+      anchors.set(id, bound({
+        x: dest.x + offset.x / span * disk * reach,
+        y: dest.y + offset.y / span * disk * reach,
+        z: dest.z + offset.z / span * disk * reach * .3,
       }));
     }
   });
@@ -949,7 +986,8 @@ export class SemanticLayoutEngine {
       const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
       anchors.set(id, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated));
     });
-    placeOverviewStars(ids, anchors, real, pinned);
+    const starOwned = placeOverviewStars(ids, anchors, real, pinned);
+    placeDuplicateLabels(view.nodes, anchors, starOwned, pinned);
     const dirtyIds = new Set<string>();
     for (const id of ids) {
       const prior = previousPositions.get(id), p = anchors.get(id)!;

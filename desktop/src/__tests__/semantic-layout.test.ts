@@ -770,4 +770,18 @@ describe('bounded semantic overview layout', () => {
     expect(spread[4]).toBeGreaterThan(.15);
     expectFiniteSolve(result, empty());
   });
+
+  it('pulls a repeated saved label together without collapsing a uniform fixture', () => {
+    const nodes = Array.from({ length: 256 }, (_, i) => ({
+      id: `n${String(i).padStart(4, '0')}`,
+      label: i < 12 ? 'repeated topic' : `distinct ${i}`,
+      source_target: 'source-a', space: 'same source', source_version: 'v1', importance: 20,
+    }));
+    const view = { ...parseKnowledgeGraph({ nodes, edges: [] }), focusId: null, hops: 0 };
+    const result = new SemanticLayoutEngine().layout(view, empty());
+    const id = (n: number) => `n${String(n).padStart(4, '0')}`;
+    expect(distance(result.anchors, id(0), id(1))).toBeLessThan(distance(result.anchors, id(0), id(40)));
+    expect(distance(result.anchors, id(0), id(11))).toBeLessThan(.5);
+    expectFiniteSolve(result, empty());
+  });
 });
