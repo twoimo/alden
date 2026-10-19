@@ -119,6 +119,23 @@ def overview_sample_tier(label, kind) -> int:
     return overview_label_tier(label)
 
 
+def overview_sample_rank(label, body, kind) -> int:
+    """Overview order when the stored title and body are both available.
+
+    An untitled source whose first line is only a short post stays stored.
+    A saved title, and an untitled note of at least 40 characters, do not.
+    """
+    shown = overview_display_label(label if isinstance(label, str) else '', body if isinstance(body, str) else '')
+    named = kind if isinstance(kind, str) else ''
+    tier = overview_sample_tier(shown, named)
+    if tier >= 3:
+        return tier
+    stored = label.strip() if isinstance(label, str) else ''
+    if not stored and named == 'source' and len(shown.strip()) < 40:
+        return 3
+    return tier
+
+
 def overview_routing_hub(node) -> bool:
     """A saved bucket can stay in the graph without being an overview attractor.
 
@@ -1036,6 +1053,7 @@ class CollectionStore:
             db.create_function('alden_content_class',2,lambda meta,body:content_evidence_class(json.loads(meta),body),deterministic=True)
             db.create_function('alden_overview_tier', 1, overview_label_tier, deterministic=True)
             db.create_function('alden_sample_tier', 2, overview_sample_tier, deterministic=True)
+            db.create_function('alden_sample_rank', 3, overview_sample_rank, deterministic=True)
             db.create_function('alden_display_label', 2, overview_display_label, deterministic=True)
             checkpoint, _, _, _ = self._activity_scope(db, projects, target_id, platform)
             if not projects:
@@ -1114,8 +1132,8 @@ class CollectionStore:
                     # Interleave real source targets so a large project's hubs
                     # cannot occupy the whole unified overview. No fake links.
                     picking = """SELECT id FROM (SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.target_id
-                      ORDER BY alden_sample_tier(alden_display_label(v.label,v.body), json_extract(v.metadata,'$.kind')), COALESCE(d.degree,0) DESC, s.id) AS source_slot
-                      FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version WHERE alden_sample_tier(alden_display_label(v.label,v.body), json_extract(v.metadata,'$.kind')) < 3) ORDER BY source_slot,id"""
+                      ORDER BY alden_sample_rank(v.label, v.body, json_extract(v.metadata,'$.kind')), COALESCE(d.degree,0) DESC, s.id) AS source_slot
+                      FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version WHERE alden_sample_rank(v.label, v.body, json_extract(v.metadata,'$.kind')) < 3) ORDER BY source_slot,id"""
                 search_cte = cte
                 if plan:
                     contains, params = korean_literal_sql(plan)

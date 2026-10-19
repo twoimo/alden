@@ -103,6 +103,10 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(overview_sample_tier('렉카박멸', 'source_group'), 3)
         self.assertEqual(overview_sample_tier('채용공고·지원시기', 'topic'), 0)
         self.assertEqual(overview_sample_tier('라이브 아카이브', 'source_group'), 0)
+        from alden_collection import overview_sample_rank
+        self.assertEqual(overview_sample_rank('', '드디어 다 끝났습니다.', 'source'), 3)
+        self.assertEqual(overview_sample_rank('', '사무실 야경을 보며 일한 기록입니다. 원문은 유지하고 채용 일정까지 적습니다.', 'source'), 0)
+        self.assertEqual(overview_sample_rank('자소서', '짧은', 'topic'), 0)
         target = self.target()
         records = [{**self.record('topic', text='채용 일정과 서류 기준을 적은 원문입니다.'), 'label': '채용공고·지원시기', 'kind': 'topic'}]
         records.append({**self.record('hub', text='코드 허브 원문입니다.'), 'label': 'overlay', 'kind': 'hub'})
