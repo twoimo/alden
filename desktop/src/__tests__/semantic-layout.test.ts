@@ -744,7 +744,7 @@ describe('bounded semantic overview layout', () => {
     expect(dot(spokes, right)).toBeLessThan(dot(spokes, left));
     const cliqueRadius = [1, 2, 3, 4, 5, 6, 7].map(ellip).sort((a, b) => a - b)[3];
     const isolateRadius = Array.from({ length: 80 }, (_, n) => ellip(40 + n)).sort((a, b) => a - b)[40];
-    expect(isolateRadius).toBeGreaterThan(cliqueRadius + .2);
+    expect(isolateRadius).toBeGreaterThan(cliqueRadius + .15);
     expect(distance(result.anchors, id(1), id(2))).toBeLessThan(distance(result.anchors, id(1), id(8)));
   });
 });

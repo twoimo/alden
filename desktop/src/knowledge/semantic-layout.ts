@@ -193,7 +193,7 @@ function spreadFreshEnergy(
     const rawLength = Math.hypot(raw.x, raw.y, raw.z) || 1;
     const direction = { x: raw.x / rawLength, y: raw.y / rawLength, z: raw.z / rawLength };
     ringLabels.add(label); ray.set(label, direction);
-    centers.set(label, { x: direction.x * .9, y: direction.y * .9, z: direction.z * .9 });
+    centers.set(label, { x: direction.x * 1.25, y: direction.y * 1.25, z: direction.z * 1.25 });
   }
   const pull = new Map<string, { x: number; y: number; z: number; w: number }>();
   for (const pair of pairs) {
@@ -212,7 +212,7 @@ function spreadFreshEnergy(
     if (ringLabels.has(label)) continue;
     const length = Math.hypot(acc.x, acc.y, acc.z);
     if (!(length > 1e-8)) continue;
-    const dist = (membersByLabel.get(label)?.length ?? 1) >= 2 ? 1.2 : 1.45;
+    const dist = (membersByLabel.get(label)?.length ?? 1) >= 2 ? 1.45 : 1.6;
     const jitter = seed(label);
     centers.set(label, {
       x: acc.x / length * dist + jitter.x * .02,
