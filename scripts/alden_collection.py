@@ -1129,9 +1129,15 @@ class CollectionStore:
                 if overview and not fts:
                     # Interleave real source targets so a large project's hubs
                     # cannot occupy the whole unified overview. No fake links.
-                    picking = """SELECT id FROM (SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.target_id
-                      ORDER BY alden_sample_rank(v.label, v.body, json_extract(v.metadata,'$.kind')), COALESCE(d.degree,0) DESC, s.id) AS source_slot
-                      FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version WHERE alden_sample_rank(v.label, v.body, json_extract(v.metadata,'$.kind')) < 3) ORDER BY source_slot,id"""
+                    picking = """SELECT id FROM (SELECT s.id,
+                      ROW_NUMBER() OVER(PARTITION BY s.target_id
+                        ORDER BY alden_sample_rank(v.label, v.body, json_extract(v.metadata,'$.kind')), COALESCE(d.degree,0) DESC, s.id) AS source_slot,
+                      ROW_NUMBER() OVER(PARTITION BY CASE WHEN length(trim(alden_display_label(v.label,v.body)))<2 THEN s.id
+                        ELSE alden_display_label(v.label,v.body) END
+                        ORDER BY COALESCE(d.degree,0) DESC, s.id) AS label_copy
+                      FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version
+                      WHERE alden_sample_rank(v.label, v.body, json_extract(v.metadata,'$.kind')) < 3)
+                      WHERE label_copy=1 ORDER BY source_slot,id"""
                 search_cte = cte
                 if plan:
                     contains, params = korean_literal_sql(plan)

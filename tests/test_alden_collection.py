@@ -29,7 +29,7 @@ class CollectionTests(unittest.TestCase):
                          {'자료 목록':'unread_body_marker','실제 본문':'content_candidate'})
     def test_overview_density_is_explicit_bounded_and_keeps_scope_and_detail_budgets(self):
         allowed, denied = self.target(), self.target("denied", "other")
-        self.store.ingest(allowed, [self.record(str(i)) for i in range(160)])
+        self.store.ingest(allowed, [{**self.record(str(i)), 'label': f'자료 {i}'} for i in range(160)])
         self.store.ingest(denied, [self.record("private")])
         with self.assertRaises(ValueError):
             self.store.graph_page(projects=["one"], limit=1984)
@@ -74,7 +74,11 @@ class CollectionTests(unittest.TestCase):
 
     def test_overview_hides_structural_edges_without_deleting_them(self):
         target = self.target()
-        records = [self.record('a', text='채용 기준을 적은 원문'), self.record('b', text='면접 질문을 적은 원문'), self.record('c', text='파일 목록을 적은 원문')]
+        records = [
+            {**self.record('a', text='채용 기준을 적은 원문'), 'label': '채용 기준'},
+            {**self.record('b', text='면접 질문을 적은 원문'), 'label': '면접 질문'},
+            {**self.record('c', text='파일 목록을 적은 원문'), 'label': '파일 목록'},
+        ]
         relations = [
             {"source_platform": "youtube", "source_id": "a", "target_platform": "youtube", "target_id": "b", "type": "source-topic"},
             {"source_platform": "youtube", "source_id": "b", "target_platform": "youtube", "target_id": "c", "type": "contains"},
@@ -121,6 +125,21 @@ class CollectionTests(unittest.TestCase):
         self.assertNotIn('overlay', labels)
         stored = [node['label'] for node in self.store.graph_page(projects=['one'], limit=120)['nodes']]
         self.assertIn('overlay', stored)
+
+    def test_overview_keeps_one_copy_of_a_repeated_saved_label(self):
+        target = self.target()
+        records = [
+            {**self.record('a', text='첫 요약 원문입니다.'), 'label': '취업의 방 요약'},
+            {**self.record('b', text='같은 제목의 다른 원문입니다.'), 'label': '취업의 방 요약'},
+            {**self.record('c', text='자소서 기준 원문입니다.'), 'label': '자소서'},
+        ]
+        self.store.ingest(target, records)
+        overview = self.store.graph_page(projects=['one'], limit=1984, overview=True)
+        labels = [node['label'] for node in overview['nodes']]
+        self.assertEqual(labels.count('취업의 방 요약'), 1)
+        self.assertIn('자소서', labels)
+        stored = [node['label'] for node in self.store.graph_page(projects=['one'], limit=120)['nodes']]
+        self.assertEqual(stored.count('취업의 방 요약'), 2)
 
     def test_overview_hides_routing_hub_lines_without_deleting_edges(self):
         self.assertTrue(overview_routing_hub({"id": "bucket", "label": "일반 동영상", "category": "source_group"}))
