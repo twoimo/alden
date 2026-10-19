@@ -114,6 +114,8 @@ def overview_sample_tier(label, kind) -> int:
         return 3
     if kind == 'source_group':
         return 3
+    if re.fullmatch(r'[A-Za-z0-9_-]{6,32}', text):
+        return 3
     return overview_label_tier(label)
 
 

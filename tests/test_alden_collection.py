@@ -101,6 +101,8 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(overview_sample_tier('theme.liquid', 'document'), 3)
         self.assertEqual(overview_sample_tier('shop-presets.json', 'metadata'), 3)
         self.assertEqual(overview_sample_tier('A plain English title', 'source'), 0)
+        self.assertEqual(overview_sample_tier('Ab12Cd34Ef', 'source'), 3)
+        self.assertEqual(overview_sample_tier('The owner of a restaurant', 'video'), 0)
         self.assertEqual(overview_sample_tier('notes/보고서.md', 'source'), 0)
         self.assertEqual(overview_sample_tier('- 링크: https://www.threads.com/@allpass_everything/post/DaPgW1NGRpL', 'source'), 3)
         self.assertEqual(overview_sample_tier('https://recruit.kepco.co.kr/frt/frt0001/view.do', 'source'), 3)
