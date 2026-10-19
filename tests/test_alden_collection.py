@@ -71,6 +71,20 @@ class CollectionTests(unittest.TestCase):
         with sqlite3.connect(self.store.path) as db:
             self.assertEqual(db.execute('SELECT label FROM versions').fetchone()[0], '')
 
+    def test_overview_hides_structural_edges_without_deleting_them(self):
+        target = self.target()
+        records = [self.record('a', text='채용 기준을 적은 원문'), self.record('b', text='면접 질문을 적은 원문'), self.record('c', text='파일 목록을 적은 원문')]
+        relations = [
+            {"source_platform": "youtube", "source_id": "a", "target_platform": "youtube", "target_id": "b", "type": "source-topic"},
+            {"source_platform": "youtube", "source_id": "b", "target_platform": "youtube", "target_id": "c", "type": "contains"},
+        ]
+        self.store.ingest(target, records, relations=relations)
+        overview = self.store.graph_page(projects=['one'], limit=1984, overview=True)
+        self.assertEqual(overview['total_edges'], 2)
+        self.assertEqual({edge['relation'] for edge in overview['edges']}, {'source-topic'})
+        page = self.store.graph_page(projects=['one'], limit=120)
+        self.assertEqual({edge['relation'] for edge in page['edges']}, {'source-topic', 'contains'})
+
     def test_first_target_change_after_other_target_stages_is_not_a_pruning_reset(self):
         allowed, other = self.target(), self.target("elsewhere", "other")
         self.store.ingest(other, [self.record("unrelated")])

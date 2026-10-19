@@ -976,6 +976,9 @@ class CollectionStore:
             raise ValueError("collection_event_time_invalid")
         if type(details) is not bool or not isinstance(query, str) or len(query) > 256:
             raise ValueError("collection_graph_filter_invalid")
+        # Unfiltered overview drawing omits file-tree edges. The stored
+        # relations and non-overview pages keep them.
+        draw_topical_edges = overview is True and focus is None and query == "" and relation is None
         with self.database() as db:
             db.create_function('alden_relation_digest', 1, relation_evidence_digest, deterministic=True)
             from alden_content_evidence import content_evidence_class
@@ -1217,6 +1220,10 @@ class CollectionStore:
                               "source_metadata": {"kind": kind, "content_evidence": evidence_class}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
             edges = [{"id": row["id"], "source": row["source"], "target": row["target"], "relation": row["type"], "context": "explicit source relationship", "weight": 1, "purpose": "reference", "evidence_message_id": row["id"], "evidence": {"kind": "snapshot", "source_event_ids": [row["id"]], "chat_id": "", "confirmed_at": None, "retracted": False}}
                      for row in edge_rows]
+            if draw_topical_edges:
+                topical = [edge for edge in edges if edge["relation"] not in {"contains", "in-group", "imports", "generated-import"}]
+                if topical:
+                    edges = topical
             result = {"ok": True, "nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": total_edges,
                     "next": offset+limit if more else None, "focus": focus, "scope": projects,
                     "facets": facets, "targets": self.targets(projects),
