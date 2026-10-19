@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {placeOverviewLabel,type LabelBox} from '../knowledge/label-placement';
-import {outwardLabelPoint} from '../knowledge/label-placement';
+import {outwardLabelPoint,ringLabelPoint} from '../knowledge/label-placement';
 
 describe('node-adjacent overview labels',()=>{
   const viewport={x:0,y:0,width:900,height:600};
@@ -12,6 +12,18 @@ describe('node-adjacent overview labels',()=>{
     const invalid=outwardLabelPoint(Number.NaN,10,viewport,46);
     expect(Number.isNaN(invalid.x)).toBe(true);
     expect(invalid.y).toBe(10);
+  });
+  it('moves an in-core topic label out to the ring and leaves an outer label',()=>{
+    const inner=ringLabelPoint(500,340,viewport,.78);
+    const center=ringLabelPoint(450,300,viewport,.78);
+    const outer=ringLabelPoint(860,40,viewport,.78);
+    const ring=Math.min(viewport.width,viewport.height)*.78/2;
+    expect(Math.hypot(inner.x-450,inner.y-300)).toBeCloseTo(ring,5);
+    expect(center).toEqual({x:450,y:300});
+    expect(outer).toEqual({x:860,y:40});
+    const invalid=ringLabelPoint(Number.NaN,12,viewport,.78);
+    expect(Number.isNaN(invalid.x)).toBe(true);
+    expect(invalid.y).toBe(12);
   });
   it('culls a crowded label instead of displacing it far from its source node',()=>{
     const earlier:LabelBox[]=[];

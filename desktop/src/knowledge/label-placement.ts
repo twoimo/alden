@@ -109,3 +109,25 @@ export function outwardLabelPoint(
   const step = Math.min(distance, length * .22);
   return { x: screenX + dx / length * step, y: screenY + dy / length * step };
 }
+
+/** Far-zoom topic captions leave the dense core along their own screen ray.
+ * A point already outside the ring, or too close to the center to have a
+ * direction, stays where it is. Stored graph coordinates are untouched. */
+export function ringLabelPoint(
+  screenX: number, screenY: number, viewport: LabelViewport, ringRatio: number,
+): { x: number; y: number } {
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)
+      || !Number.isFinite(viewport.x) || !Number.isFinite(viewport.y)
+      || !Number.isFinite(viewport.width) || !Number.isFinite(viewport.height)
+      || viewport.width <= 0 || viewport.height <= 0) {
+    return { x: screenX, y: screenY };
+  }
+  const centerX = viewport.x + viewport.width / 2, centerY = viewport.y + viewport.height / 2;
+  const dx = screenX - centerX, dy = screenY - centerY;
+  const length = Math.hypot(dx, dy);
+  if (!(length > 8)) return { x: screenX, y: screenY };
+  const ratio = Number.isFinite(ringRatio) ? Math.max(.2, Math.min(.92, ringRatio)) : .72;
+  const ring = Math.min(viewport.width, viewport.height) * ratio / 2;
+  if (length >= ring) return { x: screenX, y: screenY };
+  return { x: centerX + dx / length * ring, y: centerY + dy / length * ring };
+}

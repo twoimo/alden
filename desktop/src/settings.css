@@ -117,6 +117,7 @@ body.settings-view #app { height: 100%; min-height: 0; }
 .knowledge-node-label[data-view="overview"][data-role="title"] { color:#aebed5; letter-spacing:0; }
 .knowledge-node-label[data-view="overview"][data-lines="2"] { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-height: 1.35; overflow-wrap: anywhere; }
 .knowledge-node-label[data-view="overview"][data-role="active"] { color:#edf4ff; }
+.knowledge-node-label[data-view="overview"][data-role="topic"] { background: color-mix(in srgb, #10233f 84%, transparent); border: 1px solid #d6e2f42e; border-radius: 999px; padding: 1px 8px; letter-spacing: .01em; text-shadow: none; }
 .knowledge-node-label { position: absolute; top: 0; left: 0; max-width: 156px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text); padding: 3px 6px; background: color-mix(in srgb, var(--canvas) 86%, transparent); border-radius: 4px; }
 .knowledge-node-label[data-focused="true"] { color: var(--accent-ink); font-weight: 650; }
 @media (max-width: 720px) { .knowledge-heading { top: 90px; left: 22px; } .knowledge-heading h1 { font-size: 22px; } }

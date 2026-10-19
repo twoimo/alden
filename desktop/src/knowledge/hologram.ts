@@ -22,7 +22,7 @@ import { PositionTransition } from './position-transition';
 import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout-metrics';
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { projectedOffsetGain } from './projected-display-offset';
-import { compareOverviewLabelPriority, outwardLabelPoint, placeOverviewLabel, type LabelBox } from './label-placement';
+import { compareOverviewLabelPriority, outwardLabelPoint, placeOverviewLabel, ringLabelPoint, type LabelBox } from './label-placement';
 import { internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
 import { labelReadingFrame, labelZoomLevel, labelZoomStyle, selectProjectedLabels, type LabelZoom, type ProjectedLabelCandidate } from './label-zoom';
 import type { LayoutAffinity } from './layout-affinity';
@@ -1194,7 +1194,12 @@ export class KnowledgeHologram {
       if (this.view.hops === 0) {
         const screenX = x + (this.projected.x + 1) * width / 2;
         const screenY = y + (1 - this.projected.y) * height / 2 + offset;
-        const shifted = outwardLabelPoint(screenX, screenY, this.viewport, this.globalLabels.has(id) ? 46 : 20);
+        const topic = this.globalLabels.has(id);
+        // Far and mid zoom keep saved topic names on a quiet ring. Closer zoom
+        // returns each name to its own node.
+        const shifted = topic && this.labelZoom <= 1
+          ? ringLabelPoint(screenX, screenY, this.viewport, .78)
+          : outwardLabelPoint(screenX, screenY, this.viewport, topic ? 46 : 20);
         box.left = Math.max(x, Math.min(x + width - box.width, shifted.x - box.width / 2));
         box.top = Math.min(y + height - labelHeight, Math.max(y, shifted.y));
         placeOverviewLabel(box, this.viewport, this.excludedLabelBounds, this.labelBounds, index - 1,
