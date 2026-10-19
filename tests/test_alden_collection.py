@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from alden_collection import CollectionStore, TargetBusy, identity, read_action
 from alden_collection import overview_label_tier
+from alden_collection import overview_display_label
 from alden_collect import capture_source, collect_target
 
 
@@ -52,6 +53,21 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(page['total_nodes'], 3)
         self.assertEqual(page['nodes'][0]['label'], '채용공고 지원시기')
         self.assertEqual({node['label'] for node in self.store.graph_page(projects=['one'], limit=1984, overview=True)['nodes']}, {'12', 'theme.liquid', '채용공고 지원시기'})
+
+    def test_blank_source_label_gets_a_display_line_without_rewriting_the_version(self):
+        body = 'allpass_everything\n12시간\n사무실 야경을 보며 일한 기록입니다. 원문은 유지합니다.'
+        self.assertEqual(overview_display_label('', body), '사무실 야경을 보며 일한 기록입니다. 원문은 유지합니다.')
+        self.assertEqual(overview_display_label('저장된 제목', body), '저장된 제목')
+        target = self.target()
+        self.store.ingest(target, [{**self.record('post', text=body), 'label': '임시'}])
+        import sqlite3
+        with sqlite3.connect(self.store.path) as db:
+            db.execute("UPDATE versions SET label=''")
+        page = self.store.graph_page(projects=['one'], limit=1984, overview=True)
+        self.assertEqual(page['total_nodes'], 1)
+        self.assertEqual(page['nodes'][0]['label'], '사무실 야경을 보며 일한 기록입니다. 원문은 유지합니다.')
+        with sqlite3.connect(self.store.path) as db:
+            self.assertEqual(db.execute('SELECT label FROM versions').fetchone()[0], '')
 
     def test_first_target_change_after_other_target_stages_is_not_a_pruning_reset(self):
         allowed, other = self.target(), self.target("elsewhere", "other")

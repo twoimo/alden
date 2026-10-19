@@ -69,6 +69,28 @@ def overview_label_tier(label) -> int:
     return 0
 
 
+def overview_display_label(label, body=None) -> str:
+    """Show a saved title, or the first substantive line when the title is blank.
+
+    This does not write the source version. Channel handles and relative times
+    are skipped. The result is a display string, not a new identity.
+    """
+    text = label.strip() if isinstance(label, str) else ''
+    if text:
+        return text
+    if not isinstance(body, str):
+        return ''
+    for raw in body.splitlines():
+        line = ' '.join(raw.split())
+        if not line or re.fullmatch(r'\d+\s*시간', line) or re.fullmatch(r'@?[A-Za-z0-9_.]+', line):
+            continue
+        if re.search(r'[가-힣]', line) and len(line) >= 4:
+            return line[:80]
+        if re.search(r'[A-Za-z]', line) and len(line) >= 12:
+            return line[:80]
+    return ''
+
+
 def normalized_body(value: str) -> str:
     # Indentation, tabs, blank lines and Markdown hard breaks carry meaning.
     # Original bytes stay in the source blob; only Unicode composition and
@@ -954,6 +976,7 @@ class CollectionStore:
             from alden_content_evidence import content_evidence_class
             db.create_function('alden_content_class',2,lambda meta,body:content_evidence_class(json.loads(meta),body),deterministic=True)
             db.create_function('alden_overview_tier', 1, overview_label_tier, deterministic=True)
+            db.create_function('alden_display_label', 2, overview_display_label, deterministic=True)
             checkpoint, _, _, _ = self._activity_scope(db, projects, target_id, platform)
             if not projects:
                 if _references_only:
@@ -1014,7 +1037,7 @@ class CollectionStore:
                 return self._record_details(db, row, expected_version)
             json_node = """json_object('id',s.id,'platform',s.platform,'original_id',s.original_id,
               'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
-              'label',v.label,'body',substr(v.body,1,2400),'metadata',json_object('kind',substr(CAST(json_extract(v.metadata,'$.kind') AS TEXT),1,256)),
+              'label',alden_display_label(v.label,v.body),'body',substr(v.body,1,2400),'metadata',json_object('kind',substr(CAST(json_extract(v.metadata,'$.kind') AS TEXT),1,256)),
               'content_evidence',alden_content_class(v.metadata,v.body),
               'source_url',json_extract(v.metadata,'$.source_url'),'degree',COALESCE(d.degree,0))"""
             if overview:
@@ -1031,7 +1054,7 @@ class CollectionStore:
                     # Interleave real source targets so a large project's hubs
                     # cannot occupy the whole unified overview. No fake links.
                     picking = """SELECT id FROM (SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.target_id
-                      ORDER BY alden_overview_tier(v.label), COALESCE(d.degree,0) DESC, s.id) AS source_slot
+                      ORDER BY alden_overview_tier(alden_display_label(v.label,v.body)), COALESCE(d.degree,0) DESC, s.id) AS source_slot
                       FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version) ORDER BY source_slot,id"""
                 search_cte = cte
                 if plan:
@@ -1119,7 +1142,7 @@ class CollectionStore:
                 incident_cte, incident_args = incident_scope(ids)
                 focus_node = """json_object('id',s.id,'platform',s.platform,'original_id',s.original_id,
                   'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
-                  'label',v.label,'body',v.body,'metadata',v.metadata,'raw_sha256',v.raw_sha256,
+                  'label',alden_display_label(v.label,v.body),'body',v.body,'metadata',v.metadata,'raw_sha256',v.raw_sha256,
                   'raw_path',v.raw_path,'source_url',json_extract(v.metadata,'$.source_url'),
                   'degree',COALESCE(d.degree,0))"""
                 nodes_json, edges_json = db.execute(incident_cte + "SELECT "
