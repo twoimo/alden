@@ -25,6 +25,17 @@ export function internalGraphLabel(label: string): boolean {
     || /^[0-9a-f]{32,}$/i.test(text);
 }
 
+/** A saved bucket can remain in the graph without becoming an overview star.
+ * Display geometry only. The record, label and edges stay stored. */
+export function overviewRoutingStar(label: string, category?: string): boolean {
+  const text = label.normalize('NFC').replace(/\s+/g, ' ').trim();
+  if (GENERIC.test(text) || BUCKET.test(text)) return true;
+  if ((category === 'hub' || category === 'code') && !/[가-힣]/.test(text)) return true;
+  if (category !== 'source_group') return false;
+  const terms = text.split(/[·\s/]+/).filter(term => /[A-Za-z가-힣]{2}/.test(term));
+  return terms.length < 2;
+}
+
 /** Display choices from saved labels, not relevance/truth or identity decisions.
  * Keep every graph node and hover/focus target. Rank once when rebuilding.
  */

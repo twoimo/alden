@@ -777,6 +777,26 @@ describe('bounded semantic overview layout', () => {
     expectFiniteSolve(result, empty());
   });
 
+  it('keeps a generic bucket off the rim star reserved for a saved subject', () => {
+    const edges = [];
+    for (let member = 1; member <= 40; member++) edges.push(R(0, member));
+    for (let member = 42; member <= 71; member++) edges.push(R(41, member));
+    const view = scene(256, edges);
+    view.nodes = view.nodes.map(node => node.id === 'n0000'
+      ? { ...node, label: '기타·미분류', category: 'topic' }
+      : node.id === 'n0041'
+        ? { ...node, label: '채용공고·지원시기', category: 'topic' }
+        : node);
+    const result = new SemanticLayoutEngine().layout(view, empty());
+    const ellip = (id: string) => {
+      const point = result.anchors.get(id)!;
+      return Math.hypot(point.x / 2.3, point.y / 1.55, point.z / 1.1);
+    };
+    expect(ellip('n0041')).toBeGreaterThan(.72);
+    expect(ellip('n0000')).toBeLessThan(ellip('n0041') - .15);
+    expectFiniteSolve(result, empty());
+  });
+
   it('pulls a repeated saved label together without collapsing a uniform fixture', () => {
     const nodes = Array.from({ length: 256 }, (_, i) => ({
       id: `n${String(i).padStart(4, '0')}`,

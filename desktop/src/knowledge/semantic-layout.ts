@@ -1,6 +1,7 @@
 import type { KnowledgeView } from './graph-model';
 import type { LayoutAffinityPair } from './layout-affinity';
 import type { Point3 } from './plasticity';
+import { overviewRoutingStar } from './overview-labels';
 
 /** Snapshot budgets, not a larger per-frame physics capacity. */
 export const SEMANTIC_LAYOUT_LIMITS = Object.freeze({
@@ -232,15 +233,17 @@ function placeOverviewStars(
   anchors: Map<string, Point3>,
   edges: ReadonlyArray<readonly [string, { source: string; target: string }]>,
   pinned: ReadonlySet<string>,
+  nodes: readonly { id?: string; label?: string; category?: string }[],
 ): Set<string> {
   const owned = new Set<string>();
   if (ids.length < 256 || pinned.size === 1) return owned;
+  const blocked = new Set(nodes.flatMap(node => node.id && overviewRoutingStar(node.label ?? '', node.category) ? [node.id] : []));
   const degree = new Map<string, number>();
   for (const [, edge] of edges) {
     degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
     degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
   }
-  const hubs = [...degree.entries()].filter(([, count]) => count >= 24)
+  const hubs = [...degree.entries()].filter(([id, count]) => count >= 24 && !blocked.has(id))
     .sort((a, b) => b[1] - a[1] || order(a[0], b[0]));
   if (!hubs.length) return owned;
   const hubDegree = new Map(hubs);
@@ -250,7 +253,7 @@ function placeOverviewStars(
     const left = degree.get(edge.source) ?? 0, right = degree.get(edge.target) ?? 0;
     const leaf = left >= 24 && right < 24 ? edge.target : right >= 24 && left < 24 ? edge.source : '';
     const hub = leaf === edge.target ? edge.source : leaf === edge.source ? edge.target : '';
-    if (!leaf || !hub) continue;
+    if (!leaf || !hub || blocked.has(hub)) continue;
     const current = owner.get(leaf);
     if (!current || (hubDegree.get(current) ?? 0) < (hubDegree.get(hub) ?? 0)) owner.set(leaf, hub);
   }
@@ -988,7 +991,7 @@ export class SemanticLayoutEngine {
       const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
       anchors.set(id, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated));
     });
-    const starOwned = placeOverviewStars(ids, anchors, real, pinned);
+    const starOwned = placeOverviewStars(ids, anchors, real, pinned, view.nodes);
     placeDuplicateLabels(view.nodes, anchors, starOwned, pinned);
     const dirtyIds = new Set<string>();
     for (const id of ids) {
