@@ -113,9 +113,7 @@ def overview_sample_tier(label, kind) -> int:
     if text in {'기타', '미분류', '기타·미분류', '일반 동영상', '전체 동영상', '동영상', '영상', '홍보·안내', '외부 자료·링크'}:
         return 3
     if kind == 'source_group':
-        terms = [term for term in re.split(r'[·\s/]+', text) if re.search(r'[A-Za-z가-힣]{2}', term)]
-        if len(terms) < 2:
-            return 3
+        return 3
     return overview_label_tier(label)
 
 
