@@ -58,6 +58,8 @@ class CollectionTests(unittest.TestCase):
         body = 'allpass_everything\n12시간\n사무실 야경을 보며 일한 기록입니다. 원문은 유지합니다.'
         self.assertEqual(overview_display_label('', body), '사무실 야경을 보며 일한 기록입니다. 원문은 유지합니다.')
         self.assertEqual(overview_display_label('저장된 제목', body), '저장된 제목')
+        self.assertEqual(overview_display_label('', '취업 이직\n3) 1,000억 원 유상증자, 미래 성장동력'), '3) 1,000억 원 유상증자, 미래 성장동력')
+        self.assertEqual(overview_display_label('', '자소서'), '자소서')
         target = self.target()
         self.store.ingest(target, [{**self.record('post', text=body), 'label': '임시'}])
         import sqlite3

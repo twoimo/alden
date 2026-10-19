@@ -80,12 +80,17 @@ def overview_display_label(label, body=None) -> str:
         return text
     if not isinstance(body, str):
         return ''
+    lines = []
     for raw in body.splitlines():
         line = ' '.join(raw.split())
         if not line or re.fullmatch(r'\d+\s*시간', line) or re.fullmatch(r'@?[A-Za-z0-9_.]+', line):
             continue
-        if re.search(r'[가-힣]', line) and len(line) >= 4:
-            return line[:80]
+        lines.append(line)
+    for minimum in (12, 2):
+        for line in lines:
+            if re.search(r'[가-힣]', line) and len(line) >= minimum:
+                return line[:80]
+    for line in lines:
         if re.search(r'[A-Za-z]', line) and len(line) >= 12:
             return line[:80]
     return ''
