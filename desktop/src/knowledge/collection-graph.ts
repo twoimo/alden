@@ -315,11 +315,13 @@ export class CollectionGraphController {
         contentExcluded: this.affinity.contentExcludedNodes, validationRejected: this.affinity.validationRejectedNodes,
         requested: this.affinity.requestedNodes, pairs: this.affinity.pairs.length, evaluated: this.affinity.evaluatedPairs,
         truncated: this.affinity.truncatedCandidates } : { state: 'unavailable', reason: parsed.reason };
+      this.noteAffinityCoverage();
     } catch {
       if (this.active && !this.disposed && request.epoch === this.epoch
         && request.key === JSON.stringify([this.lastRead?.query, affinityInput(this.graph.currentGraph.nodes)])) {
         this.affinity = null; this.graph.setLayoutAffinity?.(null);
         this.affinityDiagnostic = { state: 'unavailable', reason: 'affinity_transport_failed' };
+        this.noteAffinityCoverage();
       }
     } finally {
       this.affinityBusy = false;
@@ -332,6 +334,17 @@ export class CollectionGraphController {
     this.setText('knowledge-scope', this.collection
       ? `표시 ${view.nodes.length}개 · 연결 ${view.edges.length}개 / 허용한 필터 범위 ${this.totals.nodes.toLocaleString('ko-KR')}개 · 연결 ${this.totals.edges.toLocaleString('ko-KR')}개. 크기는 해당 범위의 이웃 수이며 신뢰도를 뜻하지 않습니다.`
       : '현재 표시한 기억과 저장된 관계입니다.');
+  }
+
+  private noteAffinityCoverage(): void {
+    const summary = this.root.getElementById('knowledge-summary');
+    if (!summary) return;
+    const base = (summary.textContent ?? '').replace(/ · 내용 비교 .+$/, '');
+    const usable = this.affinity?.usableNodes;
+    const requested = this.affinity?.requestedNodes;
+    summary.textContent = typeof usable === 'number' && typeof requested === 'number' && requested > usable
+      ? `${base} · 내용 비교 ${usable.toLocaleString('ko-KR')}/${requested.toLocaleString('ko-KR')}`
+      : base;
   }
 
   private updateTools(): void {
