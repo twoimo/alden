@@ -91,6 +91,9 @@ class CollectionTests(unittest.TestCase):
         from alden_collection import overview_sample_tier
         self.assertEqual(overview_sample_tier('overlay', 'hub'), 3)
         self.assertEqual(overview_sample_tier('스토어와 브랜드', 'hub'), 0)
+        self.assertEqual(overview_sample_tier('src/app.py', 'source'), 3)
+        self.assertEqual(overview_sample_tier('A plain English title', 'source'), 0)
+        self.assertEqual(overview_sample_tier('notes/보고서.md', 'source'), 0)
         target = self.target()
         records = [{**self.record('topic', text='채용 일정과 서류 기준을 적은 원문입니다.'), 'label': '채용공고·지원시기', 'kind': 'topic'}]
         records.append({**self.record('hub', text='코드 허브 원문입니다.'), 'label': 'overlay', 'kind': 'hub'})
@@ -100,7 +103,10 @@ class CollectionTests(unittest.TestCase):
         page = self.store.graph_page(projects=['one'], limit=1984, overview=True)
         labels = [node['label'] for node in page['nodes']]
         self.assertEqual(page['total_nodes'], 6)
-        self.assertLess(labels.index('채용공고·지원시기'), labels.index('overlay'))
+        self.assertIn('채용공고·지원시기', labels)
+        self.assertNotIn('overlay', labels)
+        stored = [node['label'] for node in self.store.graph_page(projects=['one'], limit=120)['nodes']]
+        self.assertIn('overlay', stored)
 
     def test_overview_hides_routing_hub_lines_without_deleting_edges(self):
         self.assertTrue(overview_routing_hub({"id": "bucket", "label": "일반 동영상", "category": "source_group"}))

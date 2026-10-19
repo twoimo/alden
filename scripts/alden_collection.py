@@ -98,9 +98,11 @@ def overview_display_label(label, body=None) -> str:
 
 
 def overview_sample_tier(label, kind) -> int:
-    """Overview sampling only. ASCII code hubs stay stored but lose the first slots."""
+    """Overview sampling only. ASCII code hubs and path-like sources stay stored."""
     text = label.strip() if isinstance(label, str) else ''
-    if kind in {'hub', 'code'} and not re.search(r'[가-힣]', text):
+    folded = text.replace('\\', '/')
+    path_like = '/' in folded or bool(re.search(r'\.[A-Za-z0-9]{1,8}$', text))
+    if not re.search(r'[가-힣]', text) and (kind in {'hub', 'code'} or (kind == 'source' and path_like)):
         return 3
     return overview_label_tier(label)
 
@@ -1101,7 +1103,7 @@ class CollectionStore:
                     # cannot occupy the whole unified overview. No fake links.
                     picking = """SELECT id FROM (SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.target_id
                       ORDER BY alden_sample_tier(alden_display_label(v.label,v.body), json_extract(v.metadata,'$.kind')), COALESCE(d.degree,0) DESC, s.id) AS source_slot
-                      FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version) ORDER BY source_slot,id"""
+                      FROM shown s LEFT JOIN degrees d ON d.id=s.id JOIN versions v ON v.id=s.visible_version WHERE alden_sample_tier(alden_display_label(v.label,v.body), json_extract(v.metadata,'$.kind')) < 3) ORDER BY source_slot,id"""
                 search_cte = cte
                 if plan:
                     contains, params = korean_literal_sql(plan)
