@@ -768,6 +768,12 @@ describe('bounded semantic overview layout', () => {
     const spread = [1, 2, 3, 4, 5, 6, 7, 8].map(n => distance(result.anchors, id(0), id(n)));
     spread.sort((a, b) => a - b);
     expect(spread[4]).toBeGreaterThan(.15);
+    const rim = (n: number) => {
+      const point = result.anchors.get(id(n))!;
+      return Math.hypot(point.x / 2.3, point.y / 1.55, point.z / 1.1);
+    };
+    expect(rim(0)).toBeGreaterThan(.72);
+    expect(rim(41)).toBeGreaterThan(.72);
     expectFiniteSolve(result, empty());
   });
 

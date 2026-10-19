@@ -264,10 +264,10 @@ function placeOverviewStars(
     let dest: Point3;
     if (index < ringCount) {
       const angle = -Math.PI / 2 + (index / ringCount) * Math.PI * 2;
-      dest = bound({ x: Math.cos(angle) * 1.55, y: Math.sin(angle) * 1.05, z: ((index % 3) - 1) * .12 });
+      dest = bound({ x: Math.cos(angle) * 2.05, y: Math.sin(angle) * 1.38, z: ((index % 3) - 1) * .1 });
     } else {
       const dir = seed(hub), length = Math.hypot(dir.x, dir.y, dir.z) || 1;
-      dest = bound({ x: dir.x / length * 1.7, y: dir.y / length * 1.7, z: dir.z / length * 1.7 });
+      dest = bound({ x: dir.x / length * 2.05, y: dir.y / length * 1.38, z: dir.z / length * .9 });
     }
     const group = members.get(hub) ?? [hub];
     const disk = Math.min(.48, .035 * Math.sqrt(group.length));
