@@ -6,7 +6,7 @@ import type { Point3 } from './plasticity';
 // Include it in the existing pixel-motion stop criterion.
 // A monotone radial expansion gives crowded inner nodes more screen area.
 // Directions and radial order survive; original solver coordinates stay exact.
-const DISPLAY_EXPONENT = .3;
+const DISPLAY_EXPONENT = .45;
 export const OVERVIEW_DISPLAY_GAIN = Math.pow(.1, -DISPLAY_EXPONENT) * (1 + DISPLAY_EXPONENT * 2.3 / 1.1);
 function displayAspect(width:number,height:number):number {
   return Number.isFinite(width)&&Number.isFinite(height)&&width>0&&height>0
