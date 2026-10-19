@@ -11,6 +11,18 @@ function render(body:string, extras:Record<string,unknown>={}) {
   renderNodeDetails(graph,graph.nodes[0],{details:{node_id:'record',basis:'source_record',version:'v1',body,raw_sha256:'a'.repeat(64),...extras}});
 }
 describe('source-backed reading and numeric facts',()=>{
+  it('folds a retained graph numeric line tail and keeps three-digit measurements', () => {
+    const reading = '서류에서 높은 점수를 받는 지원자 특징과 준비 방법입니다. 원문은 그대로 보존됩니다.';
+    const tail = '\n1\n2\n6\n1\n3';
+    const projection = {policy:'graph-reading-numeric-lines-v1', status:'unverified_presentation_candidate',
+      basis:'retained_graph_original_text', original_preserved:true, semantic_validity:'unverified',
+      reading, tail, body_sha256:'b'.repeat(64), reading_sha256:'c'.repeat(64), tail_sha256:'d'.repeat(64)};
+    render(reading + tail, {body_format:'retained_original_text', reading_projection:projection});
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe(reading);
+    expect(document.querySelector('.knowledge-reading-tail pre')!.textContent).toBe(tail);
+    render('분기별 관측값\n125\n180\n240');
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe('분기별 관측값\n125\n180\n240');
+  });
   it('folds only an explicit source-bound candidate and retains its exact expandable tail',()=>{
     const reading='서류에서 높은 점수를 받는 지원자 특징과 준비 방법입니다.',tail='\n11\n2',body=reading+tail;
     const projection={policy:'legacy-threads-reading-tail-v1',status:'unverified_presentation_candidate',

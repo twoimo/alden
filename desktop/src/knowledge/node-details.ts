@@ -35,16 +35,22 @@ const boundPanes = new WeakSet<HTMLElement>();
 
 function readingCandidate(selected: Record<string, unknown> | null, copy: string): {reading:string;tail:string} | null {
   const value = record(selected?.reading_projection);
+  const graphTail = value?.policy === 'graph-reading-numeric-lines-v1';
+  const legacyTail = value?.policy === 'legacy-threads-reading-tail-v1';
   if (selected?.basis !== 'source_record' || selected.body_format !== 'retained_original_text'
     || !/^[0-9a-f]{64}$/.test(text(selected.raw_sha256)) || !value
-    || value.policy !== 'legacy-threads-reading-tail-v1' || value.status !== 'unverified_presentation_candidate'
-    || value.basis !== 'verified_retained_legacy_threads_record' || value.original_preserved !== true
+    || (!graphTail && !legacyTail) || value.status !== 'unverified_presentation_candidate'
+    || (legacyTail && value.basis !== 'verified_retained_legacy_threads_record')
+    || (graphTail && value.basis !== 'retained_graph_original_text')
+    || value.original_preserved !== true
     || value.semantic_validity !== 'unverified' || typeof value.reading !== 'string' || !value.reading
     || typeof value.tail !== 'string' || !value.tail || value.tail.length > 128
     || value.reading + value.tail !== copy
     || !['body_sha256','reading_sha256','tail_sha256'].every(key => typeof value[key] === 'string' && /^[0-9a-f]{64}$/.test(value[key] as string))) return null;
   const tokens = value.tail.trim().split(/\s+/);
-  if (tokens.length < 2 || tokens.length > 8 || tokens.some(token => !/^(?:[0-9]{1,4}|\/)$/.test(token))
+  if (graphTail) {
+    if (tokens.length < 3 || tokens.length > 6 || tokens.some(token => !/^[0-9]{1,2}$/.test(token))) return null;
+  } else if (tokens.length < 2 || tokens.length > 8 || tokens.some(token => !/^(?:[0-9]{1,4}|\/)$/.test(token))
     || tokens.filter(token => token !== '/').length < (tokens.includes('/') ? 3 : 2)) return null;
   return {reading:value.reading,tail:value.tail};
 }

@@ -71,12 +71,51 @@ def project_source_text(body, source):
     }}
 
 
+
+def _graph_reading_tail(body, source):
+    """Fold a trailing run of one- and two-digit lines on a retained graph note.
+
+    The original string stays in the archive. Three-digit measurements, years
+    and short notes are not folded.
+    """
+    if (not isinstance(body, str) or not isinstance(source, dict)
+            or source.get('platform') != 'graph' or source.get('localOriginalText') != body
+            or len(body) > 12000 or '```' in body or '~~~' in body):
+        return None
+    lines = body.splitlines()
+    end = len(lines)
+    while end > 0 and lines[end - 1].strip() == '':
+        end -= 1
+    start = end
+    while start > 0 and re.fullmatch(r'[0-9]{1,2}', lines[start - 1].strip() or ''):
+        start -= 1
+    numeric = end - start
+    if not 3 <= numeric <= 6 or start == 0:
+        return None
+    prefix = '\n'.join(lines[:start])
+    reading = prefix.rstrip('\r\n')
+    tail = body[len(reading):]
+    if not body.startswith(prefix) or len(reading) < 80 or not re.search(r'[A-Za-z가-힣]', reading):
+        return None
+
+    sha = lambda value: hashlib.sha256(value.encode('utf-8')).hexdigest()
+    return {'policy': 'graph-reading-numeric-lines-v1',
+            'status': 'unverified_presentation_candidate',
+            'basis': 'retained_graph_original_text',
+            'original_preserved': True, 'semantic_validity': 'unverified',
+            'reading': reading, 'tail': tail,
+            'body_sha256': sha(body), 'reading_sha256': sha(reading),
+            'tail_sha256': sha(tail)}
+
+
 def reading_tail_presentation(body, source):
     """Optional reversible folding for a verified legacy source, never indexing.
 
     Numeric shape remains semantically unverified. Return exact displayed
     parts; do not change the authoritative body or search extraction policy.
     """
+    if isinstance(source, dict) and source.get('platform') == 'graph':
+        return _graph_reading_tail(body, source)
     if (not isinstance(body, str) or len(body) > 12000
             or not _legacy_threads_source(body, source)
             or '```' in body or '~~~' in body):

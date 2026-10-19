@@ -32,6 +32,21 @@ def source(body):
 
 
 class SourceTextTests(unittest.TestCase):
+
+    def test_graph_note_folds_only_a_long_one_or_two_digit_line_tail(self):
+        body = BODY + '\n1\n2\n6\n1\n3'
+        record = {'platform': 'graph', 'localOriginalText': body}
+        result = reading_tail_presentation(body, record)
+        self.assertEqual(result['policy'], 'graph-reading-numeric-lines-v1')
+        self.assertEqual(result['reading'] + result['tail'], body)
+        self.assertTrue(result['original_preserved'])
+        self.assertEqual(result['semantic_validity'], 'unverified')
+        self.assertIsNone(project_source_text(body, record)['projection'])
+        for unchanged in (BODY + '\n125\n180\n240', BODY + '\n2026', '짧은 메모\n1\n2\n3',
+                          BODY + '\n1\n2\n6\n1\n3\n4\n5\n6'):
+            self.assertIsNone(reading_tail_presentation(unchanged, {'platform': 'graph', 'localOriginalText': unchanged}))
+        self.assertIsNone(reading_tail_presentation(body, {'platform': 'graph', 'localOriginalText': body + 'x'}))
+
     def test_reading_candidate_preserves_exact_body_and_unverified_status(self):
         for suffix in ('\n11\n2', ' 1 / 2 6 1 3', '\n1\n/\n2\n9\n2'):
             body = BODY + suffix
