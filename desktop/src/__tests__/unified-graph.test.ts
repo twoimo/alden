@@ -31,4 +31,10 @@ describe('one permission-preserving graph view', () => {
     model.clickNode('n0'); model.expandOneHop(); expect(model.current().nodes.length).toBeLessThanOrEqual(24);
     model.reset(); expect(model.current().nodes).toHaveLength(720);
   });
+  it('does not mark a fresh collection unverified because memory sync is old', () => {
+    expect(unifiedGraph(collection, { ...memory, stale: true }, {})).toMatchObject({ stale: false, ok: true, partial: false });
+    expect(unifiedGraph({ ...collection, stale: true }, memory, {})).toMatchObject({ stale: true });
+    expect(unifiedGraph(null, { ...memory, stale: true }, {})).toMatchObject({ stale: true });
+    expect(unifiedGraph({ ok: false, stale: false }, { ...memory, stale: true }, {})).toMatchObject({ stale: true, partial: true });
+  });
 });

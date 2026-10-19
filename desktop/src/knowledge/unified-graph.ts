@@ -34,6 +34,10 @@ export function unifiedGraph(collection: Record<string, unknown> | null, memory:
     nodes: [...collectionNodes, ...rawMemory], edges: [...collectionEdges, ...rawEdges],
     total_nodes: Number(collection?.total_nodes ?? collectionNodes.length) + visibleMemory.length,
     total_edges: Number(collection?.total_edges ?? collectionEdges.length) + edges.length,
-    overview_budget: 2048, stale: collection?.stale === true || memory?.stale === true, partial: (collection !== null && collection.ok !== true) || (memory !== null && memory.ok !== true),
+    overview_budget: 2048,
+    // A fresh saved collection is not unverified just because the side memory
+    // index is old. Memory-only and failed collection reads still surface stale.
+    stale: collection?.ok === true ? collection.stale === true : collection?.stale === true || memory?.stale === true,
+    partial: (collection !== null && collection.ok !== true) || (memory !== null && memory.ok !== true),
     facets: collection?.facets, next: collection?.next ?? null };
 }
