@@ -86,6 +86,22 @@ class CollectionTests(unittest.TestCase):
         page = self.store.graph_page(projects=['one'], limit=120)
         self.assertEqual({edge['relation'] for edge in page['edges']}, {'source-topic', 'contains'})
 
+
+    def test_overview_sample_keeps_ascii_code_hubs_behind_saved_subjects(self):
+        from alden_collection import overview_sample_tier
+        self.assertEqual(overview_sample_tier('overlay', 'hub'), 3)
+        self.assertEqual(overview_sample_tier('스토어와 브랜드', 'hub'), 0)
+        target = self.target()
+        records = [{**self.record('topic', text='채용 일정과 서류 기준을 적은 원문입니다.'), 'label': '채용공고·지원시기', 'kind': 'topic'}]
+        records.append({**self.record('hub', text='코드 허브 원문입니다.'), 'label': 'overlay', 'kind': 'hub'})
+        records += [{**self.record('p' + str(i), text='연결된 코드 자료 ' + str(i) + ' 원문입니다.'), 'label': '자료 ' + str(i)} for i in range(4)]
+        relations = [{"source_platform": "youtube", "source_id": "hub", "target_platform": "youtube", "target_id": "p" + str(i), "type": "source-topic"} for i in range(4)]
+        self.store.ingest(target, records, relations=relations)
+        page = self.store.graph_page(projects=['one'], limit=1984, overview=True)
+        labels = [node['label'] for node in page['nodes']]
+        self.assertEqual(page['total_nodes'], 6)
+        self.assertLess(labels.index('채용공고·지원시기'), labels.index('overlay'))
+
     def test_overview_hides_routing_hub_lines_without_deleting_edges(self):
         self.assertTrue(overview_routing_hub({"id": "bucket", "label": "일반 동영상", "category": "source_group"}))
         self.assertTrue(overview_routing_hub({"id": "name", "label": "렉카박멸", "category": "source_group"}))
