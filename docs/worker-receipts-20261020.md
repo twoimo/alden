@@ -13,10 +13,10 @@ Stress verification also reproduced a first-creation openat ENOENT while the own
 ## Verification and its limits
 
 - Entire worker module plus abort suite:391 tests passed after the final guard repair.
-- Fresh-process affinity/layout/sampling:83 tests passed without changing production RSS/time/CPU limits.
+- Fresh-process affinity/layout/sampling/JSON:86 tests passed without changing production RSS/time/CPU limits.
 - Fixed concurrency/partial-write cases:52 passed, including50 concurrency trials (24 receipts / four writers per trial), an injected pre-write creation failure and write/fsync uncertainty with no duplicate replay.
 - New boundary regressions cover first receipt→second abort token, shared-parent refusal, symlink/hardlink refusal, complete concurrent JSON lines, partial writes, zero progress and post-write failure.
-- Full general discovery runs separately from the83 memory-budget cases. The first broad harness used stdin, which broke multiprocessing spawn; its receipts are retained as failed evidence. A proper file-based main runner is used for the final result. The final run/result manifests establish the actual counts and skipped conditions; a prepared runner is not a pass.
+- Full general discovery runs separately from the86 memory-budget cases. The first broad harness used stdin, which broke multiprocessing spawn; its receipts are retained as failed evidence. A proper file-based main runner is used for the final result. The final run/result manifests establish the actual counts and skipped conditions; a prepared runner is not a pass.
 
 The actual worker default model, routed/local model admission, permission/identity/freshness checks, queue transitions and emergency policy are unchanged. Valid supervisor proof and preflight still gate activation. No existing queue receipt is cleared or relabeled, and no old worker/model is restarted by these tests.
 
