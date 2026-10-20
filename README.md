@@ -8,6 +8,8 @@
 
 현재-source ChatGPT 심층 감사의18개 지적을 판정하고, 공식 Leiden reference를 개발30조건과 파라미터 고정 후 새 seed120조건에서 실행했습니다. [후속 판정·실험·남은 조건](docs/graph-algorithm-audit-0.3.153-followup.md)은 원문 보존·회귀/holdout 구분·목적함수 tradeoff를 기록하며, 실제 의미 품질이나 설치 알고리즘 승격을 주장하지 않습니다.
 
+[구조·의미 채널 감사](docs/graph-channel-audit-20261020.md)는 현행 엔진의180조건·900비교를 실행하고 과분할·모순 채널·ID치환·간선 복원 반례를 기록합니다. 고유 입력132개/크기·seed 가족12개를 실행 횟수와 구분하며, 합성 결과로 의미 정답이나 제품 알고리즘 승격을 주장하지 않습니다.
+
 [설치 임베딩 경로의 shadow 점검](docs/embedding-shadow-0.3.153.md)은 기존 warm E5 응답103개와 별도 가상64자료로 producer 저장 벡터64개를 대사했습니다. 실험 후 같은 고정 revision의 디스크7파일을 복구·해시 검증했고 기존 listener를 보존했습니다. 실제 의미 정답·새 표현 우위·cold restart는 별도 미완료입니다.
 
 [Graphify 도입 검토](docs/graphify-adoption-audit-20261019.md)는 공식0.9.92 소스를 고정해 자동 병합·대표 라벨·군집·캐시의 반례를 재현하고, 전체 대체와 코드 adapter·패턴 선별 도입을 비교합니다. GPT-6 Pro Deep Research thesis 전문63,019bytes를 저장·해시 검증했고, 제안의 byte span·동일성 facet·캐시 조건을 보강했습니다. Gemini 반대감사·최종 역검증과 실제 제품 도입은 미완료입니다.
