@@ -1,8 +1,11 @@
 import io
+import http.client
 import json
 import base64
 import hashlib
 import os
+import socket
+import threading
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
@@ -105,6 +108,98 @@ class RoutedLlmTests(unittest.TestCase):
         self.assertEqual(self.invoke_json(self.completed()), '확인')
         self.assertEqual(self.adapter.last_metrics['backend_request_id'], 'response-1')
         self.assertEqual(self.adapter.last_metrics['usage'], {'output_tokens': 2})
+
+    def test_first_confirmed_completion_keeps_answer_and_backend_evidence_immutable(self):
+        later = self.completed(id='response-2', usage={'output_tokens': 999}, output=[{
+            'type': 'message', 'role': 'assistant',
+            'content': [{'type': 'output_text', 'text': '다른 답변'}]}])
+        for suffix in (
+            {'type': 'response.output_text.delta', 'delta': 'LATE'},
+            {'type': 'response.completed', 'response': later},
+            {'type': 'response.completed', 'response': self.completed(model='wrong-model')},
+            {'type': 'response.failed'},
+        ):
+            with self.subTest(kind=suffix['type'], model=suffix.get('response', {}).get('model')), \
+                    patch('alden_routed_llm.record_result') as health:
+                answer, _ = self.invoke([{'type': 'response.completed', 'response': self.completed()}, suffix])
+                self.assertEqual(answer, '확인')
+                self.assertEqual(self.adapter.last_metrics['backend_request_id'], 'response-1')
+                self.assertEqual(self.adapter.last_metrics['usage'], {'output_tokens': 2})
+                self.assertEqual(self.adapter.last_metrics['response_model_id'], DEFAULT_MODEL)
+                health.assert_called_once_with(self.root, DEFAULT_MODEL, success=True)
+
+    def test_confirmed_completion_does_not_wait_for_eof_or_another_frame(self):
+        class OpenStream(Stream):
+            def readline(response, limit):
+                if response.tell() == len(response.getvalue()):
+                    raise TimeoutError('stream stayed open after its terminal event')
+                return super().readline(limit)
+        with patch('alden_routed_llm.catalog', return_value=self.catalog), \
+                patch('alden_routed_llm.CancellableLocalResponse', return_value=OpenStream([
+                    {'type': 'response.completed', 'response': self.completed()}])):
+            self.assertEqual(self.adapter.generate_messages('SYSTEM', 'USER', self.token), '확인')
+
+    def test_cancellation_while_closing_completed_stream_still_prevents_publication(self):
+        token = self.token
+        class CancelOnClose(Stream):
+            def __exit__(response, *args):
+                token.cancel()
+                return False
+        with patch('alden_routed_llm.catalog', return_value=self.catalog), \
+                patch('alden_routed_llm.record_result') as health, \
+                patch('alden_routed_llm.CancellableLocalResponse', return_value=CancelOnClose([
+                    {'type': 'response.completed', 'response': self.completed()}])):
+            with self.assertRaises(AldenCancelled):
+                self.adapter.generate_messages('SYSTEM', 'USER', token)
+            health.assert_not_called()
+            self.assertEqual(self.adapter.last_metrics['request']['state'], 'cancelled')
+
+    def test_owned_http_completion_closes_stream_without_waiting_for_server_eof(self):
+        # Redirect only the test connection factory to an owned ephemeral
+        # listener. The real router, models and user state are never contacted.
+        listener = socket.socket()
+        self.addCleanup(listener.close)
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(1)
+        listener.settimeout(2)
+        closed = threading.Event()
+        errors = []
+        frame = b'data: ' + json.dumps({
+            'type': 'response.completed', 'response': self.completed()}).encode() + b'\n\n'
+        def serve():
+            try:
+                with listener.accept()[0] as peer:
+                    peer.settimeout(2)
+                    with peer.makefile('rb') as request:
+                        headers = []
+                        while True:
+                            line = request.readline(65537)
+                            if line == b'\r\n':
+                                break
+                            if not line or len(line) > 65536:
+                                raise ValueError('test_request_headers')
+                            headers.append(line)
+                        length = next(int(line.split(b':', 1)[1]) for line in headers
+                                      if line.lower().startswith(b'content-length:'))
+                        request.read(length)
+                        peer.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n'
+                                     b'Connection: keep-alive\r\n\r\n' + frame)
+                        # Keep the server side open until the consumer closes.
+                        if peer.recv(1) == b'':
+                            closed.set()
+            except Exception as error:
+                errors.append(type(error).__name__)
+        server = threading.Thread(target=serve, daemon=True)
+        server.start()
+        connection = http.client.HTTPConnection
+        with patch('alden_routed_llm.catalog', return_value=self.catalog), \
+                patch('alden_local_http.http.client.HTTPConnection', side_effect=lambda *_args, **kwargs:
+                      connection('127.0.0.1', listener.getsockname()[1], **kwargs)):
+            self.assertEqual(self.adapter.generate_messages('SYSTEM', 'USER', self.token, timeout=1), '확인')
+        self.assertTrue(closed.wait(2), 'the owned consumer left its completed socket open')
+        server.join(2)
+        self.assertFalse(server.is_alive())
+        self.assertEqual(errors, [])
 
     def test_json_never_publishes_wrong_model_failed_or_unknown_completion(self):
         cases = [({'model': 'gpt-6-astra'}, 'routed_model_mismatch'),

@@ -166,6 +166,9 @@ class OpenCodexLlm:
                             if terminal_output:
                                 output = terminal_output
                             completed = True
+                            # The first validated completion owns the answer
+                            # and backend evidence; EOF or later frames do not.
+                            break
                         elif kind == "response.incomplete":
                             self._confirm_completed(event.get('response', {}))
                             raise RoutedGenerationError('routed_llm_incomplete_response')
