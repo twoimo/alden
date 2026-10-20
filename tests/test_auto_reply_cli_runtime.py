@@ -301,6 +301,23 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         path.write_text(body, encoding="utf-8")
         path.chmod(0o700)
 
+    @contextmanager
+    def _hook_contract_interpreter(self, module):
+        """Owned metadata fixture; never execute the declared interpreter.
+
+        Hosted CI Python can be group writable. Contract tests must exercise
+        their declared safe/unsafe files without changing that host runtime.
+        Payload tests separately execute the real Python with explicit argv.
+        """
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            interpreter = Path(temporary) / "python-fixture"
+            self._write_executable(interpreter, "#!/bin/sh\nexit 99\n")
+            with (
+                mock.patch.object(module.sys, "executable", str(interpreter)),
+                mock.patch.dict(os.environ, {"OPENKAKAO_PYTHON": str(interpreter)}),
+            ):
+                yield interpreter
+
     def test_supervisor_signal_handler_only_records_the_request(self):
         module = self._load_supervisor_module("auto_reply_supervisor_signal_test")
         module._signal_requested = None
@@ -5367,6 +5384,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     def test_recipient_bundle_is_strict_and_exposes_register_hint(self):
         module = self._load_auto_reply_module("auto_reply_recipient_bundle_test")
+        module.BIN = Path.home() / "retrieval-cli-fixture"
+        self._write_executable(module.BIN, "#!/bin/sh\nexit 99\n")
 
         def raw_profile(endings):
             return {
@@ -8012,6 +8031,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
 
         with (
+            self._hook_contract_interpreter(module),
             mock.patch.object(module.sys, "version_info", (3, 11)),
             mock.patch.dict(
                 os.environ,
@@ -8031,6 +8051,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             )
 
         with (
+            self._hook_contract_interpreter(module),
             mock.patch.object(module.sys, "version_info", (3, 14)),
             mock.patch.dict(
                 os.environ,
@@ -8079,6 +8100,9 @@ print(json.dumps({
             try:
                 module.HOOK = hook
                 with (
+                    mock.patch.object(module, "_verified_hook_command", return_value=[
+                        sys.executable, "-E", "-B", "-S", str(hook),
+                    ]) as verified_command,
                     mock.patch.object(module.sys, "version_info", (3, 11)),
                     mock.patch.dict(
                         os.environ,
@@ -8090,6 +8114,7 @@ print(json.dumps({
                         {"event_id": "ax:test:99"},
                         dry_run=True,
                     )
+                    verified_command.assert_called_once_with()
             finally:
                 module.HOOK = original_hook
 
@@ -8121,6 +8146,7 @@ print(json.dumps({
             other = root / "other-python"
             self._write_executable(other, "#!/bin/sh\nexit 0\n")
             with (
+                self._hook_contract_interpreter(module),
                 mock.patch.object(module.sys, "version_info", (3, 11)),
                 mock.patch.dict(
                     os.environ,
@@ -12727,6 +12753,7 @@ print(json.dumps({
                         },
                     ),
                     mock.patch.object(module, "send_reply", return_value=False) as sender,
+                    mock.patch.object(module, "durable_policy_skip", return_value=True) as skip,
                     mock.patch.object(
                         module,
                         "reply_job_delivery_phase",
@@ -12738,6 +12765,7 @@ print(json.dumps({
                 # Past the window plus grace a formed draft is dropped before
                 # the AX attempt: an expired reply must not reach KakaoTalk.
                 sender.assert_not_called()
+                skip.assert_called_once()
                 complete.assert_called_once_with(event["event_id"], "")
                 row = connection.execute(
                     """
@@ -18352,7 +18380,7 @@ print("EOF" if value == b"" else "DATA", flush=True)
                 (3, 11),
             )
         )
-        with mock.patch.dict(
+        with self._hook_contract_interpreter(db_watch), mock.patch.dict(
             os.environ,
             {"OPENKAKAO_PYTHON": sys.executable},
             clear=False,
@@ -18387,15 +18415,14 @@ print(json.dumps({"ack": VALUE, "event_id": payload["event_id"]}), flush=True)
             original_hook = db_watch.HOOK
             try:
                 db_watch.HOOK = hook
-                with mock.patch.dict(
-                    os.environ,
-                    {"OPENKAKAO_PYTHON": ""},
-                    clear=False,
-                ):
+                with mock.patch.object(db_watch, "_verified_hook_command", return_value=[
+                    sys.executable, "-E", "-B", "-S", str(hook),
+                ]) as verified_command:
                     result = db_watch._run_bounded_hook(
                         b'{"event_id":"db:42:99"}',
                         timeout=2.0,
                     )
+                    verified_command.assert_called_once_with()
             finally:
                 db_watch.HOOK = original_hook
             self.assertEqual(result.returncode, 0)
@@ -18411,7 +18438,7 @@ print(json.dumps({"ack": VALUE, "event_id": payload["event_id"]}), flush=True)
             )
             self.assertFalse((root / "__pycache__").exists())
 
-            with mock.patch.dict(
+            with self._hook_contract_interpreter(db_watch), mock.patch.dict(
                 os.environ,
                 {"OPENKAKAO_PYTHON": str(hook)},
                 clear=False,
@@ -20888,10 +20915,12 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                             return_value=True,
                         ),
                         mock.patch.object(module, "send_reply") as sender,
+                        mock.patch.object(module, "durable_policy_skip", return_value=True) as skip,
                         mock.patch.object(module, "complete_event"),
                     ):
                         module.process_job(job, previous_status, connection)
                     sender.assert_not_called()
+                    skip.assert_called_once()
                     row = connection.execute(
                         """
                         SELECT status, decision, reason, category, error_class
@@ -20915,6 +20944,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_lexical_overlay_recalls_room_keyword_without_shared_vector(self):
         module = self._load_auto_reply_module("auto_reply_lexical_overlay")
+        module.BIN = Path.home() / "lexical-cli-fixture"
+        self._write_executable(module.BIN, "#!/bin/sh\nexit 99\n")
         inbound = "어제 번호 이야기해줫던거 머더라"
         event = {
             "chat_id": 417780809780519,

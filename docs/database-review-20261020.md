@@ -68,13 +68,13 @@ Primary sources reviewed on 2026-10-20: [SQLite use cases](https://sqlite.org/wh
 
 ## Worker receipt boundary delta
 
-The 0.3.194 candidate fixes an independently reproduced storage-initialization fault: a first reply receipt could create the operator-state leaf0755 and make the next abort-state read fail closed. Receipt creation now preserves the0700/0600 boundary, refuses links/shared leaves, serializes writes and bounds retries strictly before any write is admitted. [Reproduction, current fixtures and separate runtime gates](worker-receipts-20261020.md) records the evidence. Include `_append_private_reply_receipt`, `_private_lock`, both receipt callers and their tests in the source-bound external review; do not treat synthetic transport fixtures as live model or sending proof.
+The installed 0.3.194 runtime fixes an independently reproduced storage-initialization fault: a first reply receipt could create the operator-state leaf0755 and make the next abort-state read fail closed. Receipt creation now preserves the0700/0600 boundary, refuses links/shared leaves, serializes writes and bounds retries strictly before any write is admitted. [Reproduction, current fixtures and separate runtime gates](worker-receipts-20261020.md) records the evidence. Include `_append_private_reply_receipt`, `_private_lock`, both receipt callers and their tests in the source-bound external review; do not treat synthetic transport fixtures as live model or sending proof.
 
 ## External cross-audit and findings
 
 Required stages: ChatGPT GPT-6 Pro + Deep Research thesis; Gemini Argon highest supported thinking + Deep Research adversarial review; ChatGPT reverse verification. Each must return source-access evidence, a complete saved report, original URL and SHA-256. Maintain an ACCEPT / CONDITIONAL / REJECT / DEFER matrix binding each finding to source revision, implementation or explicit condition and relevant verification.
 
-Current shared admission has no free slot on either provider, and the original graph Gemini review remains nonterminal. No new DB research was dispatched, no private DB was uploaded and no lower model was substituted. Prepare the source-bound thesis, queue through the shared coordinator and resume only after admission plus actual account/model/mode/quota verification. The local document and official-source reading are not the completed three-stage audit.
+The DB thesis is queued for runtime revision `6aa823c4b75344588994828df06ec23c9e4493e6`, bundle `4c2b13a3d681f9afe87455cef084f887e5d31492b38402b72655905d175e64b6`, request `3c5552b91d081b376e1f11b5`. No DB research was dispatched and no private DB was uploaded. Admission plus actual account/model/mode/quota verification remain required. The original graph Gemini operation was separately reconciled and released with a saved **deescalated, Deep Research off** report; that is not completion of its preferred Deep Research stage or of this distinct DB audit. The local document and official-source reading are not the completed three-stage audit.
 
 | Finding | Provisional decision | Evidence / next gate |
 | --- | --- | --- |
