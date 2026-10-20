@@ -3861,7 +3861,7 @@ def _fts_query_terms(haystacks: list[str]) -> str:
     seen: set[str] = set()
     particles = ("으로", "부터", "까지", "처럼", "보다", "은", "는", "이", "가", "을", "를", "도", "에", "과", "와", "의", "로", "만")
     for haystack in haystacks:
-        for raw in re.findall(r"[0-9a-z가-힣]+", haystack.casefold()):
+        for raw in re.findall(r"[0-9a-z가-힣]+", unicodedata.normalize("NFC", haystack).casefold()):
             candidates = [raw]
             for particle in particles:
                 if len(raw) > len(particle) + 1 and raw.endswith(particle):

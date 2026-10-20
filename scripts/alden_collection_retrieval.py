@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 import sqlite3
 import struct
+import unicodedata
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, korean_literal_plan, korean_literal_matches
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations, ANNOTATION_FIELDS
@@ -425,6 +426,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     projects = _scope(projects)
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1024:
         raise ValueError('collection_query_invalid')
+    query = unicodedata.normalize('NFC', query)
     if type(max_context_chars) is not int or not 256 <= max_context_chars <= 16000:
         raise ValueError('collection_context_budget')
     if type(candidate_limit) is not int or not 1 <= candidate_limit <= 100:

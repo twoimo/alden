@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unicodedata
 from pathlib import Path
 from unittest import mock
 
@@ -1923,6 +1924,12 @@ class NormalizeTests(unittest.TestCase):
 
 
 class KnowledgeGraphRagAndNormalizationTests(unittest.TestCase):
+    def test_fts_query_terms_preserve_canonical_unicode_equivalence(self):
+        for query in ('면접 준비', '25분 초대왕 돈까스', 'café 면접'):
+            with self.subTest(query=query):
+                self.assertEqual(KG._fts_query_terms([unicodedata.normalize('NFD', query)]),
+                                 KG._fts_query_terms([query]))
+
     def test_alias_matches_korean_particles(self):
         self.assertTrue(KG._alias_matches('AI', 'AI는 정말 유용하다'))
         self.assertTrue(KG._alias_matches('AI', '(AI는 유용하다)'))

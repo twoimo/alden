@@ -7,6 +7,7 @@ import select
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
+import unicodedata
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
@@ -18,6 +19,34 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_canonical_hangul_queries_retrieve_the_same_scoped_source_and_proof(self):
+        document = self.add(self.allowed, 'composed', '면접 준비에 관한 보존 원문입니다.')
+        self.add(self.other, 'composed', '다른 프로젝트의 면접 준비 비공개 내용')
+        before = self.store.path.read_bytes()
+        options = {'projects': ['one'], 'max_entities': 1, 'max_relations': 0}
+        composed = retrieve(self.root, '면접 준비', **options)
+        decomposed = retrieve(self.root, unicodedata.normalize('NFD', '면접 준비'), **options)
+        self.assertEqual(composed['fact_provenance'][0]['entity_id'], document)
+        self.assertEqual(decomposed, composed)
+        self.assertEqual(self.store.path.read_bytes(), before)
+
+    def test_canonical_hangul_query_reaches_embedding_without_compatibility_folding(self):
+        document = self.add(self.allowed, 'original', '각 면접 보존 원문')
+        with self.profile():
+            index_dense(self.root, ['one'], embed=self.embed)
+            seen = []
+            def embed_query(query):
+                seen.append(query)
+                return [1., 0.]
+            result = retrieve(self.root, unicodedata.normalize('NFD', '① 각'), projects=['one'],
+                              max_relations=0, query_embed=embed_query)
+        self.assertEqual(seen, ['① 각'])
+        self.assertEqual(result['fact_provenance'][0]['entity_id'], document)
+
+    def test_canonical_hangul_query_preserves_original_wire_length_limit(self):
+        with self.assertRaisesRegex(ValueError, 'collection_query_invalid'):
+            retrieve(self.root, unicodedata.normalize('NFD', '각' * 342), projects=['one'])
+
     def test_title_only_lookup_keeps_source_but_marks_body_unavailable(self):
         ids = self.title_matches(2)
         before = self.store.path.read_bytes()
@@ -151,10 +180,11 @@ class CollectionRetrievalTests(unittest.TestCase):
         self.store.ingest(self.allowed,[{'original_id':'old-publication','label':'과거 기록',
             'text':'아카이브최신약관관련 기록','published_at':'2020-01-01T00:00:00Z'},
             {'original_id':'new-publication','label':'최신 약관','text':'','published_at':'2026-09-01T00:00:00Z'}])
-        result=retrieve(self.root,'최신 약관',projects=['one'],candidate_limit=1,max_entities=1,max_relations=0)
-        self.assertEqual(result['fact_provenance'][0]['entity_id'],identity('graph','new-publication'))
-        self.assertEqual(result['fact_provenance'][0]['observation_time'],'2026-09-01T00:00:00Z')
-        self.assertNotIn('ranking_policy',result)
+        for query in ('최신 약관', unicodedata.normalize('NFD', '최신 약관')):
+            result=retrieve(self.root,query,projects=['one'],candidate_limit=1,max_entities=1,max_relations=0)
+            self.assertEqual(result['fact_provenance'][0]['entity_id'],identity('graph','new-publication'))
+            self.assertEqual(result['fact_provenance'][0]['observation_time'],'2026-09-01T00:00:00Z')
+            self.assertNotIn('ranking_policy',result)
 
     def test_evidence_source_checks_honor_cancellation_and_current_version_changes(self):
         import alden_collection_retrieval as retrieval
