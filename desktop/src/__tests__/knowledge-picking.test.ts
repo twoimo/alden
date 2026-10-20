@@ -1,6 +1,40 @@
+// @vitest-environment happy-dom
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
-import { pickKnowledgeSphere } from "../knowledge/picking";
+import { pickKnowledgeLabel, pickKnowledgeSphere } from "../knowledge/picking";
+
+describe("visible knowledge label picking", () => {
+  function label(left: number, top: number, width = 140, height = 24) {
+    const element = document.createElement('span');
+    element.getBoundingClientRect = () => new DOMRect(left, top, width, height);
+    return element;
+  }
+
+  it("selects the displaced caption by its displayed client bounds", () => {
+    const labels = new Map([['topic', label(488, 304)]]);
+    expect(pickKnowledgeLabel(515, 315, labels)).toBe('topic');
+    // The tiny sphere is elsewhere; the gap must remain an empty canvas hit.
+    expect(pickKnowledgeLabel(680, 355, labels)).toBeNull();
+    expect(pickKnowledgeLabel(725, 394, labels)).toBeNull();
+  });
+
+  it("ignores hidden, collapsed and out-of-bounds captions", () => {
+    const hidden = label(488, 304); hidden.hidden = true;
+    const labels = new Map([['hidden', hidden], ['collapsed', label(488, 304, 0)]]);
+    expect(pickKnowledgeLabel(500, 315, labels)).toBeNull();
+    hidden.hidden = false;
+    for (const [x, y] of [[487, 315], [629, 315], [500, 303], [500, 329]]) {
+      expect(pickKnowledgeLabel(x, y, labels)).toBeNull();
+    }
+    expect(pickKnowledgeLabel(488, 304, labels)).toBe('hidden');
+  });
+
+  it("retains label priority if displayed bounds overlap", () => {
+    expect(pickKnowledgeLabel(500, 315, new Map([
+      ['focused', label(488, 304)], ['other', label(488, 304)],
+    ]))).toBe('focused');
+  });
+});
 
 describe("knowledge sphere picking", () => {
   it("selects the same node across the equator's tiny camera perturbations", () => {

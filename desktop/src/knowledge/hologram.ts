@@ -7,7 +7,7 @@ import { contextRegions, sourceRegions, regionBounds } from './context-regions';
 import { createNeuronGlyph, NEURON_EXTENT_RATIO } from './neuron';
 import type { NeuronPort } from './neuron';
 import { ConstellationNodes, minimumStarRadius, maximumOverviewStarRadius } from './constellation';
-import { pickKnowledgeSphere } from "./picking";
+import { pickKnowledgeLabel, pickKnowledgeSphere } from "./picking";
 import { overviewCameraDistance } from './camera-fit';
 import { overviewDisplayPoint, overviewGlyphScale, OVERVIEW_DISPLAY_GAIN } from './overview-presentation';
 import { PlasticityLayout, selectSynapses } from './plasticity';
@@ -992,6 +992,8 @@ export class KnowledgeHologram {
     const x = event.clientX - rect.left - this.viewport.x;
     const y = event.clientY - rect.top - this.viewport.y;
     if (x < 0 || y < 0 || x > this.viewport.width || y > this.viewport.height) return;
+    const labelId = pickKnowledgeLabel(event.clientX, event.clientY, this.labels);
+    if (labelId) { this.clickNode(labelId); return; }
     this.pointer.x = (x / this.viewport.width) * 2 - 1;
     this.pointer.y = -(y / this.viewport.height) * 2 + 1;
     // An idle scene may have changed since its last draw. Picking must use
