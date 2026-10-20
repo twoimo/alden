@@ -424,6 +424,37 @@ class CollectionTests(unittest.TestCase):
         self.assertIn("@original", detail["display_label"])
         self.assertEqual(detail["version"], node["source_version"])
 
+    def test_graph_source_url_uses_current_permitted_record_url_on_every_read_path(self):
+        target = self.target()
+        denied = self.target('other-channel', 'other')
+        url = 'https://www.youtube.com/watch?v=AbC'
+        self.store.ingest(target, [self.record(url=url, kind='video')])
+        self.store.ingest(denied, [self.record(url='https://example.test/private')])
+        document = identity('youtube', 'AbC')
+        version = None
+        for options in ({}, {'overview': True}, {'focus': document, 'hops': 1}):
+            node = self.store.graph_page(projects=['one'], **options)['nodes'][0]
+            self.assertEqual(node['source_url'], url)
+            version = node['source_version']
+        for hops in (0, 1):
+            detail = self.store.graph_page(projects=['one'], focus=document, hops=hops,
+                                          details=True, expected_version=version)['details']
+            self.assertEqual(detail['source_url'], url)
+            self.assertEqual(detail['version'], version)
+        with self.store.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM versions').fetchone()[0], 2)
+
+    def test_graph_source_url_keeps_explicit_value_and_ignores_nontext_fallback(self):
+        target = self.target()
+        self.store.ingest(target, [self.record('explicit', source_url='https://example.test/source',
+                                             url='https://example.test/other'),
+                                   self.record('object', url={'url': 'https://example.test/object'}),
+                                   self.record('number', url=12)])
+        nodes = {node['id']: node for node in self.store.graph_page(projects=['one'])['nodes']}
+        self.assertEqual(nodes[identity('youtube', 'explicit')]['source_url'], 'https://example.test/source')
+        self.assertIsNone(nodes[identity('youtube', 'object')]['source_url'])
+        self.assertIsNone(nodes[identity('youtube', 'number')]['source_url'])
+
     def test_graph_details_verify_record_hash_and_fence_old_selected_versions(self):
         target = self.target()
         self.store.ingest(target, [self.record(source_url="https://example.test/source")])

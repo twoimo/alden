@@ -1104,7 +1104,7 @@ class CollectionStore:
                                   + slots + ") OR r.target IN (" + slots + "))", 1)
                 return sql, (*visible_args, *current_ids, *current_ids, *relation_args)
             fields = """s.id,s.platform,s.original_id,s.visible_version,s.target_id,s.collected_at,
-              v.label,v.body,v.metadata,v.raw_sha256,v.raw_path,json_extract(v.metadata,'$.source_url') AS source_url"""
+              v.label,v.body,v.metadata,v.raw_sha256,v.raw_path,COALESCE(json_extract(v.metadata,'$.source_url'),CASE WHEN json_type(v.metadata,'$.url')='text' THEN json_extract(v.metadata,'$.url') END) AS source_url"""
             if details and focus and hops == 0 and relation is None:
                 # An already-selected record needs one exact permitted lookup,
                 # not repeated materialization of all 26k nodes and 48k edges.
@@ -1117,7 +1117,7 @@ class CollectionStore:
               'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
               'label',alden_display_label(v.label,v.body),'body',substr(v.body,1,2400),'metadata',json_object('kind',substr(CAST(json_extract(v.metadata,'$.kind') AS TEXT),1,256)),
               'content_evidence',alden_content_class(v.metadata,v.body),
-              'source_url',json_extract(v.metadata,'$.source_url'),'degree',COALESCE(d.degree,0))"""
+              'source_url',COALESCE(json_extract(v.metadata,'$.source_url'),CASE WHEN json_type(v.metadata,'$.url')='text' THEN json_extract(v.metadata,'$.url') END),'degree',COALESCE(d.degree,0))"""
             if overview:
                 json_node = json_node.replace("substr(v.body,1,2400)", "substr(v.body,1,0)")
             if not focus:
@@ -1227,7 +1227,7 @@ class CollectionStore:
                 focus_node = """json_object('id',s.id,'platform',s.platform,'original_id',s.original_id,
                   'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
                   'label',alden_display_label(v.label,v.body),'body',v.body,'metadata',v.metadata,'raw_sha256',v.raw_sha256,
-                  'raw_path',v.raw_path,'source_url',json_extract(v.metadata,'$.source_url'),
+                  'raw_path',v.raw_path,'source_url',COALESCE(json_extract(v.metadata,'$.source_url'),CASE WHEN json_type(v.metadata,'$.url')='text' THEN json_extract(v.metadata,'$.url') END),
                   'degree',COALESCE(d.degree,0))"""
                 nodes_json, edges_json = db.execute(incident_cte + "SELECT "
                     + "(SELECT json_group_array(json(node)) FROM (SELECT " + focus_node
