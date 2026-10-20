@@ -302,8 +302,17 @@ def youtube_video_snapshot(target: dict, data: dict, source: dict):
         transcript=captions.get('text')
         if not isinstance(language,str) or not language or not isinstance(transcript,str) or not transcript.strip():
             raise ValueError('collection_caption_content_unconfirmed')
-        if not all(re.match(r'^\[\d+:\d{2} - \d+:\d{2}\] .+',line) for line in transcript.splitlines() if line.strip()):
-            raise ValueError('collection_caption_timestamp_unconfirmed')
+        for line in transcript.splitlines():
+            if not line.strip():continue
+            timing=re.fullmatch(r'\[([0-9]+):([0-5][0-9]) - ([0-9]+):([0-5][0-9])\] .+',line)
+            if timing is None:
+                raise ValueError('collection_caption_timestamp_unconfirmed')
+            # Minutes can exceed59. Compare decimal strings without an
+            # unbounded int conversion; rounded zero-length cues are valid.
+            start_minutes=timing[1].lstrip('0') or '0'
+            end_minutes=timing[3].lstrip('0') or '0'
+            if (len(start_minutes),start_minutes,timing[2]) > (len(end_minutes),end_minutes,timing[4]):
+                raise ValueError('collection_caption_timestamp_unconfirmed')
         tracks=raw.get('tracks',[])
         if not isinstance(tracks,list) or not all(isinstance(t,dict) for t in tracks):
             raise ValueError('collection_caption_state_invalid')

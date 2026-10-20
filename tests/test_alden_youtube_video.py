@@ -48,6 +48,24 @@ class VideoSnapshotTests(unittest.TestCase):
         self.data['videos'][0]['captions']['text']='plain text without evidence time'
         with self.assertRaisesRegex(ValueError,'timestamp_unconfirmed'):youtube_video_snapshot(self.store.target(self.target),self.data,{})
 
+    def test_invalid_clock_seconds_or_reversed_interval_preserves_checkpoint(self):
+        self.write();collect_target(self.store,self.target)
+        before=self.store.target(self.target)['cursor']
+        for text in ['[00:60 - 01:03] 잘못된 초', '[00:01 - 00:99] 잘못된 끝 초',
+                     '[02:30 - 02:29] 역전된 구간']:
+            with self.subTest(text=text):
+                self.data['videos'][0]['captions']['text']=text;self.write()
+                with self.assertRaisesRegex(ValueError,'timestamp_unconfirmed'):
+                    collect_target(self.store,self.target)
+                self.assertEqual(self.store.target(self.target)['cursor'],before)
+
+    def test_overlaps_rounded_zero_and_long_minutes_keep_original_timestamps(self):
+        text='[60:00 - 60:03] 한 시간 뒤\n[60:02 - 60:04] 겹치는 자막\n[60:04 - 60:04] 반올림된 짧은 자막'
+        self.data['videos'][0]['captions']['text']=text
+        record=youtube_video_snapshot(self.store.target(self.target),self.data,{})[0][0]
+        self.assertTrue(record['text'].endswith(text))
+        self.assertEqual(record['raw'],self.data['videos'][0])
+
     def test_threads_shortcode_identity_and_unknown_account_are_preserved(self):
         target={'platform':'threads','kind':'post','original_id':'DeKQ2ljD3ZO'}
         data={'schema':1,'posts':[{'id':'DeKQ2ljD3ZO','author_handle':'choi.openai','url':'https://www.threads.com/@choi.openai/post/DeKQ2ljD3ZO','text':'관측된 본문','availability':'available','coverage':'main post only; replies and media not read'}]}
