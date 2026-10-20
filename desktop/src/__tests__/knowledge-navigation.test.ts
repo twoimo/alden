@@ -38,6 +38,19 @@ function pending() {
 const settle=async()=>{await Promise.resolve();await Promise.resolve();};
 const text=()=>document.getElementById("knowledge-retrieve")!.textContent;
 describe("knowledge navigation UI and retrieval epochs",()=>{
+  it('closes the popup through native cancel and fences a late detail response',async()=>{
+    const {requests,load}=pending();const graph=(await setup(payload,unavailableSnapshot(),load))!;
+    graph.clickNode('a');
+    const popup=document.getElementById('knowledge-note-pane') as HTMLDialogElement;
+    expect(popup.open).toBe(true);expect(popup.hidden).toBe(false);
+    popup.dispatchEvent(new Event('cancel',{cancelable:true}));
+    expect(popup.open).toBe(false);expect(graph.currentView.focusId).toBe(null);
+    requests[0].resolve({ok:true,facts:['늦게 도착한 결과']});await settle();
+    expect(popup.hidden).toBe(true);expect(popup.open).toBe(false);
+    expect(document.getElementById('knowledge-node-summary')!.textContent).not.toContain('늦게 도착한 결과');
+    graph.clickNode('b');expect(popup.open).toBe(true);
+    graph.dispose();expect(popup.open).toBe(false);expect(popup.hidden).toBe(true);
+  });
   it('opens linked notes by exact ID and returns to the previous note without losing the graph',async()=>{
     const {load}=pending();const graph=(await setup({nodes:[{id:'a',label:'동일한 제목'},{id:'b',label:'동일한 제목'}],edges:[{source:'a',target:'b',weight:2}]},unavailableSnapshot(),load))!;
     graph.clickNode('a');expect(document.getElementById('settings-knowledge-card')!.dataset.noteOpen).toBe('true');

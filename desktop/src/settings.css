@@ -93,15 +93,13 @@ body.settings-view #app { height: 100%; min-height: 0; }
 @media (prefers-color-scheme: dark) { body.settings-view { --canvas: #171c16; --surface: #1d251b; --text: #e9eee3; --muted: #abb5a1; --accent: #94b77e; --accent-ink: #bdcfa8; --warning: #d5ac72; --border: #303b2b; --selection: #293622; --sidebar: #1b2219; } .settings-nav-item[aria-selected="true"] { background: #2c3b22; } .settings-sidebar-footer kbd, .settings-view .tag, .settings-view .model-row.selection, .settings-view .knowledge-hologram-toolbar button { border-color: #435638; } .settings-view .knowledge-hologram-shell { background: #1d2719; } }
 @media (prefers-reduced-motion: reduce) { .settings-view *, .settings-view *::before, .settings-view *::after { transition: none !important; scroll-behavior: auto !important; } }
 
-/* Graph and selected note share the workspace without covering one another. */
+/* The graph keeps its full workspace while a selected note opens above it. */
 .settings-main { position: relative; }
 .settings-shell[data-settings-page="memory"] .settings-topbar { position: absolute; inset: 0 0 auto; z-index: 3; background: color-mix(in srgb, var(--canvas) 88%, transparent); }
 .settings-shell[data-settings-page="memory"] .settings-content { padding: 0; overflow: hidden; }
 #settings-page-memory { position: relative; height: 100%; max-width: none; margin: 0; }
 .settings-view .knowledge-section { position: relative; height: 100%; padding: 0; border: 0; overflow: hidden; }
 .knowledge-workspace { height:100%; min-width:0; min-height:0; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); gap:0; align-items:stretch; }
-/* The selection callback updates data-note-open together with the pane's hidden state. */
-.knowledge-section[data-note-open="true"] > .knowledge-workspace { grid-template-columns:minmax(0,1fr) minmax(300px,38%); }
 .knowledge-graph-pane { display:grid; grid-template-rows:auto auto auto minmax(0,1fr) auto; min-width:0; min-height:0; overflow:hidden; }
 .settings-view .knowledge-hologram-shell { height:100%; min-width:0; min-height:0; margin:0; border:0; border-radius:0; background:var(--canvas); }
 .settings-view #knowledge-graph-canvas { display: block; width: 100%; height: 100%; }
@@ -110,7 +108,9 @@ body.settings-view #app { height: 100%; min-height: 0; }
 .settings-view #knowledge-summary { margin: 10px 0 12px; }
 .knowledge-sync { margin: 10px 0 0; color: var(--muted); font-size: 11px; }
 .settings-view .knowledge-hologram-toolbar { position:static; transform:none; display:flex; width:auto; min-width:0; padding:12px 16px 16px; }
-.settings-view .knowledge-focus-card { position:relative; width:auto; max-width:100%; min-width:0; min-height:0; max-height:none; margin:0; padding:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-gutter:stable; border:0; border-left:1px solid var(--border); border-radius:0; background:var(--surface); box-shadow:none; overflow-wrap:anywhere; }
+.settings-view .knowledge-focus-card { position:fixed; inset:0; width:min(720px,calc(100vw - 48px)); max-width:none; min-width:0; min-height:0; max-height:calc(100dvh - 48px); margin:auto; padding:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-gutter:stable; border:1px solid var(--border); border-radius:14px; background:var(--surface); color:var(--text); box-shadow:0 24px 80px #02091480; overflow-wrap:anywhere; }
+.settings-view .knowledge-focus-card:not([open]) { display:none; }
+.settings-view .knowledge-focus-card::backdrop { background:#030b166b; }
 .settings-view .knowledge-focus-card:focus-visible, .settings-view #knowledge-graph-canvas:focus-visible { outline:2px solid var(--accent); outline-offset:-3px; }
 .knowledge-node-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
 .knowledge-node-label[data-view="overview"] { background:none; border:0; border-radius:0; color:#d6e2f4; font-size:14px; font-weight:550; line-height:1.45; padding:2px 1px; letter-spacing:.015em; text-shadow:0 1px 2px #081323, 0 0 4px #081323, 0 0 8px #081323; }
@@ -618,11 +618,10 @@ body.settings-view {
 .knowledge-focus-card #knowledge-retrieve { font-size:11px; color:var(--muted); margin-bottom:0; }
 .knowledge-node-summary, .knowledge-source-text { font-weight:400; }
 @media (max-width:1000px) {
-  .knowledge-section[data-note-open="true"] > .knowledge-workspace { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(360px,1.35fr) minmax(0,1fr); }
-  .settings-view .knowledge-focus-card { border-left:0; border-top:1px solid var(--border); }
   .knowledge-detail-heading { padding:14px 18px 12px; }
   .knowledge-note-body { padding:16px 18px 20px; }
 }
+@media (max-width:600px) { .settings-view .knowledge-focus-card { width:calc(100vw - 24px); max-height:calc(100dvh - 24px); border-radius:10px; } }
 
 /* Keep the graph on the observatory's navy field defined above. */
 .knowledge-node-label[data-focused="true"] { color:#f4f2f7; border-color:#f4f2f740; }

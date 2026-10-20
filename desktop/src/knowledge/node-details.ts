@@ -55,29 +55,65 @@ function readingCandidate(selected: Record<string, unknown> | null, copy: string
   return {reading:value.reading,tail:value.tail};
 }
 
-function prepareNotePane(root: Document, nodeId: string, initial: boolean): void {
-  const pane = root.getElementById('knowledge-note-pane');
-  if (!pane) return;
+function bindNotePane(root: Document, pane: HTMLDialogElement): void {
   if (!boundPanes.has(pane)) {
+    let composing = false, backdropPressed = false;
+    const close = () => root.getElementById('knowledge-focus-close')?.click();
+    const outside = (event: MouseEvent) => {
+      const bounds = pane.getBoundingClientRect();
+      return event.target === pane && (event.clientX < bounds.left || event.clientX > bounds.right
+        || event.clientY < bounds.top || event.clientY > bounds.bottom);
+    };
+    pane.addEventListener('compositionstart', () => { composing = true; });
+    pane.addEventListener('compositionend', () => { composing = false; });
     // Use the controller's existing close action, including its retrieval fence.
     pane.addEventListener('keydown', event => {
-      if (event.key !== 'Escape' || event.isComposing) return;
+      if (event.key !== 'Escape') return;
       event.preventDefault();
+      if (event.isComposing || composing) return;
       event.stopPropagation();
-      root.getElementById('knowledge-focus-close')?.click();
+      close();
+    });
+    pane.addEventListener('cancel', event => { event.preventDefault(); if (!composing) close(); });
+    pane.addEventListener('pointerdown', event => { backdropPressed = outside(event); });
+    pane.addEventListener('click', event => {
+      if (backdropPressed && outside(event)) close();
+      backdropPressed = false;
     });
     root.getElementById('knowledge-focus-close')?.addEventListener('click', () => {
-      delete pane.dataset.nodeId;
+      setNodeDetailsVisible(false, root);
       root.getElementById('knowledge-graph-canvas')?.focus({ preventScroll: true });
     }, { capture: true });
     boundPanes.add(pane);
   }
+}
+
+export function setNodeDetailsVisible(visible: boolean, root: Document = document): void {
+  const pane = root.querySelector<HTMLDialogElement>('dialog#knowledge-note-pane');
+  if (!pane) return;
+  bindNotePane(root, pane);
+  visible = visible && !pane.parentElement?.closest('[hidden]');
+  root.getElementById('settings-knowledge-card')?.setAttribute('data-note-open', String(visible));
+  if (visible) {
+    pane.hidden = false;
+    if (!pane.open) pane.showModal();
+  } else {
+    if (pane.open) pane.close();
+    pane.hidden = true;
+    delete pane.dataset.nodeId;
+  }
+}
+
+function prepareNotePane(root: Document, nodeId: string, initial: boolean): void {
+  const pane = root.querySelector<HTMLDialogElement>('dialog#knowledge-note-pane');
+  if (!pane) return;
+  bindNotePane(root, pane);
   if (initial || pane.dataset.nodeId !== nodeId) {
     pane.dataset.nodeId = nodeId;
     pane.scrollTop = 0;
     const disclosure = pane.querySelector<HTMLDetailsElement>('.knowledge-evidence-disclosure');
     if (disclosure) disclosure.open = false;
-    if (!pane.hidden) pane.focus({ preventScroll: true });
+    if (!pane.hidden && pane.open) root.getElementById('knowledge-focus-close')?.focus({ preventScroll: true });
   }
 }
 

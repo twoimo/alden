@@ -4,7 +4,7 @@ import { Window } from 'happy-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { settingsMarkup } from '../ui';
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
-import { renderNodeDetails } from '../knowledge/node-details';
+import { renderNodeDetails, setNodeDetailsVisible } from '../knowledge/node-details';
 
 const graph = parseKnowledgeGraph({ nodes: [
   { id: 'a', label: '회의 기록', description: '저장된 첫 문단\n다음 문단' },
@@ -15,7 +15,7 @@ beforeEach(() => {
   document.body.innerHTML = settingsMarkup();
 });
 
-describe('adjacent note reader', () => {
+describe('popup note reader', () => {
   it('shows matching collection record evidence without promoting source content to verified facts', () => {
     const collected = parseKnowledgeGraph({ nodes: [{ id: 'source:a', label: '원문 제목', source_version: 'version:a' }] });
     const selected = collected.nodes[0];
@@ -41,12 +41,14 @@ describe('adjacent note reader', () => {
     expect(document.getElementById('knowledge-node-body')!.textContent).not.toContain('wrong revision');
     expect(document.getElementById('knowledge-node-evidence')!.textContent).not.toContain('other-version');
   });
-  it('keeps the graph and all existing detail targets inside separate workspace panes', () => {
+  it('keeps the detail targets in a labelled modal popup over the graph workspace', () => {
     const pane = document.getElementById('knowledge-note-pane')!;
     const workspace = document.querySelector('.knowledge-workspace')!;
     expect(pane.parentElement).toBe(workspace);
     expect(document.getElementById('knowledge-graph-canvas')!.closest('.knowledge-graph-pane')?.parentElement).toBe(workspace);
     expect(pane.hidden).toBe(true);
+    expect(pane.tagName).toBe('DIALOG');
+    expect(pane.getAttribute('aria-modal')).toBe('true');
     expect(pane.getAttribute('aria-labelledby')).toBe('knowledge-focus-title');
     for (const id of ['knowledge-focus-title', 'knowledge-focus-close', 'knowledge-node-kind', 'knowledge-node-summary',
       'knowledge-node-basis', 'knowledge-node-facts', 'knowledge-relations', 'knowledge-evidence-heading',
@@ -78,21 +80,21 @@ describe('adjacent note reader', () => {
   it('preserves reading position and disclosure choice on retrieval, resetting them only on a new selection', () => {
     const pane = document.getElementById('knowledge-note-pane')!;
     const disclosure = pane.querySelector('details')!;
-    pane.hidden = false;
+    setNodeDetailsVisible(true);
     renderNodeDetails(graph, graph.nodes[0]);
-    expect(document.activeElement).toBe(pane);
+    expect(document.activeElement).toBe(document.getElementById('knowledge-focus-close'));
     disclosure.open = true;
     pane.scrollTop = 160;
-    const close = document.getElementById('knowledge-focus-close')!;
-    close.focus();
+    const action = document.createElement('button');
+    pane.querySelector('.knowledge-note-body')!.append(action); action.focus();
     renderNodeDetails(graph, graph.nodes[0], { details: { node_id: 'a', summary: '확인된 저장 설명' } });
     expect(disclosure.open).toBe(true);
     expect(pane.scrollTop).toBe(160);
-    expect(document.activeElement).toBe(close);
+    expect(document.activeElement).toBe(action);
     renderNodeDetails(graph, graph.nodes[1]);
     expect(disclosure.open).toBe(false);
     expect(pane.scrollTop).toBe(0);
-    expect(document.activeElement).toBe(pane);
+    expect(document.activeElement).toBe(document.getElementById('knowledge-focus-close'));
   });
 
   it('uses the existing close action once for Escape, returns focus to the graph, and never opens a hidden pane', () => {
@@ -103,7 +105,7 @@ describe('adjacent note reader', () => {
     renderNodeDetails(graph, graph.nodes[0]);
     expect(pane.hidden).toBe(true);
     expect(document.activeElement).not.toBe(pane);
-    pane.hidden = false;
+    setNodeDetailsVisible(true);
     renderNodeDetails(graph, graph.nodes[0]);
     renderNodeDetails(graph, graph.nodes[0], { details: { node_id: 'a' } });
     const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
@@ -111,6 +113,7 @@ describe('adjacent note reader', () => {
     expect(escape.defaultPrevented).toBe(true);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(pane.hidden).toBe(true);
+    expect((pane as HTMLDialogElement).open).toBe(false);
     expect(document.activeElement).toBe(document.getElementById('knowledge-graph-canvas'));
     renderNodeDetails(graph, graph.nodes[0], { details: { node_id: 'a' } });
     expect(pane.hidden).toBe(true);
@@ -125,13 +128,42 @@ describe('adjacent note reader', () => {
     pane.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true, bubbles: true }));
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('routes native cancel and true backdrop clicks through the existing close action', () => {
+    const pane = document.getElementById('knowledge-note-pane') as HTMLDialogElement;
+    const onClose = vi.fn();
+    document.getElementById('knowledge-focus-close')!.addEventListener('click', onClose);
+    setNodeDetailsVisible(true);
+    const cancel = new Event('cancel', { cancelable: true });
+    pane.dispatchEvent(cancel);
+    expect(cancel.defaultPrevented).toBe(true); expect(onClose).toHaveBeenCalledTimes(1);
+    expect(pane.open).toBe(false); expect(pane.hidden).toBe(true);
+    setNodeDetailsVisible(true);
+    vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue({left:200,right:800,top:100,bottom:500} as DOMRect);
+    pane.dispatchEvent(new PointerEvent('pointerdown', { clientX:300, clientY:200 }));
+    pane.dispatchEvent(new MouseEvent('click', { clientX:50, clientY:50 }));
+    expect(pane.open).toBe(true); // Dragging from content to the backdrop is not dismissal.
+    pane.dispatchEvent(new PointerEvent('pointerdown', { clientX:50, clientY:50 }));
+    pane.dispatchEvent(new MouseEvent('click', { clientX:50, clientY:50 }));
+    expect(onClose).toHaveBeenCalledTimes(2); expect(pane.open).toBe(false);
+  });
+
+  it('does not open a popup from a hidden knowledge workspace', () => {
+    const page = document.getElementById('settings-page-memory')!;
+    const pane = document.getElementById('knowledge-note-pane') as HTMLDialogElement;
+    page.hidden = true; setNodeDetailsVisible(true);
+    expect(pane.hidden).toBe(true); expect(pane.open).toBe(false);
+    page.hidden = false; setNodeDetailsVisible(true);
+    expect(pane.hidden).toBe(false); expect(pane.open).toBe(true);
+    setNodeDetailsVisible(false);
+  });
 });
 
 // These check the actual stylesheet cascade and media queries, not pixel layout.
 describe('note reader responsive CSS', () => {
   const styles = ['../styles.css', '../settings.css'].map(path => readFileSync(new URL(path, import.meta.url), 'utf8')).join('\n');
-  it.each([{ width: 1200, height: 760, stacked: false }, { width: 640, height: 680, stacked: true }])(
-    'keeps an independent reading surface at $width × $height', ({ width, height, stacked }) => {
+  it.each([{ width: 1200, height: 760 }, { width: 640, height: 680 }, { width: 480, height: 560 }])(
+    'keeps the graph full width with a scrollable popup at $width × $height', ({ width, height }) => {
       const browser = new Window({ width, height });
       try {
         const doc = browser.document;
@@ -145,26 +177,24 @@ describe('note reader responsive CSS', () => {
         const workspace = doc.querySelector('.knowledge-workspace')!;
         expect(browser.getComputedStyle(pane).display).toBe('none');
         expect(browser.getComputedStyle(workspace).gridTemplateColumns).toBe('minmax(0,1fr)');
-        pane.removeAttribute('hidden');
-        section.setAttribute('data-note-open', 'true');
+        setNodeDetailsVisible(true, doc as unknown as Document);
         const layout = browser.getComputedStyle(workspace);
         expect(layout.display).toBe('grid');
-        expect(layout.gridTemplateColumns).toBe(stacked ? 'minmax(0,1fr)' : 'minmax(0,1fr) minmax(300px,38%)');
-        expect(layout.gridTemplateRows).toBe(stacked ? 'minmax(360px,1.35fr) minmax(0,1fr)' : 'minmax(0,1fr)');
+        expect(layout.gridTemplateColumns).toBe('minmax(0,1fr)');
+        expect(layout.gridTemplateRows).toBe('minmax(0,1fr)');
         const note = browser.getComputedStyle(pane);
-        expect(note.position).toBe('relative');
+        expect(note.position).toBe('fixed');
         expect(note.overflowY).toBe('auto');
         expect(note.overflowX).toBe('hidden');
         expect(note.minWidth).toBe('0');
         expect(note.minHeight).toBe('0');
-        expect(note.borderRadius).toBe('0px');
-        expect(note.boxShadow).toBe('none');
+        expect(note.borderRadius).toBe(width <= 600 ? '10px' : '14px');
+        expect(note.boxShadow).not.toBe('none');
         expect(browser.getComputedStyle(doc.querySelector('.knowledge-heading')!).position).toBe('static');
         expect(browser.getComputedStyle(doc.querySelector('.knowledge-hologram-toolbar')!).position).toBe('static');
         expect(browser.getComputedStyle(doc.getElementById('knowledge-node-summary')!).whiteSpace).toBe('pre-wrap');
         expect(browser.getComputedStyle(doc.getElementById('knowledge-focus-title')!).overflowWrap).toBe('anywhere');
-        pane.setAttribute('hidden', '');
-        section.setAttribute('data-note-open', 'false');
+        setNodeDetailsVisible(false, doc as unknown as Document);
         expect(browser.getComputedStyle(pane).display).toBe('none');
         expect(browser.getComputedStyle(workspace).gridTemplateColumns).toBe('minmax(0,1fr)');
         expect(browser.getComputedStyle(workspace).gridTemplateRows).toBe('minmax(0,1fr)');

@@ -4,7 +4,7 @@ import { CollectionGraphController, type GraphAction } from './knowledge/collect
 import { KnowledgeRefresh } from './knowledge/refresh';
 import { knowledgeSignature } from './knowledge/changes';
 import { OrbSurfaces } from './orbs/surfaces';
-import { renderNodeDetails } from './knowledge/node-details';
+import { renderNodeDetails, setNodeDetailsVisible } from './knowledge/node-details';
 import type { VoiceStatus } from './contracts';
 import { wireConversationViews } from './conversations';
 import { wireAssistantComposer } from './assistant-composer';
@@ -465,6 +465,7 @@ export async function setupKnowledgeGraph(
   const reflow = document.querySelector<HTMLButtonElement>("#knowledge-reflow");
   if (!canvas || !expand) return null;
   if (graph.nodes.length === 0) {
+    setNodeDetailsVisible(false);
     document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open','false');
     const empty = payload?.ok !== false && Array.isArray(payload?.nodes) && payload.nodes.length === 0;
     setText("knowledge-summary", empty ? "아직 연결된 대화가 없습니다." : "대화의 연결 정보를 확인할 수 없습니다.");
@@ -495,8 +496,7 @@ export async function setupKnowledgeGraph(
   const hologram = new KnowledgeHologram(canvas, graph, ({ node, view, previousCamera }) => {
     if (disposed) return;
     const epoch = ++selectionEpoch;
-    if (detailPanel) detailPanel.hidden = node === null;
-    document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open',String(node!==null));
+    setNodeDetailsVisible(node !== null);
     if (back) back.disabled = !hologram.canGoBack;
     if (overview) overview.disabled = view.focusId === null && (view.overviewOffset??0)===0;
     if (reflow) reflow.disabled = view.nodes.length === 0 || view.hops !== 0;
@@ -553,6 +553,7 @@ export async function setupKnowledgeGraph(
   }, () => {
     disposed = true;
     selectionEpoch += 1;
+    setNodeDetailsVisible(false);
     controls.abort();
   }, 'workspace', undefined, onVoice);
 
@@ -629,6 +630,9 @@ export async function bootSettings(
   const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{composer.visible(state==='visible');archives.visible(state==='visible');collectionHistory.visible(state==='visible');entityResolution.visible(state==='visible');collectionSchedule.visible(state==='visible');automationHistory.visible(state==='visible');preferences.visible(state==='visible');}},{subscribeVisibility:dependencies.subscribeVisibility,readVisibility:dependencies.readVisibility,pauseOnBlur:false});
   window.addEventListener('pagehide',detachArchiveVisibility,{once:true});
   const navigation = wireSettingsNavigation(document, (page) => {
+    if (page !== 'memory' && document.querySelector<HTMLDialogElement>('#knowledge-note-pane')?.open) {
+      document.getElementById('knowledge-focus-close')?.click();
+    }
     archives.select(page);
     composer.select(page);
     collectionHistory.select(page);
