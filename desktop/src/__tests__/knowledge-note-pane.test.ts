@@ -173,7 +173,6 @@ describe('note reader responsive CSS', () => {
         doc.body.className = 'settings-view';
         doc.body.innerHTML = settingsMarkup();
         const pane = doc.getElementById('knowledge-note-pane')!;
-        const section = doc.getElementById('settings-knowledge-card')!;
         const workspace = doc.querySelector('.knowledge-workspace')!;
         expect(browser.getComputedStyle(pane).display).toBe('none');
         expect(browser.getComputedStyle(workspace).gridTemplateColumns).toBe('minmax(0,1fr)');
