@@ -115,6 +115,7 @@ function mount(
   };
   const fake = Object.create(KnowledgeHologram.prototype) as RenderHarness;
   Object.assign(fake, {
+    combatActivity: { advance: () => false, clearActivity: () => {}, setGraph: () => {}, dispose: () => {} },
     displayOffsets: new Map(), displayTransition: new PositionTransition(),
     displayRelaxationPending: false,
     semanticLayout: { settled: false },

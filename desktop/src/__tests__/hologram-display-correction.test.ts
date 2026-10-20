@@ -38,6 +38,7 @@ function fixture(reducedMotion: boolean) {
   Object.defineProperty(label,'offsetWidth',{get:()=>80});Object.defineProperty(label,'offsetHeight',{get:()=>22});
   const h=Object.create(KnowledgeHologram.prototype) as Record<string,any>;
   Object.assign(h,{
+    combatActivity: { advance: () => false, clearActivity: () => {}, setGraph: () => {}, dispose: () => {} },
     graph,view,positions,anchors,displayedPositions,displayOffsets:new Map(),displayTransition:new PositionTransition(),
     displayClipMatrix:new THREE.Matrix4(),displayRelaxationPending:false,semanticLayout:{settled:true},positionTransition:new PositionTransition(),
     plasticity:{moving:false,setDisplayScale:vi.fn(),advance:vi.fn(),forEachPoint:vi.fn()},

@@ -117,6 +117,7 @@ describe('sparse-visibility world-space minimum', () => {
       const bridge = () => ({ moving: false, update: noop, mesh: { visible: false, geometry: { instanceCount: 0 } } });
       const frame = Object.create(KnowledgeHologram.prototype) as { render(dt: number): void; renderedFrames: number; renderedNodeCount: number; renderedVisibleNodeCount: number | null; disposed: boolean };
       Object.assign(frame, {
+    combatActivity: { advance: () => false, clearActivity: () => {}, setGraph: () => {}, dispose: () => {} },
         displayOffsets: new Map(), displayTransition: new PositionTransition(),
         displayRelaxationPending: false,
         semanticLayout: { settled: false },

@@ -130,7 +130,7 @@ ${automationHistoryMarkup('geeknews', '긱뉴스 전송')}
                   <details id="knowledge-list"><summary title="목록" aria-label="목록"><i data-lucide="List" aria-hidden="true"></i></summary><div id="knowledge-result-list" role="list" aria-label="현재 표시한 지식 목록"></div></details>
                 </form>
                 <details id="knowledge-info" class="knowledge-info"><summary aria-label="그래프 정보" title="그래프 정보"><i data-lucide="Info" aria-hidden="true"></i></summary><div class="knowledge-scope-block"><p id="knowledge-scope" class="knowledge-scope" role="status" aria-live="polite"></p>
-                <p>색은 선택한 지식에서 현재 표시된 연결을 따라간 최단 거리입니다. 관계 방향은 연결된 노트에서 확인할 수 있습니다.</p><p class="knowledge-activity-key"><span>● 선택</span><span>● 저장 변경</span><span>● 원문 읽기</span></p>
+                <p>색은 선택한 지식에서 현재 표시된 연결을 따라간 최단 거리입니다. 관계 방향은 연결된 노트에서 확인할 수 있습니다.</p><p class="knowledge-activity-key" title="실제 저장 변경·원문 읽기 때만 연결 위에 광탄과 충격파를 표시합니다. 노드 간 적대 관계를 뜻하지 않습니다."><span>● 선택</span><span>● 저장 변경</span><span>● 원문 읽기</span></p>
                 <section id="knowledge-quality" class="knowledge-quality" aria-label="수집 기록 품질">
                   <div class="knowledge-quality-heading"><strong>수집 기록 품질</strong><button id="knowledge-quality-run" type="button">품질 확인</button></div>
                   <p id="knowledge-quality-scope">허용된 전체 현재 수집 기록이 대상입니다. 화면의 노드와 다른 필터는 반영하지 않습니다.</p>

@@ -75,6 +75,7 @@ describe('context overview camera lifecycle', () => {
     const loop = new AnimationLoop(dt => methods.render(dt), scheduler);
     const renderer = { render: vi.fn(() => { scene.updateMatrixWorld(true); camera.updateMatrixWorld(true); }) };
     Object.assign(hologram, {
+    combatActivity: { advance: () => false, clearActivity: () => {}, setGraph: () => {}, dispose: () => {} },
       displayOffsets: new Map(), displayTransition: new PositionTransition(),
       displayRelaxationPending: false,
       semanticLayout: { settled: false },

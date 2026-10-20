@@ -81,6 +81,7 @@ describe("bounded amplitude envelope", () => {
     const envelope = new VoiceEnvelope();const start = vi.fn();
     const graph = Object.create(KnowledgeHologram.prototype) as KnowledgeHologram;
     Object.defineProperties(graph, {
+      combatActivity: { value: { clearActivity: () => {}, dispose: () => {} } },
       semanticLayout: { value: { stop: vi.fn() } },
       disposed: { value: false, writable: true }, requestedAnimation: { value: false, writable: true },
       graphRoot: { value: new THREE.Group() }, voiceEnvelope: { value: envelope },

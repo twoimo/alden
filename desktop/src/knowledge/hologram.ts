@@ -36,6 +36,7 @@ import { ThinkingOrbMesh } from '../orbs/mesh';
 import { runtimeOrb, QUIET_ORB, PAUSED_ORB, type OrbActivity } from '../orbs/activity';
 import { orbCacheBytes, type OrbState } from '../orbs/frames';
 import { ACTIVITY_TTL_MS, type NodeActivity } from './collection-activity';
+import { CombatActivity } from './combat-activity';
 import {
   KnowledgeDrilldown,
   OVERVIEW_NODE_CAP,
@@ -111,6 +112,7 @@ export class KnowledgeHologram {
   private readonly synapses = new SynapticBridges();
   private readonly overviewSynapses = new SynapticBridges(4096,false);
   private readonly constellationNodes = new ConstellationNodes(OVERVIEW_LOD_CAP);
+  private readonly combatActivity = new CombatActivity();
   private readonly globalLabels = new Set<string>();
   private readonly globalLabelRanks = new Map<string, number>();
   private zoomLabelCandidates: readonly KnowledgeNode[] = [];
@@ -180,7 +182,7 @@ export class KnowledgeHologram {
     this.orbit.addEventListener('change',()=>{if(this.orbitActive){this.desiredCamera.copy(this.camera.position);this.desiredLookAt.copy(this.orbit.target);this.lookAt.copy(this.orbit.target);}this.invalidateFrame();});
     this.scene.add(this.graphRoot);
     this.graphRoot.add(this.synapses.mesh);
-    this.graphRoot.add(this.overviewSynapses.mesh,this.constellationNodes);
+    this.graphRoot.add(this.overviewSynapses.mesh,this.constellationNodes,this.combatActivity);
 
     const ambient = new THREE.AmbientLight(0xd7e1f3, 1.75);
     const key = new THREE.DirectionalLight(0xffedcc, 2.1);
@@ -279,7 +281,7 @@ export class KnowledgeHologram {
   get reducedMotionEnabled(): boolean { return this.reducedMotion || this.motion.matches; }
   setReducedMotion(reduced: boolean): void {
     this.reducedMotion = reduced;
-    if (this.reducedMotionEnabled) this.plasticity.settle();
+    if (this.reducedMotionEnabled) { this.plasticity.settle(); this.combatActivity.clearActivity(); }
     this.handleMotionChange();
   }
   resetCamera(): void {
@@ -312,7 +314,7 @@ export class KnowledgeHologram {
       return point ? [{ id: node.id, x: point.x, y: point.y, z: point.z }] : [];
     });
   }
-  get nodeActivityDiagnostics() { return { active: this.constellationNodes.activityCount, accepted: this.activityAccepted, last: this.lastNodeActivity }; }
+  get nodeActivityDiagnostics() { return { active: this.constellationNodes.activityCount, accepted: this.activityAccepted, last: this.lastNodeActivity, combat:this.combatActivity.diagnostics() }; }
 
   showNodeActivity(event: NodeActivity): void {
     const now = Date.now(), at = event.at * 1000;
@@ -320,12 +322,13 @@ export class KnowledgeHologram {
       || at > now || now - at >= ACTIVITY_TTL_MS || !this.view.nodes.some(node => node.id === event.document_id
         && node.sourceVersion === event.version && node.sourceTarget === event.target_id && !node.evidence.retracted)) return;
     this.constellationNodes.showActivity(event); this.activityAccepted++; this.lastNodeActivity = event;
+    if (!this.paused && !this.reducedMotionEnabled) this.combatActivity.show(event,now);
     this.constellationNodes.advanceActivity(now, this.reducedMotionEnabled);
     this.scheduleActivityExpiry(); this.invalidateFrame();
   }
   clearNodeActivity(): void {
     if (this.activityExpiry !== null) clearTimeout(this.activityExpiry);
-    this.activityExpiry = null; this.lastNodeActivity = null; this.constellationNodes.clearActivity(); this.invalidateFrame();
+    this.activityExpiry = null; this.lastNodeActivity = null; this.constellationNodes.clearActivity(); this.combatActivity.clearActivity(); this.invalidateFrame();
   }
   private scheduleActivityExpiry(): void {
     if (this.activityExpiry !== null) clearTimeout(this.activityExpiry);
@@ -548,6 +551,7 @@ export class KnowledgeHologram {
     this.synapses.mesh.removeFromParent();
     this.synapses.dispose();
     this.overviewSynapses.mesh.removeFromParent();this.overviewSynapses.dispose();
+    this.combatActivity.dispose();
     disposeObject(this.graphRoot);
     this.scene.children
       .filter((child) => child !== this.graphRoot)
@@ -627,6 +631,7 @@ export class KnowledgeHologram {
   }
 
   private rebuildGraph(): void {
+    this.combatActivity.setGraph(this.view.nodes,this.view.edges);
     this.displayRelaxationPending = true;
     const visibleIds = new Set(this.view.nodes.map(node=>node.id));
     for(const id of this.displayOffsets.keys())if(!visibleIds.has(id))this.displayOffsets.delete(id);
@@ -636,7 +641,7 @@ export class KnowledgeHologram {
     this.layoutPositions();
     const retired=new THREE.Group();
     for (const child of [...this.graphRoot.children]) {
-      if (child === this.synapses.mesh||child===this.overviewSynapses.mesh||child===this.constellationNodes) continue;
+      if (child === this.synapses.mesh||child===this.overviewSynapses.mesh||child===this.constellationNodes||child===this.combatActivity) continue;
       this.graphRoot.remove(child);
       retired.add(child);
     }
@@ -1150,8 +1155,9 @@ export class KnowledgeHologram {
     this.overviewSynapses.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused,pointsMoving||displayMoving||denseOverview&&cameraProjectionChanged);
     this.constellationNodes.update(this.displayedPositions);
     const nodeActivityMoving = this.constellationNodes.advanceActivity(Date.now(), this.reducedMotionEnabled || this.paused);
+    const combatMoving = this.combatActivity.advance(Date.now(),this.displayedPositions,this.viewport.height,this.reducedMotionEnabled||this.paused);
     if(pointsMoving || displayMoving || this.nebulae.moving || denseOverview&&cameraProjectionChanged) this.nebulae.update(elapsed,this.displayedPositions,this.reducedMotionEnabled||this.paused);
-    this.loop.setInteractive(this.plasticity.moving||this.positionTransition.moving||this.displayTransition.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
+    this.loop.setInteractive(combatMoving||this.plasticity.moving||this.positionTransition.moving||this.displayTransition.moving||this.synapses.moving||this.overviewSynapses.moving||this.nebulae.moving||this.orbitActive||cameraMoving);
     this.applyDetailMode(this.view.hops>0&&this.camera.position.distanceTo(this.lookAt)<2.35);
     this.synapses.mesh.visible=this.neuronDetail&&(this.synapses.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount>0;
     this.overviewSynapses.mesh.visible=!this.neuronDetail&&(this.overviewSynapses.mesh.geometry as THREE.InstancedBufferGeometry).instanceCount>0;
@@ -1249,7 +1255,7 @@ export class KnowledgeHologram {
       if (label.hidden === box.visible) label.hidden = !box.visible;
       if (box.visible && (!wasVisible || previousLeft !== box.left || previousTop !== box.top)) label.style.transform = `translate(${box.left}px, ${box.top}px)`;
     }
-    if (this.paused || this.reducedMotionEnabled || (!nodeActivityMoving && !this.plasticity.moving && !this.positionTransition.moving && !this.displayTransition.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
+    if (this.paused || this.reducedMotionEnabled || (!combatMoving && !nodeActivityMoving && !this.plasticity.moving && !this.positionTransition.moving && !this.displayTransition.moving && !this.synapses.moving && !this.overviewSynapses.moving && !this.nebulae.moving && !orbActive && !this.voiceEnvelope.needsFrame && !this.orbitActive && !cameraMoving)) this.loop.stop();
   }
   private prepareDisplayCorrection(): void {
     const {width,height}=this.viewport;

@@ -29,6 +29,7 @@ describe("decorative sky ownership", () => {
     const rendererDispose=vi.fn();const stopped=vi.fn();const started=vi.fn();
     const graph=Object.create(KnowledgeHologram.prototype) as KnowledgeHologram;
     Object.defineProperties(graph,{
+      combatActivity: { value: { clearActivity: () => {}, dispose: () => {} } },
       semanticLayout:{value:{stop:vi.fn(),clear:vi.fn()}},positionTransition:{value:{clear:vi.fn()}},layoutChanged:{value:new Set()},layoutFingerprints:{value:new Map()},
       communitySlots:{value:new Map()},
       displayOffsets:{value:new Map()},displayTransition:{value:{clear:vi.fn()}},

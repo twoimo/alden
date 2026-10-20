@@ -1,3 +1,4 @@
+import { CombatActivity } from '../knowledge/combat-activity';
 // @vitest-environment happy-dom
 import * as THREE from 'three';
 import { PositionTransition } from '../knowledge/position-transition';
@@ -21,7 +22,8 @@ function fixture() {
   const constellation = new ConstellationNodes(2048);
   const synapses = new SynapticBridges(), overview = new SynapticBridges(4096,false);
   const root = new THREE.Group();
-  root.add(constellation,synapses.mesh,overview.mesh);
+  const combatActivity=new CombatActivity();
+  root.add(constellation,synapses.mesh,overview.mesh,combatActivity);
   const canvas=document.createElement('canvas');
   const shell=document.createElement('div');
   shell.innerHTML='<div class="knowledge-depth-legend" hidden></div>';
@@ -33,7 +35,7 @@ function fixture() {
     displayRelaxationPending: false,
 
     view,graph:view,positions,anchors:positions,displayedPositions:new Map(),
-    graphRoot:root,canvas,constellationNodes:constellation,synapses,overviewSynapses:overview,
+    graphRoot:root,canvas,constellationNodes:constellation,synapses,overviewSynapses:overview,combatActivity,
     nodeMeshes:new Map(),neuronMeshes:new Map(),neuronPorts:new Map(),orbMeshes:new Map(),
     labels:new Map(),labelBounds:[],globalLabels:new Set(),globalLabelRanks:new Map(),zoomLabels:new Set(),
     pickGeometry:null,pickMaterial:null,orbit:{mouseButtons:{}},hoveredId:null,
@@ -59,6 +61,15 @@ function fixture() {
 }
 
 describe('detail geometry admission', () => {
+  it('retains the activity layer and its GPU buffers through graph rebuilds', () => {
+    const graph=fixture(),layer=graph.combatActivity;
+    const geometry=vi.spyOn(layer.children[0].geometry,'dispose');
+    graph.rebuildGraph();graph.rebuildGraph();
+    expect(layer.parent).toBe(graph.graphRoot);
+    expect(graph.graphRoot.children).toContain(layer);
+    expect(geometry).not.toHaveBeenCalled();
+  });
+
   it('keeps a 24-node relation view as one dot batch until actual detail zoom', () => {
     const graph=fixture();
     graph.rebuildGraph();
