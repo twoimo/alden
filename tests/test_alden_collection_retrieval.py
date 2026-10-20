@@ -476,6 +476,55 @@ class CollectionRetrievalTests(unittest.TestCase):
         self.assertEqual(first['search_mode'],'rrf');self.assertEqual(second['search_mode'],'rrf')
         self.assertIn('original',first['facts'][0]);self.assertIn('private other',second['facts'][0])
 
+    def test_unchanged_multi_project_index_does_not_rewrite_current_vectors(self):
+        import sqlite3
+        first={'platform':'graph','original_id':'same','label':'shared term','text':'original',
+               'raw':{'viewCount':10}}
+        second={**first,'text':'private other','raw':{'viewCount':20}}
+        self.store.ingest(self.allowed,[first]);self.store.ingest(self.other,[second])
+        self.store.register(platform='graph',original_id='empty-target',kind='source',label='empty',projects=['empty'])
+        path=self.store.root/'retrieval.sqlite3'
+        with self.profile():
+            self.assertEqual(index_dense(self.root,['one','two'],embed=self.embed)['embedded_changed'],2)
+            with sqlite3.connect(path) as db:
+                db.execute('CREATE TABLE vector_write_probe(writes INTEGER NOT NULL)')
+                db.execute('INSERT INTO vector_write_probe VALUES(0)')
+                db.execute('''CREATE TRIGGER vector_insert_probe AFTER INSERT ON vectors
+                    BEGIN UPDATE vector_write_probe SET writes=writes+1; END''')
+                saved=db.execute('SELECT * FROM vectors ORDER BY document_id,version').fetchall()
+            source_before=self.store.path.read_bytes()
+            for projects in (['one','two'],['two','one'],['one','one','two'],['one','two','empty'],['one']):
+                with self.subTest(projects=projects):
+                    with sqlite3.connect(path) as db:db.execute('UPDATE vector_write_probe SET writes=0')
+                    report=index_dense(self.root,projects,embed=lambda _:self.fail('cached versions must not re-embed'))
+                    with sqlite3.connect(path) as db:
+                        self.assertEqual(db.execute('SELECT writes FROM vector_write_probe').fetchone()[0],0)
+                        self.assertEqual(db.execute('SELECT * FROM vectors ORDER BY document_id,version').fetchall(),saved)
+                    self.assertEqual(report['embedded_changed'],0)
+                    self.assertEqual(report['reused_versions'],0)
+                    self.assertEqual(self.store.path.read_bytes(),source_before)
+            # A genuine raw-metadata revision keeps its own version and copies
+            # exactly one admitted vector when encoder input/profile is equal.
+            with sqlite3.connect(path) as db:db.execute('UPDATE vector_write_probe SET writes=0')
+            self.store.ingest(self.other,[{**second,'raw':{'viewCount':21}}])
+            report=index_dense(self.root,['one','two'],embed=lambda _:self.fail('same body must reuse only the changed version'))
+            self.assertEqual(report['embedded_changed'],0);self.assertEqual(report['reused_versions'],1)
+            with sqlite3.connect(path) as db:
+                self.assertEqual(db.execute('SELECT writes FROM vector_write_probe').fetchone()[0],1)
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM vectors').fetchone()[0],3)
+            first_result=retrieve(self.root,'shared',projects=['one'],query_embed=lambda _:[1.,0.])
+            second_result=retrieve(self.root,'shared',projects=['two'],query_embed=lambda _:[0.,1.])
+            self.assertIn('original',first_result['facts'][0]);self.assertIn('private other',second_result['facts'][0])
+            self.assertEqual(first_result['fact_provenance'][0]['projects'],['one'])
+            self.assertEqual(second_result['fact_provenance'][0]['projects'],['two'])
+            with sqlite3.connect(path) as db:db.execute('UPDATE vector_write_probe SET writes=0')
+            self.store.ingest(self.other,[{**second,'text':'changed body','raw':{'viewCount':22}}])
+            report=index_dense(self.root,['one','two'],embed=self.embed)
+            self.assertEqual(report['embedded_changed'],1);self.assertEqual(report['reused_versions'],0)
+            with sqlite3.connect(path) as db:
+                self.assertEqual(db.execute('SELECT writes FROM vector_write_probe').fetchone()[0],1)
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM vectors').fetchone()[0],4)
+
     def test_collection_time_filter_applies_before_candidate_limit(self):
         self.add(self.allowed,'old','original');self.add(self.allowed,'new','newer')
         with self.store.database() as db:

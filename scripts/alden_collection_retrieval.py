@@ -263,10 +263,19 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
 def _index_rows(store, projects, cancelled, **options):
     # A union's newest visible version cannot replace an older version still
     # current in another authorized project. Persist both version identities.
+    projects = _scope(projects)
     values = {}
-    for project in _scope(projects):
+    for project in projects:
         for row in _rows(store, [project], cancelled, **options):
             values[(row['id'], row['version'])] = row
+    if len(projects) > 1 and options.get('resolve_source'):
+        # Each project's text refresh replaces the temporary scope. Metadata
+        # probes after this union must cover every admitted version, including
+        # an older version still current in a different authorized project.
+        _check(cancelled)
+        with options['text_db']:
+            options['text_db'].executemany('INSERT OR IGNORE INTO temp.source_text_scope VALUES(?,?)', values)
+        _check(cancelled)
     return [values[key] for key in sorted(values)]
 
 

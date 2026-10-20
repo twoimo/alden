@@ -72,6 +72,8 @@ The installed 0.3.194 runtime fixes an independently reproduced storage-initiali
 
 ## External cross-audit and findings
 
+The 0.3.196 [multi-project scope repair](database-multi-project-scope-20261020.md) corrects a separate cache/write defect: per-project text refreshes left only the last temporary scope for the vector metadata probe. The repaired union preserves admitted version identities and prevents unchanged vectors from being rewritten. The earlier single-scope timing remains a microbenchmark; it did not prove multi-project coverage. Include this material delta in the unsent DB thesis before dispatch.
+
 Required stages: ChatGPT GPT-6 Pro + Deep Research thesis; Gemini Argon highest supported thinking + Deep Research adversarial review; ChatGPT reverse verification. Each must return source-access evidence, a complete saved report, original URL and SHA-256. Maintain an ACCEPT / CONDITIONAL / REJECT / DEFER matrix binding each finding to source revision, implementation or explicit condition and relevant verification.
 
 The DB thesis is queued for runtime revision `6aa823c4b75344588994828df06ec23c9e4493e6`, bundle `4c2b13a3d681f9afe87455cef084f887e5d31492b38402b72655905d175e64b6`, request `3c5552b91d081b376e1f11b5`. No DB research was dispatched and no private DB was uploaded. Admission plus actual account/model/mode/quota verification remain required. The original graph Gemini operation was separately reconciled and released with a saved **deescalated, Deep Research off** report; that is not completion of its preferred Deep Research stage or of this distinct DB audit. The local document and official-source reading are not the completed three-stage audit.
