@@ -15279,9 +15279,18 @@ print(json.dumps({
             holder.execute(
                 "UPDATE choi_yeonwoo_style_profile SET sample_count = 4"
             )
+            busy_timeouts = []
+            connect_idle = module._idle_context_connection
+
+            def observed_idle_connection():
+                connection = connect_idle()
+                busy_timeouts.append(connection.execute("PRAGMA busy_timeout").fetchone()[0])
+                return connection
+
             try:
                 started = time.perf_counter()
-                profiles = module._load_proactive_vector_profiles()
+                with mock.patch.object(module, "_idle_context_connection", side_effect=observed_idle_connection):
+                    profiles = module._load_proactive_vector_profiles()
                 elapsed = time.perf_counter() - started
             finally:
                 holder.rollback()
@@ -15295,9 +15304,11 @@ print(json.dumps({
             module.IDLE_CONTEXT_BUSY_TIMEOUT_MS, module.CONTEXT_BUSY_TIMEOUT_MS
         )
         self.assertLessEqual(module.IDLE_CONTEXT_BUSY_TIMEOUT_MS, 2000)
-        self.assertLessEqual(
-            elapsed, module.IDLE_CONTEXT_BUSY_TIMEOUT_MS / 1000.0 + 1.0
-        )
+        # Assert the real connection's SQLite busy bound separately from the
+        # wall clock. A hosted runner took2.71s with a1500ms SQLite handler;
+        # scheduling/IO delay is not a change to the configured lock timeout.
+        # The existing4s integration ceiling still rejects the default5s wait.
+        self.assertEqual(busy_timeouts, [module.IDLE_CONTEXT_BUSY_TIMEOUT_MS])
 
     def test_supervisor_still_fences_a_stale_idle_phase(self):
         """The idle liveness fence stays tight; only the published proof changed."""
