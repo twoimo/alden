@@ -173,7 +173,22 @@ describe('permitted collection graph navigation', () => {
     pending.resolve({ ok: true, details: { node_id: 'a' } });
     expect(await focus).toEqual({ discarded: true }); await settle(60000);
     expect(load).toHaveBeenCalledTimes(count);
-    c.start(); c.start(); await settle(); expect(load).toHaveBeenCalledTimes(count + 2); // One collection read and one scoped memory read.
+    c.start(); c.start(); await settle();
+    expect(load.mock.calls.slice(count).map(([action]) => action).sort()).toEqual(['collection-graph', 'collection-history', 'knowledge-graph']);
+  });
+
+  it('pauses graph and terminal reads across visibility changes until explicitly resumed', async () => {
+    const { c, port, load } = controller(); await settle();
+    const camera = port.navigationTargets;
+    const button = document.getElementById('knowledge-live-toggle') as HTMLButtonElement;
+    button.click(); const reads = load.mock.calls.length;
+    await settle(60000); c.stop(); c.start(); await settle(60000);
+    expect(load).toHaveBeenCalledTimes(reads);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(port.navigationTargets).toEqual(camera);
+    button.click(); await settle();
+    expect(load.mock.calls.length).toBeGreaterThan(reads);
+    expect(button.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('sends the selected target, relation, type, source and local date boundaries to the read API', async () => {

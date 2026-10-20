@@ -17,6 +17,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from '@tauri-apps/api/app';
 import "./styles.css";
 import "./settings.css";
+import './knowledge/terminal.css';
 import { renderSettingsIcons, wireSettingsNavigation } from "./settings-navigation";
 import {
   createCancellationToken,

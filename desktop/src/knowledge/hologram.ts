@@ -90,6 +90,7 @@ export class KnowledgeHologram {
   private readonly press=new THREE.Vector2();
   private drilldown: KnowledgeDrilldown;
   private readonly positions = new Map<string, THREE.Vector3>();
+  private projectionDirty = true;
   private readonly provisionalOverviewPositions = new Set<string>();
   private readonly displayedPositions = new Map<string, THREE.Vector3>();
   private readonly displayOffsets = new Map<string, THREE.Vector3>();
@@ -305,6 +306,12 @@ export class KnowledgeHologram {
     return this.view;
   }
   get currentGraph(): KnowledgeGraph { return this.graph; }
+  get mapProjectionPoints(): Array<{ id: string; x: number; y: number; z: number }> {
+    return this.view.nodes.flatMap(node => {
+      const point = this.displayedPositions.get(node.id) ?? this.positions.get(node.id);
+      return point ? [{ id: node.id, x: point.x, y: point.y, z: point.z }] : [];
+    });
+  }
   get nodeActivityDiagnostics() { return { active: this.constellationNodes.activityCount, accepted: this.activityAccepted, last: this.lastNodeActivity }; }
 
   showNodeActivity(event: NodeActivity): void {
@@ -649,6 +656,7 @@ export class KnowledgeHologram {
     const focusId = this.view.focusId;
     const global=this.view.hops===0;
     this.hoveredId=null;this.globalLabels.clear();this.globalLabelRanks.clear();
+    this.projectionDirty = true;
     this.constellationNodes.set(this.view.nodes,this.view.edges);
     this.constellationNodes.highlight(focusId);
     const depths = relationDepths(this.view);
@@ -1154,6 +1162,12 @@ export class KnowledgeHologram {
     if(this.provisionalOverviewPositions.size&&this.view.hops===0&&!this.plasticity.moving
       &&!this.positionTransition.moving&&this.semanticLayout.settled)
       for(const node of this.view.nodes)this.provisionalOverviewPositions.delete(node.id);
+    const projectionMoving = pointsMoving || displayMoving || cameraMoving || this.orbitActive || this.positionTransition.moving || this.displayTransition.moving;
+    if (projectionMoving || denseOverview && cameraProjectionChanged) this.projectionDirty = true;
+    if (this.projectionDirty && !projectionMoving && this.semanticLayout.settled) {
+      this.projectionDirty = false;
+      this.canvas.dispatchEvent(new Event('alden:projection-ready'));
+    }
     this.renderedFrames++;
     this.renderedNodeCount = this.view.nodes.length;
     // Only sparse fixtures need a clip-volume certificate. Dense rendering

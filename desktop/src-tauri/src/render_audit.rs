@@ -264,6 +264,9 @@ impl Output {
                 | "workspace-readback.json"
                 | "graph-layout-default.json"
                 | "graph-layout-compact.json"
+                | "graph-scope-wide.png" | "graph-scope-wide.json"
+                | "graph-zoom-wide.json" | "graph-zoom-wide-distant.png" | "graph-zoom-wide-context.png" | "graph-zoom-wide-detail.png"
+                | "graph-projected-wide.json" | "graph-physics-wide.json"
                 | "graph-scope-default.png"
                 | "graph-scope-compact.png"
                 | "graph-scope-default.json"
@@ -1490,22 +1493,24 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         }
     }
     let mut states=Vec::new();
-    for size in ["default","compact"] {
+    let sizes: &[&str] = if case == 0 { &["default", "wide", "compact"] } else { &["default", "compact"] };
+    for &size in sizes {
         let mut late_blur=Value::Null;
         eprintln!("Alden scope {case}: waiting for {size} viewport");
-        if size=="compact" {
-            eprintln!("Alden scope {case}: suspend before compact resize");
+        if size!="default" {
+            eprintln!("Alden scope {case}: suspend before {size} resize");
             // Suspend this owned WKWebView before changing AppKit geometry;
             // resuming uses the existing visibility/reconnection lifecycle.
             visibility(window,false,deadline)?;
             eprintln!("Alden scope {case}: suspended");
             let target=window.clone();let (tx,rx)=mpsc::sync_channel(1);
+            let dimensions = if size == "compact" { (640.0, 680.0) } else { (1600.0, 1000.0) };
             window.run_on_main_thread(move || {
                 let result=live(deadline).and_then(|_| {
                     let caught=objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
                     let native=target.ns_window().map_err(|_| "scope native window missing")?;
                     live(deadline)?;
-                    unsafe {(&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0,680.0));}
+                    unsafe {(&*native.cast::<NSWindow>()).setContentSize(NSSize::new(dimensions.0,dimensions.1));}
                     Ok(())
                     }));
                     match caught {
@@ -1611,6 +1616,19 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         let mut state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,"searchResultIds":search_ids,
             "physics":physics,"geometry":geometry,"labels":labels,"navigation":navigation,"lateBlur":late_blur,
             "scope":"owned read-only native scoped graph only; no physical input, pixel/GPU/FPS or semantic gold proof"});
+        state["terminal"] = collect_script(window,r#"JSON.stringify((()=>{
+          const dock=document.querySelector('#knowledge-terminal'),rect=dock?.getBoundingClientRect();
+          const map=document.querySelector('#knowledge-graph-canvas')?.getBoundingClientRect();
+          const visible=[...document.querySelectorAll('.knowledge-observations canvas')].filter(c=>c.getBoundingClientRect().width>0);
+          return {panels:document.querySelectorAll('.terminal-panel').length,
+            ingestRows:document.querySelectorAll('#terminal-ingest .terminal-row').length,
+            tailRows:document.querySelectorAll('#terminal-tail .terminal-row').length,
+            linkedRows:document.querySelectorAll('#terminal-linked .terminal-row').length,
+            dockWidth:rect?.width,dockHeight:rect?.height,dockScrollWidth:dock?.scrollWidth,
+            mainWidth:map?.width,mainHeight:map?.height,visibleProjections:visible.length,
+            follow:document.querySelector('#terminal-follow')?.getAttribute('aria-pressed'),
+            live:document.querySelector('#knowledge-live-toggle')?.getAttribute('aria-pressed'),
+            pageOverflow:document.documentElement.scrollWidth>innerWidth};})())"#.into(),deadline)?;
         publish(output,&format!("graph-scope-{size}.png"),&snapshot(window,deadline)?,deadline)?;
         if case==10 {state["qualityComparison"]=audit_quality_comparison(window,output,deadline,size)?;}
         publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;

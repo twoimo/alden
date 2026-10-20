@@ -20,7 +20,7 @@ const GROUP_COLORS = COMMUNITY_COLORS.map(value=>new THREE.Color(value));
 const CONNECTED = new THREE.Color(GRAPH_CONNECTED_COLOR);
 const ISOLATED = new THREE.Color(GRAPH_ISOLATED_COLOR);
 const UNRELATED = new THREE.Color(GRAPH_UNRELATED_COLOR);
-const DUST = new THREE.Color('#241f2c');
+const DUST = new THREE.Color('#69869e');
 
 /** World-space floor at the camera target, measured in CSS pixels, not device pixels. */
 export function minimumStarRadius(cameraDistance: number, verticalFov: number, viewportHeight: number, visibleCount: number): number {
