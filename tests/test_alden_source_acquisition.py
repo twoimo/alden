@@ -31,8 +31,14 @@ class SourceAcquisitionTests(unittest.TestCase):
     def test_realtime_rechecks_only_the_enabled_native_source_with_a_sixty_second_floor(self):
         self.enable()
         with self.scheduler.control_lock():RealtimeCollection(self.f.root).update(True,0)
+        live=RealtimeCollection(self.f.root)
+        live.scan(self.f.store,now=100);live.scan(self.f.store,now=103)
+        self.assertIn(self.f.target,live.pending())
         first=self.scheduler.cycle(indexer=self.index,capturer=self.capture,acquirer=self.acquire)
         self.assertEqual(first['attempts'][0]['state'],'complete')
+        self.assertEqual(live.pending(),{})
+        live.scan(self.f.store,now=200);live.scan(self.f.store,now=203)
+        self.assertEqual(live.pending(),{})
         with self.scheduler.database() as db:
             started=db.execute('SELECT started FROM attempts ORDER BY started DESC LIMIT 1').fetchone()[0]
         self.assertEqual(self.scheduler.cycle(indexer=self.index,capturer=self.capture,acquirer=self.acquire,now=started+59)['attempts'],[])

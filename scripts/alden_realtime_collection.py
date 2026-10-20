@@ -128,15 +128,18 @@ class RealtimeCollection:
         with self.database() as db:
             return {r['target_id']: dict(r) for r in db.execute('SELECT target_id,queued,queued_at FROM inputs WHERE queued IS NOT NULL AND error IS NULL ORDER BY queued_at,target_id')}
 
-    def acknowledge(self, target, signature, *, now=None):
+    def acknowledge(self, target, signature, *, observed_queued=None, now=None):
         if not signature:return False
         try:
             if self.signature(target) != signature:return False
         except (OSError,ValueError,KeyError):return False
         with self.database(write=True) as db:
-            db.execute('''UPDATE inputs SET processed=?,last_collected=?,queued=CASE WHEN queued=? THEN NULL ELSE queued END,
-              queued_at=CASE WHEN queued=? THEN NULL ELSE queued_at END WHERE target_id=?''',
-              (signature, time.time() if now is None else now, signature, signature, target['id']))
+            # Acquisition can replace the queued input before publication.
+            # Consume that original hint too, preserving a newer queued hint.
+            db.execute('''UPDATE inputs SET processed=?,last_collected=?,queued=CASE WHEN queued IN (?,?) THEN NULL ELSE queued END,
+              queued_at=CASE WHEN queued IN (?,?) THEN NULL ELSE queued_at END WHERE target_id=?''',
+              (signature, time.time() if now is None else now, signature, observed_queued,
+               signature, observed_queued, target['id']))
         return True
 
     def heartbeat(self, state, *, now=None):

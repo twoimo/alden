@@ -451,7 +451,8 @@ class CollectionScheduler:
                     result['index']=indexer(self.state_root,projects,cancelled=cancelled)
                     if result['index'].get('state') not in {'ready','empty'}:
                         state='pending';error='collection_index_pending'
-                    elif realtime_enabled:realtime.acknowledge(store.target(target_id),input_signature)
+                    elif realtime_enabled:realtime.acknowledge(store.target(target_id),input_signature,
+                        observed_queued=realtime_pending.get(target_id,{}).get('queued'))
                 except (AldenCancelled,TargetBusy) as exc:
                     state='paused' if isinstance(exc,AldenCancelled) else 'busy';error=type(exc).__name__
                 except Exception as exc:

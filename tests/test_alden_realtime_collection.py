@@ -89,6 +89,21 @@ class RealtimeTests(unittest.TestCase):
         with self.store.database() as db:
             self.assertGreaterEqual(db.execute('SELECT COUNT(*) FROM versions').fetchone()[0], 2)
 
+    def test_acquired_replacement_consumes_its_original_hint_without_requeueing(self):
+        self.enable(); self.queue()
+        queued=self.live.pending()[self.target]['queued']
+        self.write('원본 확인 중 갱신된 파일')
+        target=self.store.target(self.target);current=self.live.signature(target)
+        self.assertNotEqual(queued,current)
+        self.assertTrue(self.live.acknowledge(target,current,observed_queued=queued))
+        self.assertEqual(self.live.pending(),{})
+        self.queue(300)
+        self.assertEqual(self.live.pending(),{})
+        self.write('다음에 도착한 변경');self.queue(400)
+        newer=self.live.pending()[self.target]['queued']
+        self.assertFalse(self.live.acknowledge(target,current,observed_queued=queued))
+        self.assertEqual(self.live.pending()[self.target]['queued'],newer)
+
     def test_index_pending_retains_durable_input_then_retry_completes(self):
         self.enable(); self.queue()
         first = self.cycle(indexer=lambda *a, **kw: {'state': 'warming'})
