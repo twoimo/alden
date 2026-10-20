@@ -66,6 +66,10 @@ Primary sources reviewed on 2026-10-20: [SQLite use cases](https://sqlite.org/wh
 6. If a new engine clears those gates, first build a disposable, rebuildable shadow projection. Preserve SQLite as authority until snapshot plus ordered event catch-up are reconciled at a common checkpoint. Avoid uncoordinated dual writes. Rehearse failure/recovery, digest/count/version/permission comparisons, backup restore and rollback before any product cutover. No migration, new always-on service or paid capacity was authorized merely by this document.
 7. Complete fixed-signature build/install/readback and real runtime validation for the final chosen implementation. Distinguish local tests, background rendering, installed CLI, actual service execution and external release. Keep the full 18-item goal active.
 
+## Worker receipt boundary delta
+
+The 0.3.194 candidate fixes an independently reproduced storage-initialization fault: a first reply receipt could create the operator-state leaf0755 and make the next abort-state read fail closed. Receipt creation now preserves the0700/0600 boundary, refuses links/shared leaves, serializes writes and bounds retries strictly before any write is admitted. [Reproduction, current fixtures and separate runtime gates](worker-receipts-20261020.md) records the evidence. Include `_append_private_reply_receipt`, `_private_lock`, both receipt callers and their tests in the source-bound external review; do not treat synthetic transport fixtures as live model or sending proof.
+
 ## External cross-audit and findings
 
 Required stages: ChatGPT GPT-6 Pro + Deep Research thesis; Gemini Argon highest supported thinking + Deep Research adversarial review; ChatGPT reverse verification. Each must return source-access evidence, a complete saved report, original URL and SHA-256. Maintain an ACCEPT / CONDITIONAL / REJECT / DEFER matrix binding each finding to source revision, implementation or explicit condition and relevant verification.

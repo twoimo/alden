@@ -8222,6 +8222,42 @@ def _receipt_value(analysis: dict, key: str) -> object:
     return None
 
 
+def _append_private_reply_receipt(path: Path, payload: dict) -> None:
+    """Serialize receipts through the existing owner-only file boundary."""
+    path = Path(path)
+    parent = path.parent
+    parent.mkdir(parents=True, exist_ok=True, mode=QUEUE_PARENT_MODE)
+    metadata = parent.lstat()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != QUEUE_PARENT_MODE
+    ):
+        # Do not change permissions on a pre-existing shared directory.
+        raise PermissionError("reply receipt parent is not private")
+    raw = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    for attempt in range(3):
+        entered = False
+        try:
+            with _private_lock(path, expected_parent=parent) as fd:
+                entered = True
+                os.lseek(fd, 0, os.SEEK_END)
+                remaining = memoryview(raw)
+                while remaining:
+                    count = os.write(fd, remaining)
+                    if count <= 0:
+                        raise OSError("reply receipt write made no progress")
+                    remaining = remaining[count:]
+                os.fsync(fd)
+            return
+        except FileNotFoundError:
+            # First-creation contention can fail openat even while the entry
+            # exists. Re-enter every ownership/link check, at most twice.
+            # Once admitted, a write/fsync outcome is uncertain: never replay.
+            if entered or attempt == 2:
+                raise
+
+
 def persist_reply_evidence_ledger(
     event: dict,
     analysis: dict,
@@ -8234,9 +8270,7 @@ def persist_reply_evidence_ledger(
     if not event_id:
         return None
     ledger_path = EVIDENCE_LEDGER
-    parent = ledger_path.parent
     try:
-        parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "recorded_at": utc_now(),
             "event_id": event_id,
@@ -8285,12 +8319,7 @@ def persist_reply_evidence_ledger(
             ][:8],
             "quoted_source": event.get("quoted_source") or _quoted_source_preview(event),
         }
-        line = json.dumps(payload, ensure_ascii=False) + "\n"
-        with open(ledger_path, "a", encoding="utf-8") as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(ledger_path, QUEUE_FILE_MODE)
+        _append_private_reply_receipt(ledger_path, payload)
     except (OSError, TypeError, ValueError):
         return None
     return ledger_path
@@ -8415,13 +8444,7 @@ def record_delivery_ledger(
     if isinstance(retrieval, dict):
         payload["retrieval"] = retrieval
     try:
-        EVIDENCE_LEDGER.parent.mkdir(parents=True, exist_ok=True)
-        line = json.dumps(payload, ensure_ascii=False) + "\n"
-        with open(EVIDENCE_LEDGER, "a", encoding="utf-8") as handle:
-            handle.write(line)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(EVIDENCE_LEDGER, QUEUE_FILE_MODE)
+        _append_private_reply_receipt(EVIDENCE_LEDGER, payload)
     except (OSError, TypeError, ValueError):
         return None
     return EVIDENCE_LEDGER

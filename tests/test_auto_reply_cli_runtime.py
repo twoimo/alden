@@ -212,6 +212,58 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         return module._queue_connection()
 
     @staticmethod
+    def _empty_decision_store(module):
+        """Explicit empty supervisor projection for recovery-only fixtures."""
+        path = Path.home() / (module.__name__ + "-decisions.sqlite3")
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute("""CREATE TABLE reply_decisions(
+                event_id TEXT PRIMARY KEY,status TEXT NOT NULL,decision TEXT,
+                reason TEXT,category TEXT,reply TEXT,sent_at TEXT)""")
+            connection.commit()
+        finally:
+            connection.close()
+        path.chmod(0o600)
+        module.CONTEXT_DB = path
+
+    @contextmanager
+    def _fresh_room_state(self, module, event):
+        """Actual isolated watcher file; exercise the real freshness validator."""
+        for key in ('chat_id', 'log_id', 'source_epoch'):
+            self.assertIs(type(event.get(key)), int)
+            self.assertGreater(event[key], 0)
+        self.assertTrue(event.get('owner_id'))
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            path = Path(temporary) / 'db-watch-state.json'
+            path.write_text(json.dumps({
+                'schema_version': module.CLI_DB_STATE_SCHEMA_VERSION,
+                'target_chat_id': event['chat_id'], 'target_chat_name': module.CHAT,
+                'owner_id': event['owner_id'], 'source_epoch': event['source_epoch'],
+                'last_observed_log_id': event['log_id'],
+            }))
+            path.chmod(0o600)
+            with mock.patch.dict(os.environ, {
+                'OPENKAKAO_AUTO_REPLY_CLI': '1',
+                module.TARGET_CHAT_ID_ENV: str(event['chat_id']),
+                module.DB_SOURCE_EPOCH_ENV: str(event['source_epoch']),
+                module.SUPERVISOR_OWNER_ENV: event['owner_id'],
+                module.DB_WATCH_STATE_ENV: str(path),
+            }, clear=False):
+                self.assertEqual(module.stable_room_watermark_log_id(event), event['log_id'])
+                yield path
+
+    @staticmethod
+    def _legacy_transport_fixture(module):
+        """Isolate legacy CLI protocol tests from product model admission.
+
+        These tests supply a fake executable and fake process results. The
+        product disallows this legacy cloud ID; its policy is tested separately.
+        This component stub authorizes only that test's pinned primary ID.
+        """
+        allowed = module._product_local_model_allowed
+        module._product_local_model_allowed = lambda model: model == module.REPLY_MODEL or allowed(model)
+
+    @staticmethod
     def _load_db_watch_module(name):
         spec = importlib.util.spec_from_file_location(
             name,
@@ -531,7 +583,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     @staticmethod
     @contextmanager
-    def _fake_qwen27b_gateway(module, content, *, loaded=True):
+    def _fake_qwen27b_gateway(module, content, *, loaded=True, vision=False):
         """Serve one bounded local Qwen 27B generation without network access."""
 
         class Response:
@@ -561,6 +613,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                                 "owned_by": "mlx-serve",
                                 "loaded": loaded,
                                 "state": "ready" if loaded else "unloaded",
+                                "capabilities": ["vision"] if vision else [],
                             }
                         ]
                     }
@@ -751,11 +804,10 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             rng=ShortRng(),
         )
         self.assertEqual(social["component"], "short")
-        self.assertEqual(social["delay_seconds"], 20.0)
-        self.assertEqual(
-            social["scheduled_delay_cap_seconds"],
-            module.SCHEDULED_REPLY_DELAY_CAP_SECONDS,
-        )
+        self.assertEqual(social["delay_seconds"], 40.0)
+        self.assertEqual(social["anchor_delay_seconds"], 40.0)
+        self.assertEqual(social["remaining_seconds"], 40.0)
+        self.assertEqual(social["elapsed_seconds"], 0.0)
 
         class WideShortRng:
             @staticmethod
@@ -772,7 +824,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             rng=WideShortRng(),
         )
         self.assertEqual(capped["component"], "short")
-        self.assertEqual(capped["delay_seconds"], 20.0)
+        self.assertEqual(capped["delay_seconds"], 140.0)
+        self.assertEqual(capped["sampled_delay_seconds"], 140.0)
 
     def test_response_turn_kind_classifies_question_caption_and_statement(self):
         module = self._load_auto_reply_module("auto_reply_turn_kind_test")
@@ -1560,12 +1613,13 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertFalse(
             module._outbound_reaction_allows("ㅎㅎ 그건 좀", plain_inbound, laughter_allowed=True)
         )
-        self.assertEqual(
-            module._sanitize_outbound_reaction(
-                "ㅋㅋㅋㅋ 그건 좀", plain_inbound, laughter_allowed=True
-            ),
-            "ㅋㅋㅋㅋ 그건 좀",
+        sanitized = module._sanitize_outbound_reaction(
+            "ㅋㅋㅋㅋ 그건 좀", plain_inbound, laughter_allowed=True
         )
+        self.assertRegex(sanitized, r"^ㅋ{3,5} 그건 좀$")
+        self.assertTrue(module._outbound_reaction_allows(
+            sanitized, plain_inbound, laughter_allowed=True
+        ))
         reasons: list[str] = []
         # The draft must not echo the inbound, otherwise the echo rule rejects
         # it first and the laughter assertion would prove nothing.
@@ -1590,6 +1644,91 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 laughter_allowed=True,
             )
         )
+
+    def test_reply_receipts_initialize_private_root_without_cancelling_next_turn(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_root")
+        root = module._operator_state_root()
+        module.EVIDENCE_LEDGER = root / "reply-evidence.jsonl"
+        self.assertFalse(root.exists())
+        module._capture_job_abort_token().raise_if_cancelled()
+        event = {"event_id": "db:42:1"}
+        self.assertEqual(module.persist_reply_evidence_ledger(event, {}, status="pending"), module.EVIDENCE_LEDGER)
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(module.EVIDENCE_LEDGER.stat().st_mode), 0o600)
+        module._capture_job_abort_token().raise_if_cancelled()
+        self.assertEqual(json.loads(module.EVIDENCE_LEDGER.read_text())["event_id"], event["event_id"])
+
+    def test_reply_receipts_refuse_links_and_shared_parent_without_mutating_them(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_links")
+        shared = Path.home() / "shared"
+        shared.mkdir(mode=0o755)
+        shared.chmod(0o755)
+        with self.assertRaises(PermissionError):
+            module._append_private_reply_receipt(shared / "receipt.jsonl", {"id": 1})
+        self.assertEqual(stat.S_IMODE(shared.stat().st_mode), 0o755)
+        self.assertEqual(list(shared.iterdir()), [])
+        victim = Path.home() / "unchanged.txt"
+        victim.write_bytes(b"original synthetic bytes")
+        victim.chmod(0o640)
+        for kind in ("symbolic", "hard"):
+            with self.subTest(kind=kind):
+                parent = Path.home() / kind
+                parent.mkdir(mode=0o700)
+                receipt = parent / "receipt.jsonl"
+                if kind == "symbolic":
+                    receipt.symlink_to(victim)
+                else:
+                    os.link(victim, receipt)
+                with self.assertRaises((OSError, PermissionError)):
+                    module._append_private_reply_receipt(receipt, {"id": 1})
+                self.assertEqual(victim.read_bytes(), b"original synthetic bytes")
+                self.assertEqual(stat.S_IMODE(victim.stat().st_mode), 0o640)
+
+    def test_reply_receipts_serialize_concurrent_writers_into_complete_json_lines(self):
+        from concurrent.futures import ThreadPoolExecutor
+        module = self._load_auto_reply_module("auto_reply_private_receipt_concurrency")
+        receipt = Path.home() / "private-receipts" / "receipt.jsonl"
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda i: module._append_private_reply_receipt(receipt, {"id": i, "body": "한글" * 100}), range(24)))
+        rows = [json.loads(line) for line in receipt.read_text().splitlines()]
+        self.assertEqual(sorted(row["id"] for row in rows), list(range(24)))
+        self.assertTrue(all(row["body"] == "한글" * 100 for row in rows))
+        self.assertEqual(stat.S_IMODE(receipt.stat().st_mode), 0o600)
+
+    def test_reply_receipts_complete_partial_writes_and_reject_zero_progress(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_partial")
+        receipt = Path.home() / "private-receipts" / "receipt.jsonl"
+        original_write = os.write
+        with mock.patch.object(module.os, "write", side_effect=lambda fd, raw: original_write(fd, raw[:7])) as write:
+            module._append_private_reply_receipt(receipt, {"body": "한글" * 20})
+        self.assertGreater(write.call_count, 2)
+        self.assertEqual(json.loads(receipt.read_text()), {"body": "한글" * 20})
+        before = receipt.read_bytes()
+        with mock.patch.object(module.os, "write", return_value=0):
+            with self.assertRaisesRegex(OSError, "no progress"):
+                module._append_private_reply_receipt(receipt, {"id": "must not be recorded"})
+        self.assertEqual(receipt.read_bytes(), before)
+        with mock.patch.object(module.os, "fsync", side_effect=FileNotFoundError("uncertain after write")):
+            with self.assertRaisesRegex(FileNotFoundError, "uncertain after write"):
+                module._append_private_reply_receipt(receipt, {"id": "one attempted append"})
+        self.assertEqual([json.loads(line) for line in receipt.read_text().splitlines()],
+            [{"body": "한글" * 20}, {"id": "one attempted append"}])
+
+    def test_reply_receipts_retry_only_a_prewrite_creation_failure(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_creation")
+        receipt = Path.home() / "private-receipts" / "receipt.jsonl"
+        original_open = os.open
+        attempts = []
+        def contested_open(path, *args, **kwargs):
+            if path == receipt.name:
+                attempts.append(path)
+                if len(attempts) == 1:
+                    raise FileNotFoundError("first creation contention")
+            return original_open(path, *args, **kwargs)
+        with mock.patch.object(module.os, "open", side_effect=contested_open):
+            module._append_private_reply_receipt(receipt, {"id": "once"})
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(receipt.read_text().splitlines(), [json.dumps({"id": "once"})])
 
     def test_reply_evidence_ledger_links_retrieval_and_prompt(self):
         module = self._load_auto_reply_module("auto_reply_evidence_ledger_test")
@@ -4613,74 +4752,52 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertFalse(polled[1][2]["delivery_ready"])
 
     def test_authoritative_context_sync_deferral_preserves_watcher_readiness(self):
-        db_watch = self._load_db_watch_module(
-            "auto_reply_context_sync_authoritative_deferred_test"
-        )
+        db_watch = self._load_db_watch_module("auto_reply_context_sync_authoritative_deferred_test")
         db_watch.SELF = "self"
-        deferred = {
-            "schema_version": 1,
-            "action": "context_sync_local",
-            "chat_id": 42,
-            "chat": db_watch.CHAT,
-            "checkpoint_log_id": 999,
-            "pages": 1,
-            "authoritative": True,
-            "deferred": {
-                "reason": "fresh_unmatched_self",
-                "log_id": 1000,
-                "retry_after_seconds": 5,
-            },
-            "totals": {key: 0 for key in db_watch.CONTEXT_SYNC_TOTAL_KEYS},
-            "network": False,
-        }
-        polled = []
-        saved = []
-
-        def poll_once(state, interval):
-            polled.append((dict(state), interval))
-            ready = dict(state)
-            ready.update(
-                capability_state="ready",
-                delivery_enabled=True,
-                fence_reason="",
-                fence="ready",
-            )
-            return ready, 0
-
-        def save_polled_state(state):
+        deferred = {"schema_version": 1, "action": "context_sync_local", "chat_id": 42,
+            "chat": db_watch.CHAT, "checkpoint_log_id": 999, "pages": 1, "authoritative": True,
+            "deferred": {"reason": "fresh_unmatched_self", "log_id": 1000, "retry_after_seconds": 5},
+            "totals": {key: 0 for key in db_watch.CONTEXT_SYNC_TOTAL_KEYS}, "network": False}
+        worker = ImmediateContextSyncWorker([("ok", deferred)])
+        clock = AdvancingTestClock(start=100.0)
+        polled, saved = [], []
+        def poll_once(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            ready = kwargs.get('delivery_ready', True)
+            return {**state, 'capability_state': 'ready' if ready else 'starting',
+                'delivery_enabled': ready, 'fence_reason': '', 'fence': 'ready' if ready else 'starting'}, 0
+        def save_polled(state):
             saved.append(dict(state))
             return True
-
+        def sleep(delay):
+            clock.sleep(delay)
+            if len(polled) >= 2:
+                raise StopIteration
         with (
-            mock.patch.dict(
-                os.environ,
-                {db_watch.TARGET_CHAT_ID_ENV: "42"},
-                clear=False,
-            ),
-            mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
-            mock.patch.object(db_watch.signal, "signal"),
-            mock.patch.object(db_watch, "load_state", return_value={}),
-            mock.patch.object(db_watch, "sync_context_index", return_value=deferred),
-            mock.patch.object(db_watch, "poll_once", side_effect=poll_once),
-            mock.patch.object(
-                db_watch, "_save_polled_state", side_effect=save_polled_state
-            ),
-            mock.patch.object(db_watch.time, "monotonic", side_effect=[10.0, 11.0]),
-            mock.patch.object(db_watch.time, "time", return_value=100.0),
-            mock.patch.object(db_watch.time, "sleep", side_effect=StopIteration),
-            mock.patch.object(db_watch, "_stop_poll_stream"),
+            mock.patch.dict(os.environ, {db_watch.TARGET_CHAT_ID_ENV: '42'}, clear=False),
+            mock.patch.object(sys, 'argv', ['auto-reply-db-watch.py']),
+            mock.patch.object(db_watch.signal, 'signal'),
+            mock.patch.object(db_watch, 'load_state', return_value={}),
+            mock.patch.object(db_watch, '_state', side_effect=lambda state: dict(state)),
+            mock.patch.object(db_watch, 'save_state', return_value=True),
+            mock.patch.object(db_watch, '_PERIODIC_CONTEXT_SYNC', worker),
+            mock.patch.object(db_watch, 'poll_once', side_effect=poll_once),
+            mock.patch.object(db_watch, '_save_polled_state', side_effect=save_polled),
+            mock.patch.object(db_watch.time, 'monotonic', side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, 'time', side_effect=clock.time),
+            mock.patch.object(db_watch.time, 'sleep', side_effect=sleep),
+            mock.patch.object(db_watch, '_stop_poll_stream'),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
-
-        self.assertEqual(len(polled), 1)
-        observed, interval = polled[0]
-        self.assertEqual(interval, 1.0)
-        self.assertEqual(observed["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(observed["context_sync_deferred_log_id"], 1000)
-        self.assertEqual(saved[0]["capability_state"], "ready")
-        self.assertTrue(saved[0]["delivery_enabled"])
-        self.assertEqual(saved[0]["fence"], "ready")
+        self.assertEqual(len(polled), 2)
+        self.assertFalse(polled[0][2]['delivery_ready'])
+        self.assertEqual(polled[1][0]['context_sync_checkpoint_log_id'], 999)
+        self.assertEqual(polled[1][0]['context_sync_deferred_log_id'], 1000)
+        self.assertEqual(saved[0]['capability_state'], 'starting')
+        self.assertFalse(saved[0]['delivery_enabled'])
+        self.assertEqual(saved[-1]['capability_state'], 'ready')
+        self.assertTrue(saved[-1]['delivery_enabled'])
 
     def test_clean_transient_poll_fence_is_persisted_before_bounded_retry(self):
         db_watch = self._load_db_watch_module("auto_reply_clean_poll_retry_test")
@@ -5293,6 +5410,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         event = {
             "chat_id": 42,
             "log_id": 99,
+            "source_epoch": 7,
+            "owner_id": "owner",
             "author_nickname": "현준",
             "burst_source_log_ids": [97, 98, 99],
             "burst_tail_log_id": 99,
@@ -5320,7 +5439,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 module, "_run_json_command", return_value=payload
             ) as run_json,
         ):
-            bundle = module.run_context_reply_bundle("결과 나왔어요", event)
+            with self._fresh_room_state(module, event):
+                bundle = module.run_context_reply_bundle("결과 나왔어요", event)
         command = run_json.call_args_list[0].args[0]
         self.assertEqual(
             [
@@ -5350,7 +5470,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 module.RetrievalError, "recipient_style_profile_malformed"
             ),
         ):
-            module.run_context_reply_bundle("결과 나왔어요", event)
+            with self._fresh_room_state(module, event):
+                module.run_context_reply_bundle("결과 나왔어요", event)
 
         legacy = json.loads(json.dumps(payload, ensure_ascii=False))
         legacy["schema_version"] = 2
@@ -5360,7 +5481,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             mock.patch.object(module, "_run_json_command", return_value=legacy),
             self.assertRaisesRegex(module.RetrievalError, "retrieval_schema_mismatch"),
         ):
-            module.run_context_reply_bundle("결과 나왔어요", event)
+            with self._fresh_room_state(module, event):
+                module.run_context_reply_bundle("결과 나왔어요", event)
 
         malformed_event = dict(event, burst_source_log_ids=[97, 99, 98])
         with (
@@ -5754,6 +5876,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             module, _runner = self._load_trusted_codex_module(
                 "auto_reply_runner_force_hash_test", root
             )
+            self._legacy_transport_fixture(module)
             response = {
                 "should_reply": False,
                 "reply": "",
@@ -5848,6 +5971,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, environment, clear=False):
                 module = self._load_auto_reply_module("auto_reply_codex_runner_test")
+            self._legacy_transport_fixture(module)
             module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
             self.assertTrue(module.runner_is_trusted())
             captured = {}
@@ -5924,6 +6048,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 "auto_reply_direct_target_prompt_test",
                 temporary,
             )
+            self._legacy_transport_fixture(module)
             recent = [
                 {
                     "evidence_id": "recent:500",
@@ -6038,6 +6163,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                     f"auto_reply_target_evidence_{module_suffix}",
                     temporary,
                 )
+                self._legacy_transport_fixture(module)
                 event = {
                     "type": "item.completed",
                     "item": {
@@ -6270,6 +6396,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 module = self._load_auto_reply_module(
                     "auto_reply_rate_limit_circuit_test"
                 )
+                self._legacy_transport_fixture(module)
             calls = []
 
             def limited(command, **kwargs):
@@ -6310,6 +6437,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 restarted = self._load_auto_reply_module(
                     "auto_reply_rate_limit_restart_test"
                 )
+                self._legacy_transport_fixture(restarted)
             restarted._run_bounded_process = mock.Mock(
                 side_effect=AssertionError("runner must remain circuit-broken")
             )
@@ -7225,7 +7353,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         module = self._load_auto_reply_module("auto_reply_model_queue_defer_test")
         stats = self._timing_stats(module)
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             now = int(time.time())
             event = self._burst_event(module, 321, "question?", now)
             event["recent_messages"] = [self._recent_row(event)]
@@ -7267,7 +7395,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                     mock.patch.object(module, "record_context_decision") as record,
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous_status, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous_status, connection)
                 row = connection.execute(
                     """
                     SELECT status, event_json, due_at, decision, reason, error_class
@@ -7348,7 +7477,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             with mock.patch.object(module.time, "time", return_value=base):
                 self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
@@ -7384,6 +7513,12 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                         return_value=True,
                     ) as record_skip,
                     mock.patch.object(module, "complete_event") as complete,
+                    mock.patch.object(module, "_run_bounded_process", return_value=(0, json.dumps([{
+                        "log_id": event["log_id"], "chat_id": event["chat_id"],
+                        "author_id": event["author_id"], "is_self": False,
+                        "sender_name": event["author_nickname"], "message": event["message"],
+                        "attachment": "", "message_type": 1, "sent_at": event["sent_at"],
+                    }]).encode(), b"")),
                 ):
                     first_now = base + module.BURST_SETTLE_SECONDS + 1.0
                     with mock.patch.object(
@@ -7395,7 +7530,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                             first_now,
                             connection,
                         )
-                        module.process_job(first_job, first_status, connection)
+                        with self._fresh_room_state(module, json.loads((first_job)["event_json"])):
+                            module.process_job(first_job, first_status, connection)
 
                     first_row = connection.execute(
                         "SELECT status, due_at, event_json FROM reply_jobs "
@@ -7419,7 +7555,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                             base + 100.0,
                             connection,
                         )
-                        module.process_job(second_job, second_status, connection)
+                        with self._fresh_room_state(module, json.loads((second_job)["event_json"])):
+                            module.process_job(second_job, second_status, connection)
 
                     second_row = connection.execute(
                         "SELECT status, due_at, event_json FROM reply_jobs "
@@ -7443,7 +7580,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                             original_deadline,
                             connection,
                         )
-                        module.process_job(final_job, final_status, connection)
+                        with self._fresh_room_state(module, json.loads((final_job)["event_json"])):
+                            module.process_job(final_job, final_status, connection)
 
                 final_row = connection.execute(
                     "SELECT status, due_at, decision, reason, category "
@@ -9933,6 +10071,10 @@ print(json.dumps({
                     },
                 }
 
+                db_watch.QUEUE = Path.home() / "42" / "reply-queue.sqlite3"
+                db_watch.QUEUE.parent.mkdir(mode=0o700)
+                fixture = db_watch.transition_journal.open_queue(db_watch.QUEUE, create=True, expected_chat_id=42)
+                fixture.close()
                 state, emitted = db_watch.poll_once(db_watch._state({}), 1.0)
 
                 self.assertEqual(started, [(42, 1.0, 123)])
@@ -11118,7 +11260,8 @@ print(json.dumps({
                 return_value=model_result,
             ) as generate,
         ):
-            analysis = module.analyze_event(prepared)
+            with self._fresh_room_state(module, prepared):
+                analysis = module.analyze_event(prepared)
         self.assertEqual(analysis["decision"], "reply")
         self.assertEqual(
             generate.call_args.kwargs["conversation_target"],
@@ -11178,7 +11321,8 @@ print(json.dumps({
                 return_value=model_result,
             ) as generate,
         ):
-            analysis = module.analyze_event(prepared)
+            with self._fresh_room_state(module, prepared):
+                analysis = module.analyze_event(prepared)
 
         self.assertEqual(analysis["decision"], "reply")
         incoming = generate.call_args.args[0]
@@ -11417,14 +11561,14 @@ print(json.dumps({
                         status="sending",
                         error_class=None,
                     ),
-                    "updated",
+                    "superseded",
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT status FROM reply_jobs WHERE event_id = ?",
                         (first["event_id"],),
                     ).fetchone()[0],
-                    "sending",
+                    "projection_pending",
                 )
             finally:
                 connection.close()
@@ -11473,7 +11617,8 @@ print(json.dumps({
                         (second["event_id"],),
                     ).fetchone()[0]
                 )
-                self.assertEqual(queued_second["burst_source_log_ids"], [402])
+                # Sending has not yet proved receipt; preserve both source IDs.
+                self.assertEqual(queued_second["burst_source_log_ids"], [401, 402])
             finally:
                 connection.close()
 
@@ -11862,7 +12007,7 @@ print(json.dumps({
         )
 
         now = int(time.time())
-        event = self._burst_event(module, 425, "old question?", now - 301)
+        event = self._burst_event(module, 425, "previous statement", now - 301)
         event["recent_messages"] = [self._recent_row(event)]
         bundle = {
             "context": [{"evidence_id": "ctx:one"}],
@@ -11878,7 +12023,8 @@ print(json.dumps({
             mock.patch.object(module, "fetch_link_previews", return_value=[]),
             mock.patch.object(module, "generate_reply") as model,
         ):
-            analysis = module.analyze_event(event)
+            with self._fresh_room_state(module, event):
+                analysis = module.analyze_event(event)
         self.assertEqual(analysis["decision"], "skip")
         self.assertEqual(analysis["reason"], "stale_backlog")
         self.assertEqual(analysis["category"], "policy")
@@ -12201,7 +12347,7 @@ print(json.dumps({
             style_profile={"policy_version": module.STYLE_POLICY_VERSION},
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
             try:
@@ -12251,7 +12397,8 @@ print(json.dumps({
                         return_value=True,
                     ) as record_context,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 row = connection.execute(
                     "SELECT status, due_at, event_json FROM reply_jobs WHERE event_id = ?",
                     (event["event_id"],),
@@ -12371,6 +12518,7 @@ print(json.dumps({
         event = self._burst_event(module, 443, "질문이에요?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         prepared["response_timing"] = {
             "delay_seconds": 12.4,
@@ -12383,7 +12531,7 @@ print(json.dumps({
             "response_window_upper_seconds": 300.0,
         }
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             first_connection = self._worker_queue_connection(module)
             first_connection.execute(
@@ -12447,7 +12595,8 @@ print(json.dumps({
                         "sample_response_delay_for_analysis",
                     ) as resample,
                 ):
-                    module.process_job(job, previous, restarted)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, restarted)
                 resample.assert_not_called()
                 sender.assert_called_once()
                 self.assertEqual(sender.call_args.args[0], "저장된 답변")
@@ -12470,7 +12619,7 @@ print(json.dumps({
         prepared = module._prepare_burst_event(event)
         prepared["response_window_upper_seconds"] = 60.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -12508,7 +12657,8 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as sender,
                     mock.patch.object(module, "complete_event"),
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 sender.assert_not_called()
                 self.assertEqual(
                     tuple(
@@ -12608,9 +12758,10 @@ print(json.dumps({
         event = self._burst_event(module, 446, "old scheduled", now - 70)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 60.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -12664,7 +12815,8 @@ print(json.dumps({
                     ),
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 sender.assert_called_once()
                 complete.assert_not_called()
                 row = connection.execute(
@@ -12689,9 +12841,10 @@ print(json.dumps({
         event = self._burst_event(module, 447, "question?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -12741,7 +12894,8 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as sender,
                     mock.patch.object(module, "finish_delivery_unknown") as unknown,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 sender.assert_not_called()
                 unknown.assert_not_called()
                 row = connection.execute(
@@ -12771,9 +12925,10 @@ print(json.dumps({
         event = self._burst_event(module, 448, "question?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -12818,7 +12973,8 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply", return_value=False),
                     mock.patch.object(module, "finish_delivery_unknown") as unknown,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 unknown.assert_not_called()
                 self.assertEqual(
                     connection.execute(
@@ -12888,7 +13044,8 @@ print(json.dumps({
                     ),
                     mock.patch.object(module, "record_delivery_unknown"),
                 ):
-                    module.process_job(job, "scheduled", connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "scheduled", connection)
                 self.assertEqual(
                     connection.execute(
                         "SELECT status FROM reply_jobs WHERE event_id = ?",
@@ -12907,6 +13064,7 @@ print(json.dumps({
         first = self._burst_event(module, 453, "first", now)
         first["recent_messages"] = [self._recent_row(first)]
         first = module._prepare_burst_event(first)
+        first["analysis_watermark_log_id"] = first["log_id"]
         first["response_window_upper_seconds"] = 300.0
         second = self._burst_event(
             module,
@@ -12917,7 +13075,7 @@ print(json.dumps({
         )
         second["recent_messages"].append(self._recent_row(second))
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(first))
             connection = self._worker_queue_connection(module)
             try:
@@ -12994,7 +13152,8 @@ print(json.dumps({
                     ),
                     mock.patch.object(module, "record_delivery_unknown"),
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
 
                 row = connection.execute(
                     """
@@ -13014,7 +13173,7 @@ print(json.dumps({
                         "delivery_unknown",
                     ),
                 )
-                self.assertEqual(conversation.call_count, 2)
+                self.assertEqual(conversation.call_count, 1)  # No post-mutation freshness rollback.
                 skip_audit.assert_not_called()
             finally:
                 connection.close()
@@ -13951,7 +14110,7 @@ print(json.dumps({
     def test_burst_projection_retries_audit_without_delivery_authority(self):
         module = self._load_auto_reply_module("auto_reply_burst_projection_retry_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             first = self._burst_event(module, 551, "first", 5_500)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -13963,10 +14122,15 @@ print(json.dumps({
             )
             second["recent_messages"].append(self._recent_row(second))
             self.assertTrue(module.enqueue_event(first))
-            self.assertTrue(module.enqueue_event(second))
             connection = self._worker_queue_connection(module)
+            initial = module.claim_job(time.time() + module.BURST_SETTLE_SECONDS + 1, connection)
+            self.assertIsNotNone(initial)
+            self.assertEqual(initial[1], "pending")
+            self.assertTrue(module.enqueue_event(second))
+            self.assertEqual(module.transition_processing_job(first["event_id"], connection=connection,
+                status="scheduled"), "superseded")
             try:
-                claimed = module.claim_job(time.time(), connection)
+                claimed = module.claim_job(time.time() + module.BURST_SETTLE_SECONDS + 1, connection)
                 self.assertIsNotNone(claimed)
                 job, previous_status = claimed
                 self.assertEqual(previous_status, "projection_pending")
@@ -13984,7 +14148,8 @@ print(json.dumps({
                     mock.patch.object(module, "record_delivery_unknown") as unknown,
                 ):
                     before = time.time()
-                    module.process_job(job, previous_status, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous_status, connection)
                 row = connection.execute(
                     """
                     SELECT status, due_at, reason, category, error_class
@@ -14011,7 +14176,8 @@ print(json.dumps({
                     mock.patch.object(module, "complete_event"),
                     mock.patch.object(module, "cleanup_media_path"),
                 ):
-                    module.process_job(retry_job, retry_status, connection)
+                    with self._fresh_room_state(module, json.loads((retry_job)["event_json"])):
+                        module.process_job(retry_job, retry_status, connection)
                 self.assertEqual(
                     connection.execute(
                         "SELECT status FROM reply_jobs WHERE event_id = ?",
@@ -14024,6 +14190,7 @@ print(json.dumps({
 
     def test_stale_processing_with_successor_recovers_for_projection(self):
         module = self._load_auto_reply_module("auto_reply_burst_recovery_test")
+        self._empty_decision_store(module)
         with tempfile.TemporaryDirectory() as temporary:
             module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
             first = self._burst_event(module, 601, "first", 6_000)
@@ -14439,7 +14606,7 @@ print(json.dumps({
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            module.QUEUE = root / "42" / "reply-queue.sqlite3"
             queue = self._worker_queue_connection(module)
             queue.execute(
                 """
@@ -14477,7 +14644,8 @@ print(json.dumps({
                     mock.patch.object(module, "_context_terminal_decision", return_value=terminal),
                     mock.patch.object(module, "complete_event"),
                 ):
-                    module.process_job(job, "pending", queue)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "pending", queue)
                 row = queue.execute(
                     "SELECT status,reason,error_class FROM reply_jobs WHERE event_id=?",
                     (event["event_id"],),
@@ -14600,18 +14768,18 @@ print(json.dumps({
             "auto_reply_scheduled_strict_skip_test"
         )
         cases = (
-            ("context", True, "planned", "context_only_author", "context_only"),
+            ("not-enrolled", True, "planned", "author_not_allowlisted", "policy"),
             ("empty", False, None, "empty_scheduled_reply", "uncertain"),
             (
                 "short-laughter",
                 False,
                 "좋네ㅋㅋ",
-                module.REPLY_LAUGHTER_POLICY_REASON,
+                "policy_reaction_mismatch",
                 "policy",
             ),
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             queue = self._worker_queue_connection(module)
             try:
                 for index, (name, context_only, reply, reason, category) in enumerate(
@@ -14625,6 +14793,7 @@ print(json.dumps({
                             name,
                             int(time.time()),
                         )
+                        event["analysis_watermark_log_id"] = event["log_id"]
                         event["response_window_upper_seconds"] = 300.0
                         job = {
                             "event_id": event["event_id"],
@@ -14670,7 +14839,7 @@ print(json.dumps({
                             mock.patch.object(
                                 module,
                                 "numeric_author_identity_status",
-                                return_value="allowed",
+                                return_value="not_allowlisted" if context_only else "allowed",
                             ),
                             mock.patch.object(
                                 module,
@@ -14699,7 +14868,8 @@ print(json.dumps({
                             ),
                             mock.patch.object(module, "complete_event"),
                         ):
-                            module.process_job(job, "scheduled", queue)
+                            with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                                module.process_job(job, "scheduled", queue)
                         row = queue.execute(
                             """
                             SELECT status,decision,reason,category,reply,
@@ -15440,6 +15610,12 @@ print(json.dumps({
         module = self._load_auto_reply_module("auto_reply_worker_sqlite_busy_test")
         first_connection = mock.Mock()
         reopened_connection = mock.Mock()
+        # The independent reconciliation sweep sees an empty queue. Recovery
+        # below remains the component that raises the transient SQLite error.
+        first_connection.execute.return_value.fetchall.return_value = []
+        first_connection.execute.return_value.fetchone.return_value = (0,)
+        reopened_connection.execute.return_value.fetchall.return_value = []
+        reopened_connection.execute.return_value.fetchone.return_value = (0,)
         circuit_connection = mock.Mock()
         health = mock.Mock()
         rerank = mock.Mock()
@@ -15465,7 +15641,7 @@ print(json.dumps({
             mock.patch.object(module, "apply_operator_request"),
             mock.patch.object(
                 module,
-                "recover_stale_jobs",
+                "claim_job",
                 side_effect=sqlite3.OperationalError("database is locked"),
             ),
             mock.patch.object(module.time, "sleep") as sleep,
@@ -16717,200 +16893,42 @@ print(json.dumps({
             capture.assert_not_called()
             generate.assert_not_called()
 
-    def test_generate_reply_passes_ordered_multi_image_flags(self):
-        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
-            root = Path(temporary)
-            module, _runner = self._load_trusted_codex_module(
-                "auto_reply_ordered_multi_image_test", root
-            )
-            with self._owned_image_bundle(
-                module,
-                count=3,
-                message_type=27,
-            ) as media:
-                evidence_id = f"media:{media['manifest']['bundle_sha256']}"
-                response = {
-                    "should_reply": True,
-                    "reply": "세 장 모두 봤어요",
-                    "category": "social",
-                    "reason": "useful_image_response",
-                    "evidence_ids": [evidence_id],
-                }
+    def test_generate_reply_preserves_ordered_images_on_admitted_vision_route(self):
+        module = self._load_auto_reply_module("auto_reply_ordered_vision_test")
+        with self._owned_image_bundle(module, count=2) as media:
+            evidence = "media:" + media["manifest"]["bundle_sha256"]
+            answer = json.dumps({"should_reply": True, "reply": "메뉴판 내용 확인했어요",
+                "category": "social", "reason": "photo", "evidence_ids": [evidence]}, ensure_ascii=False)
+            with (
+                self._fake_qwen27b_gateway(module, answer, vision=True) as gateway,
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": True, "lease_token": "c" * 32, "retry_at": time.time() + 180}),
+                mock.patch.object(module, "_finish_model_call_success", return_value=True),
+                mock.patch.object(module, "_run_bounded_process") as process,
+            ):
+                result = module.generate_reply("메뉴 확인해줘", [], [], [], [], attachment="image",
+                    image_path=media["paths"][0], image_paths=media["paths"],
+                    image_marker=media["marker"], media_evidence_id=evidence)
+            self.assertTrue(result["should_reply"], result)
+            parts = gateway["payloads"][0]["messages"][1]["content"]
+            received = [base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
+                        for part in parts if part["type"] == "image_url"]
+            self.assertEqual(received, [path.read_bytes() for path in media["paths"]])
+            process.assert_not_called()
+            gateway["external_urlopen"].assert_not_called()
 
-                with (
-                    self._fake_qwen27b_gateway(
-                        module,
-                        json.dumps(response, ensure_ascii=False),
-                    ) as gateway,
-                    mock.patch.object(
-                        module, "privacy_attestation_current", return_value=True
-                    ),
-                    mock.patch.object(module, "runner_is_trusted", return_value=True),
-                    mock.patch.object(
-                        module,
-                        "_acquire_model_call_slot",
-                        return_value={
-                            "allowed": True,
-                            "failure_class": "",
-                            "retry_at": time.time() + 180,
-                            "lease_token": "a" * 32,
-                        },
-                    ),
-                    mock.patch.object(
-                        module, "_finish_model_call_success", return_value=True
-                    ),
-                    mock.patch.object(
-                        module, "_run_bounded_process"
-                    ) as process_runner,
-                ):
-                    result = module.generate_reply(
-                        "사진들 봐줘",
-                        [],
-                        [],
-                        [],
-                        [],
-                        attachment="image",
-                        image_path=media["paths"][0],
-                        image_marker=media["marker"],
-                        image_paths=media["paths"],
-                        media_evidence_id=evidence_id,
-                    )
-
-                self.assertEqual(len(gateway["payloads"]), 1)
-                payload = gateway["payloads"][0]
-                self.assertEqual(
-                    payload["model"],
-                    module.QWEN38_27B_MODEL_ID.removeprefix("mlx/"),
-                )
-                content = payload["messages"][1]["content"]
-                self.assertIsInstance(content, list)
-                prompt = content[0]["text"]
-                self.assertIn('"image_input_count": 3', prompt)
-                self.assertIn(evidence_id, prompt)
-                image_bytes = [
-                    base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
-                    for part in content[1:]
-                ]
-                self.assertEqual(
-                    image_bytes,
-                    [path.read_bytes() for path in media["paths"]],
-                )
-                gateway["external_urlopen"].assert_not_called()
-                process_runner.assert_not_called()
-                self.assertTrue(result["should_reply"])
-                self.assertEqual(result["evidence_ids"], [evidence_id])
-
-    def test_gjc_generate_reply_sends_prompt_on_stdin_with_at_images(self):
-        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
-            root = Path(temporary)
-            runner = root / "gjc"
-            self._write_executable(runner, "#!/bin/sh\nexit 0\n")
-            environment = {
-                "OPENKAKAO_REPLY_RUNNER": str(runner),
-                "OPENKAKAO_REPLY_RUNNER_KIND": "gjc",
-                "OPENKAKAO_REPLY_RUNNER_SHA256": hashlib.sha256(runner.read_bytes()).hexdigest(),
-                "OPENKAKAO_REPLY_MODEL": "omlx/Qwen3.6-35B-A3B-8bit",
-                "OPENKAKAO_REPLY_REASONING_EFFORT": "high",
-                "OPENKAKAO_REPLY_SERVICE_TIER": "default",
-                "OPENKAKAO_REPLY_QUEUE": str(root / "reply-queue.sqlite3"),
-            }
-            with mock.patch.dict(os.environ, environment, clear=False):
-                module = self._load_auto_reply_module("auto_reply_gjc_stdin_image_test")
-            module._operator_state_root = lambda: root
-            (root / "reply-image-model.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "model": module.QWEN38_27B_MODEL_ID,
-                        "updated_at": 1,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self._owned_image_bundle(module, count=1, message_type=2) as media:
-                evidence_id = f"media:{media['manifest']['bundle_sha256']}"
-                response = {
-                    "should_reply": True,
-                    "reply": "메뉴판이네",
-                    "category": "social",
-                    "reason": "useful_image_response",
-                    "evidence_ids": [evidence_id],
-                }
-
-                with (
-                    self._fake_qwen27b_gateway(
-                        module,
-                        json.dumps(response, ensure_ascii=False),
-                    ) as gateway,
-                    mock.patch.object(
-                        module, "privacy_attestation_current", return_value=True
-                    ),
-                    mock.patch.object(module, "runner_is_trusted", return_value=True),
-                    mock.patch.object(
-                        module,
-                        "_acquire_model_call_slot",
-                        return_value={
-                            "allowed": True,
-                            "failure_class": "",
-                            "retry_at": time.time() + 180,
-                            "lease_token": "b" * 32,
-                        },
-                    ),
-                    mock.patch.object(
-                        module, "_finish_model_call_success", return_value=True
-                    ),
-                    mock.patch.object(
-                        module, "_run_bounded_process"
-                    ) as process_runner,
-                    mock.patch.object(module, "_ensure_omlx_model_resident"),
-                ):
-                    result = module.generate_reply(
-                        "이 사진 뭐야",
-                        [],
-                        [],
-                        [],
-                        [],
-                        attachment="image",
-                        image_path=media["paths"][0],
-                        image_marker=media["marker"],
-                        image_paths=media["paths"],
-                        media_evidence_id=evidence_id,
-                    )
-
-                self.assertEqual(len(gateway["payloads"]), 1)
-                payload = gateway["payloads"][0]
-                self.assertEqual(
-                    payload["model"],
-                    module.QWEN38_27B_MODEL_ID.removeprefix("mlx/"),
-                )
-                content = payload["messages"][1]["content"]
-                self.assertIsInstance(content, list)
-                prompt = content[0]["text"]
-                prompt_payload = json.loads(prompt)
-                self.assertEqual(prompt_payload["incoming_message"], "이 사진 뭐야")
-                self.assertEqual(prompt_payload["attachment"], "image")
-                self.assertIs(prompt_payload["image_input_available"], True)
-                self.assertEqual(prompt_payload["image_input_count"], 1)
-                self.assertEqual(
-                    prompt_payload["media_evidence"],
-                    {
-                        "evidence_id": evidence_id,
-                        "source_log_id": None,
-                        "image_count": 1,
-                    },
-                )
-                self.assertNotIn(str(media["paths"][0]), prompt)
-                self.assertEqual(content[0]["type"], "text")
-                self.assertEqual(content[1]["type"], "image_url")
-                image_url = content[1]["image_url"]["url"]
-                self.assertEqual(
-                    base64.b64decode(image_url.split(",", 1)[1]),
-                    media["paths"][0].read_bytes(),
-                )
-                gateway["external_urlopen"].assert_not_called()
-                process_runner.assert_not_called()
-                self.assertTrue(result["should_reply"])
-                self.assertEqual(result["reply"], "메뉴판이네")
+    def test_unregistered_cli_model_cannot_receive_images_or_private_prompt(self):
+        module = self._load_auto_reply_module("auto_reply_unknown_cli_image_route")
+        with self._owned_image_bundle(module, count=2) as media:
+            original = [path.read_bytes() for path in media["paths"]]
+            with mock.patch.object(module, "_run_bounded_process") as process:
+                result = module._run_generation_candidate("unregistered/private-cli-model", "private system",
+                    b"private input", command=["unused-cli"], env={}, model_stdin_bytes=b"private input",
+                    image_paths=media["paths"], timeout=1)
+            self.assertEqual(result, (1, b"", b"product_cloud_fallback_disabled"))
+            process.assert_not_called()
+            self.assertEqual([path.read_bytes() for path in media["paths"]], original)
 
     def test_image_bundle_manifest_is_complete_ordered_and_hash_bound(self):
         module = self._load_auto_reply_module(
@@ -17041,6 +17059,7 @@ print(json.dumps({
                         media["paths"],
                         media["manifest"],
                         recent_messages=[],
+                        authoritative_messages=[message],
                         candidate={},
                     )
             self.assertEqual(hook.call_count, 1)
@@ -17091,7 +17110,7 @@ print(json.dumps({
         self.assertIsNotNone(skipped)
         self.assertFalse(skipped["should_reply"])
 
-    def test_delivery_unknown_removes_bundle_and_scrubs_durable_event(self):
+    def test_delivery_unknown_retains_bundle_and_scrubs_durable_event(self):
         module = self._load_auto_reply_module(
             "auto_reply_delivery_unknown_media_scrub_test"
         )
@@ -17124,13 +17143,13 @@ print(json.dumps({
                     connection.close()
                 durable = json.loads(row["event_json"])
                 self.assertEqual(row["status"], module.DELIVERY_UNKNOWN)
-                self.assertFalse(media["directory"].exists())
+                self.assertTrue(media["directory"].exists())
                 self.assertEqual(durable["image_path"], "")
                 self.assertEqual(durable["image_paths"], [])
                 self.assertEqual(durable["media_marker"], "")
                 self.assertIsNone(durable["media_manifest"])
 
-    def test_author_terminal_removes_bundle_and_scrubs_durable_event(self):
+    def test_author_terminal_retains_bundle_and_scrubs_durable_event(self):
         module = self._load_auto_reply_module(
             "auto_reply_author_terminal_media_scrub_test"
         )
@@ -17165,7 +17184,7 @@ print(json.dumps({
                     connection.close()
                 durable = json.loads(row["event_json"])
                 self.assertEqual(row["status"], "skipped")
-                self.assertFalse(media["directory"].exists())
+                self.assertTrue(media["directory"].exists())
                 self.assertEqual(durable["image_path"], "")
                 self.assertEqual(durable["image_paths"], [])
                 self.assertEqual(durable["media_marker"], "")
@@ -17581,6 +17600,7 @@ print(json.dumps({
                     self._fake_qwen27b_gateway(
                         module,
                         stdout.decode("utf-8"),
+                        vision=True,
                     ) as gateway,
                     mock.patch.object(
                         module, "privacy_attestation_current", return_value=True
@@ -18091,38 +18111,21 @@ print(json.dumps({
 
     def test_generate_reply_preserves_attested_database_media_marker(self):
         module = self._load_auto_reply_module("auto_reply_db_media_marker_test")
-        image = Path("/tmp/openkakao-auto-reply-media-owned/1_image.png")
-        marker = image.parent / module.MEDIA_ACTIVE_MARKER
-        with (
-            mock.patch.object(module, "runner_is_trusted", return_value=True),
-            mock.patch.object(
-                module,
-                "_image_path_within_cap",
-                return_value=True,
-            ) as validate_image,
-            mock.patch.object(
-                module,
-                "_acquire_model_call_slot",
-                return_value={
-                    "allowed": False,
-                    "failure_class": "rate_limit",
-                    "retry_at": time.time() + 60,
-                },
-            ),
-        ):
-            result = module.generate_reply(
-                "이미지 확인해줘",
-                [{"evidence_id": "ctx:1", "message": "맥락"}],
-                [],
-                [],
-                [],
-                attachment="image",
-                image_path=image,
-                image_marker=marker,
-                media_evidence_id=f"media:{'a' * 64}",
-            )
-        self.assertEqual(result["reason"], "model_rate_limited")
-        validate_image.assert_called_once_with(image, marker)
+        with self._owned_image_bundle(module) as media:
+            image, marker = media["paths"][0], media["marker"]
+            with (
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_image_path_within_cap", wraps=module._image_path_within_cap) as validate,
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": False, "failure_class": "rate_limit", "retry_at": time.time() + 60}),
+            ):
+                result = module.generate_reply("이미지 확인해줘", [], [], [], [], attachment="image",
+                    image_path=image, image_marker=marker,
+                    media_evidence_id="media:" + media["manifest"]["bundle_sha256"])
+            self.assertEqual(result["reason"], "model_rate_limited")
+            validate.assert_called_once_with(image, marker)
+            self.assertTrue(image.is_file())
+            self.assertTrue(marker.is_file())
 
     def test_model_defer_keeps_owned_image_for_retry(self):
         module = self._load_auto_reply_module(
@@ -19130,6 +19133,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_usage_limit_unknown_heals_to_skip_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_usage_limit_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -19168,6 +19172,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_model_temporarily_unavailable_unknown_reopens_pending(self):
         module = self._load_auto_reply_module("auto_reply_model_retry_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -19216,6 +19221,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         module = self._load_auto_reply_module(
             "auto_reply_model_retry_leftover_give_up"
         )
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -19258,6 +19264,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_retrieval_failed_unknown_heals_to_skip_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_retrieval_failed_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -19306,6 +19313,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_blank_unknown_reopens_pending_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_blank_unknown_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -19382,6 +19390,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_identity_policy_blank_unknown_skips_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_identity_unknown_skip")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -19431,6 +19440,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_high_attempt_blank_unknown_skips_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_blank_unknown_high_attempt_skip")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -19470,6 +19480,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_high_attempt_formed_unknown_skips_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_formed_unknown_high_attempt_skip")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준"}
@@ -19520,6 +19531,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         module = self._load_auto_reply_module(
             "auto_reply_high_attempt_ax_authorized_unknown_skip"
         )
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준", "is_self": False}
@@ -19598,6 +19610,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_formed_ordinary_unknown_reschedules_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_formed_ordinary_unknown_heal")
+        self._empty_decision_store(module)
         previous_owner = os.environ.get("OPENKAKAO_SUPERVISOR_OWNER")
         previous_epoch = os.environ.get("OPENKAKAO_DB_SOURCE_EPOCH")
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
@@ -19672,6 +19685,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_ax_confirmed_unknown_heals_to_sent_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_ax_confirmed_unknown_sent")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         digest = "GeekNews TOP5 · 2026-08-19 12:23 KST\n\n1. example"
@@ -19749,6 +19763,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_ax_authorized_unknown_without_confirm_stays_delivery_unknown(self):
         module = self._load_auto_reply_module("auto_reply_ax_authorized_unknown_hold")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         previous_owner = os.environ.get("OPENKAKAO_SUPERVISOR_OWNER")
         previous_epoch = os.environ.get("OPENKAKAO_DB_SOURCE_EPOCH")
@@ -19834,6 +19849,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_empty_stale_backlog_unknown_skips_without_blocking(self):
         module = self._load_auto_reply_module("auto_reply_empty_stale_unknown_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준"}
@@ -19873,6 +19889,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_proactive_unix_unknown_heals_to_stale_backlog_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_proactive_unix_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {
@@ -19925,6 +19942,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         module = self._load_auto_reply_module(
             "auto_reply_formed_proactive_unix_leftover_heal"
         )
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         digest = "GeekNews TOP5 · 2026-08-19 08:49 KST\n\n1. example"
@@ -19980,6 +19998,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_proactive_real_tail_unknown_heals_to_stale_backlog_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_proactive_real_tail_leftover")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {
@@ -20064,6 +20083,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
                     mock.patch.object(module, "privacy_attestation_current", return_value=True),
                     mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                    mock.patch.object(module, "_proactive_unknown_is_closed_slot", return_value=False),
                     mock.patch.object(
                         module,
                         "sample_response_delay_for_analysis",
@@ -20076,7 +20096,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     mock.patch.object(module, "record_context_decision", return_value=True),
                     mock.patch.object(module, "analyze_event") as analyze,
                 ):
-                    module.process_job(job, "pending", queue)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "pending", queue)
                 analyze.assert_not_called()
                 row = queue.execute(
                     "SELECT status,decision,reason,category,reply FROM reply_jobs WHERE event_id=?",
@@ -20097,6 +20118,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_in_slot_proactive_unknown_retries_instead_of_stale_skip(self):
         module = self._load_auto_reply_module("auto_reply_proactive_in_slot_retry")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         now = 1_787_052_957
@@ -20187,11 +20209,13 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
                     mock.patch.object(module, "privacy_attestation_current", return_value=True),
                     mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                    mock.patch.object(module, "_proactive_unknown_is_closed_slot", return_value=False),
                     mock.patch.object(module, "sample_response_delay_for_analysis") as sample,
                     mock.patch.object(module, "record_context_decision") as record,
                     mock.patch.object(module, "analyze_event") as analyze,
                 ):
-                    module.process_job(job, "pending", queue)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "pending", queue)
                 sample.assert_not_called()
                 record.assert_not_called()
                 analyze.assert_not_called()
@@ -20690,6 +20714,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_in_slot_formed_proactive_high_attempts_reopens_instead_of_skip(self):
         module = self._load_auto_reply_module("auto_reply_proactive_in_slot_high_attempt")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         digest = "GeekNews TOP5 · 2026-08-21 19:30 KST\n\n1. example"
