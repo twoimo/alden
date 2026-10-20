@@ -1,0 +1,18 @@
+{
+  "baseline_commit": "ee0f88d8076c7f6ad9728a5acab71e8686aa3177",
+  "baseline_sha256": "5386aa19a49940e512b1e4c5713adf1f5a05b188af9b1f5844b47da4badf70ca",
+  "candidate_sha256": "31b7efd837aa7757a3c2ac493b84584341c48c3a5cbe190ec1ce79eddd03ec48",
+  "patch_sha256": "809f044d9098e10440a2714494efebe45a12302e9338577b7b05922d5c395bb5",
+  "candidate_only": true,
+  "installed": false,
+  "source_truth_or_broad_semantic_gold": false,
+  "dependencies": {
+    "scripts/alden_collection.py": "a74d3a47d81b8631c4bc54c7aff421e49f0c56d603d00725ebb78cd9df479810",
+    "scripts/alden_content_evidence.py": "81ef356159d953660ea860eb94632a2d9995149ce6126bcf2e68086fbd23d0df",
+    "scripts/alden_source_text.py": "6248f186cd962126eeb8e9c7eb5df59a596305ffb7ae7aa2e893b1c9c3957f38",
+    "scripts/auto_reply_knowledge_graph.py": "88537df2cd7a718fc100225ced9250afc68c6359cb81922afb38ab362814d18b",
+    "scripts/alden_retrieval_time.py": "e15acf66ea60be3bdc1756f1fd4f5d69825faa1f6985dbf6218de803963c45f4",
+    "tests/test_alden_collection_retrieval.py": "58f287e21e9eddb1b26240e029e60aac3bef6776d048d7a2fcc2dcf11a4a16e6"
+  },
+  "fixture_sha256": "1297671729a44b16bed318d6c91ea7ffb6133ba53c14079709d05ec91f486751"
+}
