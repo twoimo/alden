@@ -110,8 +110,11 @@ function selectSavedLabels(nodes: readonly KnowledgeNode[], limit: number): Know
   };
   // Leave unused slots empty when no descriptive saved labels are available.
   // Retain subject, connection and source preferences among eligible labels.
-  for (const item of candidates) if (item.tier === 0) add(item);
+  for (const item of candidates) if (item.tier === 0 && !groups.has(item.group)) add(item);
   for (const item of candidates) if (!groups.has(item.group)) add(item);
   for (const item of candidates) add(item);
-  return chosen;
+  // Membership favors distinct sources; display order retains the saved
+  // subject/connection ranking. Consume the set to keep duplicate inputs capped.
+  const selected = new Set(chosen);
+  return candidates.flatMap(item => selected.delete(item.node) ? [item.node] : []);
 }

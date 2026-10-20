@@ -38,6 +38,37 @@ function expectFiniteSolve(result: ReturnType<SemanticLayoutEngine['layout']>, p
 }
 
 describe('bounded semantic overview layout', () => {
+  it('ignores unknown pin IDs when choosing a fresh dense layout', () => {
+    const view = scene(256);
+    for (const pins of [[], ['n0000']]) {
+      const previous = new Map([['n0000', { x: 3, y: 0, z: 0 }]]);
+      const solve = (ids: string[]) => new SemanticLayoutEngine().layout(view, pins.length ? previous : empty(), [], {
+        nowMs: 1000, pinnedIds: new Set(ids), reflow: pins.length > 0,
+      });
+      const expected = solve(pins), actual = solve([...pins, 'not-in-view']);
+      expect(actual.diagnostics.pinnedNodes).toBe(pins.length);
+      expect(actual.anchors).toEqual(expected.anchors);
+    }
+  });
+
+  it('bounds a cached disconnected anchor after releasing an off-center pin without reflowing it', () => {
+    const view = scene(3, [R(0, 1)]), engine = new SemanticLayoutEngine();
+    const previous = new Map([
+      ['n0000', { x: 3, y: 0, z: 0 }], ['n0001', { x: 3.4, y: 0, z: 0 }],
+      ['n0002', { x: 4.5, y: 0, z: 0 }],
+    ]);
+    const focused = engine.layout(view, previous, [], { nowMs: 1000, pinnedIds: new Set(['n0000']) });
+    expect(focused.anchors.get('n0000')).toEqual(previous.get('n0000'));
+    expect(focused.anchors.get('n0002')!.x).toBeGreaterThan(2.3);
+    const released = engine.layout(view, focused.anchors, [], { nowMs: 1000 });
+    expect(released.diagnostics.affectedNodes).toBe(2);
+    for (const p of released.anchors.values()) expect(Math.hypot(p.x / 2.3, p.y / 1.55, p.z / 1.1)).toBeLessThanOrEqual(1 + 1e-12);
+    const cached = engine.layout(view, released.anchors, [], { nowMs: 1000 });
+    expect(cached.anchors).toEqual(released.anchors);
+    expect(cached.diagnostics.solverIterations).toBe(0);
+    expect(engine.checkpoint().positions).toEqual([...cached.anchors]);
+  });
+
   it('ALD-PIN-FRAME-003 uses distinct authoritative multi-pin spring endpoints at x=2.4 and x=6', () => {
     const view = scene(3, [R(0, 2)]), pinnedIds = new Set(['n0000', 'n0001']);
     const solve = (x: number) => {

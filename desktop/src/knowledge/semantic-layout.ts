@@ -663,7 +663,7 @@ export class SemanticLayoutEngine {
     }
     separateMultiMemberCenters(centers, membersByLabel);
     const freshOverview = ids.length >= 256
-      && (options.pinnedIds?.size ?? 0) !== 1
+      && pinned.size !== 1
       && (options.reflow === true || ids.every(id => !finite(previousPositions.get(id)) && !this.positions.has(id)));
     if (freshOverview) spreadFreshEnergy(clusterIds, membersByLabel, centers, pairs);
     // A few hundred members on the inner ring become one ball at the camera
@@ -737,6 +737,9 @@ export class SemanticLayoutEngine {
       if (pinned.has(ids[i])) continue;
       points[i] = pinOrigin ? boundNear(points[i], pinOrigin) : bound(points[i]);
       origins[i] = pinOrigin ? boundNear(origins[i], pinOrigin) : bound(origins[i]);
+      // Releasing an off-center pin restores global bounds for cached
+      // components too. They need projection, not another force solve.
+      if (!pinOrigin && this.pins.size === 1 && !movable[i]) anchors.set(ids[i], copy(points[i]));
     }
     // Keep authoritative pins in world coordinates. Scale ALL force terms in
     // an extreme component together, including rest lengths and collisions;

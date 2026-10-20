@@ -6,6 +6,32 @@ import { communityCaptionNodes, internalGraphLabel, selectOverviewLabels } from 
 
 const graph = (nodes: Array<Record<string, unknown>>) => parseKnowledgeGraph({nodes,edges:[]});
 describe('overview reading entry labels', () => {
+  it.each(['topic', 'source_claim'])('reserves overview slots for another eligible %s source before repeating a source', category => {
+    const nodes = graph([
+      ...Array.from({ length: 9 }, (_, i) => ({ id: `topic-${i}`, label: `저장된 주제 ${i}`, category: 'topic', degree: 100 - i, source_target: 'dominant' })),
+      { id: 'other', label: '다른 출처의 검증된 기록', category, source_target: 'other' },
+    ]).nodes;
+    const before = JSON.stringify(nodes), selected = selectOverviewLabels(nodes);
+    expect(selected).toHaveLength(8);
+    expect(selected.map(node => node.id)).toEqual(['topic-0', 'topic-1', 'topic-2', 'topic-3', 'topic-4', 'topic-5', 'topic-6', 'other']);
+    expect(selectOverviewLabels([...nodes].reverse())).toEqual(selected);
+    expect(selectOverviewLabels(nodes, 1).map(node => node.id)).toEqual(['topic-0']);
+    expect(selectOverviewLabels(nodes, 2).map(node => node.id)).toEqual(['topic-0', 'other']);
+    expect(selected.every(node => nodes.includes(node))).toBe(true);
+    expect(JSON.stringify(nodes)).toBe(before);
+    const shell = document.createElement('div'), canvas = document.createElement('canvas'), layer = document.createElement('div');
+    layer.className = 'knowledge-node-labels'; shell.append(canvas, layer); document.body.append(shell);
+    const state = { canvas, view: { nodes, edges: [], focusId: null, hops: 0 }, hoveredId: null,
+      globalLabels: new Set(selected.map(node => node.id)), globalLabelRanks: new Map(selected.map((node, index) => [node.id, index])),
+      labels: new Map<string, HTMLSpanElement>(), labelBounds: [] };
+    const hologram = Object.assign(Object.create(KnowledgeHologram.prototype), state) as typeof state & { refreshOverviewLabels(): void };
+    try {
+      hologram.refreshOverviewLabels();
+      expect(hologram.labels.size).toBe(8);
+      expect(hologram.labels.get('other')?.textContent).toBe(nodes.find(node => node.id === 'other')!.label);
+    } finally { shell.remove(); }
+  });
+
   it('keeps link references navigable while prioritizing substantive labels', () => {
     const nodes=graph([
       {id:'reference',label:'채용 절차 안내 링크',category:'document',degree:9999,source_metadata:{content_evidence:'reference_only'}},
@@ -102,7 +128,7 @@ describe('overview reading entry labels', () => {
     ]).nodes;
     expect(selectOverviewLabels(nodes).map(n=>n.id)).toEqual(['channel','video','snippets']);
   });
-  it('fills the overview with connected subjects before headlines and amount fragments', () => {
+  it('ranks connected subjects first while reserving a small cap for distinct sources', () => {
     const nodes=graph([
       {id:'low',label:'경력·이직',category:'topic',degree:10,source_target:'career'},
       {id:'high',label:'채용공고·지원시기',category:'topic',degree:3000,source_target:'career'},
@@ -111,7 +137,7 @@ describe('overview reading entry labels', () => {
       {id:'claim',label:'115,700원은 편집자막 금액',category:'source_claim',degree:1,source_target:'clips'},
       {id:'title',label:'다 먹으면 평생 공짜기 사장님이 남긴 말',category:'video',degree:50,source_target:'channel'},
     ]).nodes;
-    expect(selectOverviewLabels(nodes,2).map(n=>n.id)).toEqual(['high','low']);
+    expect(selectOverviewLabels(nodes,2).map(n=>n.id)).toEqual(['high','claim']);
     expect(selectOverviewLabels(nodes).map(n=>n.id).slice(0,2)).toEqual(['high','low']);
     expect(nodes).toHaveLength(6);
   });
