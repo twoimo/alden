@@ -33,6 +33,21 @@ def source(body):
 
 class SourceTextTests(unittest.TestCase):
 
+    def test_graph_reading_fold_preserves_original_line_endings(self):
+        for newline in ('\n', '\r\n', '\r'):
+            for trailing in ('', newline + '  ' + newline):
+                with self.subTest(newline=repr(newline), trailing=repr(trailing)):
+                    reading = BODY.replace('\n', newline)
+                    body = reading + newline + newline.join(('1', '2', '6', '1', '3')) + trailing
+                    record = {'platform': 'graph', 'localOriginalText': body}
+                    result = reading_tail_presentation(body, record)
+                    self.assertIsNotNone(result)
+                    self.assertEqual(result['reading'], reading)
+                    self.assertEqual(result['reading'] + result['tail'], body)
+                    self.assertEqual(result['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+                    self.assertEqual(record['localOriginalText'], body)
+                    self.assertIsNone(project_source_text(body, record)['projection'])
+
     def test_graph_note_folds_only_a_long_one_or_two_digit_line_tail(self):
         body = BODY + '\n1\n2\n6\n1\n3'
         record = {'platform': 'graph', 'localOriginalText': body}
@@ -148,6 +163,28 @@ class SourceProjectionIntegrationTests(unittest.TestCase):
         self.record = {'platform':'graph','original_id':'post1','label':'','text':BODY+TAIL,'raw':source(BODY+TAIL)}
         self.store.ingest(self.target, [self.record])
         self.doc = identity('graph', 'post1')
+
+    def test_graph_detail_folds_crlf_without_changing_retained_or_indexed_text(self):
+        reading = BODY.replace('\n', '\r\n')
+        body = reading + '\r\n1\r\n2\r\n6\r\n1\r\n3\r\n'
+        self.store.ingest(self.target, [{**self.record, 'text': body,
+            'raw': {'platform': 'graph', 'localOriginalText': body}}])
+        index_text(self.root, ['one'])
+        with sqlite3.connect(self.store.root/'retrieval.sqlite3') as db:
+            indexed = db.execute('SELECT * FROM texts').fetchall()
+        before = self.store.path.read_bytes()
+        originals = {p.name: p.read_bytes() for p in self.store.blobs.iterdir()}
+        detail = self.store.graph_page(projects=['one'], focus=self.doc, details=True)['details']
+        self.assertEqual(detail['body'], body)
+        self.assertEqual(detail['body_format'], 'retained_original_text')
+        self.assertIsNone(detail['text_projection'])
+        self.assertEqual(detail['reading_projection']['reading'], reading)
+        self.assertEqual(detail['reading_projection']['reading'] + detail['reading_projection']['tail'], body)
+        self.assertEqual(detail['reading_projection']['semantic_validity'], 'unverified')
+        self.assertEqual(self.store.path.read_bytes(), before)
+        self.assertEqual({p.name: p.read_bytes() for p in self.store.blobs.iterdir()}, originals)
+        with sqlite3.connect(self.store.root/'retrieval.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT * FROM texts').fetchall(), indexed)
 
     def test_detail_and_search_share_projection_without_source_or_version_mutation(self):
         before = self.store.path.read_bytes()

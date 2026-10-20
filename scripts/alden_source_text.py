@@ -82,7 +82,7 @@ def _graph_reading_tail(body, source):
             or source.get('platform') != 'graph' or source.get('localOriginalText') != body
             or len(body) > 12000 or '```' in body or '~~~' in body):
         return None
-    lines = body.splitlines()
+    lines = body.splitlines(keepends=True)
     end = len(lines)
     while end > 0 and lines[end - 1].strip() == '':
         end -= 1
@@ -92,7 +92,8 @@ def _graph_reading_tail(body, source):
     numeric = end - start
     if not 3 <= numeric <= 6 or start == 0:
         return None
-    prefix = '\n'.join(lines[:start])
+    # Slice on retained boundaries: rebuilding with LF breaks CRLF/CR sources.
+    prefix = ''.join(lines[:start])
     reading = prefix.rstrip('\r\n')
     tail = body[len(reading):]
     if not body.startswith(prefix) or len(reading) < 80 or not re.search(r'[A-Za-z가-힣]', reading):
