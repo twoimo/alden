@@ -2,7 +2,7 @@ import { fetchSettingsAction } from './runtime';
 import type { SettingsPage } from './settings-navigation';
 
 type Row = Record<string, unknown>;
-type Operation = 'pause' | 'resume' | 'interval' | 'run' | 'acquisition';
+type Operation = 'pause' | 'resume' | 'interval' | 'run' | 'acquisition' | 'realtime';
 type Entry = {row:HTMLElement;label:HTMLElement;next:HTMLElement;last:HTMLElement;button:HTMLButtonElement;
   run:HTMLButtonElement;source:HTMLButtonElement;interval:HTMLSelectElement;save:HTMLButtonElement;dirty:boolean};
 const records = (value: unknown): Row[] => Array.isArray(value)
@@ -19,11 +19,14 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
   const section=create('section');section.className='collection-schedule';section.setAttribute('aria-label','정기 수집 일정');
   const header=create('div');header.className='collection-schedule-heading';
   const title=create('h2','정기 수집'), global=document.createElement('button'), reload=document.createElement('button');
+  const realtime=document.createElement('button'), liveStatus=create('p');
+  realtime.type='button';realtime.className='collection-realtime-toggle';liveStatus.className='collection-realtime-status';liveStatus.setAttribute('aria-live','polite');
+  let realtimeEnabled=false,realtimeRevision=0,realtimeVerified=false;
   global.type=reload.type='button';global.className='collection-schedule-global';reload.textContent='새로고침';
   const status=create('p','일정을 확인합니다.');status.className='collection-schedule-status';status.setAttribute('aria-live','polite');
   const note=create('p');note.className='collection-schedule-note';
   const list=create('ul');list.className='collection-schedule-targets';
-  header.append(title,global,reload);section.append(header,status,list,note);
+  header.append(title,global,realtime,reload);section.append(header,status,liveStatus,list,note);
   (host.querySelector('.collection-history') ?? host.querySelector('.settings-page-heading'))?.after(section);
   if(!section.parentElement)host.prepend(section);
   const entries=new Map<string,Entry>();
@@ -33,6 +36,7 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
   const active=()=>!dead&&visible&&page==='history';
   const controls=()=>{
     global.disabled=busy||!verified||aborted||entries.size===0;
+    realtime.disabled=busy||!verified||!realtimeVerified||aborted||entries.size===0;
     reload.disabled=busy;
     for(const entry of entries.values()){
       const disabled=busy||!verified||aborted||entry.button.dataset.excluded==='true';
@@ -43,6 +47,17 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
   };
   function render(data:Row) {
     verified=true;aborted=data.abort_latched===true;globalPaused=data.global_paused===true;
+    const rt=data.realtime&&typeof data.realtime==='object'?data.realtime as Row:{};
+    realtimeVerified=typeof rt.enabled==='boolean'&&Number.isSafeInteger(rt.revision)&&Number(rt.revision)>=0;
+    realtimeEnabled=rt.enabled===true;realtimeRevision=Number(rt.revision)||0;
+    realtime.textContent=realtimeEnabled?'실시간 수집 끄기':'실시간 수집 켜기';
+    realtime.setAttribute('aria-pressed',String(realtimeEnabled));
+    const labels:Record<string,string>={watching:'변경 감지 중',processing:'수집·색인 중',paused:'수집 중지됨',voice_deferred:'음성 대화 후 수집',reconnecting:'감시기 연결 확인 필요',disabled:'실시간 수집 꺼짐'};
+    liveStatus.textContent=realtimeVerified?labels[String(rt.state)]??'실시간 상태 확인 필요':'실시간 상태 확인 필요';
+    if(realtimeEnabled)liveStatus.textContent+=' · 파일 원본 5초 감지 · 허용된 영상 원본 1분 확인';
+    const inputs=records(rt.inputs),errors=inputs.filter(input=>input.error).length,pending=inputs.filter(input=>input.pending===1).length;
+    if(errors||pending)liveStatus.textContent+=` · 대기 ${pending} · 원본 확인 필요 ${errors}`;
+    liveStatus.dataset.state=String(rt.state??'unverified');
     const schedule=data.schedule&&typeof data.schedule==='object'?data.schedule as Row:{};
     const targets=records(data.targets).filter(row=>typeof row.id==='string').slice(0,200);
     const total=Number.isSafeInteger(data.total_targets)&&Number(data.total_targets)>=targets.length?Number(data.total_targets):targets.length;
@@ -54,7 +69,8 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
       :!targets.length?'등록된 수집 대상이 없습니다.'
       :live?`자동 확인 켜짐 · ${count} · ${String(data.time_zone??'현지 시간')}`
       :`일정 실행 확인 필요 · ${count}`;
-    note.textContent=live?'로그인한 macOS 세션에서 1분마다 예정된 대상을 확인합니다. 대화·음성이 진행 중이면 수집을 미룹니다.'
+    note.textContent=realtimeEnabled?'등록된 파일·그래프의 변경과 원본 자동 확인이 허용된 영상을 수집합니다. 채널·Threads의 웹 신규 발견은 연결된 수집기 범위에 따릅니다. 화면 갱신 중지는 백그라운드 수집을 끄지 않습니다.'
+      :live?'로그인한 macOS 세션에서 1분마다 예정된 대상을 확인합니다. 대화·음성이 진행 중이면 수집을 미룹니다.'
       :'저장된 예정 시각입니다. 자동 실행 작업의 설치·연결 상태를 확인해야 합니다.';
     global.textContent=globalPaused?'정기 확인 재개':'정기 확인 중지';
     const ids=new Set(targets.map(row=>String(row.id)));
@@ -95,7 +111,7 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
       entry.source.dataset.enabled=String(acquisition.enabled===true);entry.source.dataset.revision=String(acquisition.revision??0);
       entry.source.textContent=acquisition.enabled===true?'원본 자동 확인 끄기':'원본 자동 확인 켜기';
       entry.source.setAttribute('aria-label',String(target.label??'수집 대상')+' '+entry.source.textContent);
-      entry.source.title='Aside가 연결된 동안 설정한 주기에 영상 정보와 자막을 새로 확인합니다.';
+      entry.source.title=realtimeEnabled?'실시간 모드에서 최소 1분 간격으로 허용된 영상 정보와 자막을 확인합니다.':'Aside가 연결된 동안 설정한 주기에 영상 정보와 자막을 새로 확인합니다.';
       if(acquisition.enabled===true)entry.last.textContent+=' · '+(target.last_stage==='acquisition'&&target.acquisition_error
         ?'원본 접근 확인 필요':target.last_acquisition?'원본 확인됨':'원본 확인 대기');
       entry.button.dataset.operation=paused||blocked?'resume':'pause';entry.button.textContent=paused||blocked?'재개':'중지';
@@ -134,6 +150,7 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
   }
   async function change(operation:Operation,targetId?:string,extra:Row={}){if(verified&&!aborted)await request(operation,targetId,extra);}
   global.addEventListener('click',()=>void change(globalPaused?'resume':'pause'),{signal:listeners.signal});
+  realtime.addEventListener('click',()=>void change('realtime',undefined,{enabled:!realtimeEnabled,expected_revision:realtimeRevision}),{signal:listeners.signal});
   reload.addEventListener('click',()=>{for(const entry of entries.values())entry.dirty=false;void request();},{signal:listeners.signal});controls();
   return {
     select(next:SettingsPage){if(page===next)return;page=next;epoch++;stop();if(active())void request();},

@@ -18,6 +18,27 @@ const PANEL_WIDTH: f64 = 560.0;
 const VISIBILITY_EVENT: &str = "alden://visibility";
 const EMERGENCY_EVENT: &str = "alden://emergency-state";
 
+fn settings_size(work_width: f64, work_height: f64) -> (f64, f64) {
+    ((work_width - 48.0).clamp(1.0, 1440.0), (work_height - 48.0).clamp(1.0, 960.0))
+}
+
+/// Size the initially hidden workspace once; subsequent opens preserve resizing.
+fn fit_initial_settings(window: &tauri::WebviewWindow) {
+    if let Some(monitor) = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten()) {
+        let scale = monitor.scale_factor();
+        let area = monitor.work_area();
+        let (width, height) = settings_size(area.size.width as f64 / scale, area.size.height as f64 / scale);
+        let _ = window.set_min_size(Some(tauri::LogicalSize::new(width.min(640.0), height.min(680.0))));
+        if window.set_size(tauri::LogicalSize::new(width, height)).is_ok() {
+            if let Ok(outer) = window.outer_size() {
+                let x = area.position.x + area.size.width.saturating_sub(outer.width) as i32 / 2;
+                let y = area.position.y + area.size.height.saturating_sub(outer.height) as i32 / 2;
+                let _ = window.set_position(PhysicalPosition::new(x, y));
+            }
+        }
+    }
+}
+
 /// Payload for the window visibility event: one boolean, never content.
 fn visibility_payload(visible: bool) -> Value {
     serde_json::json!({ "visible": visible })
@@ -367,6 +388,9 @@ fn main() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            if let Some(settings) = app.get_webview_window("settings") {
+                fit_initial_settings(&settings);
+            }
             let knowledge_bridge = app.state::<PythonBridge>().inner().clone();
             std::thread::spawn(move || loop {
                 let _ = knowledge_bridge.synchronize_knowledge();
@@ -441,6 +465,14 @@ fn handle_window_event(window: &tauri::Window, event: &WindowEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_is_larger_but_fits_a_small_work_area() {
+        assert_eq!(settings_size(1728.0, 1080.0), (1440.0, 960.0));
+        let (width, height) = settings_size(1280.0, 720.0);
+        assert!(width < 1280.0 && height < 720.0);
+        assert!(width >= 640.0 && height > 600.0);
+    }
 
     #[test]
     fn global_abort_shortcut_avoids_the_macos_force_quit_chord() {

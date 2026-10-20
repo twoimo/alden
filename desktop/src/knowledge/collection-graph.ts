@@ -51,6 +51,7 @@ export class CollectionGraphController {
   private signature = '';
   private listSignature = '';
   private debounce: ReturnType<typeof setTimeout> | null = null;
+  private collectorStatus: Record<string, unknown> | null = null;
   private totals = { nodes: 0, edges: 0 };
   private readonly source: HTMLSelectElement;
   private readonly quality: KnowledgeQualityPanel;
@@ -204,10 +205,13 @@ export class CollectionGraphController {
       const reads = await Promise.allSettled([
         this.collection ? this.load('collection-graph', { query: JSON.stringify(query) }) : Promise.resolve(null),
         includeMemory ? this.load('knowledge-graph') : Promise.resolve(null),
+        this.collection ? this.load('collection-scheduler-status') : Promise.resolve(null),
       ]);
       const values = reads.map(read => read.status === 'fulfilled' ? read.value : { ok: false });
       const result = unifiedGraph(values[0], values[1], query);
       if (!this.active || this.disposed || epoch !== this.epoch) return null;
+      this.collectorStatus=values[2]?.ok===true&&values[2]?.realtime&&typeof values[2].realtime==='object'
+        ? values[2].realtime as Record<string,unknown>:null;
       this.lastRead = { query, epoch, nodes: Array.isArray(result.nodes) ? result.nodes.length : 0,
         partial: result.partial === true, collectionAvailable: values[0]?.ok === true, memoryAvailable: values[1]?.ok === true };
       return result ?? { ok: false };
@@ -289,6 +293,14 @@ export class CollectionGraphController {
     this.setText('knowledge-summary', `${this.graph.currentView.nodes.length.toLocaleString('ko-KR')}개 ${payload.partial ? '일부 표시' : '표시'}`);
     this.setText('knowledge-sync', payload.partial ? '일부 출처를 불러오지 못했습니다.' : payload.stale ? '자료 확인 필요' : this.collection ? '저장된 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
     this.setText('knowledge-mode', payload.partial ? '일부 출처 누락' : this.collection ? '수집 기록' : payload.stale ? '자료 확인 필요' : '저장된 기억');
+    const collectorBadge=this.root.getElementById('knowledge-mode');
+    if(collectorBadge){delete collectorBadge.dataset.collectorState;collectorBadge.removeAttribute('title');}
+    if(!payload.partial&&this.collection&&this.collectorStatus?.enabled===true){
+      const state=String(this.collectorStatus.state);
+      const status:Record<string,string>={watching:'실시간 감시',processing:'실시간 수집',paused:'수집 중지',voice_deferred:'음성 후 수집',reconnecting:'수집기 확인'};
+      this.setText('knowledge-mode',status[state]??'수집기 확인');
+      if(collectorBadge){collectorBadge.hidden=false;collectorBadge.dataset.collectorState=state;collectorBadge.title='등록 원본 변경 감지 5초 · 허용된 영상 원본 확인 최소 1분. 화면 갱신 중지와 별도로 동작합니다.';}
+    }
     this.updateFacets(payload); this.updateTools(); this.describeScope(); this.renderList();
     if (this.collection) this.journal.snapshot(payload.activity_checkpoint, this.graph.currentView.nodes);
     this.updateTerminal();

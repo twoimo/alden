@@ -164,6 +164,7 @@ jobs:
           tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_link_fetch_requires_separate_opt_in_and_never_ignores_overflow
           tests.test_alden_build_receipt
           tests.test_alden_collection_scheduler
+          tests.test_alden_realtime_collection
           tests.test_alden_youtube_video
           tests.test_alden_retrieval_eval
           tests.test_alden_retrieval_time

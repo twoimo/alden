@@ -123,15 +123,23 @@ class SemanticPairSamplingTests(unittest.TestCase):
         self.assert_participation(coverage, eligible=8, compared=8, minimum=1, maximum=2)
 
     def test_even_and_odd_full_rounds_exhaust_unique_unordered_pairs(self):
-        for size in (5, 6):
+        for size in range(2, 13):
             with self.subTest(size=size):
                 loaded = synthetic_loaded((f"n{i}", ["shared"], 0.) for i in range(size))
                 candidates, coverage = self.sample(loaded)
                 all_pairs = {(loaded[i][0]["id"], loaded[j][0]["id"])
                              for i in range(size) for j in range(i + 1, size)}
-                selected = [(item["source"], item["target"]) for item in candidates]
+                budgets = sa.Budgets()
+                # Exhaustion is a property of the comparison sampler. The
+                # downstream candidate policy deliberately caps endpoint degree
+                # and therefore cannot return K6 (degree five) in full.
+                selected = [(loaded[i][0]['id'], loaded[j][0]['id'])
+                            for i, j in sa._project_matchings([list(range(size))], size,
+                                len(all_pairs), sa._Guard(budgets, lambda: False))]
                 self.assertEqual(set(selected), all_pairs)
                 self.assertEqual(len(selected), len(all_pairs))
+                degree = Counter(node for item in candidates for node in (item['source'], item['target']))
+                self.assertLessEqual(max(degree.values(), default=0), sa.CANDIDATE_DEGREE_LIMIT)
                 self.assertEqual(coverage["pairs_evaluated"], len(all_pairs))
                 self.assertEqual(coverage["eligible_same_project_pairs"], len(all_pairs))
                 self.assertEqual(coverage["pair_coverage"], 1)

@@ -9,6 +9,7 @@ import alden_source_acquisition as acquisition
 from alden_abort import AldenCancelled
 from alden_collect import collect_target
 from alden_collection_scheduler import CollectionScheduler,settings_action
+from alden_realtime_collection import RealtimeCollection
 
 class SourceAcquisitionTests(unittest.TestCase):
     def setUp(self):
@@ -26,6 +27,19 @@ class SourceAcquisitionTests(unittest.TestCase):
     def enable(self):
         with patch('alden_collection_scheduler.host_cli',return_value=self.f.root/'fake-host'):
             self.scheduler.update_acquisition(self.f.target,True,0)
+
+    def test_realtime_rechecks_only_the_enabled_native_source_with_a_sixty_second_floor(self):
+        self.enable()
+        with self.scheduler.control_lock():RealtimeCollection(self.f.root).update(True,0)
+        first=self.scheduler.cycle(indexer=self.index,capturer=self.capture,acquirer=self.acquire)
+        self.assertEqual(first['attempts'][0]['state'],'complete')
+        with self.scheduler.database() as db:
+            started=db.execute('SELECT started FROM attempts ORDER BY started DESC LIMIT 1').fetchone()[0]
+        self.assertEqual(self.scheduler.cycle(indexer=self.index,capturer=self.capture,acquirer=self.acquire,now=started+59)['attempts'],[])
+        self.assertEqual(self.calls,1)
+        second=self.scheduler.cycle(indexer=self.index,capturer=self.capture,acquirer=self.acquire,now=started+61)
+        self.assertEqual(second['attempts'][0]['state'],'complete')
+        self.assertEqual(self.calls,2)
     @staticmethod
     def index(*args,**kwargs):return {'state':'ready'}
     @staticmethod

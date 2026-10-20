@@ -332,8 +332,13 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
         db.commit()
         source_rows = _index_rows(store, projects, cancelled, text_db=db, resolve_source=True)
         rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
-        saved = {(r[0], r[1]): r[2:] for r in db.execute(
-            'SELECT document_id,version,text_hash,model,endpoint,encoding FROM vectors')}
+        # _index_rows(resolve_source=True) already admitted this bounded scope.
+        # Probe its current versions by the existing primary key instead of
+        # loading metadata for every historical or unrelated project vector.
+        saved = {(r[0], r[1]): r[2:] for r in db.execute('''
+            SELECT v.document_id,v.version,v.text_hash,v.model,v.endpoint,v.encoding
+            FROM temp.source_text_scope s CROSS JOIN vectors v
+            ON v.document_id=s.document_id AND v.version=s.version''')}
         changed, windows, reused = 0, 0, 0
         reused_rows = []
         def flush_reused():

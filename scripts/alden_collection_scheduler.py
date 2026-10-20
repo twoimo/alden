@@ -22,6 +22,7 @@ from alden_collection import CollectionStore, TargetBusy, safe_directory
 from alden_collect import collect_target, capture_source
 from alden_collection_retrieval import index_dense
 from alden_source_acquisition import PROVIDER, acquire_input, supported, host_cli
+from alden_realtime_collection import RealtimeCollection, REMOTE_SECONDS
 
 AGENT_LABEL='com.openkakao.alden.collection'
 INSTALLED_APP=Path('/Applications/Alden.app')
@@ -38,8 +39,9 @@ def read_schedule(state_root):
         if definition!=schedule_definition(Path(state_root).absolute(),python,script):return {'state':'different_definition'}
         result=subprocess.run(['/bin/launchctl','print','gui/'+str(os.getuid())+'/'+AGENT_LABEL],capture_output=True,text=True,timeout=2)
         if result.returncode:return {'state':'unloaded'}
+        pid=re.search(r'^\s*pid = (\d+)\s*$',result.stdout,re.M)
         return {'state':'running' if re.search(r'^\s*state = running\s*$',result.stdout,re.M) else 'waiting',
-                'check_seconds':60}
+                'check_seconds':5,'pid':int(pid[1]) if pid else None}
     except (OSError,ValueError,subprocess.TimeoutExpired):return {'state':'unverified'}
 
 def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
@@ -55,7 +57,8 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
         fields={'pause':{'operation','target_id'},'resume':{'operation','target_id'},
                 'interval':{'operation','target_id','interval_seconds','expected_interval'},
                 'run':{'operation','target_id','request_id'},
-                'acquisition':{'operation','target_id','enabled','expected_revision'}}
+                'acquisition':{'operation','target_id','enabled','expected_revision'},
+                'realtime':{'operation','target_id','enabled','expected_revision'}}
         if not isinstance(operation,str) or operation not in fields or set(options)-fields[operation]:
             raise ValueError('collection_scheduler_control_invalid')
         target=options.get('target_id')
@@ -63,6 +66,11 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
             raise ValueError('collection_scheduler_target_invalid')
         # Resuming the schedule never clears the independent emergency latch.
         if operation in {'pause','resume'}:scheduler.pause(operation=='pause',target)
+        elif operation=='realtime':
+            if target is not None:raise ValueError('collection_scheduler_control_invalid')
+            with scheduler.control_lock():
+                RealtimeCollection(state_root).update(options.get('enabled'),options.get('expected_revision'))
+            if options.get('enabled'):install_schedule(state_root)
         elif not target:raise ValueError('collection_scheduler_target_invalid')
         elif operation=='interval':
             for field in ('interval_seconds','expected_interval'):
@@ -103,13 +111,14 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
             'last_acquisition':acquired.get('observed_at') if isinstance(acquired,dict) else None,
             'acquisition_error':last.get('error') if stage=='acquisition' else None})
     aborted=AbortToken(Path(state_root)/ABORT_STATE_NAME).is_cancelled()
+    schedule=read_schedule(state_root)
     return {'ok':True,'state':data['state'],'global_paused':bool(controls.get('global')),
             'abort_latched':aborted,'targets':targets,'total_targets':total,'time_zone':time.tzname[0],
-            'schedule':read_schedule(state_root),'observed_at':time.time()}
+            'schedule':schedule,'realtime':RealtimeCollection(state_root).status(schedule),'observed_at':time.time()}
 
 def schedule_definition(state_root, python, script):
     return {'Label':AGENT_LABEL,'ProgramArguments':[str(python),'-B',str(script),'--state-root',str(state_root),
-            '--once','--max-targets','1','--max-seconds','180'], 'RunAtLoad':True,'StartInterval':60,
+            '--watch','--max-targets','1','--max-seconds','180'], 'RunAtLoad':True,'StartInterval':60,
             'ProcessType':'Standard','Nice':10,'LowPriorityIO':False,'ThrottleInterval':30,
             'EnvironmentVariables':{'PYTHONDONTWRITEBYTECODE':'1'}}
 
@@ -133,8 +142,15 @@ def install_schedule(state_root):
             raise RuntimeError('collection_schedule_foreign_definition')
         if prior!=definition:
             legacy={**definition,'ProcessType':'Background','LowPriorityIO':True}
-            if prior!=legacy:raise RuntimeError('collection_schedule_existing_settings_differ')
-            if current.returncode==0:raise RuntimeError('collection_schedule_reload_requires_unloaded_owned_job')
+            once={**definition,'ProgramArguments':[argument if argument!='--watch' else '--once' for argument in definition['ProgramArguments']]}
+            old_background={**once,'ProcessType':'Background','LowPriorityIO':True}
+            if prior not in (legacy,once,old_background):raise RuntimeError('collection_schedule_existing_settings_differ')
+            if current.returncode==0:
+                if re.search(r'^\s*(?:state = running|pid = \d+)\s*$',current.stdout,re.M):
+                    return {'state':'deferred','reason':'collection_active','label':AGENT_LABEL}
+                if not re.search(r'^\s*state = (?:not running|waiting|exited|spawn scheduled)\s*$',current.stdout,re.M):
+                    raise RuntimeError('collection_schedule_reload_requires_unloaded_owned_job')
+                subprocess.run(['/bin/launchctl','bootout',service],capture_output=True,check=True)
             # Migrate only the exact earlier app definition. Preserve its
             # bytes once; caller has already stopped this owned producer.
             raw=path.read_bytes();backup_folder=safe_directory(Path(state_root)/'knowledge/collection/schedule-backups')
@@ -294,6 +310,9 @@ class CollectionScheduler:
             return data.get('state') in {'user_listen','transcribing','generating','speaking'} and time.time()-float(data.get('updated_at',0))<30
         except (OSError,ValueError,TypeError):return True
 
+    def _abort_latched(self):
+        return AbortToken(self.state_root/ABORT_STATE_NAME).is_cancelled()
+
     def status(self, *, limit=30):
         """Read bounded durable results without creating files or running work."""
         if type(limit) is not int or not 1<=limit<=200:raise ValueError('collection_scheduler_limit_invalid')
@@ -320,7 +339,8 @@ class CollectionScheduler:
         finally:db.close()
 
     def cycle(self, *, max_targets=1, max_seconds=300, target_id=None, collector=collect_target,
-              capturer=capture_source, indexer=index_dense, acquirer=acquire_input, now=None, token=None):
+              capturer=capture_source, indexer=index_dense, acquirer=acquire_input, now=None, token=None,
+              stopping=lambda:False,on_progress=lambda:None):
         if type(max_targets) is not int or not 1<=max_targets<=16 or type(max_seconds) is not int or not 1<=max_seconds<=3600:
             raise ValueError('collection_scheduler_budget_invalid')
         store=CollectionStore.open_existing(self.state_root)
@@ -334,10 +354,14 @@ class CollectionScheduler:
         try:
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:return {'state':'busy','attempts':[]}
-            if token.is_cancelled() or self._paused():return {'state':'paused','attempts':[]}
+            if stopping() or token.is_cancelled() or self._paused():return {'state':'paused','attempts':[]}
             if self._voice_busy():return {'state':'deferred','reason':'voice_active','attempts':[]}
             stamp=time.time() if now is None else now
             cycle=uuid.uuid4().hex;started=time.monotonic();attempts=[]
+            realtime=RealtimeCollection(self.state_root)
+            realtime_pending=realtime.pending()
+            realtime_policy=realtime.policy()
+            realtime_enabled=realtime_policy['enabled']
             with self.database() as db:
                 pending={row[0] for row in db.execute("SELECT target_id FROM attempts WHERE state='running'")}
                 pending.update(row[0] for row in db.execute("SELECT s.target_id FROM target_state s JOIN attempts a ON a.id=s.last_run WHERE a.state!='complete'"))
@@ -346,14 +370,19 @@ class CollectionScheduler:
                 db.execute("UPDATE manual_requests SET state='queued' WHERE state='running'")
                 manual={r['target_id']:r['id'] for r in db.execute("SELECT id,target_id FROM manual_requests WHERE state='queued' ORDER BY requested_at")}
                 retry={row['target_id']:dict(row) for row in db.execute('SELECT * FROM target_state')}
+                remote_due={row['target_id']:row['last_started'] for row in db.execute('''SELECT p.target_id,COALESCE(MAX(a.started),0) AS last_started
+                  FROM acquisition_policy p LEFT JOIN attempts a ON a.target_id=p.target_id WHERE p.enabled=1 GROUP BY p.target_id
+                  HAVING last_started<=? ORDER BY last_started,p.target_id''',(stamp-REMOTE_SECONDS,))} if realtime_enabled else {}
             with store.database() as db:
-                eligible=sorted(pending|manual.keys())
+                eligible=sorted(pending|manual.keys()|realtime_pending.keys()|remote_due.keys())
                 due=[row[0] for row in db.execute('''SELECT t.id FROM targets t WHERE t.enabled=1 AND (t.next_run<=? OR t.id IN ('PLACEHOLDER'))
                   AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied')
                   ORDER BY t.next_run,t.id'''.replace("'PLACEHOLDER'",','.join('?' for _ in eligible) or 'NULL'),(stamp,*eligible))]
             order={target:index for index,target in enumerate(due)}
             manual_order={target:index for index,target in enumerate(manual)}
-            due.sort(key=lambda target:(target not in manual,manual_order.get(target,order[target])))
+            due.sort(key=lambda target:(0,manual_order[target]) if target in manual else
+                (1,realtime_pending[target]['queued_at']) if target in realtime_pending else
+                (2,remote_due[target]) if target in remote_due else (3,order[target]))
             due=[target for target in due if (not selected or target==selected) and not retry.get(target,{}).get('blocked')
                  and retry.get(target,{}).get('retry_at',0)<=stamp and not self._paused(target)]
             if not due:return {'state':'idle','attempts':[]}
@@ -362,8 +391,9 @@ class CollectionScheduler:
                 if selected and target_id!=selected:continue
                 if len(attempts)>=max_targets or time.monotonic()-started>=max_seconds:break
                 previous=retry.get(target_id,{})
+                live_attempt=target_id not in manual and (target_id in realtime_pending or target_id in remote_due)
                 if previous.get('blocked') or previous.get('retry_at',0)>stamp or self._paused(target_id):continue
-                if token.is_cancelled() or self._paused():break
+                if stopping() or token.is_cancelled() or self._paused():break
                 with self.database() as db:
                     prior=db.execute("SELECT state,result FROM attempts WHERE target_id=? ORDER BY started DESC,id DESC LIMIT 1",(target_id,)).fetchone()
                 prior_result=json.loads(prior['result']) if prior and prior['state']!='complete' and prior['result'] else {}
@@ -375,21 +405,25 @@ class CollectionScheduler:
                     with self.database() as db:db.execute("UPDATE manual_requests SET state='running',attempt_id=? WHERE id=?",(attempt,manual[target_id]))
                 pause_check=[-1.0,False]
                 def cancelled():
-                    if token.is_cancelled() or time.monotonic()-started>=max_seconds:return True
+                    on_progress()
+                    if stopping() or token.is_cancelled() or time.monotonic()-started>=max_seconds:return True
                     current=time.monotonic()
                     if current-pause_check[0]>=.25:
                         pause_check[:]=[current,self._paused(target_id) or self._voice_busy()
+                            or live_attempt and realtime.policy()!=realtime_policy
                             or policy_revision is not None and self.acquisition_policy(target_id)!=policy]
                     return pause_check[1]
                 @contextmanager
                 def publication_guard():
                     with self.control_lock(), token.commit_guard():
-                        if self._paused(target_id) or self._voice_busy() or time.monotonic()-started>=max_seconds:
+                        if stopping() or self._paused(target_id) or self._voice_busy() or time.monotonic()-started>=max_seconds:
                             raise AldenCancelled('collection_scheduler_paused')
                         if policy_revision is not None and self.acquisition_policy(target_id)!=policy:
                             raise AldenCancelled('collection_acquisition_policy_changed')
+                        if live_attempt and realtime.policy()!=realtime_policy:
+                            raise AldenCancelled('collection_realtime_policy_changed')
                         yield
-                state='complete';error=None;result={};stage='collection'
+                state='complete';error=None;result={'trigger':'manual' if target_id in manual else 'input_change' if target_id in realtime_pending else 'source_poll' if target_id in remote_due else 'schedule'};stage='collection'
                 try:
                     if policy['enabled']:
                         stage='acquisition'
@@ -406,6 +440,8 @@ class CollectionScheduler:
                         with self.database() as db:db.execute('UPDATE attempts SET result=? WHERE id=?',(json.dumps(result,ensure_ascii=False),attempt))
                         if cancelled():raise AldenCancelled('collection_acquisition_cancelled')
                     stage='collection'
+                    try:input_signature=realtime.signature(store.target(target_id)) if realtime_enabled else None
+                    except (OSError,ValueError,KeyError):input_signature=None
                     result['collection']=collector(store,target_id,cancelled=cancelled,publication_guard=publication_guard)
                     if cancelled():raise AldenCancelled('collection_scheduler_cancelled')
                     stage='capture';result['capture']=capturer(store,target_id,cancelled=cancelled)
@@ -415,6 +451,7 @@ class CollectionScheduler:
                     result['index']=indexer(self.state_root,projects,cancelled=cancelled)
                     if result['index'].get('state') not in {'ready','empty'}:
                         state='pending';error='collection_index_pending'
+                    elif realtime_enabled:realtime.acknowledge(store.target(target_id),input_signature)
                 except (AldenCancelled,TargetBusy) as exc:
                     state='paused' if isinstance(exc,AldenCancelled) else 'busy';error=type(exc).__name__
                 except Exception as exc:
@@ -443,10 +480,19 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--state-root',type=Path,required=True)
     parser.add_argument('--once',action='store_true');parser.add_argument('--pause',action='store_true');parser.add_argument('--resume',action='store_true');parser.add_argument('--status',action='store_true')
     parser.add_argument('--install-schedule',action='store_true')
+    parser.add_argument('--watch',action='store_true')
     parser.add_argument('--target');parser.add_argument('--max-targets',type=int,default=1);parser.add_argument('--max-seconds',type=int,default=300)
     args=parser.parse_args()
-    if sum([args.once,args.pause,args.resume,args.status,args.install_schedule])!=1:parser.error('choose once, pause, resume, status, or install-schedule')
+    if sum([args.once,args.pause,args.resume,args.status,args.install_schedule,args.watch])!=1:parser.error('choose once, watch, pause, resume, status, or install-schedule')
     scheduler=CollectionScheduler(args.state_root)
+    if args.watch:
+        import signal
+        import threading
+        from alden_realtime_collection import watch
+        stopped=threading.Event()
+        for name in (signal.SIGTERM,signal.SIGINT):signal.signal(name,lambda *_:stopped.set())
+        watch(scheduler,stopped)
+        return
     result=install_schedule(args.state_root) if args.install_schedule else scheduler.status() if args.status else scheduler.cycle(max_targets=args.max_targets,max_seconds=args.max_seconds,target_id=args.target) if args.once else scheduler.pause(args.pause,args.target)
     print(json.dumps(result,ensure_ascii=False))
 

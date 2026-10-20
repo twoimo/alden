@@ -35,10 +35,12 @@ class Port {
   }
 }
 function controller(read: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => page(), memory: Record<string, unknown> = { ok: true, nodes: [], edges: [] },
-  affinity: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => ({ ok: false, reason: 'affinity_unavailable' })) {
+  affinity: (options: Record<string, unknown>) => Promise<Record<string, unknown>> = async () => ({ ok: false, reason: 'affinity_unavailable' }),
+  collector: () => Promise<Record<string,unknown>> = async()=>({ok:false})) {
   const load = vi.fn<typeof fetchSettingsAction>(async (action, input = {}) => action === 'collection-projects'
     ? { ok: true, projects: [{ project: 'one' }, { project: 'two' }] } : action === 'collection-graph'
-      ? read(JSON.parse(input.query ?? '{}')) : action === 'collection-affinity' ? affinity(JSON.parse(input.query ?? '{}')) : memory);
+      ? read(JSON.parse(input.query ?? '{}')) : action === 'collection-affinity' ? affinity(JSON.parse(input.query ?? '{}'))
+        :action==='collection-scheduler-status'?collector():memory);
   const port = new Port(); const c = new CollectionGraphController(load, port); port.controller = c; owned.push(c); c.start();
   return { c, port, load };
 }
@@ -48,6 +50,19 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const c of owned) c.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('permitted collection graph navigation', () => {
+  it('shows the actual collector state independently of the screen refresh controls', async () => {
+    let state='watching';
+    controller(undefined,undefined,undefined,async()=>({ok:true,realtime:{enabled:true,state}}));
+    await settle();
+    const badge=document.getElementById('knowledge-mode')!;
+    expect(badge.hidden).toBe(false);
+    expect(badge.textContent).toBe('실시간 감시');
+    expect(badge.dataset.collectorState).toBe('watching');
+    state='reconnecting';
+    await settle(15000);
+    expect(badge.textContent).toBe('수집기 확인');
+    expect(badge.dataset.collectorState).toBe('reconnecting');
+  });
   it('keeps available memory visible and explicitly labels collection failure as partial',async()=>{
     const memory={ok:true,nodes:[{id:'remembered',label:'보존된 기억'}],edges:[]};
     const {c,port}=controller(async()=>{throw new Error('snapshot timeout');},memory);
@@ -174,7 +189,7 @@ describe('permitted collection graph navigation', () => {
     expect(await focus).toEqual({ discarded: true }); await settle(60000);
     expect(load).toHaveBeenCalledTimes(count);
     c.start(); c.start(); await settle();
-    expect(load.mock.calls.slice(count).map(([action]) => action).sort()).toEqual(['collection-graph', 'collection-history', 'knowledge-graph']);
+    expect(load.mock.calls.slice(count).map(([action]) => action).sort()).toEqual(['collection-graph', 'collection-history', 'collection-scheduler-status', 'knowledge-graph']);
   });
 
   it('pauses graph and terminal reads across visibility changes until explicitly resumed', async () => {

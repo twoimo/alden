@@ -11,6 +11,25 @@ beforeEach(()=>{vi.useFakeTimers();document.body.innerHTML='<section id="setting
 afterEach(()=>{for(const component of owned.splice(0))component.dispose();vi.useRealTimers();document.body.replaceChildren();});
 const setup=(load:ReturnType<typeof vi.fn<typeof fetchSettingsAction>>)=>{const component=wireCollectionSchedule(load);owned.push(component);component.select('history');return component;};
 describe('native collection schedule',()=>{
+  it('enables live input detection with the observed CAS revision and reads back actual monitor state',async()=>{
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(result({realtime:{enabled:false,revision:3,state:'disabled',inputs:[]}}))
+      .mockResolvedValue(result({realtime:{enabled:true,revision:4,state:'watching',inputs:[]}}));
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    const toggle=document.querySelector<HTMLButtonElement>('.collection-realtime-toggle')!;
+    toggle.click();toggle.click();await vi.advanceTimersByTimeAsync(0);
+    expect(JSON.parse(load.mock.calls.at(-1)![1]!.query!)).toEqual({operation:'realtime',target_id:null,enabled:true,expected_revision:3});
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('.collection-realtime-status')?.textContent).toContain('변경 감지 중');
+    expect(load.mock.calls.filter(([action])=>action==='collection-scheduler-control')).toHaveLength(1);
+  });
+  it('does not label a saved live policy as running without a fresh owned monitor',async()=>{
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValue(result({realtime:{enabled:true,revision:1,state:'reconnecting',inputs:[{pending:1,error:'missing'}]}}));
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    const status=document.querySelector('.collection-realtime-status')!;
+    expect(status.textContent).toContain('감시기 연결 확인 필요');
+    expect(status.textContent).toContain('원본 확인 필요 1');
+    expect(status.textContent).not.toContain('변경 감지 중');
+  });
   it('uses the observed source policy revision and changes no interval when toggled',async()=>{
     const first=result({targets:[{...result().targets[0],acquisition_supported:true,acquisition:{enabled:false,revision:4}}]});
     const changed=result({targets:[{...result().targets[0],acquisition_supported:true,acquisition:{enabled:true,revision:5},last_acquisition:'2026-10-09T08:00:00Z'}]});
