@@ -1,0 +1,55 @@
+{
+  "queries": 17,
+  "rrf_retrieval_calls": 34,
+  "query_embedding_batches": 0,
+  "reused_query_vectors": 17,
+  "same_vectors_and_read_snapshots": true,
+  "verified_excerpt_coordinate_checks": 44,
+  "candidate_sha256": "7f0260b18dde848793706260073c50b405397eab244e88dfc40228bccb3b6361",
+  "groups": {
+    "native_title": {
+      "baseline": {
+        "queries": 8,
+        "sources_returned": 0,
+        "emitted_all_query_words": 0
+      },
+      "candidate": {
+        "queries": 8,
+        "sources_returned": 8,
+        "emitted_all_query_words": 8
+      }
+    },
+    "retained_caption_span": {
+      "baseline": {
+        "queries": 8,
+        "sources_returned": 6,
+        "emitted_all_query_words": 4
+      },
+      "candidate": {
+        "queries": 8,
+        "sources_returned": 8,
+        "emitted_all_query_words": 8
+      }
+    },
+    "original_control": {
+      "baseline": {
+        "queries": 1,
+        "sources_returned": 0,
+        "emitted_all_query_words": 0
+      },
+      "candidate": {
+        "queries": 1,
+        "sources_returned": 1,
+        "emitted_all_query_words": 1
+      }
+    }
+  },
+  "hit_regressions": [],
+  "original_control_ranks": {
+    "baseline": 21,
+    "candidate": 1
+  },
+  "installed": false,
+  "semantic_quality_or_latency_improvement_established": false,
+  "scope": "Uninstalled candidate on fixed source-derived probes; no independent semantic gold, latency or quota claim."
+}
