@@ -13,7 +13,7 @@ class WorkerStub implements LayoutWorkerPort {
   flush() {
     const request = this.requests.at(-1)!, engine = this.engine ?? new SemanticLayoutEngine();
     if (request.checkpoint) engine.restore(request.checkpoint);
-    const result = engine.layout(request.view, new Map(request.previous), request.pairs, { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), reflow: request.reflow === true });
+    const result = engine.layout(request.view, new Map(request.previous), request.pairs, { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), nowMs: request.nowMs, reflow: request.reflow === true });
     const response = { id: request.id, anchors: [...result.anchors], diagnostics: result.diagnostics, checkpoint: engine.checkpoint(), wallMs: 1 };
     this.onmessage?.({ data: response } as MessageEvent<LayoutResponse>);
     return response;
@@ -30,6 +30,56 @@ const withAffinity=(source:KnowledgeView):KnowledgeView=>({...source,layoutAffin
 }});
 
 describe('owned asynchronous semantic layout', () => {
+  it('reuses pending and completed snapshots across equivalent node, R and S array permutations',()=>{
+    const worker=new WorkerStub(),apply=vi.fn(),driver=new SemanticLayoutDriver(apply,()=>worker);
+    const source=withAffinity(view(['a','b','c','d']));
+    source.edges.push({...source.edges[0],source:'c',target:'d'});
+    source.layoutAffinity={...source.layoutAffinity!,pairs:[
+      {source:'a',target:'c',cosine:.9},{source:'b',target:'d',cosine:.8}]};
+    const reversed={...source,nodes:[...source.nodes].reverse(),edges:[...source.edges].reverse(),
+      layoutAffinity:{...source.layoutAffinity,pairs:[...source.layoutAffinity.pairs].reverse()}};
+    const before=JSON.stringify([source,reversed]);
+    driver.request(source,new Map(),new Set(),new Set());
+    driver.request(reversed,new Map(),new Set(),new Set());
+    expect(worker.requests).toHaveLength(1);expect(worker.terminate).not.toHaveBeenCalled();
+    const completed=worker.flush();expect(apply).toHaveBeenCalledTimes(1);
+    expect(driver.labelsFor(reversed,new Set())).toEqual(completed.checkpoint.labels);
+    driver.request(reversed,new Map(),new Set(),new Set());
+    expect(worker.requests).toHaveLength(1);expect(driver.diagnostics.state).toBe('cached');
+    expect(JSON.stringify([source,reversed])).toBe(before);driver.clear();
+  });
+
+  it('stamps the same relation-validity time onto each dispatched snapshot',()=>{
+    vi.useFakeTimers();vi.setSystemTime(1000);
+    try{
+      const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker);
+      driver.request(view(),new Map(),new Set(),new Set());
+      expect(worker.requests[0]).toMatchObject({nowMs:1000});driver.clear();
+    }finally{vi.useRealTimers();}
+  });
+
+  it('does not reuse geometry labels after a node changes its layout category',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),source=view();
+    driver.request(source,new Map(),new Set(),new Set());worker.flush();
+    const next={...source,nodes:source.nodes.map(n=>n.id==='a'?{...n,category:'source_group'}:n)};
+    expect(driver.labelsFor(next,new Set())).toBeUndefined();
+    driver.request(next,new Map(),new Set(),new Set());expect(worker.requests).toHaveLength(2);driver.clear();
+  });
+
+  it.each(['nodes','edges','pairs'] as const)('keeps %s admission-prefix changes distinct above the solver input cap',kind=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker);
+    let source=withAffinity(view(['a','b','c']));
+    if(kind==='nodes')source={...source,nodes:Array.from({length:8193},(_,i)=>({...source.nodes[0],id:'n'+i,
+      evidence:{...source.nodes[0].evidence,retracted:![0,1,8192].includes(i)}})),edges:[]};
+    if(kind==='edges')source={...source,edges:Array.from({length:32769},(_,i)=>({...source.edges[0],target:i===32768?'c':'b'}))};
+    if(kind==='pairs')source={...source,layoutAffinity:{...source.layoutAffinity!,pairs:Array.from({length:32769},(_,i)=>({source:'a',target:i===32768?'c':'b',cosine:.9}))}};
+    driver.request(source,new Map(),new Set(),new Set());worker.flush();
+    const reversed={...source,nodes:kind==='nodes'?[...source.nodes].reverse():source.nodes,
+      edges:kind==='edges'?[...source.edges].reverse():source.edges,
+      layoutAffinity:kind==='pairs'?{...source.layoutAffinity!,pairs:[...source.layoutAffinity!.pairs].reverse()}:source.layoutAffinity};
+    expect(driver.labelsFor(reversed,new Set())).toBeUndefined();driver.clear();
+  });
+
   it('re-solves a changed explicit pin even with an unchanged graph and pin identity',()=>{
     const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker),source=view();
     const first=new Map([['a',{x:.3,y:.2,z:0}]]);

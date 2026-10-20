@@ -1,11 +1,11 @@
 import type { KnowledgeView } from './graph-model';
 import type { LayoutAffinityPair } from './layout-affinity';
 import type { Point3 } from './plasticity';
-import type { SemanticLayoutCheckpoint, SemanticLayoutDiagnostics } from './semantic-layout';
+import { SEMANTIC_LAYOUT_LIMITS, type SemanticLayoutCheckpoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { relationCurrentlyValid } from './relation-validity';
 
 export interface LayoutRequest { id: number; view: KnowledgeView; previous: Array<[string, Point3]>;
-  pairs: readonly LayoutAffinityPair[]; changed: string[]; pinned: string[]; reflow?: boolean; checkpoint?: SemanticLayoutCheckpoint }
+  pairs: readonly LayoutAffinityPair[]; changed: string[]; pinned: string[]; nowMs: number; reflow?: boolean; checkpoint?: SemanticLayoutCheckpoint }
 export interface LayoutResponse { id: number; anchors?: Array<[string, Point3]>;
   diagnostics?: SemanticLayoutDiagnostics; checkpoint?: SemanticLayoutCheckpoint; wallMs?: number; error?: string }
 export interface LayoutWorkerPort { onmessage: ((event: MessageEvent<LayoutResponse>) => void) | null;
@@ -16,11 +16,20 @@ function affinityAuthorityKey(view:KnowledgeView):string {
   return JSON.stringify(affinity?[affinity.state,affinity.inputKey,affinity.profileKey]:null);
 }
 
-function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>):string {
-  const now=Date.now();
-  return JSON.stringify([view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance,n.evidence.retracted]),
-    view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted,relationCurrentlyValid(e,now)]),
-    affinityAuthorityKey(view),view.layoutAffinity?.pairs??[],[...pinned].sort()]);
+function snapshotRows(rows:readonly unknown[],keepOrder:boolean):string[] {
+  const keys=rows.map(row=>JSON.stringify(row));
+  return keepOrder?keys:keys.sort();
+}
+
+function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>,now=Date.now()):string {
+  const limits=SEMANTIC_LAYOUT_LIMITS,pairs=view.layoutAffinity?.pairs??[];
+  // Above an input cap, array order selects the admitted prefix. Duplicate
+  // node identities can also make order significant; retain both boundaries.
+  const nodeOrder=view.nodes.length>limits.inputNodes||new Set(view.nodes.map(n=>n.id)).size!==view.nodes.length;
+  return JSON.stringify([
+    snapshotRows(view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance,n.category,n.evidence.retracted]),nodeOrder),
+    snapshotRows(view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted,relationCurrentlyValid(e,now)]),view.edges.length>limits.inputEdges),
+    affinityAuthorityKey(view),snapshotRows(pairs.map(p=>[p.source,p.target,p.cosine]),pairs.length>limits.inputAffinities),[...pinned].sort()]);
 }
 
 /** One latest snapshot, one owned worker; superseded/hidden jobs cannot apply.
@@ -69,7 +78,7 @@ export class SemanticLayoutDriver {
     const visibleIds=new Set(view.nodes.filter(node=>!node.evidence.retracted).map(node=>node.id));
     const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, label: n.id, description: '', facts: [] })),
       edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', evidence: { ...e.evidence, sourceEventIds: [] } })) };
-    const key = snapshotKey(view,pinned);
+    const nowMs=Date.now(),key = snapshotKey(view,pinned,nowMs);
     const pinCoordinates=()=>[...pinned].filter(id=>visibleIds.has(id)).sort().map(id=>{
       const p=previous.get(id);return [id,p?.x??null,p?.y??null,p?.z??null];
     });
@@ -132,7 +141,7 @@ export class SemanticLayoutDriver {
       restoredProvisionalNodes:[...visibleIds].filter(key=>provisional.has(key)&&solved.has(key)&&!pinned.has(key)).length};
     this.state={...this.state,...priorBasis};
     worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
-      pairs, changed: [...changed], pinned: [...pinned], reflow, checkpoint: this.checkpoint });
+      pairs, changed: [...changed], pinned: [...pinned], nowMs, reflow, checkpoint: this.checkpoint });
   }
 
   stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.pendingReflow = false; this.requestedPins = ''; this.requestedKey = ''; this.requestedInputs=''; }

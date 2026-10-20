@@ -6,10 +6,11 @@ const scope = self as unknown as { onmessage: ((event: MessageEvent<LayoutReques
 scope.onmessage = event => {
   const request = event.data;
   try {
+    if (!Number.isFinite(request.nowMs)) throw new Error('semantic_layout_clock_invalid');
     if (request.checkpoint) engine.restore(request.checkpoint);
     const started = performance.now();
     const result = engine.layout(request.view, new Map(request.previous), request.pairs,
-      { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), reflow: request.reflow === true });
+      { changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), nowMs: request.nowMs, reflow: request.reflow === true });
     scope.postMessage({ id: request.id, anchors: [...result.anchors], diagnostics: result.diagnostics,
       checkpoint: engine.checkpoint(), wallMs: performance.now() - started });
   } catch { scope.postMessage({ id: request.id, error: 'semantic_layout_failed' }); }

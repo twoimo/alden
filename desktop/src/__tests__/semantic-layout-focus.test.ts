@@ -16,7 +16,7 @@ class LayoutWorker implements LayoutWorkerPort {
     const request = this.requests.at(-1)!, engine = new SemanticLayoutEngine();
     if (request.checkpoint) engine.restore(request.checkpoint);
     const result = engine.layout(request.view, new Map(request.previous), request.pairs, {
-      changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned),
+      changedIds: new Set(request.changed), pinnedIds: new Set(request.pinned), nowMs: request.nowMs,
     });
     const response = { id: request.id, anchors: [...result.anchors], diagnostics: result.diagnostics, checkpoint: engine.checkpoint() };
     this.onmessage?.({ data: response } as MessageEvent<LayoutResponse>);
