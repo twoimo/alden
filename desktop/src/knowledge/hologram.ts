@@ -23,7 +23,8 @@ import { projectedLayoutMetrics, type ProjectedCircle } from './projected-layout
 import { relaxProjectedCircles, type RelaxationResult } from './projected-relaxation';
 import { projectedOffsetGain } from './projected-display-offset';
 import { compareOverviewLabelPriority, outwardLabelPoint, placeOverviewLabel, ringLabelPoint, spreadRingCaptions, type LabelBox } from './label-placement';
-import { communityCaptionNodes, internalGraphLabel, selectOverviewLabels, selectZoomLabelCandidates } from './overview-labels';
+import { communityCaptionNodes, internalGraphLabel, selectZoomLabelCandidates } from './overview-labels';
+import { overviewCaptionRole, selectOverviewCaptions } from './overview-captions';
 import { labelReadingFrame, labelZoomLevel, labelZoomStyle, selectProjectedLabels, type LabelZoom, type ProjectedLabelCandidate } from './label-zoom';
 import type { LayoutAffinity } from './layout-affinity';
 import { SynapticBridges } from './synapses';
@@ -672,13 +673,14 @@ export class KnowledgeHologram {
     else this.communityState=null;
     this.constellationNodes.visible=true;this.neuronDetail=false;
     this.orbit.enableRotate=true;this.orbit.mouseButtons.LEFT=THREE.MOUSE.ROTATE;
-    for (const node of selectOverviewLabels(this.view.nodes)) {
+    const captions=selectOverviewCaptions(this.view.nodes,this.view.edges);
+    for (const {node} of captions) {
       this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
     }
     if (global) for (const node of communityCaptionNodes(this.view.nodes, layoutLabels, this.globalLabels, Math.max(0, 8 - this.globalLabels.size))) {
       this.globalLabels.add(node.id); this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
     }
-    this.zoomLabelCandidates = global ? selectZoomLabelCandidates(this.view.nodes) : [];
+    this.zoomLabelCandidates = global ? [...new Set([...captions.map(c=>c.node),...selectZoomLabelCandidates(this.view.nodes)])] : [];
     for (const node of this.zoomLabelCandidates) if (!this.globalLabelRanks.has(node.id))
       this.globalLabelRanks.set(node.id, this.globalLabelRanks.size);
     this.zoomLabels.clear(); this.labelZoom = 1;
@@ -731,7 +733,8 @@ export class KnowledgeHologram {
         label.className = "knowledge-node-label";
         label.hidden = true;
         label.textContent = shownLabel;
-        label.title = shownLabel;
+        label.dataset.captionRole=overviewCaptionRole(node);
+        label.title = shownLabel+(label.dataset.captionRole==='reference-section'?' · 저장된 자료 목록 · 본문 내용 검증과 구분':'');
         label.dataset.focused = String(focused);
         label.dataset.view='overview';
         labelLayer.append(label);
@@ -886,7 +889,8 @@ export class KnowledgeHologram {
       const node=this.view.nodes.find(node=>node.id===id);if(!node||internalGraphLabel(node.label))continue;
       const label=document.createElement('span');label.className='knowledge-node-label';
       label.hidden=true;
-      label.textContent=node.label;label.title=node.label;label.dataset.view='overview';
+      label.textContent=node.label;label.dataset.captionRole=overviewCaptionRole(node);
+      label.title=node.label+(label.dataset.captionRole==='reference-section'?' · 저장된 자료 목록 · 본문 내용 검증과 구분':'');label.dataset.view='overview';
       label.dataset.focused=String(id===this.view.focusId);layer.append(label);this.labels.set(id,label);
     }
     this.prioritizeOverviewLabels();
@@ -897,19 +901,22 @@ export class KnowledgeHologram {
     const level = labelZoomLevel(ratio, this.labelZoom);
     const style = labelZoomStyle(level, this.viewport.width, this.viewport.height, ratio);
     const projected: ProjectedLabelCandidate[] = [];
+    const headingsAvailable=this.zoomLabelCandidates.some(node=>this.globalLabels.has(node.id)&&overviewCaptionRole(node)!=='title');
     const reserved = new Set([this.view.focusId, this.hoveredId].filter(Boolean)).size;
     // Project only saved eligible candidates; keep a bounded DOM and collision
     // budget. A zoomed-in viewport can discover titles absent from the overview.
     for (const node of this.zoomLabelCandidates) {
       if (!style.detail && !this.globalLabels.has(node.id)) continue;
+      if (!style.detail && headingsAvailable && overviewCaptionRole(node)==='title') continue;
       const p = this.displayedPositions.get(node.id) ?? this.positions.get(node.id);
       if (!p) continue;
       this.projected.copy(p).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
       if (Math.abs(this.projected.x) > .96 || Math.abs(this.projected.y) > .96
         || this.projected.z < -1 || this.projected.z > 1) continue;
       if (node.id === this.view.focusId || node.id === this.hoveredId) continue;
-      const topic = this.globalLabels.has(node.id);
-      const reading = labelReadingFrame(topic ? 'topic' : 'title', level, node.label, topic ? style.topicSize : style.detailSize);
+      const role=overviewCaptionRole(node);
+      const topic = this.globalLabels.has(node.id)&&role!=='title';
+      const reading = labelReadingFrame(topic ? role : 'title', level, node.label, topic ? style.topicSize : style.detailSize);
       projected.push({id: node.id, x: (this.projected.x + 1) * this.viewport.width / 2,
         y: (1 - this.projected.y) * this.viewport.height / 2, topic,
         width: reading.width, height: reading.height,
@@ -931,14 +938,15 @@ export class KnowledgeHologram {
     for (const [id, label] of this.labels) {
       const box = this.labelBounds[index++];
       const prominent = id === this.view.focusId || id === this.hoveredId;
-      const topic = this.globalLabels.has(id);
+      const topic = this.globalLabels.has(id)&&label.dataset.captionRole!=='title';
       const size = prominent ? Math.max(15, style.topicSize + .5) : topic ? style.topicSize : style.detailSize;
       label.dataset.level = String(level);
-      label.dataset.role = prominent ? 'active' : topic ? 'topic' : 'title';
+      const role=prominent?'active':topic&&label.dataset.captionRole==='reference-section'?'reference-section':topic?'topic':'title';
+      label.dataset.role = role;
       label.style.fontSize = `${size}px`;
       label.style.fontWeight = prominent ? '650' : topic ? '550' : '450';
       label.style.opacity = String(prominent ? 1 : style.opacity);
-      const reading = labelReadingFrame(prominent ? 'active' : topic ? 'topic' : 'title', level, label.textContent ?? '', size);
+      const reading = labelReadingFrame(role, level, label.textContent ?? '', size);
       if (label.style.maxWidth !== `${reading.maxWidth}px` || label.dataset.lines !== String(reading.lines)) {
         label.style.maxWidth = `${reading.maxWidth}px`;
         label.dataset.lines = String(reading.lines);

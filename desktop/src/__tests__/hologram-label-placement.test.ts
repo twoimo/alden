@@ -96,10 +96,13 @@ function setup(
 
   if (opts.zoom) {
     camera.position.z = 5 / opts.zoom;
+    const zoomNodes = parseKnowledgeGraph({nodes:specs.map(node=>({id:node.id,
+      label:'실제 자료 ' + node.id, category:opts.globalIds?.includes(node.id)?'topic':'document'})),edges:[]}).nodes;
+    // The real view and zoom candidates reference the same typed source nodes.
+    Object.assign(fake, { view: { hops: 0, focusId: opts.focus ?? null, nodes: zoomNodes } });
     Object.assign(fake, {desiredCamera:camera.position.clone(), labelFitDistance:5,
       labelZoom:1, zoomLabels:new Set(),
-      zoomLabelCandidates:parseKnowledgeGraph({nodes:specs.map(node=>({id:node.id,
-        label:'실제 자료 ' + node.id, category:opts.globalIds?.includes(node.id)?'topic':'document'})),edges:[]}).nodes});
+      zoomLabelCandidates:zoomNodes});
   }
 
   fake.refreshOverviewLabels();
