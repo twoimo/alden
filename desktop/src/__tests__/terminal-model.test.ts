@@ -4,6 +4,13 @@ import { parseKnowledgeGraph } from '../knowledge/graph-model';
 
 const now = Date.parse('2026-10-20T12:00:00Z');
 describe('permitted terminal display-slice aggregates', () => {
+  it('retains real connections within a single saved type', () => {
+    const graph = parseKnowledgeGraph({ nodes: [{ id: 'a', label: '지원 준비', category: 'topic' },
+      { id: 'b', label: '면접', category: 'topic' }], edges: [{ source: 'a', target: 'b', relation: 'related-to' }] }, now);
+    const data = terminalSummary(graph, null, now);
+    expect(data.edges).toHaveLength(1);
+    expect(data.routes).toEqual([{ source: 'topic', target: 'topic', count: 1 }]);
+  });
   it('deduplicates exact transport repeats without merging direction, relation or evidence', () => {
     const raw = { source: 'a', target: 'b', relation: 'supports', evidence_message_id: 'proof-1' };
     const graph = parseKnowledgeGraph({ nodes: [{ id: 'a', label: 'A', category: '개념' }, { id: 'a', label: 'A copy' },

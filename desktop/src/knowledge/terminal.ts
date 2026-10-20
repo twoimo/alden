@@ -6,7 +6,7 @@ export type MapPoint = { id: string; x: number; y: number; z: number };
 const panels = [
   ['ingest', 'INGEST', '최근 수집'], ['linked', 'LINKED', '선택한 연결'],
   ['trend', 'f(x)', '수정일 분포 · UTC'], ['sectors', 'SECTORS', '지식 유형'],
-  ['chord', 'CHORD', '유형 간 연결'], ['tail', 'TAIL-F', '처리 이력'],
+  ['chord', 'CHORD', '연결 분포'], ['tail', 'TAIL-F', '처리 이력'],
 ] as const;
 export function terminalMarkup(): string {
   return `<section id="knowledge-terminal" class="knowledge-terminal" aria-label="실시간 지식 터미널">${panels.map(([id, name, label]) =>
@@ -157,19 +157,26 @@ export class KnowledgeTerminal {
   }
   private renderRoutes(data: TerminalSummary): void {
     const list = data.routes.slice(0, 6);
-    if (!list.length) { this.set('chord', [this.empty('표시 범위에 영역 간 연결이 없습니다.')]); return; }
+    if (!list.length) { this.set('chord', [this.empty('현재 지도에 저장된 연결이 없습니다.')]); return; }
     const svg = this.root.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('viewBox', '0 0 140 90'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('terminal-chord');
+    svg.setAttribute('viewBox', '0 0 140 90'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('terminal-chord-chart');
     const sectors = [...new Set(list.flatMap(route => [route.source, route.target]))];
-    const point = (index: number) => { const angle = index / sectors.length * Math.PI * 2 - Math.PI / 2; return [70 + Math.cos(angle) * 37, 45 + Math.sin(angle) * 37]; };
+    const point = (index: number, offset = 0) => { const angle = index / sectors.length * Math.PI * 2 - Math.PI / 2 + offset; return [70 + Math.cos(angle) * 37, 45 + Math.sin(angle) * 37]; };
+    const ring = this.root.createElementNS(svg.namespaceURI, 'circle');
+    ring.setAttribute('cx', '70'); ring.setAttribute('cy', '45'); ring.setAttribute('r', '37');
+    ring.setAttribute('fill', 'none'); ring.setAttribute('stroke', '#88bad23d'); svg.append(ring);
     for (const route of list) {
-      const a = point(sectors.indexOf(route.source)), b = point(sectors.indexOf(route.target));
+      const internal = route.source === route.target;
+      const a = point(sectors.indexOf(route.source), internal ? -.28 : 0), b = point(sectors.indexOf(route.target), internal ? .28 : 0);
       const path = this.root.createElementNS(svg.namespaceURI, 'path');
-      path.setAttribute('d', `M${a.join(',')} Q70,45 ${b.join(',')}`); path.setAttribute('stroke', colors[sectors.indexOf(route.source) % colors.length]);
+      path.setAttribute('d', internal ? `M${a.join(',')} C24,68 116,68 ${b.join(',')}` : `M${a.join(',')} Q70,45 ${b.join(',')}`);
+      path.setAttribute('stroke', colors[sectors.indexOf(route.source) % colors.length]);
+      path.setAttribute('data-route', internal ? 'within-type' : 'between-types');
       path.setAttribute('stroke-width', String(Math.min(3, .5 + Math.log1p(route.count) / 2))); path.setAttribute('fill', 'none'); svg.append(path);
     }
     sectors.forEach((_, i) => { const [x, y] = point(i), dot = this.root.createElementNS(svg.namespaceURI, 'circle'); dot.setAttribute('cx', String(x)); dot.setAttribute('cy', String(y)); dot.setAttribute('r', '3'); dot.setAttribute('fill', colors[i % colors.length]); svg.append(dot); });
-    this.set('chord', [svg, ...list.slice(0, 3).map(route => this.row(`${typeName(route.source)} → ${typeName(route.target)}`, number(route.count)))]);
+    this.set('chord', [svg, ...list.slice(0, 3).map(route => this.row(route.source === route.target
+      ? `${typeName(route.source)} 내부` : `${typeName(route.source)} → ${typeName(route.target)}`, number(route.count)))]);
   }
   private renderHistory(): void {
     const latest = new Map<string, Row>();

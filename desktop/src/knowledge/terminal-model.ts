@@ -37,7 +37,6 @@ export function terminalSummary(graph: KnowledgeGraph, focus: string | null, now
   for (const edge of edges) {
     const source = known.get(edge.source)!.category.trim() || '분류 미정';
     const target = known.get(edge.target)!.category.trim() || '분류 미정';
-    if (source === target) continue;
     const key = JSON.stringify([source, target]);
     const previous = routes.get(key);
     if (previous) previous.count++;

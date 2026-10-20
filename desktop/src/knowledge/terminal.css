@@ -19,10 +19,9 @@
 .settings-view .knowledge-hologram-toolbar button { min-height:29px; padding:5px 10px; font-size:10px; }
 .settings-view #knowledge-live-toggle { margin-left:auto; color:#9ad8ed; border-color:#84c8db55; }
 .settings-view #knowledge-live-toggle[aria-pressed="false"] { color:#e6c489; border-color:#e6c48966; }
-.knowledge-terminal { display:grid; grid-template-columns:minmax(164px,1.4fr) minmax(152px,1.15fr) minmax(144px,.9fr) minmax(144px,.95fr) minmax(152px,1fr) minmax(182px,1.5fr); height:208px; max-height:30vh; min-height:142px; overflow:auto; overscroll-behavior:contain; border-top:1px solid #7aa8c74d; background:#081624; scrollbar-width:thin; scrollbar-color:#54718c44 transparent; }
+.knowledge-terminal { display:grid; grid-template-columns:minmax(164px,1.4fr) minmax(152px,1.15fr) minmax(144px,.9fr) minmax(144px,.95fr) minmax(152px,1fr) minmax(182px,1.5fr); grid-template-rows:minmax(0,1fr); column-gap:2px; height:208px; max-height:30vh; min-height:142px; overflow:auto; overscroll-behavior:contain; border-top:1px solid #41627d; background:#355570; scrollbar-width:thin; scrollbar-color:#54718c44 transparent; }
 .knowledge-terminal[hidden] { display:none; }
-.terminal-panel { display:flex; flex-direction:column; min-width:0; min-height:0; border-right:1px solid #7aa8c72b; }
-.terminal-panel:last-child { border-right:0; }
+.terminal-panel { display:flex; flex-direction:column; align-self:stretch; min-width:0; min-height:0; overflow:hidden; background:#081624; }
 .terminal-panel>header { display:flex; align-items:center; min-height:31px; flex:none; gap:7px; padding:0 9px; border-bottom:1px solid #7aa8c72b; background:#102239; }
 .terminal-panel h2 { margin:0; padding:3px 5px; color:#a8deef; background:#73bed21c; font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.06em; white-space:nowrap; }
 .terminal-panel>header>span { font-size:9px; color:#a4b8ca; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -41,15 +40,15 @@ button.terminal-row:focus-visible, #terminal-follow:focus-visible { outline:1px 
 .terminal-sector:before { content:""; position:absolute; left:0; bottom:2px; height:2px; width:var(--sector-share); background:var(--sector-color); opacity:.58; z-index:-1; }
 .terminal-bars { height:96px; display:flex; align-items:flex-end; gap:4px; padding:12px 3px 0; border-bottom:1px solid #789ab655; background:repeating-linear-gradient(to top,transparent 0 23px,#89b4d015 23px 24px); }
 .terminal-bars>span { display:block; flex:1; max-width:22px; min-height:2px; background:linear-gradient(to top,#4b8da9,#a1dbea); border-radius:1px 1px 0 0; }
-.terminal-chord { display:block; width:100%; height:88px; }
+.terminal-chord-chart { display:block; width:100%; height:88px; }
 .terminal-stage { flex:none; min-width:25px; font-size:8px; font-weight:550; line-height:15px; padding:0 3px; color:#a9dccc; background:#76c6ab18; }
 .terminal-stage[data-stage="failed"] { color:#f1b0ac; background:#c276761f; }
 .terminal-stage[data-stage="paused"],.terminal-stage[data-stage="discovered"] { color:#e2ce99; background:#ddbb771a; }
 .terminal-stage[data-stage="parsed"],.terminal-stage[data-stage="validated"] { color:#c4c0ef; background:#a6a2d81a; }
 .terminal-ingest .terminal-row>small { display:none; }
 @media(max-width:1340px) { .knowledge-command-stage { grid-template-columns:minmax(0,1fr); } .knowledge-observations { display:none; } }
-@media(max-height:650px) { .knowledge-terminal { height:148px; } .terminal-bars { height:62px; } .terminal-chord { height:62px; } }
+@media(max-height:650px) { .knowledge-terminal { height:148px; } .terminal-bars { height:62px; } .terminal-chord-chart { height:62px; } }
 @media(max-width:720px) { .knowledge-terminal { height:156px; } .knowledge-map-caption { left:10px; font-size:9px; } .settings-view .knowledge-hologram-toolbar { justify-content:flex-start; } .knowledge-toolbar-spacer { display:none; } }
 
-.settings-shell[data-settings-page="memory"] .knowledge-command-stage .knowledge-hologram-shell { background:radial-gradient(ellipse at 52% 46%,#183f6099,transparent 65%),linear-gradient(155deg,#0a1d37,#112f50 55%,#0b2240); }
+.settings-shell[data-settings-page="memory"] .knowledge-command-stage .knowledge-hologram-shell { background:radial-gradient(ellipse at 58% 44%,#17365188,transparent 60%),radial-gradient(ellipse at 18% 88%,#16264255,transparent 48%),linear-gradient(145deg,#0b1528,#0f223b 52%,#0a1b31); }
 .knowledge-map-caption time { margin-left:16px; color:#9cb7ca; letter-spacing:0; font-size:9px; }

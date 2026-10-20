@@ -15,6 +15,14 @@ function setup(load: typeof fetchSettingsAction) {
 beforeEach(() => { document.body.innerHTML = '<button id="knowledge-terminal-toggle" aria-expanded="true"></button>' + observationMarkup() + terminalMarkup(); });
 afterEach(() => terminal?.dispose());
 describe('knowledge terminal lifecycle and evidence', () => {
+  it('draws actual within-type connections instead of an empty chord panel', () => {
+    setup(vi.fn());
+    terminal.update(parseKnowledgeGraph({ nodes: [{ id: 'a', label: '지원 준비', category: 'topic' },
+      { id: 'b', label: '면접', category: 'topic' }], edges: [{ source: 'a', target: 'b', relation: 'related-to' }] }), null);
+    expect(document.querySelector('#terminal-chord path[data-route="within-type"]')).not.toBeNull();
+    expect(document.getElementById('terminal-chord')!.textContent).toContain('주제 내부');
+    expect(document.getElementById('terminal-chord')!.textContent).not.toContain('연결이 없습니다');
+  });
   it('renders source labels as text and opens only an actually displayed linked node', async () => {
     const load = vi.fn<typeof fetchSettingsAction>(async () => ({ ok: true, items: [event(1, '<img src=x onerror=alert(1)>')] }));
     const select = setup(load); await terminal.refreshHistory({}, true);

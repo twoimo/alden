@@ -1,6 +1,6 @@
 # Alden
 
-0.3.190에는 남색 우주 관제형 지식 터미널을 추가했습니다. 실제 지도·보조 투영과 INGEST / LINKED / f(x) / SECTORS / CHORD / TAIL-F, 갱신 중지·재개·이력 추적을 연결합니다. [데이터 범위·수명주기·검증과 남은 감사](docs/knowledge-command-terminal-20261020.md)를 확인하세요. 현재 표시 유형/관계 집계와 의미 군집 품질은 구별하며 전체 목표·외부 교차검증·정식 배포는 계속 미완료입니다.
+0.3.191에는 남색 우주 관제형 지식 터미널을 추가했습니다. 실제 지도·보조 투영과 INGEST / LINKED / f(x) / SECTORS / CHORD / TAIL-F, 갱신 중지·재개·이력 추적을 연결합니다. [데이터 범위·수명주기·검증과 남은 감사](docs/knowledge-command-terminal-20261020.md)를 확인하세요. 현재 표시 유형/관계 집계와 의미 군집 품질은 구별하며 전체 목표·외부 교차검증·정식 배포는 계속 미완료입니다.
 
 [사람 판정 기반 한국어 검색 기준선](docs/miracl-retrieval-baseline-20261019.md): MIRACL213질의/3,057판정으로 실제 warm E5·BM25·RRF와 설치 consumer를 비교하고 NIST와5,992개 지표 값을 대사했습니다. 공개 판정 문서2,835개 집합의 nDCG@10은 Dense.7213, 제품 RRF.6802였습니다. [후속 단계 추적](docs/miracl-stage-trace-20261019.md)은 기존 네 순위 전체를 재현하고 lexical·동점·본문·consumer를 분리했으며 추가3,210개 지표를 검산했습니다. 개인 corpus·의미 군집·기본 검색 정책의 최적성을 인증하거나 제품 가중치를 변경한 결과는 아닙니다.
 
