@@ -67,6 +67,44 @@ class ChatFileTests(unittest.TestCase):
         self.assertEqual(conflict['error_code'], 'request_id_payload_or_target_conflict')
         self.assertFalse(conflict['ok'])
 
+    def test_conflicting_request_cannot_store_unreferenced_attachment_bytes(self):
+        original = request(documents=[attachment()])
+        completed = self.run_input(original)
+        self.assertTrue(completed['ok'])
+        from alden_chat_turns import get_request
+        saved_request = get_request(self.root, original['request_id'])
+        def blobs():
+            return {str(path.relative_to(self.root)): path.read_bytes()
+                    for namespace in ('assistant-input-files', 'assistant-input-images')
+                    for path in (self.root / namespace).glob('*') if path.is_file()}
+        before = blobs()
+        for changed in (
+            request(documents=[attachment(data=b'Different document bytes 67.')]),
+            request(images=[attachment('photo.png', png(), 'image/png')]),
+        ):
+            with self.subTest(kind='document' if changed['files'] else 'image'):
+                result = self.run_input(changed)
+                self.assertEqual(result['error_code'], 'request_id_payload_or_target_conflict')
+                self.assertFalse(result['ok'])
+                self.assertEqual(blobs(), before)
+                self.assertEqual(get_request(self.root, original['request_id']), saved_request)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_conflicting_pending_request_cannot_store_new_document(self):
+        from alden_chat_turns import get_request
+        value = request(documents=[attachment()])
+        decoded = files.decode_files(value['files'])
+        files.persist_files(self.root, decoded, self.token)
+        reserve_turn(self.root, value['request_id'], None, value['text'],
+                     attachments=[meta for meta, _ in decoded])
+        saved = get_request(self.root, value['request_id'])
+        before = {path.name: path.read_bytes() for path in (self.root/'assistant-input-files').iterdir()}
+        result = self.run_input(request(documents=[attachment(data=b'Conflicting pending bytes 67.')]))
+        self.assertEqual(result['error_code'], 'request_id_payload_or_target_conflict')
+        self.assertEqual({path.name: path.read_bytes() for path in (self.root/'assistant-input-files').iterdir()}, before)
+        self.assertEqual(get_request(self.root, value['request_id']), saved)
+        self.assertEqual(self.calls, [])
+
     def test_empty_files_preserve_existing_payload_identity(self):
         value=request(); first=self.run_input(value); value.pop('files')
         self.assertEqual(first,self.run_input(value))

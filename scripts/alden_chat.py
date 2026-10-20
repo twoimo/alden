@@ -376,9 +376,17 @@ def failure_receipt(value, code, state='failed'):
 
 
 def _process_owned_input(state_root, value, decoded, token, *, generate, select_model, files=()):
-    from alden_chat_turns import reserve_turn, complete_turn, cancel_turn, StaleTurn
+    from alden_chat_turns import (reserve_turn, complete_turn, cancel_turn, StaleTurn,
+                                  inspect_replay, TurnConflict)
     from alden_voice import configured_voice_model
     token.raise_if_cancelled()
+    # The request lock is already held. Reject a known ID conflict before
+    # persisting bytes which cannot belong to that request's original turn.
+    try:
+        inspect_replay(state_root, value['request_id'], value['conversation_id'], value['text'],
+                       [meta for meta, _ in list(decoded) + list(files)])
+    except TurnConflict:
+        return failure_receipt(value, 'request_id_payload_or_target_conflict')
     paths = persist_images(state_root, decoded, token)
     from alden_chat_files import persist_files, select_file_context, verify_file_bytes
     persist_files(state_root, files, token)
