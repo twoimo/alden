@@ -10,7 +10,9 @@ This reuses the read-only replay inspection and does not introduce a new identit
 
 Two behavioral regressions reproduce three failures before the fix: different document and image bytes on a completed ID, and different document bytes on a pending ID. Each request already reported a conflict, but the stored blob set grew. The corrected checks require exactly the original blob bytes and durable request, without another generation call.
 
-All 95 affected assistant input, document, image-context, turn, link and generation-store tests pass after correction. They retain real parser-child tests, same-conversation document follow-ups, completed replay, revocation/corruption/cancellation/supersession fences and provenance checks. Model outputs and model selection in these tests are controlled fixtures; no live model quality or successful provider inference is claimed.
+An additional malformed-image-metadata regression preserves the existing failure receipt when preflight validation rejects an input, before storing any bytes. The first guard revision raised an exception for that case; its failure evidence is retained.
+
+All 96 affected assistant input, document, image-context, turn, link and generation-store tests pass after correction. They retain real parser-child tests, same-conversation document follow-ups, completed replay, revocation/corruption/cancellation/supersession fences and provenance checks. Model outputs and model selection in these tests are controlled fixtures; no live model quality or successful provider inference is claimed.
 
 The same new regressions are run against the actual installed 0.3.208 modules before delivery. Staged and installed 0.3.209 checks, signatures, exact bundle hashes, preserved configuration/target/scheduler settings and remote CI require their own receipts under `outputs/attachment-admission209-20261021/`. Source tests alone do not establish installation or native UI behavior. No foreground QA, live message, microphone session, retrieval candidate promotion or source-graph mutation is needed for this correction.
 

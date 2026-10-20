@@ -105,6 +105,14 @@ class ChatFileTests(unittest.TestCase):
         self.assertEqual(get_request(self.root, value['request_id']), saved)
         self.assertEqual(self.calls, [])
 
+    def test_rejected_image_metadata_keeps_failure_receipt_before_storage(self):
+        result = self.run_input(request(images=[attachment('..', png(), 'image/png')]))
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['error_code'], 'assistant_input_failed')
+        self.assertEqual(result['state'], 'failed')
+        self.assertFalse(any((self.root/'assistant-input-images').glob('*')))
+        self.assertEqual(self.calls, [])
+
     def test_empty_files_preserve_existing_payload_identity(self):
         value=request(); first=self.run_input(value); value.pop('files')
         self.assertEqual(first,self.run_input(value))
