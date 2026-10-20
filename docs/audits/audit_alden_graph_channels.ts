@@ -11,6 +11,9 @@ const integer = (name: string, fallback: number, maximum: number) => {
   return value;
 };
 const start = integer('--seed-start', 201, 1_000_000), count = integer('--seed-count', 6, 12);
+const sizesAt = process.argv.indexOf('--sizes');
+const sizes = sizesAt < 0 ? [96, 192] : process.argv[sizesAt + 1]?.split(',').map(Number);
+if (!sizes?.length || new Set(sizes).size !== sizes.length || sizes.some(n => !Number.isSafeInteger(n) || n < 8 || n > 2048 || n % 4)) throw new Error('invalid --sizes');
 const choose2 = (n: number) => n * (n - 1) / 2;
 function ari(a: string[], b: string[]): number {
   if (a.length !== b.length || a.length < 2) throw new Error('invalid partition size');
@@ -32,7 +35,7 @@ type Edge = { source: string; target: string; weight: number };
 const key = (a: string, b: string) => JSON.stringify([a, b].sort());
 const cases = ['aligned', 'opposed-topologies', 'hub-aligned', 'disconnected-aligned', 'sparse-aligned'] as const;
 const rows = [];
-for (const n of [96, 192]) for (const scenario of cases) for (let seed = start; seed < start + count; seed++) {
+for (const n of sizes) for (const scenario of cases) for (let seed = start; seed < start + count; seed++) {
   const rng = random(seed), width = n / 4;
   const ids = Array.from({ length: n }, (_, i) => 'channel:' + String(i).padStart(4, '0'));
   const structureTruth = ids.map((_, i) => Math.floor(i / width));
@@ -114,5 +117,5 @@ console.log(JSON.stringify({ schema: 1, sourceFiles: {
   'desktop/src/knowledge/semantic-layout.ts': hash('desktop/src/knowledge/semantic-layout.ts'),
   'desktop/src/knowledge/graph-model.ts': hash('desktop/src/knowledge/graph-model.ts'),
   'docs/audits/audit_alden_graph_channels.ts': hash('docs/audits/audit_alden_graph_channels.ts'),
-}, seedPolicy: { start, count, sizes: [96, 192], cases, channels: ['structure', 'affinity', 'mixed'] },
+}, seedPolicy: { start, count, sizes, cases, channels: ['structure', 'affinity', 'mixed'] },
   scope: 'Synthetic development ablation. Two explicit conflicting generation labels; neither is real semantic truth. No models, source stores, native windows, or product policy changed.', rows }, null, 2));
