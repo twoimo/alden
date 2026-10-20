@@ -9689,8 +9689,9 @@ def fetch_link_previews(
                 target[0] = (current_incomplete, 0)
             except LinkContentUnavailable as error:
                 target[0] = (_incomplete_link_preview(current_url, str(error)), 0)
-            except TimeoutError:
-                target[0] = (_incomplete_link_preview(current_url, 'link_timeout'), 0)
+            except (TimeoutError, ValueError, OSError) as error:
+                from alden_link_fetch import link_failure_reason
+                target[0] = (_incomplete_link_preview(current_url, link_failure_reason(error)), 0)
             except Exception:
                 target[0] = (current_incomplete, 0)
 
@@ -15678,7 +15679,15 @@ def analyze_event(event: dict, *, file_context: dict | None = None) -> dict:
             )
             and not youtube_title_only
         ):
-            result["reason"] = "link_unavailable"
+            from alden_link_fetch import LINK_FAILURE_REASONS
+            result["reason"] = next((
+                preview["unavailable"]
+                for url in urls for preview in previews
+                if isinstance(preview, dict) and preview.get("url") == url
+                and preview.get("complete") is not True
+                and isinstance(preview.get("unavailable"), str)
+                and preview["unavailable"] in LINK_FAILURE_REASONS
+            ), "link_unavailable")
             result["category"] = "uncertain"
             return result
 

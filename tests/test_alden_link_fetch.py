@@ -52,6 +52,11 @@ class LinkFetchTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.run_fetch(response=Response(body=b'x'*1_000_001))
         self.assertTrue(self.connection.closed)
         with self.assertRaises(TimeoutError):fetch.read_body(Response(),time.monotonic()-1)
+    def test_body_overflow_reason_survives_real_reader_and_closes_connection(self):
+        with self.assertRaises(ValueError) as error:
+            self.run_fetch(response=Response(body=b'x' * (fetch.MAX_BODY_BYTES + 1)))
+        self.assertEqual(fetch.link_failure_reason(error.exception), 'link_response_budget')
+        self.assertTrue(self.connection.closed)
     def test_cancellation_propagates_and_closes_owned_connection(self):
         class Cancelled(RuntimeError):pass
         count=0

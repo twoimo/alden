@@ -26,6 +26,10 @@ _READ_CHUNK_BYTES = 64 * 1024
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 
 
+class LinkBodyBudgetExceeded(ValueError):
+    """Bounded reads exceeded their byte budget, before any parsing."""
+
+
 def _remaining(deadline: float) -> float:
     try:
         if isinstance(deadline, bool) or not math.isfinite(float(deadline)):
@@ -299,7 +303,7 @@ def read_body(
             break
         total += len(chunk)
         if total > max_bytes:
-            raise ValueError("link body exceeds bounded retrieval size")
+            raise LinkBodyBudgetExceeded("link body exceeds bounded retrieval size")
         chunks.append(bytes(chunk))
     cancel()
     return b"".join(chunks)
@@ -424,6 +428,8 @@ def fetch_bytes(
                     raise TimeoutError("link read timeout") from None
                 except OSError:
                     raise OSError("link read unavailable") from None
+                except LinkBodyBudgetExceeded:
+                    raise
                 except ValueError:
                     raise ValueError("link body read failed") from None
                 cancel()
@@ -431,7 +437,7 @@ def fetch_bytes(
                 if not isinstance(body, (bytes, bytearray)):
                     raise ValueError("link response body is not bytes")
                 if len(body) > MAX_BODY_BYTES:
-                    raise ValueError("link body exceeds bounded retrieval size")
+                    raise LinkBodyBudgetExceeded("link body exceeds bounded retrieval size")
                 return bytes(body), len(body)
         finally:
             try:
@@ -443,3 +449,49 @@ def fetch_bytes(
         if redirect_to is not None:
             current_url = redirect_to
     raise ValueError("link redirect not allowed")
+
+
+_LINK_FAILURES = {
+    "link DNS timeout": "link_dns_timeout",
+    "link DNS resolution failed": "link_dns_unavailable",
+    "link DNS lookup invalid": "link_dns_unavailable",
+    "link DNS input invalid": "link_dns_unavailable",
+    "link DNS timeout invalid": "link_dns_timeout",
+    "link DNS address count invalid": "link_dns_unavailable",
+    "link DNS address malformed": "link_dns_unavailable",
+    "link DNS address not public": "link_not_public",
+    "link connection timeout": "link_connection_timeout",
+    "link connection unavailable": "link_connection_unavailable",
+    "link HTTP request failed": "link_http_unavailable",
+    "link response status invalid": "link_http_unavailable",
+    "link response not successful": "link_http_unavailable",
+    "link response headers unavailable": "link_http_unavailable",
+    "link response headers invalid": "link_http_unavailable",
+    "link redirect not allowed": "link_redirect_unavailable",
+    "link redirect invalid": "link_redirect_unavailable",
+    "link redirect policy failed": "link_redirect_unavailable",
+    "link redirect budget invalid": "link_redirect_unavailable",
+    "link content encoding not supported": "link_encoding_unavailable",
+    "link read timeout": "link_read_timeout",
+    "link read unavailable": "link_read_unavailable",
+    "link body read failed": "link_read_unavailable",
+    "link response body is not bytes": "link_read_unavailable",
+    "link body exceeds bounded retrieval size": "link_response_budget",
+    "link body budget invalid": "link_response_budget",
+    "link URL timeout": "link_timeout",
+    "link deadline invalid": "link_timeout",
+}
+
+
+def link_failure_reason(error: BaseException) -> str:
+    """Map a fixed fetch failure to a stable reason. Unknown errors stay generic."""
+    if not isinstance(error, (TimeoutError, ValueError, OSError)):
+        return "link_unavailable"
+    return _LINK_FAILURES.get(str(error), "link_timeout" if isinstance(error, TimeoutError) else "link_unavailable")
+
+
+LINK_FAILURE_REASONS = frozenset(_LINK_FAILURES.values()) | {
+    "link_unavailable",
+    "link_source_budget", "link_source_identity_invalid", "link_format_unavailable",
+    "link_binary_content", "link_encoding_unavailable",
+}

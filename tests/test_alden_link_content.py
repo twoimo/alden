@@ -2,8 +2,10 @@
 import hashlib
 from contextlib import ExitStack
 import json
+import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import patch
@@ -142,6 +144,47 @@ class LinkWorkerTests(unittest.TestCase):
             result = self.worker.fetch_link_previews('https://example.com/one')
         self.assertFalse(result[0]['complete'])
         self.assertEqual(result[0]['unavailable'], 'link_encoding_unavailable')
+
+    def test_http_failure_keeps_its_reason(self):
+        with patch.object(self.worker, '_fetch_link_preview_once', side_effect=ValueError('link response not successful')):
+            result = self.worker.fetch_link_previews('https://example.com/one')
+        self.assertEqual(result[0]['unavailable'], 'link_http_unavailable')
+        self.assertFalse(result[0]['complete'])
+
+    def test_unknown_transport_error_stays_generic(self):
+        with patch.object(self.worker, '_fetch_link_preview_once', side_effect=ValueError('socket details example.test')):
+            result = self.worker.fetch_link_previews('https://example.com/one')
+        self.assertEqual(result[0]['unavailable'], 'link_unavailable')
+
+    def test_link_failure_reaches_analysis_without_search_or_model_calls(self):
+        worker = self.worker
+        event = runtime_fixtures.AutoReplyCliRuntimeTests._burst_event(
+            worker, 51, 'https://example.com/a', int(time.time()))
+        cases = [
+            (OSError('link DNS resolution failed'), 'link_dns_unavailable'),
+            (TimeoutError('link connection timeout'), 'link_connection_timeout'),
+            (ValueError('link response not successful'), 'link_http_unavailable'),
+            (ValueError('link redirect not allowed'), 'link_redirect_unavailable'),
+            (ValueError('socket details private.example'), 'link_unavailable'),
+        ]
+        for error, reason in cases:
+            with self.subTest(reason=reason), patch.dict(os.environ, {'OPENKAKAO_ALLOW_LINK_FETCH':'1'}), \
+                    patch.object(worker, '_reply_turn_hold_reason', return_value=None), \
+                    patch.object(worker, '_fetch_link_preview_once', side_effect=error), \
+                    patch.object(worker, 'capture_visible_image', return_value=None), \
+                    patch.object(worker, 'run_context_reply_bundle') as search, \
+                    patch.object(worker, 'generate_reply') as generate, \
+                    tempfile.TemporaryDirectory() as folder, \
+                    patch.object(worker, 'EVIDENCE_LEDGER', Path(folder)/'reply-evidence.jsonl'):
+                result = worker.analyze_event(event)
+                path = worker.persist_reply_evidence_ledger(event, result, status='skipped')
+                self.assertIsNotNone(path)
+                self.assertEqual(json.loads(path.read_text())['reason'], reason)
+            self.assertEqual(result['reason'], reason)
+            self.assertEqual(result['decision'], 'skip')
+            self.assertEqual(result['provenance']['link_failures'], [{'index':0, 'reason':reason}])
+            search.assert_not_called()
+            generate.assert_not_called()
 
 
 
