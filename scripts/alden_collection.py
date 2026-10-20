@@ -52,6 +52,10 @@ def normalized_text(value: str) -> str:
 
 _GENERIC_OVERVIEW_LABELS = {'snippets', 'sections', 'config', 'templates', 'assets', 'layout', 'locales', 'src', 'dist', 'node_modules', 'index', 'readme'}
 _ASSET_OVERVIEW_LABEL = re.compile(r'(?i)^[A-Za-z0-9_.-]{1,80}[.](?:liquid|json|js|css|scss|svg|md)$')
+_DISPLAY_LINK_LINE = re.compile(
+    r'(?:https?://\S+|(?:[-*•]\s*)?(?:링크|원문(?:\s*링크)?|URL)\s*:\s*https?://\S+)', re.I)
+_DISPLAY_REACTION_LINE = re.compile(
+    r'(?:[-*•]\s*)?반응:\s*좋아요\s*[0-9][0-9,]*\s*·\s*답글\s*[0-9][0-9,]*\s*·\s*리포스트\s*[0-9][0-9,]*')
 
 
 def overview_label_tier(label) -> int:
@@ -80,20 +84,23 @@ def overview_display_label(label, body=None) -> str:
         return text
     if not isinstance(body, str):
         return ''
-    lines = []
+    short_korean = english = ''
     for raw in body.splitlines():
         line = ' '.join(raw.split())
         if not line or re.fullmatch(r'\d+\s*시간', line) or re.fullmatch(r'@?[A-Za-z0-9_.]+', line):
             continue
-        lines.append(line)
-    for minimum in (12, 2):
-        for line in lines:
-            if re.search(r'[가-힣]', line) and len(line) >= minimum:
+        # Legacy export headers locate/count a source; a following saved line
+        # makes a more useful display title. The complete body stays retained.
+        if _DISPLAY_LINK_LINE.fullmatch(line) or _DISPLAY_REACTION_LINE.fullmatch(line):
+            continue
+        if re.search(r'[가-힣]', line):
+            if len(line) >= 12:
                 return line[:80]
-    for line in lines:
-        if re.search(r'[A-Za-z]', line) and len(line) >= 12:
-            return line[:80]
-    return ''
+            if not short_korean and len(line) >= 2:
+                short_korean = line
+        if not english and re.search(r'[A-Za-z]', line) and len(line) >= 12:
+            english = line
+    return (short_korean or english)[:80]
 
 
 

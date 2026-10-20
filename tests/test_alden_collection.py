@@ -17,6 +17,43 @@ from alden_collect import capture_source, collect_target
 
 
 class CollectionTests(unittest.TestCase):
+    def test_blank_display_title_skips_export_link_and_reaction_lines(self):
+        heading = '서류 평가에서 경험과 직무의 연결 근거를 구체적으로 설명합니다.'
+        header = '- 링크: https://www.threads.com/@example/post/Example123\n- 반응: 좋아요 6 · 답글 0 · 리포스트 0'
+        self.assertEqual(overview_display_label('', header + '\n\n' + heading), heading)
+        self.assertEqual(overview_display_label('', header), '')
+        self.assertEqual(overview_display_label('저장된 원래 제목', header + '\n' + heading), '저장된 원래 제목')
+
+    def test_display_title_preserves_substantive_url_and_numeric_sentences(self):
+        for sentence in ('링크: https://example.com 결과를 분석한 문서입니다.',
+                         '반응: 좋아요 6개를 목표로 정한 실험입니다.',
+                         '반응 속도는 0.2ms이며 표본은 1,000개입니다.',
+                         '지원 기간 안내 https://example.com/apply 를 확인했습니다.'):
+            self.assertEqual(overview_display_label('', sentence + '\n다음 설명입니다.'), sentence)
+
+    def test_graph_title_projection_preserves_distinct_sources_and_originals(self):
+        target = self.target()
+        heading = '서류 평가에서 경험과 직무의 연결 근거를 구체적으로 설명합니다.'
+        records = [{**self.record(name, text='- 링크: https://example.com/' + name +
+                    '\n- 반응: 좋아요 6 · 답글 0 · 리포스트 0\n\n' + heading), 'label': ''}
+                   for name in ('first-source', 'second-source')]
+        self.store.ingest(target, records)
+        before = self.store.path.read_bytes()
+        blobs = {p.name:p.read_bytes() for p in self.store.blobs.iterdir()}
+        page = self.store.graph_page(projects=['one'])
+        self.assertEqual(page['total_nodes'], 2)
+        self.assertEqual({node['id'] for node in page['nodes']},
+                         {identity('youtube', record['original_id']) for record in records})
+        self.assertEqual([node['label'] for node in page['nodes']], [heading, heading])
+        for node in page['nodes']:
+            detail = self.store.graph_page(projects=['one'], focus=node['id'], hops=0,
+                                           details=True, expected_version=node['source_version'])['details']
+            original = next(record for record in records if identity('youtube',record['original_id']) == node['id'])
+            self.assertEqual(detail['body'], original['text'])
+            self.assertEqual(detail['version'], node['source_version'])
+        self.assertEqual(self.store.path.read_bytes(), before)
+        self.assertEqual({p.name:p.read_bytes() for p in self.store.blobs.iterdir()}, blobs)
+
     def test_graph_classifies_declared_unread_metadata_without_reading_original_files(self):
         target=self.target()
         self.store.ingest(target,[{'original_id':'unread','label':'자료 목록','text':'경로만 색인한 파일. 본문은 읽지 않았습니다.','kind':'document'},
