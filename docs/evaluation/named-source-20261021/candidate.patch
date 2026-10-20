@@ -1,6 +1,6 @@
 --- a/scripts/alden_collection_retrieval.py
 +++ b/scripts/alden_collection_retrieval.py
-@@ -20,0 +21,31 @@
+@@ -21,0 +22,31 @@
 +
 +
 +def _prefer_named_source_titles(store, rows, ranked, plans, projects, limit,
@@ -32,23 +32,23 @@
 +    return candidates[:limit], preferred, {'matched': len(matched), 'verified': checked,
 +        'preferred': len(preferred), 'verification_limit': budget,
 +        'truncated': len(ordered) > checked, 'meaning': 'source_title_lookup_not_body_grounding'}
-@@ -504,0 +536 @@
+@@ -506,0 +538 @@
 +    title_preferred, title_coverage = set(), None
-@@ -510,2 +542,2 @@
+@@ -512,2 +544,2 @@
 -        words = list(dict.fromkeys(re.findall(r'[0-9a-z가-힣]+', query.casefold())))[:24]
 -        body_plans = [korean_literal_plan(kg._fts_query_terms([word])) for word in words]
 +        words = list(dict.fromkeys(re.findall(r'[0-9a-z가-힣]+', query.casefold())))
 +        body_plans = [korean_literal_plan(kg._fts_query_terms([word])) for word in words[:24]]
-@@ -515,0 +548,5 @@
+@@ -517,0 +550,5 @@
 +            if len(words) <= 24:
 +                ranked, title_preferred, title_coverage = _prefer_named_source_titles(
 +                    store, eligible, ranked, body_plans, projects,
 +                    candidate_limit * (2 if mode == 'rrf' else 1), body_preferred,
 +                    max(0, MAX_BODY_EVIDENCE_CHECKS - (body_coverage or {}).get('verified', 0)), cancelled)
-@@ -589,0 +627,2 @@
+@@ -591,0 +629,2 @@
 +            elif document_id in title_preferred:
 +                proof['selection_basis'] = 'matching_current_version_bound_title; source lookup, not body grounding'
-@@ -681,0 +721,3 @@
+@@ -683,0 +723,3 @@
 +            **({'source_title_policy':'current_version_bound_named_source_after_body_v1',
 +                'source_title_evidence_coverage':title_coverage}
 +               if title_coverage and title_coverage['matched'] else {}),
