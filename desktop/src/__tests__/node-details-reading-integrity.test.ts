@@ -11,6 +11,35 @@ function render(body:string, extras:Record<string,unknown>={}) {
   renderNodeDetails(graph,graph.nodes[0],{details:{node_id:'record',basis:'source_record',version:'v1',body,raw_sha256:'a'.repeat(64),...extras}});
 }
 describe('source-backed reading and numeric facts',()=>{
+  for (const newline of ['\n', '\r\n', '\r']) it(`keeps exact source boundaries when folding ${JSON.stringify(newline)} with outer whitespace`, () => {
+    const reading = '\t  원문의 들여쓰기와 줄바꿈을 보존합니다.' + newline + '준비 과정과 확인 가능한 근거입니다.  ';
+    const tail = newline + ['1', '2', '6', '1', '3'].join(newline) + newline;
+    const projection = {policy:'graph-reading-numeric-lines-v1', status:'unverified_presentation_candidate',
+      basis:'retained_graph_original_text', original_preserved:true, semantic_validity:'unverified',
+      reading, tail, body_sha256:'b'.repeat(64), reading_sha256:'c'.repeat(64), tail_sha256:'d'.repeat(64)};
+    render(reading + tail, {body_format:'retained_original_text', reading_projection:projection});
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe(reading);
+    const note = document.querySelector<HTMLDetailsElement>('.knowledge-reading-tail')!;
+    expect(note).not.toBeNull();
+    expect(note.open).toBe(false);
+    expect(note.querySelector('pre')!.textContent).toBe(tail);
+    note.open = true;
+    expect(document.getElementById('knowledge-node-body')!.textContent! + note.querySelector('pre')!.textContent!).toBe(reading + tail);
+  });
+
+  it('does not fold a projection whose source needs control removal or truncation', () => {
+    for (const reading of ['\u0000보존된 원문입니다.', '보존'.repeat(6001)]) {
+      const tail = '\n1\n2\n3';
+      const projection = {policy:'graph-reading-numeric-lines-v1', status:'unverified_presentation_candidate',
+        basis:'retained_graph_original_text', original_preserved:true, semantic_validity:'unverified',
+        reading, tail, body_sha256:'b'.repeat(64), reading_sha256:'c'.repeat(64), tail_sha256:'d'.repeat(64)};
+      render(reading + tail, {body_format:'retained_original_text', reading_projection:projection});
+      expect(document.querySelector('.knowledge-reading-tail')).toBeNull();
+      expect(document.getElementById('knowledge-node-body')!.textContent).not.toContain('\u0000');
+      expect(document.getElementById('knowledge-node-body')!.textContent!.length).toBeLessThanOrEqual(12000);
+    }
+  });
+
   it('folds a retained graph numeric line tail and keeps three-digit measurements', () => {
     const reading = '서류에서 높은 점수를 받는 지원자 특징과 준비 방법입니다. 원문은 그대로 보존됩니다.';
     const tail = '\n1\n2\n6\n1\n3';

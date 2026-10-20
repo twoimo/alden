@@ -1,7 +1,8 @@
 import type { KnowledgeGraph, KnowledgeNode } from './graph-model';
 
+const STRIPPED_TEXT_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g;
 function text(value: unknown, limit = 1200): string {
-  return typeof value === 'string' ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, limit) : '';
+  return typeof value === 'string' ? value.replace(STRIPPED_TEXT_CONTROLS, '').trim().slice(0, limit) : '';
 }
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -37,7 +38,8 @@ function readingCandidate(selected: Record<string, unknown> | null, copy: string
   const value = record(selected?.reading_projection);
   const graphTail = value?.policy === 'graph-reading-numeric-lines-v1';
   const legacyTail = value?.policy === 'legacy-threads-reading-tail-v1';
-  if (selected?.basis !== 'source_record' || selected.body_format !== 'retained_original_text'
+  if (copy.length > 12000 || copy.replace(STRIPPED_TEXT_CONTROLS, '') !== copy
+    || selected?.basis !== 'source_record' || selected.body_format !== 'retained_original_text'
     || !/^[0-9a-f]{64}$/.test(text(selected.raw_sha256)) || !value
     || (!graphTail && !legacyTail) || value.status !== 'unverified_presentation_candidate'
     || (legacyTail && value.basis !== 'verified_retained_legacy_threads_record')
@@ -169,10 +171,12 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const summary = root.getElementById('knowledge-node-summary');
   if (summary) summary.textContent = text(selected?.summary) || nodeSummary(graph, node);
   const body = root.getElementById('knowledge-node-body');
-  const copy = (selected?.basis === 'note' || selected?.basis === 'source_record') && node.category !== 'collection' ? text(selected.body, 12000) : '';
+  const retainedCopy = (selected?.basis === 'note' || selected?.basis === 'source_record')
+    && node.category !== 'collection' && typeof selected.body === 'string' ? selected.body : '';
+  const copy = text(retainedCopy, 12000);
   // Source-specific projection is already bound to retained bytes by the
   // backend. Numeric shape alone cannot distinguish chrome from source data.
-  const candidate = readingCandidate(selected, copy);
+  const candidate = readingCandidate(selected, retainedCopy);
   const reading = candidate?.reading ?? copy;
   if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
