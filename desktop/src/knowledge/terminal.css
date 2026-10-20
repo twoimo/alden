@@ -19,7 +19,7 @@
 .settings-view .knowledge-hologram-toolbar button { min-height:29px; padding:5px 10px; font-size:10px; }
 .settings-view #knowledge-live-toggle { margin-left:auto; color:#9ad8ed; border-color:#84c8db55; }
 .settings-view #knowledge-live-toggle[aria-pressed="false"] { color:#e6c489; border-color:#e6c48966; }
-.knowledge-terminal { display:grid; grid-template-columns:minmax(164px,1.4fr) minmax(152px,1.15fr) minmax(144px,.9fr) minmax(144px,.95fr) minmax(152px,1fr) minmax(182px,1.5fr); grid-template-rows:minmax(0,1fr); column-gap:2px; height:208px; max-height:30vh; min-height:142px; overflow:auto; overscroll-behavior:contain; border-top:1px solid #41627d; background:#355570; scrollbar-width:thin; scrollbar-color:#54718c44 transparent; }
+.knowledge-terminal { display:grid; grid-template-columns:minmax(164px,1.4fr) minmax(152px,1.15fr) minmax(144px,.9fr) minmax(144px,.95fr) minmax(152px,1fr) minmax(182px,1.5fr); grid-template-rows:minmax(0,1fr); column-gap:1px; height:208px; max-height:30vh; min-height:142px; overflow:auto; overscroll-behavior:contain; border-top:1px solid #41627d; background:#355570; scrollbar-width:thin; scrollbar-color:#54718c44 transparent; }
 .knowledge-terminal[hidden] { display:none; }
 .terminal-panel { display:flex; flex-direction:column; align-self:stretch; min-width:0; min-height:0; overflow:hidden; background:#081624; }
 .terminal-panel>header { display:flex; align-items:center; min-height:31px; flex:none; gap:7px; padding:0 9px; border-bottom:1px solid #7aa8c72b; background:#102239; }
