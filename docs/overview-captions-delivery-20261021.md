@@ -21,3 +21,9 @@ The published Spark graph contains metadata descriptions, not admitted body cont
 - Evidence remains private and untracked in `outputs/topic-label-priority-20261021/`: source snapshots, selector comparison, raw UI/typecheck logs, browser receipts and directly reviewed screenshots. Installed artifact/configuration/signature readback and CI are separate delivery gates in the manifest and task-root progress files.
 
 This is a reversible presentation change for 0.3.200. It does not complete the full 18-item goal, ST01–13, independent semantic validation, native physical-input/Retina checks, representative GPU/battery performance or normal release/notarization.
+
+## Installed artifact readback
+
+Runtime `ad2c8264c174ed7385f23cd43172727c55fff423` was built with the existing fixed local certificate and installed at `/Applications/Alden.app` as 0.3.200. All 78 candidate/installed file hashes and modes matched and strict/deep signature verification passed. The running launchd process resolved to that installed executable. Models, enrollment, emergency state and all seven targets' configuration, intervals, permissions and acquisition policies matched the private pre-install baseline. During ordinary collection the version/event counts advanced from 64,585/466,376 to 64,589/466,442; document/relation/relation-version counts remained 26,623/48,355/118,555. No watcher/model/worker restart or queue reset was required. The installer retained its ordinary recovery backup.
+
+Remote CI run `39454472228` and the subsequent documentation head are tracked in the private delivery manifest and task-root progress records. This artifact/configuration readback does not substitute for installed native visual/input verification. The final local report is not the still-incomplete external three-stage audit.
