@@ -57,22 +57,22 @@ receipt recovery avoids that second callback. Power-loss behavior is untested.
 
 ## Verification performed
 
--21 focused candidate boundary tests plus65 existing acquisition, scheduler,
+- 21 focused candidate boundary tests plus65 existing acquisition, scheduler,
   receiver and realtime tests pass on the pinned product CPython3.11 runtime.
--Two retained real public feeds contain30 entries, including12 Shorts links.
+- Two retained real public feeds contain30 entries, including12 Shorts links.
   Two already-known IDs are skipped.28 retained native responses register and
   collect as28 separate video targets in an isolated real CollectionStore.
   They preserve26 actual captions and2 explicit caption-access failures.
--All28 reach actual source capture, exact version-scoped FTS bodies and title
+- All28 reach actual source capture, exact version-scoped FTS bodies and title
   queries in their permitted project. Foreign-project queries return no rows.
   Parent configurations, cursors, original memberships and versions remain
   exact. Both stores pass integrity checks; no relationships are invented.
--Two actual owned child-process evaluations exit73, respectively after durable
+- Two actual owned child-process evaluations exit73, respectively after durable
   acquisition and after canonical target commit. Distinct replacement PIDs
   resume the same receipt without another native callback or duplicate target;
   actual collection/capture then succeeds. This is deliberate process death,
   not OS crash or power-loss certification.
--The current feed-integrity guard is additionally checked against all28 real
+- The current feed-integrity guard is additionally checked against all28 real
   replay jobs. Malformed/tampered feed/native bytes, changed child permissions,
   pause/voice/emergency gates provider holds and a busy canonical transaction after input publication have focused regressions. A bounded publication retry preserves the original durable response after rollback.
 
