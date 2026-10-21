@@ -3,7 +3,7 @@
 No content inference or source discovery. CollectionScheduler remains the only
 publication owner. Signatures are observation hints, never source identities.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 import hashlib
 import json
 import os
@@ -36,24 +36,23 @@ class RealtimeCollection:
             if not self.path.exists():
                 fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
                 os.close(fd)
-            db = sqlite3.connect(self.path, timeout=5)
-            db.executescript('''CREATE TABLE IF NOT EXISTS policy(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL,revision INTEGER NOT NULL);
-              INSERT OR IGNORE INTO policy VALUES(1,0,0);
-              CREATE TABLE IF NOT EXISTS inputs(target_id TEXT PRIMARY KEY,seen TEXT,stable_since REAL,queued TEXT,queued_at REAL,
-                processed TEXT,last_collected REAL,error TEXT);
-              CREATE TABLE IF NOT EXISTS heartbeat(id INTEGER PRIMARY KEY CHECK(id=1),pid INTEGER NOT NULL,updated REAL NOT NULL,state TEXT NOT NULL);''')
-        else:
-            db = sqlite3.connect(self.path.absolute().as_uri() + '?mode=ro', uri=True, timeout=.2)
-            db.execute('PRAGMA query_only=ON')
-        db.row_factory = sqlite3.Row
-        try:
-            yield db
-            if write: db.commit()
-        except BaseException:
-            if write: db.rollback()
-            raise
-        finally:
-            db.close()
+        with closing(sqlite3.connect(self.path, timeout=5) if write else
+                     sqlite3.connect(self.path.absolute().as_uri() + '?mode=ro', uri=True, timeout=.2)) as db:
+            if write:
+                db.executescript('''CREATE TABLE IF NOT EXISTS policy(id INTEGER PRIMARY KEY CHECK(id=1),enabled INTEGER NOT NULL,revision INTEGER NOT NULL);
+                  INSERT OR IGNORE INTO policy VALUES(1,0,0);
+                  CREATE TABLE IF NOT EXISTS inputs(target_id TEXT PRIMARY KEY,seen TEXT,stable_since REAL,queued TEXT,queued_at REAL,
+                    processed TEXT,last_collected REAL,error TEXT);
+                  CREATE TABLE IF NOT EXISTS heartbeat(id INTEGER PRIMARY KEY CHECK(id=1),pid INTEGER NOT NULL,updated REAL NOT NULL,state TEXT NOT NULL);''')
+            else:
+                db.execute('PRAGMA query_only=ON')
+            db.row_factory = sqlite3.Row
+            try:
+                yield db
+                if write: db.commit()
+            except BaseException:
+                if write: db.rollback()
+                raise
 
     def policy(self):
         if not self.path.exists(): return {'enabled': False, 'revision': 0}

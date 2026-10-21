@@ -4,7 +4,7 @@ Own scheduler state is separate from the source/version store. One process
 owns a cycle, while CollectionStore retains its per-target publication locks.
 """
 from __future__ import annotations
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 import fcntl
 import hashlib
 import json
@@ -185,40 +185,40 @@ class CollectionScheduler:
         if self.path.is_symlink():raise RuntimeError('collection_scheduler_state_unsafe')
         if not self.path.exists():
             fd=os.open(self.path,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
-        db=sqlite3.connect(self.path,timeout=5);db.row_factory=sqlite3.Row
-        if db.execute("SELECT 1 FROM sqlite_master WHERE name='controls'").fetchone() and not db.execute("SELECT 1 FROM sqlite_master WHERE name='acquisition_policy'").fetchone():
-            backup=self.folder/('scheduler.before-acquisition-'+uuid.uuid4().hex+'.sqlite3')
-            fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
-            with sqlite3.connect(backup) as recovery:
-                db.backup(recovery)
-                if recovery.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise RuntimeError('collection_scheduler_backup_invalid')
-        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='controls'").fetchone() and not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_requests'").fetchone():
-            backup=self.folder/('scheduler.before-manual-'+uuid.uuid4().hex+'.sqlite3')
-            fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
-            with sqlite3.connect(backup) as recovery:
-                db.backup(recovery)
-                if recovery.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise RuntimeError('collection_scheduler_backup_invalid')
-        db.executescript('''CREATE TABLE IF NOT EXISTS controls(id TEXT PRIMARY KEY,paused INTEGER NOT NULL);
-          CREATE TABLE IF NOT EXISTS target_state(target_id TEXT PRIMARY KEY,failures INTEGER NOT NULL DEFAULT 0,
-            retry_at REAL NOT NULL DEFAULT 0,blocked INTEGER NOT NULL DEFAULT 0,last_error TEXT,last_run TEXT);
-          CREATE TABLE IF NOT EXISTS cycles(id TEXT PRIMARY KEY,started REAL NOT NULL,finished REAL,state TEXT NOT NULL);
-          CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY,cycle_id TEXT NOT NULL,target_id TEXT NOT NULL,
-            started REAL NOT NULL,finished REAL,state TEXT NOT NULL,result TEXT,error TEXT);
-          CREATE TABLE IF NOT EXISTS manual_requests(id TEXT PRIMARY KEY,target_id TEXT NOT NULL,
-            requested_at REAL NOT NULL,state TEXT NOT NULL,attempt_id TEXT,finished_at REAL);
-          CREATE UNIQUE INDEX IF NOT EXISTS manual_active_target ON manual_requests(target_id) WHERE state IN ('queued','running');
-          CREATE TABLE IF NOT EXISTS acquisition_policy(target_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,
-            provider TEXT NOT NULL,revision INTEGER NOT NULL);
-          INSERT OR IGNORE INTO controls VALUES('global',0);''')
-        try:yield db;db.commit()
-        except BaseException:db.rollback();raise
-        finally:db.close()
+        with closing(sqlite3.connect(self.path,timeout=5)) as db:
+            db.row_factory=sqlite3.Row
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='controls'").fetchone() and not db.execute("SELECT 1 FROM sqlite_master WHERE name='acquisition_policy'").fetchone():
+                backup=self.folder/('scheduler.before-acquisition-'+uuid.uuid4().hex+'.sqlite3')
+                fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
+                with closing(sqlite3.connect(backup)) as recovery, recovery:
+                    db.backup(recovery)
+                    if recovery.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise RuntimeError('collection_scheduler_backup_invalid')
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='controls'").fetchone() and not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_requests'").fetchone():
+                backup=self.folder/('scheduler.before-manual-'+uuid.uuid4().hex+'.sqlite3')
+                fd=os.open(backup,os.O_CREAT|os.O_EXCL|os.O_WRONLY|os.O_NOFOLLOW,0o600);os.close(fd)
+                with closing(sqlite3.connect(backup)) as recovery, recovery:
+                    db.backup(recovery)
+                    if recovery.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise RuntimeError('collection_scheduler_backup_invalid')
+            db.executescript('''CREATE TABLE IF NOT EXISTS controls(id TEXT PRIMARY KEY,paused INTEGER NOT NULL);
+              CREATE TABLE IF NOT EXISTS target_state(target_id TEXT PRIMARY KEY,failures INTEGER NOT NULL DEFAULT 0,
+                retry_at REAL NOT NULL DEFAULT 0,blocked INTEGER NOT NULL DEFAULT 0,last_error TEXT,last_run TEXT);
+              CREATE TABLE IF NOT EXISTS cycles(id TEXT PRIMARY KEY,started REAL NOT NULL,finished REAL,state TEXT NOT NULL);
+              CREATE TABLE IF NOT EXISTS attempts(id TEXT PRIMARY KEY,cycle_id TEXT NOT NULL,target_id TEXT NOT NULL,
+                started REAL NOT NULL,finished REAL,state TEXT NOT NULL,result TEXT,error TEXT);
+              CREATE TABLE IF NOT EXISTS manual_requests(id TEXT PRIMARY KEY,target_id TEXT NOT NULL,
+                requested_at REAL NOT NULL,state TEXT NOT NULL,attempt_id TEXT,finished_at REAL);
+              CREATE UNIQUE INDEX IF NOT EXISTS manual_active_target ON manual_requests(target_id) WHERE state IN ('queued','running');
+              CREATE TABLE IF NOT EXISTS acquisition_policy(target_id TEXT PRIMARY KEY,enabled INTEGER NOT NULL,
+                provider TEXT NOT NULL,revision INTEGER NOT NULL);
+              INSERT OR IGNORE INTO controls VALUES('global',0);''')
+            try:yield db;db.commit()
+            except BaseException:db.rollback();raise
 
     def acquisition_policy(self,target_id):
         default={'enabled':False,'provider':PROVIDER,'revision':0}
         if not self.path.exists():return default
         if any(p.is_symlink() for p in [self.path,*self.path.parents]):raise ValueError('collection_scheduler_state_unsafe')
-        with sqlite3.connect(self.path.absolute().as_uri()+'?mode=ro',uri=True,timeout=.15) as db:
+        with closing(sqlite3.connect(self.path.absolute().as_uri()+'?mode=ro',uri=True,timeout=.15)) as db:
             db.execute('PRAGMA query_only=ON')
             if not db.execute("SELECT 1 FROM sqlite_master WHERE name='acquisition_policy'").fetchone():return default
             row=db.execute('SELECT enabled,provider,revision FROM acquisition_policy WHERE target_id=?',(target_id,)).fetchone()
