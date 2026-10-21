@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import unicodedata
 import socket
 import signal
 import stat
@@ -1525,6 +1526,7 @@ class AldenVoicePipeline:
 
 def _voice_blocks_knowledge_lookup(text: str) -> bool:
     """A current refusal/new-input storage request also overrides followups."""
+    text = unicodedata.normalize('NFC', text)
     denied = re.search(r'(?:찾|검색|조회|읽)(?:지|하지)\s*(?:마|말)|(?:찾|검색|조회|읽)\s*(?:금지|안\s*해)', text)
     if denied:
         return True
@@ -1535,6 +1537,7 @@ def _voice_blocks_knowledge_lookup(text: str) -> bool:
 
 def _voice_requests_knowledge(text: str) -> bool:
     """Keep current-input storage apart from explicit saved-source retrieval."""
+    text = unicodedata.normalize('NFC', text)
     if _voice_blocks_knowledge_lookup(text):
         return False
     if any(word in text for word in ('카카오톡','카톡','채팅방','대화방','지식','자료','노드','그래프')):
@@ -1555,13 +1558,13 @@ def _voice_collection_projects(root: Path, query: str) -> list[str]:
     store = CollectionStore.open_existing(root)
     if store is None:
         return []
-    compact = lambda value: ''.join(value.casefold().split())
+    compact = lambda value: ''.join(unicodedata.normalize('NFC', value).casefold().split())
     wanted = compact(query)
     with store.database() as db:
         rows = db.execute("SELECT DISTINCT p.project,t.label FROM target_projects p JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied'")
         matches = {project for project, label in rows if any(
             compact(alias) and compact(alias) in wanted
-            for alias in (project, label, label.removesuffix(' 지식 그래프')))}
+            for alias in (project, label, unicodedata.normalize('NFC', label).removesuffix(' 지식 그래프')))}
     return sorted(matches)
 
 
@@ -1580,12 +1583,12 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         if _voice_requests_knowledge(previous):
             earlier=previous
             break
-        if not previous.strip().startswith(followup_prefixes):
+        if not unicodedata.normalize('NFC', previous).strip().startswith(followup_prefixes):
             break
-    followup=text.strip().startswith(followup_prefixes)
+    followup=unicodedata.normalize('NFC', text).strip().startswith(followup_prefixes)
     if root is None or not ((root/'knowledge/corpus/current.json').is_file() or (root/'knowledge/osk/sync.json').is_file() or (root/'knowledge/collection/collection.sqlite3').is_file()) or not (explicit_request or (earlier and followup)):
         return '',{'state':'not_requested','mode':'none','sources':0}
-    token.raise_if_cancelled();query=(text+(' '+earlier if followup and not explicit_request else '')).strip()[:1024];started=time.perf_counter()
+    token.raise_if_cancelled();query=unicodedata.normalize('NFC',(text+(' '+earlier if followup and not explicit_request else '')).strip()[:1024]);started=time.perf_counter()
     try:
         from alden_corpus import search,resolve_room
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle,embedding_abort_scope

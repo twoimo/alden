@@ -2,6 +2,7 @@
 import json
 import sys
 import unittest
+import unicodedata
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -10,6 +11,61 @@ import alden_voice as voice
 from alden_abort import AbortController,AldenCancelled
 
 class VoiceRetrievalTests(unittest.TestCase):
+    def test_canonical_hangul_lookup_reaches_same_query_without_rewriting_input(self):
+        result={'facts':['보존 원문'],'fact_provenance':[{'note_id':'stable','source_kind':'collected_source'}],'search_mode':'bm25_only'}
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            requests=['저장된 자료 알려줘',unicodedata.normalize('NFD','저장된 자료 알려줘')]
+            originals=list(requests);queries=[]
+            for request in requests:
+                with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value=result) as lookup:
+                    reference,metrics=voice._voice_knowledge_reference(request,[],root,AbortController(root).token())
+                self.assertEqual(metrics['state'],'found');queries.append(lookup.call_args.args[0])
+            self.assertEqual(queries,[requests[0],requests[0]])
+            self.assertEqual(requests,originals)
+
+    def test_decomposed_refusal_and_storage_never_authorize_lookup(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td);history=[{'role':'user','content':'저장된 자료 알려줘'}]
+            requests=['자료 '+unicodedata.normalize('NFD','검색하지 마'),
+                      '자료 '+unicodedata.normalize('NFD','조회 금지'),
+                      '지금 말한 자료 '+unicodedata.normalize('NFD','저장해 줘')]
+            for request in requests:
+                with self.subTest(request=request),mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['원치 않는 조회'],'fact_provenance':[]}) as lookup:
+                    reference,metrics=voice._voice_knowledge_reference(request,history,root,AbortController(root).token())
+                lookup.assert_not_called();self.assertEqual(reference,'');self.assertEqual(metrics['state'],'not_requested')
+
+    def test_decomposed_followup_keeps_earlier_source_request_and_history_bytes(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td)
+            previous=unicodedata.normalize('NFD','저장된 공고 알려줘')
+            followup=unicodedata.normalize('NFD','그럼 날짜는?')
+            history=[{'role':'user','content':previous}]
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['보존 원문'],'fact_provenance':[]}) as lookup:
+                reference,metrics=voice._voice_knowledge_reference(followup,history,root,AbortController(root).token())
+            self.assertEqual(metrics['state'],'found')
+            self.assertEqual(lookup.call_args.args[0],unicodedata.normalize('NFC',followup+' '+previous))
+            self.assertEqual(history,[{'role':'user','content':previous}])
+
+    def test_project_alias_canonical_forms_keep_distinct_scopes_without_compatibility_folding(self):
+        from alden_collection import CollectionStore
+        with TemporaryDirectory() as td:
+            root=self.root(td).resolve();store=CollectionStore(root)
+            for original,label,project in [('first',unicodedata.normalize('NFD','취업 지식 그래프'),'one'),
+                                          ('second','취업 지식 그래프','two'),('compat','Ａ 지식 그래프','compat')]:
+                store.register(platform='graph',original_id=original,kind='source',label=label,projects=[project])
+            for query in ['취업 자료 찾아줘',unicodedata.normalize('NFD','취업 자료 찾아줘')]:
+                self.assertEqual(voice._voice_collection_projects(root,query),['one','two'])
+            self.assertEqual(voice._voice_collection_projects(root,'A 자료 찾아줘'),[])
+
+    def test_decomposed_query_keeps_original_1024_codepoint_budget(self):
+        with TemporaryDirectory() as td:
+            root=self.root(td);request=unicodedata.normalize('NFD','저장된 자료 설명 '*200)
+            with mock.patch('auto_reply_knowledge_graph.retrieve_knowledge_bundle',return_value={'facts':['보존 원문'],'fact_provenance':[]}) as lookup:
+                reference,metrics=voice._voice_knowledge_reference(request,[],root,AbortController(root).token())
+            self.assertEqual(metrics['state'],'found')
+            self.assertEqual(lookup.call_args.args[0],unicodedata.normalize('NFC',request.strip()[:1024]))
+
     def test_collection_date_bases_reach_model_and_metrics_without_changing_original_dates(self):
         from alden_retrieval_time import collection_time_evidence,query_time_reference
         with TemporaryDirectory() as td:
