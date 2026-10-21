@@ -277,6 +277,22 @@ def threads_snapshot(target: dict, data: dict, source: dict):
     return records, relations
 
 
+def _caption_clock_key(clock):
+    """Compare native MM:SS / HH:MM:SS without converting unbounded integers."""
+    parts = clock.split(':')
+    minutes = parts[0].lstrip('0') or '0'
+    if len(parts) == 3:
+        # Multiply decimal hours by60 and add the bounded minute component.
+        carry, digits = int(parts[1]), []
+        for digit in reversed(minutes):
+            value = (ord(digit)-ord('0'))*60 + carry
+            digits.append(str(value % 10)); carry = value // 10
+        while carry:
+            digits.append(str(carry % 10)); carry //= 10
+        minutes = ''.join(reversed(digits)).lstrip('0') or '0'
+    return len(minutes), minutes, parts[-1]
+
+
 def youtube_video_snapshot(target: dict, data: dict, source: dict):
     """One observed video, isolated from a channel's complete membership set."""
     if target['platform']!='youtube' or target['kind']!='video':
@@ -304,14 +320,12 @@ def youtube_video_snapshot(target: dict, data: dict, source: dict):
             raise ValueError('collection_caption_content_unconfirmed')
         for line in transcript.splitlines():
             if not line.strip():continue
-            timing=re.fullmatch(r'\[([0-9]+):([0-5][0-9]) - ([0-9]+):([0-5][0-9])\] .+',line)
+            timing=re.fullmatch(r'\[([0-9]+(?::[0-5][0-9]){1,2}) - ([0-9]+(?::[0-5][0-9]){1,2})\] .+',line)
             if timing is None:
                 raise ValueError('collection_caption_timestamp_unconfirmed')
-            # Minutes can exceed59. Compare decimal strings without an
-            # unbounded int conversion; rounded zero-length cues are valid.
-            start_minutes=timing[1].lstrip('0') or '0'
-            end_minutes=timing[3].lstrip('0') or '0'
-            if (len(start_minutes),start_minutes,timing[2]) > (len(end_minutes),end_minutes,timing[4]):
+            # Native output switches to hours at the one-hour boundary.
+            # Rounded zero-length and overlapping cues remain valid.
+            if _caption_clock_key(timing[1]) > _caption_clock_key(timing[2]):
                 raise ValueError('collection_caption_timestamp_unconfirmed')
         tracks=raw.get('tracks',[])
         if not isinstance(tracks,list) or not all(isinstance(t,dict) for t in tracks):

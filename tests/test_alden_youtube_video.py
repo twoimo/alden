@@ -52,7 +52,9 @@ class VideoSnapshotTests(unittest.TestCase):
         self.write();collect_target(self.store,self.target)
         before=self.store.target(self.target)['cursor']
         for text in ['[00:60 - 01:03] 잘못된 초', '[00:01 - 00:99] 잘못된 끝 초',
-                     '[02:30 - 02:29] 역전된 구간']:
+                     '[02:30 - 02:29] 역전된 구간', '[01:60:00 - 02:00:00] 잘못된 분',
+                     '[01:00:60 - 01:01:00] 잘못된 초', '[01:00:03 - 59:59] 혼합 역전',
+                     '[60:01 - 01:00:00] 반대 혼합 역전', '[00:00:00:00 - 00:01] 네 부분 시각']:
             with self.subTest(text=text):
                 self.data['videos'][0]['captions']['text']=text;self.write()
                 with self.assertRaisesRegex(ValueError,'timestamp_unconfirmed'):
@@ -65,6 +67,24 @@ class VideoSnapshotTests(unittest.TestCase):
         record=youtube_video_snapshot(self.store.target(self.target),self.data,{})[0][0]
         self.assertTrue(record['text'].endswith(text))
         self.assertEqual(record['raw'],self.data['videos'][0])
+
+    def test_hour_clocks_and_cross_hour_cues_keep_original_native_text(self):
+        text='[59:55 - 01:00:03] 한 시간 경계\n[01:00:03 - 01:00:09] 이후 자막'
+        self.data['videos'][0]['captions']['text']=text
+        record=youtube_video_snapshot(self.store.target(self.target),self.data,{})[0][0]
+        self.assertTrue(record['text'].endswith(text))
+        self.assertEqual(record['raw'],self.data['videos'][0])
+
+    def test_equal_hour_and_long_minute_clocks_keep_rounded_zero_interval(self):
+        text='[01:00:00 - 60:00] 같은 시각\n[60:00 - 01:00:01] 다음 시각'
+        self.data['videos'][0]['captions']['text']=text
+        self.assertTrue(youtube_video_snapshot(self.store.target(self.target),self.data,{})[0][0]['text'].endswith(text))
+
+    def test_hour_clock_does_not_require_unbounded_integer_conversion(self):
+        hours='9'*5000;next_hours='1'+'0'*5000
+        text=f'[{hours}:59:59 - {next_hours}:00:00] 큰 시각'
+        self.data['videos'][0]['captions']['text']=text
+        self.assertTrue(youtube_video_snapshot(self.store.target(self.target),self.data,{})[0][0]['text'].endswith(text))
 
     def test_threads_shortcode_identity_and_unknown_account_are_preserved(self):
         target={'platform':'threads','kind':'post','original_id':'DeKQ2ljD3ZO'}
