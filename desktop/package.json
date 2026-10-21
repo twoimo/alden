@@ -1,7 +1,7 @@
 {
   "name": "openkakao-alden-desktop",
   "private": true,
-  "version": "0.3.209",
+  "version": "0.3.210",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",

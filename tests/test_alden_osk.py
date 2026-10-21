@@ -19,8 +19,59 @@ source = {'ok': True, 'indexed_at': 42, 'stale': False, 'nodes': [
  'edges':[{'source':'chat:1','target':'memory:one','relation':'mentions','weight':3,'room_id':'1','evidence':{'kind':'ledger','chat_id':'1'}}]}
 '''
 
+OBSERVATION_PRELUDE = r'''
+import copy,sqlite3
+from unittest.mock import patch
+import auto_reply_knowledge_graph as kg
+account='a'*64;folder=root/'knowledge/corpus'/account;folder.mkdir(parents=True)
+(folder.parent/'current.json').write_text(json.dumps({'schema_version':1,'account':account,'snapshot':'fixed'}))
+index=sqlite3.connect(folder/'context.sqlite3')
+index.execute('CREATE TABLE corpus_meta(key TEXT PRIMARY KEY,value TEXT)')
+index.executemany('INSERT INTO corpus_meta VALUES(?,?)',[('account',account),('snapshot','fixed'),('complete','1')]);index.commit()
+observation=folder/'room-observations.json'
+observation.write_text(json.dumps({'schema_version':1,'account':account,'corpus_snapshot':'fixed','observed_at':1000,
+ 'rooms':[{'chat_id':'1','label':'확인된 방 이름','label_kind':'room_title','source':'local_chats','observed_at':900}]}))
+def displays():
+ return kg._room_observation_displays(index,root,['kakao:'+account+':room:1'],expected_account=account)
+'''
+
 
 class OskIntegrationTests(unittest.TestCase):
+    def test_source_signature_tracks_reader_freshness_without_cache_file_changes(self):
+        result=self.execute(OBSERVATION_PRELUDE+r'''
+original=observation.read_bytes();boundary=900+kg.ROOM_OBSERVATIONS_MAX_AGE_SECONDS
+with patch.object(a.time,'time',return_value=1000):
+ fresh=a._source_signature(root);assert displays()['1']['label']=='확인된 방 이름'
+for now,accepted in [(boundary,True),(boundary+.01,False),(850,False),(940,True)]:
+ with patch.object(a.time,'time',return_value=now):
+  assert bool(displays()) is accepted
+  assert (a._source_signature(root)==fresh) is accepted
+ assert observation.read_bytes()==original
+print(json.dumps({'expiryAndFutureBoundary':True,'sourceBytesUnchanged':True}))
+''')
+        self.assertEqual(result,{'expiryAndFutureBoundary':True,'sourceBytesUnchanged':True})
+
+    def test_unchanged_sync_rechecks_expired_observed_title_and_keeps_node_identity(self):
+        result=self.execute(OBSERVATION_PRELUDE+r'''
+def collect(*args,**kwargs):
+ current=copy.deepcopy(source);labels=displays()
+ current['nodes'][0]['label']=labels['1']['label'] if labels else '원문 방 식별'
+ return current
+with patch('auto_reply_knowledge_graph.collect_knowledge_graph',side_effect=collect) as calls:
+ with patch.object(a.time,'time',return_value=1000):
+  a.synchronize(root);assert a.synchronize(root)['state']=='unchanged'
+  item=a._read_json(a._home(root)/'sync.json')['managed']['chat:1'];identity=item['osk_id']
+  assert item['source']['label']=='확인된 방 이름' and calls.call_count==1
+ with patch.object(a.time,'time',return_value=900+kg.ROOM_OBSERVATIONS_MAX_AGE_SECONDS+.01):
+  a.synchronize(root)
+  item=a._read_json(a._home(root)/'sync.json')['managed']['chat:1']
+  assert calls.call_count==2 and item['source']['label']=='원문 방 식별'
+  assert item['osk_id']==identity
+  assert a.synchronize(root)['state']=='unchanged'
+print(json.dumps({'expiredObservationRechecked':True,'stableNodeIdentity':True}))
+''')
+        self.assertEqual(result,{'expiredObservationRechecked':True,'stableNodeIdentity':True})
+
     def test_focus_uses_canonical_summary_after_managed_hash_is_reconciled(self):
         result=self.execute(r'''
 a.synchronize(root,source);c,g,_,w=a._load_engine(root);home=a._home(root);cp=a._read_json(home/'sync.json');item=cp['managed']['memory:one'];p=g.Index().by_id[item['osk_id']][0]

@@ -983,6 +983,12 @@ ROOM_OBSERVATIONS_MAX_ROOMS = 10000
 ROOM_OBSERVATIONS_MAX_AGE_SECONDS = 24 * 60 * 60
 
 
+def _room_observation_time_fresh(value, now):
+    """Shared observation-time boundary for readers and producer invalidation."""
+    return (not isinstance(value, bool) and isinstance(value, (int, float))
+            and 0 < value < 2**53 and -60 <= now - value <= ROOM_OBSERVATIONS_MAX_AGE_SECONDS)
+
+
 def _room_title(raw: Any, key: str) -> str:
     """Exclude placeholders and our generated aliases from title evidence."""
     if not isinstance(raw, str):
@@ -1156,12 +1162,8 @@ def _room_observation_displays(index_conn: sqlite3.Connection, state_root: Path,
         return {}
     now = time.time()
 
-    def fresh(value):
-        return (not isinstance(value, bool) and isinstance(value, (int, float))
-                and 0 < value < 2**53 and -60 <= now - value <= ROOM_OBSERVATIONS_MAX_AGE_SECONDS)
-
     observed_at = payload.get('observed_at')
-    if not fresh(observed_at):
+    if not _room_observation_time_fresh(observed_at, now):
         return {}
     rooms = payload.get('rooms')
     if not isinstance(rooms, list) or len(rooms) > ROOM_OBSERVATIONS_MAX_ROOMS:
@@ -1177,7 +1179,7 @@ def _room_observation_displays(index_conn: sqlite3.Connection, state_root: Path,
         if row.get('source') not in ('local_history_rooms', 'local_chats', 'ax') or row.get('label_kind') not in ('room_title', 'display_name'):
             continue
         row_observed_at = row.get('observed_at', observed_at)
-        if not fresh(row_observed_at) or row_observed_at > observed_at + 60:
+        if not _room_observation_time_fresh(row_observed_at, now) or row_observed_at > observed_at + 60:
             continue
         label = _room_title(row.get('label'), wanted[number])
         if not label:

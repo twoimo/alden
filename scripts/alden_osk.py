@@ -478,7 +478,24 @@ def _source_signature(state_root: Path) -> str:
         if path.exists():
             if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size > 2 * 1024 * 1024:
                 raise RuntimeError('osk_room_observation_unsafe')
-            observed = digest(path.read_bytes()).encode()
+            data = path.read_bytes()
+            observed = digest(data).encode()
+            # Unchanged bytes can cross the reader's expiry/future boundary.
+            # Fingerprint the same time predicate without renewing timestamps.
+            try:
+                from auto_reply_knowledge_graph import (ROOM_OBSERVATIONS_MAX_ROOMS,
+                                                        _room_observation_time_fresh)
+                payload = json.loads(data)
+                rooms = payload.get('rooms') if isinstance(payload, dict) else None
+                if (isinstance(payload, dict) and payload.get('schema_version') == 1
+                        and isinstance(rooms, list) and len(rooms) <= ROOM_OBSERVATIONS_MAX_ROOMS):
+                    at, now = payload.get('observed_at'), time.time()
+                    states = [_room_observation_time_fresh(at, now)] + [
+                        _room_observation_time_fresh(row.get('observed_at', at), now)
+                        if isinstance(row, dict) else False for row in rooms]
+                    observed += digest(json.dumps(states).encode()).encode()
+            except (ValueError, TypeError, RecursionError):
+                pass  # Malformed observations remain bound by their raw hash.
     return digest(json.dumps(pointer,sort_keys=True).encode()+code+observed)
 
 
