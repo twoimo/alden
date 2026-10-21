@@ -104,6 +104,53 @@ class RoutedLlmTests(unittest.TestCase):
                 patch('alden_routed_llm.CancellableLocalResponse', return_value=JsonResponse(payload)):
             return self.adapter.generate_messages('CALLER SYSTEM', 'LATEST USER', self.token, **kwargs)
 
+    def refusal(self, value='요청하신 내용에는 답변을 제공할 수 없습니다.'):
+        return self.completed(output=[{'type':'message','role':'assistant',
+            'content':[{'type':'refusal','refusal':value}]}])
+
+    def test_completed_refusal_is_returned_without_marking_the_model_unavailable(self):
+        payload = self.refusal()
+        expected = payload['output'][0]['content'][0]['refusal']
+        for mode in ('json', 'sse'):
+            with self.subTest(mode=mode):
+                answer = (self.invoke_json(payload) if mode == 'json' else
+                          self.invoke([{'type':'response.completed','response':payload}])[0])
+                self.assertEqual(answer, expected)
+                self.assertEqual(self.adapter.last_metrics['request']['state'], 'completed')
+                self.assertEqual(self.adapter.last_metrics['response_model_id'], DEFAULT_MODEL)
+                self.assertEqual(self.adapter.last_metrics['backend_request_id'], 'response-1')
+                health = json.loads((self.root / 'model-route-health.json').read_text())
+                self.assertTrue(health[DEFAULT_MODEL]['success'])
+
+    def test_terminal_refusal_replaces_unconfirmed_output_text_deltas(self):
+        payload = self.refusal()
+        answer, _ = self.invoke([
+            {'type':'response.output_text.delta','delta':'UNCONFIRMED PARTIAL'},
+            {'type':'response.refusal.delta','delta':'UNCONFIRMED REFUSAL'},
+            {'type':'response.completed','response':payload}])
+        self.assertEqual(answer, payload['output'][0]['content'][0]['refusal'])
+
+    def test_malformed_refusal_never_validates_prior_stream_text(self):
+        for value in (None, 42, {}, '', ' \n\t '):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RuntimeError, '^routed_llm_invalid_response$'):
+                    self.invoke([{'type':'response.output_text.delta','delta':'UNCONFIRMED'},
+                                 {'type':'response.completed','response':self.refusal(value)}])
+                self.assertEqual(self.adapter.last_metrics['request']['state'], 'failed')
+
+    def test_assistant_text_and_refusal_preserve_terminal_content_order(self):
+        payload = self.completed(output=[{'type':'message','role':'assistant','content':[
+            {'type':'output_text','text':'안내: '},
+            {'type':'refusal','refusal':'답변을 제공할 수 없습니다.'},
+            {'type':'output_text','text':' 다른 요청을 입력해 주세요.'}]}])
+        self.assertEqual(self.invoke_json(payload), '안내: 답변을 제공할 수 없습니다. 다른 요청을 입력해 주세요.')
+
+    def test_refusal_in_non_assistant_outputs_is_not_exposed(self):
+        payload = self.completed()
+        payload['output'].insert(0, {'type':'message','role':'tool','content':[
+            {'type':'refusal','refusal':'NOT ASSISTANT OUTPUT'}]})
+        self.assertEqual(self.invoke_json(payload), '확인')
+
     def test_json_requires_completed_exact_model_and_keeps_usage(self):
         self.assertEqual(self.invoke_json(self.completed()), '확인')
         self.assertEqual(self.adapter.last_metrics['backend_request_id'], 'response-1')
@@ -155,6 +202,22 @@ class RoutedLlmTests(unittest.TestCase):
             self.assertEqual(self.adapter.last_metrics['request']['state'], 'cancelled')
 
     def test_owned_http_completion_closes_stream_without_waiting_for_server_eof(self):
+        self._invoke_owned_http_completion([
+            {'type': 'response.completed', 'response': self.completed()}], '확인')
+
+    def test_owned_http_terminal_refusal_replaces_partial_text_and_keeps_route_available(self):
+        payload = self.refusal()
+        self._invoke_owned_http_completion([
+            {'type': 'response.output_text.delta', 'delta': 'UNCONFIRMED PARTIAL'},
+            {'type': 'response.refusal.delta', 'delta': 'UNCONFIRMED REFUSAL'},
+            {'type': 'response.completed', 'response': payload}],
+            payload['output'][0]['content'][0]['refusal'])
+        health = json.loads((self.root / 'model-route-health.json').read_text())
+        self.assertTrue(health[DEFAULT_MODEL]['success'])
+        self.assertEqual(self.adapter.last_metrics['request']['state'], 'completed')
+        self.assertEqual(self.adapter.last_metrics['backend_request_id'], 'response-1')
+
+    def _invoke_owned_http_completion(self, events, expected):
         # Redirect only the test connection factory to an owned ephemeral
         # listener. The real router, models and user state are never contacted.
         listener = socket.socket()
@@ -164,8 +227,7 @@ class RoutedLlmTests(unittest.TestCase):
         listener.settimeout(2)
         closed = threading.Event()
         errors = []
-        frame = b'data: ' + json.dumps({
-            'type': 'response.completed', 'response': self.completed()}).encode() + b'\n\n'
+        frame = b''.join(b'data: ' + json.dumps(event).encode() + b'\n\n' for event in events)
         def serve():
             try:
                 with listener.accept()[0] as peer:
@@ -195,7 +257,7 @@ class RoutedLlmTests(unittest.TestCase):
         with patch('alden_routed_llm.catalog', return_value=self.catalog), \
                 patch('alden_local_http.http.client.HTTPConnection', side_effect=lambda *_args, **kwargs:
                       connection('127.0.0.1', listener.getsockname()[1], **kwargs)):
-            self.assertEqual(self.adapter.generate_messages('SYSTEM', 'USER', self.token, timeout=1), '확인')
+            self.assertEqual(self.adapter.generate_messages('SYSTEM', 'USER', self.token, timeout=1), expected)
         self.assertTrue(closed.wait(2), 'the owned consumer left its completed socket open')
         server.join(2)
         self.assertFalse(server.is_alive())

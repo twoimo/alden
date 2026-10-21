@@ -245,7 +245,14 @@ class OpenCodexLlm:
             content = item.get("content", [])
             if not isinstance(content, list) or any(not isinstance(part, dict) for part in content):
                 raise RoutedGenerationError("routed_llm_invalid_response")
-            output.extend(part["text"] for part in content if part.get("type") == "output_text" and isinstance(part.get("text"), str))
+            for part in content:
+                if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                    output.append(part["text"])
+                elif part.get("type") == "refusal":
+                    refusal = part.get("refusal")
+                    if not isinstance(refusal, str) or not refusal.strip():
+                        raise RoutedGenerationError("routed_llm_invalid_response")
+                    output.append(refusal)
         return output
 
     @staticmethod
