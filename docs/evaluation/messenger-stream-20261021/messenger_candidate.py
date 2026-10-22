@@ -253,6 +253,23 @@ class Frontier:
             if not claims_exist:
                 for pending in db.execute("SELECT id,room,payload FROM pages WHERE state='prepared'"):
                     self._claim_page_content(db, pending['id'], pending['room'], json.loads(pending['payload'])['items'])
+            if 'sent_at' not in {r['name'] for r in db.execute('PRAGMA table_info(message_heads)')}:
+                db.execute('ALTER TABLE message_heads ADD COLUMN sent_at REAL')
+                pages = {}
+                for head in db.execute('''SELECT h.id,h.room,h.message,h.page,p.payload,p.next_frontier
+                    FROM message_heads h JOIN pages p ON p.id=h.page WHERE p.state='complete' '''):
+                    if head['page'] not in pages:
+                        try:
+                            pages[head['page']] = {item['id']: item for item in self._retained_page(head)['items']}
+                        except SourceBlocked:
+                            pages[head['page']] = None  # Old policies require fresh canonical observations.
+                    if pages[head['page']] is None:
+                        continue
+                    item = pages[head['page']].get(head['message'])
+                    if item is None or type(item.get('sent_at')) not in (int, float) or not math.isfinite(item['sent_at']) or item['sent_at'] < 0:
+                        raise ValueError('messenger_context_timestamp_missing')
+                    db.execute('UPDATE message_heads SET sent_at=? WHERE id=?', (item['sent_at'], head['id']))
+            db.execute('CREATE INDEX IF NOT EXISTS message_context_time ON message_heads(room,sent_at,message)')
         self.store = CollectionStore(root, source_access=self._source_access, source_revision=self._source_revision)
         self.target = identity('target-' + platform, 'local-db:' + account)
         with self.store.database() as db:
@@ -505,10 +522,13 @@ class Frontier:
             cursor={'page': job, 'scope': 'one observed page; not complete DB coverage'})
         after_publish()
         with self.database() as db:
-            db.executemany('''INSERT INTO message_heads VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+            db.executemany('''INSERT INTO message_heads(id,room,message,content_hash,state,reason,body,page)
+                VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 content_hash=excluded.content_hash,state=excluded.state,reason=excluded.reason,body=excluded.body,page=excluded.page''', updates)
             db.executemany('''INSERT INTO head_fingerprints VALUES(?,?) ON CONFLICT(id) DO UPDATE SET
                 fingerprint=excluded.fingerprint''', fingerprints)
+            db.executemany('UPDATE message_heads SET sent_at=? WHERE id=?',
+                [(item['sent_at'], self._observation(row['room'], item)[0]) for item in payload['items']])
             db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
                        (row['next_frontier'], time.time(), row['room']))
             db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))
@@ -573,29 +593,118 @@ class Frontier:
                 ORDER BY h.room,h.message''', (content_hash,))
             for origin in origins:
                 try:
-                    authorization = self.reader.authorize(origin['room'])
+                    payload = self._current_page(origin)
                 except SourceBlocked:
                     continue
-                payload = json.loads(origin['payload'])
-                if hashlib.sha256(encoded([payload, json.loads(origin['next_frontier'])])).hexdigest() != origin['page']:
+                except ValueError:
                     return False
-                # A deduplicated version retains its first publisher metadata.
-                # Authority belongs to this target's own account and page.
-                if (payload.get('account') != self.account or payload.get('platform') != self.platform
-                    or payload.get('room') != origin['room']):
-                    return False
-                if payload.get('quality_policy') != POLICY:
-                    continue
-                if self.platform == 'telegram':
-                    scope = payload.get('reader_scope')
-                    if (not isinstance(authorization, dict) or not isinstance(scope, dict)
-                        or not authorization.get('authorization_sha256')
-                        or any(scope.get(k) != authorization.get(k) for k in ('since', 'until', 'authorization_sha256'))):
-                        continue
                 if any(item['id'] == origin['message'] and item['visible']
                        and classify(item['body']).content_hash == content_hash for item in payload['items']):
                     return True
         return False
+
+    def _retained_page(self, origin):
+        payload = json.loads(origin['payload'])
+        if (hashlib.sha256(encoded([payload, json.loads(origin['next_frontier'])])).hexdigest() != origin['page']
+            or payload.get('account') != self.account or payload.get('platform') != self.platform
+            or payload.get('room') != origin['room']):
+            raise ValueError('messenger_origin_integrity')
+        if payload.get('quality_policy') != POLICY:
+            raise SourceBlocked('messenger_origin_policy_changed')
+        return payload
+
+    def _current_page(self, origin):
+        payload = self._retained_page(origin)
+        authorization = self.reader.authorize(origin['room'])
+        if self.platform == 'telegram':
+            scope = payload.get('reader_scope')
+            if (not isinstance(authorization, dict) or not isinstance(scope, dict)
+                or not authorization.get('authorization_sha256')
+                or any(scope.get(k) != authorization.get(k) for k in ('since', 'until', 'authorization_sha256'))):
+                raise SourceBlocked('messenger_origin_authorization_changed')
+        return payload
+
+    def context_window(self, room, message, *, projects, before=3, after=3, max_gap=900):
+        """Current, bounded source transcript; proximity is not a reply/fact edge."""
+        if (not isinstance(room, str) or not room or not isinstance(message, str) or not message
+            or type(before) is not int or not 0 <= before <= 5
+            or type(after) is not int or not 0 <= after <= 5
+            or type(max_gap) is not int or not 0 <= max_gap <= 3600
+            or not isinstance(projects, list) or not projects
+            or any(not isinstance(p, str) or not p for p in projects)):
+            raise ValueError('messenger_context_query_invalid')
+        def permission():
+            if not any(p['project'] in projects and p['permission'] != 'denied'
+                       for p in self.store.target(self.target)['projects']):
+                raise SourceBlocked('messenger_context_project_denied')
+        permission()
+        if self.reader.identity() != self.account:
+            raise SourceBlocked('messenger_context_account_changed')
+        revision = self._source_revision(self.target)
+        with self.database() as db:
+            db.execute('BEGIN')
+            frontier = db.execute('SELECT frontier FROM rooms WHERE id=?', (room,)).fetchone()
+            anchor = db.execute('SELECT * FROM message_heads WHERE room=? AND message=?', (room, message)).fetchone()
+            if frontier is None or anchor is None or anchor['sent_at'] is None:
+                raise SourceBlocked('messenger_context_anchor_unavailable')
+            unplaced = bool(db.execute('SELECT 1 FROM message_heads WHERE room=? AND sent_at IS NULL LIMIT 1', (room,)).fetchone())
+            at = anchor['sent_at']
+            older = db.execute('''SELECT * FROM message_heads WHERE room=? AND sent_at>=?
+                AND (sent_at<? OR sent_at=? AND message<?) ORDER BY sent_at DESC,message DESC LIMIT ?''',
+                (room, at-max_gap, at, at, message, before)).fetchall()
+            newer = db.execute('''SELECT * FROM message_heads WHERE room=? AND sent_at<=?
+                AND (sent_at>? OR sent_at=? AND message>?) ORDER BY sent_at,message LIMIT ?''',
+                (room, at+max_gap, at, at, message, after)).fetchall()
+            heads = [*reversed(older), anchor, *newer]
+            pages, items = {}, []
+            for head in heads:
+                origin = db.execute('''SELECT h.room,h.page,p.payload,p.next_frontier FROM message_heads h
+                    JOIN pages p ON p.id=h.page WHERE h.id=? AND p.state='complete' ''', (head['id'],)).fetchone()
+                if origin is None:
+                    raise SourceBlocked('messenger_context_page_unavailable')
+                if head['page'] not in pages:
+                    pages[head['page']] = [self._current_page(origin), []]
+                payload, selected = pages[head['page']]
+                matches = [item for item in payload['items'] if item['id'] == head['message']]
+                fingerprint = db.execute('SELECT fingerprint FROM head_fingerprints WHERE id=?', (head['id'],)).fetchone()
+                if len(matches) != 1 or fingerprint is None:
+                    raise SourceBlocked('messenger_context_observation_missing')
+                item = matches[0]
+                _, observed, triage = self._observation(room, item)
+                if (observed != fingerprint[0] or item['sent_at'] != head['sent_at']
+                    or triage.content_hash != head['content_hash'] or triage.state != head['state']
+                    or triage.reason != head['reason']
+                    or (triage.text if triage.state == 'candidate' else None) != head['body']):
+                    raise SourceBlocked('messenger_context_observation_changed')
+                selected.append(item)
+                items.append({'message_id': item['id'], 'sent_at': item['sent_at'], 'body': item['body'],
+                    'state': triage.state, 'reason': triage.reason, 'source_page': head['page'],
+                    'content_hash': triage.content_hash, 'anchor': item['id'] == message})
+            if len(encoded(items)) > 65536:
+                raise SourceBlocked('messenger_context_budget')
+        # Source reads retain each adapter's current visibility/consent guard.
+        # Check only this bounded span, never reacquire the entire room here.
+        for payload, selected in pages.values():
+            self.reader.verify_prepared({**payload, 'items': selected})
+        permission()
+        if self.reader.identity() != self.account or self._source_revision(self.target) != revision:
+            raise SourceBlocked('messenger_context_authorization_changed')
+        with self.database() as db:
+            current = db.execute('SELECT frontier FROM rooms WHERE id=?', (room,)).fetchone()
+            if current is None or current['frontier'] != frontier['frontier']:
+                raise SourceBlocked('messenger_context_frontier_changed')
+            for head in heads:
+                current = db.execute('SELECT * FROM message_heads WHERE id=?', (head['id'],)).fetchone()
+                if current is None or dict(current) != dict(head):
+                    raise SourceBlocked('messenger_context_frontier_changed')
+        window_id = hashlib.sha256(encoded([self.platform, self.account, room, message, revision,
+            [(r['message_id'], r['source_page']) for r in items]])).hexdigest()
+        return {'platform': self.platform, 'account_id': self.account, 'room_id': room,
+            'anchor_message': message, 'items': items, 'authority_revision': revision,
+            'window_id': window_id, 'quality_policy': POLICY,
+            'has_unplaced_rows': unplaced, 'coverage': 'committed observed rows only; not full conversation history',
+            'scope': 'bounded cached conversation; time proximity is not a reply, identity, agreement or established fact',
+            'order': 'sent_at then message ID; equal-time order is not conversational causality'}
     @contextmanager
     def _publication_guard(self, payload):
         self._authorize_publication(payload)

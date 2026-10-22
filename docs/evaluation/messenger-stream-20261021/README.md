@@ -383,3 +383,68 @@ claimed. Existing Pro → Gemini → Pro holds and all 18/ST01–14/Cursor gates
 Private evidence: `outputs/messenger-scope-20261023/`. Exact source revision,
 remote CI and installed-app preservation are recorded separately from these
 controlled backend/DOM checks.
+
+## Bounded current conversation context (uninstalled candidate)
+
+The controlled question “회의 일정은 몇 시로 변경되나요?” became a candidate
+node while “3시요” remained retained context. The old graph alone therefore could
+not recover their source conversation. This does not make the question an
+established decision, nor does proximity prove that the short message answers it.
+
+M07 adds a read-only `Frontier.context_window(room, message, projects=...)` over
+committed source observations. Its alternative, automatically composing and
+publishing a new fact from adjacent messages, remains deferred pending explicit
+reply/source semantics, context reclassification and independent gold. The read
+returns exact message bodies and source-page references, including short/numeric
+context and explicit withheld gaps, under one pinned account/room/project scope.
+It creates no graph node, fact/identity/reply edge, body version or combat event.
+This is a grounding path for later classification/retrieval/UI integration, not
+completion of that integration or of useful real-time collection.
+
+An indexed timestamp column on the existing head owner permits bounded neighbors
+across retained pages. Legacy timestamps are backfilled from checksum-bound
+committed pages in one transaction; interrupted migration rolls back. Old-policy
+rows remain unplaced until a fresh canonical observation, and coverage explicitly
+reports unknown timestamps. A query includes at most five messages before/after,
+within at most one hour of its anchor, with a 64 KiB response budget. Defaults
+are three before/after and fifteen minutes. Equal timestamps use a stable message
+ID tie order, explicitly not conversational causality. Completeness is limited
+to committed observed rows, not server or whole-conversation history.
+
+Before releasing bodies the method checks project authority, pinned account,
+retained page scope/checksum/policy, head fingerprints and current room/date
+grants, then asks the existing adapter to verify those exact current messages.
+Kakao's canonical exact-ID reader checks each selected row; a finite Telegram
+window that no longer contains a selected row blocks rather than implying
+deletion. Authority, project permission and frontier/head identity are rechecked
+before return. A span's `window_id` changes with its source pages or authority;
+quiet reads remain stable and do not inherit a grant from an old cache entry.
+Common retained-page and current-scope verification is shared with the existing
+protected projection checker.
+
+Sixteen new checks pass, including the question/short-answer pair, context-only
+anchors, cross-page source capabilities, gap/time/room bounds, exact adapter
+readback, collection pause, edited/hidden source, project/account/grant changes,
+expiry during revalidation, tampered timestamps, migration interruption/recovery,
+explicit byte/query budgets and quiet/no-fake-activity behavior. All 38 direct
+consumer modules / 709 Python checks pass in fresh pinned processes. The new
+module is also wired into CI as its own fresh process. No semantic-quality or
+whole-app performance improvement is inferred from these checks.
+
+A separate actual canonical Kakao read found 371 current cached room records
+and acquired one page of 50 heads into a new private isolated candidate. One
+selected source message passed current exact-ID context verification, with one
+returned item in the configured time window and zero context-generated events.
+Catalog/page/exact reads each reported verified read-only/schema state and zero
+server, send, source-database or app-setting writes. This proves that bounded
+native reader boundary only: adjacent-message behavior is fixture-tested, not
+established by that one-message native span. No Telegram body was acquired. The
+single elapsed observation is retained as execution evidence, not a benchmark.
+
+The installed 0.3.218 app remains unchanged. Context reclassification, explicit
+reply/author semantics, UI/MCP/index/embedding consumers, durable source retirement,
+all-room live scheduling, native Telegram consent, independent gold and the
+actual installed end-to-end graph/combat journey remain open. Original Pro,
+immutable Gemini and reverse-verification stages are preserved; consequential
+promotion is still externally unvalidated. Private source receipts and native
+content remain under `outputs/messenger-context-20261023/`, outside Git/uploads.

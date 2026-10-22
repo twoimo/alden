@@ -293,6 +293,9 @@ jobs:
       - name: Test messenger source access in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_access -v
 
+      - name: Test bounded messenger context in a fresh process
+        run: python3 -B -m unittest tests.test_alden_messenger_context -v
+
       # The reader enforces a process peak RSS budget. Earlier test modules
       # must not consume the memory allowance of this independent CLI process.
       - name: Test bounded affinity in a fresh process
