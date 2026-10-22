@@ -128,6 +128,42 @@ terminal review keeps its original source/job/target and is not replaced by
 this delta. The canonical skill now requires ordinary reasoning, research off;
 historical uncertain research is not canceled or relabeled.
 
+## Publication and recovery follow-up
+
+An expiry injected after source-byte storage reproduced a publication after the
+source authorizer had become invalid. The candidate now uses the store's
+existing commit fence to recheck current account, target permission and source
+scope immediately before the product commit. Expiry rolls back versions, FTS,
+stored-change events and the target cursor together; the immutable prepared page
+remains resumable after authorization returns. This is not an access lease or a
+read-time expiry filter for previously published documents.
+
+Prepared recovery also revalidates visible body bytes and source timestamps.
+Kakao uses the canonical reader's exact `message_id` query, at most 50 one-row
+lookups, so new arrivals cannot move the requested record outside a latest-page
+window. Telegram's current CLI has no exact-ID read; recovery rechecks its
+original bounded page. An absent record produces
+`messenger_prepared_window_incomplete`, never a fabricated deletion. A changed
+or withheld record blocks stale publication. Rebase/supersession of changed
+pending pages and retirement of already committed stale content remain gates.
+
+An initially empty, fully traversed room now stays eligible for live checks and
+can acquire its first arrival. Unvisited rooms retain their backfill prerequisite.
+
+Prepared payload and next-frontier bytes are also rehashed against their job ID
+before any source access or publication; a changed checkpoint fails integrity
+validation rather than moving the cursor under an old job identity.
+
+Verification: 201 affected Python checks, including 39 frontier checks. Failure
+baselines are `commit-guard-baseline-20261023.log`,
+`recovery-visibility-baseline-20261023.log`, and `empty-room-baseline-20261023.log`.
+The checkpoint-integrity baseline is `prepared-integrity-baseline-20261023.log`.
+The actual canonical Kakao reader also validated one retained message by exact
+ID against current native SQLCipher/WAL bytes: match, read-only/schema verified,
+one source lookup, zero source/server/send/settings writes. That host read is
+recorded in `native-exact-recovery-receipt-20261023.json`; it is not a full-history,
+installed-watcher, latency or currently expired-access retirement claim.
+
 ## Remaining delivery gates
 
 - Authorization expiry/scope rebasing and prepared-page visibility reconciliation.

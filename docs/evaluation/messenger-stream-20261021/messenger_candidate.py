@@ -28,6 +28,19 @@ class SourceBlocked(RuntimeError):
     pass
 
 
+def verify_prepared_items(prepared, observed):
+    """Current visible bytes must agree; an absent window proves no deletion."""
+    current = {item['id']: item for item in observed}
+    if len(current) != len(observed):
+        raise SourceBlocked('messenger_revalidation_duplicate')
+    for before in prepared:
+        after = current.get(before['id'])
+        if after is None:
+            raise SourceBlocked('messenger_prepared_window_incomplete')
+        if any(before.get(key) != after.get(key) for key in ('visible', 'body', 'sent_at')):
+            raise SourceBlocked('messenger_prepared_source_changed')
+
+
 class KakaoReader:
     """Adapter over the canonical reader; never SQL or a copied decoder."""
     def __init__(self, canonical):
@@ -53,9 +66,11 @@ class KakaoReader:
         return {'account_id': account, 'complete': True,
                 'rooms': [{'id': r['room_id'], 'title': r['title']} for r in result['rooms']]}
 
-    def page(self, room, cursor):
+    def page(self, room, cursor, *, message_id=None):
         account = self.identity()
-        result = self.canonical.snapshot(chat_id=room, show_text=True, limit=50, cursor=cursor)
+        result = self.canonical.snapshot(chat_id=room, show_text=True,
+            limit=1 if message_id is not None else 50, cursor=cursor,
+            **({'message_id': message_id} if message_id is not None else {}))
         if result.get('status') != 'ok':
             reason = result.get('reason') or result.get('status') or 'unavailable'
             raise SourceBlocked('kakao_reader_' + (reason if isinstance(reason, str) and re.fullmatch(r'[a-z0-9_]{1,96}', reason) else 'unavailable'))
@@ -76,6 +91,13 @@ class KakaoReader:
         return {'account_id': account, 'room_id': room, 'items': values,
                 'more': result['messages_truncated'], 'next_cursor': result.get('next_cursor'),
                 'scope': 'canonical current-account visible local SQLCipher rows; live WAL included'}
+
+    def verify_prepared(self, payload):
+        # Exact-ID lookup avoids advancing or replacing the retained page when
+        # newer arrivals have moved its rows out of the latest window.
+        for item in payload['items']:
+            page = self.page(payload['room'], None, message_id=item['id'])
+            verify_prepared_items([item], page['items'])
 
 
 class TelegramReader:
@@ -153,6 +175,12 @@ class TelegramReader:
                 'scope': {'source': 'canonical local Postbox', 'since': scope['since'], 'until': scope['until'],
                           'complete': result.get('complete'), 'withheld': result.get('withheld'),
                           'decode_errors': result.get('decode_errors')}}
+
+    def verify_prepared(self, payload):
+        page = self.page(payload['room'], payload['before'])
+        # The canonical CLI currently has no exact-ID lookup. A moved or
+        # missing window blocks recovery, never implies source withdrawal.
+        verify_prepared_items(payload['items'], page['items'])
 
 
 def create_root(path):
@@ -302,27 +330,25 @@ class Frontier:
                        (job, room['id'], encoded(payload).decode(), encoded(state).decode(), 'prepared'))
         return job
 
-    def _publish(self, job, *, cancelled, after_publish):
+    def _publish(self, job, *, cancelled, after_publish, revalidate=False):
         with self.database() as db:
             row = db.execute('SELECT * FROM pages WHERE id=?', (job,)).fetchone()
         if row is None:
             raise ValueError('messenger_prepared_page_missing')
-        if self.reader.identity() != self.account:
-            raise ValueError('messenger_account_changed')
-        self._allowed()
         payload = json.loads(row['payload'])
+        if hashlib.sha256(encoded([payload, json.loads(row['next_frontier'])])).hexdigest() != job:
+            raise ValueError('messenger_prepared_integrity')
         if payload.get('quality_policy') != POLICY:
             raise ValueError('messenger_prepared_policy_changed')
-        authorization = self.reader.authorize(payload['room'])
-        if self.platform == 'telegram' and authorization is not None:
-            old_scope = payload.get('reader_scope')
-            if not isinstance(old_scope, dict) or any(old_scope.get(k) != authorization[k] for k in ('since', 'until')):
-                raise SourceBlocked('telegram_prepared_scope_changed')
+        self._authorize_publication(payload)
         if row['state'] == 'complete':
             with self.database() as db:
                 db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
                            (row['next_frontier'], time.time(), row['room']))
             return {'state': 'unchanged', 'room_id': row['room'], 'job': job}
+        if revalidate:
+            self.reader.verify_prepared(payload)
+            self._authorize_publication(payload)
         records, retractions, updates, affected = [], [], [], set()
         for item in payload['items']:
             original = encoded([self.account, payload['room'], item['id']]).decode()
@@ -358,6 +384,7 @@ class Frontier:
         result = self.store.ingest(self.target, records, retractions=retractions,
             run_id='messenger-page:' + job, origin='messenger-db:' + self.platform + ':' + payload['mode'],
             processing_version=POLICY, cancelled=cancelled,
+            publication_guard=lambda: self._publication_guard(payload),
             cursor={'page': job, 'scope': 'one observed page; not complete DB coverage'})
         after_publish()
         with self.database() as db:
@@ -371,6 +398,20 @@ class Frontier:
                 'withheld': sum(not item['visible'] for item in payload['items']),
                 'triage': {state: sum(r[4] == state for r in updates) for state in ('candidate', 'context', 'review', 'withheld')},
                 'collection': result}
+
+    def _authorize_publication(self, payload):
+        if self.reader.identity() != self.account:
+            raise ValueError('messenger_account_changed')
+        self._allowed()
+        authorization = self.reader.authorize(payload['room'])
+        if self.platform == 'telegram' and authorization is not None:
+            old_scope = payload.get('reader_scope')
+            if not isinstance(old_scope, dict) or any(old_scope.get(k) != authorization[k] for k in ('since', 'until')):
+                raise SourceBlocked('telegram_prepared_scope_changed')
+    @contextmanager
+    def _publication_guard(self, payload):
+        self._authorize_publication(payload)
+        yield
 
     def _allowed(self):
         target = self.store.target(self.target)
@@ -402,12 +443,12 @@ class Frontier:
                 rooms = db.execute("SELECT * FROM rooms r WHERE retry_at<=? AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.room=r.id AND p.state='prepared') ORDER BY checked,id", (time.time(),)).fetchall()
             if pending:
                 try:
-                    return self._publish(pending['id'], cancelled=cancelled, after_publish=after_publish)
+                    return self._publish(pending['id'], cancelled=cancelled, after_publish=after_publish, revalidate=True)
                 except SourceBlocked as error:
                     return self._blocked(pending['room'], error)
             for room in rooms:
                 state = json.loads(room['frontier'])
-                if mode == 'backfill' and state['back_done'] or mode == 'live' and state['live_head'] is None:
+                if mode == 'backfill' and state['back_done'] or mode == 'live' and state['live_head'] is None and not state['back_done']:
                     continue
                 try:
                     cursor = state.get({'backfill': 'back_cursor', 'live': 'live_cursor', 'reconcile': 'check_cursor'}[mode])

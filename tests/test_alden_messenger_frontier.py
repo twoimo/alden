@@ -47,6 +47,11 @@ class Reader:
         return {'account_id': self.account, 'room_id': room, 'items': values,
                 'more': more, 'next_cursor': next_cursor, 'scope': 'owned fixture'}
 
+    def verify_prepared(self, payload):
+        self.authorize(payload['room'])
+        values = self.pages[(payload['room'], payload['before'])][0]
+        candidate.verify_prepared_items(payload['items'], values)
+
 
 class FrontierTests(unittest.TestCase):
     def setUp(self):
@@ -149,7 +154,7 @@ class FrontierTests(unittest.TestCase):
         self.assertEqual(len(engine.store.search('자료', projects=[candidate.PROJECT])), 7)
         self.assertEqual(engine.status()['backfilled_rooms'], 1)
 
-    def test_recovery_replays_prepared_bytes_without_a_second_body_read(self):
+    def test_recovery_replays_prepared_bytes_without_another_page_fetch(self):
         engine, reader = self.frontier({('a', None): ([item(2)], False, None)})
         def crash():
             raise SystemExit(73)
@@ -169,6 +174,60 @@ class FrontierTests(unittest.TestCase):
         reader.blocked = True
         self.assertEqual(engine.step()['state'], 'blocked')
         self.assertEqual(engine.status()['prepared_pages'], 1)
+
+    def test_authorization_expiry_during_store_write_rolls_back_publication(self):
+        engine, reader = self.frontier({('a', None): ([item(2)], False, None)})
+        blob = engine.store._blob
+        def expire_after_blob(raw):
+            result = blob(raw)
+            reader.blocked = True
+            return result
+        with patch.object(engine.store, '_blob', side_effect=expire_after_blob):
+            result = engine.step()
+        self.assertEqual(result['state'], 'blocked')
+        self.assertEqual(engine.store.search('회의', projects=[candidate.PROJECT]), [])
+        with engine.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT count(*) FROM events WHERE stage='stored'").fetchone()[0], 0)
+        self.assertEqual(engine.status()['prepared_pages'], 1)
+        reader.blocked = False
+        with engine.database() as db:
+            db.execute('UPDATE rooms SET retry_at=0')
+        self.assertEqual(engine.step()['state'], 'published')
+        self.assertEqual(len(reader.reads), 1)
+        self.assertEqual(len(engine.store.search('회의', projects=[candidate.PROJECT])), 1)
+
+    def test_recovered_page_does_not_publish_a_now_withheld_or_edited_message(self):
+        for replacement in (item(2, visible=False), item(2, '회의 자료가 수정되어 예전 내용과 다릅니다.')):
+            with self.subTest(visible=replacement['visible']):
+                case = candidate.create_root(self.root / ('case-' + str(replacement['visible'])))
+                reader = Reader({('a', None): ([item(2)], False, None)})
+                engine = candidate.Frontier(case, 'kakaotalk', 'owner', reader)
+                engine.seed({'account_id':'owner','complete':True,'rooms':[{'id':'a','title':'a'}]})
+                page = reader.page('a', None)
+                with engine.database() as db:
+                    room = db.execute('SELECT * FROM rooms').fetchone()
+                engine._prepare(room, 'backfill', page)
+                reader.pages[('a', None)] = ([replacement], False, None)
+                self.assertEqual(engine.step()['state'], 'blocked')
+                self.assertEqual(engine.store.search('회의', projects=[candidate.PROJECT]), [])
+                self.assertEqual(engine.status()['prepared_pages'], 1)
+                with engine.database() as db:
+                    self.assertFalse(json.loads(db.execute('SELECT frontier FROM rooms').fetchone()[0])['back_done'])
+
+    def test_changed_prepared_checkpoint_is_rejected_before_source_access(self):
+        engine, reader = self.frontier({('a', None): ([item(2)], False, None)})
+        with engine.database() as db:
+            room = db.execute('SELECT * FROM rooms').fetchone()
+        job = engine._prepare(room, 'backfill', reader.page('a', None))
+        with engine.database() as db:
+            next_state = json.loads(db.execute('SELECT next_frontier FROM pages').fetchone()[0])
+            next_state['back_done'] = False
+            db.execute('UPDATE pages SET next_frontier=?', (json.dumps(next_state),))
+        with self.assertRaisesRegex(ValueError, 'messenger_prepared_integrity'):
+            engine._publish(job, cancelled=lambda:False, after_publish=lambda:None)
+        self.assertEqual(len(reader.reads), 1)
+        self.assertEqual(engine.store.search('회의', projects=[candidate.PROJECT]), [])
 
     def test_pending_telegram_page_cannot_publish_under_a_changed_date_scope(self):
         scopes = {'a': {'since': '2026-10-20', 'until': '2026-10-21'}}
@@ -226,6 +285,13 @@ class FrontierTests(unittest.TestCase):
         before = engine.store.events(projects=[candidate.PROJECT])['items']
         self.assertEqual(engine.step(mode='live')['state'], 'unchanged')
         self.assertEqual(engine.store.events(projects=[candidate.PROJECT])['items'], before)
+
+    def test_empty_room_remains_live_and_collects_its_first_arrival(self):
+        engine, reader = self.frontier({('a', None): ([], False, None)})
+        engine.step()
+        reader.pages[('a', None)] = ([item(1)], False, None)
+        self.assertEqual(engine.step(mode='live')['state'], 'published')
+        self.assertEqual(len(engine.store.search('회의', projects=[candidate.PROJECT])), 1)
 
     def test_pending_expired_context_does_not_block_other_rooms(self):
         engine, reader = self.frontier({('a', None): ([item(1)], False, None),
@@ -285,6 +351,36 @@ class FrontierTests(unittest.TestCase):
 
 
 class CanonicalAdapterTests(unittest.TestCase):
+    def test_kakao_recovery_uses_exact_ids_instead_of_a_shifted_latest_window(self):
+        calls = []
+        def snapshot(**options):
+            calls.append(options)
+            return {'status':'ok','db_readonly_verified':True,'schema_decryption_verified':True,
+                'chat':{'chatId':'a'},'messages_truncated':False,'next_cursor':None,
+                'messages':[{'chatId':'a','logId':options['message_id'],'sentAt':1,'message':'회의 자료입니다.'}]}
+        reader = candidate.KakaoReader(SimpleNamespace(snapshot=snapshot))
+        payload = {'room':'a','before':'old-page-cursor','items':[
+            {'id':str(n),'visible':True,'body':'회의 자료입니다.','sent_at':1} for n in (1,2)]}
+        with patch.object(reader,'identity',return_value='owner'):
+            reader.verify_prepared(payload)
+        self.assertEqual([c['message_id'] for c in calls], ['1','2'])
+        self.assertTrue(all(c['limit']==1 and c['cursor'] is None for c in calls))
+
+    def test_telegram_recovery_missing_window_blocks_without_inferred_deletion(self):
+        calls = []
+        def invoke(args):
+            calls.append(args)
+            if args == ['probe']:
+                return {'status':'ready_readonly','read_only':True,'owner_id':'owner'}
+            return {'status':'ok','owner_id':'owner','peer_id':'a','content_returned':True,
+                'messages':[],'more':True,'next_cursor':'following'}
+        reader = candidate.TelegramReader(invoke,{'a':{'since':'2026-10-20','until':'2026-10-21'}},lambda *args:None)
+        with self.assertRaisesRegex(candidate.SourceBlocked,'messenger_prepared_window_incomplete'):
+            reader.verify_prepared({'room':'a','before':'saved','items':[item(1)]})
+        requests = [c for c in calls if c[0]=='messages']
+        self.assertEqual(len(requests),1)
+        self.assertEqual(requests[0][-2:],['--cursor','saved'])
+
     def test_kakao_withheld_original_is_never_copied_into_a_prepared_page(self):
         response = {'status':'ok','db_readonly_verified':True,'schema_decryption_verified':True,
             'chat':{'chatId':'a'},'messages_truncated':False,'next_cursor':None,
