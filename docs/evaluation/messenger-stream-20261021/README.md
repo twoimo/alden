@@ -164,6 +164,57 @@ one source lookup, zero source/server/send/settings writes. That host read is
 recorded in `native-exact-recovery-receipt-20261023.json`; it is not a full-history,
 installed-watcher, latency or currently expired-access retirement claim.
 
+## Repeated source states and quiet reconciliation
+
+Two regressions reproduced a completed-page identity collision: visible →
+withheld → visible left the restored source unsearchable; text A → B → A left B
+searchable. Content-addressed page/run reuse had skipped the actual restoration.
+
+The isolated candidate now includes a per-room observation epoch in new prepared
+identities. It advances when the selected source rows or their current triage
+change. A separate digest table binds each current origin to the full canonical
+observed item and policy, including original metadata, without copying another
+body. Fingerprints, heads, epoch and completion commit together after canonical
+publication. A crash after that publication resumes the same pending identity;
+it cannot create another body version or stored event. Recovery compares the
+entire retained item with the canonical reread, rather than accepting changed
+original metadata behind an unchanged body.
+
+Completed observations from earlier epochs and competing observations at the
+same epoch cannot overwrite newer heads. A current unchanged page advances only
+its own traversal cursor without republishing collection events. Cancellation
+after reading still preserves that checkpoint. This also avoids extra audit
+events when another page in the same room changed. The eight-column head table
+and historical page bytes remain compatible; an old prepared page can finish at
+epoch zero, and old heads acquire fingerprints on observation without rewriting
+their body versions. This is not a consent lease or a scope-rebasing mechanism.
+
+Verification at base `42c648e6a45e2a17eeeaef24e45a37d38fab31a1`:
+
+- 11 new behavioral checks; 50 frontier/store/adapter checks within 236 affected
+  Python checks passed under the pinned runtime with bytecode writes disabled.
+  The original two-failure baseline and intermediate failures remain preserved.
+- A new, isolated replay of the retained 63 pages / 2,514 heads reproduced 535
+  documents and 535 versions, with all 23 additional exact-content origins.
+  Two complete reconciliation cycles over the 19 fully archived rooms added
+  zero events, versions or changed activity. The original archive was not edited.
+- The installed 0.3.218 runtime remains source `42c648e…`, independently checked
+  against its 78 file hashes/modes and strict/deep fixed signature. The 43 target
+  configurations, permissions, acquisition policies and user controls remain
+  unchanged. This candidate is not included in the installed app allowlist.
+
+Private evidence: `outputs/messenger-lifecycle-20261023/`. Controlled source
+fixtures plus real isolated SQLite verify the transition logic; archived replay
+does not establish current source visibility, all-room/live coverage, semantic
+quality, end-to-end combat, physical minimized QA or resource improvement.
+
+External validation remains incomplete. The original Pro report and immutable
+queued Gemini source bundle are preserved; this is an unsent local delta, not a
+replacement review. Publishing-time authorization fences remain in force.
+Previously published expiry/withdrawal retirement, read-time authorization,
+changed-scope cursor rebasing, context reclassification and product watcher
+integration are still promotion gates.
+
 ## Remaining delivery gates
 
 - Authorization expiry/scope rebasing and prepared-page visibility reconciliation.

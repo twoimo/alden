@@ -37,7 +37,7 @@ def verify_prepared_items(prepared, observed):
         after = current.get(before['id'])
         if after is None:
             raise SourceBlocked('messenger_prepared_window_incomplete')
-        if any(before.get(key) != after.get(key) for key in ('visible', 'body', 'sent_at')):
+        if before != after:
             raise SourceBlocked('messenger_prepared_source_changed')
 
 
@@ -218,6 +218,8 @@ class Frontier:
                 id TEXT PRIMARY KEY,room TEXT NOT NULL,message TEXT NOT NULL,
                 content_hash TEXT,state TEXT NOT NULL,reason TEXT NOT NULL,body TEXT,page TEXT NOT NULL)''')
             db.execute('CREATE INDEX IF NOT EXISTS message_content ON message_heads(content_hash,state)')
+            db.execute('''CREATE TABLE IF NOT EXISTS head_fingerprints(
+                id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL)''')
             binding = db.execute('SELECT account FROM binding').fetchone()
             if binding and binding[0] != account:
                 raise ValueError('messenger_account_changed')
@@ -272,6 +274,28 @@ class Frontier:
                     (room['id'], room['title'], state, block, time.time() + 60 if block else 0))
         return len(rooms)
 
+    @staticmethod
+    def _epoch(state):
+        epoch = state.get('source_epoch', 0)
+        if type(epoch) is not int or epoch < 0:
+            raise ValueError('messenger_source_epoch_invalid')
+        return epoch
+
+    def _observation(self, room, item):
+        original = encoded([self.account, room, item['id']]).decode()
+        fingerprint = hashlib.sha256(encoded([POLICY, item])).hexdigest()
+        return original, fingerprint, classify(item['body'])
+
+    def _heads_match(self, db, room, items):
+        for item in items:
+            original, fingerprint, triage = self._observation(room, item)
+            head = db.execute('''SELECT h.content_hash,h.state,h.reason,f.fingerprint
+                FROM message_heads h LEFT JOIN head_fingerprints f ON f.id=h.id
+                WHERE h.id=?''', (original,)).fetchone()
+            if head is None or tuple(head) != (triage.content_hash, triage.state, triage.reason, fingerprint):
+                return False
+        return True
+
     def _prepare(self, room, mode, page):
         if page.get('account_id') != self.account or page.get('room_id') != room['id']:
             raise ValueError('messenger_page_scope_mismatch')
@@ -284,6 +308,7 @@ class Frontier:
         if len(encoded(page)) > 4 * 1024 * 1024:
             raise ValueError('messenger_page_budget')
         state = json.loads(room['frontier'])
+        epoch = self._epoch(state)
         cursor_key = {'backfill': 'back_cursor', 'live': 'live_cursor', 'reconcile': 'check_cursor'}[mode]
         before = state.get(cursor_key)
         if more and cursor == before:
@@ -322,10 +347,17 @@ class Frontier:
                 state.update(live_head=state['live_new_head'] or state['live_head'], live_cursor=None, live_new_head=None)
             else:
                 state['live_cursor'] = cursor
-        payload = {'account': self.account, 'platform': self.platform, 'room': room['id'],
-                   'items': selected, 'mode': mode, 'before': before, 'reader_scope': page.get('scope'), 'quality_policy': POLICY}
-        job = hashlib.sha256(encoded([payload, state])).hexdigest()
         with self.database() as db:
+            current = db.execute('SELECT frontier FROM rooms WHERE id=?', (room['id'],)).fetchone()
+            if current is None or current['frontier'] != room['frontier']:
+                raise SourceBlocked('messenger_prepare_checkpoint_changed')
+            # A -> B -> A is a new observation, even though A's content and
+            # cursor match an old completed page. Stable observations reuse it.
+            state['source_epoch'] = epoch + (not self._heads_match(db, room['id'], selected))
+            payload = {'account': self.account, 'platform': self.platform, 'room': room['id'],
+                       'items': selected, 'mode': mode, 'before': before, 'reader_scope': page.get('scope'),
+                       'quality_policy': POLICY, 'source_epoch': state['source_epoch']}
+            job = hashlib.sha256(encoded([payload, state])).hexdigest()
             db.execute('INSERT OR IGNORE INTO pages VALUES(?,?,?,?,?)',
                        (job, room['id'], encoded(payload).decode(), encoded(state).decode(), 'prepared'))
         return job
@@ -340,19 +372,50 @@ class Frontier:
             raise ValueError('messenger_prepared_integrity')
         if payload.get('quality_policy') != POLICY:
             raise ValueError('messenger_prepared_policy_changed')
+        next_state = json.loads(row['next_frontier'])
+        with self.database() as db:
+            current = db.execute('SELECT frontier FROM rooms WHERE id=?', (row['room'],)).fetchone()
+            if current is None:
+                raise ValueError('messenger_prepared_room_missing')
+            current_state = json.loads(current['frontier'])
+            epoch = self._epoch(current_state)
+            following = self._epoch(next_state)
+            legacy = 'source_epoch' not in payload and 'source_epoch' not in next_state
+            if not legacy and ('source_epoch' not in payload or 'source_epoch' not in next_state
+                               or self._epoch(payload) != following):
+                raise ValueError('messenger_prepared_epoch_mismatch')
+            if legacy:
+                if epoch != 0:
+                    raise SourceBlocked('messenger_prepared_epoch_stale')
+            elif following not in (epoch, epoch + 1) or row['state'] == 'complete' and following != epoch:
+                raise SourceBlocked('messenger_prepared_epoch_stale')
+            unchanged = row['state'] == 'complete' or not legacy and following == epoch
+            if unchanged and not self._heads_match(db, row['room'], payload['items']):
+                raise SourceBlocked('messenger_prepared_observation_conflict')
         self._authorize_publication(payload)
-        if row['state'] == 'complete':
-            with self.database() as db:
-                db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
-                           (row['next_frontier'], time.time(), row['room']))
-            return {'state': 'unchanged', 'room_id': row['room'], 'job': job}
-        if revalidate:
+        if revalidate and row['state'] == 'prepared':
             self.reader.verify_prepared(payload)
             self._authorize_publication(payload)
-        records, retractions, updates, affected = [], [], [], set()
+        if cancelled():
+            raise RuntimeError('collection_cancelled')
+        if unchanged:
+            fields = {'backfill': ('back_cursor', 'back_done', 'live_head'),
+                      'live': ('live_cursor', 'live_new_head', 'live_head'),
+                      'reconcile': ('check_cursor',)}[payload['mode']]
+            if current_state.get(fields[0]) != payload['before']:
+                raise SourceBlocked('messenger_prepared_cursor_changed')
+            # A repeated reconcile sweep may revisit a completed page. Advance
+            # only its own cursor; never rewind another mode's later progress.
+            current_state.update({key: next_state[key] for key in fields})
+            with self.database() as db:
+                db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
+                           (encoded(current_state).decode(), time.time(), row['room']))
+                db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))
+            return {'state': 'unchanged', 'room_id': row['room'], 'job': job}
+        records, retractions, updates, fingerprints, affected = [], [], [], [], set()
         for item in payload['items']:
-            original = encoded([self.account, payload['room'], item['id']]).decode()
-            triage = classify(item['body'])
+            original, fingerprint, triage = self._observation(payload['room'], item)
+            fingerprints.append((original, fingerprint))
             with self.database() as db:
                 previous = db.execute('SELECT content_hash,state FROM message_heads WHERE id=?', (original,)).fetchone()
             if previous and previous['state'] == 'candidate':
@@ -390,6 +453,8 @@ class Frontier:
         with self.database() as db:
             db.executemany('''INSERT INTO message_heads VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 content_hash=excluded.content_hash,state=excluded.state,reason=excluded.reason,body=excluded.body,page=excluded.page''', updates)
+            db.executemany('''INSERT INTO head_fingerprints VALUES(?,?) ON CONFLICT(id) DO UPDATE SET
+                fingerprint=excluded.fingerprint''', fingerprints)
             db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
                        (row['next_frontier'], time.time(), row['room']))
             db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))

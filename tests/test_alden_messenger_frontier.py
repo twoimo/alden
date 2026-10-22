@@ -3,6 +3,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
 import importlib.util
+import hashlib
 import json
 import sys
 import unittest
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-from alden_collection import CollectionStore, identity
+from alden_collection import CollectionStore, encoded, identity
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'docs/evaluation/messenger-stream-20261021'))
 
@@ -286,6 +287,190 @@ class FrontierTests(unittest.TestCase):
         self.assertEqual(engine.step(mode='live')['state'], 'unchanged')
         self.assertEqual(engine.store.events(projects=[candidate.PROJECT])['items'], before)
 
+    def test_visible_withheld_visible_restores_the_same_source_without_a_new_version(self):
+        body = '회의 일정은 다음 주 화요일 오후 3시로 확정되었습니다.'
+        engine, reader = self.frontier({('a', None): ([item(1, body)], False, None)})
+        engine.step(); engine.step(mode='live')
+        reader.pages[('a', None)] = ([item(1, visible=False)], False, None)
+        engine.step(mode='live')
+        self.assertEqual(engine.store.search('회의', projects=[candidate.PROJECT]), [])
+        reader.pages[('a', None)] = ([item(1, body)], False, None)
+        engine.step(mode='live')
+        self.assertEqual(len(engine.store.search('회의', projects=[candidate.PROJECT])), 1)
+        with engine.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
+        before = engine.store.events(projects=[candidate.PROJECT])['items']
+        self.assertEqual(engine.step(mode='live')['state'], 'unchanged')
+        self.assertEqual(engine.store.events(projects=[candidate.PROJECT])['items'], before)
+
+    def test_edited_source_can_return_to_its_original_text_without_replaying_an_old_completed_page(self):
+        first = '계약 금액은 10만원으로 확정되었습니다.'
+        revised = '계약 금액은 20만원으로 변경되었습니다.'
+        engine, reader = self.frontier({('a', None): ([item(1, first)], False, None)})
+        engine.step(); engine.step(mode='live')
+        reader.pages[('a', None)] = ([item(1, revised)], False, None)
+        engine.step(mode='live')
+        reader.pages[('a', None)] = ([item(1, first)], False, None)
+        engine.step(mode='live')
+        self.assertEqual(len(engine.store.search('10만원', projects=[candidate.PROJECT])), 1)
+        self.assertEqual(engine.store.search('20만원', projects=[candidate.PROJECT]), [])
+        with engine.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 2)
+
+    def test_restoration_after_store_commit_crash_resumes_once_in_a_new_instance(self):
+        original = item(1, '회의 일정은 화요일 오후 3시로 확정되었습니다.')
+        engine, reader = self.frontier({('a', None): ([original], False, None)})
+        engine.step(); engine.step(mode='live')
+        reader.pages[('a', None)] = ([item(1, visible=False)], False, None)
+        engine.step(mode='live')
+        reader.pages[('a', None)] = ([original], False, None)
+        with self.assertRaises(SystemExit):
+            engine.step(mode='live', after_publish=lambda: (_ for _ in ()).throw(SystemExit(73)))
+        self.assertEqual(len(engine.store.search('회의', projects=[candidate.PROJECT])), 1)
+        before = engine.store.events(projects=[candidate.PROJECT])['items']
+        resumed = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
+        self.assertEqual(resumed.step(mode='live')['state'], 'published')
+        self.assertEqual(resumed.status()['prepared_pages'], 0)
+        self.assertEqual(resumed.store.events(projects=[candidate.PROJECT])['items'], before)
+        self.assertEqual(resumed.step(mode='live')['state'], 'unchanged')
+        with resumed.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
+
+    def test_restored_duplicate_origin_is_retained_without_another_body_version(self):
+        body = '회의 자료를 다음 주 화요일까지 검토하기로 결정했습니다.'
+        engine, reader = self.frontier({('a', None): ([item(1, body)], False, None),
+                                       ('b', None): ([item(2, body)], False, None)}, ('a', 'b'))
+        engine.step(); engine.step()
+        reader.pages[('a', None)] = ([item(1, visible=False)], False, None)
+        engine.step(mode='live')
+        reader.pages[('a', None)] = ([item(1, body)], False, None)
+        engine.step(mode='live'); engine.step(mode='live')
+        origins = engine.origins(classify(body).content_hash)['items']
+        self.assertEqual([(r['room'], r['state']) for r in origins], [('a', 'candidate'), ('b', 'candidate')])
+        self.assertEqual(len(engine.store.search('회의', projects=[candidate.PROJECT])), 1)
+        with engine.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
+
+    def test_metadata_and_timestamp_can_return_to_original_without_body_duplication(self):
+        original = {**item(1), 'original': {'senderName': 'first', 'attachment': None}}
+        revised = {**original, 'sent_at': 2000, 'original': {'senderName': 'revised', 'attachment': None}}
+        engine, reader = self.frontier({('a', None): ([original], False, None)})
+        engine.step(); engine.step(mode='live')
+        for value in (revised, original):
+            reader.pages[('a', None)] = ([value], False, None)
+            self.assertEqual(engine.step(mode='live')['state'], 'published')
+            with engine.database() as db:
+                payload = json.loads(db.execute('''SELECT p.payload FROM message_heads h
+                    JOIN pages p ON p.id=h.page''').fetchone()[0])
+            self.assertEqual(payload['items'], [value])
+        before = engine.store.events(projects=[candidate.PROJECT])['items']
+        with engine.database() as db:
+            pages = db.execute('SELECT count(*) FROM pages').fetchone()[0]
+        self.assertEqual(engine.step(mode='live')['state'], 'unchanged')
+        self.assertEqual(engine.store.events(projects=[candidate.PROJECT])['items'], before)
+        with engine.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM pages').fetchone()[0], pages)
+        with engine.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
+
+    def test_old_completed_observation_cannot_restore_a_later_withheld_head(self):
+        engine, reader = self.frontier({('a', None): ([item(1)], False, None)})
+        engine.step()
+        old = engine.step(mode='live')['job']
+        reader.pages[('a', None)] = ([item(1, visible=False)], False, None)
+        engine.step(mode='live')
+        with engine.database() as db:
+            before = db.execute('SELECT frontier FROM rooms').fetchone()[0]
+        with self.assertRaisesRegex(candidate.SourceBlocked, 'messenger_prepared_epoch_stale'):
+            engine._publish(old, cancelled=lambda: False, after_publish=lambda: None)
+        self.assertEqual(engine.store.search('회의', projects=[candidate.PROJECT]), [])
+        with engine.database() as db:
+            self.assertEqual(db.execute('SELECT frontier FROM rooms').fetchone()[0], before)
+
+    def test_competing_prepared_observation_does_not_overwrite_committed_heads(self):
+        engine, reader = self.frontier({('a', None): ([item(1)], False, None)})
+        with engine.database() as db:
+            room = db.execute('SELECT * FROM rooms').fetchone()
+        first = engine._prepare(room, 'backfill', reader.page('a', None))
+        reader.pages[('a', None)] = ([item(1, '마감 일정이 다음 달로 변경되었습니다.')], False, None)
+        competing = engine._prepare(room, 'backfill', reader.page('a', None))
+        engine._publish(first, cancelled=lambda: False, after_publish=lambda: None)
+        with self.assertRaisesRegex(candidate.SourceBlocked, 'messenger_prepared_observation_conflict'):
+            engine._publish(competing, cancelled=lambda: False, after_publish=lambda: None)
+        self.assertEqual(len(engine.store.search('회의', projects=[candidate.PROJECT])), 1)
+        self.assertEqual(engine.store.search('마감', projects=[candidate.PROJECT]), [])
+
+    def test_legacy_prepared_page_migrates_without_changing_its_identity(self):
+        engine, reader = self.frontier({('a', None): ([item(1)], False, None)})
+        with engine.database() as db:
+            room = db.execute('SELECT * FROM rooms').fetchone()
+        job = engine._prepare(room, 'backfill', reader.page('a', None))
+        with engine.database() as db:
+            row = db.execute('SELECT * FROM pages WHERE id=?', (job,)).fetchone()
+            payload, next_state = json.loads(row['payload']), json.loads(row['next_frontier'])
+            payload.pop('source_epoch'); next_state.pop('source_epoch')
+            legacy = hashlib.sha256(encoded([payload, next_state])).hexdigest()
+            db.execute('UPDATE pages SET id=?,payload=?,next_frontier=? WHERE id=?',
+                       (legacy, encoded(payload).decode(), encoded(next_state).decode(), job))
+            db.execute('DROP TABLE head_fingerprints')
+        resumed = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
+        self.assertEqual(resumed.step()['job'], legacy)
+        self.assertEqual(resumed.status()['prepared_pages'], 0)
+        resumed.step(mode='live')
+        reader.pages[('a', None)] = ([item(1, visible=False)], False, None)
+        resumed.step(mode='live')
+        reader.pages[('a', None)] = ([item(1)], False, None)
+        resumed.step(mode='live')
+        self.assertEqual(len(resumed.store.search('회의', projects=[candidate.PROJECT])), 1)
+        with resumed.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
+
+    def test_legacy_committed_heads_gain_fingerprints_without_rewriting_versions(self):
+        engine, reader = self.frontier({('a', None): ([item(1)], False, None)})
+        engine.step()
+        with engine.database() as db:
+            state = json.loads(db.execute('SELECT frontier FROM rooms').fetchone()[0])
+            state.pop('source_epoch')
+            db.execute('UPDATE rooms SET frontier=?', (encoded(state).decode(),))
+            db.execute('DROP TABLE head_fingerprints')
+        resumed = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
+        resumed.step(mode='live')
+        self.assertEqual(resumed.step(mode='live')['state'], 'unchanged')
+        with resumed.store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
+
+    def test_prepared_revalidation_rejects_changed_original_metadata(self):
+        original = {**item(1), 'original': {'senderName': 'first'}}
+        engine, reader = self.frontier({('a', None): ([original], False, None)})
+        with engine.database() as db:
+            room = db.execute('SELECT * FROM rooms').fetchone()
+        engine._prepare(room, 'backfill', reader.page('a', None))
+        reader.pages[('a', None)] = ([{**original, 'original': {'senderName': 'changed'}}], False, None)
+        self.assertEqual(engine.step()['reason'], 'messenger_prepared_source_changed')
+        self.assertEqual(engine.store.search('회의', projects=[candidate.PROJECT]), [])
+
+    def test_cancel_during_unchanged_page_read_keeps_its_checkpoint(self):
+        engine, reader = self.frontier({('a', None): ([item(1)], True, 'older'),
+                                       ('a', 'older'): ([item(2)], False, None)})
+        engine.step(); engine.step()
+        engine.step(mode='reconcile'); engine.step(mode='reconcile')
+        with engine.database() as db:
+            before = db.execute('SELECT frontier FROM rooms').fetchone()[0]
+        events = engine.store.events(projects=[candidate.PROJECT])['items']
+        stopped = False
+        page = reader.page
+        def cancel_after_read(*args):
+            nonlocal stopped
+            result = page(*args)
+            stopped = True
+            return result
+        with patch.object(reader, 'page', side_effect=cancel_after_read):
+            with self.assertRaisesRegex(RuntimeError, 'collection_cancelled'):
+                engine.step(mode='reconcile', cancelled=lambda: stopped)
+        with engine.database() as db:
+            self.assertEqual(db.execute('SELECT frontier FROM rooms').fetchone()[0], before)
+        self.assertEqual(engine.store.events(projects=[candidate.PROJECT])['items'], events)
+
     def test_empty_room_remains_live_and_collects_its_first_arrival(self):
         engine, reader = self.frontier({('a', None): ([], False, None)})
         engine.step()
@@ -360,7 +545,8 @@ class CanonicalAdapterTests(unittest.TestCase):
                 'messages':[{'chatId':'a','logId':options['message_id'],'sentAt':1,'message':'회의 자료입니다.'}]}
         reader = candidate.KakaoReader(SimpleNamespace(snapshot=snapshot))
         payload = {'room':'a','before':'old-page-cursor','items':[
-            {'id':str(n),'visible':True,'body':'회의 자료입니다.','sent_at':1} for n in (1,2)]}
+            {'id':str(n),'visible':True,'body':'회의 자료입니다.','sent_at':1,
+             'original':{'chatId':'a','logId':str(n),'sentAt':1,'message':'회의 자료입니다.'}} for n in (1,2)]}
         with patch.object(reader,'identity',return_value='owner'):
             reader.verify_prepared(payload)
         self.assertEqual([c['message_id'] for c in calls], ['1','2'])
