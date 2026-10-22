@@ -27,7 +27,7 @@ function snapshotKey(view:KnowledgeView,pinned:ReadonlySet<string>,now=Date.now(
   // node identities can also make order significant; retain both boundaries.
   const nodeOrder=view.nodes.length>limits.inputNodes||new Set(view.nodes.map(n=>n.id)).size!==view.nodes.length;
   return JSON.stringify([
-    snapshotRows(view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.importance,n.category,n.evidence.retracted]),nodeOrder),
+    snapshotRows(view.nodes.map(n=>[n.id,n.sourceVersion,n.sourceTarget,n.label,n.importance,n.category,n.evidence.retracted]),nodeOrder),
     snapshotRows(view.edges.map(e=>[e.source,e.target,e.weight,e.purpose,e.validFrom,e.validTo,e.evidence.retracted,relationCurrentlyValid(e,now)]),view.edges.length>limits.inputEdges),
     affinityAuthorityKey(view),snapshotRows(pairs.map(p=>[p.source,p.target,p.cosine]),pairs.length>limits.inputAffinities),[...pinned].sort()]);
 }
@@ -76,7 +76,7 @@ export class SemanticLayoutDriver {
     this.affinityAuthority=authority;
     const pairs = view.layoutAffinity?.pairs ?? [];
     const visibleIds=new Set(view.nodes.filter(node=>!node.evidence.retracted).map(node=>node.id));
-    const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, label: n.id, description: '', facts: [] })),
+    const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, description: '', facts: [] })),
       edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', evidence: { ...e.evidence, sourceEventIds: [] } })) };
     const nowMs=Date.now(),key = snapshotKey(view,pinned,nowMs);
     const pinCoordinates=()=>[...pinned].filter(id=>visibleIds.has(id)).sort().map(id=>{

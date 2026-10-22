@@ -342,7 +342,8 @@ describe('affinity worker authority boundary ALD-WORKER-SCOPE-004', () => {
     expect(request.previous).toEqual(first.anchors);
     expect(request.pairs).toEqual(source.layoutAffinity!.pairs);
     expect(request.pinned).toEqual(['a']); expect(request.view.nodes).toHaveLength(source.nodes.length);
-    expect(request.view.nodes.every(node => node.label === node.id && node.description === '' && node.facts?.length === 0)).toBe(true);
+    expect(request.view.nodes.map(node => node.label)).toEqual(next.nodes.map(node => node.label));
+    expect(request.view.nodes.every(node => node.description === '' && node.facts?.length === 0)).toBe(true);
     expect(request.view.edges.every(edge => edge.context === '' && edge.evidenceMessageId === '' && !edge.evidence.sourceEventIds.length)).toBe(true);
     workers[0].flush(); expect(apply).toHaveBeenCalledTimes(1);
     const current = workers[1].flush();
