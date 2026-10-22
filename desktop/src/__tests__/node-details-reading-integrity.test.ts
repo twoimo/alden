@@ -3,12 +3,13 @@ import {beforeEach,describe,expect,it} from 'vitest';
 import {parseKnowledgeGraph} from '../knowledge/graph-model';
 import {renderNodeDetails} from '../knowledge/node-details';
 
-const graph=parseKnowledgeGraph({nodes:[{id:'record',label:'보존 자료',category:'document',source_version:'v1'}],edges:[]});
+const graph=parseKnowledgeGraph({nodes:[{id:'record',label:'보존 자료',category:'document',source_version:'v1',source_target:'target-a'}],edges:[]});
 beforeEach(()=>{
   document.body.innerHTML='<p id="knowledge-node-summary"></p><div id="knowledge-node-body" hidden></div><p id="knowledge-node-kind"></p><p id="knowledge-node-basis"></p><ul id="knowledge-node-facts"></ul><h2 id="knowledge-evidence-heading"></h2><div id="knowledge-node-evidence"></div>';
 });
 function render(body:string, extras:Record<string,unknown>={}) {
-  renderNodeDetails(graph,graph.nodes[0],{details:{node_id:'record',basis:'source_record',version:'v1',body,raw_sha256:'a'.repeat(64),...extras}});
+  const selected = extras.basis === 'note' ? { ...graph, nodes: graph.nodes.map(node => ({ ...node, sourceVersion: '', sourceTarget: '' })) } : graph;
+  renderNodeDetails(selected,selected.nodes[0],{details:{node_id:'record',basis:'source_record',version:'v1',target_id:'target-a',body,raw_sha256:'a'.repeat(64),...extras}});
 }
 describe('source-backed reading and numeric facts',()=>{
   for (const newline of ['\n', '\r\n', '\r']) it(`keeps exact source boundaries when folding ${JSON.stringify(newline)} with outer whitespace`, () => {

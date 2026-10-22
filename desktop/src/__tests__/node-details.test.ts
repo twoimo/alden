@@ -9,9 +9,9 @@ beforeEach(()=>{document.body.innerHTML='<p id="knowledge-node-summary"></p><div
 const source={source_id:`kakao:${account}:room:42:log:1`,source_kind:'local_db_snapshot',author_id:'7',room_title:'회의',sender:'같은 이름',date:'2026-10-01T15:00:00+09:00',content:'금요일 오후 3시에 회의합니다.',source_role:'peer_history'};
 describe('selected-node explanations',()=>{
   it('keeps a separated numeric tail collapsed, inert and tied to the selected source version',()=>{
-    const notes=parseKnowledgeGraph({nodes:[{id:'post',label:'게시물',category:'source',source_version:'v1'}],edges:[]});
+    const notes=parseKnowledgeGraph({nodes:[{id:'post',label:'게시물',category:'source',source_version:'v1',source_target:'target-a'}],edges:[]});
     const tail='\n\u00a0\n1\n/\n2\n6\n1\n3';
-    const details={node_id:'post',basis:'source_record',version:'v1',body:'1. 정상 항목\n5. 마지막 항목',raw_sha256:'1'.repeat(64),
+    const details={node_id:'post',basis:'source_record',version:'v1',target_id:'target-a',body:'1. 정상 항목\n5. 마지막 항목',raw_sha256:'1'.repeat(64),
       text_projection:{policy:'threads-separated-numeric-tail-v1',status:'structural_tail_candidate',original_preserved:true,
         semantic_validity:'unverified',separated_tail:tail,removed_characters:tail.length,
         original_body_sha256:'2'.repeat(64),body_sha256:'3'.repeat(64),separated_tail_sha256:'4'.repeat(64)}};
@@ -30,9 +30,9 @@ describe('selected-node explanations',()=>{
     expect(document.querySelector('.knowledge-separated-tail')).toBeNull();
   });
   it('preserves unclassified numeric source content and facts without a projection receipt', () => {
-    const notes = parseKnowledgeGraph({ nodes: [{ id: 'post', label: '서류 특징', category: 'document', source_version: 'v1' }], edges: [] });
+    const notes = parseKnowledgeGraph({ nodes: [{ id: 'post', label: '서류 특징', category: 'document', source_version: 'v1', source_target: 'target-a' }], edges: [] });
     const saved = '서류에서 높은 점수를 받는 지원자 특징.\n1. 채용공고의 JD를 그대로 옮겨 쓰지 않는다.\n1\n2\n6\n1\n3';
-    renderNodeDetails(notes, notes.nodes[0], { details: { node_id: 'post', basis: 'source_record', version: 'v1', body: saved, raw_sha256: 'a'.repeat(64), key_facts: ['핵심 문장', '1'] } });
+    renderNodeDetails(notes, notes.nodes[0], { details: { node_id: 'post', basis: 'source_record', version: 'v1', target_id: 'target-a', body: saved, raw_sha256: 'a'.repeat(64), key_facts: ['핵심 문장', '1'] } });
     const shown = document.getElementById('knowledge-node-body')!.textContent || '';
     expect(shown).toContain('1. 채용공고의 JD를 그대로 옮겨 쓰지 않는다.');
     expect(shown).toBe(saved);
@@ -62,15 +62,16 @@ describe('selected-node explanations',()=>{
     expect(document.getElementById('knowledge-node-body')!.textContent).toBe('[[같은 이름]]');
   });
   it('requires a stable ID for collected source body links even when an institution label is unique',()=>{
-    const notes=parseKnowledgeGraph({nodes:[{id:'post',label:'채용 공고',category:'post',source_version:'v1'},
+    const notes=parseKnowledgeGraph({nodes:[{id:'post',label:'채용 공고',category:'post',source_version:'v1',source_target:'target-a'},
       {id:'institution:a',label:'하나저축은행',category:'organization'}],edges:[]});
-    renderNodeDetails(notes,notes.nodes[0],{details:{node_id:'post',basis:'source_record',version:'v1',
+    renderNodeDetails(notes,notes.nodes[0],{details:{node_id:'post',basis:'source_record',version:'v1',target_id:'target-a',
       body:'[[하나저축은행]] · [[institution:a|저장된 기관 ID]]'}});
     expect(document.querySelectorAll('button.knowledge-note-link')).toHaveLength(1);
     expect(document.querySelector<HTMLButtonElement>('button.knowledge-note-link')!.dataset.knowledgeNode).toBe('institution:a');
     expect(document.getElementById('knowledge-node-body')!.textContent).toContain('[[하나저축은행]]');
     expect(notes.edges).toEqual([]);
-    renderNodeDetails(notes,notes.nodes[0],{details:{node_id:'post',basis:'note',body:'[[하나저축은행]]'}});
+    const savedNote = { ...notes, nodes: notes.nodes.map(node => ({ ...node, sourceVersion: '', sourceTarget: '' })) };
+    renderNodeDetails(savedNote,savedNote.nodes[0],{details:{node_id:'post',basis:'note',body:'[[하나저축은행]]'}});
     expect(document.querySelector<HTMLButtonElement>('button.knowledge-note-link')!.dataset.knowledgeNode).toBe('institution:a');
   });
   it('displays traceable original text and excludes another room, account and same-name actor',()=>{

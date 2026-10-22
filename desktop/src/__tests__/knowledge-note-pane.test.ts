@@ -17,10 +17,10 @@ beforeEach(() => {
 
 describe('popup note reader', () => {
   it('shows matching collection record evidence without promoting source content to verified facts', () => {
-    const collected = parseKnowledgeGraph({ nodes: [{ id: 'source:a', label: '원문 제목', source_version: 'version:a' }] });
+    const collected = parseKnowledgeGraph({ nodes: [{ id: 'source:a', label: '원문 제목', source_version: 'version:a', source_target: 'target-a' }] });
     const selected = collected.nodes[0];
     renderNodeDetails(collected, selected, { details: { node_id: selected.id, basis: 'source_record',
-      version: 'version:a', body: '<script>source text</script>', raw_sha256: 'a'.repeat(64),
+      version: 'version:a', target_id: 'target-a', body: '<script>source text</script>', raw_sha256: 'a'.repeat(64),
       source_url: 'https://example.test/public', collected_at: 1791350000, platform: 'threads',
       capture: { status: 'manifest_verified', source_sha256: 'b'.repeat(64), byte_scope: 'exact original JSON file bytes', json_pointer: '/posts/0' } } });
     expect(document.getElementById('knowledge-node-body')!.textContent).toBe('<script>source text</script>');
@@ -32,10 +32,11 @@ describe('popup note reader', () => {
   });
 
   it('rejects other versions and credential-bearing source links', () => {
-    const collected = parseKnowledgeGraph({ nodes: [{ id: 'a', label: '원문', source_version: 'version:a' }] });
-    const details = { node_id: 'a', basis: 'source_record', version: 'version:a', body: 'collected text',
+    const collected = parseKnowledgeGraph({ nodes: [{ id: 'a', label: '원문', source_version: 'version:a', source_target: 'target-a' }] });
+    const details = { node_id: 'a', basis: 'source_record', version: 'version:a', target_id: 'target-a', body: 'collected text',
       raw_sha256: 'a'.repeat(64), source_url: 'https://user:secret@example.test/private' };
     renderNodeDetails(collected, collected.nodes[0], { details });
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe('collected text');
     expect(document.querySelector('#knowledge-node-evidence a')).toBeNull();
     renderNodeDetails(collected, collected.nodes[0], { details: { ...details, version: 'other-version', body: 'wrong revision' } });
     expect(document.getElementById('knowledge-node-body')!.textContent).not.toContain('wrong revision');

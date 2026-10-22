@@ -1,5 +1,6 @@
 import type { fetchSettingsAction } from '../runtime';
 import type { KnowledgeGraph } from './graph-model';
+import { matchesSourceReference } from './graph-model';
 import { terminalSummary, type TerminalSummary } from './terminal-model';
 
 export type MapPoint = { id: string; x: number; y: number; z: number };
@@ -45,7 +46,12 @@ export class KnowledgeTerminal {
     const signal = this.controls.signal;
     root.getElementById('knowledge-terminal')?.addEventListener('click', event => {
       const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button[data-terminal-node]') : null;
-      if (button?.dataset.terminalNode && this.summary.nodes.some(node => node.id === button.dataset.terminalNode)) this.select(button.dataset.terminalNode);
+      const node = button?.dataset.terminalNode ? this.summary.nodes.find(node => node.id === button.dataset.terminalNode) : undefined;
+      if (!button || !node) return;
+      if (button.dataset.terminalRecord === 'true' && !matchesSourceReference(node, {
+        node_id: node.id, version: button.dataset.terminalVersion, target_id: button.dataset.terminalTarget,
+      })) return;
+      this.select(node.id);
     }, { signal });
     root.getElementById('terminal-follow')?.addEventListener('click', () => {
       this.follow = !this.follow;
@@ -72,7 +78,7 @@ export class KnowledgeTerminal {
   update(graph: KnowledgeGraph, focus: string | null, points: MapPoint[] = []): void {
     this.graph = graph; this.focus = focus; this.points = points;
     this.summary = terminalSummary(graph, focus);
-    this.render();
+    this.render(); this.renderHistory();
   }
   async refreshHistory(query: Row, collection: boolean): Promise<void> {
     if (!this.active) return;
@@ -189,7 +195,12 @@ export class KnowledgeTerminal {
       const stage = stageNames[String(row.stage)], detail = row.details as Row | undefined;
       const label = row.stage === 'stored' && detail?.change === 'unchanged' ? '변경 없음' : stage;
       const at = Number(row.at), time = Number.isFinite(at) && at > 0 ? new Date(at * 1000).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '시각 미상';
-      const line = this.row(String(row.document_label), ingestion ? label : time);
+      const node = this.summary.nodes.find(node => matchesSourceReference(node, { node_id: row.document_id, version: row.version, target_id: row.target_id }));
+      const line = this.row(String(row.document_label), ingestion ? label : time, node?.id);
+      if (node) {
+        line.dataset.terminalRecord = 'true'; line.dataset.terminalVersion = String(row.version); line.dataset.terminalTarget = String(row.target_id);
+        line.title = '현재 지도에 표시된 같은 수집 기록 열기 · ' + String(row.document_label);
+      } else line.title += ' · 현재 지도의 같은 출처·기록 버전으로 확인되지 않았습니다.';
       const badge = this.make('b', label, 'terminal-stage'); badge.dataset.stage = String(row.stage); line.prepend(badge); return line;
     };
     this.set('ingest', this.history.length ? [this.make('p', '수집 범위 · 최근 자료', 'terminal-footnote'), ...[...latest.values()].slice(0, 8).map(row => display(row, true))]

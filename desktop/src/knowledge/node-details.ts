@@ -1,4 +1,5 @@
 import type { KnowledgeGraph, KnowledgeNode } from './graph-model';
+import { matchesSourceReference } from './graph-model';
 
 const STRIPPED_TEXT_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g;
 function text(value: unknown, limit = 1200): string {
@@ -166,19 +167,27 @@ function renderBody(container: HTMLElement, body: string, graph: KnowledgeGraph,
 
 export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, payload: Record<string, unknown> | null = null, root: Document = document): void {
   const details = record(payload?.details);
-  const selected = details && details.node_id === node.id
-    && (details.basis !== 'source_record' || details.version === node.sourceVersion) ? details : null;
+  const sourceExpected = Boolean(node.sourceVersion || node.sourceTarget || details?.basis === 'source_record');
+  const selected = payload?.ok !== false && payload?.discarded !== true && details && details.node_id === node.id
+    && (!sourceExpected || details.basis === 'source_record' && matchesSourceReference(node, details)) ? details : null;
+  const unavailableSource = sourceExpected && payload !== null && !selected;
   const summary = root.getElementById('knowledge-node-summary');
-  if (summary) summary.textContent = text(selected?.summary) || nodeSummary(graph, node);
+  if (summary) summary.textContent = unavailableSource ? '이 자료의 원문을 확인하지 못했습니다.' : text(selected?.summary) || nodeSummary(graph, node);
   const body = root.getElementById('knowledge-node-body');
   const retainedCopy = (selected?.basis === 'note' || selected?.basis === 'source_record')
     && node.category !== 'collection' && typeof selected.body === 'string' ? selected.body : '';
   const copy = text(retainedCopy, 12000);
+  const clipped = retainedCopy.replace(STRIPPED_TEXT_CONTROLS, '').trim().length > 12000;
   // Source-specific projection is already bound to retained bytes by the
   // backend. Numeric shape alone cannot distinguish chrome from source data.
   const candidate = readingCandidate(selected, retainedCopy);
   const reading = candidate?.reading ?? copy;
   if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
+  root.querySelectorAll('.knowledge-body-limit').forEach(note => note.remove());
+  if (body && reading && (clipped || selected?.truncated === true)) {
+    const note = root.createElement('p'); note.className = 'knowledge-body-limit';
+    note.textContent = '일부 발췌 · 현재 화면에는 본문의 앞부분만 표시합니다.'; body.after(note);
+  }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
   if (body && candidate) {
     const note = root.createElement('details'); note.className = 'knowledge-separated-tail knowledge-reading-tail';
@@ -296,6 +305,7 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     return;
   }
   if (basis) basis.textContent = seen.size ? `원문 ${seen.size}건 · 최근 기록의 일부입니다.`
+    : unavailableSource ? '표시할 수 있는 출처와 기록 버전을 확인하지 못했습니다.'
     : node.category === 'collection' ? '그래프에 실제 등록된 구조를 기준으로 설명합니다.'
     : selected?.basis === 'note' ? '저장된 노트의 설명입니다. 대화 원문으로 확인된 사실과 구분합니다.'
     : payload ? '원문을 확인하지 못했습니다. 저장된 설명만 표시합니다.' : '저장된 설명 · 원문을 확인하고 있습니다.';

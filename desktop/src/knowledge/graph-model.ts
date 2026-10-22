@@ -53,6 +53,13 @@ export interface KnowledgeNode {
   resolutionContexts?: KnowledgeResolutionContext[];
 }
 
+/** Exact record identity only; current project permission is checked by the reader. */
+export function matchesSourceReference(node: KnowledgeNode, reference: Record<string, unknown> | null | undefined): boolean {
+  return typeof node.sourceVersion === 'string' && node.sourceVersion.length > 0
+    && typeof node.sourceTarget === 'string' && node.sourceTarget.length > 0
+    && reference?.node_id === node.id && reference.version === node.sourceVersion && reference.target_id === node.sourceTarget;
+}
+
 export interface KnowledgeEdge {
   source: string;
   relation: string;

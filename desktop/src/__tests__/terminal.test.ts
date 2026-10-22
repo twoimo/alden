@@ -15,6 +15,31 @@ function setup(load: typeof fetchSettingsAction) {
 beforeEach(() => { document.body.innerHTML = '<button id="knowledge-terminal-toggle" aria-expanded="true"></button>' + observationMarkup() + terminalMarkup(); });
 afterEach(() => terminal?.dispose());
 describe('knowledge terminal lifecycle and evidence', () => {
+  it('opens a history row only through the same displayed document/version/target', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>(async () => ({ ok: true, items: [{ ...event(1), version: 'v1', target_id: 'target-a' }] }));
+    const select = setup(load);
+    terminal.update(parseKnowledgeGraph({ nodes: [{ id: 'a', label: '현재 원문', source_version: 'v1', source_target: 'target-a' }], edges: [] }), null);
+    await terminal.refreshHistory({}, true);
+    for (const id of ['terminal-ingest', 'terminal-tail']) {
+      const button = document.querySelector<HTMLButtonElement>(`#${id} button[data-terminal-node="a"]`)!;
+      expect(button).not.toBeNull(); button.click();
+    }
+    expect(select.mock.calls).toEqual([['a'], ['a']]);
+    terminal.update(parseKnowledgeGraph({ nodes: [{ id: 'a', label: '변경된 원문', source_version: 'v2', source_target: 'target-a' }], edges: [] }), null);
+    expect(document.querySelectorAll('#terminal-ingest button, #terminal-tail button')).toHaveLength(0);
+    expect(document.getElementById('terminal-tail')!.textContent).toContain('원문 자료');
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+  it.each([{ version: 'v2' }, { target_id: 'target-b' }, { version: undefined }, { target_id: undefined }, { document_id: 'outside' }])('keeps unresolved history visible without offering a misleading current-source action: %j', async delta => {
+    const load = vi.fn<typeof fetchSettingsAction>(async () => ({ ok: true, items: [{ ...event(1), version: 'v1', target_id: 'target-a', ...delta }] }));
+    const select = setup(load);
+    terminal.update(parseKnowledgeGraph({ nodes: [{ id: 'a', label: '현재 원문', source_version: 'v1', source_target: 'target-a' }], edges: [] }), null);
+    await terminal.refreshHistory({}, true);
+    expect(document.querySelectorAll('#terminal-ingest button, #terminal-tail button')).toHaveLength(0);
+    expect(document.getElementById('terminal-tail')!.textContent).toContain('원문 자료');
+    document.querySelector<HTMLElement>('#terminal-tail .terminal-row')!.click();
+    expect(select).not.toHaveBeenCalled();
+  });
   it('draws actual within-type connections instead of an empty chord panel', () => {
     setup(vi.fn());
     terminal.update(parseKnowledgeGraph({ nodes: [{ id: 'a', label: '지원 준비', category: 'topic' },

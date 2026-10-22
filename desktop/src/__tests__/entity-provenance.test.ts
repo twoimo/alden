@@ -131,7 +131,7 @@ describe('project review contexts', () => {
     const payload = withContexts([context('one', consolidated, false)]);
     payload.nodes[0].source_version = 'a-new-v';
     const graph = parseKnowledgeGraph(payload);
-    renderNodeDetails(graph, graph.nodes[0], { details: { node_id: 'a', basis: 'source_record', version: 'a-new-v', body: '현재 버전 본문' } });
+    renderNodeDetails(graph, graph.nodes[0], { details: { node_id: 'a', basis: 'source_record', version: 'a-new-v', target_id: 'target', body: '현재 버전 본문' } });
     const note = document.querySelector('.knowledge-resolution-note')!;
     expect(note.textContent).toContain('현재 표시 버전이 이 결정의 검토 버전과 다릅니다');
     expect(note.textContent).toContain('현재 본문을 검토된 내용으로 간주할 수 없습니다');

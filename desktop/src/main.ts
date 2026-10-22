@@ -533,7 +533,7 @@ export async function setupKnowledgeGraph(
       if (!focus || focus.ok !== true) {
         if (detailPanel) detailPanel.dataset.focusState = 'unavailable';
         renderNodeDetails(currentGraph, node, focus ?? { ok: false });
-        setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
+        setText("knowledge-retrieve", node.sourceVersion || node.sourceTarget ? "선택한 수집 기록을 확인하지 못했습니다." : "관련 대화를 찾지 못했습니다.");
         return;
       }
       const detail = focus.details as Record<string, unknown> | undefined;
@@ -548,7 +548,7 @@ export async function setupKnowledgeGraph(
         ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
         : "관련 대화를 찾지 못했습니다.");
     }).catch(() => {
-      if (selectionEpoch === epoch) { if (detailPanel) detailPanel.dataset.focusState = 'unavailable'; renderNodeDetails(currentGraph, node, { ok: false }); setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다."); }
+      if (selectionEpoch === epoch) { if (detailPanel) detailPanel.dataset.focusState = 'unavailable'; renderNodeDetails(currentGraph, node, { ok: false }); setText("knowledge-retrieve", node.sourceVersion || node.sourceTarget ? "선택한 수집 기록을 확인하지 못했습니다." : "관련 대화를 찾지 못했습니다."); }
     });
   }, () => {
     disposed = true;

@@ -1,7 +1,7 @@
 import type { fetchSettingsAction } from '../runtime';
 import type { KnowledgeFocusEvent, KnowledgeHologram } from './hologram';
 import type { KnowledgeNode } from './graph-model';
-import { parseKnowledgeGraph, MAX_FOCUS_HOPS, NAVIGATION_HISTORY_LIMIT } from './graph-model';
+import { parseKnowledgeGraph, matchesSourceReference, MAX_FOCUS_HOPS, NAVIGATION_HISTORY_LIMIT } from './graph-model';
 import { knowledgeSignature } from './changes';
 import { KnowledgeRefresh } from './refresh';
 import { unifiedGraph } from './unified-graph';
@@ -40,6 +40,7 @@ export class CollectionGraphController {
   private readonly terminal: KnowledgeTerminal;
   private disposed = false;
   private epoch = 0;
+  private focusGeneration = 0;
   private initialization: Promise<void> | null = null;
   private userSelected = false;
   private state: Navigation = { offset: 0, focusId: null, hops: 0 };
@@ -219,16 +220,24 @@ export class CollectionGraphController {
   }
 
   async focus(node: KnowledgeNode, legacy: () => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown> | null> {
+    if (!this.active || this.disposed) return { discarded: true };
+    const generation = ++this.focusGeneration;
+    if ((node.sourceVersion || node.sourceTarget) && (!node.sourceVersion || !node.sourceTarget)) {
+      return { ok: false, error: 'collection_detail_reference_mismatch' };
+    }
     const epoch = this.epoch;
     let result = node.sourceVersion ? await this.load('collection-graph', { query: JSON.stringify({ ...this.query(),
       focus: node.id, hops: 0, limit: 120, overview: false, details: true, expected_version: node.sourceVersion }) }) : await legacy();
-    if (!this.active || epoch !== this.epoch || this.disposed) return { discarded: true };
+    if (!this.active || epoch !== this.epoch || generation !== this.focusGeneration || this.disposed) return { discarded: true };
     if (node.canonicalId && result?.details && typeof result.details === 'object') {
       const original = result.details as Record<string, unknown>;
       if (original.node_id === node.canonicalId) result = { ...result, details: { ...original, node_id: node.id } };
     }
     const detail = result?.details as Record<string, unknown> | undefined;
-    if (this.collection && this.graph.currentView.focusId === node.id && result?.ok === true && detail?.node_id === node.id && detail.version === node.sourceVersion && detail.target_id === node.sourceTarget) {
+    if (node.sourceVersion && result?.ok === true && (detail?.basis !== 'source_record' || !matchesSourceReference(node, detail))) {
+      return { ok: false, error: 'collection_detail_reference_mismatch' };
+    }
+    if (this.collection && this.graph.currentView.focusId === node.id && result?.ok === true && detail?.basis === 'source_record' && matchesSourceReference(node, detail)) {
       this.graph.showNodeActivity({ event_id: `read:${++this.readSequence}`, sequence: 0, document_id: node.id,
         version: node.sourceVersion!, target_id: node.sourceTarget!, run_id: 'visible-detail', origin: 'alden-detail',
         at: Date.now() / 1000, kind: 'read', success: true });

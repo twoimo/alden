@@ -50,6 +50,49 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const c of owned) c.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('permitted collection graph navigation', () => {
+  it('fences A-to-B-to-A replies even when node/version/target repeat', async () => {
+    const oldA = deferred<Record<string, unknown>>(), oldB = deferred<Record<string, unknown>>(), currentA = deferred<Record<string, unknown>>();
+    const pending = [oldA, oldB, currentA];
+    const { c, port } = controller(async options => options.details ? pending.shift()!.promise
+      : page(['a', 'b'], { nodes: ['a', 'b'].map(id => ({ ...node(id), source_target: 'target-a' })) }));
+    await settle();
+    port.clickNode('a'); const first = c.focus(port.currentGraph.nodes[0], async () => null);
+    port.clickNode('b'); const second = c.focus(port.currentGraph.nodes[1], async () => null);
+    port.clickNode('a'); const third = c.focus(port.currentGraph.nodes[0], async () => null);
+    const result = (id: string) => ({ ok: true, details: { node_id: id, basis: 'source_record', version: 'v1', target_id: 'target-a' } });
+    oldA.resolve(result('a')); expect(await first).toEqual({ discarded: true });
+    oldB.resolve(result('b')); expect(await second).toEqual({ discarded: true });
+    expect(port.showNodeActivity).not.toHaveBeenCalled();
+    currentA.resolve(result('a')); expect(await third).toEqual(result('a'));
+    expect(port.showNodeActivity).toHaveBeenCalledTimes(1);
+  });
+  it('does not start a focus read after the graph has stopped', async () => {
+    const { c, port, load } = controller(async () => page(['a'], { nodes: [{ ...node('a'), source_target: 'target-a' }] }));
+    await settle(); c.stop(); const count = load.mock.calls.length;
+    expect(await c.focus(port.currentGraph.nodes[0], async () => null)).toEqual({ discarded: true });
+    expect(load).toHaveBeenCalledTimes(count);
+  });
+  it('returns a matching source record and emits read activity only after the exact selected reference succeeds', async () => {
+    const details = { node_id: 'a', basis: 'source_record', version: 'v1', target_id: 'target-a', body: '확인된 원문' };
+    const { c, port } = controller(async options => options.details ? { ok: true, details }
+      : page(['a'], { nodes: [{ ...node('a'), source_target: 'target-a' }] }));
+    await settle(); port.clickNode('a');
+    const result = await c.focus(port.currentGraph.nodes[0], async () => null);
+    expect(result).toEqual({ ok: true, details });
+    expect(port.showNodeActivity).toHaveBeenCalledWith(expect.objectContaining({ document_id: 'a', version: 'v1', target_id: 'target-a', kind: 'read' }));
+  });
+  it.each([
+    { target_id: 'target-b' }, { version: 'v2' }, { node_id: 'another' },
+    { target_id: undefined }, { version: undefined }, { basis: 'note' },
+  ])('rejects mismatched source details before popup/title/facts consumers: %j', async delta => {
+    const { c, port } = controller(async options => options.details
+      ? { ok: true, details: { node_id: 'a', basis: 'source_record', version: 'v1', target_id: 'target-a', body: 'wrong response', ...delta }, facts: ['wrong fact'] }
+      : page(['a'], { nodes: [{ ...node('a'), source_target: 'target-a' }] }));
+    await settle(); port.clickNode('a');
+    const result = await c.focus(port.currentGraph.nodes[0], async () => null);
+    expect(result).toEqual({ ok: false, error: 'collection_detail_reference_mismatch' });
+    expect(port.showNodeActivity).not.toHaveBeenCalled();
+  });
   it('shows the actual collector state independently of the screen refresh controls', async () => {
     let state='watching';
     controller(undefined,undefined,undefined,async()=>({ok:true,realtime:{enabled:true,state}}));
@@ -182,14 +225,14 @@ describe('permitted collection graph navigation', () => {
 
   it('stops reads and discards late focus results while hidden, then resumes one poller', async () => {
     const pending = deferred<Record<string, unknown>>();
-    const { c, port, load } = controller(async options => options.details ? pending.promise : page());
+    const { c, port, load } = controller(async options => options.details ? pending.promise : page(['a'], { nodes: [{ ...node('a'), source_target: 'target-a' }] }));
     await settle(); const focus = c.focus(port.currentGraph.nodes[0], async () => null);
     c.stop(); const count = load.mock.calls.length;
     pending.resolve({ ok: true, details: { node_id: 'a' } });
     expect(await focus).toEqual({ discarded: true }); await settle(60000);
     expect(load).toHaveBeenCalledTimes(count);
     c.start(); c.start(); await settle();
-    expect(load.mock.calls.slice(count).map(([action]) => action).sort()).toEqual(['collection-graph', 'collection-history', 'collection-scheduler-status', 'knowledge-graph']);
+    expect(load.mock.calls.slice(count).map(([action]) => action).sort()).toEqual(['collection-affinity', 'collection-graph', 'collection-history', 'collection-scheduler-status', 'knowledge-graph']);
   });
 
   it('pauses graph and terminal reads across visibility changes until explicitly resumed', async () => {
@@ -221,7 +264,7 @@ describe('permitted collection graph navigation', () => {
   });
 
   it('checks selected content versions and refreshes a real version change without moving the camera', async () => {
-    let version = 'v1'; const { c, port, load } = controller(async () => page(['a'], { nodes: [node('a', version)] }));
+    let version = 'v1'; const { c, port, load } = controller(async () => page(['a'], { nodes: [{ ...node('a', version), source_target: 'target-a' }] }));
     await settle(); const n: KnowledgeNode = port.currentGraph.nodes[0];
     await c.focus(n, async () => null);
     expect(JSON.parse(load.mock.calls.at(-1)![1]!.query!)).toMatchObject({ expected_version: 'v1', details: true });
