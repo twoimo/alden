@@ -78,7 +78,7 @@ export class KnowledgeTerminal {
     if (!this.active) return;
     const options: Row = { limit: 80 };
     for (const key of ['projects', 'target_id', 'platform', 'search', 'since', 'until']) if (query[key]) options[key] = query[key];
-    const key = JSON.stringify([options, query.node_type, query.relation]);
+    const key = JSON.stringify([collection, options, query.node_type, query.relation]);
     if (this.scope !== key) { this.reset(); this.scope = key; }
     if (!collection) { this.history = []; this.historyState = '대화 기억에는 수집 처리 이력이 없습니다.'; this.renderHistory(); return; }
     if (this.busy) return;
@@ -87,7 +87,8 @@ export class KnowledgeTerminal {
       const result = await this.load('collection-history', { query: JSON.stringify(options) });
       if (!this.active || epoch !== this.epoch) return;
       if (result?.ok !== true || !Array.isArray(result.items)) {
-        this.historyState = '수집 이력을 확인할 수 없습니다.'; this.history = []; this.renderHistory(); return;
+        this.historyState = '수집 이력을 확인할 수 없습니다.';
+        this.history = []; this.pending = null; this.historyStream = null; this.renderHistory(); this.followLabel(); return;
       }
       const stream = typeof result.stream_id === 'string' ? result.stream_id : null;
       if (result.reset === true || stream !== null && this.historyStream !== null && stream !== this.historyStream) {
@@ -108,7 +109,10 @@ export class KnowledgeTerminal {
       else { this.pending = items; }
       this.followLabel();
     } catch {
-      if (this.active && epoch === this.epoch) { this.historyState = '수집 이력을 확인할 수 없습니다.'; this.history = []; this.renderHistory(); }
+      if (this.active && epoch === this.epoch) {
+        this.historyState = '수집 이력을 확인할 수 없습니다.';
+        this.history = []; this.pending = null; this.historyStream = null; this.renderHistory(); this.followLabel();
+      }
     } finally { this.busy = false; }
   }
   synced(): void {

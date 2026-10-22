@@ -60,4 +60,43 @@ describe('knowledge terminal lifecycle and evidence', () => {
     document.getElementById('knowledge-terminal-toggle')!.click();
     expect(document.getElementById('knowledge-terminal')!.hidden).toBe(true);
   });
+  it.each(['denied', 'malformed', 'rejected'] as const)('does not restore pre-failure pending records after %s history', async failure => {
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce({ ok: true, stream_id: 's1', items: [event(1, '기존 기록')] })
+      .mockResolvedValueOnce({ ok: true, stream_id: 's1', items: [event(2, '실패 전 대기 기록')] });
+    if (failure === 'rejected') load.mockRejectedValueOnce(new Error('unavailable'));
+    else load.mockResolvedValueOnce(failure === 'denied' ? { ok: false } : { ok: true, items: null });
+    load.mockResolvedValueOnce({ ok: true, stream_id: 's2', items: [event(3, '새로 확인한 기록')] });
+    setup(load); await terminal.refreshHistory({}, true);
+    document.getElementById('terminal-follow')!.click();
+    await terminal.refreshHistory({}, true);
+    expect(document.getElementById('terminal-follow')!.textContent).toBe('새 기록 1');
+    await terminal.refreshHistory({}, true);
+    expect(document.getElementById('terminal-follow')!.textContent).toBe('추적 꺼짐');
+    document.getElementById('terminal-follow')!.click();
+    for (const id of ['terminal-ingest', 'terminal-tail']) {
+      const host = document.getElementById(id)!;
+      expect(host.textContent).toContain('수집 이력을 확인할 수 없습니다.');
+      expect(host.querySelectorAll('.terminal-row')).toHaveLength(0);
+      expect(host.textContent).not.toContain('실패 전 대기 기록');
+    }
+    await terminal.refreshHistory({}, true);
+    expect(document.getElementById('terminal-tail')!.textContent).toContain('새로 확인한 기록');
+    expect(document.getElementById('terminal-tail')!.textContent).not.toContain('확인할 수 없습니다');
+  });
+  it('fences a collection reply after switching to conversation memory with the same query', async () => {
+    let resolve!: (value: Record<string, unknown>) => void;
+    const load = vi.fn<typeof fetchSettingsAction>(() => new Promise(r => { resolve = r; }));
+    setup(load); const pending = terminal.refreshHistory({}, true);
+    await terminal.refreshHistory({}, false);
+    resolve({ ok: true, stream_id: 's1', items: [event(1, '이전 수집 범위의 기록')] });
+    await pending;
+    document.getElementById('terminal-follow')!.click();
+    document.getElementById('terminal-follow')!.click();
+    for (const id of ['terminal-ingest', 'terminal-tail']) {
+      const host = document.getElementById(id)!;
+      expect(host.textContent).toContain('대화 기억에는 수집 처리 이력이 없습니다.');
+      expect(host.querySelectorAll('.terminal-row')).toHaveLength(0);
+    }
+  });
 });
