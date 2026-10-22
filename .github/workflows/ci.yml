@@ -207,6 +207,7 @@ jobs:
           tests.test_alden_source_acquisition
           tests.test_alden_collection_db_ownership
           tests.test_alden_channel_discovery_candidate
+          tests.test_alden_messenger_frontier
           tests.test_alden_graph_quality
           tests.test_alden_relation_binding
           tests.test_alden_relation_observations

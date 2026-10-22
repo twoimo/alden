@@ -23,6 +23,7 @@ from alden_source_text import project_source_text, reading_tail_presentation
 
 
 SCHEMA = 3
+PLATFORMS = frozenset({'threads', 'youtube', 'files', 'graph', 'kakaotalk', 'telegram'})
 _GRAPH_REFERENCES = object()  # Internal capability, never a JSON query flag.
 SNAPSHOT_RECORD_BUDGET = 100000
 MAX_RECORD_BYTES = 2 * 1024 * 1024
@@ -538,7 +539,7 @@ class CollectionStore:
                  projects: list[str], url: str = "", interval_seconds: int = 21600,
                  enabled: bool = True, config: dict | None = None,
                  permission: str = "local-private") -> str:
-        if platform not in {"threads", "youtube", "files", "graph"}:
+        if platform not in PLATFORMS:
             raise ValueError("collection_platform_invalid")
         if not projects or any(not isinstance(p, str) or not p or len(p) > 128 for p in projects):
             raise ValueError("collection_projects_invalid")
@@ -714,7 +715,24 @@ class CollectionStore:
     def ingest(self, target_id: str, records, *, cursor=None, origin="alden",
                run_id: str | None = None, relations=(), cancelled=lambda: False,
                complete_snapshot=False, source_revision=None, source_order=None,
-               processing_version="collection-record-v1", publication_guard=None) -> dict:
+               processing_version="collection-record-v1", publication_guard=None, retractions=()) -> dict:
+        retractions = tuple(retractions)
+        if len(retractions) > MAX_BATCH_RECORDS or complete_snapshot and retractions:
+            raise ValueError('collection_retractions_invalid')
+        retracted_ids = []
+        for record in retractions:
+            if not isinstance(record, dict) or set(record) != {'platform', 'original_id'} or record['platform'] not in PLATFORMS:
+                raise ValueError('collection_retractions_invalid')
+            retracted_ids.append(identity(record['platform'], record['original_id']))
+        if len(set(retracted_ids)) != len(retracted_ids):
+            raise ValueError('collection_retractions_invalid')
+        if retracted_ids:
+            records = list(records)
+            if len(records) > MAX_BATCH_RECORDS:
+                raise ValueError('collection_retractions_invalid')
+            target_platform = self.target(target_id)['platform']
+            if any(identity(record.get('platform', target_platform), record['original_id']) in retracted_ids for record in records):
+                raise ValueError('collection_retraction_conflicts_with_record')
         automatic_snapshot_run = complete_snapshot and not run_id
         if not isinstance(processing_version, str) or not 1 <= len(processing_version) <= 128:
             raise ValueError("collection_processing_version_invalid")
@@ -744,7 +762,7 @@ class CollectionStore:
             target = self.target(target_id)
             if not target["enabled"]:
                 raise RuntimeError("collection_target_paused")
-            if complete_snapshot and not any(p['permission'] != 'denied' for p in target['projects']):
+            if (complete_snapshot or retracted_ids) and not any(p['permission'] != 'denied' for p in target['projects']):
                 raise ValueError('collection_source_scope_denied')
             counts = {"added": 0, "revised": 0, "unchanged": 0}
             with self.database() as db:
@@ -817,9 +835,11 @@ class CollectionStore:
                         projection_sha = digest(encoded([label, body, {k:v for k,v in metadata.items() if k != 'source'}]))
                         version = identity("version", encoded([doc_id, raw_sha, processing_version, projection_sha]).decode())
                         old = db.execute("SELECT current_version FROM documents WHERE id=?", (doc_id,)).fetchone()
-                        membership = db.execute("SELECT current_version FROM memberships WHERE target_id=? AND document_id=?", (target_id, doc_id)).fetchone()
+                        membership = db.execute("SELECT current_version,availability FROM memberships WHERE target_id=? AND document_id=?", (target_id, doc_id)).fetchone()
                         prior_version = membership[0] if membership else old[0] if old else None
                         category = "added" if old is None else "unchanged" if prior_version == version else "revised"
+                        if membership and membership['availability'] != 'available':
+                            category = 'revised'
                         counts[category] += 1
                         self._event(db, run_id, target_id, "discovered", document_id=doc_id, version=version)
                         db.execute("INSERT INTO documents VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET current_version=excluded.current_version,availability=excluded.availability",
@@ -874,6 +894,14 @@ class CollectionStore:
                                 raise ValueError('collection_orphan_relation')
                             db.execute('INSERT OR IGNORE INTO snapshot_relations VALUES(?)', (rel_id,))
                     removed = 0
+                    for document_id in retracted_ids:
+                        if cancelled():raise RuntimeError('collection_cancelled')
+                        row = db.execute("SELECT current_version FROM memberships WHERE target_id=? AND document_id=? AND availability='available'", (target_id, document_id)).fetchone()
+                        if row is None:continue
+                        db.execute("UPDATE memberships SET availability='deleted' WHERE target_id=? AND document_id=?", (target_id, document_id))
+                        db.execute("UPDATE documents SET availability='deleted' WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE document_id=? AND availability='available')", (document_id, document_id))
+                        self._event(db, run_id, target_id, 'stored', document_id=document_id, version=row['current_version'], change='removed', reason='현재 원본 리더가 본문을 제공하지 않습니다. 이전 버전은 보존했습니다.')
+                        removed += 1
                     if complete_snapshot:
                         missing = db.execute("SELECT document_id,current_version FROM memberships WHERE target_id=? AND availability='available' AND document_id NOT IN (SELECT document_id FROM snapshot_members)", (target_id,)).fetchall()
                         removed = len(missing)
@@ -1042,7 +1070,7 @@ class CollectionStore:
         for value in (focus, target_id, node_type, relation, expected_version):
             if value is not None and (not isinstance(value, str) or not value or len(value) > 256):
                 raise ValueError("collection_graph_filter_invalid")
-        if platform is not None and platform not in {"youtube", "threads", "files", "graph"}:
+        if platform is not None and platform not in PLATFORMS:
             raise ValueError("collection_platform_invalid")
         for value in (since, until):
             if value is not None and (type(value) not in {int, float} or not math.isfinite(value) or value < 0):
@@ -1398,7 +1426,7 @@ class CollectionStore:
             raise ValueError("collection_event_cursor_invalid")
         if stage is not None and stage not in STAGES:
             raise ValueError("collection_stage_invalid")
-        if platform is not None and platform not in {"youtube", "threads", "files", "graph"}:
+        if platform is not None and platform not in PLATFORMS:
             raise ValueError("collection_platform_invalid")
         for value in (since, until):
             if value is not None and (type(value) not in {int, float} or not math.isfinite(value) or value < 0):
@@ -1516,7 +1544,7 @@ class CollectionStore:
             raise ValueError("collection_activity_cursor_invalid")
         if target_id is not None and (not isinstance(target_id, str) or len(target_id) > 256):
             raise ValueError("collection_graph_filter_invalid")
-        if platform is not None and platform not in {"youtube", "threads", "files", "graph"}:
+        if platform is not None and platform not in PLATFORMS:
             raise ValueError("collection_platform_invalid")
         with self.database() as db:
             checkpoint, earliest, where, args = self._activity_scope(db, projects, target_id, platform)
