@@ -72,6 +72,7 @@ export class CollectionActivity {
     if (!next) return;
     this.nodes = nodes; this.snapshotCursor = next.cursor;
     if (!this.committed || this.waitingSnapshot || next.stream_id !== this.committed.stream_id) {
+      this.epoch++;
       this.committed = next; this.waitingSnapshot = false; this.pending.clear(); this.seen.clear(); this.clear();
     }
     this.flush(); this.schedule(2500);

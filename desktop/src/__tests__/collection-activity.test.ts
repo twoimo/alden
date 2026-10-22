@@ -67,6 +67,22 @@ describe('committed graph activity consumption', () => {
     expect(consumer.diagnostics().cursor).toBe(15); expect(consumer.diagnostics().pending).toBe(1);
     consumer.snapshot(point(15), nodes()); expect(show).toHaveBeenCalledTimes(1);
   });
+  it('discards an old journal reply after a replacement snapshot even when node identities match', async () => {
+    let resolve!: (value: ReturnType<typeof page>) => void;
+    const read = vi.fn((_options: Record<string, unknown>) => new Promise<ReturnType<typeof page>>(done => { resolve = done; }));
+    const { consumer, show } = setup(read);
+    await vi.advanceTimersByTimeAsync(2500);
+    consumer.snapshot(point(100, 'stream-b'), nodes());
+    resolve(page(15, [event()]));
+    await Promise.resolve(); await Promise.resolve();
+    expect(consumer.diagnostics()).toMatchObject({ cursor: 100, pending: 0, seen: 0 });
+    expect(show).not.toHaveBeenCalled();
+    read.mockImplementation(async () => page(101, [event(101, { at: 14 })], { stream_id: 'stream-b' }));
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(read.mock.calls.at(-1)![0]).toEqual({ activity: true, after: 100, stream_id: 'stream-b', limit: 200 });
+    consumer.snapshot(point(101, 'stream-b'), nodes());
+    expect(show).toHaveBeenCalledExactlyOnceWith(event(101, { at: 14 }));
+  });
   it('does not pulse wrong target/version, hidden nodes, future/old timestamps, failures, or reversed sequences', async () => {
     const entries = [event(11, { at: 0 }), event(12, { at: 20 }), event(13, { success: false } as never),
       event(14, { target_id: 'denied' }), event(15, { document_id: 'hidden' }), event(16, { version: 'old' }), event(14)];
