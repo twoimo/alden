@@ -303,6 +303,13 @@ fresh-process verification keeps the original budget and source guards intact;
 an import-only MCP test needs the existing scripts path in its environment. Failed preliminary logs are preserved,
 not reported as passing.
 
+The first exact-head CI run `39861830028` then reached the same peak-RSS guard in
+the new borrowed-reader check after the large combined Python command. That
+failure is retained. The workflow runs the access module in its own fresh Python
+process, following the existing worker/affinity isolation pattern; the product
+RSS limit and test assertions are unchanged. A new exact-head run must pass all
+four jobs before this candidate's delivery checks are considered complete.
+
 This is not a complete privacy, cache or release claim. Retained UI/history stream
 and MCP/index/embedding caches need explicit revocation propagation; all alternate
 SQL consumers, source-visibility refresh, temporal/identity gold and long-lived
