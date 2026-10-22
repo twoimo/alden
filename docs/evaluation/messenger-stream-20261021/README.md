@@ -237,3 +237,82 @@ integration are still promotion gates.
 - Measured collection latency and CPU/RAM/DB/render budgets on representative load.
 - External three-stage review bound to the precise source bundle, then installed
   verification, source/config/data preservation, PR/CI and normal release gates.
+
+## Read-time authority candidate (uninstalled)
+
+The expiry counterexample at `ca9fc55…` was reproducible even though the collector
+correctly returned blocked: the already-published Store search and graph each
+still returned one document. A collector-only publication fence therefore cannot
+establish continued read authority, including while collection is paused.
+
+Two distinct mechanisms were considered. Persisted origin retirement can remove
+old memberships and notify indexes/caches, but cannot by itself protect a read
+before its next worker tick, and must not inherit collection pause/permission
+barriers. The implemented reversible candidate instead gates the canonical Store
+read queries on current authority. Durable retirement and scope/cache lifecycle
+remain complementary future work; this local choice is externally unvalidated.
+
+KakaoTalk/Telegram target platforms default to withholding without an explicitly
+provided trusted `source_access` checker, regardless of target kind. Each read
+connection registers one shared guard. Selected target/document/version bindings
+must exist; only the Boolean `True` authorizes a protected source. Missing,
+non-Boolean and failing checkers withhold it. Positive decisions are checked
+again before returning, preventing a selected body from escaping after authority
+is lost during the read. Existing project permission and availability predicates
+remain in force. Generic read-only application entry points do not silently
+construct or adopt a messenger authorizer.
+
+Search, graph/overview/focus/reference paths, source contexts, retained details,
+history/event rows and visual activity apply this guard. Relation evidence also
+requires the source target's two available memberships, even if another permitted
+target keeps the same nodes visible. The layout snapshot owner installs the same
+functions on its existing read-only connection; borrowing does not commit, close
+or replace that connection. Room/target metadata remains discoverable. Withheld
+projection reads do not delete versions, blobs, memberships or provenance.
+
+The frontier's trusted checker verifies the pinned account, an exact current
+candidate origin and its checksum/policy, and that origin's current room
+permission. One expired duplicate origin does not hide a second permitted one.
+Telegram authorizers must return their already-validated stable authorization
+record for protected reads. Only its digest is retained in the page's scope;
+no consent registry is fabricated or updated. Missing revision receipts leave
+reads withheld. Date-bound or authorization-record changes cannot reuse an old
+page's authority. Renewal requires a fresh canonical page; identical content
+updates the origin's page proof without another body version or collection
+activity. A changed record also fences prepared publication.
+
+Verification distinguishes controlled callbacks and real isolated SQLite from
+native sources. New tests cover default/generic/read-only paths, collection pause,
+authority loss during a read, raw/version preservation, independent memberships,
+relation evidence, borrowed layout ownership, account/date changes, duplicate
+origins and renewal without fake new activity. The prior failed expiry probe is
+retained separately; its new counterpart reports zero search/graph matches even
+before a collector tick, with zero additional source-body requests after expiry.
+The native Telegram consent state has not been changed and no Telegram body was
+acquired. All source/runtime tests use bytecode-disabled pinned Python.
+
+Broader checks caught and fixed two integration defects in this candidate: the
+exact-detail SQL replacement needed to retain its extra focus binding, and the
+borrowed layout connection needed the common guard registration. Initial
+all-consumer execution also exceeded affinity tests' process RSS admission after
+many unrelated fixtures accumulated. A matched 35-module / 621-test shared-process control passed with both the
+unchanged base and candidate code, with peak test-process RSS of 132,022,272 and
+131,694,592 bytes respectively. These are single harness runs, not app memory
+improvement or a causal explanation for every preliminary failure. Per-module
+fresh-process verification keeps the original budget and source guards intact;
+an import-only MCP test needs the existing scripts path in its environment. Failed preliminary logs are preserved,
+not reported as passing.
+
+This is not a complete privacy, cache or release claim. Retained UI/history stream
+and MCP/index/embedding caches need explicit revocation propagation; all alternate
+SQL consumers, source-visibility refresh, temporal/identity gold and long-lived
+multi-process behavior still require coverage. The protected history path uses
+per-event authorization rather than unfiltered aggregate counts, so representative
+latency/RAM measurements are required. Native consent integration and resource
+admission are unverified. Existing 18/ST01–14/Cursor requirements and the actual
+Pro → Gemini → Pro validation/release holds remain active. The installed app
+remains 0.3.218, runtime source `42c648e…`; this candidate is not installed.
+
+Private evidence: `outputs/messenger-access-20261023/` and the preceding
+`outputs/messenger-lifecycle-20261023/`. The final source revision, source hashes,
+exact-head CI and evidence manifest are recorded separately after verification.

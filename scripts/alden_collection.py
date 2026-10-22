@@ -335,7 +335,8 @@ class TargetBusy(RuntimeError):
 
 
 class CollectionStore:
-    def __init__(self, state_root: Path):
+    def __init__(self, state_root: Path, *, source_access=None):
+        self.source_access = source_access
         self.read_only = False
         self.schema = SCHEMA
         self.root = safe_directory(state_root / "knowledge" / "collection")
@@ -480,13 +481,14 @@ class CollectionStore:
             db.execute('CREATE INDEX IF NOT EXISTS event_target_sequence ON events(target_id,sequence)')
 
     @classmethod
-    def open_existing(cls, state_root: Path):
+    def open_existing(cls, state_root: Path, *, source_access=None):
         path = state_root.absolute() / "knowledge" / "collection" / "collection.sqlite3"
         if not path.exists():
             return None
         if any(p.is_symlink() for p in [*path.parents, path]):
             raise ValueError("collection_path_symlink")
         store = cls.__new__(cls)
+        store.source_access = source_access
         store.read_only = True
         store.path, store.root = path, path.parent
         store.blobs, store.locks = store.root / "sources", store.root / "locks"
@@ -497,11 +499,42 @@ class CollectionStore:
             store.schema = int(row[0])
         return store
 
+    def _install_source_access(self, db):
+        protected, decisions = None, {}
+        def guarded_targets():
+            nonlocal protected
+            if protected is None:
+                protected = {row[0] for row in db.execute(
+                    "SELECT id FROM targets WHERE platform IN ('kakaotalk','telegram')")}
+            return protected
+        def check_source(key, metadata):
+            try:
+                return callable(self.source_access) and self.source_access(*key, json.loads(metadata)) is True
+            except Exception:
+                return False
+        def source_allowed(target, document, version):
+            if target not in guarded_targets():
+                return 1
+            key = (target, document, version)
+            if key not in decisions:
+                row = db.execute('SELECT metadata FROM versions WHERE id=? AND document_id=?', (version, document)).fetchone()
+                metadata = row[0] if row else '{}'
+                decisions[key] = (metadata, bool(row) and check_source(key, metadata))
+            return int(decisions[key][1])
+        db.create_function('alden_source_allowed', 3, source_allowed)
+        db.create_function('alden_has_source_guards', 0, lambda: int(bool(guarded_targets())))
+        def verify():
+            for key, (metadata, allowed) in decisions.items():
+                if allowed and not check_source(key, metadata):
+                    raise RuntimeError('collection_source_authorization_changed')
+        return verify
+
     @contextmanager
     def database(self, *, publication_guard=None, cancelled=None):
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
+        verify_source_access = self._install_source_access(db)
         if self.read_only:
             db.execute("PRAGMA query_only=ON")
             db.execute("BEGIN")
@@ -512,6 +545,7 @@ class CollectionStore:
             db.execute('PRAGMA cache_size=-65536')
         try:
             yield db
+            verify_source_access()
             with publication_guard() if publication_guard is not None else nullcontext():
                 if cancelled is not None and cancelled():
                     raise RuntimeError('collection_cancelled')
@@ -943,7 +977,7 @@ class CollectionStore:
             raise ValueError("collection_event_cursor_invalid")
         if projects is None:
             projects = [p["project"] for p in self.projects()]
-        clauses = ["e.sequence>?"];args = [after]
+        clauses = ["e.sequence>?", "alden_source_allowed(e.target_id,e.document_id,e.version)=1"];args = [after]
         if projects is not None:
             if not projects:
                 return {"items": [], "cursor": after}
@@ -976,7 +1010,7 @@ class CollectionStore:
                               "availability": row["availability"], "source_version": row["visible_version"]})
             allowed = {n["id"] for n in nodes}
             edges = []
-            for row in db.execute("SELECT r.* FROM relations r WHERE active=1 AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id AND p.project IN (" + marks + ") AND p.permission!='denied')", projects):
+            for row in db.execute("SELECT r.* FROM relations r WHERE active=1 AND " + self._source_relation_scope() + " AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id AND p.project IN (" + marks + ") AND p.permission!='denied')", projects):
                 if row["source"] in allowed and row["target"] in allowed:
                     require_relation_binding(db, row)
                     edges.append({"id": row["id"], "source": row["source"], "target": row["target"],
@@ -1038,8 +1072,15 @@ class CollectionStore:
           SELECT m.document_id,m.current_version,ROW_NUMBER() OVER(
             PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
           FROM memberships m JOIN versions v ON v.id=m.current_version
-          WHERE """ + available + candidate_scope + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+          WHERE """ + available + candidate_scope + """alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
+            AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
             AND p.permission!='denied' AND p.project IN (""" + marks + "))) WHERE choice=1"
+
+    def _source_relation_scope(self):
+        available = " AND m.availability='available'" if self.schema >= 3 else ""
+        return " AND ".join("alden_source_allowed(r.target_id,r." + endpoint + ","
+            "(SELECT m.current_version FROM memberships m WHERE m.target_id=r.target_id AND m.document_id=r." + endpoint + available + "))=1"
+            for endpoint in ('source', 'target'))
 
     def projects(self) -> list[dict]:
         with self.database() as db:
@@ -1106,7 +1147,8 @@ class CollectionStore:
               SELECT m.document_id,m.current_version,m.target_id,ROW_NUMBER() OVER(
                 PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
               FROM memberships m JOIN versions v ON v.id=m.current_version JOIN targets t ON t.id=m.target_id
-              WHERE """ + available + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+              WHERE """ + available + """alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
+                AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
                 AND p.permission!='denied' AND p.project IN (""" + marks + """))
                 AND (? IS NULL OR m.target_id=?) AND (? IS NULL OR t.platform=?)),
               visible AS MATERIALIZED (
@@ -1119,7 +1161,7 @@ class CollectionStore:
                 AND r.version IS alden_relation_digest(r.evidence)) AS history_bound
               FROM relations r JOIN visible a ON a.id=r.source JOIN visible b ON b.id=r.target
               LEFT JOIN relation_versions h ON h.relation_id=r.id AND h.version=r.version
-              WHERE r.active=1 AND (? IS NULL OR r.target_id=?)
+              WHERE r.active=1 AND """ + self._source_relation_scope() + """ AND (? IS NULL OR r.target_id=?)
                 AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
                   AND p.permission!='denied' AND p.project IN (""" + marks + """))),
               permitted_edges AS MATERIALIZED (SELECT * FROM permitted_relationships WHERE ? IS NULL OR type=?),
@@ -1143,7 +1185,8 @@ class CollectionStore:
             if details and focus and hops == 0 and relation is None:
                 # An already-selected record needs one exact permitted lookup,
                 # not repeated materialization of all 26k nodes and 48k edges.
-                exact = cte.replace("WHERE " + available + "EXISTS(", "WHERE m.document_id=? AND " + available + "EXISTS(", 1)
+                exact = cte.replace("WHERE " + available + "alden_source_allowed(",
+                                    "WHERE m.document_id=? AND " + available + "alden_source_allowed(", 1)
                 row = db.execute(exact + "SELECT " + fields + " FROM shown s JOIN versions v ON v.id=s.visible_version WHERE s.id=?", (focus, *args, focus)).fetchone()
                 if row is None:
                     raise ValueError("collection_graph_focus_not_in_scope")
@@ -1294,7 +1337,7 @@ class CollectionStore:
             contexts_sql = """SELECT m.document_id,m.target_id,m.current_version,p.project,v.label
               FROM memberships m JOIN target_projects p ON p.target_id=m.target_id
               JOIN versions v ON v.id=m.current_version JOIN targets t ON t.id=m.target_id
-              WHERE m.document_id IN (""" + selected + ") AND p.permission!='denied' AND p.project IN (" + marks + ") "
+              WHERE m.document_id IN (""" + selected + ") AND alden_source_allowed(m.target_id,m.document_id,m.current_version)=1 AND p.permission!='denied' AND p.project IN (" + marks + ") "
             if self.schema >= 3:
                 contexts_sql += "AND m.availability='available' "
             contexts_sql += """AND (? IS NULL OR m.target_id=?) AND (? IS NULL OR t.platform=?)
@@ -1352,6 +1395,9 @@ class CollectionStore:
             return result
 
     def _record_details(self, db, row, expected_version) -> dict:
+        if not db.execute('SELECT alden_source_allowed(?,?,?)',
+                          (row['target_id'], row['id'], row['visible_version'])).fetchone()[0]:
+            return {'ok': False, 'error': 'collection_source_authorization_required'}
         if expected_version is not None and row["visible_version"] != expected_version:
             return {"ok": False, "error": "collection_graph_version_changed"}
         raw = self._verified_source_blob(self.blobs, row["raw_path"], MAX_RECORD_BYTES)
@@ -1453,6 +1499,9 @@ class CollectionStore:
             if reset:
                 before = after = None
             where = " AND ".join([scope, *clauses])
+            guarded = bool(db.execute('SELECT alden_has_source_guards()').fetchone()[0])
+            if guarded:
+                where += " AND alden_source_allowed(e.target_id,e.document_id,e.version)=1"
             args = [*scope_args, *args]
             # Preserve keyset order on the integer primary key. A target IN
             # index otherwise makes SQLite join/sort the entire journal for
@@ -1463,7 +1512,7 @@ class CollectionStore:
                 summary = {"total": 0, "stages": {s: 0 for s in sorted(STAGES)},
                            "changes": {s: 0 for s in ('added', 'revised', 'unchanged', 'removed', 'relations_changed')},
                            "as_of": checkpoint['cursor']}
-                accelerated = not query and since is None and until is None and db.execute("SELECT 1 FROM meta WHERE key='journal_counts_v1' AND value='1'").fetchone()
+                accelerated = not guarded and not query and since is None and until is None and db.execute("SELECT 1 FROM meta WHERE key='journal_counts_v1' AND value='1'").fetchone()
                 if accelerated:
                     count_query = "SELECT e.stage,e.change,SUM(e.count) AS count FROM event_counts e WHERE " + where + " GROUP BY e.stage,e.change"
                 else:
@@ -1558,7 +1607,7 @@ class CollectionStore:
                         "stream_id": generation, "reset": True, "has_more": False}
             rows = db.execute("""SELECT e.*,r.origin,r.state AS run_state FROM events e
               JOIN targets t ON t.id=e.target_id JOIN runs r ON r.id=e.run_id WHERE """ + where +
-              " AND e.sequence>? ORDER BY e.sequence LIMIT ?", (*args, after, limit+1)).fetchall()
+              " AND e.sequence>? AND alden_source_allowed(e.target_id,e.document_id,e.version)=1 ORDER BY e.sequence LIMIT ?", (*args, after, limit+1)).fetchall()
             items = []
             for row in rows[:limit]:
                 details = json.loads(row["details"])

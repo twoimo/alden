@@ -141,7 +141,9 @@ class TelegramReader:
         if not scope:
             raise SourceBlocked('telegram_context_consent_required')
         scope = {'since': scope['since'], 'until': scope['until']}
-        self.authorizer(self.identity(), room, scope['since'], scope['until'])
+        authorization = self.authorizer(self.identity(), room, scope['since'], scope['until'])
+        if isinstance(authorization, dict) and authorization:
+            scope['authorization_sha256'] = hashlib.sha256(encoded(authorization)).hexdigest()
         return scope
 
     def page(self, room, cursor):
@@ -174,7 +176,9 @@ class TelegramReader:
                 'more': result['more'], 'next_cursor': result.get('next_cursor'),
                 'scope': {'source': 'canonical local Postbox', 'since': scope['since'], 'until': scope['until'],
                           'complete': result.get('complete'), 'withheld': result.get('withheld'),
-                          'decode_errors': result.get('decode_errors')}}
+                          'decode_errors': result.get('decode_errors'),
+                          **({'authorization_sha256': scope['authorization_sha256']}
+                             if 'authorization_sha256' in scope else {})}}
 
     def verify_prepared(self, payload):
         page = self.page(payload['room'], payload['before'])
@@ -234,7 +238,7 @@ class Frontier:
             if not claims_exist:
                 for pending in db.execute("SELECT id,room,payload FROM pages WHERE state='prepared'"):
                     self._claim_page_content(db, pending['id'], pending['room'], json.loads(pending['payload'])['items'])
-        self.store = CollectionStore(root)
+        self.store = CollectionStore(root, source_access=self._source_access)
         self.target = identity('target-' + platform, 'local-db:' + account)
         with self.store.database() as db:
             present = db.execute('SELECT 1 FROM targets WHERE id=?', (self.target,)).fetchone()
@@ -440,6 +444,9 @@ class Frontier:
             # only its own cursor; never rewind another mode's later progress.
             current_state.update({key: next_state[key] for key in fields})
             with self.database() as db:
+                if row['state'] == 'prepared':
+                    db.executemany('UPDATE message_heads SET page=? WHERE id=?',
+                        [(job, self._observation(row['room'], item)[0]) for item in payload['items']])
                 db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
                            (encoded(current_state).decode(), time.time(), row['room']))
                 db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))
@@ -505,6 +512,46 @@ class Frontier:
             old_scope = payload.get('reader_scope')
             if not isinstance(old_scope, dict) or any(old_scope.get(k) != authorization[k] for k in ('since', 'until')):
                 raise SourceBlocked('telegram_prepared_scope_changed')
+            if old_scope.get('authorization_sha256') != authorization.get('authorization_sha256'):
+                raise SourceBlocked('telegram_prepared_authorization_changed')
+
+    def _source_access(self, target, document, version, metadata):
+        """Current origin authority is required even when collection is stopped."""
+        source = metadata.get('source', {})
+        if (target != self.target or not isinstance(source, dict)
+            or source.get('kind') != 'messenger-exact-content-provenance'
+            or source.get('account_id') != self.account or source.get('platform') != self.platform):
+            return False
+        content_hash = source.get('content_hash')
+        if (not isinstance(content_hash, str) or not re.fullmatch(r'[0-9a-f]{64}', content_hash)
+            or document != identity('graph', 'messenger-content:' + content_hash)
+            or self.reader.identity() != self.account):
+            return False
+        with self.database() as db:
+            origins = db.execute('''SELECT h.room,h.message,h.page,p.payload,p.next_frontier
+                FROM message_heads h JOIN pages p ON p.id=h.page
+                WHERE h.content_hash=? AND h.state='candidate' AND p.state='complete'
+                ORDER BY h.room,h.message''', (content_hash,))
+            for origin in origins:
+                try:
+                    authorization = self.reader.authorize(origin['room'])
+                except SourceBlocked:
+                    continue
+                payload = json.loads(origin['payload'])
+                if hashlib.sha256(encoded([payload, json.loads(origin['next_frontier'])])).hexdigest() != origin['page']:
+                    return False
+                if payload.get('quality_policy') != POLICY:
+                    continue
+                if self.platform == 'telegram':
+                    scope = payload.get('reader_scope')
+                    if (not isinstance(authorization, dict) or not isinstance(scope, dict)
+                        or not authorization.get('authorization_sha256')
+                        or any(scope.get(k) != authorization.get(k) for k in ('since', 'until', 'authorization_sha256'))):
+                        continue
+                if any(item['id'] == origin['message'] and item['visible']
+                       and classify(item['body']).content_hash == content_hash for item in payload['items']):
+                    return True
+        return False
     @contextmanager
     def _publication_guard(self, payload):
         self._authorize_publication(payload)

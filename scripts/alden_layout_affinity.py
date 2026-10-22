@@ -122,6 +122,8 @@ class ReadTransactions:
         store.path = self.folder / "collection.sqlite3"
         store.blobs, store.locks = self.folder / "sources", self.folder / "locks"
         store._owner = self
+        store.source_access = None
+        self.verify_source_access = store._install_source_access(self.collection)
         self.store = store
         cache_path = self.folder / "retrieval.sqlite3"
         if cache_path.exists():
@@ -165,6 +167,7 @@ def read_transactions(state_root, *, budgets=semantic.Budgets(), cancelled=lambd
     try:
         with semantic._sql_errors(guard):
             yield owner.open()
+            owner.verify_source_access()
     finally:
         owner.close()
 

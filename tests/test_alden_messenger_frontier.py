@@ -27,6 +27,11 @@ def item(number, body=None, visible=True):
             'visible': visible, 'sent_at': 1000 + number}
 
 
+def journal_rows(store):
+    with store.database() as db:
+        return [tuple(row) for row in db.execute('SELECT * FROM events ORDER BY sequence')]
+
+
 class Reader:
     account = 'owner'
     blocked = False
@@ -161,11 +166,11 @@ class FrontierTests(unittest.TestCase):
             raise SystemExit(73)
         with self.assertRaises(SystemExit):
             engine.step(after_publish=crash)
-        before = engine.store.events(projects=[candidate.PROJECT])['items']
+        before = journal_rows(engine.store)
         engine = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
         self.assertEqual(engine.step()['state'], 'published')
         self.assertEqual(len(reader.reads), 1)
-        self.assertEqual(engine.store.events(projects=[candidate.PROJECT])['items'], before)
+        self.assertEqual(journal_rows(engine.store), before)
         self.assertEqual(engine.status()['prepared_pages'], 0)
 
     def test_authorization_is_rechecked_before_prepared_replay(self):
@@ -326,12 +331,12 @@ class FrontierTests(unittest.TestCase):
         reader.pages[('a', None)] = ([original], False, None)
         with self.assertRaises(SystemExit):
             engine.step(mode='live', after_publish=lambda: (_ for _ in ()).throw(SystemExit(73)))
-        self.assertEqual(len(engine.store.search('회의', projects=[candidate.PROJECT])), 1)
-        before = engine.store.events(projects=[candidate.PROJECT])['items']
+        self.assertEqual(engine.store.search('회의', projects=[candidate.PROJECT]), [])
+        before = journal_rows(engine.store)
         resumed = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
         self.assertEqual(resumed.step(mode='live')['state'], 'published')
         self.assertEqual(resumed.status()['prepared_pages'], 0)
-        self.assertEqual(resumed.store.events(projects=[candidate.PROJECT])['items'], before)
+        self.assertEqual(journal_rows(resumed.store), before)
         self.assertEqual(resumed.step(mode='live')['state'], 'unchanged')
         with resumed.store.database() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
@@ -670,7 +675,8 @@ class MessengerStoreTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory(dir='/private/tmp')
         self.addCleanup(temp.cleanup)
-        self.store = CollectionStore(Path(temp.name))
+        # These checks isolate store transactions with controlled authority.
+        self.store = CollectionStore(Path(temp.name), source_access=lambda *args: True)
         self.target = self.store.register(platform='kakaotalk', original_id='owner', kind='local-db',
             label='local messages', projects=['one'])
         self.record = {'platform': 'kakaotalk', 'original_id': 'room:message',
