@@ -120,6 +120,18 @@ class MessengerContextTests(unittest.TestCase):
         with patch.object(self.reader, 'verify_prepared', side_effect=change):
             with self.assertRaisesRegex(candidate.SourceBlocked, 'frontier_changed'): self.context()
 
+    def test_quiet_checkpoint_progress_does_not_block_the_same_current_source_span(self):
+        verify = self.reader.verify_prepared
+        def advance(payload):
+            verify(payload)
+            with self.engine.database() as db:
+                state = json.loads(db.execute("SELECT frontier FROM rooms WHERE id='a'").fetchone()[0])
+                state['check_cursor'] = 'next-metadata-page'
+                db.execute("UPDATE rooms SET frontier=? WHERE id='a'", (encoded(state).decode(),))
+        before = self.context()['window_id']
+        with patch.object(self.reader, 'verify_prepared', side_effect=advance):
+            self.assertEqual(self.context()['window_id'], before)
+
     def test_head_tampering_cannot_supply_new_context_body_or_timestamp(self):
         with self.engine.database() as db:
             db.execute("UPDATE message_heads SET sent_at=1001 WHERE message='2'")

@@ -691,7 +691,7 @@ class Frontier:
             raise SourceBlocked('messenger_context_authorization_changed')
         with self.database() as db:
             current = db.execute('SELECT frontier FROM rooms WHERE id=?', (room,)).fetchone()
-            if current is None or current['frontier'] != frontier['frontier']:
+            if current is None or self._epoch(json.loads(current['frontier'])) != self._epoch(json.loads(frontier['frontier'])):
                 raise SourceBlocked('messenger_context_frontier_changed')
             for head in heads:
                 current = db.execute('SELECT * FROM message_heads WHERE id=?', (head['id'],)).fetchone()

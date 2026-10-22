@@ -422,16 +422,16 @@ quiet reads remain stable and do not inherit a grant from an old cache entry.
 Common retained-page and current-scope verification is shared with the existing
 protected projection checker.
 
-Sixteen new checks pass, including the question/short-answer pair, context-only
+Seventeen new checks pass, including the question/short-answer pair, context-only
 anchors, cross-page source capabilities, gap/time/room bounds, exact adapter
 readback, collection pause, edited/hidden source, project/account/grant changes,
 expiry during revalidation, tampered timestamps, migration interruption/recovery,
 explicit byte/query budgets and quiet/no-fake-activity behavior. All 38 direct
-consumer modules / 709 Python checks pass in fresh pinned processes. The new
+consumer modules / 710 Python checks pass in fresh pinned processes. The new
 module is also wired into CI as its own fresh process. No semantic-quality or
 whole-app performance improvement is inferred from these checks.
 
-A separate actual canonical Kakao read found 371 current cached room records
+A separate actual canonical Kakao read at `c0817cc…` found 371 current cached room records
 and acquired one page of 50 heads into a new private isolated candidate. One
 selected source message passed current exact-ID context verification, with one
 returned item in the configured time window and zero context-generated events.
@@ -440,6 +440,21 @@ server, send, source-database or app-setting writes. This proves that bounded
 native reader boundary only: adjacent-message behavior is fixture-tested, not
 established by that one-message native span. No Telegram body was acquired. The
 single elapsed observation is retained as execution evidence, not a benchmark.
+
+A follow-up regression reproduced a valid span being blocked when an unchanged
+reconciliation cursor advanced during current-source verification. The final
+check now compares the room's source-observation epoch and the exact selected
+heads; quiet cursor progress alone does not revoke a span. Real source-epoch,
+head or authority changes still block. The earlier native reader receipt belongs
+to `c0817cc…`; the one-line epoch correction has separate controlled regression
+coverage rather than inheriting a new native read claim.
+
+A controlled multi-source probe also keeps an integration condition explicit:
+generic projection reads withhold both sources, each owned frontier reads its
+own source only, and an explicit per-target authority composition reads both.
+Revoking Telegram leaves only the permitted Kakao source without another source
+body call. The main app still lacks that installed composition. Relaxing the
+default denial would hide this missing integration rather than implementing it.
 
 The installed 0.3.218 app remains unchanged. Context reclassification, explicit
 reply/author semantics, UI/MCP/index/embedding consumers, durable source retirement,
