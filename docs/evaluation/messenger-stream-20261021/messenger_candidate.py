@@ -6,6 +6,7 @@ here. A durable prepared page bridges a crash between the two SQLite commits.
 """
 from contextlib import closing, contextmanager
 from pathlib import Path
+from types import MappingProxyType
 import fcntl
 import hashlib
 import json
@@ -26,6 +27,52 @@ PROJECT = 'messenger-evaluation'
 
 class SourceBlocked(RuntimeError):
     pass
+
+
+class MessengerAuthority:
+    """Explicit read-side composition; never discovers/adopts a native account."""
+    def __init__(self, frontiers):
+        if not isinstance(frontiers, (list, tuple)) or not frontiers:
+            raise ValueError('messenger_authority_sources_required')
+        sources, root = {}, None
+        for frontier in frontiers:
+            if not isinstance(frontier, Frontier):
+                raise ValueError('messenger_authority_source_invalid')
+            binding = (frontier.root.absolute(), frontier.platform, frontier.account, frontier.target)
+            if root is not None and root != binding[0]:
+                raise ValueError('messenger_authority_roots_differ')
+            if frontier.target in sources:
+                raise ValueError('messenger_authority_target_ambiguous')
+            root = binding[0]
+            if frontier.target != identity('target-' + frontier.platform, 'local-db:' + frontier.account):
+                raise ValueError('messenger_authority_binding_invalid')
+            sources[frontier.target] = (frontier, binding)
+        self.root, self.sources = root, MappingProxyType(sources)
+
+    def _source(self, target):
+        if not isinstance(target, str):
+            return None
+        entry = self.sources.get(target)
+        if entry is None:
+            return None
+        frontier, binding = entry
+        if (frontier.root.absolute(), frontier.platform, frontier.account, frontier.target) != binding:
+            return None
+        return frontier
+
+    def access(self, target, document, version, metadata):
+        source = self._source(target)
+        return source is not None and source._source_access(target, document, version, metadata) is True
+
+    def revision(self, target):
+        source = self._source(target)
+        return None if source is None else source._source_revision(target)
+
+    def context_window(self, target, room, message, **options):
+        source = self._source(target)
+        if source is None:
+            raise SourceBlocked('messenger_authority_source_unavailable')
+        return source.context_window(room, message, **options)
 
 
 def verify_prepared_items(prepared, observed):

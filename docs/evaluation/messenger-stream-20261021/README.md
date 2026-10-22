@@ -463,3 +463,71 @@ actual installed end-to-end graph/combat journey remain open. Original Pro,
 immutable Gemini and reverse-verification stages are preserved; consequential
 promotion is still externally unvalidated. Private source receipts and native
 content remain under `outputs/messenger-context-20261023/`, outside Git/uploads.
+
+## Explicit shared read authority and retrieval provenance (uninstalled candidate)
+
+M08 composes already configured frontiers through an explicit
+`MessengerAuthority`. The alternative, letting generic read requests discover or
+adopt native accounts, remains rejected for this candidate: request JSON and MCP
+arguments cannot establish consent or trusted readers. The registry binds a
+fixed set of targets to one root/account/platform ownership snapshot. Ambiguous
+targets and different roots are rejected; changed bindings and unknown targets
+withhold. Authority and revisions delegate to the existing canonical guards on
+every read. No account/service is started, switched or implicitly authorized.
+
+The existing `read_action`, `retrieve` and `KnowledgeServer` Python entry points
+accept optional trusted source-access/revision callbacks. The trusted application
+composition passes the registry's root and callbacks together. Old positional
+calls and ordinary CLI/stdio requests retain default denial for protected
+messenger bodies. Non-messenger data keeps its established behavior. This connects
+the candidate to real graph/history/activity, retrieval and serialized MCP paths,
+but does not configure or install that owner in the production app.
+
+The integration tests exposed three previously hidden output defects. A shared
+body could correctly remain visible through Kakao while retrieval still included
+revoked Telegram memberships, relation evidence, or the immutable first
+publisher's authorization metadata. Retrieval now filters source memberships,
+publisher labels used in temporal selection and relationship evidence with the
+same current guards. Relationship endpoints must also remain available. Selected
+messenger `derived_from` evidence contains only the content identity and current
+permitted target references; the original first-publisher metadata, versions,
+pages and raw bytes stay privately retained. This does not delete source history
+or invent a new factual relationship.
+
+Fourteen new controlled tests cover multi-source/default-closed graph reads,
+exact duplicate version preservation, revoked membership/relationship/receipt
+exclusion, temporal publisher scopes, source changes in history/activity/context,
+actual MCP dispatch/serialization, denied JSON authority injection, read-only
+database enforcement, unknown/changed/ambiguous root bindings, one unavailable
+provider with an independently permitted origin, and quiet reads.
+The real retrieval/SQLite/MCP code runs with controlled readers and explicit
+network/embedding-call rejection; no native user corpus or model inference is
+involved. Two leakage regressions and a separate authorization-metadata regression
+were observed before their corrections. The first test attempt also used the
+wrong exception class for SQLite's existing read-only rejection; that fixture
+expectation was corrected without relaxing the database protection. Imported
+fixture classes are not rediscovered as duplicate tests in the final module.
+
+All 39 direct consumer modules / 724 Python checks pass in fresh pinned processes.
+The authority module has its own fresh CI step. A separate native Kakao check
+uses the existing private candidate and revalidates one source message through
+the canonical exact-ID reader. That same document passes the real read API,
+retained-body retrieval and serialized in-process MCP graph dispatch, with one
+entity/node in each path, unchanged activity cursor and no retrieval projection
+file created. The canonical read reports verified read-only/schema state and
+zero server/send/source-DB/app-setting writes. Model-call counts were not
+instrumented in this native probe: an initial combined zero inference is
+explicitly corrected in the separate observation receipt, with original evidence
+preserved. The elapsed observation is not a performance benchmark. This is one
+Kakao source over an isolated store, not a connected installed stdio host. No
+mixed native Telegram/Kakao runtime, installed MCP route, indexing promotion,
+semantic gold, app performance or full privacy
+completion is claimed. Index producers and every alternate cache/SQL consumer,
+current visibility/durable retirement, native consent, all-room scheduling and
+the installed end-to-end path remain separate gates. The application entry
+points still require the actual trusted root/reader bootstrap before production
+use. The original Pro/Gemini/reverse audit and full 18/ST01–14/Cursor holds remain.
+
+Private evidence: `outputs/messenger-authority-20261023/`. Source/tests, exact-head
+CI, predecessor receipts and installed-artifact preservation are recorded
+separately; no private native content is included in the scoped audit delta.

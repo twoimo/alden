@@ -24,16 +24,17 @@ class CallToken(AbortToken):
 class KnowledgeServer(StdioServer):
     server_name = 'alden-readonly-knowledge'
 
-    def __init__(self, root, allowed_projects, *, tool_timeout=10):
+    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None):
         super().__init__(None, tool_timeout=tool_timeout)
         self.root = Path(root)
+        self.source_access, self.source_revision = source_access, source_revision
         self.allowed = frozenset(allowed_projects)
         if not self.allowed or len(self.allowed) > 16 or any(not isinstance(p, str) or not p or len(p) > 128 for p in self.allowed):
             raise ValueError('knowledge_startup_scope_required')
         if not self.root.is_absolute() or '..' in self.root.parts:
             raise ValueError('knowledge_startup_path_invalid')
         # Opening existing data validates paths/schema without creating or migrating it.
-        CollectionStore.open_existing(self.root)
+        CollectionStore.open_existing(self.root, source_access=source_access, source_revision=source_revision)
 
     def tool_catalog(self):
         common = {'projects': {'type': 'array', 'minItems': 1, 'maxItems': 16,
@@ -42,7 +43,7 @@ class KnowledgeServer(StdioServer):
         result = []
         for name, extras, description in [
             ('alden_knowledge_search', {'query': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
-             'Retrieve retained collection versions and explicit relations with exact provenance. No writes, model loads or account access.'),
+             'Retrieve retained versions and explicit relations with exact provenance. Read-only; explicitly supplied source authority is rechecked.'),
             ('alden_knowledge_graph', {'focus': {'type': 'string', 'maxLength': 256}},
              'Read bounded stored graph nodes and explicit relationships in the allowed project scope.'),
             ('alden_knowledge_history', {'after': {'type': 'integer', 'minimum': 0}},
@@ -86,7 +87,8 @@ class KnowledgeServer(StdioServer):
             import auto_reply_knowledge_graph as kg
             with kg.embedding_abort_scope(token):
                 result = retrieve(self.root, args['query'], projects=args['projects'],
-                                  max_entities=args.get('limit', 6), cancelled=cancelled)
+                                  max_entities=args.get('limit', 6), cancelled=cancelled,
+                                  source_access=self.source_access, source_revision=self.source_revision)
         else:
             action = 'collection-graph' if name.endswith('graph') else 'collection-history'
             options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
@@ -94,7 +96,8 @@ class KnowledgeServer(StdioServer):
                 options['after'] = args['after']
             if 'focus' in args:
                 options['focus'], options['hops'] = args['focus'], 1
-            result = read_action(self.root, action, json.dumps(options))
+            result = read_action(self.root, action, json.dumps(options),
+                                 source_access=self.source_access, source_revision=self.source_revision)
             if action == 'collection-history':
                 # The UI catalog is global; MCP exposes only this request's projects.
                 requested = frozenset(args['projects'])

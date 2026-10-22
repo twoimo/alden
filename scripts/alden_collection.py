@@ -1663,14 +1663,15 @@ class CollectionStore:
                     "refresh_required": refresh_required}
 
 
-def read_action(state_root: Path, action: str, query: str | None = None) -> dict:
+def read_action(state_root: Path, action: str, query: str | None = None, *,
+                source_access=None, source_revision=None) -> dict:
     """Bounded read-only application boundary; never creates a store on lookup."""
     if action not in {"collection-projects", "collection-history", "collection-graph"}:
         raise ValueError("collection_action_invalid")
     options = json.loads(query) if query else {}
     if not isinstance(options, dict):
         raise ValueError("collection_query_invalid")
-    store = CollectionStore.open_existing(state_root)
+    store = CollectionStore.open_existing(state_root, source_access=source_access, source_revision=source_revision)
     if store is None:
         return {"ok": True, "items": [], "nodes": [], "edges": [], "projects": [], "next": None, "state": "not_configured"}
     known = [p["project"] for p in store.projects()]

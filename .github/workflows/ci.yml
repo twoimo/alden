@@ -296,6 +296,9 @@ jobs:
       - name: Test bounded messenger context in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_context -v
 
+      - name: Test messenger authority composition in a fresh process
+        run: python3 -B -m unittest tests.test_alden_messenger_authority -v
+
       # The reader enforces a process peak RSS budget. Earlier test modules
       # must not consume the memory allowance of this independent CLI process.
       - name: Test bounded affinity in a fresh process

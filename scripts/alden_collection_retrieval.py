@@ -149,6 +149,7 @@ def _verified_source(db, store, row, projects):
         m.current_version AS source_version FROM memberships m
         JOIN target_projects p ON p.target_id=m.target_id
         WHERE m.document_id=? AND m.current_version=? AND m.availability='available'
+        AND alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
         AND p.permission!='denied' AND p.project IN (''' + marks + ''')
         ORDER BY p.project,m.target_id LIMIT 257''', (row['id'], row['version'], *projects))]
     if len(memberships) > MAX_SOURCE_MEMBERSHIPS:
@@ -421,7 +422,8 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
 
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              candidate_limit=40, max_context_chars=8000, rrf_k=60, rrf_weights=None,
-             cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None):
+             cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None,
+             source_access=None, source_revision=None):
     import auto_reply_knowledge_graph as kg
     projects = _scope(projects)
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1024:
@@ -433,7 +435,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         raise ValueError('collection_candidate_budget')
     if also is not None and (not isinstance(also,(list,tuple)) or len(also)>40 or any(not isinstance(i,str) for i in also)):
         raise ValueError('collection_explicit_ids_invalid')
-    store = CollectionStore.open_existing(Path(root))
+    store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
     if store is None:
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
     source_rows = _rows(store, projects, cancelled, time_from, time_to)
@@ -527,11 +529,14 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 marks=','.join('?' for _ in projects)
                 publisher_scopes={}
                 for target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
-                    WHERE m.document_id=? AND m.availability='available' AND EXISTS(SELECT 1 FROM target_projects p
+                    WHERE m.document_id=? AND m.availability='available'
+                    AND alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
+                    AND EXISTS(SELECT 1 FROM target_projects p
                     WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,*projects)):
                     publisher_scopes.setdefault(label,[]).append(target_id)
                 conflict=source.execute('''SELECT r.source,r.target FROM relations r WHERE r.active=1 AND r.type IN ('conflicts','contradicts')
-                    AND (r.source=? OR r.target=?) AND EXISTS(SELECT 1 FROM target_projects p
+                    AND (r.source=? OR r.target=?) AND ''' + store._source_relation_scope() + '''
+                    AND EXISTS(SELECT 1 FROM target_projects p
                     WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,*projects))
                 temporal_records.append({'id':identity,'name':row['label'],'aliases':aliases+list(publisher_scopes),'mention_scopes':publisher_scopes,
                     'has_conflict':any(a in eligible and b in eligible for a,b in conflict),
@@ -564,6 +569,13 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             row = eligible[document_id]
             record, metadata, memberships = _verified_source(db, store, row, projects)
             source_projects = list(dict.fromkeys(m['project'] for m in memberships))
+            derived = metadata.get('source', {})
+            if isinstance(derived, dict) and derived.get('kind') == 'messenger-exact-content-provenance':
+                # Immutable first-publisher metadata is retained recovery data,
+                # not another source's current authority or consent receipt.
+                derived = {'kind': derived['kind'], 'content_hash': derived.get('content_hash'),
+                    'current_source_targets': sorted({m['target_id'] for m in memberships}),
+                    'scope': 'current_verified_source_memberships; historical first-publisher metadata retained privately'}
             proof = {'fact_type': 'entity', 'entity_id': document_id, 'note_id': document_id,
                      'source_kind': 'collected_source', 'source_version': row['version'],
                      'note_hash': row['raw_sha256'], 'original_id': row['original_id'],
@@ -574,7 +586,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                      'body_source': row['body_source'],
                      'lexical_match': ('korean_literal_substring' if document_id in literal_ids else
                                        'bm25_token' if document_id in token_ids else None),
-                     'derived_from': metadata.get('source', {}), 'truth_status': 'source_record; not independently verified',
+                     'derived_from': derived, 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
             evidence_class = content_evidence_class(metadata, row['body'], source=record,
                                                    body_source=row['body_source'])
@@ -630,6 +642,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 JOIN memberships sm ON sm.target_id=r.target_id AND sm.document_id=r.source
                 JOIN memberships tm ON tm.target_id=r.target_id AND tm.document_id=r.target
                 WHERE r.active=1 AND r.source=?
+                AND sm.availability='available' AND tm.availability='available'
+                AND ''' + store._source_relation_scope() + '''
                 AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
                 AND p.permission!='denied' AND p.project IN (''' + marks + ')) ORDER BY r.id',
                 (chosen[0], *projects))
