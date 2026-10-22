@@ -189,9 +189,21 @@ and historical page bytes remain compatible; an old prepared page can finish at
 epoch zero, and old heads acquire fingerprints on observation without rewriting
 their body versions. This is not a consent lease or a scope-rebasing mechanism.
 
+A further controlled counterexample at `a82c8db…` found a cross-room commit gap:
+after a restored origin's store commit but before its head commit, another room
+could withdraw the same body. Replaying the completed store run then left one
+candidate head but zero search matches. Indexed prepared-page content claims now
+order operations affecting either the old or new candidate hash behind an
+earlier pending page. Unrelated content can continue in other rooms. Claim-table
+creation and legacy pending-page population share one transaction, so interrupted
+migration cannot leave an empty, apparently migrated table. The two failing
+legacy/current subcases, interrupted migration, shared-content waiting, unrelated
+room progress and final recovery are checked with controlled readers and real
+isolated SQLite. This is not a proof for writers outside this frontier.
+
 Verification at base `42c648e6a45e2a17eeeaef24e45a37d38fab31a1`:
 
-- 11 new behavioral checks; 50 frontier/store/adapter checks within 236 affected
+- 12 new behavioral checks; 51 frontier/store/adapter checks within 237 affected
   Python checks passed under the pinned runtime with bytecode writes disabled.
   The original two-failure baseline and intermediate failures remain preserved.
 - A new, isolated replay of the retained 63 pages / 2,514 heads reproduced 535

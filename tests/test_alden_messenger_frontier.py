@@ -471,6 +471,60 @@ class FrontierTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT frontier FROM rooms').fetchone()[0], before)
         self.assertEqual(engine.store.events(projects=[candidate.PROJECT])['items'], events)
 
+    def test_pending_duplicate_origin_recovery_orders_shared_content_but_not_other_rooms(self):
+        body = '회의 자료를 다음 주 화요일까지 검토하기로 결정했습니다.'
+        for migrate_claims in (False, True):
+            with self.subTest(legacy_claims=migrate_claims):
+                root = candidate.create_root(self.root / ('cross-room-' + str(migrate_claims)))
+                reader = Reader({('a',None):([item(1,body)],False,None),
+                                 ('b',None):([item(2,body)],False,None),
+                                 ('c',None):([item(3,'네')],False,None)})
+                engine = candidate.Frontier(root, 'kakaotalk', 'owner', reader)
+                engine.seed({'account_id':'owner','complete':True,
+                             'rooms':[{'id':room,'title':room} for room in ('a','b','c')]})
+                engine.step(); engine.step(); engine.step()
+                reader.pages[('a',None)] = ([item(1,visible=False)],False,None)
+                engine.step(mode='live'); engine.step(mode='live'); engine.step(mode='live')
+                reader.pages[('a',None)] = ([item(1,body)],False,None)
+                with self.assertRaises(SystemExit):
+                    engine.step(mode='live', after_publish=lambda: (_ for _ in ()).throw(SystemExit(73)))
+                if migrate_claims:
+                    with engine.database() as db:
+                        db.execute('DROP TABLE IF EXISTS page_content_claims')
+                    claim_page = candidate.Frontier._claim_page_content
+                    def interrupt_migration(*args):
+                        claim_page(*args)
+                        raise RuntimeError('controlled_claim_migration_interruption')
+                    with patch.object(candidate.Frontier, '_claim_page_content', side_effect=interrupt_migration, autospec=True):
+                        with self.assertRaisesRegex(RuntimeError, 'controlled_claim_migration_interruption'):
+                            candidate.Frontier(root, 'kakaotalk', 'owner', reader)
+                    with engine.database() as db:
+                        self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='page_content_claims'").fetchone())
+                engine = candidate.Frontier(root, 'kakaotalk', 'owner', reader)
+                denied = {'a'}
+                def authorize(room):
+                    if room in denied:
+                        raise candidate.SourceBlocked('controlled_room_authorization_expired')
+                with patch.object(reader, 'authorize', side_effect=authorize):
+                    self.assertEqual(engine.step(mode='live')['state'], 'blocked')
+                    reader.pages[('b',None)] = ([item(2,visible=False)],False,None)
+                    blocked = engine.step(mode='live')
+                    self.assertEqual(blocked['state'], 'blocked')
+                    self.assertEqual(blocked['reason'], 'messenger_shared_content_pending')
+                    reader.pages[('c',None)] = ([item(3,'프로젝트 검토 일정은 금요일 오후 4시로 확정되었습니다.')],False,None)
+                    independent = engine.step(mode='live')
+                    self.assertEqual((independent['room_id'], independent['state']), ('c','published'))
+                    denied.clear()
+                    with engine.database() as db:
+                        db.execute('UPDATE rooms SET retry_at=0')
+                    self.assertEqual(engine.step(mode='live')['room_id'], 'a')
+                    self.assertEqual(engine.step(mode='live')['room_id'], 'b')
+                self.assertEqual(len(engine.store.search('화요일', projects=[candidate.PROJECT])), 1)
+                self.assertEqual(len(engine.store.search('프로젝트', projects=[candidate.PROJECT])), 1)
+                self.assertEqual(engine.status()['prepared_pages'], 0)
+                with engine.store.database() as db:
+                    self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 2)
+
     def test_empty_room_remains_live_and_collects_its_first_arrival(self):
         engine, reader = self.frontier({('a', None): ([], False, None)})
         engine.step()

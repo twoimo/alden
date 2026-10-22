@@ -225,6 +225,15 @@ class Frontier:
                 raise ValueError('messenger_account_changed')
             if not binding:
                 db.execute('INSERT INTO binding VALUES(?)', (account,))
+            if not db.in_transaction:
+                db.execute('BEGIN IMMEDIATE')
+            claims_exist = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='page_content_claims'").fetchone()
+            db.execute('''CREATE TABLE IF NOT EXISTS page_content_claims(
+                page TEXT NOT NULL,content_hash TEXT NOT NULL,PRIMARY KEY(page,content_hash))''')
+            db.execute('CREATE INDEX IF NOT EXISTS content_claim_pages ON page_content_claims(content_hash,page)')
+            if not claims_exist:
+                for pending in db.execute("SELECT id,room,payload FROM pages WHERE state='prepared'"):
+                    self._claim_page_content(db, pending['id'], pending['room'], json.loads(pending['payload'])['items'])
         self.store = CollectionStore(root)
         self.target = identity('target-' + platform, 'local-db:' + account)
         with self.store.database() as db:
@@ -296,6 +305,18 @@ class Frontier:
                 return False
         return True
 
+    def _claim_page_content(self, db, job, room, items):
+        affected = set()
+        for item in items:
+            original, _, triage = self._observation(room, item)
+            previous = db.execute('SELECT content_hash,state FROM message_heads WHERE id=?', (original,)).fetchone()
+            if previous and previous['state'] == 'candidate':
+                affected.add(previous['content_hash'])
+            if triage.state == 'candidate':
+                affected.add(triage.content_hash)
+        db.executemany('INSERT OR IGNORE INTO page_content_claims VALUES(?,?)',
+                       [(job, content_hash) for content_hash in sorted(affected)])
+
     def _prepare(self, room, mode, page):
         if page.get('account_id') != self.account or page.get('room_id') != room['id']:
             raise ValueError('messenger_page_scope_mismatch')
@@ -353,13 +374,16 @@ class Frontier:
                 raise SourceBlocked('messenger_prepare_checkpoint_changed')
             # A -> B -> A is a new observation, even though A's content and
             # cursor match an old completed page. Stable observations reuse it.
-            state['source_epoch'] = epoch + (not self._heads_match(db, room['id'], selected))
+            changed = not self._heads_match(db, room['id'], selected)
+            state['source_epoch'] = epoch + 1 if changed else epoch
             payload = {'account': self.account, 'platform': self.platform, 'room': room['id'],
                        'items': selected, 'mode': mode, 'before': before, 'reader_scope': page.get('scope'),
                        'quality_policy': POLICY, 'source_epoch': state['source_epoch']}
             job = hashlib.sha256(encoded([payload, state])).hexdigest()
             db.execute('INSERT OR IGNORE INTO pages VALUES(?,?,?,?,?)',
                        (job, room['id'], encoded(payload).decode(), encoded(state).decode(), 'prepared'))
+            if changed:
+                self._claim_page_content(db, job, room['id'], selected)
         return job
 
     def _publish(self, job, *, cancelled, after_publish, revalidate=False):
@@ -392,6 +416,14 @@ class Frontier:
             unchanged = row['state'] == 'complete' or not legacy and following == epoch
             if unchanged and not self._heads_match(db, row['room'], payload['items']):
                 raise SourceBlocked('messenger_prepared_observation_conflict')
+            if not unchanged and db.execute('''SELECT 1 FROM page_content_claims mine
+                JOIN page_content_claims earlier ON earlier.content_hash=mine.content_hash
+                JOIN pages p ON p.id=earlier.page
+                WHERE mine.page=? AND p.state='prepared'
+                  AND p.rowid<(SELECT rowid FROM pages WHERE id=?) LIMIT 1''', (job, job)).fetchone():
+                # A pending store commit must reach its origin-head commit
+                # before another room can invalidate that same content's run.
+                raise SourceBlocked('messenger_shared_content_pending')
         self._authorize_publication(payload)
         if revalidate and row['state'] == 'prepared':
             self.reader.verify_prepared(payload)
