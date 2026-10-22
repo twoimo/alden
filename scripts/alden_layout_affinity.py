@@ -123,6 +123,7 @@ class ReadTransactions:
         store.blobs, store.locks = self.folder / "sources", self.folder / "locks"
         store._owner = self
         store.source_access = None
+        store.source_revision = None
         self.verify_source_access = store._install_source_access(self.collection)
         self.store = store
         cache_path = self.folder / "retrieval.sqlite3"

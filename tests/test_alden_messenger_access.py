@@ -91,6 +91,24 @@ class MessengerAccessTests(unittest.TestCase):
                 self.store.source_access = callback
                 self.assertEqual(self.store.search('revocable', projects=['project']), [])
 
+    def test_invalid_configured_source_revision_fails_closed(self):
+        self.store.source_access = lambda *args: True
+        for revision in (True, lambda *args: None, lambda *args: 'not-a-digest',
+                         lambda *args: (_ for _ in ()).throw(RuntimeError('scope unavailable'))):
+            with self.subTest(revision=revision):
+                self.store.source_revision = revision
+                self.assertEqual(self.store.search('revocable', projects=['project']), [])
+
+    def test_scope_change_during_a_metadata_only_read_prevents_returning_a_stale_checkpoint(self):
+        calls = 0
+        def revision(target):
+            nonlocal calls
+            calls += 1
+            return ('a' if calls == 1 else 'b') * 64
+        self.store.source_revision = revision
+        with self.assertRaisesRegex(RuntimeError, 'collection_source_authorization_changed'):
+            self.store.activity_page(projects=['project'])
+
     def test_withholding_retains_versions_raw_bytes_and_current_memberships(self):
         with self.store.database() as db:
             before = [tuple(row) for row in db.execute('SELECT * FROM memberships')]
@@ -136,6 +154,16 @@ class MessengerAccessTests(unittest.TestCase):
 
 
 class FrontierAccessTests(unittest.TestCase):
+    def add_kakao_origin(self):
+        from tests.test_alden_messenger_frontier import Reader, item
+        text = '회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.'
+        reader = Reader({('k',None):([item(1,text)],False,None)})
+        reader.account = 'controlled-kakao-owner'
+        engine = self.candidate.Frontier(self.root, 'kakaotalk', reader.account, reader)
+        engine.seed({'account_id':reader.account,'complete':True,'rooms':[{'id':'k','title':'controlled'}]})
+        engine.step()
+        return reader, engine
+
     def setUp(self):
         from tests.test_alden_messenger_frontier import candidate
         self.candidate = candidate
@@ -144,6 +172,7 @@ class FrontierAccessTests(unittest.TestCase):
         self.denied, self.body_calls = set(), []
         self.scopes = {room:{'since':'2026-10-20','until':'2026-10-23'} for room in ('a','b')}
         self.account = 'owner'
+        self.text = '회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.'
         self.grants = {room:{'controlled_authorization_revision':'fixture-v1'} for room in ('a','b')}
         def invoke(args):
             if args == ['probe']:
@@ -152,7 +181,7 @@ class FrontierAccessTests(unittest.TestCase):
             room = args[args.index('--peer-id')+1]
             return {'status':'ok','owner_id':self.account,'peer_id':room,'content_returned':True,
                     'more':False,'messages':[{'id':room,'peer_id':room,'timestamp':1792551600,
-                    'text':'회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.'}]}
+                    'text':self.text}]}
         def authorize(owner, room, since, until):
             if room in self.denied:
                 raise candidate.SourceBlocked('telegram_context_consent_expired')
@@ -182,6 +211,58 @@ class FrontierAccessTests(unittest.TestCase):
         with self.engine.database() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM message_heads WHERE state='candidate'").fetchone()[0], 2)
 
+    def test_revocation_changes_history_and_activity_scope_without_fake_events(self):
+        store, projects = self.engine.store, [self.candidate.PROJECT]
+        history = store.recent_events(projects=projects)
+        checkpoint = store.activity_page(projects=projects)
+        self.assertTrue(history['items'])
+        with store.database() as db:
+            count = db.execute('SELECT count(*) FROM events').fetchone()[0]
+        before = len(self.body_calls)
+        self.denied.update(('a','b'))
+        current = store.recent_events(projects=projects, after=history['cursor'], stream_id=history['stream_id'])
+        self.assertTrue(current['reset'])
+        self.assertNotEqual(current['stream_id'], history['stream_id'])
+        self.assertEqual(current['items'], [])
+        self.assertEqual(current['summary']['total'], 0)
+        activity = store.activity_page(projects=projects, after=checkpoint['cursor'], stream_id=checkpoint['stream_id'])
+        self.assertTrue(activity['reset'])
+        self.assertEqual(activity['items'], [])
+        self.assertEqual(store.graph_page(projects=projects)['activity_checkpoint']['stream_id'], current['stream_id'])
+        self.assertEqual(len(self.body_calls), before)
+        with store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], count)
+
+    def test_new_knowledge_keeps_authority_scope_and_delivers_real_activity(self):
+        store, projects = self.engine.store, [self.candidate.PROJECT]
+        checkpoint = store.activity_page(projects=projects)
+        self.text = '회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.'
+        self.assertEqual(self.engine.step(mode='live')['state'], 'published')
+        page = store.activity_page(projects=projects, after=checkpoint['cursor'], stream_id=checkpoint['stream_id'])
+        self.assertFalse(page['reset'])
+        self.assertEqual(page['stream_id'], checkpoint['stream_id'])
+        self.assertEqual([item['kind'] for item in page['items']], ['added'])
+        self.assertTrue(page['items'][0]['origin'].endswith(':live'))
+
+    def test_withheld_source_retirement_refreshes_caches_without_exposing_a_receipt(self):
+        from tests.test_alden_messenger_frontier import item
+        reader, engine = self.add_kakao_origin()
+        projects = [self.candidate.PROJECT]
+        before = engine.store.recent_events(projects=projects, target_id=engine.target)
+        self.assertTrue(before['items'])
+        reader.pages[('k',None)] = ([item(1,visible=False)],False,None)
+        engine.step(mode='live')
+        current = engine.store.recent_events(projects=projects, target_id=engine.target,
+            after=before['cursor'], stream_id=before['stream_id'])
+        self.assertTrue(current['reset'])
+        self.assertEqual(current['items'], [])
+        activity = engine.store.activity_page(projects=projects, target_id=engine.target,
+            after=before['cursor'], stream_id=before['stream_id'])
+        self.assertFalse(activity['reset'])
+        self.assertEqual(activity['items'], [])
+        self.assertTrue(activity['refresh_required'])
+        self.assertGreater(activity['cursor'], before['cursor'])
+
     def test_current_account_and_date_scope_changes_cannot_reuse_old_origin_authority(self):
         for room in self.scopes:
             self.scopes[room] = {'since':'2026-10-24','until':'2026-10-25'}
@@ -207,6 +288,37 @@ class FrontierAccessTests(unittest.TestCase):
         with self.engine.store.database() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], versions)
             self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], events)
+
+    def test_shared_version_uses_each_current_target_origin_instead_of_first_publisher_account(self):
+        reader, other = self.add_kakao_origin()
+        self.denied.update(('a','b'))
+        def access(*args):
+            return self.engine._source_access(*args) or other._source_access(*args)
+        store = CollectionStore.open_existing(self.root, source_access=access)
+        result = store.search('회의', projects=[self.candidate.PROJECT])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['metadata']['source']['platform'], 'telegram')
+        graph = store.graph_page(projects=[self.candidate.PROJECT])
+        self.assertEqual(graph['nodes'][0]['source_target'], other.target)
+        self.assertEqual({c['target_id'] for c in graph['nodes'][0]['source_contexts']}, {other.target})
+        with store.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)
+        reader.blocked = True
+        self.assertEqual(store.search('회의', projects=[self.candidate.PROJECT]), [])
+
+    def test_a_valid_page_checksum_does_not_authorize_another_account_payload(self):
+        import hashlib
+        from alden_collection import encoded
+        _, other = self.add_kakao_origin()
+        self.assertEqual(len(other.store.search('회의', projects=[self.candidate.PROJECT])), 1)
+        with other.database() as db:
+            row = db.execute('SELECT p.* FROM pages p JOIN message_heads h ON h.page=p.id').fetchone()
+            payload = json.loads(row['payload']);payload['account'] = 'different-account'
+            job = hashlib.sha256(encoded([payload,json.loads(row['next_frontier'])])).hexdigest()
+            db.execute('INSERT INTO pages VALUES(?,?,?,?,?)',
+                       (job,row['room'],encoded(payload).decode(),row['next_frontier'],'complete'))
+            db.execute('UPDATE message_heads SET page=?', (job,))
+        self.assertEqual(other.store.search('회의', projects=[self.candidate.PROJECT]), [])
 
 
 if __name__ == '__main__':

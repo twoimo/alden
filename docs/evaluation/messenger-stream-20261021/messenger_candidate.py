@@ -58,6 +58,9 @@ class KakaoReader:
         # read-only transaction and withholds hidden source fields at SQL read.
         self.identity()
 
+    def authorization_scope(self):
+        return {'account': self.identity(), 'policy': 'canonical-current-account'}
+
     def catalog(self):
         account = self.identity()
         result = self.canonical.snapshot(catalog_only=True)
@@ -145,6 +148,18 @@ class TelegramReader:
         if isinstance(authorization, dict) and authorization:
             scope['authorization_sha256'] = hashlib.sha256(encoded(authorization)).hexdigest()
         return scope
+
+    def authorization_scope(self):
+        account, rooms = self.identity(), []
+        for room in sorted(self.scopes):
+            try:
+                scope = self.authorize(room)
+            except SourceBlocked:
+                scope = {'state': 'withheld'}
+            rooms.append([room, scope])
+        if self.identity() != account:
+            raise SourceBlocked('telegram_account_changed_during_authorization')
+        return {'account': account, 'rooms': rooms}
 
     def page(self, room, cursor):
         scope = self.authorize(room)
@@ -238,7 +253,7 @@ class Frontier:
             if not claims_exist:
                 for pending in db.execute("SELECT id,room,payload FROM pages WHERE state='prepared'"):
                     self._claim_page_content(db, pending['id'], pending['room'], json.loads(pending['payload'])['items'])
-        self.store = CollectionStore(root, source_access=self._source_access)
+        self.store = CollectionStore(root, source_access=self._source_access, source_revision=self._source_revision)
         self.target = identity('target-' + platform, 'local-db:' + account)
         with self.store.database() as db:
             present = db.execute('SELECT 1 FROM targets WHERE id=?', (self.target,)).fetchone()
@@ -515,12 +530,36 @@ class Frontier:
             if old_scope.get('authorization_sha256') != authorization.get('authorization_sha256'):
                 raise SourceBlocked('telegram_prepared_authorization_changed')
 
+    def _source_revision(self, target):
+        if target != self.target:
+            return None
+        account = self.reader.identity()
+        if account != self.account:
+            return hashlib.sha256(encoded(['account_changed', self.account])).hexdigest()
+        scope = getattr(self.reader, 'authorization_scope', None)
+        if callable(scope):
+            state = scope()
+        else:
+            # Custom evaluation readers have no batch capability. Native
+            # readers provide metadata-only scope snapshots above.
+            with self.database() as db:
+                rooms = [row[0] for row in db.execute('SELECT id FROM rooms ORDER BY id')]
+            state = []
+            for room in rooms:
+                try:
+                    authorization = self.reader.authorize(room)
+                except SourceBlocked:
+                    authorization = {'state': 'withheld'}
+                state.append([room, authorization])
+        if self.reader.identity() != account:
+            raise SourceBlocked('messenger_account_changed_during_authorization')
+        return hashlib.sha256(encoded([self.platform, account, state])).hexdigest()
+
     def _source_access(self, target, document, version, metadata):
         """Current origin authority is required even when collection is stopped."""
         source = metadata.get('source', {})
         if (target != self.target or not isinstance(source, dict)
-            or source.get('kind') != 'messenger-exact-content-provenance'
-            or source.get('account_id') != self.account or source.get('platform') != self.platform):
+            or source.get('kind') != 'messenger-exact-content-provenance'):
             return False
         content_hash = source.get('content_hash')
         if (not isinstance(content_hash, str) or not re.fullmatch(r'[0-9a-f]{64}', content_hash)
@@ -539,6 +578,11 @@ class Frontier:
                     continue
                 payload = json.loads(origin['payload'])
                 if hashlib.sha256(encoded([payload, json.loads(origin['next_frontier'])])).hexdigest() != origin['page']:
+                    return False
+                # A deduplicated version retains its first publisher metadata.
+                # Authority belongs to this target's own account and page.
+                if (payload.get('account') != self.account or payload.get('platform') != self.platform
+                    or payload.get('room') != origin['room']):
                     return False
                 if payload.get('quality_policy') != POLICY:
                     continue

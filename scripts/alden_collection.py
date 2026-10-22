@@ -335,8 +335,9 @@ class TargetBusy(RuntimeError):
 
 
 class CollectionStore:
-    def __init__(self, state_root: Path, *, source_access=None):
+    def __init__(self, state_root: Path, *, source_access=None, source_revision=None):
         self.source_access = source_access
+        self.source_revision = source_revision
         self.read_only = False
         self.schema = SCHEMA
         self.root = safe_directory(state_root / "knowledge" / "collection")
@@ -481,7 +482,7 @@ class CollectionStore:
             db.execute('CREATE INDEX IF NOT EXISTS event_target_sequence ON events(target_id,sequence)')
 
     @classmethod
-    def open_existing(cls, state_root: Path, *, source_access=None):
+    def open_existing(cls, state_root: Path, *, source_access=None, source_revision=None):
         path = state_root.absolute() / "knowledge" / "collection" / "collection.sqlite3"
         if not path.exists():
             return None
@@ -489,6 +490,7 @@ class CollectionStore:
             raise ValueError("collection_path_symlink")
         store = cls.__new__(cls)
         store.source_access = source_access
+        store.source_revision = source_revision
         store.read_only = True
         store.path, store.root = path, path.parent
         store.blobs, store.locks = store.root / "sources", store.root / "locks"
@@ -500,7 +502,7 @@ class CollectionStore:
         return store
 
     def _install_source_access(self, db):
-        protected, decisions = None, {}
+        protected, decisions, scopes = None, {}, {}
         def guarded_targets():
             nonlocal protected
             if protected is None:
@@ -512,9 +514,28 @@ class CollectionStore:
                 return callable(self.source_access) and self.source_access(*key, json.loads(metadata)) is True
             except Exception:
                 return False
+        def current_scope(target):
+            revision = getattr(self, 'source_revision', None)
+            if revision is None:
+                return 'unversioned' if callable(getattr(self, 'source_access', None)) else 'withheld'
+            if not callable(revision):
+                return 'unavailable'
+            try:
+                value = revision(target)
+                return value if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) else 'unavailable'
+            except Exception:
+                return 'unavailable'
+        def source_scope(target):
+            if target not in guarded_targets():
+                return None
+            if target not in scopes:
+                scopes[target] = current_scope(target)
+            return scopes[target]
         def source_allowed(target, document, version):
             if target not in guarded_targets():
                 return 1
+            if source_scope(target) == 'unavailable':
+                return 0
             key = (target, document, version)
             if key not in decisions:
                 row = db.execute('SELECT metadata FROM versions WHERE id=? AND document_id=?', (version, document)).fetchone()
@@ -523,7 +544,11 @@ class CollectionStore:
             return int(decisions[key][1])
         db.create_function('alden_source_allowed', 3, source_allowed)
         db.create_function('alden_has_source_guards', 0, lambda: int(bool(guarded_targets())))
+        db.create_function('alden_source_scope', 1, source_scope)
         def verify():
+            for target, value in scopes.items():
+                if current_scope(target) != value:
+                    raise RuntimeError('collection_source_authorization_changed')
             for key, (metadata, allowed) in decisions.items():
                 if allowed and not check_source(key, metadata):
                     raise RuntimeError('collection_source_authorization_changed')
@@ -1494,12 +1519,18 @@ class CollectionStore:
             clauses.append("(t.label LIKE ? OR v.label LIKE ?)");args += ["%"+query+"%"]*2
         with self.database() as db:
             checkpoint, _, scope, scope_args = self._activity_scope(db, projects, target_id, platform)
+            guarded = bool(db.execute('SELECT alden_has_source_guards()').fetchone()[0])
             reset = (stream_id is not None and stream_id != checkpoint['stream_id']
                      or after is not None and after > checkpoint['cursor'])
+            if not reset and after is not None and guarded:
+                reset = bool(db.execute("""SELECT 1 FROM events e JOIN targets t ON t.id=e.target_id
+                    JOIN runs r ON r.id=e.run_id WHERE """ + scope + """ AND e.sequence>? AND e.sequence<=?
+                    AND t.platform IN ('kakaotalk','telegram') AND e.stage='stored' AND r.state='complete'
+                    AND json_extract(e.details,'$.change')='removed' LIMIT 1""",
+                    (*scope_args, after, checkpoint['cursor'])).fetchone())
             if reset:
                 before = after = None
             where = " AND ".join([scope, *clauses])
-            guarded = bool(db.execute('SELECT alden_has_source_guards()').fetchone()[0])
             if guarded:
                 where += " AND alden_source_allowed(e.target_id,e.document_id,e.version)=1"
             args = [*scope_args, *args]
@@ -1563,9 +1594,14 @@ class CollectionStore:
           AND p.project IN (""" + marks + """ ) AND (? IS NULL OR p.target_id=?)
           AND (? IS NULL OR t.platform=?))"""
         args = [*projects, target_id, target_id, platform, platform]
+        allowed = db.execute("SELECT DISTINCT p.target_id FROM target_projects p JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied' AND p.project IN (" + marks + ") AND (? IS NULL OR p.target_id=?) AND (? IS NULL OR t.platform=?) ORDER BY p.target_id", args).fetchall()
+        source_scopes = [(target[0], db.execute('SELECT alden_source_scope(?)', (target[0],)).fetchone()[0])
+                         for target in allowed]
+        source_scopes = [value for value in source_scopes if value[1] is not None]
+        if source_scopes:
+            generation = identity('stream', encoded([generation, source_scopes]).decode())
         # Endpoints need two bounded index lookups, not a full MIN+MAX scan.
         if db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='event_target_sequence'").fetchone():
-            allowed = db.execute("SELECT DISTINCT p.target_id FROM target_projects p JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied' AND p.project IN (" + marks + ") AND (? IS NULL OR p.target_id=?) AND (? IS NULL OR t.platform=?)", args).fetchall()
             starts, ends = [], []
             for target in allowed:
                 first_scoped = db.execute("SELECT sequence FROM events WHERE target_id=? ORDER BY sequence LIMIT 1", (target[0],)).fetchone()
@@ -1607,19 +1643,24 @@ class CollectionStore:
                         "stream_id": generation, "reset": True, "has_more": False}
             rows = db.execute("""SELECT e.*,r.origin,r.state AS run_state FROM events e
               JOIN targets t ON t.id=e.target_id JOIN runs r ON r.id=e.run_id WHERE """ + where +
-              " AND e.sequence>? AND alden_source_allowed(e.target_id,e.document_id,e.version)=1 ORDER BY e.sequence LIMIT ?", (*args, after, limit+1)).fetchall()
-            items = []
+              " AND e.sequence>? ORDER BY e.sequence LIMIT ?", (*args, after, limit+1)).fetchall()
+            items, refresh_required = [], False
             for row in rows[:limit]:
                 details = json.loads(row["details"])
                 if (row["stage"] != "stored" or row["run_state"] != "complete"
                     or details.get("change") not in {"added", "revised", "removed", "relations_changed"}):
+                    continue
+                if not db.execute('SELECT alden_source_allowed(?,?,?)',
+                    (row['target_id'],row['document_id'],row['version'])).fetchone()[0]:
+                    refresh_required |= details['change'] in {'removed','relations_changed'}
                     continue
                 items.append({"sequence": row["sequence"], "event_id": row["event_id"],
                               "document_id": row["document_id"], "version": row["version"],
                               "at": row["at"], "target_id": row["target_id"], "run_id": row["run_id"],
                               "origin": row["origin"], "kind": details["change"], "success": True})
             return {"ok": True, "items": items, "cursor": rows[min(len(rows),limit)-1]["sequence"] if rows else after,
-                    "latest": latest, "stream_id": generation, "reset": False, "has_more": len(rows)>limit}
+                    "latest": latest, "stream_id": generation, "reset": False, "has_more": len(rows)>limit,
+                    "refresh_required": refresh_required}
 
 
 def read_action(state_root: Path, action: str, query: str | None = None) -> dict:

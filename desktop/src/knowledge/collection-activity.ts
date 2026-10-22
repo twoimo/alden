@@ -112,7 +112,8 @@ export class CollectionActivity {
       }
       if (page.reset !== false || !integer(page.latest) || next.cursor > page.latest || !Array.isArray(page.items)
         || page.items.length > 200 || typeof page.has_more !== 'boolean' || page.has_more && next.cursor === before.cursor) return;
-      let previous = before.cursor, needsSnapshot = false;
+      let previous = before.cursor, needsSnapshot = page.refresh_required === true;
+      if (needsSnapshot) { this.pending.clear(); this.clear(); }
       for (const raw of page.items) {
         const event = receipt(raw);
         if (!event || event.sequence <= previous || event.sequence > next.cursor || this.seen.has(event.event_id)) continue;

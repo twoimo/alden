@@ -323,3 +323,63 @@ remains 0.3.218, runtime source `42c648e…`; this candidate is not installed.
 Private evidence: `outputs/messenger-access-20261023/` and the preceding
 `outputs/messenger-lifecycle-20261023/`. The final source revision, source hashes,
 exact-head CI and evidence manifest are recorded separately after verification.
+
+## Shared origins and incremental cache invalidation (uninstalled candidate)
+
+Two follow-up counterexamples were retained: an allowed Kakao origin disappeared
+when its shared immutable version had first been published by another Telegram
+account, and revoked content left old history rows in an incremental client
+because its journal stream had not changed. Both are now covered by bounded
+local regressions; neither result establishes whole-product revocation safety.
+
+Exact content deduplication still creates one document/version. Its immutable
+first-publisher metadata is content provenance, not another target's authority.
+The frontier instead validates its own retained page's account/platform/room,
+checksum, policy and current authorization before exposing that origin. A
+recomputed checksum alone cannot authenticate a page for another account. When
+both origins are withheld, neither may expose the shared body; raw versions and
+origins remain retained for recovery.
+
+The optional `source_revision(target)` callback binds current authority to a
+metadata-only digest, checked again before a read returns. Malformed, unavailable
+or failing configured revisions withhold protected source reads. Native candidate
+readers provide explicit current-account/authorization snapshots. Telegram's
+snapshot includes its declared room/date authorization receipts, without reading
+message bodies or changing consent. Generic readers do not adopt these checkers.
+For compatibility, an explicitly trusted legacy `source_access` checker without
+a revision remains unversioned: its per-read checks still apply, but it does not
+establish incremental cache coherence. Production adapters must provide both.
+
+History and activity stream identities include these authority digests. Losing
+authority resets retained client history, paused terminal follow rows and pending
+visual receipts. Normal new content under the same authority keeps the stream
+stable. A completed source-withdrawal event also reloads history even when its
+authority digest is unchanged. Activity consumes withheld stage positions to
+advance its cursor, but returns no withheld source receipt/identifier. A bodyless
+`refresh_required` signal invalidates the snapshot and pending effects; it never
+creates a combat pulse. Valid new receipts still wait for an exact matching
+document/version/target in the refreshed graph and play once.
+
+Verification: 37 consumer modules / 693 Python checks in fresh pinned processes,
+and 97 UI files / 1,099 checks plus TypeScript/Vite build passed. Seven added
+Python checks cover separate accounts/platforms, forged page scope, invalid or
+changing revision digests, revocation stream reset, stable-authority new content
+and withdrawal. Six added UI checks include four replays of real candidate
+Python/SQLite packets over controlled synthetic sources, not handwritten API
+responses or native messenger acquisition. Their packet/hash receipt is retained
+privately with the capture script. Source/body calls after the controlled
+revocation remain zero. The preliminary DOM failure was an incorrect expectation
+that unchanged paused rows count as new rows; its log remains preserved.
+
+This candidate remains uninstalled. Alternate SQL/MCP/index/embedding caches,
+current canonical source visibility, durable retirement while the watcher is
+stopped, long-lived multi-process races, representative authorization cost and
+independent semantic/context gold remain open. All-room production watching and
+actual collection → index → provenance UI → graph/combat verification are still
+required. No private Telegram body, live send, consent/settings mutation, physical
+minimized UI, whole-app performance improvement or complete external audit is
+claimed. Existing Pro → Gemini → Pro holds and all 18/ST01–14/Cursor gates remain.
+
+Private evidence: `outputs/messenger-scope-20261023/`. Exact source revision,
+remote CI and installed-app preservation are recorded separately from these
+controlled backend/DOM checks.

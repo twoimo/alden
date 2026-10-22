@@ -23,6 +23,28 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10000); });
 afterEach(() => { owned.forEach(c => c.stop()); owned.length = 0; vi.useRealTimers(); });
 
 describe('committed graph activity consumption', () => {
+  it('discards a pending source receipt when a bodyless retirement invalidates its snapshot', async () => {
+    const read = vi.fn().mockResolvedValueOnce(page(15, [event()]))
+      .mockResolvedValue(page(20, [], { refresh_required: true }));
+    const { consumer, show } = setup(read);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(consumer.diagnostics().pending).toBe(1);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(consumer.diagnostics().pending).toBe(0);
+    consumer.snapshot(point(20), nodes());
+    expect(show).not.toHaveBeenCalled();
+  });
+  it('refreshes a withheld retirement without revealing a receipt or playing a pulse', async () => {
+    const { consumer, refresh, show, clear } = setup(vi.fn(async () => page(15, [], { refresh_required: true })));
+    clear.mockClear();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(show).not.toHaveBeenCalled();
+    expect(consumer.diagnostics().cursor).toBe(15);
+    consumer.snapshot(point(15), []);
+    expect(show).not.toHaveBeenCalled();
+  });
   it('admits the first saved event from an empty baseline only after its exact source version is visible', async () => {
     const read = vi.fn(async () => page(5, [event(4, { kind: 'added' })]));
     const refresh = vi.fn(), show = vi.fn(), clear = vi.fn();
