@@ -25,6 +25,20 @@ MARKER = b'alden-isolated-messenger-evaluation-v1\n'
 PROJECT = 'messenger-evaluation'
 
 
+def _message_id_key(value):
+    # One total order: unsigned ASCII decimals first, then opaque IDs in binary
+    # order. Keep raw IDs distinct, including zero padding; never cast to int.
+    if value.isascii() and value.isdecimal():
+        magnitude = value.lstrip('0') or '0'
+        return (0, len(magnitude), magnitude, value)
+    return (1, 0, '', value)
+
+
+def _compare_message_ids(left, right):
+    a, b = _message_id_key(left), _message_id_key(right)
+    return (a > b) - (a < b)
+
+
 class SourceBlocked(RuntimeError):
     pass
 
@@ -450,6 +464,7 @@ class Frontier:
             raise ValueError('messenger_frontier_unsafe')
         with closing(sqlite3.connect(self.path, timeout=.5)) as db:
             db.row_factory = sqlite3.Row
+            db.create_collation('alden_message_id', _compare_message_ids)
             try:
                 yield db
                 db.commit()
@@ -872,12 +887,14 @@ class Frontier:
                 raise SourceBlocked('messenger_context_anchor_unavailable')
             unplaced = bool(db.execute('SELECT 1 FROM message_heads WHERE room=? AND sent_at IS NULL LIMIT 1', (room,)).fetchone())
             at = anchor['sent_at']
-            older = db.execute('''SELECT * FROM message_heads WHERE room=? AND sent_at>=?
-                AND (sent_at<? OR sent_at=? AND message<?) ORDER BY sent_at DESC,message DESC LIMIT ?''',
-                (room, at-max_gap, at, at, message, before)).fetchall()
-            newer = db.execute('''SELECT * FROM message_heads WHERE room=? AND sent_at<=?
-                AND (sent_at>? OR sent_at=? AND message>?) ORDER BY sent_at,message LIMIT ?''',
-                (room, at+max_gap, at, at, message, after)).fetchall()
+            older = db.execute('''SELECT * FROM message_heads WHERE room=? AND sent_at>=? AND sent_at<=?
+                AND (sent_at<? OR sent_at=? AND message COLLATE alden_message_id<?)
+                ORDER BY sent_at DESC,message COLLATE alden_message_id DESC LIMIT ?''',
+                (room, at-max_gap, at, at, at, message, before)).fetchall()
+            newer = db.execute('''SELECT * FROM message_heads WHERE room=? AND sent_at<=? AND sent_at>=?
+                AND (sent_at>? OR sent_at=? AND message COLLATE alden_message_id>?)
+                ORDER BY sent_at,message COLLATE alden_message_id LIMIT ?''',
+                (room, at+max_gap, at, at, at, message, after)).fetchall()
             heads = [*reversed(older), anchor, *newer]
             pages, items = {}, []
             for head in heads:
@@ -928,7 +945,8 @@ class Frontier:
             'source_epoch': self._epoch(json.loads(frontier['frontier'])),
             'has_unplaced_rows': unplaced, 'coverage': 'committed observed rows only; not full conversation history',
             'scope': 'bounded cached conversation; time proximity is not a reply, identity, agreement or established fact',
-            'order': 'sent_at then message ID; equal-time order is not conversational causality'}
+            'order': 'sent_at then unsigned ASCII decimal IDs by magnitude/raw ID, then opaque IDs in binary order; '
+                     'equal-time order is not conversational causality'}
     @contextmanager
     def _publication_guard(self, payload):
         self._authorize_publication(payload)

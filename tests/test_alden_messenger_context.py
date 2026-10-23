@@ -1,6 +1,7 @@
 """Bounded current conversation spans preserve context without inventing facts."""
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import hashlib
 import json
 import sqlite3
 import unittest
@@ -21,6 +22,78 @@ class MessengerContextTests(unittest.TestCase):
 
     def context(self, message='1', **options):
         return self.engine.context_window('a', message, projects=[candidate.PROJECT], **options)
+
+    def tied_messages(self, ids, platform='kakaotalk'):
+        root = candidate.create_root(self.root.parent / ('ties-' + platform))
+        values = [{**item(1, '같은 시각의 회의 자료 ' + str(index)), 'id': message, 'sent_at': 1000}
+                  for index, message in enumerate(ids)]
+        class ScopedReader(Reader):
+            def authorize(self, room):
+                super().authorize(room)
+                return {'since': None, 'until': None, 'authorization_sha256': 'controlled-fixture'}
+
+            def page(self, room, cursor):
+                return {**super().page(room, cursor), 'scope': self.authorize(room)}
+        reader = ScopedReader({('a', None): (values, False, None)})
+        engine = candidate.Frontier(root, platform, 'owner', reader)
+        engine.seed({'account_id': 'owner', 'complete': True, 'rooms': [{'id': 'a', 'title': 'fixture'}]})
+        engine.step()
+        return engine, reader
+
+    def test_equal_timestamp_numeric_ids_select_nearest_neighbors_in_numeric_order(self):
+        for platform in ('kakaotalk', 'telegram'):
+            with self.subTest(platform=platform):
+                engine, reader = self.tied_messages(['20', '3', '10', '2'], platform)
+                events = journal_rows(engine.store)
+                result = engine.context_window('a', '10', projects=[candidate.PROJECT], before=1, after=1, max_gap=0)
+                self.assertEqual([r['message_id'] for r in result['items']], ['3', '10', '20'])
+                self.assertEqual([r['anchor'] for r in result['items']], [False, True, False])
+                self.assertIn('not conversational causality', result['order'])
+                self.assertEqual(journal_rows(engine.store), events)
+
+    def test_padded_numeric_and_opaque_ids_have_one_consistent_order_without_merging(self):
+        expected = ['0', '00', '000', '01', '1', '2', '10', '+2', '-1', '1a', 'A', 'telegram:2', 'α', '２']
+        engine, reader = self.tied_messages(list(reversed(expected)))
+        before = hashlib.sha256(engine.path.read_bytes()).hexdigest()
+        for index, anchor in enumerate(expected):
+            with self.subTest(anchor=anchor):
+                result = engine.context_window('a', anchor, projects=[candidate.PROJECT], before=1, after=1)
+                self.assertEqual([r['message_id'] for r in result['items']],
+                                 expected[max(0, index-1):index+2])
+        self.assertEqual(hashlib.sha256(engine.path.read_bytes()).hexdigest(), before)
+        self.assertEqual([r['id'] for r in reader.pages[('a', None)][0]], list(reversed(expected)))
+        # No persisted collation dependency: ordinary SQLite connections still
+        # read/check the database without installing this query-only ordering.
+        with sqlite3.connect(engine.path) as db:
+            self.assertEqual(db.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            self.assertEqual({r[0] for r in db.execute('SELECT message FROM message_heads')}, set(expected))
+
+    def test_arbitrarily_long_numeric_ids_do_not_overflow_or_hit_integer_conversion_limits(self):
+        expected = ['9223372036854775808', '9' * 5000, '1' + '0' * 5000]
+        engine, reader = self.tied_messages(list(reversed(expected)))
+        # Reopen to exercise registration on a fresh connection/Frontier too.
+        engine = candidate.Frontier(engine.root, 'kakaotalk', 'owner', reader)
+        result = engine.context_window('a', expected[1], projects=[candidate.PROJECT], before=1, after=1)
+        self.assertEqual([r['message_id'] for r in result['items']], expected)
+
+    def test_timestamp_precedes_message_id_and_equal_time_cross_page_neighbors_are_revalidated(self):
+        engine, reader = self.tied_messages(['10', '2'])
+        previous = reader.pages[('a', None)][0]
+        latest = [{**item(3, '다음 자료'), 'id': '20', 'sent_at': 1000},
+                  {**item(4, '다음 시각'), 'id': '1', 'sent_at': 1001}]
+        reader.pages[('a', None)] = (latest, True, 'older')
+        engine.step(mode='live')
+        current = [*latest, *previous]
+        def verify(payload):
+            candidate.verify_prepared_items(payload['items'], current)
+        with patch.object(reader, 'verify_prepared', side_effect=verify) as checked:
+            result = engine.context_window('a', '10', projects=[candidate.PROJECT], before=1, after=2)
+            self.assertEqual([r['message_id'] for r in result['items']], ['2', '10', '20', '1'])
+            self.assertEqual(checked.call_count, 2)
+        current[2] = {**current[2], 'body': '바뀐 원문'}
+        with patch.object(reader, 'verify_prepared', side_effect=verify):
+            with self.assertRaisesRegex(candidate.SourceBlocked, 'source_changed'):
+                engine.context_window('a', '10', projects=[candidate.PROJECT])
 
     def drop_timestamp(self):
         with self.engine.database() as db:
