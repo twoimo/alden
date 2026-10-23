@@ -128,6 +128,9 @@ function separateMultiMemberCenters(centers: Map<string, Point3>, membersByLabel
     let moved = false;
     for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
       let dx = points[j].x - points[i].x, dy = points[j].y - points[i].y, dz = points[j].z - points[i].z;
+      // A separated axis already proves Euclidean distance >= minimum. Keep
+      // pair/update order identical while avoiding square roots for far peers.
+      if (Math.abs(dx) >= minimum || Math.abs(dy) >= minimum || Math.abs(dz) >= minimum) continue;
       let length = Math.hypot(dx, dy, dz);
       if (length >= minimum) continue;
       if (length < 1e-8) {

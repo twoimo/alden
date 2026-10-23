@@ -16,10 +16,11 @@ export function labelZoomStyle(level: LabelZoom, width: number, height: number, 
   const magnification = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
   const progress = Math.max(0, Math.min(1, Math.log2(magnification / .55) / Math.log2(2.5 / .55)));
   const gradualBudget = Math.max(4, Math.round(8 * magnification ** 1.2));
+  const reveal = Math.max(0, Math.min(1, (magnification - 1.47) / .31));
   return { budget: Math.min([4, 8, 16, 24][level], capacity, gradualBudget),
     topicSize: Math.round((13 + progress * 3) * 4) / 4,
     detailSize: Math.round((12 + progress) * 4) / 4,
-    detail: level >= 2, opacity: [.88, .96, 1, 1][level] };
+    detail: level >= 2, opacity: level >= 2 ? reveal * reveal * (3 - 2 * reveal) : 0 };
 }
 
 export type ProjectedLabelCandidate = { id: string; x: number; y: number; topic: boolean; rank: number; width?: number; height?: number };

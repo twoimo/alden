@@ -18,6 +18,14 @@ describe('screen-space graph reading levels',()=>{
     expect(labelZoomStyle(0,1000,600).budget).toBe(4);
     expect(labelZoomStyle(1,1000,600).topicSize).toBe(14.25);
   });
+  it('reveals passive captions only after zooming past the overview, with continuous opacity',()=>{
+    expect(labelZoomStyle(1,1200,800,1).opacity).toBe(0);
+    const opacity=[1.47,1.5,1.6,1.7,1.78,2].map(r=>labelZoomStyle(2,1200,800,r).opacity);
+    expect(opacity[0]).toBe(0);expect(opacity.at(-1)).toBe(1);
+    expect(opacity).toEqual([...opacity].sort((a,b)=>a-b));
+    expect(opacity.every(value=>value>=0&&value<=1)).toBe(true);
+    expect(labelZoomStyle(2,1200,800,1.34).opacity).toBe(0);
+  });
   it('keeps type continuous across content thresholds, readable and bounded at extreme magnification',()=>{
     for(const ratio of [.72,1.4,2.1]) {
       const before=labelZoomStyle(labelZoomLevel(ratio-.01,0),1000,600,ratio-.01);

@@ -121,6 +121,10 @@ export class KnowledgeHologram {
   private labelZoom: LabelZoom = 1;
   private topicRingPoints = new Map<string, { x: number; y: number }>();
   private labelFitDistance = 0;
+  private labelProjectionState?: {
+    candidates: readonly KnowledgeNode[]; width: number; height: number;
+    focus: string | null; hover: string | null; fit: number;
+  };
   private hoveredId:string|null=null;
   private hoverFrame: number | null = null;
   private hoverX = 0;
@@ -895,19 +899,30 @@ export class KnowledgeHologram {
     }
     this.prioritizeOverviewLabels();
   }
-  private updateZoomLabels(): void {
+  private updateZoomLabels(projectionChanged = true): void {
     if (this.view.hops !== 0 || !this.zoomLabelCandidates?.length) return;
+    const previous = this.labelProjectionState;
+    const inputsChanged = !previous || previous.candidates !== this.zoomLabelCandidates
+      || previous.width !== this.viewport.width || previous.height !== this.viewport.height
+      || previous.focus !== this.view.focusId || previous.hover !== this.hoveredId
+      || previous.fit !== this.labelFitDistance;
+    // Combat can request frames without moving the graph/camera. Reuse the
+    // projection until its geometry, viewport or deliberate reading target changes.
+    if (!projectionChanged && !inputsChanged) return;
+    this.labelProjectionState = { candidates: this.zoomLabelCandidates,
+      width: this.viewport.width, height: this.viewport.height,
+      focus: this.view.focusId, hover: this.hoveredId, fit: this.labelFitDistance };
     const ratio = this.labelFitDistance / Math.max(.01, this.camera.position.distanceTo(this.lookAt));
     const level = labelZoomLevel(ratio, this.labelZoom);
     const style = labelZoomStyle(level, this.viewport.width, this.viewport.height, ratio);
     const projected: ProjectedLabelCandidate[] = [];
-    const headingsAvailable=this.zoomLabelCandidates.some(node=>this.globalLabels.has(node.id)&&overviewCaptionRole(node)!=='title');
     const reserved = new Set([this.view.focusId, this.hoveredId].filter(Boolean)).size;
     // Project only saved eligible candidates; keep a bounded DOM and collision
     // budget. A zoomed-in viewport can discover titles absent from the overview.
     for (const node of this.zoomLabelCandidates) {
-      if (!style.detail && !this.globalLabels.has(node.id)) continue;
-      if (!style.detail && headingsAvailable && overviewCaptionRole(node)==='title') continue;
+      // Subjects and saved lists are reading detail too. Keep the fitted map
+      // clear; hover/selection below remain available at every magnification.
+      if (!style.detail || style.opacity === 0) break;
       const p = this.displayedPositions.get(node.id) ?? this.positions.get(node.id);
       if (!p) continue;
       this.projected.copy(p).applyMatrix4(this.graphRoot.matrixWorld).project(this.camera);
@@ -932,7 +947,7 @@ export class KnowledgeHologram {
     const wanted = selectProjectedLabels(projected, Math.min(style.budget, 24 - reserved), this.zoomLabels);
     const changed = wanted.size !== this.zoomLabels.size || [...wanted].some(id => !this.zoomLabels.has(id));
     this.zoomLabels = wanted;
-    if (changed) this.refreshOverviewLabels();
+    if (changed || inputsChanged) this.refreshOverviewLabels();
     this.labelZoom = level;
     let index = 0;
     for (const [id, label] of this.labels) {
@@ -1201,7 +1216,7 @@ export class KnowledgeHologram {
       this.renderedVisibleNodeCount = visible;
     }
     const { x, y, width, height } = this.viewport;
-    this.updateZoomLabels();
+    this.updateZoomLabels(projectionMoving || cameraProjectionChanged);
     let index = 0;
     for (const [id, label] of this.labels) {
       const box = this.labelBounds[index++];

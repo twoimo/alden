@@ -16,7 +16,8 @@ Source coverage is `Frontier._prepare`, `_publish`, `_source_access`,
 `CollectionStore.ingest`, `release_activity`, `_event` and `activity_page` in
 `scripts/alden_collection.py`. The UI's history counts and terminal labels keep
 the readiness stage distinct from stored changes. Base inspected is
-`7d7a5149f8a05dbd913add6cf8e5cc5fa3f4adc6`; exact tested source hashes live in
+`7d7a5149f8a05dbd913add6cf8e5cc5fa3f4adc6`; implementation aligned at
+`583bee9e54aa76721ac62e63fb5585cd0a8c014a`. Exact tested source hashes live in
 the verification/native receipts. Advance the sync revision only after checking
 that each modeled boundary still corresponds to a real commit in the source.
 
