@@ -24,13 +24,16 @@ class CallToken(AbortToken):
 class KnowledgeServer(StdioServer):
     server_name = 'alden-readonly-knowledge'
 
-    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None):
+    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, search_strategy='complete'):
         super().__init__(None, tool_timeout=tool_timeout)
         self.root = Path(root)
         self.source_access, self.source_revision = source_access, source_revision
         if source_context is not None and not all(callable(value) for value in (source_access, source_revision, source_context)):
             raise ValueError('knowledge_source_context_authority_required')
         self.source_context = source_context
+        if search_strategy not in ('complete','indexed-lexical'):
+            raise ValueError('knowledge_search_strategy_invalid')
+        self.search_strategy=search_strategy
         self.allowed = frozenset(allowed_projects)
         if not self.allowed or len(self.allowed) > 16 or any(not isinstance(p, str) or not p or len(p) > 128 for p in self.allowed):
             raise ValueError('knowledge_startup_scope_required')
@@ -60,6 +63,8 @@ class KnowledgeServer(StdioServer):
                                            'idempotentHint': True, 'openWorldHint': False}})
             if name.endswith('search'):
                 result[-1]['inputSchema']['properties']['limit'] = {'type': 'integer', 'minimum': 1, 'maximum': 10}
+                if self.search_strategy=='indexed-lexical':
+                    result[-1]['description'] += ' Bounded lexical candidates from stored-version text; not exhaustive or archived-only-text search.'
         return result
 
     def valid_call(self, params):
@@ -93,7 +98,7 @@ class KnowledgeServer(StdioServer):
                 result = retrieve(self.root, args['query'], projects=args['projects'],
                                   max_entities=args.get('limit', 6), cancelled=cancelled,
                                   source_access=self.source_access, source_revision=self.source_revision,
-                                  source_context=self.source_context)
+                                  source_context=self.source_context, search_strategy=self.search_strategy)
         else:
             action = 'collection-graph' if name.endswith('graph') else 'collection-history'
             options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
@@ -116,9 +121,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--allow-project', action='append', required=True)
+    parser.add_argument('--search-strategy', choices=('complete','indexed-lexical'), default='complete')
     args = parser.parse_args()
     try:
-        KnowledgeServer(args.state_root, args.allow_project).serve(sys.stdin.buffer, sys.stdout.buffer)
+        KnowledgeServer(args.state_root, args.allow_project, search_strategy=args.search_strategy).serve(sys.stdin.buffer, sys.stdout.buffer)
     except (BrokenPipeError, KeyboardInterrupt):
         pass
 

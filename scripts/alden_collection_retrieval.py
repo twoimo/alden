@@ -8,7 +8,7 @@ import sqlite3
 import struct
 import unicodedata
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, require_collection_source_root, korean_literal_plan, korean_literal_matches
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, require_collection_source_root, korean_literal_plan, korean_literal_matches, korean_literal_sql
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations, ANNOTATION_FIELDS
 from alden_source_text import TEXT_VERSION, project_source_text
 
@@ -277,7 +277,7 @@ def _verify_retrieval_result(store, projects, authority, eligible, ranked, proof
                 verify(row['source']); verify(row['target'])
 
 
-def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False, cache_guard=None):
+def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False, cache_guard=None, candidate_ids=None):
     projects = _scope(projects)
     clauses, args = [], list(projects)
     for value, operator in [(time_from, '>='), (time_to, '<=')]:
@@ -287,6 +287,14 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
             clauses.append('v.collected_at' + operator + '?');args.append(value)
     if time_from is not None and time_to is not None and time_from > time_to:
         raise ValueError('collection_time_filter_invalid')
+    if candidate_ids is not None and (not isinstance(candidate_ids, (list, tuple)) or len(candidate_ids)>140
+            or any(not isinstance(value,str) for value in candidate_ids)):
+        raise ValueError('collection_candidate_budget')
+    prefix = ''
+    if candidate_ids is not None:
+        prefix = 'WITH search_candidates(document_id) AS (' + (
+            'VALUES '+','.join('(?)' for _ in candidate_ids) if candidate_ids else 'SELECT NULL WHERE 0') + ') '
+        args = [*candidate_ids, *args]
     owned = None
     if text_db is None and _path(store).is_file():
         owned = sqlite3.connect(_path(store).as_uri() + '?mode=ro', uri=True, timeout=.15)
@@ -294,12 +302,12 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
             text_db = owned
     try:
         with store.database(cancelled=cancelled) as db:
-            source_query = ' FROM documents d JOIN (' + store._scope_versions(projects) + ''') s
+            source_query = ' FROM documents d JOIN (' + store._scope_versions(projects, candidates=candidate_ids is not None) + ''') s
                 ON s.document_id=d.id JOIN versions v ON v.id=s.current_version
                 WHERE d.availability='available' ''' + ''.join(' AND ' + c for c in clauses)
             fts_ids = {}
             if resolve_source:
-                keys = db.execute('SELECT d.id,v.id' + source_query + ' LIMIT ?', (*args, MAX_DOCUMENTS+1)).fetchall()
+                keys = db.execute(prefix + 'SELECT d.id,v.id' + source_query + ' LIMIT ?', (*args, MAX_DOCUMENTS+1)).fetchall()
                 if len(keys)>MAX_DOCUMENTS:raise RuntimeError('collection_retrieval_budget')
                 with text_db:
                     text_db.execute('DROP TABLE IF EXISTS temp.source_text_scope')
@@ -320,7 +328,7 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
                     text_db.executemany('DELETE FROM text_fts WHERE rowid=?', pending_delete)
                     text_db.executemany('INSERT INTO text_fts VALUES(?,?,?,?)', pending_fts)
                 pending_text.clear();pending_delete.clear();pending_fts.clear()
-            rows = db.execute('''SELECT d.id,d.platform,d.original_id,v.id AS version,
+            rows = db.execute(prefix + '''SELECT d.id,d.platform,d.original_id,v.id AS version,
                 v.raw_sha256,v.raw_path,v.label,v.body,v.collected_at''' + source_query + ' ORDER BY d.id', args)
             result, budget = [], 0
             for row in rows:
@@ -386,6 +394,66 @@ def _index_rows(store, projects, cancelled, **options):
             options['text_db'].executemany('INSERT OR IGNORE INTO temp.source_text_scope VALUES(?,?)', values)
         _check(cancelled)
     return [values[key] for key in sorted(values)]
+
+
+def _indexed_lexical_candidates(store, terms, projects, limit, cancelled, time_from, time_to):
+    """Bounded stored-version index selection, then current source admission.
+
+    Raw index slots never expose body/metadata or confer source authority.
+    Only a current, independently admitted version may become a result.
+    """
+    if not terms:
+        return []
+    marks=','.join('?' for _ in projects)
+    scope='''d.availability='available' AND EXISTS(SELECT 1 FROM memberships m
+        WHERE m.document_id=d.id AND m.current_version=v.id AND m.availability='available'
+        AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+        AND p.permission!='denied' AND p.project IN ('''+marks+')))'
+    values=list(projects)
+    for value,operator in ((time_from,'>='),(time_to,'<=')):
+        if value is not None:
+            if type(value) not in (int,float) or not math.isfinite(value):
+                raise ValueError('collection_time_filter_invalid')
+            scope+=' AND v.collected_at'+operator+'?';values.append(value)
+    if time_from is not None and time_to is not None and time_from>time_to:
+        raise ValueError('collection_time_filter_invalid')
+    budget=min(1000,max(100,limit*10))
+    admitted,seen={},set()
+    def admit(raw, literal):
+        for start in range(0,len(raw),20):
+            _check(cancelled)
+            chunk=raw[start:start+20]
+            expected={}
+            for document,version,score in chunk:
+                if (document,version) not in seen:
+                    seen.add((document,version));expected[(document,version)]=float(score)
+            ids=list(dict.fromkeys(document for document,_version in expected))
+            if not ids:continue
+            rows=_rows(store,projects,cancelled,time_from,time_to,candidate_ids=ids)
+            for row in rows:
+                key=(row['id'],row['version'])
+                if key in expected and row['id'] not in admitted:
+                    admitted[row['id']]=(row['id'],row['version'],expected[key],literal)
+            if len(admitted)>=limit:return
+    with store.database(cancelled=cancelled) as db:
+        raw=[tuple(row) for row in db.execute('''SELECT d.id,v.id,bm25(version_search)
+            FROM version_search JOIN versions v ON v.id=version_search.version_id
+            JOIN documents d ON d.id=v.document_id WHERE version_search MATCH ?
+            AND version_search.document_id=d.id
+            AND version_search.label=v.label
+            AND version_search.body=v.body AND '''+scope+
+            ' ORDER BY 3,d.id,v.id LIMIT ?', (terms,*values,budget))]
+        admit(raw,False)
+        plan=korean_literal_plan(terms)
+        if len(admitted)<limit and plan and len(raw)<budget:
+            contains,parameters=korean_literal_sql(plan,numeric_boundaries=True)
+            db.create_function('alden_korean_literal',3,
+                lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
+            literal=[tuple(row) for row in db.execute('''SELECT d.id,v.id,0.0 FROM versions v
+                JOIN documents d ON d.id=v.document_id WHERE '''+scope+' AND '+contains+
+                ' ORDER BY d.id,v.id LIMIT ?',(*values,*parameters,budget-len(raw)))]
+            admit(literal,True)
+    return sorted(admitted.values(),key=lambda row:(row[3],row[2],row[0]))[:limit]
 
 
 def _path(store):
@@ -583,9 +651,11 @@ def _index_dense(root, projects, *, cancelled, embed, progress, source_access=No
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              candidate_limit=40, max_context_chars=8000, rrf_k=60, rrf_weights=None,
              cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None,
-             source_access=None, source_revision=None, source_context=None):
+             source_access=None, source_revision=None, source_context=None, search_strategy='complete'):
     import auto_reply_knowledge_graph as kg
     projects = _scope(projects)
+    if search_strategy not in ('complete','indexed-lexical'):
+        raise ValueError('collection_search_strategy_invalid')
     if source_context is not None and not all(callable(value) for value in (source_context, source_access, source_revision)):
         raise ValueError('collection_source_context_authority_required')
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1024:
@@ -603,15 +673,21 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
     with store.database() as db:
         authority = store._source_authority_snapshot(db, projects)
-    source_rows = _rows(store, projects, cancelled, time_from, time_to)
+    terms = kg._fts_query_terms([query])
+    indexed = None
+    if search_strategy=='indexed-lexical':
+        indexed=_indexed_lexical_candidates(store,terms,projects,candidate_limit,cancelled,time_from,time_to)
+    candidate_ids=None if indexed is None else list(dict.fromkeys([r[0] for r in indexed]+list(also or [])))
+    source_rows = _rows(store, projects, cancelled, time_from, time_to, candidate_ids=candidate_ids)
     rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
     eligible = {row['id']: row for row in rows}
-    terms = kg._fts_query_terms([query])
-    lexical = [(r['id'], float(r['rank'])) for r in store.search(terms, projects=projects,
-                limit=candidate_limit, time_from=time_from, time_to=time_to, expand_korean=False)] if terms else []
+    lexical = ([(r['id'], float(r['rank'])) for r in store.search(terms, projects=projects,
+                limit=candidate_limit, time_from=time_from, time_to=time_to, expand_korean=False)] if terms else []) if indexed is None else [
+                    (document,score) for document,version,score,_literal in indexed
+                    if document in eligible and eligible[document]['version']==version]
     dense, mode = [], 'bm25_only'
     path = _path(store)
-    if terms and path.is_file():
+    if indexed is None and terms and path.is_file():
         with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=.15)) as db:
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='text_fts'").fetchone():
                 raw_lexical = db.execute('SELECT document_id,version,bm25(text_fts) FROM text_fts WHERE text_fts MATCH ? ORDER BY 3,document_id', (terms,))
@@ -627,7 +703,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                     seen = {i for i, _ in lexical}
                     lexical = (lexical + [(i, s) for i, s in projected_lexical if i not in seen])[:candidate_limit]
     token_ids = {document_id for document_id, _ in lexical}
-    literal_ids = set()
+    literal_ids = set() if indexed is None else {r[0] for r in indexed if r[3] and r[0] in eligible}
     plan = korean_literal_plan(terms)
     if plan:
         seen = {identity for identity, _ in lexical}
@@ -639,7 +715,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 lexical.append((row['id'], 0.0)); seen.add(row['id']); literal_ids.add(row['id'])
     _check(cancelled)
     try:
-        if path.is_file() and eligible:
+        if indexed is None and path.is_file() and eligible:
             saved = {}
             with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=.15)) as scoped:
                 if not scoped.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors'").fetchone():
@@ -891,6 +967,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     _check(cancelled)
     _verify_retrieval_result(store, projects, authority, eligible, ranked, provenance, relation_checks)
     return {'facts': facts, 'fact_provenance': provenance,
+            **({'retrieval_scope':'bounded_stored_version_index','eligible_documents_scope':'admitted_candidates',
+                'coverage':'bounded candidates; not an exhaustive corpus or archived-only-text search'} if indexed is not None else {}),
             **({'conversation_context': {'policy':CONVERSATION_CONTEXT_POLICY,'items':excerpts,
                 'checked_entities':context_checks,'withheld_entities':context_withheld,
                 'unverified_relation_endpoints':context_unverified_relations,

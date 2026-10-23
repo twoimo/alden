@@ -11,6 +11,70 @@ from alden_collection import CollectionStore, identity, read_action
 
 
 class MessengerAccessTests(unittest.TestCase):
+    def test_indexed_strategy_admits_query_candidates_without_scanning_all_native_sources(self):
+        from alden_collection_retrieval import retrieve
+        self.store.ingest(self.target,[{**self.record,'original_id':str(i),'text':'다른 업무 자료의 검토 기록입니다.'} for i in range(600)])
+        self.store.ingest(self.target,[{**self.record,'original_id':'needle','text':'유일한우주항로 도착 시각을 확인합니다.'}])
+        calls=0
+        def access(*args):
+            nonlocal calls
+            calls+=1
+            return True
+        result=retrieve(self.root,'유일한우주항로',projects=['project'],max_entities=1,candidate_limit=4,
+            source_access=access,source_revision=lambda _:'a'*64,search_strategy='indexed-lexical')
+        self.assertTrue(result['facts']);self.assertLess(calls,100)
+        self.assertEqual(result['eligible_documents_scope'],'admitted_candidates')
+        self.assertEqual(result['eligible_documents'],1)
+        self.assertEqual(retrieve(self.root,'유일한우주항로',projects=['project'],search_strategy='indexed-lexical')['facts'],[])
+
+    def test_indexed_strategy_refills_after_withheld_top_index_candidates(self):
+        from alden_collection_retrieval import retrieve
+        self.store.ingest(self.target,[{**self.record,'original_id':str(i)} for i in range(35)])
+        with self.store.database() as db:
+            allowed=db.execute('SELECT id FROM documents ORDER BY id DESC LIMIT 1').fetchone()[0]
+        result=retrieve(self.root,'revocable',projects=['project'],max_entities=1,candidate_limit=1,
+            source_access=lambda target,document,version,metadata:document==allowed,
+            source_revision=lambda _:'a'*64,search_strategy='indexed-lexical')
+        self.assertEqual([p['entity_id'] for p in result['fact_provenance'] if p['fact_type']=='entity'],[allowed])
+
+    def test_indexed_strategy_does_not_use_a_withheld_matching_version_for_another_permitted_version(self):
+        from alden_collection_retrieval import retrieve
+        other=self.store.register(platform='kakaotalk',original_id='other-owner',kind='local-db',
+            label='other',projects=['project'])
+        self.store.ingest(other,[{**self.record,'text':'유일한항로 변경은 다음 달 적용됩니다.'}])
+        result=retrieve(self.root,'유일한항로',projects=['project'],candidate_limit=2,
+            source_access=lambda target,*args:target==self.target,source_revision=lambda _:'a'*64,
+            search_strategy='indexed-lexical')
+        self.assertEqual(result['facts'],[])
+
+    def test_indexed_strategy_keeps_korean_literal_and_numeric_boundaries(self):
+        from alden_collection_retrieval import retrieve
+        self.store.ingest(self.target,[{**self.record,'original_id':'word','text':'면접을 준비하는 실제 업무 기록입니다.'},
+            {**self.record,'original_id':'ten','text':'목표 금액은 10만원입니다.'},
+            {**self.record,'original_id':'hundred-ten','text':'목표 금액은 110만원입니다.'}])
+        for query,expected in [('면접','word'),('10만원','ten')]:
+            with self.subTest(query=query):
+                result=retrieve(self.root,query,projects=['project'],source_access=lambda *args:True,
+                    source_revision=lambda _:'a'*64,search_strategy='indexed-lexical')
+                self.assertEqual([p['entity_id'] for p in result['fact_provenance'] if p['fact_type']=='entity'],
+                                 [identity('graph',expected)])
+
+    def test_indexed_strategy_rejects_misbound_or_stale_fts_slots(self):
+        from alden_collection_retrieval import retrieve
+        with self.store.database() as db:
+            version=db.execute('SELECT current_version FROM documents WHERE id=?',(self.document,)).fetchone()[0]
+        for document,label,body,query in [
+            ('foreign-document',self.record['label'],self.record['text'],'revocable'),
+            (self.document,self.record['label'],'유일한항로','유일한항로'),
+            (self.document,'유일한항로',self.record['text'],'유일한항로')]:
+            with self.subTest(document=document,label=label,body=body):
+                with self.store.database() as db:
+                    db.execute('DELETE FROM version_search')
+                    db.execute('INSERT INTO version_search VALUES(?,?,?,?)',(version,document,label,body))
+                result=retrieve(self.root,query,projects=['project'],source_access=lambda *args:True,
+                    source_revision=lambda _:'a'*64,search_strategy='indexed-lexical')
+                self.assertEqual(result['facts'],[])
+
     def test_retrieval_cancellation_stops_the_protected_source_sql_scan(self):
         from alden_collection_retrieval import retrieve
         self.store.ingest(self.target, [{**self.record,'original_id':str(i)} for i in range(300)])

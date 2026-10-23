@@ -3,6 +3,13 @@
 Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
+Latest retrieval candidate: [explicit bounded stored-version retrieval](INDEXED_RETRIEVAL.md).
+The same actual full-project `회의` query returns one current-source fact/context
+in1.90s on the final candidate (earlier candidate7.47s), with explicit indexed
+lexical coverage; complete mode still reaches its
+10s deadline. The default remains complete, corpus scope is unchanged, and
+production/default promotion, index completion and installation remain gated.
+
 Latest host delta: [read-only loading and cancellable reads](READONLY_HOST.md).
 Existing source state now opens without writer migrations. Actual SQL cancellation
 and an independent native stdio timeout/next-ping journey are verified. The full

@@ -18,6 +18,12 @@ import auto_reply_knowledge_graph as kg
 
 
 class MessengerAuthorityTests(unittest.TestCase):
+    def test_mcp_explicit_indexed_strategy_retains_authority_and_reports_coverage(self):
+        result=self.call(self.server(search_strategy='indexed-lexical'),'search',query='회의')
+        self.assertTrue(result['facts']);self.assertEqual(result['eligible_documents_scope'],'admitted_candidates')
+        self.model.assert_not_called()
+        self.reader.blocked=True;self.case.denied.update(('a','b'))
+        self.assertEqual(self.call(self.server(search_strategy='indexed-lexical'),'search',query='회의')['facts'],[])
     def test_explicit_index_authority_reaches_text_dense_and_mcp_without_source_events(self):
         before = journal_rows(self.kk.store)
         text = index_text(self.root, self.projects, **self.guards)
@@ -194,8 +200,8 @@ class MessengerAuthorityTests(unittest.TestCase):
         self.reader.pages[('k', None)] = ([item(1, '계약 조건과 배송 일정은 다음 주 별도 승인 후에 확정합니다.')], False, None)
         self.kk.step(mode='reconcile')
 
-    def server(self, guarded=True):
-        server = KnowledgeServer(self.root, self.projects, **(self.guards if guarded else {}))
+    def server(self, guarded=True, **options):
+        server = KnowledgeServer(self.root, self.projects, **(self.guards if guarded else {}), **options)
         server.dispatch({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
             'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': {}}})
         server.dispatch({'jsonrpc': '2.0', 'method': 'notifications/initialized'})

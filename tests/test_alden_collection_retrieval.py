@@ -22,6 +22,12 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_indexed_strategy_still_rejects_permission_revoked_after_fact_assembly(self):
+        self.add(self.allowed,'indexed-revoke','private original body')
+        with self.after_assembly(self.deny_allowed):
+            with self.assertRaisesRegex(RuntimeError,'authorization_changed'):
+                retrieve(self.root,'shared',projects=['one'],search_strategy='indexed-lexical')
+
     @contextmanager
     def after_assembly(self, mutation):
         original_database, original_verify = CollectionStore.database, retrieval_module._verified_source
