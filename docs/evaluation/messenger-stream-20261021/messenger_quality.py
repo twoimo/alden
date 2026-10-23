@@ -4,7 +4,7 @@ import hashlib
 import re
 import unicodedata
 
-POLICY = 'messenger-triage-nfc-v2'
+POLICY = 'messenger-triage-nfc-v3'
 ACKNOWLEDGEMENTS = frozenset({'네', '넵', '예', '응', 'ㅇㅇ', '감사합니다', '고마워요',
     '안녕하세요', '수고하세요', '넵 감사합니다', '확인했습니다', '감사합니다!', '네!', '넵!'})
 PROMOTIONS = ('수익 보장', '수익보장', '원금 보장', '원금보장', '리딩방 입장', '지금 입장하세요')
@@ -30,17 +30,18 @@ def classify(body):
         return Triage('', None, 'withheld', 'canonical_reader_withheld')
     if not isinstance(body, str):
         raise ValueError('messenger_body_invalid')
-    text = unicodedata.normalize('NFC', body).strip()
+    text = unicodedata.normalize('NFC', body)
     content_hash = hashlib.sha256(text.encode()).hexdigest() if text else None
-    if not text:
+    view = text.strip()  # Classification/presentation only, never content identity.
+    if not view:
         return Triage(text, content_hash, 'context', 'empty_or_non_text')
-    if text in ACKNOWLEDGEMENTS or re.fullmatch(r'[ㅋㅎㅠㅜ\s.!?~]+', text):
+    if view in ACKNOWLEDGEMENTS or re.fullmatch(r'[ㅋㅎㅠㅜ\s.!?~]+', view):
         return Triage(text, content_hash, 'context', 'standalone_acknowledgement')
     if not any(character.isalpha() for character in text):
         # A number/date/time can be important in its surrounding conversation.
         # Keep it in the source ledger rather than deleting it as an outlier.
         return Triage(text, content_hash, 'context', 'numeric_or_symbol_context')
-    if re.fullmatch(r'https?://\S+', text):
+    if re.fullmatch(r'https?://\S+', view):
         return Triage(text, content_hash, 'context', 'link_content_not_acquired')
     substance = text_without_urls(text)
     if not any(character.isalpha() for character in substance):

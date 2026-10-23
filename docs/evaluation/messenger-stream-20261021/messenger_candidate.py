@@ -143,11 +143,22 @@ class KakaoReader:
                 'scope': 'canonical current-account visible local SQLCipher rows; live WAL included'}
 
     def verify_prepared(self, payload):
+        verify_prepared_items(payload['items'], self.refresh_prepared(payload)['items'])
+
+    def refresh_prepared(self, payload):
         # Exact-ID lookup avoids advancing or replacing the retained page when
         # newer arrivals have moved its rows out of the latest window.
+        items, scope, account = [], None, self.identity()
         for item in payload['items']:
             page = self.page(payload['room'], None, message_id=item['id'])
-            verify_prepared_items([item], page['items'])
+            current = [r for r in page['items'] if r['id'] == item['id']]
+            if len(current) != 1 or len(page['items']) != 1:
+                raise SourceBlocked('messenger_prepared_window_incomplete')
+            items.extend(current); scope = page['scope']
+        if self.identity() != account:
+            raise SourceBlocked('kakao_account_changed_during_refresh')
+        return {'account_id': account, 'room_id': payload['room'], 'items': items,
+                'more': False, 'next_cursor': None, 'scope': scope}
 
 
 class TelegramReader:
@@ -243,10 +254,20 @@ class TelegramReader:
                              if 'authorization_sha256' in scope else {})}}
 
     def verify_prepared(self, payload):
-        page = self.page(payload['room'], payload['before'])
+        page = self.refresh_prepared(payload)
         # The canonical CLI currently has no exact-ID lookup. A moved or
         # missing window blocks recovery, never implies source withdrawal.
         verify_prepared_items(payload['items'], page['items'])
+
+    def refresh_prepared(self, payload):
+        page = self.page(payload['room'], payload.get('reader_before', payload['before']))
+        if len({r['id'] for r in page['items']}) != len(page['items']):
+            raise SourceBlocked('messenger_revalidation_duplicate')
+        wanted = {item['id'] for item in payload['items']}
+        selected = [item for item in page['items'] if item['id'] in wanted]
+        if len(selected) != len(wanted) or len({r['id'] for r in selected}) != len(wanted):
+            raise SourceBlocked('messenger_prepared_window_incomplete')
+        return {**page, 'items': selected, 'more': False, 'next_cursor': None}
 
 
 def create_root(path):
@@ -297,6 +318,7 @@ class Frontier:
             db.execute('''CREATE TABLE IF NOT EXISTS page_content_claims(
                 page TEXT NOT NULL,content_hash TEXT NOT NULL,PRIMARY KEY(page,content_hash))''')
             db.execute('CREATE INDEX IF NOT EXISTS content_claim_pages ON page_content_claims(content_hash,page)')
+            db.execute('CREATE TABLE IF NOT EXISTS retired_policy_pages(page TEXT PRIMARY KEY,reason TEXT NOT NULL)')
             if not claims_exist:
                 for pending in db.execute("SELECT id,room,payload FROM pages WHERE state='prepared'"):
                     self._claim_page_content(db, pending['id'], pending['room'], json.loads(pending['payload'])['items'])
@@ -400,7 +422,7 @@ class Frontier:
         db.executemany('INSERT OR IGNORE INTO page_content_claims VALUES(?,?)',
                        [(job, content_hash) for content_hash in sorted(affected)])
 
-    def _prepare(self, room, mode, page):
+    def _prepare(self, room, mode, page, *, policy_reprocess=False, observation_cursor=None):
         if page.get('account_id') != self.account or page.get('room_id') != room['id']:
             raise ValueError('messenger_page_scope_mismatch')
         items = page.get('items')
@@ -413,7 +435,7 @@ class Frontier:
             raise ValueError('messenger_page_budget')
         state = json.loads(room['frontier'])
         epoch = self._epoch(state)
-        cursor_key = {'backfill': 'back_cursor', 'live': 'live_cursor', 'reconcile': 'check_cursor'}[mode]
+        cursor_key = {'backfill': 'back_cursor', 'live': 'live_cursor', 'reconcile': 'check_cursor', 'policy': 'policy_cursor'}[mode]
         before = state.get(cursor_key)
         if more and cursor == before:
             raise ValueError('messenger_page_stalled')
@@ -439,6 +461,8 @@ class Frontier:
             # Revisit acquired rows independently of live-head discovery.
             # Absence alone is not evidence of source deletion.
             state['check_cursor'] = cursor if more else None
+        elif mode == 'policy':
+            state['policy_cursor'] = None
         else:
             if not state['live_new_head'] and ids:
                 state['live_new_head'] = ids[0]
@@ -462,6 +486,9 @@ class Frontier:
             payload = {'account': self.account, 'platform': self.platform, 'room': room['id'],
                        'items': selected, 'mode': mode, 'before': before, 'reader_scope': page.get('scope'),
                        'quality_policy': POLICY, 'source_epoch': state['source_epoch']}
+            if policy_reprocess:
+                payload['policy_reprocess'] = True
+                payload['reader_before'] = observation_cursor
             job = hashlib.sha256(encoded([payload, state])).hexdigest()
             db.execute('INSERT OR IGNORE INTO pages VALUES(?,?,?,?,?)',
                        (job, room['id'], encoded(payload).decode(), encoded(state).decode(), 'prepared'))
@@ -503,6 +530,7 @@ class Frontier:
                 JOIN page_content_claims earlier ON earlier.content_hash=mine.content_hash
                 JOIN pages p ON p.id=earlier.page
                 WHERE mine.page=? AND p.state='prepared'
+                  AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id)
                   AND p.rowid<(SELECT rowid FROM pages WHERE id=?) LIMIT 1''', (job, job)).fetchone():
                 # A pending store commit must reach its origin-head commit
                 # before another room can invalidate that same content's run.
@@ -516,7 +544,7 @@ class Frontier:
         if unchanged:
             fields = {'backfill': ('back_cursor', 'back_done', 'live_head'),
                       'live': ('live_cursor', 'live_new_head', 'live_head'),
-                      'reconcile': ('check_cursor',)}[payload['mode']]
+                      'reconcile': ('check_cursor',), 'policy': ('policy_cursor',)}[payload['mode']]
             if current_state.get(fields[0]) != payload['before']:
                 raise SourceBlocked('messenger_prepared_cursor_changed')
             # A repeated reconcile sweep may revisit a completed page. Advance
@@ -563,7 +591,8 @@ class Frontier:
                            'content_hash': content_hash, 'account_id': self.account,
                            'scope': payload['reader_scope'], 'provenance': 'query Frontier.origins; source pages retained'}})
         result = self.store.ingest(self.target, records, retractions=retractions,
-            run_id='messenger-page:' + job, origin='messenger-db:' + self.platform + ':' + payload['mode'],
+            run_id='messenger-page:' + job,
+            origin=('messenger-policy:' if payload.get('policy_reprocess') is True else 'messenger-db:') + self.platform + ':' + payload['mode'],
             processing_version=POLICY, cancelled=cancelled,
             publication_guard=lambda: self._publication_guard(payload),
             cursor={'page': job, 'scope': 'one observed page; not complete DB coverage'})
@@ -602,7 +631,7 @@ class Frontier:
             return None
         account = self.reader.identity()
         if account != self.account:
-            return hashlib.sha256(encoded(['account_changed', self.account])).hexdigest()
+            return hashlib.sha256(encoded(['account_changed', self.account, POLICY])).hexdigest()
         scope = getattr(self.reader, 'authorization_scope', None)
         if callable(scope):
             state = scope()
@@ -620,7 +649,7 @@ class Frontier:
                 state.append([room, authorization])
         if self.reader.identity() != account:
             raise SourceBlocked('messenger_account_changed_during_authorization')
-        return hashlib.sha256(encoded([self.platform, account, state])).hexdigest()
+        return hashlib.sha256(encoded([self.platform, account, POLICY, state])).hexdigest()
 
     def _source_access(self, target, document, version, metadata):
         """Current origin authority is required even when collection is stopped."""
@@ -783,8 +812,8 @@ class Frontier:
                 raise ValueError('messenger_account_changed')
             self._allowed()
             with self.database() as db:
-                pending = db.execute("SELECT p.id,p.room FROM pages p JOIN rooms r ON r.id=p.room WHERE p.state='prepared' AND r.retry_at<=? ORDER BY p.rowid LIMIT 1", (time.time(),)).fetchone()
-                rooms = db.execute("SELECT * FROM rooms r WHERE retry_at<=? AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.room=r.id AND p.state='prepared') ORDER BY checked,id", (time.time(),)).fetchall()
+                pending = db.execute("SELECT p.id,p.room FROM pages p JOIN rooms r ON r.id=p.room WHERE p.state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id) AND r.retry_at<=? ORDER BY p.rowid LIMIT 1", (time.time(),)).fetchone()
+                rooms = db.execute("SELECT * FROM rooms r WHERE retry_at<=? AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.room=r.id AND p.state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id)) ORDER BY checked,id", (time.time(),)).fetchall()
             if pending:
                 try:
                     return self._publish(pending['id'], cancelled=cancelled, after_publish=after_publish, revalidate=True)
@@ -808,7 +837,7 @@ class Frontier:
     def status(self):
         with self.database() as db:
             rooms = db.execute('SELECT frontier,error FROM rooms').fetchall()
-            pending = db.execute("SELECT count(*) FROM pages WHERE state='prepared'").fetchone()[0]
+            pending = db.execute("SELECT count(*) FROM pages p WHERE state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id)").fetchone()[0]
             triage = dict(db.execute('SELECT state,count(*) FROM message_heads GROUP BY state'))
             unique = db.execute("SELECT count(DISTINCT content_hash) FROM message_heads WHERE state='candidate'").fetchone()[0]
         return {'rooms': len(rooms), 'backfilled_rooms': sum(json.loads(r['frontier'])['back_done'] for r in rooms),

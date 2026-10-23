@@ -1650,6 +1650,9 @@ class CollectionStore:
                 if (row["stage"] != "stored" or row["run_state"] != "complete"
                     or details.get("change") not in {"added", "revised", "removed", "relations_changed"}):
                     continue
+                if row['origin'].startswith('messenger-policy:'):
+                    refresh_required = True
+                    continue
                 if not db.execute('SELECT alden_source_allowed(?,?,?)',
                     (row['target_id'],row['document_id'],row['version'])).fetchone()[0]:
                     refresh_required |= details['change'] in {'removed','relations_changed'}

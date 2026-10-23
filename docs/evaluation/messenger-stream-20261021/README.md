@@ -5,6 +5,60 @@ Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 ## Intended outcome and scope
 
+Latest isolated delta (2026-10-23, based on `2f5f678`):
+`messenger-triage-nfc-v3` hashes the complete NFC body. Outer whitespace,
+indentation and line endings participate in identity; only the classification
+view is trimmed. The reproduced v2 failure merged syntactically valid Python
+with an indented `IndentationError` variant. Both original source pages were
+retained, but their projection incorrectly shared one document.
+
+`messenger_policy_migration.py` rebuilds a separate marked private snapshot
+through current canonical readers. The original store, pages, versions and
+discovery cursors remain available. Old prepared jobs are retained and retired
+from replay in the staged copy; committed heads and pending source IDs are
+queued for fresh observation. A changed account, expired grant or missing
+finite reader window blocks that task rather than inferring deletion or using
+an old body. Explicitly withheld current observations remain withheld. Retry
+retires the blocked observation before preparing a new one. Store-commit
+interruptions resume the same durable job without a second event.
+
+Policy bookkeeping has its own cursor; Telegram's actual older reader window
+is bound separately and survives repeated snapshots. Task selection is indexed;
+lineage is recorded per completed task and assembled only on request. A former
+content hash can split into multiple exact hashes, so this is a content lineage
+map, **not** automatic entity/pin identity migration. Snapshot readiness means
+all queued tasks are completed or explicitly blocked, never complete server
+history. Ready snapshots still enforce current source authority on reads.
+
+Policy processing requests a graph refresh but emits no combat receipt. Real
+new live input retains its normal journal receipt. Source revision includes the
+quality policy so a changed policy invalidates old source-scoped caches.
+
+Verification: 18 policy regressions and 40 fresh-process consumer modules / 742
+Python checks passed in the pinned menu runtime. The first broad run exposed a
+missing test import path; its failure is preserved separately, then the runner
+used the established scripts import path. A current exact Kakao source was read
+five times for a **controlled one-item legacy projection and isolated staged
+migration**: current body/hash and one graph node matched, original projection
+state was unchanged and combat receipts were zero. Each canonical read reported
+read-only/schema verified and zero server/send/source-DB/app-setting writes.
+This is not migration of an installed DB, all-room coverage, native Telegram,
+semantic-quality gold, vector-index producer or performance evidence.
+
+Evidence is private under `outputs/messenger-policy-20261023/`; full source
+hashes bind the final native receipt. Installed Alden remains 0.3.218 / runtime
+`42c648e6a45e2a17eeeaef24e45a37d38fab31a1`; 78 file hashes/modes, fixed signature
+and static configuration were checked unchanged. No installed watcher, restart,
+foreground QA or activation occurred. Original-source recovery is preserved;
+production root-switch/CAS rollback, installed indexing/MCP/graph integration,
+and whole-room resource/latency gates remain open.
+
+This reversible candidate has **not** completed external cross-audit. Immutable
+older Pro reports and queued Gemini bundles remain bound to their original
+revisions; they do not validate v3. The existing Gemini priority question remains
+unanswered. Do not replace its queued payload or infer approval. Dependent
+validation/release remains blocked under pstack's cross-audit contract.
+
 The user requested **all KakaoTalk and Telegram databases**, with unnecessary
 content, duplicates and outliers filtered so useful knowledge can grow. Existing
 18 requirements, ST01–13 and Cursor-session gates remain in force. The requested
@@ -26,7 +80,7 @@ No unchanged replay, idle timer or denied source may generate fake activity.
 | M01 | One frontier per pinned account/platform, per-room checkpoints; alternative: hundreds of independently scheduled targets | Existing scheduler has bounded target scans. Enumerate every cached room, no silent 200-room cutoff; isolate failed rooms and drain multi-page bursts without losing history. |
 | M02 | Durable prepared pages bridge frontier/store commits; alternative: one cross-domain transaction | Existing store owns version/FTS/activity transactions. Kill after publication, resume exact bytes, prove no second version/event or lost checkpoint. Pending visibility/permission changes must fail closed. |
 | M03 | Preserve raw authorized pages and reversible context/review/candidate states; alternative: discard low-score messages | Short acknowledgements/numbers can be important context. Context assembly and reclassification must recover them. Independent human gold is required before semantic-quality claims. |
-| M04 | NFC exact text content identity plus separate original identities; alternative: semantic/entity merging at ingestion | Keep numbers, direction, case and internal whitespace. Preserve every room/message origin. One origin withdrawal must not remove another available membership. Similarity alone never establishes identity or a factual relation. |
+| M04 | Full NFC exact text content identity plus separate original identities; alternative: semantic/entity merging at ingestion | Keep numbers, direction, case, outer/internal whitespace, indentation and line endings. Preserve every room/message origin. v2's outer-strip counterexample is corrected only in an uninstalled v3 candidate with a staged canonical-reobservation path. One origin withdrawal must not remove another available membership. Similarity alone never establishes identity or a factual relation. |
 | M05 | Reconcile source authorization and current visibility before continued exposure | Consent expiry/date-scope changes and old prepared pages are production gates. Withholding must remove current projection while retaining recovery/provenance; renewal requires current canonical source validation. |
 | M06 | Use the existing real activity journal for bounded visual effects | Measure source commit → durable publication → scene refresh → receipt consumption. No fabricated relation, event or recent timestamp. Verify idle, cancellation, hidden/minimized and reduced-motion behavior. |
 
