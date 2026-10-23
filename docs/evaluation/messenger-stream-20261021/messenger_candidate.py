@@ -15,11 +15,11 @@ import os
 import sqlite3
 import stat
 import re
-import subprocess
 import time
 
 from alden_collection import CollectionStore, encoded, identity, overview_display_label, safe_directory
 from messenger_quality import POLICY, classify, text_without_urls
+from alden_platform_identity import PlatformIdentityError, platform_uuid
 
 MARKER = b'alden-isolated-messenger-evaluation-v1\n'
 PROJECT = 'messenger-evaluation'
@@ -183,11 +183,11 @@ class KakaoReader:
         self.canonical = canonical
 
     def identity(self):
-        raw = subprocess.check_output(['/usr/sbin/ioreg', '-rd1', '-c', 'IOPlatformExpertDevice'], text=True)
-        match = re.search(r'"IOPlatformUUID"\s*=\s*"([0-9A-Fa-f-]{36})"', raw)
-        if not match:
-            raise SourceBlocked('kakao_current_identity_unavailable')
-        return self.canonical.resolve_identity(match[1])[0]
+        try:
+            device = platform_uuid()
+        except PlatformIdentityError as error:
+            raise SourceBlocked('kakao_current_identity_unavailable') from error
+        return self.canonical.resolve_identity(device)[0]
 
     def authorize(self, room):
         # snapshot() independently verifies the current owner before/after its

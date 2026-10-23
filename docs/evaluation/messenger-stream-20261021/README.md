@@ -5,6 +5,41 @@ Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 ## Intended outcome and scope
 
+Current fresh-identity delta (2026-10-23, based on `0c9fb6b`): repeated account
+guards spawned `ioreg` for the hardware UUID every time. Alden's candidate now
+reads the same current property directly through system IOKit/CoreFoundation
+and still invokes the canonical account resolver on every check. Only framework
+handles are cached; UUID/account/consent values are not. A missing service/key,
+wrong property type, conversion failure or malformed UUID blocks the read before
+account/body access. Native objects are released on success and failure. No
+shared SDK, credential cache, process, settings or privileges were changed.
+
+The independently authored bindings follow Apple's
+[IOKit API definitions](https://github.com/apple-oss-distributions/IOKitUser/blob/main/IOKitLib.h)
+and [property API](https://developer.apple.com/documentation/iokit/1514293-ioregistryentrycreatecfproperty/).
+Fresh UUID reads matched `ioreg` on this Mac. Twelve regressions cover ABI widths,
+system-only library paths, object ownership, failure/no-fallback behavior,
+changing device/account results and repeated current-account resolution.
+All784 checks in43 fresh pinned Python processes passed.
+
+An alternating matched benchmark used the exact old identity method from
+`0c9fb6b` and the new method with the same canonical SDK, private store, complete
+371-room catalog and one primed quiet room. All30 input pairs contained the same
+50-message page. Median native unchanged-poll time was606.2ms versus437.9ms,
+a27.8% reduction for this specific path. All63 SDK observations verified
+readonly/schema and zero server/send/source-DB/app-setting writes; the polls
+created zero events. This is not a371-room sweep, source-arrival propagation,
+interactive frame/GPU/battery or whole-app speedup. The earlier138.6-second
+all-room pass is a different workload and cannot supply a speedup ratio here.
+
+Evidence is private under `outputs/messenger-identity-20261023/`. The actual
+shared SDK still matches SHAff9d5dd6cf208b33436d129bba36e8aa1ef53cda084dec8bd618573d15174cc1.
+Installed0.3.218/runtime42c648e, its78 file hashes/modes, fixed signature and43
+target settings remain unchanged. This candidate has not completed external
+cross-audit or installed execution. Fast all-room change discovery,219 rooms of
+older history, native Telegram consent, semantic gold, full18/ST01–14/Cursor8
+and normal release remain open.
+
 Current traversal-fairness delta (2026-10-23, based on `5660197`): interleaving
 live, backfill and reconcile reproduced permanent room partitioning. Three
 eligible rooms became `live:{a}`, `backfill:{b}`, `reconcile:{c}` because all
