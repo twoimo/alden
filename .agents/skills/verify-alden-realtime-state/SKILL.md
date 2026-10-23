@@ -18,6 +18,8 @@ policy/scan/heartbeat. Tests are `tests/test_alden_realtime_collection.py` and
 publication protocol, source arrival, native readers, UI/combat or installed app.
 
 Baseline inspected: `1eb223652533fb47c66a8e888716c1088c134569`.
+Aligned implementation: `04b854b9600046d6b7549a038de58b026ed6e163`;
+watcher SHA-256 `3bdda372a926c64fe1394371d746e4aeb690a827d801ce341ce61cf235a59043`.
 Current source alignment is additionally bound by the SHA-256 in the generated
 verification receipt. Update this record to the delivered source commit only
 after confirming that the modeled boundaries still match that implementation.
