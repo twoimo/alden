@@ -11,6 +11,33 @@ from alden_collection import CollectionStore, identity, read_action
 
 
 class MessengerAccessTests(unittest.TestCase):
+    def test_integer_query_adds_suffixed_lexemes_without_changing_existing_token_hits(self):
+        from alden_collection_retrieval import retrieve
+        records=[('unit','보관 수량은 100개입니다.'),('larger','보관 수량은 1000개입니다.'),
+                 ('grouped','보관 수량은 100,000개입니다.'),('decimal','보관 수량은 100.5개입니다.')]
+        self.store.ingest(self.target,[{**self.record,'original_id':name,'text':text} for name,text in records])
+        for strategy in ('complete','indexed-lexical'):
+            with self.subTest(strategy=strategy):
+                result=retrieve(self.root,'100',projects=['project'],max_entities=10,candidate_limit=20,
+                    source_access=lambda *args:True,source_revision=lambda _:'a'*64,search_strategy=strategy)
+                proofs={p['entity_id']:p for p in result['fact_provenance'] if p['fact_type']=='entity'}
+                self.assertIn(identity('graph','unit'),proofs)
+                self.assertEqual(proofs[identity('graph','unit')]['lexical_match'],'integer_digit_lexeme')
+                self.assertNotIn(identity('graph','larger'),proofs)
+                for token in ('grouped','decimal'):
+                    self.assertEqual(proofs[identity('graph',token)]['lexical_match'],'bm25_token')
+                self.assertEqual(retrieve(self.root,'100',projects=['project'],search_strategy=strategy)['facts'],[])
+
+    def test_integer_supplement_keeps_a_full_existing_token_candidate_pool(self):
+        from alden_collection_retrieval import retrieve
+        self.store.ingest(self.target,[{**self.record,'original_id':'token','text':'보관 수량은 100 입니다.'},
+            {**self.record,'original_id':'unit','text':'보관 수량은 100개입니다.'}])
+        for strategy in ('complete','indexed-lexical'):
+            result=retrieve(self.root,'100',projects=['project'],candidate_limit=1,
+                source_access=lambda *args:True,source_revision=lambda _:'a'*64,search_strategy=strategy)
+            self.assertEqual([p['entity_id'] for p in result['fact_provenance'] if p['fact_type']=='entity'],
+                             [identity('graph','token')])
+
     def test_indexed_strategy_admits_query_candidates_without_scanning_all_native_sources(self):
         from alden_collection_retrieval import retrieve
         self.store.ingest(self.target,[{**self.record,'original_id':str(i),'text':'다른 업무 자료의 검토 기록입니다.'} for i in range(600)])

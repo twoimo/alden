@@ -3,6 +3,11 @@
 Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
+Latest query delta: [additive digit-lexeme recall](INTEGER_QUERY.md) fixes the
+`100` → `100개` omission in retrieve/MCP while preserving existing token hits.
+One qualified native query now returns its fact/current context; arithmetic/unit
+semantics, other numeric interfaces and installed promotion remain open.
+
 Latest retrieval candidate: [explicit bounded stored-version retrieval](INDEXED_RETRIEVAL.md).
 The same actual full-project `회의` query returns one current-source fact/context
 in1.90s on the final candidate (earlier candidate7.47s), with explicit indexed

@@ -21,6 +21,18 @@ MAX_BODY_EVIDENCE_CHECKS = 100
 CONTEXT_TEXT_POLICY = 'retained-threads-annotation-context-v2'
 CONVERSATION_CONTEXT_POLICY = 'current-source-excerpt-v1'
 MAX_CONTEXT_ANCHORS = 2
+_DIGIT_LEXEME = re.compile(r'\d+(?:[.,]+\d+)*')
+
+
+def _integer_digit_query(query):
+    value=query.strip()
+    return value if re.fullmatch(r'[0-9]{2,64}',value) else None
+
+
+def _integer_digit_matches(label, body, term):
+    # Supplement literal digit runs only. No int/float, sign, unit, grouping or
+    # Unicode value conversion; a formatted numeric run stays one opaque token.
+    return any(match.group()==term for field in (label,body) for match in _DIGIT_LEXEME.finditer(field))
 
 
 def _verified_conversation_excerpt(proof, value):
@@ -396,7 +408,7 @@ def _index_rows(store, projects, cancelled, **options):
     return [values[key] for key in sorted(values)]
 
 
-def _indexed_lexical_candidates(store, terms, projects, limit, cancelled, time_from, time_to):
+def _indexed_lexical_candidates(store, terms, projects, limit, cancelled, time_from, time_to, *, integer_term=None):
     """Bounded stored-version index selection, then current source admission.
 
     Raw index slots never expose body/metadata or confer source authority.
@@ -445,10 +457,15 @@ def _indexed_lexical_candidates(store, terms, projects, limit, cancelled, time_f
             ' ORDER BY 3,d.id,v.id LIMIT ?', (terms,*values,budget))]
         admit(raw,False)
         plan=korean_literal_plan(terms)
-        if len(admitted)<limit and plan and len(raw)<budget:
-            contains,parameters=korean_literal_sql(plan,numeric_boundaries=True)
-            db.create_function('alden_korean_literal',3,
-                lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
+        if len(admitted)<limit and (plan or integer_term) and len(raw)<budget:
+            if integer_term:
+                contains,parameters='alden_integer_digit(v.label,v.body,?)=1',(integer_term,)
+                db.create_function('alden_integer_digit',3,
+                    lambda label,body,word:int(_integer_digit_matches(label,body,word)),deterministic=True)
+            else:
+                contains,parameters=korean_literal_sql(plan,numeric_boundaries=True)
+                db.create_function('alden_korean_literal',3,
+                    lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
             literal=[tuple(row) for row in db.execute('''SELECT d.id,v.id,0.0 FROM versions v
                 JOIN documents d ON d.id=v.document_id WHERE '''+scope+' AND '+contains+
                 ' ORDER BY d.id,v.id LIMIT ?',(*values,*parameters,budget-len(raw)))]
@@ -674,9 +691,11 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     with store.database() as db:
         authority = store._source_authority_snapshot(db, projects)
     terms = kg._fts_query_terms([query])
+    integer_term = _integer_digit_query(query)
     indexed = None
     if search_strategy=='indexed-lexical':
-        indexed=_indexed_lexical_candidates(store,terms,projects,candidate_limit,cancelled,time_from,time_to)
+        indexed=_indexed_lexical_candidates(store,terms,projects,candidate_limit,cancelled,time_from,time_to,
+                                            integer_term=integer_term)
     candidate_ids=None if indexed is None else list(dict.fromkeys([r[0] for r in indexed]+list(also or [])))
     source_rows = _rows(store, projects, cancelled, time_from, time_to, candidate_ids=candidate_ids)
     rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
@@ -705,13 +724,15 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     token_ids = {document_id for document_id, _ in lexical}
     literal_ids = set() if indexed is None else {r[0] for r in indexed if r[3] and r[0] in eligible}
     plan = korean_literal_plan(terms)
-    if plan:
+    if plan or integer_term:
         seen = {identity for identity, _ in lexical}
         for row in rows:
             _check(cancelled)
             if len(lexical) >= candidate_limit:
                 break
-            if row['id'] not in seen and korean_literal_matches(plan, row['label'], row['body']):
+            matches=(_integer_digit_matches(row['label'],row['body'],integer_term) if integer_term else
+                     korean_literal_matches(plan,row['label'],row['body']))
+            if row['id'] not in seen and matches:
                 lexical.append((row['id'], 0.0)); seen.add(row['id']); literal_ids.add(row['id'])
     _check(cancelled)
     try:
@@ -831,7 +852,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                      'scope_basis': 'current_permitted_version_memberships_at_selected_snapshot',
                      'updated_at': row['collected_at'],
                      'body_source': row['body_source'],
-                     'lexical_match': ('korean_literal_substring' if document_id in literal_ids else
+                     'lexical_match': ('integer_digit_lexeme' if integer_term and document_id in literal_ids else
+                                       'korean_literal_substring' if document_id in literal_ids else
                                        'bm25_token' if document_id in token_ids else None),
                      'derived_from': derived, 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
@@ -967,6 +989,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     _check(cancelled)
     _verify_retrieval_result(store, projects, authority, eligible, ranked, provenance, relation_checks)
     return {'facts': facts, 'fact_provenance': provenance,
+            **({'integer_query_policy':'additive digit-lexeme recall; existing token/dense matching retained; no value or unit conversion'} if integer_term else {}),
             **({'retrieval_scope':'bounded_stored_version_index','eligible_documents_scope':'admitted_candidates',
                 'coverage':'bounded candidates; not an exhaustive corpus or archived-only-text search'} if indexed is not None else {}),
             **({'conversation_context': {'policy':CONVERSATION_CONTEXT_POLICY,'items':excerpts,

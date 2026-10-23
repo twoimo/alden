@@ -22,6 +22,16 @@ import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    def test_integer_digit_lexeme_supplement_is_not_value_or_query_conversion(self):
+        for query,expected in [('100','100'),(' 100 ','100'),('00100','00100'),('1',None),
+                               ('100.0',None),('-100',None),('100개',None),('１００',None)]:
+            self.assertEqual(retrieval_module._integer_digit_query(query),expected)
+        for text,expected in [('100개',True),('1000개',False),('100,000개',False),('1,100개',False),
+                              ('100.5개',False),('100.0개',False),('수량,100개',True),('100.',True),
+                              ('1000개 이후 100개',True),('١100개',False),('１００개',False)]:
+            with self.subTest(text=text):
+                self.assertEqual(retrieval_module._integer_digit_matches('',text,'100'),expected)
+
     def test_indexed_strategy_still_rejects_permission_revoked_after_fact_assembly(self):
         self.add(self.allowed,'indexed-revoke','private original body')
         with self.after_assembly(self.deny_allowed):

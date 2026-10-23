@@ -5,6 +5,10 @@ unvalidated; installed Alden remains 0.3.218. This is a new explicit search
 strategy, not promotion of a different default/model or completion of the full
 native/dense index, production enrollment or all 18 requirements.
 
+The later [digit-lexeme supplement](INTEGER_QUERY.md) partially resolves the
+numeric-only recall gap recorded below. The original failure/evidence remains
+historical; numeric value and unit semantics are still unvalidated.
+
 ## Result, choice and contract
 
 The previous actual full-project search timed out before returning a fact.
