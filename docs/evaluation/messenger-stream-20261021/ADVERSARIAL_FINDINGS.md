@@ -61,7 +61,7 @@ No finding is rejected merely because tests already pass.
 | F-M05-02: first publisher's private capture metadata in search | ACCEPT | Reproduced on current 0f2e5a9 through both FTS and Korean literal search. Corrected search projection exposes only messenger content identity, preserving stored capture metadata privately. | Current-source reverse review and installed API verification; no whole-system privacy claim. |
 | F-M05-03: second origin classified unchanged | CONDITIONAL | Exact shared content is still one document/version; a new occurrence is not an independent fact or author. | Verify whether origin-only changes need a scoped refresh/link receipt without fake added-content combat. |
 | F-M05-04: two-database activity loss | ACCEPT | 583bee9 adds deferred stored events and durable frontier outbox; 15 commit/crash cases and 3 rejected source mutants pass. | Production backlog/liveness/source-arrival/UI/combat verification. |
-| F-M05-05: retracted non-messenger relation endpoint | DEFER | Existing protected-source tests are insufficient to prove all unguarded-source membership cases. | Reproduce independent-source endpoint retraction and enforce current endpoint membership without borrowing another target. |
+| F-M05-05: retracted non-messenger relation endpoint | ACCEPT | Reproduced on 77fc305: both endpoint withdrawals leaked an edge through legacy graph, paged graph and reference counts. Relation SQL rejects retained withdrawn/unversioned owned memberships before the source guard, while preserving explicit never-owned external references. | Current-source reverse review and installed refresh; this is not a cross-transaction or semantic-truth proof. |
 | F-M05-06: wrong version and unchecked origins | ACCEPT / CONDITIONAL | Current-version membership/body binding was fixed in583bee9. Origins access still needs its actual caller/scope audit. | Test every origins entry point; retain current source/account/project guards. |
 | F-M07-01: Telegram anchor leaves50-row window | DEFER | Current reader correctly fails closed when the observed page cannot revalidate the anchor. That is not history liveness. | Supported exact-anchor/bounded historical lookup and actual consent-bound Telegram verification. |
 | F-M07-02: numeric message-ID tie ordering | DEFER | Equal-time numeric IDs require a protocol-aware order; lexicographic TEXT is insufficient as a general numeric claim. | Reproduce with equal timestamps; avoid fixed-width integer overflow or reordering opaque IDs. |
@@ -98,3 +98,52 @@ from an older module hash is not relabeled as a new installed search test.
 Full 18/ST01–16/Cursor8 remain active. Current-source external reverse/delta
 review, remaining finding gates and installed/production verification must
 finish before this candidate is promoted.
+
+
+## F-M05-05: relation membership is source-specific
+
+The guarded-source callback intentionally allows ordinary non-messenger
+targets. Its return value cannot establish that a relation endpoint still has
+a membership in that target. The old scalar subquery returned NULL after
+incremental retraction, and that default callback still returned 1. If a second
+permitted source kept the same document globally visible, the first source's
+old edge and paged/reference edge count remained visible.
+
+A real isolated SQLite counterexample exercised either endpoint, through
+`graph`, `graph_page` and `graph_references`; all 6 assertions failed before
+correction. An initial `EXISTS`-only proposal incorrectly required ownership of
+every endpoint. The independent focus BFS oracle rejected 9 scope combinations
+because an explicit external reference can legitimately point to a document
+owned only by another source. That proposal is rejected; the independent oracle
+and its expected graphs were not weakened.
+
+At the relation SQL snapshot, the correction distinguishes two cases. If this
+relation owner has a membership row, it must have a non-null current version,
+be available in schema 3 and pass the existing source guard. A withdrawn or
+unversioned row yields 0 and cannot fall back to another source. If no owned
+row exists, the existing source guard receives NULL as before: ordinary explicit
+external references remain compatible, while guarded messenger sources still
+fail closed without their own version. Callers separately require both nodes
+and the relation owner to be permitted. Older schema availability compatibility
+is retained; no role or author identity is inferred.
+
+Read filtering does not delete retained relations, relation versions or source
+records. Re-observing the owned endpoint and its explicit relation restores
+visibility. A second regression retains a different source's actual assertion
+of the same pair while hiding the withdrawn owner's assertion. Shared nodes
+remain available. Dedicated checks preserve a never-owned external reference
+and withhold an owned endpoint whose current version is NULL. Explicitly changing
+an already-withdrawn owned endpoint into a new external-reference role is not
+inferred by this read rule; source-role migration needs separate authority and
+re-observation evidence before promotion. The paged/reference and legacy outputs have different shapes;
+a harness expectation of legacy-only `source_evidence` on paged output was
+corrected to compare the actual source-bound relation ID, with its initial
+error log preserved separately.
+
+This fixes the scoped current-membership defect. It does not establish
+semantic validity, independent authorship, instantaneous installed UI refresh
+or multi-transaction revocation safety; those gates remain open.
+
+The refined source passed 811 tests in 45 fresh pinned Python processes,
+including the unchanged independent focus BFS oracle. No native/installed
+relation refresh or current-source reverse review is implied by this pass.

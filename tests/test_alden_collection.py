@@ -347,6 +347,81 @@ class CollectionTests(unittest.TestCase):
             self.store.ingest(target, [self.record()], relations=[{"source_platform": "youtube", "source_id": "AbC", "target_platform": "youtube", "target_id": "missing", "type": "refers-to"}])
         self.assertEqual(self.store.graph(projects=["one"])["nodes"], [])
 
+    def test_relation_cannot_borrow_a_retracted_endpoint_from_another_source(self):
+        for endpoint in ('from', 'to'):
+            with self.subTest(endpoint=endpoint):
+                project='relation-' + endpoint
+                owner=self.target('owner-'+endpoint,project)
+                mirror=self.target('mirror-'+endpoint,project)
+                records=[self.record(key,text='회의 자료 '+key) for key in ('from','to')]
+                relation={'source_platform':'youtube','source_id':'from','target_platform':'youtube',
+                          'target_id':'to','type':'reference','evidence':{'quote':'owned relation'}}
+                self.store.ingest(owner,records,relations=[relation])
+                self.store.ingest(mirror,records)
+                self.assertEqual(len(self.store.graph_page(projects=[project])['edges']),1)
+                self.store.ingest(owner,[],retractions=[{'platform':'youtube','original_id':endpoint}])
+                with self.store.database() as db:
+                    before=[tuple(row) for row in db.execute('SELECT * FROM relations ORDER BY id')]
+                    versions=db.execute('SELECT count(*) FROM relation_versions').fetchone()[0]
+                for read in (self.store.graph,self.store.graph_page,self.store.graph_references):
+                    with self.subTest(read=read.__name__):
+                        result=read(projects=[project])
+                        self.assertEqual(len(result['nodes']),2)
+                        if read.__name__=='graph_references':
+                            self.assertEqual(result['total_edges'],0)
+                        else:
+                            self.assertEqual(result['edges'],[])
+                with self.store.database() as db:
+                    self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM relations ORDER BY id')],before)
+                    self.assertEqual(db.execute('SELECT count(*) FROM relation_versions').fetchone()[0],versions)
+                self.store.ingest(owner,records,relations=[relation])
+                self.assertEqual(len(self.store.graph_page(projects=[project])['edges']),1)
+
+    def test_relation_withdrawal_preserves_another_sources_own_assertion(self):
+        owner=self.target('relation-owner');mirror=self.target('relation-mirror')
+        records=[self.record(key,text='회의 자료 '+key) for key in ('from','to')]
+        relation={'source_platform':'youtube','source_id':'from','target_platform':'youtube',
+                  'target_id':'to','type':'reference','evidence':{'quote':'first source'}}
+        self.store.ingest(owner,records,relations=[relation])
+        self.store.ingest(mirror,records,relations=[{**relation,'evidence':{'quote':'second source'}}])
+        self.assertEqual(len(self.store.graph_page(projects=['one'])['edges']),2)
+        self.store.ingest(owner,[],retractions=[{'platform':'youtube','original_id':'from'}])
+        with self.store.database() as db:
+            expected=db.execute('SELECT id FROM relations WHERE target_id=?',(mirror,)).fetchone()[0]
+        for read in (self.store.graph,self.store.graph_page):
+            with self.subTest(read=read.__name__):
+                result=read(projects=['one'])
+                self.assertEqual(len(result['nodes']),2)
+                self.assertEqual(len(result['edges']),1)
+                self.assertEqual(result['edges'][0]['id'],expected)
+
+    def test_explicit_external_reference_does_not_require_owning_the_endpoint(self):
+        owner=self.target('reference-owner');external=self.target('external-document')
+        self.store.ingest(external,[self.record('to',text='외부 회의 자료')])
+        self.store.ingest(owner,[self.record('from',text='출처의 명시적 참조')],relations=[{
+            'source_platform':'youtube','source_id':'from','target_platform':'youtube','target_id':'to',
+            'type':'reference','evidence':{'quote':'explicit external document reference'}}])
+        for read in (self.store.graph,self.store.graph_page,self.store.graph_references):
+            with self.subTest(read=read.__name__):
+                result=read(projects=['one'])
+                self.assertEqual(len(result['nodes']),2)
+                self.assertEqual(result['total_edges'] if read.__name__=='graph_references' else len(result['edges']),1)
+
+    def test_an_owned_endpoint_without_a_current_version_is_not_an_external_reference(self):
+        owner=self.target('incomplete-owner');mirror=self.target('complete-mirror')
+        records=[self.record(key,text='보존한 회의 자료 '+key) for key in ('from','to')]
+        self.store.ingest(owner,records,relations=[{'source_platform':'youtube','source_id':'from',
+            'target_platform':'youtube','target_id':'to','type':'reference'}])
+        self.store.ingest(mirror,records)
+        with self.store.database() as db:
+            db.execute('UPDATE memberships SET current_version=NULL WHERE target_id=? AND document_id=?',
+                       (owner,identity('youtube','to')))
+        for read in (self.store.graph,self.store.graph_page):
+            with self.subTest(read=read.__name__):
+                result=read(projects=['one'])
+                self.assertEqual(len(result['nodes']),2)
+                self.assertEqual(result['edges'],[])
+
     def test_project_versions_do_not_leak_a_different_target_revision(self):
         allowed = self.target()
         restricted = self.target("channel-B", "two", permission="denied")

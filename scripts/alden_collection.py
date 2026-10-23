@@ -1146,10 +1146,18 @@ class CollectionStore:
             AND p.permission!='denied' AND p.project IN (""" + marks + "))) WHERE choice=1"
 
     def _source_relation_scope(self):
-        available = " AND m.availability='available'" if self.schema >= 3 else ""
-        return " AND ".join("alden_source_allowed(r.target_id,r." + endpoint + ","
-            "(SELECT m.current_version FROM memberships m WHERE m.target_id=r.target_id AND m.document_id=r." + endpoint + available + "))=1"
-            for endpoint in ('source', 'target'))
+        guards = []
+        for endpoint in ('source', 'target'):
+            allowed = 'alden_source_allowed(r.target_id,r.' + endpoint + ',m.current_version)'
+            available = 'm.current_version IS NOT NULL' + (" AND m.availability='available'" if self.schema >= 3 else '')
+            allowed = 'CASE WHEN ' + available + ' THEN ' + allowed + ' ELSE 0 END'
+            # A retained withdrawal must not fall back to another source's
+            # visible copy. A never-owned endpoint can still be an explicit
+            # external reference; callers independently scope its visible node.
+            guards.append('COALESCE((SELECT ' + allowed + ' FROM memberships m'
+                ' WHERE m.target_id=r.target_id AND m.document_id=r.' + endpoint + '),'
+                'alden_source_allowed(r.target_id,r.' + endpoint + ',NULL))=1')
+        return ' AND '.join(guards)
 
     def projects(self) -> list[dict]:
         with self.database() as db:
