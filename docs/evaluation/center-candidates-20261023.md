@@ -92,8 +92,8 @@ two warmups and nine rounds per full incremental case:
 The2,048-node chain median decreases50.2% for this synthetic CPU workload.
 Small cases regress; this is not a universal speedup. The separate component
 comparison preserves exact geometry in12 cases. For1,024 coincident centers it
-measures103.680→77.606ms; for512 coincident centers26.210→26.463ms, effectively
-unchanged at this measurement precision. Component and complete solver numbers
+measures103.680→77.606ms; for512 coincident centers26.210→26.463ms, a measured
+1.0% regression whose statistical significance is unestablished. Component and complete solver numbers
 are different experiments and must not be combined.
 
 The full comparison preserves exact anchors, memberships and complete checkpoint
