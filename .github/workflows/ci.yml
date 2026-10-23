@@ -311,6 +311,9 @@ jobs:
       - name: Test fresh macOS identity and native ownership in a fresh process
         run: python3 -B -m unittest tests.test_alden_platform_identity -v
 
+      - name: Verify bounded watcher states and rejected source mutations
+        run: python3 -B scripts/verify_alden_realtime_state.py
+
       # The reader enforces a process peak RSS budget. Earlier test modules
       # must not consume the memory allowance of this independent CLI process.
       - name: Test bounded affinity in a fresh process

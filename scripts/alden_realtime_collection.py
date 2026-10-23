@@ -170,20 +170,34 @@ def watch(scheduler, stopped, *, wait=None, now=time.time):
     from alden_collection import CollectionStore
     realtime = RealtimeCollection(scheduler.state_root)
     last_scheduled = float('-inf')
+    def storage_busy(error):
+        code = getattr(error, 'sqlite_errorcode', None)
+        return type(code) is int and code & 255 in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}
+    def heartbeat(state):
+        try:
+            realtime.heartbeat(state)
+        except sqlite3.OperationalError as error:
+            if not storage_busy(error): raise
     try:
         while not stopped.is_set():
-            stamp = now(); enabled = realtime.policy()['enabled']
-            if enabled:
-                store = CollectionStore.open_existing(scheduler.state_root)
-                blocked = scheduler._paused() or scheduler._abort_latched()
-                voice = scheduler._voice_busy()
-                realtime.heartbeat('paused' if blocked else 'voice_deferred' if voice else 'watching')
-                if store and not blocked and not voice: realtime.scan(store, paused=scheduler._paused, now=stamp)
-            if enabled or stamp - last_scheduled >= 60:
-                last_scheduled = stamp
-                result=scheduler.cycle(max_targets=1, max_seconds=180, stopping=stopped.is_set,
-                    on_progress=lambda: realtime.heartbeat('processing'))
-                if enabled: realtime.heartbeat('paused' if result['state']=='paused' else 'voice_deferred' if result['state']=='deferred' else 'watching')
+            try:
+                stamp = now(); enabled = realtime.policy()['enabled']
+                if enabled:
+                    store = CollectionStore.open_existing(scheduler.state_root)
+                    blocked = scheduler._paused() or scheduler._abort_latched()
+                    voice = scheduler._voice_busy()
+                    heartbeat('paused' if blocked else 'voice_deferred' if voice else 'watching')
+                    if store and not blocked and not voice: realtime.scan(store, paused=scheduler._paused, now=stamp)
+                if enabled or stamp - last_scheduled >= 60:
+                    result=scheduler.cycle(max_targets=1, max_seconds=180, stopping=stopped.is_set,
+                        on_progress=lambda: heartbeat('processing'))
+                    last_scheduled = stamp
+                    if enabled: heartbeat('paused' if result['state']=='paused' else 'voice_deferred' if result['state']=='deferred' else 'watching')
+            except sqlite3.OperationalError as error:
+                if not storage_busy(error): raise
+                # A failed read is not permission to collect or an empty source.
+                # The next bounded tick rereads all gates and durable queues.
+                heartbeat('storage_busy')
             wait(POLL_SECONDS)
     finally:
-        realtime.heartbeat('stopped')
+        heartbeat('stopped')

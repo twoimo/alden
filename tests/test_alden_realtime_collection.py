@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import time
@@ -217,6 +218,39 @@ class RealtimeTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM versions').fetchone()[0],2)
         self.assertEqual(self.live.pending(),{})
         self.assertEqual(self.scheduler.status()['manual_pending'],[])
+
+    def test_watch_defers_a_real_sqlite_lock_without_consuming_pending_input(self):
+        self.enable(); self.queue()
+        pending = self.live.pending()
+        lock = sqlite3.connect(self.store.path, timeout=0)
+        self.addCleanup(lock.close)
+        lock.execute('PRAGMA locking_mode=EXCLUSIVE')
+        lock.execute('BEGIN EXCLUSIVE')
+        stopped = threading.Event(); ticks = []; cycles = []
+        original = self.scheduler.cycle
+        def cycle(**options):
+            cycles.append(len(ticks))
+            return original(indexer=lambda *a, **kw: {'state': 'ready'}, **options)
+        def advance(_seconds):
+            ticks.append(1)
+            if len(ticks) == 1:
+                self.assertEqual(cycles, [])
+                self.assertEqual(self.live.pending(), pending)
+                lock.rollback(); lock.close()
+            if len(ticks) == 2:
+                stopped.set()
+        with patch.object(self.scheduler, 'cycle', side_effect=cycle):
+            watch(self.scheduler, stopped, wait=advance, now=lambda: 100 + len(ticks)*5)
+        self.assertEqual(cycles, [1])
+        self.assertEqual(self.live.pending(), {})
+
+    def test_watch_does_not_retry_schema_errors_as_temporary_contention(self):
+        self.enable()
+        stopped = threading.Event(); waits = []
+        with patch.object(CollectionStore, 'open_existing', side_effect=sqlite3.OperationalError('no such table: source')):
+            with self.assertRaisesRegex(sqlite3.OperationalError, 'no such table'):
+                watch(self.scheduler, stopped, wait=waits.append)
+        self.assertEqual(waits, [])
 
 
 if __name__ == '__main__': unittest.main()

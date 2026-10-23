@@ -5,6 +5,57 @@ Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 ## Intended outcome and scope
 
+Latest bounded history/state audit (2026-10-23, based on `1eb2236`): the owned
+local-cache backfill committed1,107 more pages before a real SQLite lock in its
+private full-status cancellation callback stopped the run. Local oldest-page
+boundaries increased from152 to257 of371 rooms;114 rooms and one prepared page
+remain. The original receipt's `partial`/null reason was incomplete; its exit1
+trace and a separate termination-correction receipt preserve that discrepancy.
+No retry, production switch or complete-server-history claim follows.
+
+Readonly reconciliation covered all65,839 retained heads and1,850 page checksums
+(1,849 complete, one prepared). Classification reproduced45,093 context rows,
+20,293 lexical candidates,11 review rows and442 withheld rows. Exact candidate
+text produced18,661 distinct documents while retaining1,632 additional original
+occurrences across439 repeated-content documents. These are occurrences, not
+independent corroborating authors. All18,661 raw blobs and current projections
+matched their recorded hashes/contracts; every candidate remains explicitly
+unverified. This is policy/integrity evidence, not a semantic precision score.
+
+An initial audit oracle wrongly required searchable body bytes to equal NFC
+source bytes. Twenty-eight real CRLF/CR projections correctly differed under the
+existing search-normalization contract. The oracle was corrected without
+changing source identity or deleting originals, and its first failure remains.
+Both pre-run DB snapshots and3,734 pre-run raw blobs were actually restored into
+a separate root, integrity/logical hashes matched, and one retained body/version
+was read through the real details API without source-body reacquisition or new
+events. The first details harness had assumed a `nodes` field on the details-only
+response; that harness failure is retained separately. This is not a production
+root rollback or current native visibility proof.
+
+The product watcher has a related reproducible defect: a private actual SQLite
+exclusive lock makes `CollectionStore.open_existing` escape `watch`, terminating
+the worker. A reversible source correction waits the existing five seconds on
+SQLite BUSY/LOCKED only, then rechecks current gates and durable input. A failed
+cycle no longer advances the periodic invocation clock. Other storage failures
+remain fatal. Bounded generated traces exercise84 busy/control combinations,
+two periodic retry cases and eight fatal cases; a real private-lock journey and
+two broken variants of actual code discriminate the failure. All789 checks in44
+fresh pinned Python processes passed. See [state transitions, claim decisions
+and bounds](STATE_VERIFICATION.md), the generated project-local
+`.agents/skills/verify-alden-realtime-state/SKILL.md`, and
+`scripts/verify_alden_realtime_state.py`.
+
+Installed0.3.218/runtime42c648e,78 file hashes/modes, strict/deep fixed signature,
+43 targets/configs/permissions/intervals, primary6175 and collector74136 were
+rechecked unchanged. Source/tests are separate from installation and physical
+minimized-state verification. Private evidence is under
+`outputs/messenger-history-20261023/`; no native corpus/DB is attached externally.
+The approved one-job Gemini FIFO exception applies only to the immutable2f5f678
+bundle and does not validate later source or ST15. Current-source cross-audit,
+production integration, native Telegram consent, semantic gold and the full
+18/ST01–15/Cursor8/release gates remain open.
+
 Current fresh-identity delta (2026-10-23, based on `0c9fb6b`): repeated account
 guards spawned `ioreg` for the hardware UUID every time. Alden's candidate now
 reads the same current property directly through system IOKit/CoreFoundation
