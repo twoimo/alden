@@ -524,8 +524,11 @@ class CollectionStore:
             store.schema = int(row[0])
         return store
 
-    def _install_source_access(self, db):
+    def _install_source_access(self, db, *, cancelled=None):
         protected, decisions, scopes = None, {}, {}
+        def check_cancelled():
+            if cancelled is not None and cancelled():
+                raise RuntimeError('collection_cancelled')
         def guarded_targets():
             nonlocal protected
             if protected is None:
@@ -533,11 +536,13 @@ class CollectionStore:
                     "SELECT id FROM targets WHERE platform IN ('kakaotalk','telegram')")}
             return protected
         def check_source(key, metadata):
+            check_cancelled()
             try:
                 return callable(self.source_access) and self.source_access(*key, json.loads(metadata)) is True
             except Exception:
                 return False
         def current_scope(target):
+            check_cancelled()
             revision = getattr(self, 'source_revision', None)
             if revision is None:
                 return 'unversioned' if callable(getattr(self, 'source_access', None)) else 'withheld'
@@ -555,6 +560,7 @@ class CollectionStore:
                 scopes[target] = current_scope(target)
             return scopes[target]
         def source_allowed(target, document, version):
+            check_cancelled()
             if target not in guarded_targets():
                 return 1
             if source_scope(target) == 'unavailable':
@@ -569,10 +575,12 @@ class CollectionStore:
         db.create_function('alden_has_source_guards', 0, lambda: int(bool(guarded_targets())))
         db.create_function('alden_source_scope', 1, source_scope)
         def verify():
+            check_cancelled()
             for target, value in scopes.items():
                 if current_scope(target) != value:
                     raise RuntimeError('collection_source_authorization_changed')
             for key, (metadata, allowed) in decisions.items():
+                check_cancelled()
                 if allowed and not check_source(key, metadata):
                     raise RuntimeError('collection_source_authorization_changed')
         return verify
@@ -583,7 +591,7 @@ class CollectionStore:
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
-        verify_source_access = self._install_source_access(db)
+        verify_source_access = self._install_source_access(db, cancelled=cancelled)
         if self.read_only:
             db.execute("PRAGMA query_only=ON")
             db.execute("BEGIN")
@@ -593,6 +601,10 @@ class CollectionStore:
             # writer, never to an original database or foreground reader.
             db.execute('PRAGMA cache_size=-65536')
         try:
+            if cancelled is not None:
+                db.set_progress_handler(lambda: int(bool(cancelled())), 256)
+                if cancelled():
+                    raise RuntimeError('collection_cancelled')
             yield db
             require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision)
             verify_source_access()
@@ -600,8 +612,12 @@ class CollectionStore:
                 if cancelled is not None and cancelled():
                     raise RuntimeError('collection_cancelled')
                 db.commit()
-        except BaseException:
+        except BaseException as error:
+            # An interrupted VM must not also interrupt its rollback.
+            db.set_progress_handler(None, 0)
             db.rollback()
+            if isinstance(error, sqlite3.Error) and cancelled is not None and cancelled():
+                raise RuntimeError('collection_cancelled') from error
             raise
         finally:
             db.close()

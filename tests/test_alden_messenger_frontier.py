@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import importlib.util
 import hashlib
 import json
+import sqlite3
 import sys
 import unittest
 from types import SimpleNamespace
@@ -80,6 +81,57 @@ class Reader:
 
 
 class FrontierTests(unittest.TestCase):
+    def test_readonly_open_keeps_existing_schema_and_blocks_both_database_writers(self):
+        engine, reader = self.frontier({('a', None): ([item(1)], False, None)})
+        engine.step()
+        with engine.database() as db:
+            db.execute('DROP TABLE activity_releases')
+        before = journal_rows(engine.store)
+        opened = candidate.Frontier.open_existing(self.root, 'kakaotalk', 'owner', reader)
+        self.assertTrue(opened.store.graph_page(projects=[candidate.PROJECT])['nodes'])
+        self.assertEqual(opened.context_window('a', '1', projects=[candidate.PROJECT], before=0, after=0)['items'][0]['message_id'], '1')
+        with opened.database() as db:
+            self.assertIsNone(db.execute("SELECT 1 FROM sqlite_master WHERE name='activity_releases'").fetchone())
+            with self.assertRaisesRegex(sqlite3.OperationalError, 'readonly'):
+                db.execute('UPDATE binding SET account=?', ('other',))
+        with opened.store.database() as db:
+            with self.assertRaisesRegex(sqlite3.OperationalError, 'readonly'):
+                db.execute('DELETE FROM documents')
+        self.assertEqual(journal_rows(engine.store), before)
+        reader.blocked = True
+        self.assertEqual(opened.store.graph_page(projects=[candidate.PROJECT])['nodes'], [])
+
+    def test_readonly_open_cannot_initialize_a_missing_frontier(self):
+        with self.assertRaisesRegex(ValueError, 'missing'):
+            candidate.Frontier.open_existing(self.root, 'kakaotalk', 'owner', Reader({}))
+        self.assertFalse((self.root / 'frontier-kakaotalk').exists())
+
+    def test_readonly_open_rejects_a_changed_account_and_missing_context_schema(self):
+        engine, reader = self.frontier({})
+        reader.account = 'other'
+        with self.assertRaisesRegex(ValueError, 'account_changed'):
+            candidate.Frontier.open_existing(self.root, 'kakaotalk', 'owner', reader)
+        reader.account = 'owner'
+        with engine.database() as db:
+            db.execute('DROP TABLE message_heads')
+        with self.assertRaisesRegex(ValueError, 'requires_migration'):
+            candidate.Frontier.open_existing(self.root, 'kakaotalk', 'owner', reader)
+
+    def test_readonly_open_rejects_unregistered_target_and_rechecks_persisted_binding(self):
+        engine, reader = self.frontier({})
+        opened = candidate.Frontier.open_existing(self.root, 'kakaotalk', 'owner', reader)
+        with engine.database() as db:
+            db.execute("UPDATE binding SET account='other'")
+        with self.assertRaisesRegex(ValueError, 'account_binding'):
+            with opened.database():
+                self.fail('Changed source binding was admitted')
+        with engine.database() as db:
+            db.execute("UPDATE binding SET account='owner'")
+        with engine.store.database() as db:
+            db.execute("UPDATE targets SET original_id='other'")
+        with self.assertRaisesRegex(ValueError, 'target_binding'):
+            candidate.Frontier.open_existing(self.root, 'kakaotalk', 'owner', reader)
+
     def setUp(self):
         temp = TemporaryDirectory(dir='/private/tmp')
         self.addCleanup(temp.cleanup)

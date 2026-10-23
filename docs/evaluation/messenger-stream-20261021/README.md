@@ -3,6 +3,13 @@
 Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
+Latest host delta: [read-only loading and cancellable reads](READONLY_HOST.md).
+Existing source state now opens without writer migrations. Actual SQL cancellation
+and an independent native stdio timeout/next-ping journey are verified. The full
+native index timed out with7,425 retained cache rows; full-project search is still
+too slow. These incomplete outcomes are retained separately from the earlier
+one-document native success and are not production factory/installed delivery.
+
 Latest guarded producer delta: [index authority and native text boundary](INDEX_AUTHORITY.md).
 Explicit source guards reach text/dense indexing and bracket encoder/cache use;
 839 checks and one narrowed real Kakao text→MCP→native-context journey pass.

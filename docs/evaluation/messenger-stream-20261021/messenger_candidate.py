@@ -160,7 +160,8 @@ class MessengerAuthority:
                 (source.target,proof['entity_id'],proof['source_version'])).fetchone() is None:
                 return False
         with source.database() as db:
-            db.execute('BEGIN')
+            if not db.in_transaction:
+                db.execute('BEGIN')
             room = db.execute('SELECT frontier FROM rooms WHERE id=?', (window['room_id'],)).fetchone()
             if room is None or source._epoch(json.loads(room['frontier'])) != window['source_epoch']:
                 return False
@@ -389,7 +390,8 @@ def create_root(path):
 
 
 class Frontier:
-    def __init__(self, root, platform, account, reader):
+    @staticmethod
+    def _existing_root(root, platform, account):
         root = Path(root)
         if platform not in {'kakaotalk', 'telegram'} or not isinstance(account, str) or not account:
             raise ValueError('messenger_identity_invalid')
@@ -399,7 +401,50 @@ class Frontier:
         marker = root / '.messenger-evaluation'
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077 or marker.is_symlink() or marker.read_bytes() != MARKER:
             raise ValueError('messenger_evaluation_root_required')
+        return root
+
+    @classmethod
+    def open_existing(cls, root, platform, account, reader):
+        """Load explicitly selected enrolled state without creating/migrating it."""
+        root = cls._existing_root(root, platform, account)
+        if not root.is_absolute() or '..' in root.parts:
+            raise ValueError('messenger_existing_absolute_root_required')
+        folder = root / ('frontier-' + platform)
+        path = folder / 'frontier.sqlite3'
+        if not path.is_file():
+            raise ValueError('messenger_existing_frontier_missing')
+        if any(p.is_symlink() for p in (path, folder)) or path.stat().st_uid != os.geteuid():
+            raise ValueError('messenger_frontier_unsafe')
+        if reader.identity() != account:
+            raise ValueError('messenger_account_changed')
+        source = cls.__new__(cls)
+        source.root, source.platform, source.account, source.reader = root, platform, account, reader
+        source._source_root, source.folder, source.path, source.read_only = root, folder, path, True
+        source.target = identity('target-' + platform, 'local-db:' + account)
+        with source.database() as db:
+            required = {'rooms': {'id','frontier'}, 'binding': {'account'},
+                'pages': {'id','room','payload','next_frontier','state'},
+                'message_heads': {'id','room','message','content_hash','state','reason','body','page','sent_at'},
+                'head_fingerprints': {'id','fingerprint'}}
+            for table, columns in required.items():
+                if not columns.issubset({r['name'] for r in db.execute('PRAGMA table_info(' + table + ')')}):
+                    raise ValueError('messenger_existing_frontier_requires_migration')
+        source.store = CollectionStore.open_existing(root,
+            source_access=source._source_access, source_revision=source._source_revision)
+        if source.store is None:
+            raise ValueError('messenger_existing_collection_missing')
+        with source.store.database() as db:
+            target = db.execute('SELECT platform,original_id,kind FROM targets WHERE id=?', (source.target,)).fetchone()
+            if target is None or tuple(target) != (platform, account, 'local-db'):
+                raise ValueError('messenger_existing_target_binding_invalid')
+        if reader.identity() != account:
+            raise ValueError('messenger_account_changed')
+        return source
+
+    def __init__(self, root, platform, account, reader):
+        root = self._existing_root(root, platform, account)
         self.root, self.platform, self.account, self.reader = root, platform, account, reader
+        self.read_only = False
         self._source_root = root.absolute()
         self.folder = safe_directory(root / ('frontier-' + platform))
         self.path = self.folder / 'frontier.sqlite3'
@@ -475,13 +520,27 @@ class Frontier:
 
     @contextmanager
     def database(self):
-        if self.path.is_symlink():
+        readonly = getattr(self, 'read_only', False)
+        if self.path.is_symlink() or readonly and any(p.is_symlink() for p in self.path.parents):
             raise ValueError('messenger_frontier_unsafe')
-        with closing(sqlite3.connect(self.path, timeout=.5)) as db:
+        if readonly:
+            self.collection_source_root()
+            self._existing_root(self.root, self.platform, self.account)
+        with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True, timeout=.5)
+                     if readonly else sqlite3.connect(self.path, timeout=.5)) as db:
             db.row_factory = sqlite3.Row
             db.create_collation('alden_message_id', _compare_message_ids)
+            if readonly:
+                db.execute('PRAGMA query_only=ON')
+                db.execute('BEGIN')
+                binding = db.execute("SELECT account FROM binding LIMIT 2").fetchall() if db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='binding'").fetchone() else []
+                if len(binding) != 1 or binding[0][0] != self.account:
+                    raise ValueError('messenger_existing_account_binding_invalid')
             try:
                 yield db
+                if readonly:
+                    self.collection_source_root()
                 db.commit()
             except BaseException:
                 db.rollback()
@@ -895,7 +954,8 @@ class Frontier:
             raise SourceBlocked('messenger_context_account_changed')
         revision = self._source_revision(self.target)
         with self.database() as db:
-            db.execute('BEGIN')
+            if not db.in_transaction:
+                db.execute('BEGIN')
             frontier = db.execute('SELECT frontier FROM rooms WHERE id=?', (room,)).fetchone()
             anchor = db.execute('SELECT * FROM message_heads WHERE room=? AND message=?', (room, message)).fetchone()
             if frontier is None or anchor is None or anchor['sent_at'] is None:

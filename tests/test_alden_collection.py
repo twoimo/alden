@@ -17,6 +17,22 @@ from alden_collect import capture_source, collect_target
 
 
 class CollectionTests(unittest.TestCase):
+    def test_database_cancellation_interrupts_running_sql_and_rolls_back(self):
+        calls = 0
+        def tick(value):
+            nonlocal calls
+            calls += 1
+            return value
+        with self.assertRaisesRegex(RuntimeError, 'collection_cancelled'):
+            with self.store.database(cancelled=lambda: calls >= 3) as db:
+                db.execute("INSERT INTO meta VALUES('cancel-probe','uncommitted')")
+                db.create_function('cancel_tick', 1, tick)
+                db.execute('''WITH RECURSIVE numbers(x) AS (VALUES(1) UNION ALL
+                    SELECT x+1 FROM numbers WHERE x<10000) SELECT sum(cancel_tick(x)) FROM numbers''').fetchone()
+        self.assertLess(calls, 100)
+        with self.store.database() as db:
+            self.assertIsNone(db.execute("SELECT value FROM meta WHERE key='cancel-probe'").fetchone())
+
     def test_blank_display_title_skips_export_link_and_reaction_lines(self):
         heading = '서류 평가에서 경험과 직무의 연결 근거를 구체적으로 설명합니다.'
         header = '- 링크: https://www.threads.com/@example/post/Example123\n- 반응: 좋아요 6 · 답글 0 · 리포스트 0'

@@ -11,6 +11,34 @@ from alden_collection import CollectionStore, identity, read_action
 
 
 class MessengerAccessTests(unittest.TestCase):
+    def test_retrieval_cancellation_stops_the_protected_source_sql_scan(self):
+        from alden_collection_retrieval import retrieve
+        self.store.ingest(self.target, [{**self.record,'original_id':str(i)} for i in range(300)])
+        calls = 0
+        def access(*args):
+            nonlocal calls
+            calls += 1
+            return True
+        with self.assertRaisesRegex(RuntimeError, 'collection_retrieval_cancelled'):
+            retrieve(self.root, 'revocable', projects=['project'], source_access=access,
+                     source_revision=lambda _: 'a'*64, cancelled=lambda: calls >= 3)
+        self.assertLess(calls, 100)
+
+    def test_cancelled_connection_does_not_recheck_native_sources_on_exit(self):
+        stopped, calls = False, 0
+        def access(*args):
+            nonlocal calls
+            calls += 1
+            return True
+        self.store.source_access = access
+        with self.assertRaisesRegex(RuntimeError, 'collection_cancelled'):
+            with self.store.database(cancelled=lambda: stopped) as db:
+                version = db.execute('SELECT current_version FROM documents WHERE id=?', (self.document,)).fetchone()[0]
+                self.assertEqual(db.execute('SELECT alden_source_allowed(?,?,?)', (self.target,self.document,version)).fetchone()[0], 1)
+                before = calls
+                stopped = True
+        self.assertEqual(calls, before)
+
     def setUp(self):
         temporary = TemporaryDirectory(dir='/private/tmp')
         self.addCleanup(temporary.cleanup)

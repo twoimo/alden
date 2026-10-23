@@ -6,6 +6,11 @@ guarded standalone stdio, whole-corpus ingestion and external reverse review
 remain open. This closes a demonstrated producer API gap within F-M08-01,
 not the whole finding.
 
+Later candidate: [readonly source loading and SQL cancellation](READONLY_HOST.md)
+adds cancellable read/publication intervals and records the incomplete full-corpus
+native run plus an actual independent stdio timeout/recovery journey. The839-check
+and one-document receipts below retain their original source/workload scope.
+
 ## Observable defect and correction
 
 `index_text` and `index_dense` opened CollectionStore without the explicit source

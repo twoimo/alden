@@ -293,7 +293,7 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
         if owned.execute("SELECT 1 FROM sqlite_master WHERE name='texts'").fetchone():
             text_db = owned
     try:
-        with store.database() as db:
+        with store.database(cancelled=cancelled) as db:
             source_query = ' FROM documents d JOIN (' + store._scope_versions(projects) + ''') s
                 ON s.document_id=d.id JOIN versions v ON v.id=s.current_version
                 WHERE d.availability='available' ''' + ''.join(' AND ' + c for c in clauses)
@@ -361,6 +361,9 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
                 result.append(item)
             flush()
             return result
+    except Exception:
+        _check(cancelled)
+        raise
     finally:
         if owned is not None:
             owned.close()
@@ -400,14 +403,14 @@ def _vector(raw):
 
 
 @contextmanager
-def _index_source_guard(store, projects, authority, pairs=()):
+def _index_source_guard(store, projects, authority, pairs=(), *, cancelled=lambda: False):
     """Fresh source interval around one bounded encoder/cache publication batch.
 
     The collection and native authorities have independent transactions. This
     checks their current observations; it is not a cross-database atomic grant.
     """
     pairs = set(pairs)
-    with store.database() as source:
+    with store.database(cancelled=cancelled) as source:
         if store._source_authority_snapshot(source, projects) != authority:
             raise RuntimeError('collection_source_authorization_changed')
         if pairs:
@@ -448,7 +451,7 @@ def index_text(root, projects, *, cancelled=lambda: False, source_access=None, s
         _check(cancelled)
         with store.database() as source:
             authority = store._source_authority_snapshot(source, projects)
-        guard = lambda pairs: _index_source_guard(store, projects, authority, pairs)
+        guard = lambda pairs: _index_source_guard(store, projects, authority, pairs, cancelled=cancelled)
         safe_directory(store.root)
         with closing(sqlite3.connect(_path(store), timeout=.15)) as db:
             db.execute('PRAGMA journal_mode=WAL')
@@ -477,7 +480,7 @@ def _index_dense(root, projects, *, cancelled, embed, progress, source_access=No
     _check(cancelled)
     with store.database() as source:
         authority = store._source_authority_snapshot(source, projects)
-    guard = lambda pairs: _index_source_guard(store, projects, authority, pairs)
+    guard = lambda pairs: _index_source_guard(store, projects, authority, pairs, cancelled=cancelled)
     safe_directory(store.root)
     with closing(sqlite3.connect(_path(store), timeout=.15)) as db:
         db.execute('PRAGMA journal_mode=WAL')
