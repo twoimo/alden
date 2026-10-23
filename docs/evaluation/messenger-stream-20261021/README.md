@@ -5,6 +5,56 @@ Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 ## Intended outcome and scope
 
+Current traversal-fairness delta (2026-10-23, based on `5660197`): interleaving
+live, backfill and reconcile reproduced permanent room partitioning. Three
+eligible rooms became `live:{a}`, `backfill:{b}`, `reconcile:{c}` because all
+modes shared `rooms.checked`. Separate durable per-mode sequence positions now
+rotate every eligible room independently of wall-clock equality/rewind. Each
+step selects at most one eligible room in SQL; unprimed live rooms and completed
+history rooms are filtered before selection. Prepared recovery advances its
+actual original mode, not the mode that happened to request recovery. Existing
+global room backoff, source permissions and publication guards remain binding.
+
+Eight fairness regressions cover mixed modes, fixed/rewound clocks, reopening,
+independent cursors, empty/unprimed rooms, blocked-room progress, interrupted
+commit, legacy metadata preservation and two sweeps over707 rooms. All772 tests
+in42 fresh pinned Python processes passed. These are correctness checks, not
+whole-app performance or native messaging proof.
+
+A separate native canonical run completed371/371 initial latest-page checks and
+371/371 live checks in an isolated store. All743 SDK observations verified
+readonly/schema and zero server/send/source-DB/app-setting writes. It retained
+13,294 source heads:3,963 candidates,9,253 context,1 review and77 withheld;
+3,734 unique candidate documents retained the229 additional exact origins.
+Initial collection added3,716 documents; live runs added18, with361 live rooms
+unchanged. The live activity API returned exactly18 added receipts bound to
+current isolated membership/version IDs, with no unchanged/duplicate receipts
+and no new read events. This was a replay audit, not installed combat rendering.
+
+Native coverage is one initial latest page and one live page per cached room,
+not complete history/server coverage or a running watcher. Only152 rooms reached
+their history boundary;219 still have older pages. No live tail cursor remained
+at the end of this bounded run. Source arrival-to-graph latency is unverified;
+no messages were sent or injected. The live pass took138.6 seconds, so further
+latency work is required before calling the product a frequent real-time poller.
+The whole two-pass runner took309.3 seconds /180.1 CPU seconds, with62,226,432-byte
+process peak RSS and57,229,997 logical bytes in its own store. These are one
+observed local reader/store workload, not application/GPU/battery measurements
+or a speedup comparison. Native model calls were not instrumented.
+
+One focused canonical catalog capability read found only room identity/title/
+kind/member-count fields, with no per-room latest-message watermark. The SDK
+advertises exact-room metadata-only reads; this is a possible next path, not an
+implemented all-room incremental watermark. Source decoding/consent guards must
+remain, and old-row edits/withdrawals require independent reconciliation.
+
+Evidence is private under `outputs/messenger-fairness-20261023/`. Original stores,
+installed0.3.218/runtime42c648e,43 target settings, signed resources and running
+primary/collector remain separate from this candidate. No daemon, install,
+source write, foreground QA, native Telegram body or model substitution was
+introduced. Production scheduler/bootstrap/index/UI integration and actual
+cross-audit/reverse verification remain open, along with full18/ST01–14/Cursor8.
+
 Current retrieval-context delta (2026-10-23, based on `e6be22a`): the controlled
 question “회의 일정은 몇 시로 변경되나요?” was searchable while its retained
 “3시요” neighbor was absent from retrieval. `MessengerAuthority.retrieval_context`

@@ -409,6 +409,10 @@ class Frontier:
                 page TEXT NOT NULL,content_hash TEXT NOT NULL,PRIMARY KEY(page,content_hash))''')
             db.execute('CREATE INDEX IF NOT EXISTS content_claim_pages ON page_content_claims(content_hash,page)')
             db.execute('CREATE TABLE IF NOT EXISTS retired_policy_pages(page TEXT PRIMARY KEY,reason TEXT NOT NULL)')
+            db.execute('''CREATE TABLE IF NOT EXISTS room_mode_checks(
+                room TEXT NOT NULL,mode TEXT NOT NULL,position INTEGER NOT NULL CHECK(position>0),
+                PRIMARY KEY(room,mode))''')
+            db.execute('CREATE INDEX IF NOT EXISTS mode_check_order ON room_mode_checks(mode,position,room)')
             if not claims_exist:
                 for pending in db.execute("SELECT id,room,payload FROM pages WHERE state='prepared'"):
                     self._claim_page_content(db, pending['id'], pending['room'], json.loads(pending['payload'])['items'])
@@ -646,6 +650,7 @@ class Frontier:
                         [(job, self._observation(row['room'], item)[0]) for item in payload['items']])
                 db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
                            (encoded(current_state).decode(), time.time(), row['room']))
+                self._checked(db, row['room'], payload['mode'])
                 db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))
             return {'state': 'unchanged', 'room_id': row['room'], 'job': job}
         records, retractions, updates, fingerprints, affected = [], [], [], [], set()
@@ -697,6 +702,7 @@ class Frontier:
                 [(item['sent_at'], self._observation(row['room'], item)[0]) for item in payload['items']])
             db.execute('UPDATE rooms SET frontier=?,checked=?,error=NULL,retry_at=0 WHERE id=?',
                        (row['next_frontier'], time.time(), row['room']))
+            self._checked(db, row['room'], payload['mode'])
             db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))
         return {'state': 'published', 'room_id': row['room'], 'job': job,
                 'input_rows': len(payload['items']), 'text_records': len(records),
@@ -883,10 +889,19 @@ class Frontier:
         if not target['enabled'] or not any(p['permission'] != 'denied' for p in target['projects']):
             raise SourceBlocked('messenger_target_disabled_or_denied')
 
-    def _blocked(self, room, error):
+    @staticmethod
+    def _checked(db, room, mode):
+        if mode not in {'backfill', 'live', 'reconcile'}:
+            return
+        position = db.execute('SELECT coalesce(max(position),0)+1 FROM room_mode_checks WHERE mode=?', (mode,)).fetchone()[0]
+        db.execute('''INSERT INTO room_mode_checks VALUES(?,?,?) ON CONFLICT(room,mode)
+            DO UPDATE SET position=excluded.position''', (room,mode,position))
+
+    def _blocked(self, room, error, mode):
         with self.database() as db:
             db.execute('UPDATE rooms SET checked=?,error=?,retry_at=? WHERE id=?',
                        (time.time(), str(error)[:160], time.time() + 60, room))
+            self._checked(db, room, mode)
         return {'state': 'blocked', 'room_id': room, 'reason': str(error)}
 
     def step(self, *, mode='backfill', cancelled=lambda: False, after_publish=lambda: None):
@@ -904,24 +919,29 @@ class Frontier:
                 raise ValueError('messenger_account_changed')
             self._allowed()
             with self.database() as db:
-                pending = db.execute("SELECT p.id,p.room FROM pages p JOIN rooms r ON r.id=p.room WHERE p.state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id) AND r.retry_at<=? ORDER BY p.rowid LIMIT 1", (time.time(),)).fetchone()
-                rooms = db.execute("SELECT * FROM rooms r WHERE retry_at<=? AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.room=r.id AND p.state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id)) ORDER BY checked,id", (time.time(),)).fetchall()
+                pending = db.execute("SELECT p.id,p.room,json_extract(p.payload,'$.mode') AS mode FROM pages p JOIN rooms r ON r.id=p.room WHERE p.state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id) AND r.retry_at<=? ORDER BY p.rowid LIMIT 1", (time.time(),)).fetchone()
+                eligibility = {'backfill': "json_extract(r.frontier,'$.back_done')=0",
+                    'live': "(json_extract(r.frontier,'$.live_head') IS NOT NULL OR json_extract(r.frontier,'$.back_done')=1)",
+                    'reconcile': '1'}[mode]
+                rooms = db.execute("""SELECT r.* FROM rooms r LEFT JOIN room_mode_checks c
+                    ON c.room=r.id AND c.mode=? WHERE r.retry_at<=? AND """ + eligibility + """
+                    AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.room=r.id AND p.state='prepared'
+                      AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id))
+                    ORDER BY coalesce(c.position,0),r.id LIMIT 1""", (mode,time.time())).fetchall()
             if pending:
                 try:
                     return self._publish(pending['id'], cancelled=cancelled, after_publish=after_publish, revalidate=True)
                 except SourceBlocked as error:
-                    return self._blocked(pending['room'], error)
+                    return self._blocked(pending['room'], error, pending['mode'])
             for room in rooms:
                 state = json.loads(room['frontier'])
-                if mode == 'backfill' and state['back_done'] or mode == 'live' and state['live_head'] is None and not state['back_done']:
-                    continue
                 try:
                     cursor = state.get({'backfill': 'back_cursor', 'live': 'live_cursor', 'reconcile': 'check_cursor'}[mode])
                     page = self.reader.page(room['id'], cursor)
                     job = self._prepare(room, mode, page)
                     return self._publish(job, cancelled=cancelled, after_publish=after_publish)
                 except SourceBlocked as error:
-                    return self._blocked(room['id'], error)
+                    return self._blocked(room['id'], error, mode)
             return {'state': 'idle'}
         finally:
             os.close(descriptor)

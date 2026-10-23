@@ -305,6 +305,9 @@ jobs:
       - name: Test current messenger retrieval context in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_rag_context -v
 
+      - name: Test mixed messenger traversal fairness in a fresh process
+        run: python3 -B -m unittest tests.test_alden_messenger_fairness -v
+
       # The reader enforces a process peak RSS budget. Earlier test modules
       # must not consume the memory allowance of this independent CLI process.
       - name: Test bounded affinity in a fresh process
