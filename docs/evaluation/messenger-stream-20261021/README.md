@@ -3,6 +3,13 @@
 Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
+Latest runtime delta: [explicit existing-state MCP factory](RUNTIME_FACTORY.md).
+The maintained messenger implementation is packaged under scripts, with legacy
+imports forwarding to it. Standard CLI/stdio opens existing enrollment using
+fresh request-bound authority. Controlled SDK journeys pass; actual SDK startup
+is withheld on current shared-file qualification failures before identity, SQL
+or body reads. Production enrollment/collector/UI and installed activation remain open.
+
 Latest query delta: [additive digit-lexeme recall](INTEGER_QUERY.md) fixes the
 `100` → `100개` omission in retrieve/MCP while preserving existing token hits.
 One qualified native query now returns its fact/current context; arithmetic/unit

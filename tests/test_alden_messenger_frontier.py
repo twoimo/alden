@@ -2,7 +2,6 @@
 from pathlib import Path
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
-import importlib.util
 import hashlib
 import json
 import sqlite3
@@ -16,10 +15,7 @@ from alden_collection import CollectionStore, encoded, identity
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'docs/evaluation/messenger-stream-20261021'))
 
-SPEC = importlib.util.spec_from_file_location('messenger_candidate',
-    Path(__file__).resolve().parents[1] / 'docs/evaluation/messenger-stream-20261021/messenger_candidate.py')
-candidate = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(candidate)
+import alden_messenger_runtime as candidate
 from messenger_quality import classify
 
 

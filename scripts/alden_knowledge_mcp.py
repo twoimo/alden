@@ -24,9 +24,12 @@ class CallToken(AbortToken):
 class KnowledgeServer(StdioServer):
     server_name = 'alden-readonly-knowledge'
 
-    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, search_strategy='complete'):
+    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, search_strategy='complete', source_factory=None):
         super().__init__(None, tool_timeout=tool_timeout)
         self.root = Path(root)
+        if source_factory is not None and (not callable(source_factory) or any(value is not None for value in (source_access, source_revision, source_context))):
+            raise ValueError('knowledge_source_factory_invalid')
+        self.source_factory, self._factory_root = source_factory, self.root
         self.source_access, self.source_revision = source_access, source_revision
         if source_context is not None and not all(callable(value) for value in (source_access, source_revision, source_context)):
             raise ValueError('knowledge_source_context_authority_required')
@@ -39,9 +42,28 @@ class KnowledgeServer(StdioServer):
             raise ValueError('knowledge_startup_scope_required')
         if not self.root.is_absolute() or '..' in self.root.parts:
             raise ValueError('knowledge_startup_path_invalid')
+        if self.source_factory is not None:
+            guards = self._source_guards(lambda: False)
+            source_access, source_revision, source_context = guards['source_access'], guards['source_revision'], guards['source_context']
+            self.source_access, self.source_revision, self.source_context = source_access, source_revision, source_context
         require_collection_source_root(self.root, source_access, source_revision, source_context)
         # Opening existing data validates paths/schema without creating or migrating it.
         CollectionStore.open_existing(self.root, source_access=source_access, source_revision=source_revision)
+
+    def _source_guards(self, cancelled):
+        if self.source_factory is None:
+            return {'source_access': self.source_access, 'source_revision': self.source_revision, 'source_context': self.source_context}
+        if self.root != self._factory_root:
+            raise ValueError('knowledge_source_factory_root_changed')
+        authority = self.source_factory(self.root, cancelled)
+        if not callable(getattr(authority, 'collection_source_root', None)):
+            raise ValueError('knowledge_source_factory_authority_invalid')
+        result = {key: getattr(authority, method, None) for key, method in
+                  [('source_access', 'access'), ('source_revision', 'revision'), ('source_context', 'retrieval_context')]}
+        if any(not callable(value) or getattr(value, '__self__', None) is not authority for value in result.values()):
+            raise ValueError('knowledge_source_factory_authority_invalid')
+        require_collection_source_root(self.root, *result.values())
+        return result
 
     def tool_catalog(self):
         common = {'projects': {'type': 'array', 'minItems': 1, 'maxItems': 16,
@@ -92,13 +114,13 @@ class KnowledgeServer(StdioServer):
         args, name = params['arguments'], params['name']
         token = CallToken(self.root / ABORT_STATE_NAME, control)
         cancelled = lambda: token.is_cancelled() or control is not None and control.stopped.is_set()
+        guards = self._source_guards(cancelled)
         if name.endswith('search'):
             import auto_reply_knowledge_graph as kg
             with kg.embedding_abort_scope(token):
                 result = retrieve(self.root, args['query'], projects=args['projects'],
                                   max_entities=args.get('limit', 6), cancelled=cancelled,
-                                  source_access=self.source_access, source_revision=self.source_revision,
-                                  source_context=self.source_context, search_strategy=self.search_strategy)
+                                  **guards, search_strategy=self.search_strategy)
         else:
             action = 'collection-graph' if name.endswith('graph') else 'collection-history'
             options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
@@ -107,7 +129,7 @@ class KnowledgeServer(StdioServer):
             if 'focus' in args:
                 options['focus'], options['hops'] = args['focus'], 1
             result = read_action(self.root, action, json.dumps(options),
-                                 source_access=self.source_access, source_revision=self.source_revision)
+                                 source_access=guards['source_access'], source_revision=guards['source_revision'])
             if action == 'collection-history':
                 # The UI catalog is global; MCP exposes only this request's projects.
                 requested = frozenset(args['projects'])
@@ -122,9 +144,15 @@ def main():
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--allow-project', action='append', required=True)
     parser.add_argument('--search-strategy', choices=('complete','indexed-lexical'), default='complete')
+    parser.add_argument('--messenger-source', choices=('kakaotalk',))
     args = parser.parse_args()
     try:
-        KnowledgeServer(args.state_root, args.allow_project, search_strategy=args.search_strategy).serve(sys.stdin.buffer, sys.stdout.buffer)
+        factory = None
+        if args.messenger_source:
+            from alden_messenger_factory import open_existing_kakao
+            factory = open_existing_kakao
+        KnowledgeServer(args.state_root, args.allow_project, search_strategy=args.search_strategy,
+                        source_factory=factory).serve(sys.stdin.buffer, sys.stdout.buffer)
     except (BrokenPipeError, KeyboardInterrupt):
         pass
 

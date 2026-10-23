@@ -299,6 +299,9 @@ jobs:
       - name: Test messenger authority composition in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_authority -v
 
+      - name: Test explicit messenger runtime factory in a fresh process
+        run: python3 -B -m unittest tests.test_alden_messenger_factory -v
+
       - name: Test exact messenger policy migration in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_policy -v
 

@@ -8,12 +8,12 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / 'docs/evaluation/messenger-stream-20261021/messenger_candidate.py'
+SOURCE = ROOT / 'scripts/alden_messenger_runtime.py'
 CHILD = '''
 from pathlib import Path
 import importlib.util,sys,unittest
 root=Path.cwd();sys.path[:0]=[str(root/'scripts'),str(root/'tests'),str(root/'docs/evaluation/messenger-stream-20261021')]
-spec=importlib.util.spec_from_file_location('messenger_candidate',sys.argv[1])
+spec=importlib.util.spec_from_file_location('alden_messenger_runtime',sys.argv[1])
 module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module;spec.loader.exec_module(module)
 result=unittest.TextTestRunner(verbosity=1).run(unittest.TestLoader().loadTestsFromName('test_alden_messenger_publication'))
 raise SystemExit(not result.wasSuccessful())

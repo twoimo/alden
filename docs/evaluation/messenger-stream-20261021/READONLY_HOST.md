@@ -1,5 +1,10 @@
 # Read-only source loading and cancellable collection reads
 
+Later delta: [standard CLI runtime factory](RUNTIME_FACTORY.md) opens existing
+enrollment without a private authority host. Current SDK qualification is held;
+earlier native evidence below retains its original source/time/scope and does
+not establish current SDK readiness.
+
 Candidate based on `40f151a229fa7856b1dca03b1e1dfa5d4ecf6990`. Installed Alden
 remains0.3.218. This is progress on F-M08-01 and a locally discovered cancellation
 defect; successful whole-corpus search/ingestion, production authority factory,
