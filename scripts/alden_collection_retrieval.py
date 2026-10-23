@@ -147,10 +147,11 @@ def _strict_json(value):
 
 def _verified_source(db, store, row, projects):
     """Bind selected source bytes to the current permitted projection snapshot."""
-    current = db.execute('''SELECT v.*,d.platform,d.original_id FROM (''' +
-        store._scope_versions(projects) + ''') s JOIN documents d ON d.id=s.document_id
+    current = db.execute('''WITH search_candidates(document_id) AS (VALUES(?))
+        SELECT v.*,d.platform,d.original_id FROM (''' +
+        store._scope_versions(projects, candidates=True) + ''') s JOIN documents d ON d.id=s.document_id
         JOIN versions v ON v.id=s.current_version
-        WHERE d.id=? AND d.availability='available' ''', (*projects, row['id'])).fetchone()
+        WHERE d.id=? AND d.availability='available' ''', (row['id'], *projects, row['id'])).fetchone()
     if current is None or current['id'] != row['version']:
         raise RuntimeError('collection_graph_version_changed')
     try:
@@ -218,6 +219,73 @@ def _scope(projects):
     if any(not isinstance(p, str) or not p or len(p) > 128 for p in projects):
         raise ValueError('collection_project_scope_invalid')
     return list(dict.fromkeys(projects))
+
+
+def _retrieval_authority(db, projects):
+    marks = ','.join('?' for _ in projects)
+    rows = db.execute('''SELECT target_id,project,permission,
+        CASE WHEN permission!='denied' THEN alden_source_scope(target_id) END
+        FROM target_projects WHERE project IN (''' + marks + ''')
+        ORDER BY target_id,project LIMIT ?''', (*projects, MAX_DOCUMENTS + 1)).fetchall()
+    if len(rows) > MAX_DOCUMENTS:
+        raise RuntimeError('collection_retrieval_budget')
+    return tuple(tuple(row) for row in rows)
+
+
+def _retrieval_relations(db, store, projects, chosen, relation_ids=()):
+    sources = ','.join('?' for _ in chosen)
+    marks = ','.join('?' for _ in projects)
+    selected = ' AND r.id IN (' + ','.join('?' for _ in relation_ids) + ')' if relation_ids else ''
+    priority = 'CASE r.source ' + ' '.join('WHEN ? THEN ' + str(i) for i in range(len(chosen))) + ' END'
+    return db.execute('''SELECT r.*,sm.current_version AS source_version,
+        tm.current_version AS target_version FROM relations r
+        JOIN memberships sm ON sm.target_id=r.target_id AND sm.document_id=r.source
+        JOIN memberships tm ON tm.target_id=r.target_id AND tm.document_id=r.target
+        WHERE r.active=1 AND r.source IN (''' + sources + ''')
+        AND sm.availability='available' AND tm.availability='available'
+        AND ''' + store._source_relation_scope() + '''
+        AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
+        AND p.permission!='denied' AND p.project IN (''' + marks + '))' + selected +
+        ' ORDER BY ' + priority + ',r.id', (*chosen, *projects, *relation_ids, *chosen))
+
+
+def _verify_retrieval_result(store, projects, authority, eligible, ranked, proofs, relations):
+    # A fresh read transaction binds the assembled response, including candidate
+    # IDs and compacted source proofs, to one final collection snapshot. It does
+    # not promise authority remains unchanged after this read/response interval.
+    with store.database() as db:
+        if _retrieval_authority(db, projects) != authority:
+            raise RuntimeError('collection_source_authorization_changed')
+        if ranked:
+            expected = {document: eligible[document]['version'] for document, _score in ranked}
+            values = ','.join('(?)' for _ in expected)
+            current = dict(db.execute('WITH search_candidates(document_id) AS (VALUES ' + values +
+                ') SELECT s.document_id,s.current_version FROM (' +
+                store._scope_versions(projects, candidates=True) + ''') s JOIN documents d ON d.id=s.document_id
+                WHERE d.availability='available' ''', (*expected, *projects)))
+            if current != expected:
+                raise RuntimeError('collection_graph_version_changed')
+        verified = {}
+        def verify(document):
+            if document not in verified:
+                verified[document] = _verified_source(db, store, eligible[document], projects)[2]
+            return verified[document]
+        for proof in proofs:
+            if proof['fact_type'] != 'entity':
+                continue
+            for source in [proof, *proof.get('matching_sources', {}).get('sources', [])]:
+                memberships = verify(source['entity_id'])
+                if any(member not in memberships for member in source['source_memberships']):
+                    raise RuntimeError('collection_source_authorization_changed')
+        if relations:
+            chosen = list(dict.fromkeys(row['source'] for row in relations))
+            current = {row['id']: row for row in _retrieval_relations(db, store, projects, chosen,
+                       [row['id'] for row in relations])}
+            for row in relations:
+                if row['id'] not in current or dict(current[row['id']]) != row:
+                    raise RuntimeError('collection_relation_changed')
+                require_relation_binding(db, current[row['id']])
+                verify(row['source']); verify(row['target'])
 
 
 def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False):
@@ -486,6 +554,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
     if store is None:
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
+    with store.database() as db:
+        authority = _retrieval_authority(db, projects)
     source_rows = _rows(store, projects, cancelled, time_from, time_to)
     rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
     eligible = {row['id']: row for row in rows}
@@ -599,6 +669,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         pinned = list(dict.fromkeys(i for i in also if i in eligible))
         ranked = [(i, 0.) for i in pinned] + [(i, s) for i, s in ranked if i not in pinned]
     facts, provenance, used = [], [], 0
+    relation_checks = []
     context_windows, context_checks, context_withheld, context_budget_omitted = [], 0, 0, 0
     context_unavailable = set()
     context_unverified_relations = 0
@@ -710,16 +781,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             chosen.append(document_id)
         if chosen and max_relations > 0:
             marks = ','.join('?' for _ in projects)
-            edges = db.execute('''SELECT r.*,sm.current_version AS source_version,
-                tm.current_version AS target_version FROM relations r
-                JOIN memberships sm ON sm.target_id=r.target_id AND sm.document_id=r.source
-                JOIN memberships tm ON tm.target_id=r.target_id AND tm.document_id=r.target
-                WHERE r.active=1 AND r.source=?
-                AND sm.availability='available' AND tm.availability='available'
-                AND ''' + store._source_relation_scope() + '''
-                AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
-                AND p.permission!='denied' AND p.project IN (''' + marks + ')) ORDER BY r.id',
-                (chosen[0], *projects))
+            edges = _retrieval_relations(db, store, projects, chosen)
             for edge in edges:
                 _check(cancelled)
                 if edge['target'] not in eligible or edge['target'] in temporal_excluded or edge['target'] in context_unavailable:
@@ -743,7 +805,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                     AND project IN (''' + marks + ') ORDER BY project', (edge['target_id'], *projects))]
                 if not relation_memberships or any(m['permission'] not in ('public','local-private') for m in relation_memberships):
                     raise RuntimeError('collection_source_scope_integrity')
-                append(eligible[edge['source']]['label'] + ' — ' + edge['type'] + ' → ' + target['label'],
+                appended = append(eligible[edge['source']]['label'] + ' — ' + edge['type'] + ' → ' + target['label'],
                        {'fact_type': 'relation', 'source_kind': 'collected_source', 'relation': edge['type'],
                         'source_id': edge['source'], 'target_id': edge['target'], 'relation_id': edge['id'],
                         'source_version': eligible[edge['source']]['version'], 'target_version': target['version'],
@@ -756,6 +818,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                         'evidence_version': edge['version'],
                         'truth_status': 'declared stored relation; not independently verified',
                         'provenance_valid': True, 'retracted': False})
+                if appended:
+                    relation_checks.append(dict(edge))
                 if sum(p['fact_type'] == 'relation' for p in provenance) >= min(int(max_relations), 10):
                     break
         excerpts = []
@@ -776,6 +840,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             used += characters
             excerpts.append(window)
     _check(cancelled)
+    _verify_retrieval_result(store, projects, authority, eligible, ranked, provenance, relation_checks)
     return {'facts': facts, 'fact_provenance': provenance,
             **({'conversation_context': {'policy':CONVERSATION_CONTEXT_POLICY,'items':excerpts,
                 'checked_entities':context_checks,'withheld_entities':context_withheld,

@@ -1,5 +1,7 @@
 """Collection source/version scopes, genuine hybrid mode and bounded MCP contracts."""
 import io
+import inspect
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import sys
@@ -13,12 +15,121 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from alden_collection import CollectionStore, identity
 from alden_collection_retrieval import index_dense, retrieve
+import alden_collection_retrieval as retrieval_module
 from alden_knowledge_mcp import KnowledgeServer, CallToken
 from alden_status_mcp import CallControl, StdioServer
 import auto_reply_knowledge_graph as kg
 
 
 class CollectionRetrievalTests(unittest.TestCase):
+    @contextmanager
+    def after_assembly(self, mutation):
+        original_database, original_verify = CollectionStore.database, retrieval_module._verified_source
+        state = {'verified': False, 'revoked': False}
+        def verify(*args, **options):
+            result = original_verify(*args, **options)
+            if inspect.currentframe().f_back.f_code.co_name == 'retrieve':
+                state['verified'] = True
+            return result
+        @contextmanager
+        def database(store, **options):
+            with original_database(store, **options) as db:
+                yield db
+            if store.read_only and state['verified'] and not state['revoked']:
+                state['revoked'] = True
+                mutation()
+        with patch.object(CollectionStore, 'database', database), patch.object(retrieval_module, '_verified_source', verify):
+            yield state
+        self.assertTrue(state['revoked'])
+
+    def deny_allowed(self):
+        with self.store.database() as db:
+            db.execute("UPDATE target_projects SET permission='denied' WHERE target_id=?", (self.allowed,))
+
+    def test_permission_revoked_after_assembly_transaction_prevents_returning_old_facts(self):
+        document = self.add(self.allowed, 'late-revoke', 'private original body')
+        with self.after_assembly(self.deny_allowed):
+            with self.assertRaisesRegex(RuntimeError, 'collection_source_authorization_changed'):
+                retrieve(self.root, 'shared', projects=['one'], also=[document], max_entities=1, max_relations=0)
+
+    def test_version_revised_after_assembly_cannot_return_the_old_body(self):
+        document = self.add(self.allowed, 'late-revision', 'original prior body')
+        with self.after_assembly(lambda: self.add(self.allowed, 'late-revision', 'revised body')):
+            with self.assertRaisesRegex(RuntimeError, 'collection_graph_version_changed'):
+                retrieve(self.root, 'shared', projects=['one'], also=[document], max_entities=1, max_relations=0)
+
+    def test_unselected_candidate_retracted_after_assembly_cannot_leak_its_old_id(self):
+        document = self.add(self.allowed, 'selected', 'original selected body')
+        self.add(self.allowed, 'candidate-only', 'original candidate body')
+        def retract():
+            self.store.ingest(self.allowed, [], retractions=[{'platform': 'graph', 'original_id': 'candidate-only'}])
+        with self.after_assembly(retract):
+            with self.assertRaisesRegex(RuntimeError, 'collection_graph_version_changed'):
+                retrieve(self.root, 'shared', projects=['one'], also=[document], max_entities=1, max_relations=0)
+
+    def test_compacted_duplicate_retraction_after_assembly_invalidates_its_proof(self):
+        from tests.test_alden_collection_context_duplicates import CollectionContextDuplicatesTests
+        case = CollectionContextDuplicatesTests(); case.setUp(); self.addCleanup(case.doCleanups)
+        case.add('duplicate-one'); case.add('duplicate-two')
+        baseline = case.get(max_entities=2)
+        self.assertEqual(baseline['context_text_compaction']['repeated_facts_removed'], 1)
+        def retract():
+            case.store.ingest(case.target, [], retractions=[{'platform': 'graph', 'original_id': 'duplicate-two'}])
+        with self.after_assembly(retract):
+            with self.assertRaisesRegex(RuntimeError, 'collection_graph_version_changed'):
+                case.get(max_entities=2)
+
+    def test_relation_changed_after_assembly_cannot_return_old_evidence(self):
+        docs = [{'platform': 'graph', 'original_id': name, 'label': 'shared term', 'text': 'original ' + name}
+                for name in ('source', 'target')]
+        relation = {'source_platform': 'graph', 'source_id': 'source', 'target_platform': 'graph',
+                    'target_id': 'target', 'type': 'mentions', 'evidence': {'fixture': 'prior'}}
+        self.store.ingest(self.allowed, docs, relations=[relation])
+        def revise():
+            self.store.ingest(self.allowed, [], relations=[{**relation, 'evidence': {'fixture': 'revised'}}])
+        with self.after_assembly(revise):
+            with self.assertRaisesRegex(RuntimeError, 'collection_relation_changed'):
+                retrieve(self.root, 'shared', projects=['one'], also=[identity('graph', 'source')], max_entities=1)
+
+    def test_mcp_does_not_serialize_a_body_revoked_after_response_assembly(self):
+        self.add(self.allowed, 'mcp-private', 'private-late-revocation-canary')
+        server = KnowledgeServer(self.root, ['one'])
+        server.dispatch({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
+            'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': {}}})
+        server.dispatch({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        with self.after_assembly(self.deny_allowed):
+            response = server.dispatch({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {
+                'name': 'alden_knowledge_search', 'arguments': {'projects': ['one'], 'query': 'shared'}}})
+        self.assertTrue(response['result']['isError'])
+        self.assertNotIn('private-late-revocation-canary', json.dumps(response))
+
+    def test_protected_origins_revoked_after_assembly_invalidate_the_response(self):
+        from tests.test_alden_messenger_authority import MessengerAuthorityTests
+        case = MessengerAuthorityTests(); case.setUp(); self.addCleanup(case.doCleanups)
+        def revoke():
+            case.reader.blocked = True
+            case.case.denied.update(('a', 'b'))
+        with self.after_assembly(revoke):
+            with self.assertRaisesRegex(RuntimeError, 'collection_source_authorization_changed'):
+                case.lookup()
+
+    def test_relations_cover_each_selected_entity_in_selection_order_with_one_global_limit(self):
+        docs = [{'platform': 'graph', 'original_id': name, 'label': 'shared term ' + name, 'text': 'original ' + name}
+                for name in ('first', 'second', 'left', 'right')]
+        relations = [{'source_platform': 'graph', 'source_id': source, 'target_platform': 'graph',
+                      'target_id': target, 'type': 'mentions', 'evidence': {'fixture': source}}
+                     for source, target in (('first', 'left'), ('second', 'right'))]
+        self.store.ingest(self.allowed, docs, relations=relations)
+        first, second = [identity('graph', name) for name in ('first', 'second')]
+        for selected in ([first, second], [second, first]):
+            with self.subTest(selected=selected):
+                result = retrieve(self.root, 'shared', projects=['one'], also=selected, max_entities=2, max_relations=2)
+                proofs = [p for p in result['fact_provenance'] if p['fact_type'] == 'relation']
+                self.assertEqual([p['source_id'] for p in proofs], selected)
+                self.assertEqual({p['target_id'] for p in proofs}, {identity('graph', 'left'), identity('graph', 'right')})
+                bounded = retrieve(self.root, 'shared', projects=['one'], also=selected, max_entities=2, max_relations=1)
+                self.assertEqual([p['source_id'] for p in bounded['fact_provenance'] if p['fact_type'] == 'relation'], selected[:1])
+
     def test_canonical_hangul_queries_retrieve_the_same_scoped_source_and_proof(self):
         document = self.add(self.allowed, 'composed', '면접 준비에 관한 보존 원문입니다.')
         self.add(self.other, 'composed', '다른 프로젝트의 면접 준비 비공개 내용')
