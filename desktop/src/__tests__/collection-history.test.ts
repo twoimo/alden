@@ -26,6 +26,16 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = '<div id="setti
 afterEach(() => { for (const item of active.splice(0)) item.dispose(); document.body.replaceChildren(); vi.useRealTimers(); });
 
 describe('durable collection history', () => {
+  it('keeps readiness separate from knowledge additions and accepts legacy summaries', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce({ ...response([]), stream_id: 'one', cursor: 0, summary: summary() })
+      .mockResolvedValueOnce({ ...response([event(1), event(2, { stage: 'published' })]),
+        stream_id: 'one', cursor: 2 });
+    setup(load); await vi.advanceTimersByTimeAsync(2500);
+    expect(document.querySelector('.collection-summary')!.textContent).toContain('2개 단계 기록 · 추가 1');
+    expect(document.body.textContent).toContain('화면 갱신 준비');
+    expect(document.body.textContent).toContain('화면 표시 완료나 내용의 사실 여부를 확인한 단계는 아닙니다');
+  });
   it('starts forward consumption at an empty checkpoint and counts changes without counting stages as knowledge', async () => {
     const load = vi.fn<typeof fetchSettingsAction>()
       .mockResolvedValueOnce({ ...response([]), stream_id: 'one', cursor: 0, summary: summary() })

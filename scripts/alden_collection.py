@@ -29,7 +29,7 @@ SNAPSHOT_RECORD_BUDGET = 100000
 MAX_RECORD_BYTES = 2 * 1024 * 1024
 MAX_BATCH_RECORDS = 2000
 BODY_NORMALIZATION_VERSION = "body-nfc-lines-v2"
-STAGES = {"discovered", "parsed", "validated", "stored", "indexed", "failed", "paused"}
+STAGES = {"discovered", "parsed", "validated", "stored", "published", "indexed", "failed", "paused"}
 
 
 def digest(value: bytes) -> str:
@@ -774,7 +774,11 @@ class CollectionStore:
     def ingest(self, target_id: str, records, *, cursor=None, origin="alden",
                run_id: str | None = None, relations=(), cancelled=lambda: False,
                complete_snapshot=False, source_revision=None, source_order=None,
-               processing_version="collection-record-v1", publication_guard=None, retractions=()) -> dict:
+               processing_version="collection-record-v1", publication_guard=None, retractions=(),
+               defer_activity=False) -> dict:
+        if type(defer_activity) is not bool:
+            raise ValueError('collection_activity_defer_invalid')
+        activity_details = {'activity_deferred': True} if defer_activity else {}
         retractions = tuple(retractions)
         if len(retractions) > MAX_BATCH_RECORDS or complete_snapshot and retractions:
             raise ValueError('collection_retractions_invalid')
@@ -915,7 +919,7 @@ class CollectionStore:
                                    (target_id, doc_id, version))
                         if complete_snapshot:
                             db.execute('INSERT INTO snapshot_members VALUES(?)', (doc_id,))
-                        self._event(db, run_id, target_id, "stored", document_id=doc_id, version=version, change=category)
+                        self._event(db, run_id, target_id, "stored", document_id=doc_id, version=version, change=category, **activity_details)
                         db.execute('INSERT INTO search_updates VALUES(?,?,?) ON CONFLICT(document_id) DO UPDATE SET label=excluded.label,body=excluded.body', (doc_id,label,body))
                         self._event(db, run_id, target_id, "indexed", document_id=doc_id, version=version,
                                     index="sqlite_fts5", dense_index="not_yet_confirmed")
@@ -959,7 +963,7 @@ class CollectionStore:
                         if row is None:continue
                         db.execute("UPDATE memberships SET availability='deleted' WHERE target_id=? AND document_id=?", (target_id, document_id))
                         db.execute("UPDATE documents SET availability='deleted' WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE document_id=? AND availability='available')", (document_id, document_id))
-                        self._event(db, run_id, target_id, 'stored', document_id=document_id, version=row['current_version'], change='removed', reason='현재 원본 리더가 본문을 제공하지 않습니다. 이전 버전은 보존했습니다.')
+                        self._event(db, run_id, target_id, 'stored', document_id=document_id, version=row['current_version'], change='removed', reason='현재 원본 리더가 본문을 제공하지 않습니다. 이전 버전은 보존했습니다.', **activity_details)
                         removed += 1
                     if complete_snapshot:
                         missing = db.execute("SELECT document_id,current_version FROM memberships WHERE target_id=? AND availability='available' AND document_id NOT IN (SELECT document_id FROM snapshot_members)", (target_id,)).fetchall()
@@ -967,14 +971,14 @@ class CollectionStore:
                         for row in missing:
                             db.execute("UPDATE memberships SET availability='deleted' WHERE target_id=? AND document_id=?", (target_id, row['document_id']))
                             db.execute("UPDATE documents SET availability='deleted' WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE document_id=? AND availability='available')", (row['document_id'], row['document_id']))
-                            self._event(db, run_id, target_id, 'stored', document_id=row['document_id'], version=row['current_version'], change='removed', reason='완전한 원본 스냅샷에서 제외되었습니다. 원문과 이전 버전은 보존했습니다.')
+                            self._event(db, run_id, target_id, 'stored', document_id=row['document_id'], version=row['current_version'], change='removed', reason='완전한 원본 스냅샷에서 제외되었습니다. 원문과 이전 버전은 보존했습니다.', **activity_details)
                         db.execute('UPDATE relations SET active=0 WHERE target_id=? AND id NOT IN (SELECT id FROM snapshot_relations)', (target_id,))
                         current_relations = dict(db.execute('SELECT id,version FROM relations WHERE target_id=? AND active=1', (target_id,)))
                         if prior_relations != current_relations:
                             self._event(db, run_id, target_id, 'stored', change='relations_changed',
                                         added=len(current_relations.keys()-prior_relations.keys()),
                                         removed=len(prior_relations.keys()-current_relations.keys()),
-                                        reason='저장된 관계와 근거가 갱신되었습니다.')
+                                        reason='저장된 관계와 근거가 갱신되었습니다.', **activity_details)
                         db.execute('INSERT OR REPLACE INTO target_snapshots VALUES(?,?,?,?,?,?)',
                                    (target_id, source_revision, effective_order, processing_version, projection, run_id))
                     if cancelled():
@@ -996,6 +1000,36 @@ class CollectionStore:
                     db.execute("UPDATE targets SET last_error=? WHERE id=?", (reason, target_id))
                     self._event(db, run_id, target_id, state, reason=reason)
                 raise
+
+    def release_activity(self, target_id, run_id, *, publication_guard, cancelled=lambda: False):
+        """Append idempotent readiness receipts after the source owner commits.
+
+        This is a durable refresh signal, not UI acknowledgement or a semantic
+        verification. The owner must hold its publication fence across commit.
+        """
+        if not callable(publication_guard) or not isinstance(run_id, str) or not run_id:
+            raise ValueError('collection_activity_release_invalid')
+        with self.target_lock(target_id), self.database(publication_guard=publication_guard, cancelled=cancelled) as db:
+            db.execute('BEGIN IMMEDIATE')
+            run = db.execute("SELECT 1 FROM runs WHERE id=? AND target_id=? AND state='complete'", (run_id, target_id)).fetchone()
+            if run is None:
+                raise ValueError('collection_activity_run_incomplete')
+            rows = db.execute("""SELECT event_id,document_id,version,details FROM events
+                WHERE run_id=? AND target_id=? AND stage='stored'
+                  AND json_extract(details,'$.activity_deferred')=1 ORDER BY sequence""", (run_id, target_id)).fetchall()
+            if len(rows) > MAX_BATCH_RECORDS:
+                raise ValueError('collection_activity_release_budget')
+            eligible = 0
+            for row in rows:
+                if cancelled():
+                    raise RuntimeError('collection_cancelled')
+                details = json.loads(row['details'])
+                if details.get('change') not in {'added', 'revised', 'removed', 'relations_changed'}:
+                    continue
+                self._event(db, run_id, target_id, 'published', document_id=row['document_id'],
+                            version=row['version'], change=details['change'], stored_event_id=row['event_id'])
+                eligible += 1
+            return {'eligible_receipts': eligible}
 
     def events(self, *, after=0, limit=100, projects=None, target_id=None, stage=None) -> dict:
         if type(after) is not int or after < 0 or type(limit) is not int or not 1 <= limit <= 200:
@@ -1647,8 +1681,10 @@ class CollectionStore:
             items, refresh_required = [], False
             for row in rows[:limit]:
                 details = json.loads(row["details"])
-                if (row["stage"] != "stored" or row["run_state"] != "complete"
+                if (row["stage"] not in {"stored", "published"} or row["run_state"] != "complete"
                     or details.get("change") not in {"added", "revised", "removed", "relations_changed"}):
+                    continue
+                if row['stage'] == 'stored' and details.get('activity_deferred') is True:
                     continue
                 if row['origin'].startswith('messenger-policy:'):
                     refresh_required = True

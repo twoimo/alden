@@ -32,6 +32,26 @@ def journal_rows(store):
         return [tuple(row) for row in db.execute('SELECT * FROM events ORDER BY sequence')]
 
 
+def assert_readiness_extension(test, store, before):
+    """Existing events are immutable; only their missing readiness receipts append."""
+    after = journal_rows(store)
+    test.assertEqual(after[:len(before)], before)
+    released = {json.loads(row[8])['stored_event_id'] for row in before if row[4] == 'published'}
+    expected = {row[1]: row for row in before if row[4] == 'stored'
+                and json.loads(row[8]).get('activity_deferred') is True
+                and json.loads(row[8]).get('change') in {'added', 'revised', 'removed', 'relations_changed'}
+                and row[1] not in released}
+    appended = after[len(before):]
+    test.assertEqual(len(appended), len(expected))
+    for row in appended:
+        test.assertEqual(row[4], 'published')
+        details = json.loads(row[8]); original = expected.pop(details['stored_event_id'])
+        test.assertEqual((row[2], row[3], row[6], row[7]), (original[2], original[3], original[6], original[7]))
+        test.assertEqual(details['change'], json.loads(original[8])['change'])
+    test.assertFalse(expected)
+    return after
+
+
 class Reader:
     account = 'owner'
     blocked = False
@@ -170,7 +190,7 @@ class FrontierTests(unittest.TestCase):
         engine = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
         self.assertEqual(engine.step()['state'], 'published')
         self.assertEqual(len(reader.reads), 1)
-        self.assertEqual(journal_rows(engine.store), before)
+        assert_readiness_extension(self, engine.store, before)
         self.assertEqual(engine.status()['prepared_pages'], 0)
 
     def test_authorization_is_rechecked_before_prepared_replay(self):
@@ -336,7 +356,7 @@ class FrontierTests(unittest.TestCase):
         resumed = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
         self.assertEqual(resumed.step(mode='live')['state'], 'published')
         self.assertEqual(resumed.status()['prepared_pages'], 0)
-        self.assertEqual(journal_rows(resumed.store), before)
+        assert_readiness_extension(self, resumed.store, before)
         self.assertEqual(resumed.step(mode='live')['state'], 'unchanged')
         with resumed.store.database() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM versions').fetchone()[0], 1)

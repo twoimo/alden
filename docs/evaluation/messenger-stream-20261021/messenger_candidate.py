@@ -17,7 +17,7 @@ import stat
 import re
 import time
 
-from alden_collection import CollectionStore, encoded, identity, overview_display_label, safe_directory
+from alden_collection import CollectionStore, encoded, identity, normalized_body, overview_display_label, safe_directory
 from messenger_quality import POLICY, classify, text_without_urls
 from alden_platform_identity import PlatformIdentityError, platform_uuid
 
@@ -409,6 +409,9 @@ class Frontier:
                 page TEXT NOT NULL,content_hash TEXT NOT NULL,PRIMARY KEY(page,content_hash))''')
             db.execute('CREATE INDEX IF NOT EXISTS content_claim_pages ON page_content_claims(content_hash,page)')
             db.execute('CREATE TABLE IF NOT EXISTS retired_policy_pages(page TEXT PRIMARY KEY,reason TEXT NOT NULL)')
+            db.execute('''CREATE TABLE IF NOT EXISTS activity_releases(
+                page TEXT PRIMARY KEY,state TEXT NOT NULL CHECK(state IN ('pending','settled','retired')),
+                error TEXT,retry_at REAL NOT NULL DEFAULT 0)''')
             db.execute('''CREATE TABLE IF NOT EXISTS room_mode_checks(
                 room TEXT NOT NULL,mode TEXT NOT NULL,position INTEGER NOT NULL CHECK(position>0),
                 PRIMARY KEY(room,mode))''')
@@ -579,7 +582,8 @@ class Frontier:
             state['source_epoch'] = epoch + 1 if changed else epoch
             payload = {'account': self.account, 'platform': self.platform, 'room': room['id'],
                        'items': selected, 'mode': mode, 'before': before, 'reader_scope': page.get('scope'),
-                       'quality_policy': POLICY, 'source_epoch': state['source_epoch']}
+                       'quality_policy': POLICY, 'source_epoch': state['source_epoch'],
+                       'activity_protocol': 'frontier-outbox-v1'}
             if policy_reprocess:
                 payload['policy_reprocess'] = True
                 payload['reader_before'] = observation_cursor
@@ -652,6 +656,8 @@ class Frontier:
                            (encoded(current_state).decode(), time.time(), row['room']))
                 self._checked(db, row['room'], payload['mode'])
                 db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))
+            if payload.get('activity_protocol') == 'frontier-outbox-v1':
+                self._release_activity(job, cancelled=cancelled)
             return {'state': 'unchanged', 'room_id': row['room'], 'job': job}
         records, retractions, updates, fingerprints, affected = [], [], [], [], set()
         for item in payload['items']:
@@ -690,6 +696,7 @@ class Frontier:
             origin=('messenger-policy:' if payload.get('policy_reprocess') is True else 'messenger-db:') + self.platform + ':' + payload['mode'],
             processing_version=POLICY, cancelled=cancelled,
             publication_guard=lambda: self._publication_guard(payload),
+            defer_activity=payload.get('activity_protocol') == 'frontier-outbox-v1',
             cursor={'page': job, 'scope': 'one observed page; not complete DB coverage'})
         after_publish()
         with self.database() as db:
@@ -704,11 +711,36 @@ class Frontier:
                        (row['next_frontier'], time.time(), row['room']))
             self._checked(db, row['room'], payload['mode'])
             db.execute("UPDATE pages SET state='complete' WHERE id=?", (job,))
+            if payload.get('activity_protocol') == 'frontier-outbox-v1':
+                db.execute("INSERT OR IGNORE INTO activity_releases(page,state) VALUES(?,'pending')", (job,))
+        if payload.get('activity_protocol') == 'frontier-outbox-v1':
+            self._release_activity(job, cancelled=cancelled)
         return {'state': 'published', 'room_id': row['room'], 'job': job,
                 'input_rows': len(payload['items']), 'text_records': len(records),
                 'withheld': sum(not item['visible'] for item in payload['items']),
                 'triage': {state: sum(r[4] == state for r in updates) for state in ('candidate', 'context', 'review', 'withheld')},
                 'collection': result}
+
+    def _release_activity(self, job, *, cancelled, revalidate=False):
+        with self.database() as db:
+            row = db.execute('''SELECT p.id AS page,p.room,p.payload,p.next_frontier,p.state
+                FROM pages p JOIN activity_releases a ON a.page=p.id
+                WHERE p.id=? AND a.state='pending' ''', (job,)).fetchone()
+        if row is None:
+            return {'state': 'activity_settled', 'job': job}
+        if row['state'] != 'complete':
+            raise ValueError('messenger_activity_frontier_incomplete')
+        payload = self._current_page(row)
+        if payload.get('activity_protocol') != 'frontier-outbox-v1':
+            raise ValueError('messenger_activity_protocol_invalid')
+        if revalidate:
+            self.reader.verify_prepared(payload)
+        self._authorize_publication(payload)
+        self.store.release_activity(self.target, 'messenger-page:' + job, cancelled=cancelled,
+                                    publication_guard=lambda: self._publication_guard(payload))
+        with self.database() as db:
+            db.execute("UPDATE activity_releases SET state='settled',error=NULL,retry_at=0 WHERE page=?", (job,))
+        return {'state': 'activity_released', 'room_id': row['room'], 'job': job}
 
     def _authorize_publication(self, payload):
         if self.reader.identity() != self.account:
@@ -750,6 +782,8 @@ class Frontier:
 
     def _source_access(self, target, document, version, metadata):
         """Current origin authority is required even when collection is stopped."""
+        if not isinstance(metadata, dict):
+            return False
         source = metadata.get('source', {})
         if (target != self.target or not isinstance(source, dict)
             or source.get('kind') != 'messenger-exact-content-provenance'):
@@ -758,6 +792,23 @@ class Frontier:
         if (not isinstance(content_hash, str) or not re.fullmatch(r'[0-9a-f]{64}', content_hash)
             or document != identity('graph', 'messenger-content:' + content_hash)
             or self.reader.identity() != self.account):
+            return False
+        with self.store.database() as stored:
+            current = stored.execute('''SELECT v.body,v.metadata FROM memberships m
+                JOIN versions v ON v.id=m.current_version JOIN documents d ON d.id=m.document_id
+                WHERE m.target_id=? AND m.document_id=? AND m.current_version=?
+                  AND m.availability='available' AND d.availability='available' ''',
+                (target, document, version)).fetchone()
+        if current is None or json.loads(current['metadata']).get('source', {}).get('content_hash') != content_hash:
+            return False
+        def matches(payload, message=None):
+            for item in payload['items']:
+                if not item['visible'] or message is not None and item['id'] != message:
+                    continue
+                triage = classify(item['body'])
+                if (triage.state == 'candidate' and triage.content_hash == content_hash
+                    and normalized_body(triage.text) == current['body']):
+                    return True
             return False
         with self.database() as db:
             origins = db.execute('''SELECT h.room,h.message,h.page,p.payload,p.next_frontier
@@ -771,8 +822,7 @@ class Frontier:
                     continue
                 except ValueError:
                     return False
-                if any(item['id'] == origin['message'] and item['visible']
-                       and classify(item['body']).content_hash == content_hash for item in payload['items']):
+                if matches(payload, origin['message']):
                     return True
         return False
 
@@ -919,6 +969,8 @@ class Frontier:
                 raise ValueError('messenger_account_changed')
             self._allowed()
             with self.database() as db:
+                release = db.execute('''SELECT a.page FROM activity_releases a JOIN pages p ON p.id=a.page
+                    WHERE a.state='pending' AND a.retry_at<=? ORDER BY p.rowid LIMIT 1''', (time.time(),)).fetchone()
                 pending = db.execute("SELECT p.id,p.room,json_extract(p.payload,'$.mode') AS mode FROM pages p JOIN rooms r ON r.id=p.room WHERE p.state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id) AND r.retry_at<=? ORDER BY p.rowid LIMIT 1", (time.time(),)).fetchone()
                 eligibility = {'backfill': "json_extract(r.frontier,'$.back_done')=0",
                     'live': "(json_extract(r.frontier,'$.live_head') IS NOT NULL OR json_extract(r.frontier,'$.back_done')=1)",
@@ -928,6 +980,14 @@ class Frontier:
                     AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.room=r.id AND p.state='prepared'
                       AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id))
                     ORDER BY coalesce(c.position,0),r.id LIMIT 1""", (mode,time.time())).fetchall()
+            if release:
+                try:
+                    return self._release_activity(release['page'], cancelled=cancelled, revalidate=True)
+                except SourceBlocked as error:
+                    with self.database() as db:
+                        db.execute('UPDATE activity_releases SET error=?,retry_at=? WHERE page=?',
+                                   (str(error)[:160], time.time() + 60, release['page']))
+                    return {'state':'blocked', 'reason':str(error), 'job':release['page']}
             if pending:
                 try:
                     return self._publish(pending['id'], cancelled=cancelled, after_publish=after_publish, revalidate=True)
@@ -952,8 +1012,11 @@ class Frontier:
             pending = db.execute("SELECT count(*) FROM pages p WHERE state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id)").fetchone()[0]
             triage = dict(db.execute('SELECT state,count(*) FROM message_heads GROUP BY state'))
             unique = db.execute("SELECT count(DISTINCT content_hash) FROM message_heads WHERE state='candidate'").fetchone()[0]
+            pending_activity = db.execute("SELECT count(*) FROM activity_releases WHERE state='pending'").fetchone()[0]
+            blocked_activity = db.execute("SELECT count(*) FROM activity_releases WHERE state='pending' AND error IS NOT NULL").fetchone()[0]
         return {'rooms': len(rooms), 'backfilled_rooms': sum(json.loads(r['frontier'])['back_done'] for r in rooms),
                 'blocked_rooms': sum(r['error'] is not None for r in rooms), 'prepared_pages': pending,
+                'pending_activity': pending_activity, 'blocked_activity': blocked_activity,
                 'triage': triage, 'unique_candidate_contents': unique, 'production_activated': False}
 
     def origins(self, content_hash, *, offset=0, limit=50):

@@ -5,6 +5,25 @@ Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 ## Intended outcome and scope
 
+Latest publication delta (2026-10-23, based on `7d7a514`): an actual SQLite
+commit-gap/cursor trace reproduced permanently missing activity receipts;
+current source authority also accepted an invalid membership version. An initial
+prepared-page authorization candidate was rejected after it violated the old
+body-withholding invariant, despite passing a narrow native probe. The safe
+candidate retains body withholding and uses deferred stored events plus a durable
+frontier-owned readiness outbox. Restart/retry appends exactly bound `published`
+receipts without rewriting original history or resetting ordinary stream
+generation. Readiness is a separate UI stage and does not count another knowledge
+addition. See [publication states, counterexamples and bounds](PUBLICATION_STATE.md).
+
+The new checker uses actual isolated SQLite crash/cursor traces and rejects
+three real-source mutations. A distinct canonical one-page native probe observed
+zero body/receipt before the head commit and six current version-bound receipts
+afterward, with zero replay extras. Its receipt/source hashes are separate from
+the rejected alternative. Current-source external audit, installed integration,
+native Telegram consent, representative backlog/latency/resources and full
+18/ST01–15/Cursor8/release gates remain open. This candidate remains uninstalled.
+
 Latest bounded history/state audit (2026-10-23, based on `1eb2236`): the owned
 local-cache backfill committed1,107 more pages before a real SQLite lock in its
 private full-status cancellation callback stopped the run. Local oldest-page

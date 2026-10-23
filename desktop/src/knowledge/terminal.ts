@@ -18,7 +18,7 @@ export function observationMarkup(): string {
 }
 
 type Row = Record<string, unknown>;
-const stageNames: Record<string, string> = { discovered: '발견', parsed: '내용 읽음', validated: '형식 확인', stored: '저장', indexed: '검색 반영', failed: '실패', paused: '중지' };
+const stageNames: Record<string, string> = { discovered: '발견', parsed: '내용 읽음', validated: '형식 확인', stored: '저장', published: '갱신 준비', indexed: '검색 반영', failed: '실패', paused: '중지' };
 const colors = ['#8edcf1', '#c8b5f2', '#e6c489', '#91d1bb', '#e5aaca', '#9bbcea'];
 const number = (value: number) => value.toLocaleString('ko-KR');
 const typeName = (value: string): string => ({ video: '영상', document: '문서', source: '출처', source_claim: '원문 주장', topic: '주제', concept: '개념', index: '색인', collection: '지식 모음', person: '인물', claim: '주장', code: '코드' })[value] ?? value;

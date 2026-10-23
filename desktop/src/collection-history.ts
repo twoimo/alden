@@ -5,7 +5,7 @@ import type { SettingsPage } from './settings-navigation';
 type Row = Record<string, unknown>;
 const stages: Record<string, string> = {
   discovered: '자료 발견', parsed: '내용 읽음', validated: '형식 확인',
-  stored: '저장 완료', indexed: '검색 반영', failed: '실패', paused: '중지',
+  stored: '저장 완료', published: '화면 갱신 준비', indexed: '검색 반영', failed: '실패', paused: '중지',
 };
 const rows = (value: unknown): Row[] => Array.isArray(value)
   ? value.filter(v => v && typeof v === 'object' && !Array.isArray(v)) as Row[] : [];
@@ -17,10 +17,11 @@ type Counts = { total: number; stages: Record<string, number>; changes: Record<s
 function counts(value: unknown): Counts | null {
   if (!value || typeof value !== 'object') return null;
   const row = value as Row, stagesRow = row.stages as Row | undefined, changesRow = row.changes as Row | undefined;
+  const stageCounts = { published: 0, ...stagesRow } as Row;
   const valid = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 0;
   if (!valid(row.total) || !stagesRow || !changesRow
-    || !Object.keys(stages).every(key => valid(stagesRow[key])) || !changes.every(key => valid(changesRow[key]))) return null;
-  const result = { total: row.total, stages: { ...stagesRow }, changes: { ...changesRow } } as Counts;
+    || !Object.keys(stages).every(key => valid(stageCounts[key])) || !changes.every(key => valid(changesRow[key]))) return null;
+  const result = { total: row.total, stages: stageCounts, changes: { ...changesRow } } as Counts;
   return Object.keys(stages).reduce((sum, key) => sum + result.stages[key], 0) === result.total ? result : null;
 }
 
@@ -99,6 +100,7 @@ export function wireCollectionHistory(load: typeof fetchSettingsAction = fetchSe
     if (typeof row.origin === 'string' && row.origin) more.append(make('p', '', '수집 경로: ' + row.origin));
     const explanation = row.stage === 'validated' ? '원본 ID·내용 해시·자료 형식을 확인했습니다. 내용의 사실 여부를 검증한 단계는 아닙니다.'
       : row.stage === 'indexed' ? '텍스트 검색에 반영했습니다. 임베딩 검색 반영은 아직 확인하지 않았습니다.'
+      : row.stage === 'published' ? '현재 출처 상태를 확인해 화면 갱신을 준비했습니다. 화면 표시 완료나 내용의 사실 여부를 확인한 단계는 아닙니다.'
       : unchanged ? '이미 저장된 내용과 같습니다. 새 지식이 추가된 기록으로 세지 않습니다.'
       : String(details.reason ?? '원문 ID와 저장 버전을 연결한 기록입니다.');
     more.append(make('p', '', explanation));

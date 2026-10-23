@@ -169,8 +169,8 @@ class MessengerPolicyTests(unittest.TestCase):
             events = [tuple(r) for r in db.execute('SELECT * FROM events ORDER BY sequence')]
         reopened = PolicyMigration(migration.root, [candidate.Frontier(migration.root, frontier.platform, frontier.account, reader)])
         self.assertEqual(reopened.step()['state'], 'processed')
-        with staged.store.database() as db:
-            self.assertEqual([tuple(r) for r in db.execute('SELECT * FROM events ORDER BY sequence')], events)
+        from tests.test_alden_messenger_frontier import assert_readiness_extension
+        assert_readiness_extension(self, staged.store, events)
         self.finish(reopened)
         self.assertEqual(len(reopened.read_action('collection-graph')['nodes']), 2)
 

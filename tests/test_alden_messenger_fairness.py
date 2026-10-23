@@ -83,7 +83,7 @@ class MessengerFairnessTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'durable store commit'):engine.step(after_publish=crash)
         events = fixtures.journal_rows(engine.store)
         self.assertEqual(engine.step(mode='live')['room_id'], 'a')
-        self.assertEqual(fixtures.journal_rows(engine.store), events)
+        fixtures.assert_readiness_extension(self, engine.store, events)
         with engine.database() as db:
             self.assertEqual([tuple(r) for r in db.execute('SELECT room,mode,position FROM room_mode_checks')], [('a','backfill',1)])
         self.assertEqual(engine.step()['room_id'], 'b')

@@ -15,6 +15,11 @@ function setup(load: typeof fetchSettingsAction) {
 beforeEach(() => { document.body.innerHTML = '<button id="knowledge-terminal-toggle" aria-expanded="true"></button>' + observationMarkup() + terminalMarkup(); });
 afterEach(() => terminal?.dispose());
 describe('knowledge terminal lifecycle and evidence', () => {
+  it('labels a readiness receipt without calling it another stored document', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>(async () => ({ ok: true, items: [{ ...event(1), stage: 'published' }] }));
+    setup(load); await terminal.refreshHistory({}, true);
+    expect(document.getElementById('terminal-tail')!.textContent).toContain('갱신 준비');
+  });
   it('opens a history row only through the same displayed document/version/target', async () => {
     const load = vi.fn<typeof fetchSettingsAction>(async () => ({ ok: true, items: [{ ...event(1), version: 'v1', target_id: 'target-a' }] }));
     const select = setup(load);
