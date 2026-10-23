@@ -11,12 +11,122 @@ from unittest.mock import patch
 from tests import test_alden_messenger_access as access_tests
 from tests.test_alden_messenger_frontier import candidate, item, journal_rows
 from alden_collection import CollectionStore, identity, read_action
-from alden_collection_retrieval import retrieve
+from alden_collection_retrieval import retrieve, index_text, index_dense
+import alden_collection_retrieval as retrieval_module
 from alden_knowledge_mcp import KnowledgeServer
 import auto_reply_knowledge_graph as kg
 
 
 class MessengerAuthorityTests(unittest.TestCase):
+    def test_explicit_index_authority_reaches_text_dense_and_mcp_without_source_events(self):
+        before = journal_rows(self.kk.store)
+        text = index_text(self.root, self.projects, **self.guards)
+        self.assertEqual((text['state'], text['documents']), ('ready', 1))
+        self.assertTrue(self.call(self.server(), 'search', query='회의')['facts'])
+        dense = index_dense(self.root, self.projects, **self.guards,
+                            embed=lambda pieces: [[1., 0.] for _ in pieces])
+        self.assertEqual((dense['state'], dense['embedded_changed']), ('ready', 1))
+        again = index_dense(self.root, self.projects, **self.guards,
+                            embed=lambda _: self.fail('unchanged input re-embedded'))
+        self.assertEqual(again['embedded_changed'], 0)
+        self.assertTrue(retrieve(self.root, '회의', projects=self.projects, **self.guards,
+                                 query_embed=lambda _: [1., 0.])['facts'])
+        self.assertEqual(journal_rows(self.kk.store), before)
+
+    def test_unguarded_index_remains_empty_and_never_calls_encoder(self):
+        for produce in (index_text, index_dense):
+            with self.subTest(produce=produce.__name__):
+                options = {'embed': lambda _: self.fail('withheld input reached encoder')} if produce is index_dense else {}
+                self.assertEqual(produce(self.root, self.projects, **options)['documents'], 0)
+        self.model.assert_not_called()
+
+    def test_text_only_mcp_does_not_probe_an_embedding_service(self):
+        index_text(self.root, self.projects, **self.guards)
+        self.assertTrue(self.call(self.server(), 'search', query='회의')['facts'])
+        self.model.assert_not_called()
+
+    def test_version_withdrawal_inside_encoder_prevents_vector_publication(self):
+        def encode(pieces):
+            with self.kk.store.database() as db:
+                db.execute("UPDATE memberships SET availability='withdrawn'")
+            return [[1., 0.] for _ in pieces]
+        with self.assertRaisesRegex(RuntimeError, 'version_changed'):
+            index_dense(self.root, self.projects, **self.guards, embed=encode)
+        with sqlite3.connect(self.root / 'knowledge/collection/retrieval.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM vectors').fetchone()[0], 0)
+
+    def test_index_rejects_cross_root_authority_before_creating_cache(self):
+        other = candidate.create_root(self.root.parent / 'index-other-root')
+        shutil.copytree(self.root / 'knowledge', other / 'knowledge')
+        for produce in (index_text, index_dense):
+            with self.subTest(produce=produce.__name__), self.assertRaisesRegex(ValueError, 'root_mismatch'):
+                produce(other, self.projects, **self.guards)
+        self.assertFalse((other / 'knowledge/collection/retrieval.sqlite3').exists())
+
+    def test_revocation_during_encoding_prevents_vector_commit_and_ready(self):
+        def encode(pieces):
+            self.reader.blocked = True
+            self.case.denied.update(('a', 'b'))
+            return [[1., 0.] for _ in pieces]
+        with self.assertRaisesRegex(RuntimeError, 'authorization_changed|version_changed'):
+            index_dense(self.root, self.projects, **self.guards, embed=encode)
+        with sqlite3.connect(self.root / 'knowledge/collection/retrieval.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM vectors').fetchone()[0], 0)
+        self.assertEqual(self.call(self.server(), 'search', query='회의')['facts'], [])
+
+    def test_revocation_after_text_scan_prevents_encoder_use_or_ready(self):
+        original = retrieval_module._index_rows
+        def rows(*args, **options):
+            result = original(*args, **options)
+            if options.get('resolve_source'):
+                self.reader.blocked = True
+                self.case.denied.update(('a', 'b'))
+            return result
+        for produce in (index_text, index_dense):
+            self.reader.blocked = False; self.case.denied.clear()
+            options = {'embed': lambda _: self.fail('revoked input reached encoder')} if produce is index_dense else {}
+            with self.subTest(produce=produce.__name__), patch.object(retrieval_module, '_index_rows', rows):
+                with self.assertRaisesRegex(RuntimeError, 'authorization_changed|version_changed'):
+                    produce(self.root, self.projects, **self.guards, **options)
+
+    def test_cancellation_after_encoding_does_not_publish_vectors(self):
+        stopped = False
+        def encode(pieces):
+            nonlocal stopped
+            stopped = True
+            return [[1., 0.] for _ in pieces]
+        with self.assertRaisesRegex(RuntimeError, 'cancelled'):
+            index_dense(self.root, self.projects, **self.guards, embed=encode, cancelled=lambda: stopped)
+        with sqlite3.connect(self.root / 'knowledge/collection/retrieval.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM vectors').fetchone()[0], 0)
+
+    def test_native_revocation_inside_cache_write_rolls_back_each_cache_transaction(self):
+        cache = self.root / 'knowledge/collection/retrieval.sqlite3'
+        connect = sqlite3.connect
+        def revoke():
+            self.reader.blocked = True
+            self.case.denied.update(('a', 'b'))
+            return 0
+        def connection(path, *args, **options):
+            db = connect(path, *args, **options)
+            if str(path) == str(cache):
+                db.create_function('revoke_native', 0, revoke)
+            return db
+        for table, schema, produce in (
+            ('texts', 'document_id TEXT,version TEXT,base_hash TEXT,raw_sha256 TEXT,extraction TEXT,label TEXT,body TEXT,body_source TEXT', index_text),
+            ('vectors', 'document_id TEXT,version TEXT,text_hash TEXT,model TEXT,endpoint TEXT,encoding TEXT,vector BLOB', index_dense)):
+            self.reader.blocked = False; self.case.denied.clear()
+            with connect(cache) as db:
+                db.execute('CREATE TABLE IF NOT EXISTS ' + table + '(' + schema + ',PRIMARY KEY(document_id,version))')
+                db.execute('CREATE TRIGGER revoke_write AFTER INSERT ON ' + table + ' BEGIN SELECT revoke_native(); END')
+            options = {'embed': lambda pieces: [[1., 0.] for _ in pieces]} if produce is index_dense else {}
+            with self.subTest(table=table), patch.object(sqlite3, 'connect', connection):
+                with self.assertRaisesRegex(RuntimeError, 'authorization_changed'):
+                    produce(self.root, self.projects, **self.guards, **options)
+            with connect(cache) as db:
+                self.assertEqual(db.execute('SELECT count(*) FROM ' + table).fetchone()[0], 0)
+                db.execute('DROP TRIGGER revoke_write')
+
     def test_wrong_root_writer_does_not_create_a_directory(self):
         other = self.root.parent / 'uncreated-store'
         self.assertFalse(other.exists())
@@ -67,6 +177,8 @@ class MessengerAuthorityTests(unittest.TestCase):
         self.guards = {'source_access': self.authority.access, 'source_revision': self.authority.revision}
         self.projects = [candidate.PROJECT]
         self.embed = self.enterContext(patch.object(kg, '_local_dense_embeddings', side_effect=AssertionError('unexpected model')))
+        self.model = self.enterContext(patch.object(kg, '_active_dense_embedding_model', return_value='fixture-encoder'))
+        self.enterContext(patch.object(kg, '_dense_endpoint_identity', return_value='fixture-endpoint'))
         self.network = self.enterContext(patch.object(socket.socket, 'connect', side_effect=AssertionError('unexpected network')))
 
     def tearDown(self):

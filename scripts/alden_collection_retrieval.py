@@ -1,5 +1,5 @@
 """Project-scoped retrieval of retained collection versions, never graph authority."""
-from contextlib import closing
+from contextlib import closing, contextmanager, nullcontext
 import json
 import re
 import math
@@ -277,7 +277,7 @@ def _verify_retrieval_result(store, projects, authority, eligible, ranked, proof
                 verify(row['source']); verify(row['target'])
 
 
-def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False):
+def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False, cache_guard=None):
     projects = _scope(projects)
     clauses, args = [], list(projects)
     for value, operator in [(time_from, '>='), (time_to, '<=')]:
@@ -314,7 +314,8 @@ def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=N
             def flush():
                 if not pending_text and not pending_fts:return
                 _check(cancelled)
-                with text_db:
+                publication = cache_guard((row[0], row[1]) for row in pending_text) if cache_guard else nullcontext()
+                with text_db, publication:
                     text_db.executemany('INSERT OR REPLACE INTO texts VALUES(?,?,?,?,?,?,?,?)', pending_text)
                     text_db.executemany('DELETE FROM text_fts WHERE rowid=?', pending_delete)
                     text_db.executemany('INSERT INTO text_fts VALUES(?,?,?,?)', pending_fts)
@@ -398,21 +399,56 @@ def _vector(raw):
     return kg._normalize_dense_vector(list(struct.unpack('<' + 'f' * (len(raw) // 4), raw)))
 
 
-def index_dense(root, projects, *, cancelled=lambda: False, embed=None, progress=None):
-    store = CollectionStore.open_existing(Path(root))
+@contextmanager
+def _index_source_guard(store, projects, authority, pairs=()):
+    """Fresh source interval around one bounded encoder/cache publication batch.
+
+    The collection and native authorities have independent transactions. This
+    checks their current observations; it is not a cross-database atomic grant.
+    """
+    pairs = set(pairs)
+    with store.database() as source:
+        if store._source_authority_snapshot(source, projects) != authority:
+            raise RuntimeError('collection_source_authorization_changed')
+        if pairs:
+            documents = sorted({document for document, _version in pairs})
+            current = set()
+            for start in range(0, len(documents), 256):
+                chunk = documents[start:start + 256]
+                values = ','.join('(?)' for _ in chunk)
+                for project in projects:
+                    current.update(tuple(row) for row in source.execute(
+                        'WITH search_candidates(document_id) AS (VALUES ' + values +
+                        ') SELECT s.document_id,s.current_version FROM (' +
+                        store._scope_versions([project], candidates=True) + ''') s
+                        JOIN documents d ON d.id=s.document_id WHERE d.availability='available' ''',
+                        (*chunk, project)))
+            if not pairs.issubset(current):
+                raise RuntimeError('collection_graph_version_changed')
+        yield
+
+
+def index_dense(root, projects, *, cancelled=lambda: False, embed=None, progress=None,
+                source_access=None, source_revision=None):
+    store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
     if store is None:
         return {'state': 'empty', 'documents': 0}
     with store.target_lock('collection-dense-retrieval'):
-        return _index_dense(root, projects, cancelled=cancelled, embed=embed, progress=progress)
+        return _index_dense(root, projects, cancelled=cancelled, embed=embed, progress=progress,
+                            source_access=source_access, source_revision=source_revision)
 
 
-def index_text(root, projects, *, cancelled=lambda: False):
+def index_text(root, projects, *, cancelled=lambda: False, source_access=None, source_revision=None):
     """Explicit reversible text-cache refresh; no model loading or embedding."""
-    store = CollectionStore.open_existing(Path(root))
+    store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
     if store is None:
         return {'state': 'empty', 'documents': 0}
     projects = _scope(projects)
     with store.target_lock('collection-dense-retrieval'):
+        _check(cancelled)
+        with store.database() as source:
+            authority = store._source_authority_snapshot(source, projects)
+        guard = lambda pairs: _index_source_guard(store, projects, authority, pairs)
         safe_directory(store.root)
         with closing(sqlite3.connect(_path(store), timeout=.15)) as db:
             db.execute('PRAGMA journal_mode=WAL')
@@ -421,18 +457,27 @@ def index_text(root, projects, *, cancelled=lambda: False):
                 PRIMARY KEY(document_id,version))''')
             db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS text_fts USING fts5(document_id UNINDEXED,version UNINDEXED,label,body)')
             db.commit()
-            rows = _index_rows(store, projects, cancelled, text_db=db, resolve_source=True)
-            return {'state': 'ready', 'documents': len(rows), 'projects': projects,
+            rows = _index_rows(store, projects, cancelled, text_db=db, resolve_source=True, cache_guard=guard)
+            latest = _index_rows(store, projects, cancelled, text_db=db)
+            with guard((r['id'], r['version']) for r in latest):
+                _check(cancelled)
+            signature = lambda values: [(r['id'], r['version'], r['text_hash']) for r in values]
+            return {'state': 'ready' if signature(rows) == signature(latest) else 'pending',
+                    'documents': len(rows), 'projects': projects,
                     'text_version': TEXT_VERSION, 'embeddings_generated': 0}
 
 
-def _index_dense(root, projects, *, cancelled, embed, progress):
+def _index_dense(root, projects, *, cancelled, embed, progress, source_access=None, source_revision=None):
     """Explicit producer operation; persist complete document vectors incrementally."""
     import auto_reply_knowledge_graph as kg
-    store = CollectionStore.open_existing(Path(root))
+    store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
     if store is None:
         return {'state': 'empty', 'documents': 0}
-    model, endpoint = kg._active_dense_embedding_model(), kg._dense_endpoint_identity()
+    projects = _scope(projects)
+    _check(cancelled)
+    with store.database() as source:
+        authority = store._source_authority_snapshot(source, projects)
+    guard = lambda pairs: _index_source_guard(store, projects, authority, pairs)
     safe_directory(store.root)
     with closing(sqlite3.connect(_path(store), timeout=.15)) as db:
         db.execute('PRAGMA journal_mode=WAL')
@@ -444,8 +489,10 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
             PRIMARY KEY(document_id,version))''')
         db.execute('CREATE VIRTUAL TABLE IF NOT EXISTS text_fts USING fts5(document_id UNINDEXED,version UNINDEXED,label,body)')
         db.commit()
-        source_rows = _index_rows(store, projects, cancelled, text_db=db, resolve_source=True)
+        source_rows = _index_rows(store, projects, cancelled, text_db=db, resolve_source=True, cache_guard=guard)
         rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
+        # Withheld/blank scopes must not contact or load an embedding service.
+        model, endpoint = (kg._active_dense_embedding_model(), kg._dense_endpoint_identity()) if rows else (None, None)
         # _index_rows(resolve_source=True) already admitted this bounded scope.
         # Probe its current versions by the existing primary key instead of
         # loading metadata for every historical or unrelated project vector.
@@ -458,7 +505,9 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
         def flush_reused():
             if not reused_rows:return
             _check(cancelled)
-            with db:db.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)',reused_rows)
+            with db, guard((row[0], row[1]) for row in reused_rows):
+                db.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)',reused_rows)
+                _check(cancelled)
             reused_rows.clear()
         pieces, owners, totals = [], [], {}
         def flush():
@@ -466,6 +515,8 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
             if not pieces:
                 return
             _check(cancelled)
+            with guard((row['id'], row['version']) for row, _weight, _final in owners):
+                _check(cancelled)
             vectors = embed(pieces) if embed else kg._local_dense_embeddings(
                 pieces, input_type='passage', model_id=model, state_root=Path(root))
             if len(vectors) != len(pieces):
@@ -484,8 +535,9 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
                     complete.append((row['id'], row['version'], row['text_hash'], model, endpoint,
                                      ENCODING, struct.pack('<' + 'f' * len(values), *values)))
             _check(cancelled)
-            with db:
+            with db, guard((row['id'], row['version']) for row, _weight, _final in owners):
                 db.executemany('INSERT OR REPLACE INTO vectors VALUES(?,?,?,?,?,?,?)', complete)
+                _check(cancelled)
             changed += len(complete);windows += len(pieces)
             if progress is not None and changed and changed % 128 < len(complete):
                 progress({'completed_versions': changed, 'eligible_versions': len(rows)})
@@ -516,6 +568,8 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
         flush()
         flush_reused()
         latest = _index_rows(store, projects, cancelled, text_db=db)
+        with guard((r['id'], r['version']) for r in latest):
+            _check(cancelled)
     signature = lambda values: [(r['id'], r['version'], r['text_hash']) for r in values]
     return {'state': 'ready' if signature(source_rows) == signature(latest) else 'pending',
             'projects': _scope(projects), 'documents': len(rows), 'embedded_changed': changed,
@@ -583,9 +637,11 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     _check(cancelled)
     try:
         if path.is_file() and eligible:
-            model, endpoint = kg._active_dense_embedding_model(), kg._dense_endpoint_identity()
             saved = {}
             with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=.15)) as scoped:
+                if not scoped.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vectors'").fetchone():
+                    raise RuntimeError('collection_vectors_unavailable')
+                model, endpoint = kg._active_dense_embedding_model(), kg._dense_endpoint_identity()
                 for start in range(0, len(rows), 200):
                     chunk = rows[start:start + 200]
                     clauses = ' OR '.join('(document_id=? AND version=?)' for _ in chunk)

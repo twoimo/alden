@@ -3,6 +3,13 @@
 Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
+Latest guarded producer delta: [index authority and native text boundary](INDEX_AUTHORITY.md).
+Explicit source guards reach text/dense indexing and bracket encoder/cache use;
+839 checks and one narrowed real Kakao text→MCP→native-context journey pass.
+Production authority/stdio wiring, Telegram contract/consent, external review and
+installed activation remain open. The linked cost model distinguishes batch-key
+checks from full source scans and reports synthetic scaling without a speed claim.
+
 ## Intended outcome and scope
 
 Latest publication delta (2026-10-23, based on `7d7a514`): an actual SQLite
