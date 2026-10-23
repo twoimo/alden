@@ -63,6 +63,42 @@ class AssistantInputTests(unittest.TestCase):
         with database(self.root) as db:
             self.assertEqual(db.execute("SELECT count(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
 
+    def test_provider_failure_reaches_receipt_and_durable_evidence_without_reply(self):
+        from urllib.error import HTTPError
+        from alden_chat_turns import get_request
+        catalog = {'models':[{'id':'selected/model','selectable':True,'local':False,'efforts':['high']}]}
+        for number, status, code in [(10,429,'routed_llm_quota'),(11,401,'routed_llm_authentication'),(12,503,'routed_llm_unavailable')]:
+            with self.subTest(status=status), patch('alden_routed_llm.catalog',return_value=catalog), \
+                    patch('alden_routed_llm.CancellableLocalResponse',side_effect=HTTPError('http://127.0.0.1:10101/v1/responses',status,'provider rejected',{},None)) as transport:
+                value=request(number)
+                result=self.run_input(value,generate=chat.generate_input)
+                self.assertEqual(result['error_code'],code)
+                self.assertEqual(result['state'],'failed')
+                self.assertEqual(result['request_id'],value['request_id'])
+                self.assertEqual(get_request(self.root,value['request_id'])['generation']['error_code'],code)
+                replay=self.run_input(value,generate=chat.generate_input)
+                self.assertEqual(replay.get('error_code'),code)
+                self.assertEqual(replay['request_id'],value['request_id'])
+                transport.assert_called_once()
+        with database(self.root) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],0)
+
+    def test_unrecognized_generation_failure_never_echoes_provider_payload(self):
+        def fail(*args):
+            raise RuntimeError('routed_llm_quota: secret-provider-payload')
+        result=self.run_input(request(),generate=fail)
+        self.assertEqual(result['error_code'],'assistant_input_failed')
+        self.assertNotIn('secret-provider-payload',json.dumps(result))
+
+    def test_replayed_reason_requires_a_terminal_failure_and_exact_safe_code(self):
+        for state,terminal,code in [('cancelled','failed','routed_llm_quota'),
+                                   ('failed','completed','routed_llm_quota'),
+                                   ('failed','failed','routed_llm_quota: private payload'),
+                                   ('failed','failed',{'reason':'private payload'})]:
+            with self.subTest(state=state,terminal=terminal,code=code):
+                result=chat.public_receipt({'state':state,'generation':{'terminal_state':terminal,'error_code':code}})
+                self.assertNotIn('error_code',result)
+
     def test_mismatched_generation_identity_is_not_committed_as_a_reply(self):
         def wrong(root,ticket,*args):
             return '다른 맥락의 답변',{'request':{'conversation_id':'f'*32,'turn_id':ticket['turn_id'],'context_version':ticket['context_version']}}

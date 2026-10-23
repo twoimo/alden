@@ -357,10 +357,20 @@ def process_input(state_root, value, token, *, generate=generate_input, select_m
 
 
 def public_receipt(value):
-    return {key: item for key, item in value.items() if key in {
+    result = {key: item for key, item in value.items() if key in {
         'ok', 'state', 'request_id', 'conversation_id', 'turn_id', 'context_version',
         'answer_context_version', 'reply', 'error_code', 'generation',
     }}
+    # Reconciliation must retain the original failed request's reason without
+    # generating again. Only exact safe codes from a terminal failure qualify.
+    generation = result.get('generation')
+    if (result.get('state') == 'failed' and 'error_code' not in result
+            and isinstance(generation, dict) and generation.get('terminal_state') == 'failed'):
+        from alden_chat_metrics import generation_error_code
+        code = generation_error_code(generation.get('error_code'))
+        if code is not None:
+            result['error_code'] = code
+    return result
 
 
 def failure_receipt(value, code, state='failed'):
@@ -445,7 +455,9 @@ def _process_owned_input(state_root, value, decoded, token, *, generate, select_
                 'error_code': 'assistant_input_superseded'}
     except Exception as error:
         if ticket: cancel_turn(state_root, ticket, reason='failed', generation=failure_generation(selection,ticket,'failed'))
-        code = str(error) if str(error) in KNOWN_INPUT_ERRORS else 'assistant_input_failed'
+        from alden_chat_metrics import generation_error_code
+        reason = str(error)
+        code = reason if reason in KNOWN_INPUT_ERRORS else generation_error_code(reason) or 'assistant_input_failed'
         return {'ok': False, 'state': 'failed', 'request_id': value['request_id'],
                 'conversation_id': ticket['conversation_id'] if ticket else value['conversation_id'], 'error_code': code}
 

@@ -97,6 +97,11 @@ def _one_of(value: object, allowed: frozenset[str]) -> bool:
     return isinstance(value, str) and value in allowed
 
 
+def generation_error_code(value: object) -> str | None:
+    """Share exact, non-sensitive generation reasons with the input receipt."""
+    return value if _one_of(value, _ERROR_CODES) else None
+
+
 def _usage(raw: object) -> dict:
     if not isinstance(raw, Mapping):
         return {}
@@ -234,8 +239,9 @@ def sanitize_generation(selection: object, metrics: object, ticket: object) -> d
     if timing:
         result["timing"] = timing
 
-    if _one_of(metrics.get("error_code"), _ERROR_CODES):
-        result["error_code"] = metrics["error_code"]
+    error_code = generation_error_code(metrics.get("error_code"))
+    if error_code is not None:
+        result["error_code"] = error_code
     if len(json.dumps(result, ensure_ascii=True, allow_nan=False,
                       sort_keys=True, separators=(",", ":")).encode("utf-8")) > MAX_GENERATION_JSON_BYTES:
         raise _invalid()
