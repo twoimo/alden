@@ -30,7 +30,7 @@ not treat a saved result as permanent permission.
 
 | State/action | Actual implementation | Guard / next outcome |
 | --- | --- | --- |
-| Initial scope | `_retrieval_authority` in its own read transaction | Captures requested-project target permissions and protected-source scope revisions. Denied targets do not invoke source scope reads. |
+| Initial scope | `CollectionStore._source_authority_snapshot` in its own read transaction | Captures requested-project target permissions and protected-source scope revisions. Denied targets do not invoke source scope reads. The implementation is now shared with graph projection; the5686877 measurements below retain their original source. |
 | Rank | Existing `_rows`, lexical/dense and temporal selection | These are separate reads, not one atomic operation. Existing version and source guards remain. |
 | Assemble | Existing `retrieve` read transaction | Constructs facts, compacted original proofs, bounded context and selected relations. |
 | Before final read | Existing cancellation check | A cancellation cannot certify a result. No cancellation callback is called after the new final read. |

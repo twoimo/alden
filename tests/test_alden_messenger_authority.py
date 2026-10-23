@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 import hashlib
 import json
 import socket
+import shutil
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -16,6 +17,48 @@ import auto_reply_knowledge_graph as kg
 
 
 class MessengerAuthorityTests(unittest.TestCase):
+    def test_wrong_root_writer_does_not_create_a_directory(self):
+        other = self.root.parent / 'uncreated-store'
+        self.assertFalse(other.exists())
+        with self.assertRaisesRegex(ValueError, 'root_mismatch'):
+            CollectionStore(other, **self.guards)
+        self.assertFalse(other.exists())
+
+    def test_existing_store_rechecks_an_authority_root_change(self):
+        store = CollectionStore.open_existing(self.root, **self.guards)
+        original = self.authority.root
+        self.authority.root = self.root.parent / 'wrong-root'
+        try:
+            with self.assertRaisesRegex(ValueError, 'root_mismatch'):
+                store.graph_page(projects=self.projects)
+        finally:
+            self.authority.root = original
+        self.assertTrue(store.graph_page(projects=self.projects)['nodes'])
+
+    def test_mcp_rejects_a_context_callback_owned_by_a_different_root(self):
+        other_root = candidate.create_root(self.root.parent / 'context-root')
+        other = candidate.Frontier(other_root, 'kakaotalk', 'owner', self.reader)
+        authority = candidate.MessengerAuthority([other])
+        with self.assertRaisesRegex(ValueError, 'root_mismatch'):
+            KnowledgeServer(self.root, self.projects, **self.guards, source_context=authority.retrieval_context)
+
+    def test_bound_source_authority_cannot_read_a_cloned_second_store(self):
+        temporary = TemporaryDirectory(dir='/private/tmp'); self.addCleanup(temporary.cleanup)
+        other = candidate.create_root(Path(temporary.name) / 'other')
+        shutil.copytree(self.root / 'knowledge', other / 'knowledge')
+        for action in ('graph', 'search', 'mcp', 'writer'):
+            with self.subTest(action=action), self.assertRaisesRegex(ValueError, 'root_mismatch'):
+                if action == 'graph':
+                    read_action(other, 'collection-graph', json.dumps({'projects': self.projects}), **self.guards)
+                elif action == 'search':
+                    retrieve(other, '회의', projects=self.projects, **self.guards)
+                elif action == 'mcp':
+                    KnowledgeServer(other, self.projects, **self.guards)
+                else:
+                    CollectionStore(other, **self.guards)
+        with self.assertRaisesRegex(ValueError, 'root_mismatch'):
+            CollectionStore.open_existing(other, source_access=self.kk._source_access)
+
     def setUp(self):
         self.case = access_tests.FrontierAccessTests(); self.case.setUp(); self.addCleanup(self.case.doCleanups)
         self.reader, self.kk = self.case.add_kakao_origin()

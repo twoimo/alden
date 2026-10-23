@@ -6,7 +6,7 @@ import sys
 import time
 
 from alden_abort import ABORT_STATE_NAME, AbortToken
-from alden_collection import CollectionStore, read_action
+from alden_collection import CollectionStore, read_action, require_collection_source_root
 from alden_collection_retrieval import retrieve
 from alden_status_mcp import StdioServer, _check
 
@@ -36,6 +36,7 @@ class KnowledgeServer(StdioServer):
             raise ValueError('knowledge_startup_scope_required')
         if not self.root.is_absolute() or '..' in self.root.parts:
             raise ValueError('knowledge_startup_path_invalid')
+        require_collection_source_root(self.root, source_access, source_revision, source_context)
         # Opening existing data validates paths/schema without creating or migrating it.
         CollectionStore.open_existing(self.root, source_access=source_access, source_revision=source_revision)
 

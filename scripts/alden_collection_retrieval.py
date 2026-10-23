@@ -8,7 +8,7 @@ import sqlite3
 import struct
 import unicodedata
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, korean_literal_plan, korean_literal_matches
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, require_collection_source_root, korean_literal_plan, korean_literal_matches
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations, ANNOTATION_FIELDS
 from alden_source_text import TEXT_VERSION, project_source_text
 
@@ -221,17 +221,6 @@ def _scope(projects):
     return list(dict.fromkeys(projects))
 
 
-def _retrieval_authority(db, projects):
-    marks = ','.join('?' for _ in projects)
-    rows = db.execute('''SELECT target_id,project,permission,
-        CASE WHEN permission!='denied' THEN alden_source_scope(target_id) END
-        FROM target_projects WHERE project IN (''' + marks + ''')
-        ORDER BY target_id,project LIMIT ?''', (*projects, MAX_DOCUMENTS + 1)).fetchall()
-    if len(rows) > MAX_DOCUMENTS:
-        raise RuntimeError('collection_retrieval_budget')
-    return tuple(tuple(row) for row in rows)
-
-
 def _retrieval_relations(db, store, projects, chosen, relation_ids=()):
     sources = ','.join('?' for _ in chosen)
     marks = ','.join('?' for _ in projects)
@@ -254,7 +243,7 @@ def _verify_retrieval_result(store, projects, authority, eligible, ranked, proof
     # IDs and compacted source proofs, to one final collection snapshot. It does
     # not promise authority remains unchanged after this read/response interval.
     with store.database() as db:
-        if _retrieval_authority(db, projects) != authority:
+        if store._source_authority_snapshot(db, projects) != authority:
             raise RuntimeError('collection_source_authorization_changed')
         if ranked:
             expected = {document: eligible[document]['version'] for document, _score in ranked}
@@ -551,11 +540,12 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         raise ValueError('collection_candidate_budget')
     if also is not None and (not isinstance(also,(list,tuple)) or len(also)>40 or any(not isinstance(i,str) for i in also)):
         raise ValueError('collection_explicit_ids_invalid')
+    require_collection_source_root(root, source_access, source_revision, source_context)
     store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
     if store is None:
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
     with store.database() as db:
-        authority = _retrieval_authority(db, projects)
+        authority = store._source_authority_snapshot(db, projects)
     source_rows = _rows(store, projects, cancelled, time_from, time_to)
     rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
     eligible = {row['id']: row for row in rows}

@@ -334,8 +334,30 @@ class TargetBusy(RuntimeError):
     pass
 
 
+def require_collection_source_root(state_root, *callbacks):
+    """Enforce the explicit root contract of participating Python adapters.
+
+    Legacy trusted callables without a declaration retain their old contract;
+    they are not thereby certified as bound to this root. JSON cannot create
+    a callback or supply this declaration.
+    """
+    expected = Path(state_root).absolute()
+    for callback in callbacks:
+        owner = getattr(callback, '__self__', None)
+        declaration = getattr(owner, 'collection_source_root', None)
+        if declaration is None:
+            continue
+        try:
+            root = declaration()
+            if not isinstance(root, Path) or root.absolute() != expected:
+                raise ValueError('root')
+        except Exception as error:
+            raise ValueError('collection_source_root_mismatch') from error
+
+
 class CollectionStore:
     def __init__(self, state_root: Path, *, source_access=None, source_revision=None):
+        require_collection_source_root(state_root, source_access, source_revision)
         self.source_access = source_access
         self.source_revision = source_revision
         self.read_only = False
@@ -483,6 +505,7 @@ class CollectionStore:
 
     @classmethod
     def open_existing(cls, state_root: Path, *, source_access=None, source_revision=None):
+        require_collection_source_root(state_root, source_access, source_revision)
         path = state_root.absolute() / "knowledge" / "collection" / "collection.sqlite3"
         if not path.exists():
             return None
@@ -556,6 +579,7 @@ class CollectionStore:
 
     @contextmanager
     def database(self, *, publication_guard=None, cancelled=None):
+        require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision)
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
@@ -570,6 +594,7 @@ class CollectionStore:
             db.execute('PRAGMA cache_size=-65536')
         try:
             yield db
+            require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision)
             verify_source_access()
             with publication_guard() if publication_guard is not None else nullcontext():
                 if cancelled is not None and cancelled():
@@ -1158,6 +1183,18 @@ class CollectionStore:
                 ' WHERE m.target_id=r.target_id AND m.document_id=r.' + endpoint + '),'
                 'alden_source_allowed(r.target_id,r.' + endpoint + ',NULL))=1')
         return ' AND '.join(guards)
+
+    def _source_authority_snapshot(self, db, projects):
+        if not projects:
+            return ()
+        marks = ','.join('?' for _ in projects)
+        rows = db.execute('''SELECT target_id,project,permission,
+            CASE WHEN permission!='denied' THEN alden_source_scope(target_id) END
+            FROM target_projects WHERE project IN (''' + marks + ''')
+            ORDER BY target_id,project LIMIT ?''', (*projects, SNAPSHOT_RECORD_BUDGET + 1)).fetchall()
+        if len(rows) > SNAPSHOT_RECORD_BUDGET:
+            raise RuntimeError('collection_retrieval_budget')
+        return tuple(tuple(row) for row in rows)
 
     def projects(self) -> list[dict]:
         with self.database() as db:
@@ -1751,6 +1788,8 @@ def read_action(state_root: Path, action: str, query: str | None = None, *,
         if options.get("activity") is True:
             return store.activity_page(projects=projects, after=options.get("after"), stream_id=options.get("stream_id"),
                                        limit=options.get("limit",200), target_id=options.get("target_id"), platform=options.get("platform"))
+        with store.database() as db:
+            authority = store._source_authority_snapshot(db, projects)
         result = store.graph_page(projects=projects, limit=options.get("limit",120), offset=options.get("offset",0),
                                 focus=options.get("focus"), hops=options.get("hops",1), query=str(options.get("search", ""))[:256],
                                 target_id=options.get("target_id"), platform=options.get("platform"),
@@ -1768,5 +1807,8 @@ def read_action(state_root: Path, action: str, query: str | None = None, *,
             current = [{**group, "state": "active"} for group in groups
                        if group.get("current_validity", {}).get("valid") is True]
             result = project_groups(result, current, projects[0]) if len(projects) == 1 else project_context_groups(result, current, projects)
+        with store.database() as db:
+            if store._source_authority_snapshot(db, projects) != authority:
+                raise RuntimeError('collection_source_authorization_changed')
         return result
     raise ValueError("collection_action_invalid")

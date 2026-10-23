@@ -17,7 +17,7 @@ import sqlite3
 import time
 import uuid
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, require_relation_binding
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, require_relation_binding, require_collection_source_root
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations as _declared_source_annotations
 from alden_graph_quality import _json
 
@@ -199,6 +199,9 @@ def _source_rows(db, store, project, members, *, read_blobs, show_records, inclu
             raise ValueError("collection_resolution_member_unavailable")
         if row["current_version"] != member["version"]:
             raise ValueError("collection_resolution_member_version_changed")
+        if not db.execute('SELECT alden_source_allowed(?,?,?)',
+                          (member['target_id'], member['document_id'], member['version'])).fetchone()[0]:
+            raise ValueError('collection_resolution_member_source_unavailable')
         if row["version_document_id"] != member["document_id"]:
             raise RuntimeError("collection_resolution_version_integrity")
         try:
@@ -252,7 +255,7 @@ def _source_rows(db, store, project, members, *, read_blobs, show_records, inclu
     return digest(encoded(fingerprint_rows)), records
 
 
-def _relations(db, project, members, *, show_relations):
+def _relations(db, store, project, members, *, show_relations):
     ids = [m["document_id"] for m in members]
     marks = ",".join("?" for _ in ids)
     # Each edge belongs to its original target, retains its original direction,
@@ -260,17 +263,20 @@ def _relations(db, project, members, *, show_relations):
     rows = db.execute("""SELECT r.id,r.target_id,r.source,r.target,r.type,r.version,r.evidence
        FROM relations r WHERE r.active=1 AND
        (r.source IN (""" + marks + ") OR r.target IN (" + marks + "))" + """
+       AND """ + store._source_relation_scope() + """
        AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
                   AND p.project=? AND p.permission!='denied')
        AND EXISTS(SELECT 1 FROM memberships m JOIN documents d ON d.id=m.document_id
                   JOIN versions v ON v.id=m.current_version AND v.document_id=m.document_id
                   JOIN target_projects p ON p.target_id=m.target_id
                   WHERE m.document_id=r.source AND m.availability='available'
+                    AND alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
                     AND d.availability='available' AND p.project=? AND p.permission!='denied')
        AND EXISTS(SELECT 1 FROM memberships m JOIN documents d ON d.id=m.document_id
                   JOIN versions v ON v.id=m.current_version AND v.document_id=m.document_id
                   JOIN target_projects p ON p.target_id=m.target_id
                   WHERE m.document_id=r.target AND m.availability='available'
+                    AND alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
                     AND d.availability='available' AND p.project=? AND p.permission!='denied')
        ORDER BY r.id LIMIT ?""", (*ids, *ids, project, project, project, MAX_RELATIONS + 1)).fetchall()
     if len(rows) > MAX_RELATIONS:
@@ -317,7 +323,7 @@ def _collection_fingerprint(db, members):
 def _evidence(db, store, project, members, *, read_blobs=False, show=False):
     members_hash, records = _source_rows(db, store, project, members,
                                          read_blobs=read_blobs, show_records=show)
-    relations_hash, relations = _relations(db, project, members, show_relations=show)
+    relations_hash, relations = _relations(db, store, project, members, show_relations=show)
     return {"member_fingerprint": members_hash, "relations_fingerprint": relations_hash,
             "source_fingerprint": digest(encoded([
                 SOURCE_POLICY, members_hash, relations_hash, _collection_fingerprint(db, members)])),
@@ -432,12 +438,16 @@ def _backup_before_feature(store):
 
 @contextmanager
 def _write_db(store):
+    require_collection_source_root(store.path.parents[2], store.source_access, store.source_revision)
     db = sqlite3.connect(store.path, timeout=5)
     db.row_factory = sqlite3.Row
+    verify_source_access = store._install_source_access(db)
     db.execute("PRAGMA foreign_keys=ON")
     try:
         db.execute("BEGIN IMMEDIATE")
         yield db
+        require_collection_source_root(store.path.parents[2], store.source_access, store.source_revision)
+        verify_source_access()
         db.commit()
     except BaseException:
         db.rollback()

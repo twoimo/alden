@@ -11,14 +11,78 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from alden_collection import CollectionStore, digest, encoded, identity, read_action
-from alden_entity_resolution import resolution_action
+from alden_entity_resolution import resolution_action, active_resolutions
 
 
 class EntityUnionReadBoundaryTests(unittest.TestCase):
+    def guarded_source(self, target=None):
+        root = self.root
+        class Reader:
+            allowed = True
+            def collection_source_root(self):
+                return root
+            def access(self, *args):
+                return self.allowed
+            def revision(self, target):
+                return ('a' if self.allowed else 'b') * 64
+        reader = Reader()
+        with self.store.database() as db:
+            db.execute("UPDATE targets SET platform='telegram' WHERE id=?", (self.target if target is None else target,))
+        guards = {'source_access': reader.access, 'source_revision': reader.revision}
+        return reader, guards
+
+    def test_revoked_relation_owner_invalidates_review_without_withholding_independent_members(self):
+        owner = self.register('relation-owner', self.PROJECTS)
+        relation = self.relation('alpha', 'beta', 'private-owner-relation')
+        self.store.ingest(owner, self.records, relations=[relation])
+        self.agree()
+        reader, guards = self.guarded_source(owner)
+        guarded = CollectionStore.open_existing(self.root, **guards)
+        with guarded.database() as db:
+            self.assertEqual(len(active_resolutions(guarded, db, [self.PROJECTS[0]])), 1)
+        reader.allowed = False
+        with guarded.database() as db:
+            self.assertEqual(active_resolutions(guarded, db, [self.PROJECTS[0]]), [])
+        page = read_action(self.root, 'collection-graph', json.dumps({'projects': self.PROJECTS}), **guards)
+        self.assertEqual(set(self.node_map(page)), {self.alpha, self.beta, self.neighbor})
+        self.assertNotIn('private-owner-relation', json.dumps(page))
+
+    def test_revoked_source_cannot_keep_a_current_resolution_when_an_independent_copy_survives(self):
+        # Isolate member authority from relation authority: this review has no
+        # active relations whose withdrawal could mask a missing member guard.
+        with self.store.database() as db:
+            db.execute('UPDATE relations SET active=0')
+        self.agree()
+        independent = self.register('independent-copy', self.PROJECTS)
+        self.store.ingest(independent, self.records)
+        reader, guards = self.guarded_source()
+        guarded = CollectionStore.open_existing(self.root, **guards)
+        with guarded.database() as db:
+            self.assertEqual(len(active_resolutions(guarded, db, [self.PROJECTS[0]])), 1)
+        reader.allowed = False
+        with guarded.database() as db:
+            self.assertEqual(active_resolutions(guarded, db, [self.PROJECTS[0]]), [])
+        page = read_action(self.root, 'collection-graph', json.dumps({'projects': self.PROJECTS}), **guards)
+        self.assertEqual(set(self.node_map(page)), {self.alpha, self.beta, self.neighbor})
+        self.assertNotIn('Explicit synthetic review', json.dumps(page))
+
+    def test_source_revoked_after_graph_read_cannot_publish_old_union_metadata(self):
+        self.agree()
+        reader, guards = self.guarded_source()
+        original = CollectionStore.graph_page
+        def revoked(store, *args, **options):
+            result = original(store, *args, **options)
+            reader.allowed = False
+            return result
+        with patch.object(CollectionStore, 'graph_page', revoked):
+            with self.assertRaisesRegex(RuntimeError, 'collection_source_authorization_changed'):
+                read_action(self.root, 'collection-graph', json.dumps({'projects': self.PROJECTS}), **guards)
+
     PROJECTS = ["union-one", "union-two"]
     SOURCE_TABLES = ("meta", "targets", "target_projects", "documents", "versions",
                      "memberships", "relations", "relation_versions", "runs", "events",

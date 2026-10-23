@@ -63,6 +63,12 @@ class MessengerAuthority:
             sources[frontier.target] = (frontier, binding)
         self.root, self.sources = root, MappingProxyType(sources)
 
+    def collection_source_root(self):
+        for frontier, binding in self.sources.values():
+            if self.root != binding[0] or frontier.collection_source_root() != binding[0]:
+                raise ValueError('messenger_authority_binding_invalid')
+        return self.root
+
     def _source(self, target):
         if not isinstance(target, str):
             return None
@@ -394,6 +400,7 @@ class Frontier:
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077 or marker.is_symlink() or marker.read_bytes() != MARKER:
             raise ValueError('messenger_evaluation_root_required')
         self.root, self.platform, self.account, self.reader = root, platform, account, reader
+        self._source_root = root.absolute()
         self.folder = safe_directory(root / ('frontier-' + platform))
         self.path = self.folder / 'frontier.sqlite3'
         with self.database() as db:
@@ -457,6 +464,14 @@ class Frontier:
         if not present:
             self.store.register(platform=platform, original_id=account, kind='local-db', label=platform,
                 projects=[PROJECT], config={'adapter': 'messenger-evaluation', 'account': account})
+
+    def collection_source_root(self):
+        root = self._source_root
+        if (self.root.absolute() != root
+            or self.path.parent.parent != root
+            or hasattr(self, 'store') and self.store.path != root / 'knowledge/collection/collection.sqlite3'):
+            raise ValueError('messenger_frontier_binding_invalid')
+        return root
 
     @contextmanager
     def database(self):
