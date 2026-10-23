@@ -2,6 +2,7 @@ import type { KnowledgeView } from './graph-model';
 import type { LayoutAffinityPair } from './layout-affinity';
 import type { Point3 } from './plasticity';
 import { overviewRoutingStar } from './overview-labels';
+import { centerCandidates } from './center-candidates';
 
 /** Snapshot budgets, not a larger per-frame physics capacity. */
 export const SEMANTIC_LAYOUT_LIMITS = Object.freeze({
@@ -126,21 +127,27 @@ function separateMultiMemberCenters(centers: Map<string, Point3>, membersByLabel
   const minimum = Math.min(1.05, Math.max(.62, 1.7 / Math.cbrt(labels.length)));
   for (let pass = 0; pass < 16; pass++) {
     let moved = false;
-    for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) {
-      let dx = points[j].x - points[i].x, dy = points[j].y - points[i].y, dz = points[j].z - points[i].z;
-      // A separated axis already proves Euclidean distance >= minimum. Keep
-      // pair/update order identical while avoiding square roots for far peers.
-      if (Math.abs(dx) >= minimum || Math.abs(dy) >= minimum || Math.abs(dz) >= minimum) continue;
-      let length = Math.hypot(dx, dy, dz);
-      if (length >= minimum) continue;
-      if (length < 1e-8) {
-        const v = seed(labels[i] + '\0' + labels[j]);
-        dx = v.x; dy = v.y; dz = v.z; length = Math.max(1e-8, Math.hypot(dx, dy, dz));
+    const candidates = centerCandidates(points, minimum);
+    for (let i = 0; i < points.length; i++) {
+      candidates?.row(i);
+      for (let j = i + 1; j < points.length; j++) {
+        if (candidates) { j = candidates.next(j); if (j >= points.length) break; }
+        let dx = points[j].x - points[i].x, dy = points[j].y - points[i].y, dz = points[j].z - points[i].z;
+        // A separated axis already proves Euclidean distance >= minimum. Keep
+        // pair/update order identical while avoiding square roots for far peers.
+        if (Math.abs(dx) >= minimum || Math.abs(dy) >= minimum || Math.abs(dz) >= minimum) continue;
+        let length = Math.hypot(dx, dy, dz);
+        if (length >= minimum) continue;
+        if (length < 1e-8) {
+          const v = seed(labels[i] + '\0' + labels[j]);
+          dx = v.x; dy = v.y; dz = v.z; length = Math.max(1e-8, Math.hypot(dx, dy, dz));
+        }
+        const push = (minimum - length) / 2 / length;
+        points[i].x -= dx * push; points[i].y -= dy * push; points[i].z -= dz * push;
+        points[j].x += dx * push; points[j].y += dy * push; points[j].z += dz * push;
+        candidates?.moved(i, j);
+        moved = true;
       }
-      const push = (minimum - length) / 2 / length;
-      points[i].x -= dx * push; points[i].y -= dy * push; points[i].z -= dz * push;
-      points[j].x += dx * push; points[j].y += dy * push; points[j].z += dz * push;
-      moved = true;
     }
     const now = points.reduce((sum, p) => ({
       x: sum.x + p.x / points.length, y: sum.y + p.y / points.length, z: sum.z + p.z / points.length,

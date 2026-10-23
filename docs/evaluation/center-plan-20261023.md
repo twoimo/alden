@@ -4,6 +4,10 @@ This reversible candidate removes a demonstrated redundant quadratic phase in
 fresh overview placement. It is not installed, and current-source external
 reverse verification and normal promotion remain open.
 
+Follow-up: [ordered candidate masks](center-candidates-20261023.md) implements
+the previously deferred incremental broad phase after comparing and rejecting
+sorted moving-cell arrays. The original source/measurement receipts remain intact.
+
 ## Source-derived decision
 
 At baseline207e518 the engine separates multi-member centers, then overwrites

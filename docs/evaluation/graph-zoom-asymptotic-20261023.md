@@ -5,6 +5,11 @@ User outcome: keep the full map clear and reveal saved subjects such as
 that the requested analysis is **asymptotic time and memory analysis**.
 This is an uninstalled, reversible candidate. The full project goal remains active.
 
+Later delta: [ordered center candidate masks](center-candidates-20261023.md)
+targets the remaining incremental/incomplete-plan all-pairs work, preserving
+exact bounded outputs. Worst-case quadratic work and extra mask storage remain;
+the original observations below retain their historical scope.
+
 ## Behavior and ownership
 
 `hologram.ts:updateZoomLabels` owns passive caption visibility. At the fitted
