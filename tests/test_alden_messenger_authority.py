@@ -91,6 +91,36 @@ class MessengerAuthorityTests(unittest.TestCase):
             stored = json.loads(db.execute('SELECT metadata FROM versions').fetchone()[0])
         self.assertEqual(stored['source']['platform'], 'telegram')
 
+    def test_lexical_search_does_not_export_revoked_first_publisher_capture_metadata(self):
+        self.case.denied.update(('a', 'b'))
+        store = CollectionStore.open_existing(self.root, **self.guards)
+        with store.database() as db:
+            before = [tuple(row) for row in db.execute('SELECT id,raw_sha256,metadata FROM versions ORDER BY id')]
+            events = db.execute('SELECT count(*) FROM events').fetchone()[0]
+        for expand in (False, True):
+            with self.subTest(expand_korean=expand):
+                result = store.search('회의', projects=self.projects, expand_korean=expand)
+                self.assertEqual(len(result), 1)
+                self.assertEqual(result[0]['body'], self.case.text)
+                self.assertEqual(result[0]['metadata']['source']['content_hash'], hashlib.sha256(self.case.text.encode()).hexdigest())
+                self.assertNotIn('authorization_sha256', json.dumps(result))
+                self.assertNotIn('account_id', json.dumps(result))
+                self.assertNotIn('platform', result[0]['metadata']['source'])
+                self.assertNotIn('since', json.dumps(result))
+                self.assertNotIn('until', json.dumps(result))
+        with store.database() as db:
+            self.assertEqual([tuple(row) for row in db.execute('SELECT id,raw_sha256,metadata FROM versions ORDER BY id')], before)
+            self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], events)
+        self.reader.blocked = True
+        self.assertEqual(store.search('회의', projects=self.projects), [])
+
+    def test_lexical_search_metadata_is_content_identity_even_before_revocation(self):
+        result = CollectionStore.open_existing(self.root, **self.guards).search('회의', projects=self.projects)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['metadata']['source']['kind'], 'messenger-exact-content-provenance')
+        self.assertNotIn('authorization_sha256', json.dumps(result))
+        self.assertNotIn('account_id', json.dumps(result))
+
     def test_retrieval_does_not_reveal_a_relation_owned_by_a_revoked_source(self):
         second = '업무 자료 검토는 계약 조건의 변경 이후 다음 주에 진행합니다.'
         self.reader.pages[('k', None)] = ([item(2, second), item(1, self.case.text)], False, None)

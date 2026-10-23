@@ -306,6 +306,15 @@ class CollectionTests(unittest.TestCase):
         self.assertEqual(len(rows),3)
         self.assertEqual(self.store.search('final',projects=['one'])[0]['body'],'final')
 
+    def test_search_keeps_nonmessenger_source_metadata_compatible(self):
+        source={'kind':'manual-document','author':'declared author','reference':'saved citation'}
+        self.store.ingest(self.target(),[self.record(text='독립 문서 검색 자료',source=source)])
+        for expand in (False,True):
+            with self.subTest(expand_korean=expand):
+                result=self.store.search('검색',projects=['one'],expand_korean=expand)
+                self.assertEqual(len(result),1)
+                self.assertEqual(result[0]['metadata']['source'],source)
+
     def test_failed_later_relation_rolls_back_batched_search_projection(self):
         target=self.target();self.store.ingest(target,[self.record(text='before')],cursor='before')
         relation={'source_platform':'youtube','source_id':'AbC','target_platform':'youtube','target_id':'missing','type':'reference'}

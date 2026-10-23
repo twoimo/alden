@@ -1121,7 +1121,17 @@ class CollectionStore:
               AND s.current_version=version_search.version_id JOIN versions v ON v.id=s.current_version
               WHERE version_search MATCH ? AND d.availability='available' """ + ''.join(' AND ' + c for c in clauses) + ' ORDER BY rank,d.id LIMIT ?',
               (query, *projects, query, *values, limit)).fetchall()
-            return [{**dict(row), "metadata": json.loads(row["metadata"])} for row in rows]
+            results = []
+            for row in rows:
+                metadata = json.loads(row['metadata'])
+                source = metadata.get('source')
+                if isinstance(source, dict) and source.get('kind') == 'messenger-exact-content-provenance':
+                    # A shared version retains its first publisher privately.
+                    # Its old account/consent receipt is not search provenance.
+                    metadata['source'] = {'kind': source['kind'], 'content_hash': source.get('content_hash'),
+                        'scope': 'content_identity_only; consult current scoped provenance for source memberships'}
+                results.append({**dict(row), 'metadata': metadata})
+            return results
 
     def _scope_versions(self, projects: list[str], *, candidates=False) -> str:
         marks = ",".join("?" for _ in projects)

@@ -798,3 +798,20 @@ use. The original Pro/Gemini/reverse audit and full 18/ST01–14/Cursor holds re
 Private evidence: `outputs/messenger-authority-20261023/`. Source/tests, exact-head
 CI, predecessor receipts and installed-artifact preservation are recorded
 separately; no private native content is included in the scoped audit delta.
+
+
+### Original adversarial report recovered; search metadata correction
+
+The complete historical 2f5f678 Gemini review is saved, source-readable and
+byte-verified; its original owned canonical redirect is reconciled and its
+completed service slot released without a resend or model/account substitution.
+The shared coordinator correction preserves ownership, source identity and
+admission guards. Current-source reverse/delta review remains open.
+
+[The 14-finding decision table](ADVERSARIAL_FINDINGS.md) separates current
+corrections, explicit conditions and deferred promotion gates. In particular,
+current lexical search exposed the first publisher's private messenger capture
+metadata after that origin was revoked. The correction preserves authorized
+shared bodies and immutable capture records, projects only content identity in
+search results and keeps ordinary source metadata compatible. 807 checks in 45
+fresh pinned Python processes pass. This candidate is not installed or activated.
