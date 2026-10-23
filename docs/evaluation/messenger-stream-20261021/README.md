@@ -5,6 +5,64 @@ Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 ## Intended outcome and scope
 
+Current retrieval-context delta (2026-10-23, based on `e6be22a`): the controlled
+question “회의 일정은 몇 시로 변경되나요?” was searchable while its retained
+“3시요” neighbor was absent from retrieval. `MessengerAuthority.retrieval_context`
+now provides bounded current transcripts to explicitly configured `retrieve`
+and `KnowledgeServer` callers. They are a separate `conversation_context`
+payload, not extra facts, graph nodes, inferred replies or agreements. Source
+message timestamps remain distinct from an anchor's collection-time filtering.
+Author identity/reply reconstruction and semantic reclassification remain open.
+
+The trusted host supplies source access, revision and context callbacks together;
+JSON/stdio cannot create this authority. The context owner must match the actual
+retrieval root, pinned target/account and selected document/version. At most two
+messenger anchors are checked, each with at most three nearby cached rows and
+two attempted original origins. Independent target origins are tried before a
+second duplicate origin. A stale/unavailable excerpt withholds that anchor and
+its selected relations while independent current sources can survive. Unknown
+messenger relation endpoints do not become fresh context evidence. Counts expose
+withheld anchors, unverified relation endpoints and excerpts omitted for the
+shared character budget; a valid empty response is not complete conversation
+coverage. Full source grants, visibility and canonical reader guards remain.
+
+Two executable races were preserved and corrected: project permission revoked
+after the source read, and a numeric neighbor reconciled from 3시 to 4시 after
+the first context read. Permission membership now participates in the authority
+revision. Before returning, a second callback phase validates the selected
+version, source epoch and checksum-bound pages/heads in bounded metadata
+transactions, without another canonical body read. This context checkpoint is
+separate from activity-stream authorization; normal source additions must not
+reset the live event stream. Cancellation and malformed/mismatched callback
+packets fail closed. Callback inputs are copied, and unrequested account fields
+cannot enter the serialized transcript.
+
+Validation: 22 retrieval-context regressions and all 764 Python checks across 41
+fresh processes passed in the pinned menu runtime. Real SQLite/retrieval and
+serialized in-process MCP are exercised with controlled readers and no unexpected
+network/embedding calls. The initial test-method-name error and overly specific
+empty-versus-error expectation remain in private logs, separately from the two
+actual failing race regressions. Later root/checkpoint deltas have separate
+final test/native receipts and do not inherit earlier source hashes.
+
+Current canonical metadata discovery found 371 cached Kakao rooms. One exact
+source was newly captured into an isolated store, then appeared with the same
+current body/window in actual retrieval and serialized in-process MCP. Discovery
+plus four exact body reads reported readonly/schema verified and zero
+server/send/source-DB/app-setting writes; the reads created zero new events.
+The native transcript contains one anchor only. Numeric replies/multiple current
+neighbors were controlled tests, not native observations. Native model calls
+were not instrumented. Installed Alden remains 0.3.218/runtime `42c648e`; no
+production watcher, installed stdio/voice host, native Telegram acquisition,
+foreground QA or semantic/latency/resource gold is proved by this delta.
+
+Evidence: private `outputs/messenger-rag-context-20261023/`, final native receipt
+`native-context-delivery-receipt.json`. This is still a reversible, uninstalled
+candidate. Cross-audit, installed bootstrap/index/UI integration and complete
+18/ST01–14/Cursor8/release gates remain open. Earlier immutable queued bundles
+remain unchanged; no new upload/send, local FIFO override, model substitution or
+audit completion follows from this implementation.
+
 Latest isolated delta (2026-10-23, based on `2f5f678`):
 `messenger-triage-nfc-v3` hashes the complete NFC body. Outer whitespace,
 indentation and line endings participate in identity; only the classification

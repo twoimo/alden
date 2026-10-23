@@ -74,6 +74,95 @@ class MessengerAuthority:
             raise SourceBlocked('messenger_authority_source_unavailable')
         return source.context_window(room, message, **options)
 
+    def retrieval_context(self, proof, *, projects, source_root, cancelled=lambda: False, expected_window=None):
+        """Fresh source excerpts for one selected document, never inferred replies."""
+        if Path(source_root).absolute() != self.root:
+            raise ValueError('messenger_context_root_mismatch')
+        derived = proof.get('derived_from', {})
+        content = derived.get('content_hash')
+        if (derived.get('kind') != 'messenger-exact-content-provenance'
+            or not isinstance(content, str) or not re.fullmatch(r'[0-9a-f]{64}', content)
+            or proof.get('entity_id') != identity('graph', 'messenger-content:' + content)):
+            raise ValueError('messenger_context_document_invalid')
+        if expected_window is not None:
+            return self._retrieval_window_current(proof, expected_window, projects, cancelled)
+        targets = sorted({m['target_id'] for m in proof['source_memberships']})
+        candidates = []
+        for target in targets:
+            source = self._source(target)
+            if source is None:
+                continue
+            with source.database() as db:
+                rows = db.execute('''SELECT room,message FROM message_heads
+                    WHERE content_hash=? AND state='candidate' ORDER BY room,message LIMIT 2''', (content,)).fetchall()
+            candidates.append([(source, row) for row in rows])
+        # Try distinct permitted targets before a duplicate origin of one target.
+        observations = [rows[index] for index in range(2) for rows in candidates if len(rows) > index][:2]
+        for source, origin in observations:
+            if cancelled():
+                raise RuntimeError('collection_retrieval_cancelled')
+            try:
+                with source.store.database() as db:
+                    current = db.execute('''SELECT v.metadata FROM memberships m JOIN versions v
+                        ON v.id=m.current_version WHERE m.target_id=? AND m.document_id=?
+                        AND m.current_version=? AND m.availability='available' ''',
+                        (source.target, proof['entity_id'], proof['source_version'])).fetchone()
+                if current is None or source._source_access(source.target, proof['entity_id'],
+                        proof['source_version'], json.loads(current['metadata'])) is not True:
+                    continue
+                window = source.context_window(origin['room'], origin['message'], projects=projects, before=1, after=1)
+                anchor = next(r for r in window['items'] if r['anchor'])
+                if anchor['state'] != 'candidate' or anchor['content_hash'] != content:
+                    raise SourceBlocked('messenger_context_anchor_changed')
+                window = {key:value for key,value in window.items() if key != 'account_id'}
+                return {'state':'current','source_targets':[source.target],
+                    'window':{**window,'target_id':source.target,
+                        'entity_id':proof['entity_id'],'source_version':proof['source_version']}}
+            except SourceBlocked:
+                continue
+        return {'state':'unavailable','reason':'current_bounded_source_excerpt_unavailable'}
+
+    def _retrieval_window_current(self, proof, window, projects, cancelled):
+        """Final bounded metadata checkpoint; no second canonical body read."""
+        if cancelled():
+            raise RuntimeError('collection_retrieval_cancelled')
+        source = self._source(window['target_id'])
+        if source is None or window['entity_id'] != proof['entity_id'] or window['source_version'] != proof['source_version']:
+            return False
+        if source._source_revision(source.target) != window['authority_revision']:
+            raise RuntimeError('collection_source_authorization_changed')
+        if not any(p['project'] in projects and p['permission'] != 'denied'
+                   for p in source.store.target(source.target)['projects']):
+            raise RuntimeError('collection_source_authorization_changed')
+        with source.store.database() as db:
+            if db.execute('''SELECT 1 FROM memberships WHERE target_id=? AND document_id=?
+                AND current_version=? AND availability='available' ''',
+                (source.target,proof['entity_id'],proof['source_version'])).fetchone() is None:
+                return False
+        with source.database() as db:
+            db.execute('BEGIN')
+            room = db.execute('SELECT frontier FROM rooms WHERE id=?', (window['room_id'],)).fetchone()
+            if room is None or source._epoch(json.loads(room['frontier'])) != window['source_epoch']:
+                return False
+            for item in window['items']:
+                head = db.execute('''SELECT h.*,p.payload,p.next_frontier FROM message_heads h
+                    JOIN pages p ON p.id=h.page WHERE h.room=? AND h.message=? AND p.state='complete' ''',
+                    (window['room_id'], item['message_id'])).fetchone()
+                if head is None or any(head[k] != item[v] for k,v in
+                        (('page','source_page'),('sent_at','sent_at'),('state','state'),('content_hash','content_hash'))):
+                    return False
+                payload = source._current_page(head)
+                current = [r for r in payload['items'] if r['id'] == item['message_id']]
+                if len(current) != 1 or current[0]['body'] != item['body']:
+                    return False
+        with source.database() as db:
+            room = db.execute('SELECT frontier FROM rooms WHERE id=?', (window['room_id'],)).fetchone()
+            if room is None or source._epoch(json.loads(room['frontier'])) != window['source_epoch']:
+                return False
+        if source._source_revision(source.target) != window['authority_revision']:
+            raise RuntimeError('collection_source_authorization_changed')
+        return True
+
 
 def verify_prepared_items(prepared, observed):
     """Current visible bytes must agree; an absent window proves no deletion."""
@@ -305,6 +394,7 @@ class Frontier:
                 id TEXT PRIMARY KEY,room TEXT NOT NULL,message TEXT NOT NULL,
                 content_hash TEXT,state TEXT NOT NULL,reason TEXT NOT NULL,body TEXT,page TEXT NOT NULL)''')
             db.execute('CREATE INDEX IF NOT EXISTS message_content ON message_heads(content_hash,state)')
+            db.execute('CREATE INDEX IF NOT EXISTS message_content_origin ON message_heads(content_hash,state,room,message)')
             db.execute('''CREATE TABLE IF NOT EXISTS head_fingerprints(
                 id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL)''')
             binding = db.execute('SELECT account FROM binding').fetchone()
@@ -649,7 +739,8 @@ class Frontier:
                 state.append([room, authorization])
         if self.reader.identity() != account:
             raise SourceBlocked('messenger_account_changed_during_authorization')
-        return hashlib.sha256(encoded([self.platform, account, POLICY, state])).hexdigest()
+        projects = sorted((p['project'], p['permission']) for p in self.store.target(target)['projects'])
+        return hashlib.sha256(encoded([self.platform, account, POLICY, state, projects])).hexdigest()
 
     def _source_access(self, target, document, version, metadata):
         """Current origin authority is required even when collection is stopped."""
@@ -778,6 +869,7 @@ class Frontier:
         return {'platform': self.platform, 'account_id': self.account, 'room_id': room,
             'anchor_message': message, 'items': items, 'authority_revision': revision,
             'window_id': window_id, 'quality_policy': POLICY,
+            'source_epoch': self._epoch(json.loads(frontier['frontier'])),
             'has_unplaced_rows': unplaced, 'coverage': 'committed observed rows only; not full conversation history',
             'scope': 'bounded cached conversation; time proximity is not a reply, identity, agreement or established fact',
             'order': 'sent_at then message ID; equal-time order is not conversational causality'}

@@ -24,10 +24,13 @@ class CallToken(AbortToken):
 class KnowledgeServer(StdioServer):
     server_name = 'alden-readonly-knowledge'
 
-    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None):
+    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None):
         super().__init__(None, tool_timeout=tool_timeout)
         self.root = Path(root)
         self.source_access, self.source_revision = source_access, source_revision
+        if source_context is not None and not all(callable(value) for value in (source_access, source_revision, source_context)):
+            raise ValueError('knowledge_source_context_authority_required')
+        self.source_context = source_context
         self.allowed = frozenset(allowed_projects)
         if not self.allowed or len(self.allowed) > 16 or any(not isinstance(p, str) or not p or len(p) > 128 for p in self.allowed):
             raise ValueError('knowledge_startup_scope_required')
@@ -88,7 +91,8 @@ class KnowledgeServer(StdioServer):
             with kg.embedding_abort_scope(token):
                 result = retrieve(self.root, args['query'], projects=args['projects'],
                                   max_entities=args.get('limit', 6), cancelled=cancelled,
-                                  source_access=self.source_access, source_revision=self.source_revision)
+                                  source_access=self.source_access, source_revision=self.source_revision,
+                                  source_context=self.source_context)
         else:
             action = 'collection-graph' if name.endswith('graph') else 'collection-history'
             options = {'projects': args['projects'], 'limit': args.get('limit', 50)}

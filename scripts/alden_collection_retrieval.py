@@ -19,6 +19,52 @@ BATCH = 8
 MAX_SOURCE_MEMBERSHIPS = 256
 MAX_BODY_EVIDENCE_CHECKS = 100
 CONTEXT_TEXT_POLICY = 'retained-threads-annotation-context-v2'
+CONVERSATION_CONTEXT_POLICY = 'current-source-excerpt-v1'
+MAX_CONTEXT_ANCHORS = 2
+
+
+def _verified_conversation_excerpt(proof, value):
+    """Validate a trusted source owner's bounded response against the selected fact."""
+    if not isinstance(value, dict):
+        raise ValueError('collection_source_context_invalid')
+    if value.get('state') == 'unavailable':
+        return None
+    if value.get('state') != 'current':
+        raise ValueError('collection_source_context_invalid')
+    permitted = {m['target_id'] for m in proof['source_memberships']}
+    targets, window = value.get('source_targets'), value.get('window')
+    window_fields = {'platform','room_id','anchor_message','items','authority_revision','window_id',
+        'quality_policy','has_unplaced_rows','coverage','scope','order','target_id','entity_id','source_version','source_epoch'}
+    if (not isinstance(targets, list) or len(targets) != 1 or not isinstance(targets[0], str) or targets[0] not in permitted
+        or not isinstance(window, dict) or len(encoded(window)) > 65536
+        or set(window) - window_fields or window.get('platform') not in {'kakaotalk','telegram'}
+        or window.get('target_id') != targets[0] or window.get('entity_id') != proof['entity_id']
+        or window.get('source_version') != proof['source_version']
+        or type(window.get('source_epoch')) is not int or window['source_epoch'] < 0
+        or not isinstance(window.get('room_id'), str) or not window['room_id']
+        or not isinstance(window.get('window_id'), str) or not re.fullmatch(r'[0-9a-f]{64}', window['window_id'])
+        or not isinstance(window.get('authority_revision'), str)
+        or not re.fullmatch(r'[0-9a-f]{64}', window['authority_revision'])):
+        raise ValueError('collection_source_context_binding')
+    items = window.get('items')
+    if not isinstance(items, list) or not 1 <= len(items) <= 3 or any(not isinstance(r, dict) for r in items):
+        raise ValueError('collection_source_context_items')
+    item_fields = {'message_id','sent_at','body','state','reason','source_page','content_hash','anchor'}
+    if any(set(r) - item_fields or not isinstance(r.get('message_id'), str) or not r['message_id']
+           or type(r.get('anchor')) is not bool
+           or type(r.get('sent_at')) not in (int, float) or not math.isfinite(r['sent_at']) or r['sent_at'] < 0
+           or r.get('body') is not None and not isinstance(r['body'], str)
+           or not isinstance(r.get('source_page'), str) or not re.fullmatch(r'[0-9a-f]{64}', r['source_page'])
+           for r in items) or len({r['message_id'] for r in items}) != len(items):
+        raise ValueError('collection_source_context_items')
+    anchors = [r for r in items if r['anchor']]
+    content = proof['derived_from'].get('content_hash')
+    if (len(anchors) != 1 or anchors[0]['message_id'] != window.get('anchor_message')
+        or anchors[0].get('state') != 'candidate' or not isinstance(anchors[0]['body'], str)
+        or anchors[0].get('content_hash') != content
+        or digest(unicodedata.normalize('NFC', anchors[0]['body']).encode()) != content):
+        raise ValueError('collection_source_context_anchor')
+    return window
 
 
 def _context_text_key(text, proof, record, metadata):
@@ -423,9 +469,11 @@ def _index_dense(root, projects, *, cancelled, embed, progress):
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              candidate_limit=40, max_context_chars=8000, rrf_k=60, rrf_weights=None,
              cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None,
-             source_access=None, source_revision=None):
+             source_access=None, source_revision=None, source_context=None):
     import auto_reply_knowledge_graph as kg
     projects = _scope(projects)
+    if source_context is not None and not all(callable(value) for value in (source_context, source_access, source_revision)):
+        raise ValueError('collection_source_context_authority_required')
     if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1024:
         raise ValueError('collection_query_invalid')
     query = unicodedata.normalize('NFC', query)
@@ -551,6 +599,9 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         pinned = list(dict.fromkeys(i for i in also if i in eligible))
         ranked = [(i, 0.) for i in pinned] + [(i, s) for i, s in ranked if i not in pinned]
     facts, provenance, used = [], [], 0
+    context_windows, context_checks, context_withheld, context_budget_omitted = [], 0, 0, 0
+    context_unavailable = set()
+    context_unverified_relations = 0
     matching_text, repeated_facts, saved_characters = {}, 0, 0
     compact_text = not also and not latest_query and time_from is None and time_to is None
     def append(text, proof):
@@ -588,6 +639,28 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                                        'bm25_token' if document_id in token_ids else None),
                      'derived_from': derived, 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
+            if source_context is not None and isinstance(derived, dict) and derived.get('kind') == 'messenger-exact-content-provenance':
+                if context_checks >= MAX_CONTEXT_ANCHORS:
+                    context_withheld += 1
+                    context_unavailable.add(document_id)
+                    continue
+                context_checks += 1
+                window = _verified_conversation_excerpt(proof,
+                    source_context(json.loads(encoded(proof)), projects=projects,
+                                   source_root=Path(root).absolute(), cancelled=cancelled))
+                _check(cancelled)
+                if window is None:
+                    context_withheld += 1
+                    context_unavailable.add(document_id)
+                    continue
+                # A shared body can survive through one current origin. Do not
+                # keep unobserved origins in this freshly checked fact's proof.
+                memberships = [m for m in memberships if m['target_id'] == window['target_id']]
+                proof['source_memberships'] = memberships
+                proof['projects'] = list(dict.fromkeys(m['project'] for m in memberships))
+                proof['derived_from'] = {**derived, 'current_source_targets':[window['target_id']]}
+                proof['scope_basis'] = 'current_canonical_excerpt_at_selected_version'
+                context_windows.append(window)
             evidence_class = content_evidence_class(metadata, row['body'], source=record,
                                                    body_source=row['body_source'])
             proof['content_evidence'] = {'policy': CONTENT_POLICY, 'classification': evidence_class}
@@ -649,9 +722,14 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 (chosen[0], *projects))
             for edge in edges:
                 _check(cancelled)
-                if edge['target'] not in eligible or edge['target'] in temporal_excluded:
+                if edge['target'] not in eligible or edge['target'] in temporal_excluded or edge['target'] in context_unavailable:
                     continue
                 target = eligible[edge['target']]
+                if (source_context is not None and target['platform'] == 'graph'
+                    and target['original_id'].startswith('messenger-content:')
+                    and not any(w['entity_id'] == edge['target'] for w in context_windows)):
+                    context_unverified_relations += 1
+                    continue
                 if edge['source_version'] != eligible[edge['source']]['version'] or edge['target_version'] != target['version']:
                     continue
                 _verified_source(db, store, target, projects)
@@ -680,8 +758,31 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                         'provenance_valid': True, 'retracted': False})
                 if sum(p['fact_type'] == 'relation' for p in provenance) >= min(int(max_relations), 10):
                     break
+        excerpts = []
+        selected = {p['entity_id'] for p in provenance if p['fact_type'] == 'entity'}
+        for window in context_windows:
+            if window['entity_id'] not in selected:
+                continue
+            proof = next(p for p in provenance if p.get('entity_id') == window['entity_id'])
+            if source_context(json.loads(encoded(proof)), projects=projects, cancelled=cancelled,
+                              source_root=Path(root).absolute(),
+                              expected_window=json.loads(encoded(window))) is not True:
+                raise RuntimeError('collection_source_context_changed')
+            _check(cancelled)
+            characters = len(encoded(window).decode())
+            if characters > max_context_chars - used:
+                context_budget_omitted += 1
+                continue
+            used += characters
+            excerpts.append(window)
     _check(cancelled)
     return {'facts': facts, 'fact_provenance': provenance,
+            **({'conversation_context': {'policy':CONVERSATION_CONTEXT_POLICY,'items':excerpts,
+                'checked_entities':context_checks,'withheld_entities':context_withheld,
+                'unverified_relation_endpoints':context_unverified_relations,
+                'omitted_for_budget':context_budget_omitted,'anchor_limit':MAX_CONTEXT_ANCHORS,
+                'scope':'bounded source transcripts, not facts/replies/agreements; source message times are separate from anchor collection-time filtering'}}
+               if source_context is not None else {}),
             'search_mode': 'bm25_with_literals' if mode == 'bm25_only' and literal_ids else mode,
             'lexical_policy': 'token_then_korean_literal_substring_v1',
             'projects': projects, 'eligible_documents': len(rows), 'context_chars': used,
