@@ -872,32 +872,47 @@ export class KnowledgeHologram {
   }
   // Refresh the collision order only on graph rebuild or hover change.
   // Selection stays ahead of hover; saved topics/titles precede broad hubs.
-  private prioritizeOverviewLabels(): void {
+  private prioritizeOverviewLabels(previousBounds = new Map(
+    [...this.labels.keys()].map((id, index) => [id, this.labelBounds[index]]),
+  )): void {
     if (this.view.hops !== 0) return;
     const ordered = [...this.labels].sort(([first], [second]) =>
       compareOverviewLabelPriority(first, second, this.view.focusId, this.hoveredId, this.globalLabelRanks));
     this.labels.clear();
     for (const [id, label] of ordered) this.labels.set(id, label);
     this.labelBounds.length = 0;
-    for (const _ of this.labels) this.labelBounds.push({width:0,left:0,top:0,visible:false});
+    for (const id of this.labels.keys())
+      this.labelBounds.push(previousBounds.get(id) ?? {width:0,left:0,top:0,visible:false});
   }
   private refreshOverviewLabels(): void {
     if(this.view.hops!==0)return;
+    // Capture by identity before removals/reordering; array indices cease to
+    // identify the same label afterwards. Typography/resize invalidation still
+    // owns remeasurement in the render path.
+    const previousBounds = new Map([...this.labels.keys()].map((id, index) => [id, this.labelBounds[index]]));
     const wanted=new Set(this.zoomLabelCandidates?.length ? this.zoomLabels : this.globalLabels);
     if(this.hoveredId)wanted.add(this.hoveredId);
     if(this.view.focusId)wanted.add(this.view.focusId);
     for(const [id,label] of this.labels)if(!wanted.has(id)){label.remove();this.labels.delete(id);}
     const layer=this.canvas.parentElement?.querySelector('.knowledge-node-labels');
+    const missing = new Set([...wanted].filter(id => !this.labels.has(id)));
+    const nodes = new Map<string, KnowledgeNode>();
+    // Resolve only new labels in one pass. Keep wanted order below, and retain
+    // the first matching record as Array.find did. No full-graph index is held.
+    if (layer && missing.size) for (const node of this.view.nodes) {
+      if (missing.has(node.id) && !nodes.has(node.id)) nodes.set(node.id, node);
+      if (nodes.size === missing.size) break;
+    }
     for(const id of wanted){
       if(this.labels.has(id)||!layer)continue;
-      const node=this.view.nodes.find(node=>node.id===id);if(!node||internalGraphLabel(node.label))continue;
+      const node=nodes.get(id);if(!node||internalGraphLabel(node.label))continue;
       const label=document.createElement('span');label.className='knowledge-node-label';
       label.hidden=true;
       label.textContent=node.label;label.dataset.captionRole=overviewCaptionRole(node);
       label.title=node.label+(label.dataset.captionRole==='reference-section'?' · 저장된 자료 목록 · 본문 내용 검증과 구분':'');label.dataset.view='overview';
       label.dataset.focused=String(id===this.view.focusId);layer.append(label);this.labels.set(id,label);
     }
-    this.prioritizeOverviewLabels();
+    this.prioritizeOverviewLabels(previousBounds);
   }
   private updateZoomLabels(projectionChanged = true): void {
     if (this.view.hops !== 0 || !this.zoomLabelCandidates?.length) return;

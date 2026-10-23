@@ -10,6 +10,11 @@ targets the remaining incremental/incomplete-plan all-pairs work, preserving
 exact bounded outputs. Worst-case quadratic work and extra mask storage remain;
 the original observations below retain their historical scope.
 
+Further delta: [caption refresh](label-refresh-20261023.md) removes repeated
+node scans for each new caption and retains unchanged text measurements across
+hover/reordering. Its synthetic DOM measurements are separate from the original
+projection/solver measurements below.
+
 ## Behavior and ownership
 
 `hologram.ts:updateZoomLabels` owns passive caption visibility. At the fitted
@@ -46,7 +51,7 @@ They are component bounds, not an all-input theorem for the entire application.
 | Saved label/caption rebuild | O(N log N + E) | O(N + E) | Includes full candidate ranking and source-link witnesses; not a frame operation. |
 | Moving caption projection/selection | O(C log C + CB) | O(C + B) | Sort plus greedy collision checks. B≤24; candidate lists can include up to8 overview captions beyond the2048 ranked titles. |
 | Stationary caption selection | O(1) cache check | O(1) extra cache key | Entire render is still not O(1); graph buffers and visible-label placement retain their costs. |
-| Caption DOM refresh | O(BN) existing lookup | O(B) labels | Each new label still finds its node in the displayed list; bounded B does not make arbitrary N free. |
+| Caption DOM refresh | O(N + B log B) when adding captions | O(B) labels and scratch | Resolves new IDs in one source pass, then orders at most B captions. With no new captions, no source scan. Text creation and necessary DOM measurements have separate costs. |
 | Multi-member center separation | O(16K²) when required | O(K) | Complete fresh plans now avoid this phase; incremental/incomplete plans retain it. Axis rejection reduces constants only. |
 | Display correction | Bounded spatial passes | O(N) |2048 nodes,8 passes,131072 tested pairs. Budget exhaustion is reported; it is not zero-overlap certification. |
 

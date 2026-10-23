@@ -39,7 +39,7 @@ function setup(
   for (const node of specs) {
     const label = document.createElement("span");
     label.textContent = "Label " + node.id.padEnd(7, "x");
-    Object.defineProperty(label, "offsetWidth", { get: () => {
+    Object.defineProperty(label, "offsetWidth", { configurable: true, get: () => {
       widthReads.set(node.id, (widthReads.get(node.id) ?? 0) + 1);
       return 132;
     } });
@@ -221,6 +221,58 @@ describe("overview labels in the native hologram projection loop", () => {
       expect(firstFrameReads).toEqual([1, 1]);
       r.fake.render(1 / 60);
       expect([...r.widthReads.values()]).toEqual(firstFrameReads);
+    } finally { r.shell.remove(); }
+  });
+
+  it('keeps unchanged text measurements when hover changes the collision order', () => {
+    const r = setup([{ id: 'first', x: -.5 }, { id: 'second', x: .5 }]);
+    try {
+      const reads = r.widthReads.get('second');
+      Object.assign(r.fake, { hoveredId: 'first' });
+      r.fake.refreshOverviewLabels();
+      r.fake.render(1 / 60);
+      expect(r.widthReads.get('second')).toBe(reads);
+      expect([...r.fake.labels.keys()]).toEqual(['first', 'second']);
+    } finally { r.shell.remove(); }
+  });
+
+  it('keeps cached boxes attached to their label when priority reverses', () => {
+    const r = setup([{ id: 'first', x: -.5 }, { id: 'second', x: .5 }]);
+    try {
+      const second = r.fake.labels.get('second')!;
+      let width = 91;
+      Object.defineProperty(second, 'offsetWidth', { configurable: true, get: () => width });
+      r.fake.labelBounds[1].width = 0;
+      r.fake.render(1 / 60);
+      Object.assign(r.fake, { hoveredId: 'second' });
+      r.fake.refreshOverviewLabels();
+      expect([...r.fake.labels.keys()]).toEqual(['second', 'first']);
+      expect(r.fake.labelBounds.map(box => box.width)).toEqual([91, 132]);
+      width = 119;
+      second.style.fontSize = '18px';
+      r.fake.render(1 / 60);
+      expect(r.fake.labelBounds[0].width).toBe(119);
+    } finally { r.shell.remove(); }
+  });
+
+  it('resolves a new visible label batch in a single source traversal', () => {
+    const r = setup([]);
+    try {
+      const count = 2048;
+      let reads = 0;
+      const nodes = Array.from({ length: count }, (_, index) => ({
+        get id() { reads++; return 'n' + index; }, label: '저장 자료 ' + index,
+      }));
+      const wanted = Array.from({ length: 24 }, (_, index) => 'n' + (count - 1 - index));
+      Object.assign(r.fake, {
+        view: { hops: 0, focusId: null, nodes },
+        globalLabels: new Set(wanted),
+        globalLabelRanks: new Map(wanted.map((id, index) => [id, index])),
+      });
+      r.fake.refreshOverviewLabels();
+      expect([...r.fake.labels.keys()]).toEqual(wanted);
+      expect(reads).toBeLessThanOrEqual(count + 24 * 3);
+      expect(r.fake.labels.get(wanted[0])?.textContent).toBe('저장 자료 2047');
     } finally { r.shell.remove(); }
   });
 
