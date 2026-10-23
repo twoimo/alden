@@ -178,12 +178,12 @@ function separateMultiMemberCenters(centers: Map<string, Point3>, membersByLabel
  * move communities that actually connect to them onto the same ray. A label
  * is outer dust only when none of its pairs reach those groups. Membership
  * and rest lengths are unchanged. */
-function spreadFreshEnergy(
+function freshEnergyCenters(
   clusterIds: ReadonlyMap<string, string>,
   membersByLabel: ReadonlyMap<string, readonly string[]>,
-  centers: Map<string, Point3>,
   pairs: readonly Pair[],
-): void {
+): Map<string, Point3> {
+  const centers = new Map<string, Point3>();
   const multi = [...membersByLabel.entries()]
     .filter(([, members]) => members.length >= 2)
     .sort((a, b) => b[1].length - a[1].length || order(a[0], b[0]));
@@ -230,6 +230,7 @@ function spreadFreshEnergy(
     const length = Math.hypot(dir.x, dir.y, dir.z) || 1;
     centers.set(label, bound({ x: dir.x / length * 1.7, y: dir.y / length * 1.7, z: dir.z / length * 1.7 }));
   }
+  return centers;
 }
 function placeOverviewStars(
   ids: readonly string[],
@@ -664,11 +665,14 @@ export class SemanticLayoutEngine {
       const members = membersByLabel.get(label) ?? [];
       members.push(id); membersByLabel.set(label, members);
     }
-    separateMultiMemberCenters(centers, membersByLabel);
     const freshOverview = ids.length >= 256
       && pinned.size !== 1
       && (options.reflow === true || ids.every(id => !finite(previousPositions.get(id)) && !this.positions.has(id)));
-    if (freshOverview) spreadFreshEnergy(clusterIds, membersByLabel, centers, pairs);
+    const freshCenters = freshOverview ? freshEnergyCenters(clusterIds, membersByLabel, pairs) : null;
+    // A complete fresh plan replaces every center. Cancellation can leave a
+    // spoke unplaced; retain the original sequential separation in that case.
+    if (!freshCenters || freshCenters.size !== centers.size) separateMultiMemberCenters(centers, membersByLabel);
+    if (freshCenters) for (const [label, point] of freshCenters) centers.set(label, point);
     // A few hundred members on the inner ring become one ball at the camera
     // center. Keep small test cliques where they are and move only a large
     // fresh community farther along the ray it already occupies.

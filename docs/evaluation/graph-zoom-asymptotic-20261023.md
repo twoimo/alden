@@ -24,6 +24,9 @@ authorize source reads or cache an account/permission decision.
 order. If any coordinate distance already exceeds the required separation, a
 Euclidean norm calculation is unnecessary. The new axis rejection skips that
 calculation. It does **not** remove the quadratic pair loop or prove optimal packing.
+A subsequent [complete fresh-center plan](center-plan-20261023.md) now avoids
+calling that loop when every resulting center would be overwritten. Incomplete
+and incremental placements retain it; historical measurements below are unchanged.
 
 ## Cost model and limits
 
@@ -39,7 +42,7 @@ They are component bounds, not an all-input theorem for the entire application.
 | Moving caption projection/selection | O(C log C + CB) | O(C + B) | Sort plus greedy collision checks. B≤24; candidate lists can include up to8 overview captions beyond the2048 ranked titles. |
 | Stationary caption selection | O(1) cache check | O(1) extra cache key | Entire render is still not O(1); graph buffers and visible-label placement retain their costs. |
 | Caption DOM refresh | O(BN) existing lookup | O(B) labels | Each new label still finds its node in the displayed list; bounded B does not make arbitrary N free. |
-| Multi-member center separation | O(16K²) | O(K) | Axis rejection reduces constants only. A future spatial broad phase needs determinism, displacement and overlap checks. |
+| Multi-member center separation | O(16K²) when required | O(K) | Complete fresh plans now avoid this phase; incremental/incomplete plans retain it. Axis rejection reduces constants only. |
 | Display correction | Bounded spatial passes | O(N) |2048 nodes,8 passes,131072 tested pairs. Budget exhaustion is reported; it is not zero-overlap certification. |
 
 The semantic solver inspects at most8192 input nodes,32768 edges and32768
