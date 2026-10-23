@@ -38,8 +38,12 @@ decoder/contextual-consent contract.
 Startup checks scope/root before native identity or collection access. The
 canonical SDK's metadata-only health check must pass complete manifest coverage,
 file pins and zero declared native/identity/credential/send/write actions. No
-pin is rewritten and no decoder is copied. Canonical module origins, capabilities
-and loaded fingerprints are checked. Unknown preloaded or changed loaded modules
+pin is rewritten and no decoder is copied. A reproduced five-module gap omitted
+three function-local imports. The supported eight-module static closure is now
+checked before import and loaded eagerly, including confirmation/catalog helpers;
+new modules/packages or relative imports require a contract refresh. This is a
+bounded static contract, not a theorem about dynamic Python imports. Canonical
+module origins, capabilities and loaded fingerprints are checked. Unknown preloaded or changed loaded modules
 need a fresh qualified host. Import state is serialized.
 
 Each request repeats qualification and creates new root-bound authority with its
@@ -83,17 +87,17 @@ controller changes.
 
 ## Verification
 
-- Twelve controlled factory/loader tests cover readonly/no-registration opening,
+- Thirteen controlled factory/loader tests cover readonly/no-registration opening,
   receipts, account changes, repeated qualification, root pinning, cancellation,
   FIFO admission, legacy object identity, module origins and loaded revisions.
 - A fresh child runs the actual CLI/stdio entrypoint with a **controlled SDK**:
   fact/context success, account-change rejection, restored-account success,
   subsequent ping, clean exit 0 and unchanged source SQLite hashes. It uses no
   native data and does not qualify the real SDK.
-- Five isolated source mutants detect health/receipt bypass, cached qualification,
-  root rebinding and stale loaded revisions. The maintained publication checker
+- Six isolated source mutants detect health/receipt bypass, cached qualification,
+  root rebinding, stale loaded revisions and the original five-module baseline. The maintained publication checker
   still rejects its three actual-source mutations after the move.
-- 868 affected checks pass in 46 fresh pinned processes. Resource checks first
+- 869 affected checks pass in 46 fresh pinned processes. Resource checks first
   detected missing Tauri entries, then all 7 passed after both exact allowlists
   were updated. Build-receipt 33 tests pass. No canonical SDK is bundled.
 

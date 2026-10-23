@@ -205,7 +205,8 @@ class CanonicalLoaderTests(unittest.TestCase):
                 (folder / (name + '.py')).write_text('')
             (folder / 'full_chat_reader.py').write_text('import sqlcipher_adapter,media_context,room_participants,message_visibility\n'
                 'def resolve_identity(device): return ("owner", "fixture")\n'
-                'def snapshot(**options): return {}\nsnapshot.supports_exact_confirmation=True\n')
+                'def snapshot(**options):\n import message_confirmation,emoticon_confirmation,room_catalog\n return {}\n'
+                'snapshot.supports_exact_confirmation=True\n')
             stack.enter_context(patch.dict(sys.modules))
             for name in factory.SDK_MODULES: sys.modules.pop(name, None)
             stack.enter_context(patch.dict(factory._loaded, {}, clear=True))
@@ -213,7 +214,8 @@ class CanonicalLoaderTests(unittest.TestCase):
             health = stack.enter_context(patch.object(factory.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(self.healthy()))))
             first = factory.load_kakao_sdk(); self.assertIs(factory.load_kakao_sdk(), first)
             self.assertEqual(health.call_count, 2)
-            (folder / 'message_visibility.py').write_text('changed = True\n')
+            self.assertIn('message_confirmation', factory._loaded)
+            (folder / 'message_confirmation.py').write_text('changed = True\n')
             with self.assertRaisesRegex(runtime.SourceBlocked, 'loaded_revision_unverified'): factory.load_kakao_sdk()
 
     def test_existing_unattested_module_cannot_supply_the_sdk(self):
@@ -224,3 +226,16 @@ class CanonicalLoaderTests(unittest.TestCase):
                  patch.dict(sys.modules, {'sqlcipher_adapter': SimpleNamespace()}), \
                  patch.object(factory.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(self.healthy()))):
                 with self.assertRaisesRegex(runtime.SourceBlocked, 'loaded_revision_unverified'): factory.load_kakao_sdk()
+
+    def test_new_conditional_dependency_is_rejected_before_import(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary:
+            folder = Path(temporary)
+            for name in factory.SDK_MODULES: (folder / (name + '.py')).write_text('')
+            (folder / 'full_chat_reader.py').write_text('def snapshot():\n import unexpected_fixture_dependency\n')
+            (folder / 'unexpected_fixture_dependency.py').write_text("raise AssertionError('must not execute')\n")
+            with patch.object(factory, 'SDK', folder), patch.dict(factory._loaded, {}, clear=True), \
+                 patch.dict(sys.modules), patch.object(factory.importlib, 'import_module') as loader, \
+                 patch.object(factory.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(self.healthy()))):
+                for name in factory.SDK_MODULES: sys.modules.pop(name, None)
+                with self.assertRaisesRegex(runtime.SourceBlocked, 'dependency_contract_changed'): factory.load_kakao_sdk()
+                loader.assert_not_called()

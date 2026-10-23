@@ -1,4 +1,5 @@
 """Explicit read-only opening of existing enrollment; never discover or register."""
+import ast
 import hashlib
 import importlib
 import json
@@ -11,7 +12,8 @@ from alden_abort import ABORT_STATE_NAME, AbortToken
 from alden_messenger_runtime import Frontier, KakaoReader, MessengerAuthority, SourceBlocked, existing_messenger_root
 
 SDK = Path.home() / '.agents/skills/aside-kakao-local-db/scripts'
-SDK_MODULES = ('sqlcipher_adapter', 'media_context', 'room_participants', 'message_visibility', 'full_chat_reader')
+SDK_MODULES = ('sqlcipher_adapter', 'media_context', 'room_participants', 'message_visibility',
+               'emoticon_confirmation', 'message_confirmation', 'room_catalog', 'full_chat_reader')
 _loaded = {}
 _import_lock = threading.Lock()
 
@@ -38,19 +40,44 @@ def load_kakao_sdk():
 
 def _load_verified_sdk():
     folder = SDK.resolve(strict=True)
-    fingerprints = {}
+    fingerprints, sources = {}, {}
     for name in SDK_MODULES:
         path = folder / (name + '.py')
         if path.is_symlink() or not path.is_file():
             raise SourceBlocked('kakao_sdk_module_unavailable')
-        fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
+        sources[name] = path.read_bytes()
+        fingerprint = hashlib.sha256(sources[name]).hexdigest()
         fingerprints[name] = (path, fingerprint)
         present = sys.modules.get(name)
         if present is not None and _loaded.get(name) != (present, fingerprint):
             raise SourceBlocked('kakao_sdk_loaded_revision_unverified')
+    # Function-local imports participate too. A changed dependency contract
+    # requires review rather than silently adding an untracked lazy module.
+    pending, closure = ['full_chat_reader'], set()
+    while pending:
+        name = pending.pop()
+        if name in closure:
+            continue
+        if name not in sources:
+            raise SourceBlocked('kakao_sdk_dependency_contract_changed')
+        closure.add(name)
+        try:
+            tree = ast.parse(sources[name])
+        except (SyntaxError, ValueError) as error:
+            raise SourceBlocked('kakao_sdk_dependency_contract_changed') from error
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                raise SourceBlocked('kakao_sdk_dependency_contract_changed')
+            imports = [alias.name.split('.')[0] for alias in node.names] if isinstance(node, ast.Import) else (
+                [node.module.split('.')[0]] if isinstance(node, ast.ImportFrom) and node.module else [])
+            pending.extend(value for value in imports if (folder / (value + '.py')).is_file() or (folder / value).is_dir())
+    if closure != set(SDK_MODULES):
+        raise SourceBlocked('kakao_sdk_dependency_contract_changed')
     sys.path.insert(0, str(folder))
     try:
         module = importlib.import_module('full_chat_reader')
+        for name in SDK_MODULES:
+            importlib.import_module(name)
     finally:
         sys.path.remove(str(folder))
     for name, (path, fingerprint) in fingerprints.items():
