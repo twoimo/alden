@@ -53,11 +53,11 @@ paths and credentials never become error labels through this resolver.
   replay regression reproduced three missing error codes. Both failures are
   retained separately. The initial composer test also rejected three missing
   reason-specific messages.
--172 affected checks passed in10 fresh pinned Python processes, covering input,
+- 172 affected checks passed in 10 fresh pinned Python processes, covering input,
   context, files, links, images, generation evidence, turn storage, routing and
   voice turns. The added checks retain request identity, verify one transport
   call across failure plus replay, reject unknown payloads and verify no answer.
-- Full UI suite:1,120 checks in100 files passed with four workers. TypeScript/
+- Full UI suite: 1,120 checks in 100 files passed with four workers. TypeScript/
   Vite build passed; its existing large-chunk warning remains.
 - The **actual original failed installed request** was then reconciled through
   candidate source. Its original request/conversation, history logical hash,
