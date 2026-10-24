@@ -459,7 +459,7 @@ class CollectionScheduler:
                         with self.database() as db:db.execute('UPDATE attempts SET result=? WHERE id=?',(json.dumps(result,ensure_ascii=False),attempt))
                         if cancelled():raise AldenCancelled('collection_acquisition_cancelled')
                     stage='collection'
-                    try:input_signature=realtime.signature(store.target(target_id)) if realtime_enabled else None
+                    try:input_signature=realtime.signature(store.target(target_id)) if realtime_enabled and target_id not in messenger_targets else None
                     except (OSError,ValueError,KeyError):input_signature=None
                     if target_id in messenger_targets:
                         from alden_messenger_production import collect

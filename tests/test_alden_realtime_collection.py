@@ -45,6 +45,28 @@ class RealtimeTests(unittest.TestCase):
         return self.scheduler.cycle(collector=collect_target, capturer=capture_source,
             indexer=changes.pop('indexer', lambda *a, **kw: {'state': 'ready'}), **changes)
 
+    def test_native_poll_cleans_only_its_obsolete_file_hint_and_keeps_file_detection(self):
+        native = self.store.register(platform='kakaotalk', original_id='owned-account', kind='local-db',
+            label='native', projects=['allowed'], config={'adapter': 'messenger-db', 'account': 'owned'})
+        self.enable()
+        with self.live.database(write=True) as db:
+            db.execute('INSERT INTO inputs VALUES(?,?,?,?,?,?,?,?)',
+                       (native, None, 100, 'obsolete-file-hint', 100, None, None, 'collection_realtime_input_unsupported'))
+        self.queue()
+        with self.live.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM inputs WHERE target_id=?', (native,)).fetchone()[0], 0)
+        self.assertEqual(set(self.live.pending()), {self.target})
+        self.assertEqual(self.store.target(native)['config']['adapter'], 'messenger-db')
+
+    def test_unknown_input_adapter_is_still_reported_unavailable(self):
+        unknown = self.store.register(platform='graph', original_id='unsupported-owned', kind='fixture',
+            label='unknown', projects=['allowed'], config={'adapter': 'unknown-adapter'})
+        self.enable()
+        self.live.scan(self.store)
+        with self.live.database() as db:
+            row = db.execute('SELECT error FROM inputs WHERE target_id=?', (unknown,)).fetchone()
+        self.assertEqual(row[0], 'collection_realtime_input_unsupported')
+
     def test_input_after_first_200_targets_is_collected_and_requeued_on_change(self):
         eligible = {self.target}
         for number in range(400):

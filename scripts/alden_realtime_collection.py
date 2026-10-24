@@ -115,7 +115,14 @@ class RealtimeCollection:
             with self.database(write=True) as db:
                 for target_id in ids:
                     if paused(target_id): continue
-                    try: signature, error = self.signature(store.target(target_id)), None
+                    try:
+                        target = store.target(target_id)
+                        if target['config'].get('adapter') == 'messenger-db':
+                            # The existing scheduler owns canonical source polls;
+                            # there is no file path or file hint for this input.
+                            db.execute('DELETE FROM inputs WHERE target_id=?', (target_id,))
+                            continue
+                        signature, error = self.signature(target), None
                     except (OSError, KeyError, ValueError) as exc:
                         signature, error = None, str(exc) if str(exc).startswith('collection_realtime_') else 'collection_realtime_input_unavailable'
                     row = db.execute('SELECT * FROM inputs WHERE target_id=?', (target_id,)).fetchone()

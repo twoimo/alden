@@ -320,6 +320,21 @@ class ProductionTests(unittest.TestCase):
             with CollectionStore(self.root).database() as db:
                 self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], events)
 
+    def test_native_poll_owner_is_not_treated_as_an_unsupported_file_input(self):
+        self.enroll()
+        realtime = RealtimeCollection(self.root)
+        realtime.update(True, 0)
+        scheduler = CollectionScheduler(self.root)
+        with patch.object(RealtimeCollection, 'signature', wraps=RealtimeCollection.signature) as signature, \
+                patch.object(scheduler, '_voice_busy', return_value=False):
+            realtime.scan(CollectionStore(self.root))
+            self.assertEqual(signature.call_count, 0)
+            result = scheduler.cycle(indexer=index_text)
+            self.assertEqual(result['state'], 'complete', result)
+            self.assertEqual(signature.call_count, 0)
+        self.assertEqual(realtime.status()['inputs'], [])
+        self.assertTrue(self.graph()['nodes'])
+
     def test_realtime_off_and_pause_and_voice_do_not_read_message_pages(self):
         self.enroll()
         scheduler = CollectionScheduler(self.root)

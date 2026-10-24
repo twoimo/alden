@@ -26,6 +26,13 @@ They do not change source identity, truth, normalization, stored page content,
 graph relationships, camera state or activity semantics. A metadata order change
 does not create a knowledge event or combat effect.
 
+Native messenger targets are polled by that same scheduler, independently of
+file-change hints. The file scanner must not label them unsupported merely
+because they have no input path. It removes only obsolete file hints for those
+targets; their source cursors, durable manual requests and native availability
+errors remain owned by the collector. Unknown file adapters still report their
+existing unsupported-input error. No raw messenger DB file watcher is added.
+
 ## Scope and cost
 
 Let R be eligible rooms, P retained pages, Q pages still marked prepared and H
