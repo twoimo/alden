@@ -80,6 +80,7 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/alden_messenger_runtime.py",
     "scripts/alden_messenger_quality.py",
     "scripts/alden_messenger_factory.py",
+    "scripts/alden_platform_identity.py",
     "scripts/alden_collect.py",
     "scripts/alden_collection_scheduler.py",
     "scripts/alden_realtime_collection.py",
