@@ -83,3 +83,37 @@ describe('dense viewports keep core separation ahead of optional whitespace',()=
     expect(diagnostics.pairTests).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.pairTests);
   });
 });
+
+describe('candidate admission and fixed geometry work',()=>{
+  const points=()=>Array.from({length:2048},()=>({x:320,y:240,radius:1.6}));
+  class CountedPins extends Set<number>{
+    calls=0;
+    override has(value:number){this.calls++;return super.has(value);}
+  }
+  it('retains all fixed offsets without quadratically querying fixed memberships',()=>{
+    const input=points(),fixed=new CountedPins(input.map((_,i)=>i)),prior=new Float64Array(input.length*2);
+    prior[14]=4;prior[15]=-2;
+    const r=relaxProjectedCircles(input,viewport,fixed,prior);
+    expect([...r.offsets]).toEqual([...prior]);
+    expect(fixed.calls).toBeLessThanOrEqual(input.length);
+    expect(r.diagnostics.pairTests).toBe(0);
+    expect(r.diagnostics.candidateVisits).toBe(0);
+  });
+  it('bounds traversal with only two movable points and preserves immutable pins',()=>{
+    const input=points(),fixed=new CountedPins(Array.from({length:2046},(_,i)=>i));
+    const r=relaxProjectedCircles(input,viewport,fixed);
+    expect(fixed.calls).toBeLessThanOrEqual(input.length);
+    expect([...r.offsets.slice(0,4092)].every(value=>value===0)).toBe(true);
+    expect([...r.offsets].every(Number.isFinite)).toBe(true);
+    expect(r.diagnostics.candidateVisits).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.candidateVisits);
+    expect(r.diagnostics.pairTests).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.pairTests);
+  });
+  it('reports bounded partial work instead of treating skipped traversal as free',()=>{
+    const r=relaxProjectedCircles(points(),viewport);
+    expect(r.diagnostics.candidateVisits).toBeGreaterThan(0);
+    expect(r.diagnostics.candidateVisits).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.candidateVisits);
+    expect(r.diagnostics.pairTests).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.pairTests);
+    expect(r.diagnostics.budgetExhausted).toBe(true);
+    expect([...r.offsets].every(Number.isFinite)).toBe(true);
+  });
+});

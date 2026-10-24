@@ -1142,6 +1142,14 @@ export class KnowledgeHologram {
       ||this.lookAt.distanceToSquared(this.desiredLookAt)>0||this.orbitActive;
     const alpha=this.reducedMotionEnabled||this.paused?1:1-Math.exp(-12*elapsed);
     this.camera.position.lerp(this.desiredCamera,alpha);this.lookAt.lerp(this.desiredLookAt,alpha);
+    const cameraRestDistanceSquared=0.000001;
+    // A correction accepted as stationary must keep the same camera while its
+    // offsets animate. Otherwise subthreshold interpolation moves the cores
+    // away from the screen-space constraints that were just solved.
+    if(!this.orbitActive){
+      if(this.camera.position.distanceToSquared(this.desiredCamera)<=cameraRestDistanceSquared)this.camera.position.copy(this.desiredCamera);
+      if(this.lookAt.distanceToSquared(this.desiredLookAt)<=cameraRestDistanceSquared)this.lookAt.copy(this.desiredLookAt);
+    }
     this.camera.lookAt(this.lookAt);this.orbit.target.copy(this.lookAt);this.orbit.update();
     this.camera.updateMatrixWorld(true);
 
@@ -1154,7 +1162,7 @@ export class KnowledgeHologram {
     // Include perspective motion from depth changes at the viewport corners.
     const perspectiveBound = Math.hypot(1, halfFovTangent * Math.hypot(1, this.camera.aspect));
     const denseOverview=this.view.hops===0&&this.view.nodes.length>120;
-    const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>0.000001||this.lookAt.distanceToSquared(this.desiredLookAt)>0.000001;
+    const cameraMoving=this.camera.position.distanceToSquared(this.desiredCamera)>cameraRestDistanceSquared||this.lookAt.distanceToSquared(this.desiredLookAt)>cameraRestDistanceSquared;
     this.plasticity.setDisplayScale(2 * nearestDepth * halfFovTangent / (Math.max(1, this.viewport.height) * perspectiveBound
       * (denseOverview?OVERVIEW_DISPLAY_GAIN:1)));
     const pointsMoving = this.plasticity.moving || this.positionTransition.moving;

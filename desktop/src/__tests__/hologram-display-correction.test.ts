@@ -61,6 +61,20 @@ function fixture(reducedMotion: boolean) {
 }
 
 describe('display collision correction in the production frame',()=>{
+  it('keeps the accepted correction camera fixed after a subthreshold camera settle',()=>{
+    const f=fixture(false),{h,camera}=f;
+    try {
+      h.desiredCamera.z+=.0005;h.desiredLookAt.x+=.0003;
+      const prepare=h.prepareDisplayCorrection.bind(h);let accepted:number[]|null=null;
+      h.prepareDisplayCorrection=()=>{accepted=camera.matrixWorld.toArray();prepare();};
+      h.displayRelaxationPending=true;h.render(1/60);
+      expect(accepted).not.toBeNull();
+      for(let i=0;i<180;i++){h.render(1/60);if(!h.displayTransition.moving)break;}
+      expect(h.displayTransition.moving).toBe(false);
+      expect(camera.matrixWorld.toArray()).toEqual(accepted);
+    }finally{f.dispose();}
+  });
+
   it('keeps emergency state latched and returns to idle after a visible redraw',()=>{
     const f=fixture(false),{h}=f;
     const callbacks=new Map<number,FrameRequestCallback>();let serial=0,now=0;
