@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "app_version": "0.3.19",
+  "source_commit_before_patch": "e8953e0c7e831ea65738b26bfeeaa81f4678ff02",
+  "runtime": "MLX-Serve26.10.1, mlx0.32.3",
+  "model_id": "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+  "revision": "901aa73a1ff5456752c02e55582609e0040ca470",
+  "context_tokens": 32768,
+  "output_tokens": 1024,
+  "temperature": 0,
+  "max_resident_memory": "24GB",
+  "minimum_usable_bytes": 42949672960,
+  "vision_fixture_matches": 4,
+  "n": 4,
+  "samples": [
+    {
+      "fixture": 0,
+      "fixture_sha256": "51487f22292f4026f8b6c56fefa6fccbd7e3db268e0550321b7e155319f73151",
+      "elapsed_s": 10.112931209150702,
+      "code": 0,
+      "reply": "빨간색 원이 3개 있습니다.",
+      "auth_probes": [
+        {
+          "case": "missing",
+          "status": 401
+        },
+        {
+          "case": "wrong",
+          "status": 401
+        }
+      ],
+      "http_routes": [
+        "http://127.0.0.1:11234/v1/models",
+        "http://127.0.0.1:11237/v1/chat/completions",
+        "http://127.0.0.1:11237/v1/models"
+      ]
+    },
+    {
+      "fixture": 1,
+      "fixture_sha256": "b06b7c4fa01914ce3a834fe998591045ae0d728ddd7ef1a19f384da93b9f0fce",
+      "elapsed_s": 6.208450542064384,
+      "code": 0,
+      "reply": "파란색 원이 2개 있습니다.",
+      "auth_probes": [
+        {
+          "case": "missing",
+          "status": 401
+        },
+        {
+          "case": "wrong",
+          "status": 401
+        }
+      ],
+      "http_routes": [
+        "http://127.0.0.1:11234/v1/models",
+        "http://127.0.0.1:11237/v1/chat/completions",
+        "http://127.0.0.1:11237/v1/models"
+      ]
+    },
+    {
+      "fixture": 2,
+      "fixture_sha256": "a3076442e07fd872de55347ba8d0f266d7de23e05b036bb4db194f272d644852",
+      "elapsed_s": 7.570644833846018,
+      "code": 0,
+      "reply": "왼쪽은 초록색 사각형, 오른쪽은 주황색 삼각형입니다.",
+      "auth_probes": [
+        {
+          "case": "missing",
+          "status": 401
+        },
+        {
+          "case": "wrong",
+          "status": 401
+        }
+      ],
+      "http_routes": [
+        "http://127.0.0.1:11234/v1/models",
+        "http://127.0.0.1:11237/v1/chat/completions",
+        "http://127.0.0.1:11237/v1/models"
+      ]
+    },
+    {
+      "fixture": 3,
+      "fixture_sha256": "56ab7e05c4cd29780a9a834fe490fb5d7b08b2f0cba68e03904c94da30927663",
+      "elapsed_s": 10.65279404190369,
+      "code": 0,
+      "reply": "ALDEN 7318",
+      "auth_probes": [
+        {
+          "case": "missing",
+          "status": 401
+        },
+        {
+          "case": "wrong",
+          "status": 401
+        }
+      ],
+      "http_routes": [
+        "http://127.0.0.1:11234/v1/models",
+        "http://127.0.0.1:11237/v1/chat/completions",
+        "http://127.0.0.1:11237/v1/models"
+      ]
+    }
+  ],
+  "median_request_including_start_stop_s": 8.84178802149836,
+  "range_s": [
+    6.208450542064384,
+    10.65279404190369
+  ],
+  "timing_scope": "fresh owned server per request; filesystem verification cache already valid; includes2negative-auth probes and cleanup; heterogeneous public fixtures; notTTFT/notp95",
+  "earlier_stochastic_ocr_miss": {
+    "fixture": 3,
+    "reply": "이미지의 텍스트는 \"ALDEN 731\"입니다.",
+    "sampling_temperature": 1,
+    "same_fixture_sha256": "56ab7e05c4cd29780a9a834fe490fb5d7b08b2f0cba68e03904c94da30927663"
+  },
+  "cancel_audit": {
+    "cancelled": true,
+    "caller_returned_output": false,
+    "preflight_code": null,
+    "preflight_error": null,
+    "transport_finished": true,
+    "port_closed": true,
+    "elapsed_s": 14.438433457864448,
+    "cancel_response_ms": 70.90166700072587,
+    "cancel_to_transport_finish_ms": 1992.7041670307517,
+    "n": 1,
+    "physical_shortcut_tested": false
+  },
+  "preservation": {
+    "existing_config_files": 6,
+    "tracked_missing_file_still_missing": 1,
+    "unchanged_existing_process_births": 5,
+    "all_fixture_checks_passed": true
+  },
+  "tests": {
+    "focused_python_passed": 107,
+    "resource_layout_rust_passed": 7
+  },
+  "limits": [
+    "No actual Kakao send.",
+    "Existing foreground workers were not restarted or adopted.",
+    "Shared unmanaged server loaded revision remains unverified.",
+    "Physical microphone/global shortcut/Retina/Dot call not proven by these checks.",
+    "Developer ID identities0 and GitHub secret names0 at delivery preparation."
+  ]
+}

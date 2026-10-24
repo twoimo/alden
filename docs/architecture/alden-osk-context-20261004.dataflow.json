@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Alden · OSK 출처와 연결",
+    "subtitle": "출처에 따른 배치와 실제 관계의 시각화 · 0.3.17",
+    "quality_profile": "showcase",
+    "animation": "none",
+    "viewBox": [
+      1080,
+      580
+    ]
+  },
+  "stages": [
+    {
+      "label": "원자료"
+    },
+    {
+      "label": "기억"
+    },
+    {
+      "label": "조직과 관계"
+    },
+    {
+      "label": "파생 뷰"
+    },
+    {
+      "label": "탐색"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "source-records",
+      "type": "database",
+      "label": "원문 보존",
+      "sublabel": "원문 · 역할",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "grounded-memories",
+      "type": "database",
+      "label": "출처가 있는 기억",
+      "sublabel": "115개 · ID",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "source-placement",
+      "type": "backend",
+      "label": "출처 맥락에 배치",
+      "sublabel": "단일 84 · 공유 31",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "source-relations",
+      "type": "database",
+      "label": "기존 관계 보존",
+      "sublabel": "398개",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "hub-navigation",
+      "type": "backend",
+      "label": "실제 허브 항해",
+      "sublabel": "경로 · Link",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "reference-projection",
+      "type": "backend",
+      "label": "관계 중심 배치",
+      "sublabel": "24 / 144",
+      "stage": 3,
+      "row": 2
+    },
+    {
+      "id": "alden-exploration",
+      "type": "frontend",
+      "label": "Alden 지식 그래프",
+      "sublabel": "주변 연결",
+      "stage": 4,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "source-records",
+      "to": "grounded-memories",
+      "label": "derived-from",
+      "variant": "emphasis"
+    },
+    {
+      "from": "grounded-memories",
+      "to": "source-placement",
+      "label": "정확한 출처 방"
+    },
+    {
+      "from": "grounded-memories",
+      "to": "source-relations",
+      "label": "원문 관계"
+    },
+    {
+      "from": "source-placement",
+      "to": "hub-navigation",
+      "label": "SDK 이동",
+      "variant": "emphasis"
+    },
+    {
+      "from": "source-relations",
+      "to": "reference-projection",
+      "label": "가중 연결",
+      "variant": "emphasis"
+    },
+    {
+      "from": "hub-navigation",
+      "to": "alden-exploration",
+      "label": "입구 탐색"
+    },
+    {
+      "from": "reference-projection",
+      "to": "alden-exploration",
+      "label": "물리적 이동"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "정본 조직",
+      "items": [
+        "유형별 인물·방·주제 허브를 강제하지 않습니다.",
+        "다른 방의 근거가 있으면 한 방으로 몰아넣지 않습니다.",
+        "기존 ID·내용·원문 좌표와 인간의 정정·pin을 보존합니다."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "화면의 의미",
+      "items": [
+        "허브는 실제 본문 Link를 통해 도달합니다.",
+        "화면의 가까운 거리가 OSK 군집 판정을 대신하지 않습니다.",
+        "기억부터 표시하고, 실제 연결 변화에 따라 움직입니다."
+      ]
+    }
+  ]
+}

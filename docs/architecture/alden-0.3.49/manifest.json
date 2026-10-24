@@ -1,0 +1,336 @@
+{
+  "runtime_version": "0.3.49",
+  "runtime_source_commit": "58a7264c531a348bdd6e48ec0a11bb1a8f75d349",
+  "scope": "Architecture artifact evidence; source/runtime/data/physical verification remain separate",
+  "locale": "Korean authored copy; fixed Viewer UI English",
+  "diagrams": [
+    {
+      "name": "system",
+      "type": "architecture",
+      "specification": "system.architecture.json",
+      "specification_sha256": "c75a3748e323adb225ea598156138f31b954ea50901d4627ef5afff96bac6a21",
+      "artifact_sha256": "eeb96de2000256631c66942e144db7133c72d84c62e8233613ce22b3f8d5e595",
+      "output": "system.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 1,
+      "code_evidence": [
+        {
+          "path": "desktop/src/main.ts",
+          "sha256": "62d17babfc6c9acc91499aea30e6b55e2f5d4a484978c2f332041e3a8af30fec"
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "sha256": "25b9b33028777939d04f7d3e161d9674099855b913f55e39255ec4323797e852"
+        },
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs",
+          "sha256": "4af2caefff807903a1902b6e6fa710a705581ae8b07c31d213e02ab195864173"
+        },
+        {
+          "path": "scripts/alden_model_routes.py",
+          "sha256": "317ade5e7abaf6b2dbd973090f6c9a3421df08beceae7bc89101959de26f0e2c"
+        }
+      ],
+      "browser_receipt": "system-browser.json",
+      "delivery_receipt": "system-delivery.json"
+    },
+    {
+      "name": "voice",
+      "type": "workflow",
+      "specification": "voice.workflow.json",
+      "specification_sha256": "dd44406928daac92ea8f46f228443c431aee9a8d7054e38dd20db347b7a2a672",
+      "artifact_sha256": "0c0255138f3101763fdfee690f1d0d110cba7daaceae143ad993f014a22ea3a3",
+      "output": "voice.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 0,
+      "code_evidence": [
+        {
+          "path": "scripts/alden_voice.py",
+          "sha256": "4f9fe5f4dcc5872ee68f933019c40bd0dced5674d0b14ced1625850fe7f26cbc"
+        },
+        {
+          "path": "scripts/alden_abort.py",
+          "sha256": "35f251273637121e513d02de5624c0096af319579b4f00cb19a5863cab2d0e91"
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "sha256": "25b9b33028777939d04f7d3e161d9674099855b913f55e39255ec4323797e852"
+        }
+      ],
+      "browser_receipt": "voice-browser.json",
+      "delivery_receipt": "voice-delivery.json"
+    },
+    {
+      "name": "collection",
+      "type": "workflow",
+      "specification": "collection.workflow.json",
+      "specification_sha256": "c0f218981cf2e0a6544e287fad2406c8f29749d7aa84f98705a40345b29a3480",
+      "artifact_sha256": "8613fa460a7209209a2815a6a076cd90d817578b69855777ceebd20b5f05f48b",
+      "output": "collection.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 0,
+      "code_evidence": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "sha256": "ff13f556faad0104c5846ad782ba7c40071a8bd8740cb151a0f1dfd39c240b16"
+        },
+        {
+          "path": "scripts/alden_collect.py",
+          "sha256": "3ee2be2f69025d96436f5d79d12ac64edc55dd01b9085091507c5f04a3efc3c1"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "71f4c38140dab4df58e55df03f2240c661a43f3a0b4ac6d268c98fe8955022cf"
+        },
+        {
+          "path": "desktop/src/collection-schedule.ts",
+          "sha256": "2bbb32e069b88b8a07e1c480b8519c0678c603afc4a47ad205269a3f1f5a36de"
+        }
+      ],
+      "browser_receipt": "collection-browser.json",
+      "delivery_receipt": "collection-delivery.json"
+    },
+    {
+      "name": "lineage",
+      "type": "dataflow",
+      "specification": "lineage.dataflow.json",
+      "specification_sha256": "09db8f26b12abbfbc9f1f63bf0c64f203c031b2231856a14b367506be4abb7b2",
+      "artifact_sha256": "1ad76157903225f6ab152f226b4955c38b29995337adeef60a15e13466219377",
+      "output": "lineage.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 1,
+      "code_evidence": [
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "71f4c38140dab4df58e55df03f2240c661a43f3a0b4ac6d268c98fe8955022cf"
+        },
+        {
+          "path": "scripts/alden_osk.py",
+          "sha256": "88cf7de3a8b85e1e371bc53739c6862a130adb74d974b4ec281afff8273ea1c2"
+        },
+        {
+          "path": "desktop/src/knowledge/unified-graph.ts",
+          "sha256": "8491583163926838c8a00b9d5ce61268bbef19a4f9248984ec41651e0d6a04d6"
+        }
+      ],
+      "browser_receipt": "lineage-browser.json",
+      "delivery_receipt": "lineage-delivery.json"
+    },
+    {
+      "name": "mcp",
+      "type": "workflow",
+      "specification": "mcp.workflow.json",
+      "specification_sha256": "291ef93f99d8a7d61478d5bea2389df52fe6e86cbd26892b0ef003568d634720",
+      "artifact_sha256": "bd983794d97444cb250ca5e2c3a0e4ccc97cf98fbf9a532014f5ac93b62b315b",
+      "output": "mcp.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 0,
+      "code_evidence": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "sha256": "03b09771f705760b56e304c994bfc7c67312d7f2c11c740000094de6e015adc7"
+        },
+        {
+          "path": "scripts/alden_status_mcp.py",
+          "sha256": "9db5f87b6dbd90b97be61920e8b4daac14bccc980a7ae9e06b6790e3bf915188"
+        }
+      ],
+      "browser_receipt": "mcp-browser.json",
+      "delivery_receipt": "mcp-delivery.json"
+    },
+    {
+      "name": "normalization",
+      "type": "workflow",
+      "specification": "normalization.workflow.json",
+      "specification_sha256": "99888810cbcb95df4dde59abdd037b42a0a1c0e031fc012afc5daac886100002",
+      "artifact_sha256": "dbf0c0dece74b74f3f8513f66b6c376c7a486ee00cc2cc16c702bd34164d7c84",
+      "output": "normalization.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 0,
+      "code_evidence": [
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "71f4c38140dab4df58e55df03f2240c661a43f3a0b4ac6d268c98fe8955022cf"
+        },
+        {
+          "path": "scripts/alden_collection_retrieval.py",
+          "sha256": "cc9cb7646c86b65e48ca8616f121f46846b64fe4cce66b8dfd728b1e37cd21d9"
+        },
+        {
+          "path": "scripts/alden_retrieval_time.py",
+          "sha256": "a1982a93353f5f092224afb659d4506a484c8c4504d64a572f15cf40915b5bb9"
+        }
+      ],
+      "browser_receipt": "normalization-browser.json",
+      "delivery_receipt": "normalization-delivery.json"
+    },
+    {
+      "name": "activity",
+      "type": "workflow",
+      "specification": "activity.workflow.json",
+      "specification_sha256": "41e1998b4985aa1d97805668d688db48cb21b1ef622a965e761b9fdbfac681b9",
+      "artifact_sha256": "0d40bd96ef6a934acc191e40719d3ccd06a308a9fd73aafecee9177280f60342",
+      "output": "activity.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 0,
+      "code_evidence": [
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "71f4c38140dab4df58e55df03f2240c661a43f3a0b4ac6d268c98fe8955022cf"
+        },
+        {
+          "path": "desktop/src/collection-history.ts",
+          "sha256": "6522d209e0d6a62e9bc631f7c3f2380c38bacb2ef28dff8f0da6ad81bbd78fc8"
+        },
+        {
+          "path": "desktop/src/knowledge/collection-activity.ts",
+          "sha256": "5df5b6b4b375b0987c772b02cbae5fc5c75b20a34e07e0f0c983f572b647aced"
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "sha256": "3d39bd3b648aca89f71dc2103569064c933dac200dc1c47a5f5367586ae9e9f6"
+        }
+      ],
+      "browser_receipt": "activity-browser.json",
+      "delivery_receipt": "activity-delivery.json"
+    },
+    {
+      "name": "recovery",
+      "type": "workflow",
+      "specification": "recovery.workflow.json",
+      "specification_sha256": "8f8630329e54b066a2979c3d32fb61edc1a8a4ef54211494be0fb22273ea4c79",
+      "artifact_sha256": "4220fd59244831c6cb9a8cf49a8936a36bd91787771b40caaf9a4dc6d4ff1b0c",
+      "output": "recovery.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 0,
+      "code_evidence": [
+        {
+          "path": "desktop/src/knowledge/collection-activity.ts",
+          "sha256": "5df5b6b4b375b0987c772b02cbae5fc5c75b20a34e07e0f0c983f572b647aced"
+        },
+        {
+          "path": "desktop/src/collection-history.ts",
+          "sha256": "6522d209e0d6a62e9bc631f7c3f2380c38bacb2ef28dff8f0da6ad81bbd78fc8"
+        },
+        {
+          "path": "desktop/src/core/lifecycle-wiring.ts",
+          "sha256": "a865805629b1f6ebbd7dd0b90fc349aa89dbed7e863cc8cdb85e188e5c407619"
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "sha256": "3d39bd3b648aca89f71dc2103569064c933dac200dc1c47a5f5367586ae9e9f6"
+        }
+      ],
+      "browser_receipt": "recovery-browser.json",
+      "delivery_receipt": "recovery-delivery.json"
+    },
+    {
+      "name": "evaluation",
+      "type": "workflow",
+      "specification": "evaluation.workflow.json",
+      "specification_sha256": "7932de7535853d5b7550583692e5f670a2d19797660979c26295b3be93a10b60",
+      "artifact_sha256": "355b4b13e80170510543dba2c5a5869419aa7ff88c8bdf10534fde57abdfe0a6",
+      "output": "evaluation.html",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "visual_review_scope": "Actual 1440x900 and 2048x1320 light/dark screenshots inspected; readability, crossings, node/label/card fit and viewport balance",
+      "correction_rounds": 0,
+      "code_evidence": [
+        {
+          "path": "scripts/auto_reply_finetune.py",
+          "sha256": "aa231b5c2a531887ea6fd99375cda7686c4b855e9ff31ebc448fd1d2fa17695a"
+        }
+      ],
+      "browser_receipt": "evaluation-browser.json",
+      "delivery_receipt": "evaluation-delivery.json"
+    }
+  ]
+}

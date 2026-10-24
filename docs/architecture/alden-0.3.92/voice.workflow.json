@@ -1,0 +1,189 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.92 · 입력과 턴·출력 펜스",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "turn92",
+      "label": "확정 입력과 응답"
+    },
+    {
+      "id": "stop92",
+      "label": "거부·취소·명시 재개",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "intake92",
+    "bytes92",
+    "ticket92",
+    "context92",
+    "infer92",
+    "commit92"
+  ],
+  "nodes": [
+    {
+      "id": "intake92",
+      "lane": "turn92",
+      "col": 0,
+      "type": "frontend",
+      "label": "텍스트·사진 입력",
+      "sublabel": "Desktop 명시 요청",
+      "width": 132
+    },
+    {
+      "id": "bytes92",
+      "lane": "turn92",
+      "col": 1,
+      "type": "security",
+      "label": "입력 바이트 확인",
+      "sublabel": "해시·실제 디코더·예산",
+      "width": 132
+    },
+    {
+      "id": "ticket92",
+      "lane": "turn92",
+      "col": 2,
+      "type": "backend",
+      "label": "확정 턴과 맥락",
+      "sublabel": "대화·버전·요청 ID",
+      "width": 132
+    },
+    {
+      "id": "context92",
+      "lane": "turn92",
+      "col": 3,
+      "type": "backend",
+      "label": "검색 참조 준비",
+      "sublabel": "선택 경로·의도·근거",
+      "width": 132
+    },
+    {
+      "id": "infer92",
+      "lane": "turn92",
+      "col": 4,
+      "type": "backend",
+      "label": "선택한 추론",
+      "sublabel": "저장된 모델·명시 자동",
+      "width": 132
+    },
+    {
+      "id": "commit92",
+      "lane": "turn92",
+      "col": 5,
+      "type": "frontend",
+      "label": "출력·이력 확정",
+      "sublabel": "현재 턴 확인 후 반영",
+      "width": 132
+    },
+    {
+      "id": "invalid92",
+      "lane": "stop92",
+      "col": 1,
+      "type": "security",
+      "label": "입력 거부",
+      "sublabel": "원인을 보존·추론 안 함",
+      "width": 132
+    },
+    {
+      "id": "cancel92",
+      "lane": "stop92",
+      "col": 4,
+      "type": "security",
+      "label": "끼어들기·중단",
+      "sublabel": "늦은 생성·재생 결과 차단",
+      "width": 132
+    },
+    {
+      "id": "resume92",
+      "lane": "stop92",
+      "col": 5,
+      "type": "security",
+      "label": "명시적 재개",
+      "sublabel": "중복 작업·전송 보호",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "request_bytes92",
+      "from": "intake92",
+      "to": "bytes92",
+      "label": "명시 요청",
+      "role": "main"
+    },
+    {
+      "id": "bytes_ticket92",
+      "from": "bytes92",
+      "to": "ticket92",
+      "label": "수신 확인",
+      "role": "main"
+    },
+    {
+      "id": "ticket_context92",
+      "from": "ticket92",
+      "to": "context92",
+      "label": "확정 입력",
+      "role": "main"
+    },
+    {
+      "id": "context_infer92",
+      "from": "context92",
+      "to": "infer92",
+      "label": "선택별 입력",
+      "role": "main"
+    },
+    {
+      "id": "infer_commit92",
+      "from": "infer92",
+      "to": "commit92",
+      "label": "턴 펜스",
+      "role": "main"
+    },
+    {
+      "id": "invalid_input92",
+      "from": "bytes92",
+      "to": "invalid92",
+      "label": "검증 실패",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "cancel_infer92",
+      "from": "infer92",
+      "to": "cancel92",
+      "label": "취소·중단",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "cancel_resume92",
+      "from": "cancel92",
+      "to": "resume92",
+      "label": "재개 요청",
+      "role": "branch",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "입력 채널 구분",
+      "items": [
+        "Desktop는 텍스트·사진을 받는다. 현재 로컬 chat 분기는 사진을 거부하며 파일/링크 worker는 별도다.",
+        "OpenCodex는 입력 분기에서, 로컬 MLX는 어댑터 내부에서 의도에 따른 검색 참조를 준비한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "실행 검증의 경계",
+      "items": [
+        "별도 음성 코드는 wake/VAD/STT·로컬 TTS를 연결한다. 물리 마이크·웨이크·에코 검증은 미완료다.",
+        "취소 후 늦은 결과는 버리고 원문 지시를 사용자 발화나 실행 권한으로 승격하지 않는다."
+      ]
+    }
+  ]
+}

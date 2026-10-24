@@ -1,0 +1,201 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.151 · 텍스트·음성·취소 경계",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "a151_voice_text",
+      "label": "텍스트 경로"
+    },
+    {
+      "id": "a151_voice_spoken",
+      "label": "수동 음성 경로"
+    }
+  ],
+  "mainPath": [
+    "a151_voice_text_user",
+    "a151_voice_text_parse",
+    "a151_voice_text_context",
+    "a151_voice_text_infer",
+    "a151_voice_text_commit"
+  ],
+  "nodes": [
+    {
+      "id": "a151_voice_text_user",
+      "lane": "a151_voice_text",
+      "col": 0,
+      "type": "security",
+      "label": "사용자 입력 확정",
+      "sublabel": "기본 검증·이미지 디코드 뒤",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_text_parse",
+      "lane": "a151_voice_text",
+      "col": 1,
+      "type": "backend",
+      "label": "문서·링크 준비",
+      "sublabel": "턴 예약 뒤·읽은 한도 표시",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_text_context",
+      "lane": "a151_voice_text",
+      "col": 2,
+      "type": "backend",
+      "label": "조건부 검색·맥락",
+      "sublabel": "의도·후속에 따라 생략",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_text_infer",
+      "lane": "a151_voice_text",
+      "col": 3,
+      "type": "backend",
+      "label": "선택한 모델",
+      "sublabel": "설정·준비·완료 상태 검사",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_text_commit",
+      "lane": "a151_voice_text",
+      "col": 4,
+      "type": "database",
+      "label": "텍스트 답변 반영",
+      "sublabel": "현재 소유 턴만 DB 저장",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_spoken_stt",
+      "lane": "a151_voice_spoken",
+      "col": 0,
+      "type": "backend",
+      "label": "음성 입력·STT",
+      "sublabel": "수동 mic·VAD·로컬 Whisper",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_spoken_user",
+      "lane": "a151_voice_spoken",
+      "col": 1,
+      "type": "database",
+      "label": "음성 사용자 확정",
+      "sublabel": "활성 턴·조건부 검색",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_spoken_infer",
+      "lane": "a151_voice_spoken",
+      "col": 2,
+      "type": "backend",
+      "label": "선택한 모델",
+      "sublabel": "별도 호출·취소 토큰",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_spoken_tts",
+      "lane": "a151_voice_spoken",
+      "col": 3,
+      "type": "backend",
+      "label": "로컬 TTS 출력",
+      "sublabel": "현재 턴·취소 검사",
+      "width": 155
+    },
+    {
+      "id": "a151_voice_spoken_commit",
+      "lane": "a151_voice_spoken",
+      "col": 4,
+      "type": "database",
+      "label": "음성 답변 기록",
+      "sublabel": "출력 뒤 활성 턴 검사",
+      "width": 155
+    }
+  ],
+  "edges": [
+    {
+      "id": "a151_voice_text_edge_0",
+      "from": "a151_voice_text_user",
+      "to": "a151_voice_text_parse",
+      "label": "현재 입력",
+      "role": "main"
+    },
+    {
+      "id": "a151_voice_text_edge_1",
+      "from": "a151_voice_text_parse",
+      "to": "a151_voice_text_context",
+      "label": "준비 근거",
+      "role": "main"
+    },
+    {
+      "id": "a151_voice_text_edge_2",
+      "from": "a151_voice_text_context",
+      "to": "a151_voice_text_infer",
+      "label": "선택 경로",
+      "role": "main"
+    },
+    {
+      "id": "a151_voice_text_edge_3",
+      "from": "a151_voice_text_infer",
+      "to": "a151_voice_text_commit",
+      "label": "현재 턴만",
+      "role": "main"
+    },
+    {
+      "id": "a151_voice_spoken_edge_0",
+      "from": "a151_voice_spoken_stt",
+      "to": "a151_voice_spoken_user",
+      "label": "현재 입력",
+      "role": "branch"
+    },
+    {
+      "id": "a151_voice_spoken_edge_1",
+      "from": "a151_voice_spoken_user",
+      "to": "a151_voice_spoken_infer",
+      "label": "준비 근거",
+      "role": "branch"
+    },
+    {
+      "id": "a151_voice_spoken_edge_2",
+      "from": "a151_voice_spoken_infer",
+      "to": "a151_voice_spoken_tts",
+      "label": "선택 경로",
+      "role": "branch"
+    },
+    {
+      "id": "a151_voice_spoken_edge_3",
+      "from": "a151_voice_spoken_tts",
+      "to": "a151_voice_spoken_commit",
+      "label": "현재 턴만",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "서로 다른 순서",
+      "items": [
+        "문서·링크 파싱은 텍스트 턴 예약 뒤",
+        "음성은 TTS 출력 뒤 assistant 기록"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "취소·현재 턴",
+      "items": [
+        "새 턴·중단은 기존 생성·재생을 취소",
+        "출력된 소리의 철회·즉시 네이티브 중단은 미보장"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "실행 조건",
+      "items": [
+        "일반 발화는 검색을 생략할 수 있음",
+        "물리 wake/echo·로컬 모델 준비는 미완료"
+      ]
+    }
+  ]
+}

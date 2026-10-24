@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Alden 0.3.151 · 프로세스와 추론 경계",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1100,
+      480
+    ],
+    "repository": {
+      "url": "https://github.com/twoimo/alden",
+      "provider": "github",
+      "revision": "106b5e07f8cffc9af0cf7a175c376d1d78f0ed5d"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      30,
+      50
+    ],
+    "cols": 4,
+    "cellW": 210,
+    "cellH": 70,
+    "gapX": 60,
+    "gapY": 70
+  },
+  "components": [
+    {
+      "id": "a151_interface",
+      "type": "frontend",
+      "label": "Alden 화면",
+      "sublabel": "대화·목록·Three.js 탐색",
+      "row": 0,
+      "col": 0,
+      "sources": [
+        {
+          "path": "desktop/src/main.ts"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_shell",
+      "type": "backend",
+      "label": "Tauri 네이티브 쉘",
+      "sublabel": "IPC·취소·가시성·단축키",
+      "row": 0,
+      "col": 1,
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_jobs",
+      "type": "backend",
+      "label": "고정 Python 작업",
+      "sublabel": "턴·범위·출처·기한 검증",
+      "row": 0,
+      "col": 2,
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_route",
+      "type": "backend",
+      "label": "OpenCodex 라우터",
+      "sublabel": "사용자 선택 모델 · 10101",
+      "row": 0,
+      "col": 3,
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_spatial",
+      "type": "frontend",
+      "label": "그래프 배치 worker",
+      "sublabel": "권한 키·고정점·줌 라벨",
+      "row": 1,
+      "col": 0,
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_knowledge",
+      "type": "database",
+      "label": "지식 저장·파생 투영",
+      "sublabel": "원문·버전·이력·OSK 범위",
+      "row": 1,
+      "col": 1,
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_local",
+      "type": "backend",
+      "label": "로컬 추론 경로",
+      "sublabel": "MLX·E5·STT·TTS 준비 게이트",
+      "row": 1,
+      "col": 2,
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_remote",
+      "type": "cloud",
+      "label": "Gemini 3.8 Flash",
+      "sublabel": "명시 원격 기본 · high/manual",
+      "row": 1,
+      "col": 3,
+      "sources": [
+        {
+          "path": "scripts/alden_routed_llm.py"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_inputs",
+      "type": "external",
+      "label": "선언한 원문",
+      "sublabel": "Threads·영상·파일·기존 그래프",
+      "row": 2,
+      "col": 1,
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    },
+    {
+      "id": "a151_schedule",
+      "type": "backend",
+      "label": "macOS 수집 예약",
+      "sublabel": "영속 요청·중복 방지·중단",
+      "row": 2,
+      "col": 2,
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py"
+        }
+      ],
+      "size": [
+        210,
+        70
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "a151_edge_0",
+      "from": "a151_interface",
+      "to": "a151_shell",
+      "label": "허용 IPC"
+    },
+    {
+      "id": "a151_edge_1",
+      "from": "a151_shell",
+      "to": "a151_jobs",
+      "label": "고정 명령"
+    },
+    {
+      "id": "a151_edge_2",
+      "from": "a151_jobs",
+      "to": "a151_route",
+      "label": "선택 모델"
+    },
+    {
+      "id": "a151_edge_3",
+      "from": "a151_route",
+      "to": "a151_remote",
+      "label": "명시 원격",
+      "labelAt": [
+        900,
+        144
+      ]
+    },
+    {
+      "id": "a151_edge_4",
+      "from": "a151_jobs",
+      "to": "a151_local",
+      "label": "로컬 추론",
+      "labelAt": [
+        630,
+        144
+      ]
+    },
+    {
+      "id": "a151_edge_5",
+      "from": "a151_knowledge",
+      "to": "a151_jobs",
+      "label": "범위 검색"
+    },
+    {
+      "id": "a151_edge_6",
+      "from": "a151_knowledge",
+      "to": "a151_spatial",
+      "label": "표시 스냅샷"
+    },
+    {
+      "id": "a151_edge_7",
+      "from": "a151_interface",
+      "to": "a151_spatial",
+      "label": "줌·선택",
+      "labelAt": [
+        90,
+        144
+      ]
+    },
+    {
+      "id": "a151_edge_8",
+      "from": "a151_inputs",
+      "to": "a151_knowledge",
+      "label": "원문·버전"
+    },
+    {
+      "id": "a151_edge_9",
+      "from": "a151_schedule",
+      "to": "a151_knowledge",
+      "label": "영속 수집"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "현재 소스",
+      "items": [
+        "Tauri + Three.js, 별도 Python 작업",
+        "원문·관계·색인·배치와 활동을 구분"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "실행 조건",
+      "items": [
+        "iQ·27B 고정 모델 파일은 현재 없음",
+        "외부 MLX 리스너는 채택·종료하지 않음"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "남은 검증",
+      "items": [
+        "물리 음성·전체 호스트·독립 의미 gold",
+        "외부 역검증·공증·운영 배포는 미완료"
+      ]
+    }
+  ]
+}

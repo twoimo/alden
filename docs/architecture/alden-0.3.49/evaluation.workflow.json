@@ -1,0 +1,129 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.49 · 독립 평가·DPO·반영",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "evaluation_input",
+      "label": "입력·처리 경로"
+    },
+    {
+      "id": "evaluation_checks",
+      "label": "검증·확정 경로"
+    }
+  ],
+  "mainPath": [
+    "evaluation_0",
+    "evaluation_1",
+    "evaluation_2",
+    "evaluation_3",
+    "evaluation_4",
+    "evaluation_5"
+  ],
+  "nodes": [
+    {
+      "id": "evaluation_0",
+      "lane": "evaluation_input",
+      "col": 0,
+      "type": "backend",
+      "label": "실패·선호 자료",
+      "sublabel": "확인 가능한 chosen·rejected",
+      "width": 170
+    },
+    {
+      "id": "evaluation_1",
+      "lane": "evaluation_checks",
+      "col": 0,
+      "type": "security",
+      "label": "분리된 평가",
+      "sublabel": "학습·검증 분리·판본 고정",
+      "width": 170
+    },
+    {
+      "id": "evaluation_2",
+      "lane": "evaluation_input",
+      "col": 1,
+      "type": "backend",
+      "label": "실제 토큰 확률",
+      "sublabel": "동일 토크나이저·기준 모델",
+      "width": 170
+    },
+    {
+      "id": "evaluation_3",
+      "lane": "evaluation_checks",
+      "col": 1,
+      "type": "backend",
+      "label": "로컬 DPO 경로",
+      "sublabel": "명시 오프라인 실행·가중치 변경",
+      "width": 170
+    },
+    {
+      "id": "evaluation_4",
+      "lane": "evaluation_input",
+      "col": 2,
+      "type": "security",
+      "label": "독립·회귀 게이트",
+      "sublabel": "품질·인용·지연·메모리·정확성",
+      "width": 170
+    },
+    {
+      "id": "evaluation_5",
+      "lane": "evaluation_checks",
+      "col": 2,
+      "type": "backend",
+      "label": "제품 반영 보류",
+      "sublabel": "손실 계산·학습·제품 교체 구분",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "id": "evaluation_e0",
+      "from": "evaluation_0",
+      "to": "evaluation_1",
+      "label": "검증 가능한 쌍",
+      "role": "main"
+    },
+    {
+      "id": "evaluation_e1",
+      "from": "evaluation_1",
+      "to": "evaluation_2",
+      "label": "미사용 평가",
+      "role": "main"
+    },
+    {
+      "id": "evaluation_e2",
+      "from": "evaluation_2",
+      "to": "evaluation_3",
+      "label": "손실·명시 학습",
+      "role": "main"
+    },
+    {
+      "id": "evaluation_e3",
+      "from": "evaluation_3",
+      "to": "evaluation_4",
+      "label": "후보 평가",
+      "role": "main"
+    },
+    {
+      "id": "evaluation_e4",
+      "from": "evaluation_4",
+      "to": "evaluation_5",
+      "label": "검증된 후보만",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "확인된 경로와 남은 검증",
+      "items": [
+        "손실 계산·학습·제품 교체 구분",
+        "광범위 실제 학습·독립 최종 평가·승격 미완료"
+      ]
+    }
+  ]
+}

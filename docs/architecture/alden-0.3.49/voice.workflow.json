@@ -1,0 +1,130 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.49 · 대화·음성·취소",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "voice_input",
+      "label": "입력·처리 경로"
+    },
+    {
+      "id": "voice_checks",
+      "label": "검증·확정 경로"
+    }
+  ],
+  "mainPath": [
+    "voice_0",
+    "voice_1",
+    "voice_2",
+    "voice_3",
+    "voice_4",
+    "voice_5"
+  ],
+  "nodes": [
+    {
+      "id": "voice_0",
+      "lane": "voice_input",
+      "col": 0,
+      "type": "backend",
+      "label": "음성·텍스트 입력",
+      "sublabel": "웨이크·VAD·STT·입력 출처",
+      "width": 170
+    },
+    {
+      "id": "voice_1",
+      "lane": "voice_checks",
+      "col": 0,
+      "type": "security",
+      "label": "확정 턴",
+      "sublabel": "conversation·turn·context ID",
+      "width": 170
+    },
+    {
+      "id": "voice_2",
+      "lane": "voice_input",
+      "col": 1,
+      "type": "backend",
+      "label": "맥락·검색",
+      "sublabel": "허용 출처와 최근 확정 상태",
+      "width": 170
+    },
+    {
+      "id": "voice_3",
+      "lane": "voice_checks",
+      "col": 1,
+      "type": "backend",
+      "label": "선택한 추론",
+      "sublabel": "로컬 또는 명시 원격 선택",
+      "width": 170
+    },
+    {
+      "id": "voice_4",
+      "lane": "voice_input",
+      "col": 2,
+      "type": "security",
+      "label": "출력 검증",
+      "sublabel": "취소·구 턴·잘린 답변 거부",
+      "width": 170
+    },
+    {
+      "id": "voice_5",
+      "lane": "voice_checks",
+      "col": 2,
+      "type": "backend",
+      "label": "TTS·재생·이력",
+      "sublabel": "자기 TTS 차단·끼어들기 취소",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "id": "voice_e0",
+      "from": "voice_0",
+      "to": "voice_1",
+      "label": "확정 발화",
+      "role": "main"
+    },
+    {
+      "id": "voice_e1",
+      "from": "voice_1",
+      "to": "voice_2",
+      "label": "현재 턴",
+      "role": "main"
+    },
+    {
+      "id": "voice_e2",
+      "from": "voice_2",
+      "to": "voice_3",
+      "label": "근거 포함",
+      "role": "main"
+    },
+    {
+      "id": "voice_e3",
+      "from": "voice_3",
+      "to": "voice_4",
+      "label": "같은 턴",
+      "role": "main"
+    },
+    {
+      "id": "voice_e4",
+      "from": "voice_4",
+      "to": "voice_5",
+      "label": "확정 출력",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "확인된 경로와 남은 검증",
+      "items": [
+        "자기 TTS 차단·끼어들기 취소",
+        "물리 마이크·웨이크 전체 검증 미완료",
+        "비상 중단: Cmd+Option+Shift+Esc · 추론·재생·도구 취소와 명시 재개"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,99 @@
+{
+  "phase": "installed local delivery; full goal active",
+  "version": "0.3.35",
+  "original_counts": {
+    "targets": 4,
+    "documents": 26622,
+    "versions": 26622,
+    "memberships": 26622,
+    "relations": 48355,
+    "runs": 34,
+    "events": 133115
+  },
+  "original_counts_unchanged": true,
+  "index": {
+    "state": "ready",
+    "projects": [
+      "career",
+      "jangsin",
+      "youtube-tzuyang",
+      "sparkuniverse"
+    ],
+    "documents": 26162,
+    "embedded_changed": 12026,
+    "source_versions": 26622,
+    "unsearchable_versions": 460,
+    "embedded_windows": 23933,
+    "model": "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0",
+    "encoding": "e5-char256-stride192-weighted-unit-pool-v1"
+  },
+  "mcp": {
+    "scope": "actual candidate stdio; not Aside/ChatGPT host or physical primary UI",
+    "tools": [
+      "alden_knowledge_search",
+      "alden_knowledge_graph",
+      "alden_knowledge_history"
+    ],
+    "outside_scope_rejected": true,
+    "mode": "rrf",
+    "eligible_documents": 12101,
+    "query_seconds": 2.871542959008366,
+    "samples": 1,
+    "source_version_hash_match": true,
+    "matching_persisted_stages": [
+      "discovered",
+      "indexed",
+      "parsed",
+      "stored",
+      "validated"
+    ]
+  },
+  "tests": {
+    "affected_python": 111,
+    "new_collection_cases": 12,
+    "rust_desktop": 108,
+    "clippy": "passed",
+    "packager_retrieval": 38
+  },
+  "limitations": [
+    "existing collection stages, not a fresh source-change event",
+    "full two-host/OSK chain and quality evaluation pending",
+    "producer final exit status not retained; ready result and terminal PID observed",
+    "no latency percentile or performance gain claim",
+    "full goal active; signing/production pending"
+  ],
+  "installed": {
+    "version": "0.3.35",
+    "runtime_source_commit": "9a2e203a21b6e04a2a9af3a7483acb04bb52f6a8",
+    "files_equal": 49,
+    "previous_app_backup_equal": 47,
+    "configs_equal": 3,
+    "signature_passed": true,
+    "primary_pid": 97242,
+    "model_pids_preserved": [
+      63062,
+      11016
+    ],
+    "source_ci_jobs_success": 4,
+    "signing": "local ad-hoc; signed/notarized production pending"
+  },
+  "installed_mcp": {
+    "mode": "rrf",
+    "eligible_documents": 12101,
+    "query_seconds": 2.9410444581881166,
+    "samples": 1,
+    "scope_rejected": true,
+    "source_version_hash_match": true
+  },
+  "installed_voice_reference": {
+    "mode": "rrf",
+    "sources": 2,
+    "reference_characters": 3783,
+    "scope": "retrieval/reference only; no microphone/generation/playback/history"
+  },
+  "skill": {
+    "canonical_links_verified": 2,
+    "skill_sha256": "10ad508f02a9eaeb7ea3b1e26357676c2d34eebbcbdbd20d90195dc4d8fd4507",
+    "host_execution_verified": false
+  }
+}

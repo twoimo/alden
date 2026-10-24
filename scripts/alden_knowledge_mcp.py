@@ -1,0 +1,161 @@
+"""Explicit project-scoped, read-only collection MCP; shared bounded stdio transport."""
+import argparse
+import json
+from pathlib import Path
+import sys
+import time
+
+from alden_abort import ABORT_STATE_NAME, AbortToken
+from alden_collection import CollectionStore, read_action, require_collection_source_root
+from alden_collection_retrieval import retrieve
+from alden_status_mcp import StdioServer, _check
+
+
+class CallToken(AbortToken):
+    def __init__(self, path, control):
+        super().__init__(path)
+        self.control = control
+
+    def is_cancelled(self):
+        return super().is_cancelled() or self.control is not None and (
+            self.control.stopped.is_set() or time.monotonic() >= self.control.deadline)
+
+
+class KnowledgeServer(StdioServer):
+    server_name = 'alden-readonly-knowledge'
+
+    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, search_strategy='complete', source_factory=None):
+        super().__init__(None, tool_timeout=tool_timeout)
+        self.root = Path(root)
+        if source_factory is not None and (not callable(source_factory) or any(value is not None for value in (source_access, source_revision, source_context))):
+            raise ValueError('knowledge_source_factory_invalid')
+        self.source_factory, self._factory_root = source_factory, self.root
+        self.source_access, self.source_revision = source_access, source_revision
+        if source_context is not None and not all(callable(value) for value in (source_access, source_revision, source_context)):
+            raise ValueError('knowledge_source_context_authority_required')
+        self.source_context = source_context
+        if search_strategy not in ('complete','indexed-lexical'):
+            raise ValueError('knowledge_search_strategy_invalid')
+        self.search_strategy=search_strategy
+        self.allowed = frozenset(allowed_projects)
+        if not self.allowed or len(self.allowed) > 16 or any(not isinstance(p, str) or not p or len(p) > 128 for p in self.allowed):
+            raise ValueError('knowledge_startup_scope_required')
+        if not self.root.is_absolute() or '..' in self.root.parts:
+            raise ValueError('knowledge_startup_path_invalid')
+        if self.source_factory is not None:
+            guards = self._source_guards(lambda: False)
+            source_access, source_revision, source_context = guards['source_access'], guards['source_revision'], guards['source_context']
+            self.source_access, self.source_revision, self.source_context = source_access, source_revision, source_context
+        require_collection_source_root(self.root, source_access, source_revision, source_context)
+        # Opening existing data validates paths/schema without creating or migrating it.
+        CollectionStore.open_existing(self.root, source_access=source_access, source_revision=source_revision)
+
+    def _source_guards(self, cancelled):
+        if self.source_factory is None:
+            return {'source_access': self.source_access, 'source_revision': self.source_revision, 'source_context': self.source_context}
+        if self.root != self._factory_root:
+            raise ValueError('knowledge_source_factory_root_changed')
+        authority = self.source_factory(self.root, cancelled)
+        if not callable(getattr(authority, 'collection_source_root', None)):
+            raise ValueError('knowledge_source_factory_authority_invalid')
+        result = {key: getattr(authority, method, None) for key, method in
+                  [('source_access', 'access'), ('source_revision', 'revision'), ('source_context', 'retrieval_context')]}
+        if any(not callable(value) or getattr(value, '__self__', None) is not authority for value in result.values()):
+            raise ValueError('knowledge_source_factory_authority_invalid')
+        require_collection_source_root(self.root, *result.values())
+        return result
+
+    def tool_catalog(self):
+        common = {'projects': {'type': 'array', 'minItems': 1, 'maxItems': 16,
+                              'uniqueItems': True, 'items': {'type': 'string', 'enum': sorted(self.allowed)}},
+                  'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}
+        result = []
+        for name, extras, description in [
+            ('alden_knowledge_search', {'query': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
+             'Retrieve retained versions and explicit relations with exact provenance. Read-only; explicitly supplied source authority is rechecked.'),
+            ('alden_knowledge_graph', {'focus': {'type': 'string', 'maxLength': 256}},
+             'Read bounded stored graph nodes and explicit relationships in the allowed project scope.'),
+            ('alden_knowledge_history', {'after': {'type': 'integer', 'minimum': 0}},
+             'Read persisted collection stages after a cursor; reading does not create activity.')]:
+            result.append({'name': name, 'description': description,
+                           'inputSchema': {'type': 'object', 'properties': {**common, **extras},
+                                           'required': ['projects'] + (['query'] if name.endswith('search') else []),
+                                           'additionalProperties': False},
+                           'annotations': {'readOnlyHint': True, 'destructiveHint': False,
+                                           'idempotentHint': True, 'openWorldHint': False}})
+            if name.endswith('search'):
+                result[-1]['inputSchema']['properties']['limit'] = {'type': 'integer', 'minimum': 1, 'maximum': 10}
+                if self.search_strategy=='indexed-lexical':
+                    result[-1]['description'] += ' Bounded lexical candidates from stored-version text; not exhaustive or archived-only-text search.'
+        return result
+
+    def valid_call(self, params):
+        name, args = params.get('name'), params.get('arguments')
+        options = {'alden_knowledge_search': {'query'}, 'alden_knowledge_graph': {'focus'},
+                   'alden_knowledge_history': {'after'}}
+        if not isinstance(name, str) or name not in options or not isinstance(args, dict) or set(args) - ({'projects', 'limit'} | options[name]):
+            return False
+        projects = args.get('projects')
+        if not isinstance(projects, list) or not 1 <= len(projects) <= 16 or any(not isinstance(p, str) or p not in self.allowed for p in projects):
+            return False
+        if len(set(projects)) != len(projects):
+            return False
+        limit = args.get('limit', 6 if name.endswith('search') else 50)
+        if type(limit) is not int or not 1 <= limit <= (10 if name.endswith('search') else 50):
+            return False
+        if name.endswith('search'):
+            return isinstance(args.get('query'), str) and 1 <= len(args['query'].strip()) <= 256
+        if name.endswith('graph'):
+            return 'focus' not in args or isinstance(args['focus'], str) and 1 <= len(args['focus']) <= 256
+        return type(args.get('after', 0)) is int and args.get('after', 0) >= 0
+
+    def call_tool(self, params, control):
+        _check(control)
+        args, name = params['arguments'], params['name']
+        token = CallToken(self.root / ABORT_STATE_NAME, control)
+        cancelled = lambda: token.is_cancelled() or control is not None and control.stopped.is_set()
+        guards = self._source_guards(cancelled)
+        if name.endswith('search'):
+            import auto_reply_knowledge_graph as kg
+            with kg.embedding_abort_scope(token):
+                result = retrieve(self.root, args['query'], projects=args['projects'],
+                                  max_entities=args.get('limit', 6), cancelled=cancelled,
+                                  **guards, search_strategy=self.search_strategy)
+        else:
+            action = 'collection-graph' if name.endswith('graph') else 'collection-history'
+            options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
+            if 'after' in args:
+                options['after'] = args['after']
+            if 'focus' in args:
+                options['focus'], options['hops'] = args['focus'], 1
+            result = read_action(self.root, action, json.dumps(options),
+                                 source_access=guards['source_access'], source_revision=guards['source_revision'])
+            if action == 'collection-history':
+                # The UI catalog is global; MCP exposes only this request's projects.
+                requested = frozenset(args['projects'])
+                result = {**result, 'projects': [project for project in result['projects']
+                                                if project['project'] in requested]}
+        _check(control)
+        return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--state-root', type=Path, required=True)
+    parser.add_argument('--allow-project', action='append', required=True)
+    parser.add_argument('--search-strategy', choices=('complete','indexed-lexical'), default='complete')
+    parser.add_argument('--messenger-source', choices=('kakaotalk',))
+    args = parser.parse_args()
+    try:
+        factory = None
+        if args.messenger_source:
+            from alden_messenger_factory import open_existing_kakao
+            factory = open_existing_kakao
+        KnowledgeServer(args.state_root, args.allow_project, search_strategy=args.search_strategy,
+                        source_factory=factory).serve(sys.stdin.buffer, sys.stdout.buffer)
+    except (BrokenPipeError, KeyboardInterrupt):
+        pass
+
+
+if __name__ == '__main__':
+    main()
