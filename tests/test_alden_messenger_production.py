@@ -174,6 +174,28 @@ class ProductionTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], before)
         self.assertTrue(self.graph()['nodes'])
 
+    def test_recent_catalog_room_is_primed_before_older_rooms_without_narrowing_enrollment(self):
+        target = self.enroll()['target_id']
+        catalog = self.reader.catalog()
+        catalog['rooms'].reverse()
+        catalog['room_order'] = 'recent_activity_desc'
+        with patch.object(self.reader, 'catalog', return_value=catalog):
+            result = production.collect(self.root, target, reader=self.reader)
+        self.assertEqual(self.reader.reads[0], ('b', None))
+        self.assertEqual(result['status']['rooms'], 2)
+        self.assertEqual(len(self.graph()['nodes']), 2)
+
+    def test_unknown_catalog_order_retains_the_existing_full_fair_schedule(self):
+        target = self.enroll()['target_id']
+        catalog = self.reader.catalog()
+        catalog['rooms'].reverse()
+        catalog['room_order'] = 'unknown-order'
+        with patch.object(self.reader, 'catalog', return_value=catalog):
+            result = production.collect(self.root, target, reader=self.reader)
+        self.assertEqual(self.reader.reads[0], ('a', None))
+        self.assertEqual(result['schedule']['policy'], 'fair-sweeps')
+        self.assertEqual(result['status']['rooms'], 2)
+
     @contextmanager
     def missing_room_adapter(self, missing=('a',)):
         from alden_messenger_runtime import KakaoReader
@@ -325,6 +347,9 @@ class ProductionTests(unittest.TestCase):
 
     def test_realtime_revocation_at_source_read_blocks_the_store_commit(self):
         self.enroll()
+        catalog = self.reader.catalog()
+        catalog['rooms'].reverse()
+        catalog['room_order'] = 'recent_activity_desc'
         realtime = RealtimeCollection(self.root)
         realtime.update(True, 0)
         scheduler = CollectionScheduler(self.root)
@@ -336,7 +361,7 @@ class ProductionTests(unittest.TestCase):
                 realtime.update(False, 1)
                 revoked.append(True)
             return value
-        with patch.object(self.reader, 'page', side_effect=revoke), patch.object(scheduler, '_voice_busy', return_value=False):
+        with patch.object(self.reader, 'catalog', return_value=catalog), patch.object(self.reader, 'page', side_effect=revoke), patch.object(scheduler, '_voice_busy', return_value=False):
             result = scheduler.cycle(indexer=index_text)
         self.assertEqual(result['state'], 'partial', result)
         self.assertEqual(result['attempts'][0]['state'], 'paused', result)

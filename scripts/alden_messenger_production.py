@@ -310,12 +310,19 @@ def collect(root, target, *, cancelled=lambda: False, publication_guard=None, re
     existing = authority._source(target)
     source = Frontier(root, existing.platform, existing.account, existing.reader, production=True)
     source.external_publication_guard = publication_guard
-    source.seed(source.reader.catalog())
+    catalog = source.reader.catalog()
+    source.seed(catalog)
+    recent = tuple(room['id'] for room in catalog['rooms'][:16]) if catalog.get('room_order') == 'recent_activity_desc' else ()
+    if recent:
+        plan = [('backfill', recent), ('live', recent), ('backfill', ()), ('live', ()),
+                ('backfill', recent), ('live', recent), ('backfill', ()), ('live', ()), ('reconcile', ())]
+    else:
+        plan = [(mode, ()) for mode in ['backfill'] * 4 + ['live'] * 4 + ['reconcile']]
     results = []
-    for mode in ['backfill'] * 4 + ['live'] * 4 + ['reconcile']:
+    for mode, preferred in plan:
         if cancelled():
             raise RuntimeError('collection_cancelled')
-        result = source.step(mode=mode, cancelled=cancelled)
+        result = source.step(mode=mode, preferred_rooms=preferred, cancelled=cancelled)
         results.append(result)
         if result['state'] in ('busy', 'cancelled') or result['state'] == 'blocked' and result.get('scope') != 'room':
             raise RuntimeError(result.get('reason', 'messenger_' + result['state']))
@@ -326,4 +333,6 @@ def collect(root, target, *, cancelled=lambda: False, publication_guard=None, re
     status = source.status()
     return {'target_id': target, 'steps': results, 'status': status,
             'state': 'partial' if status['blocked_rooms'] else 'complete',
+            'schedule': {'policy': 'recent-with-fair-sweeps' if recent else 'fair-sweeps',
+                         'preferred_room_count': len(recent), 'total_rooms': len(catalog['rooms'])},
             'coverage': 'bounded round-robin local backfill/live/reconciliation; original source server coverage unverified'}

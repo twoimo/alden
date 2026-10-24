@@ -34,6 +34,70 @@ class MessengerFairnessTests(unittest.TestCase):
         self.assertEqual({mode:set(rooms) for mode,rooms in seen.items()},
                          {mode:{'a','b','c'} for mode in seen})
 
+    def test_recent_bootstrap_does_not_drain_its_history_before_other_first_pages(self):
+        engine, reader = self.busy_rooms()
+        self.assertEqual(engine.step(preferred_rooms=('c',))['room_id'], 'c')
+        self.assertEqual(engine.step(preferred_rooms=('c',))['room_id'], 'a')
+        self.assertEqual(engine.step(preferred_rooms=('c',))['room_id'], 'b')
+        self.assertEqual(reader.reads[:3], [('c', None), ('a', None), ('b', None)])
+
+    def test_recent_live_lane_and_fair_lane_together_keep_all_eligible_rooms_moving(self):
+        engine, _ = self.busy_rooms()
+        for _ in range(3): engine.step()
+        seen = []
+        for _ in range(3):
+            seen.append(engine.step(mode='live', preferred_rooms=('c',))['room_id'])
+            seen.append(engine.step(mode='live')['room_id'])
+        self.assertEqual(seen[::2], ['c', 'c', 'c'])
+        self.assertEqual(set(seen), {'a', 'b', 'c'})
+
+    def test_catalog_rank_breaks_ties_without_replacing_durable_mode_positions(self):
+        engine, _ = self.busy_rooms()
+        for _ in range(3): engine.step()
+        self.assertEqual(engine.step(mode='live', preferred_rooms=('c', 'b'))['room_id'], 'c')
+        self.assertEqual(engine.step(mode='live', preferred_rooms=('c', 'b'))['room_id'], 'b')
+        self.assertEqual(engine.step(mode='live')['room_id'], 'a')
+
+    def test_preferred_room_cannot_jump_a_pending_page_or_charge_the_wrong_mode(self):
+        engine, _ = self.busy_rooms()
+        def crash(): raise RuntimeError('after store commit')
+        with self.assertRaisesRegex(RuntimeError, 'after store commit'):
+            engine.step(after_publish=crash)
+        self.assertEqual(engine.step(mode='live', preferred_rooms=('c',))['room_id'], 'a')
+        with engine.database() as db:
+            self.assertEqual([tuple(r) for r in db.execute('SELECT room,mode,position FROM room_mode_checks')],
+                             [('a', 'backfill', 1)])
+
+    def test_unknown_preference_is_a_hint_and_never_admits_an_unregistered_room(self):
+        engine, reader = self.busy_rooms()
+        self.assertEqual(engine.step(preferred_rooms=('unregistered',))['room_id'], 'a')
+        self.assertEqual(reader.reads, [('a', None)])
+
+    def test_invalid_preferences_are_rejected_before_reader_or_checkpoint_changes(self):
+        engine, reader = self.busy_rooms()
+        invalid = ['a', ('',), ('a', 'a'), (None,), ('x' * 129,), tuple(map(str, range(65)))]
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'messenger_priority_invalid'):
+                engine.step(preferred_rooms=value)
+        with self.assertRaisesRegex(ValueError, 'messenger_priority_invalid'):
+            engine.step(mode='reconcile', preferred_rooms=('a',))
+        self.assertEqual(reader.reads, [])
+        with engine.database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM room_mode_checks').fetchone()[0], 0)
+
+    def test_pending_page_index_migration_preserves_existing_pages_heads_and_checkpoints(self):
+        engine, reader = self.busy_rooms()
+        engine.step()
+        tables = ('rooms', 'pages', 'message_heads', 'head_fingerprints', 'room_mode_checks')
+        with engine.database() as db:
+            before = {name: [tuple(row) for row in db.execute('SELECT * FROM ' + name + ' ORDER BY rowid')] for name in tables}
+            db.execute('DROP INDEX prepared_room_pages')
+        reopened = candidate.Frontier(self.root, 'kakaotalk', 'owner', reader)
+        with reopened.database() as db:
+            self.assertEqual({name: [tuple(row) for row in db.execute('SELECT * FROM ' + name + ' ORDER BY rowid')] for name in tables}, before)
+            self.assertIsNotNone(db.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='prepared_room_pages'").fetchone())
+        self.assertEqual(reopened.step()['room_id'], 'b')
+
     def test_fixed_and_rewound_wall_clock_cannot_reselect_the_same_room_forever(self):
         engine, _ = self.busy_rooms()
         for _ in range(3): engine.step()

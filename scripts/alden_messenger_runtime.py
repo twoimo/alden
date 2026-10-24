@@ -248,7 +248,7 @@ class KakaoReader:
         result = self.canonical.snapshot(catalog_only=True)
         if result.get('status') != 'ok' or result.get('catalog_truncated') is not False or self.identity() != account:
             raise SourceBlocked('kakao_catalog_unavailable_or_changed')
-        return {'account_id': account, 'complete': True,
+        return {'account_id': account, 'complete': True, 'room_order': 'recent_activity_desc',
                 'rooms': [{'id': r['room_id'], 'title': r['title']} for r in result['rooms']]}
 
     def page(self, room, cursor, *, message_id=None):
@@ -503,6 +503,7 @@ class Frontier:
                 id TEXT PRIMARY KEY,room TEXT NOT NULL,payload TEXT NOT NULL,
                 next_frontier TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('prepared','complete')));
               CREATE TABLE IF NOT EXISTS binding(account TEXT NOT NULL);''')
+            db.execute("CREATE INDEX IF NOT EXISTS prepared_room_pages ON pages(room) WHERE state='prepared'")
             db.execute('''CREATE TABLE IF NOT EXISTS message_heads(
                 id TEXT PRIMARY KEY,room TEXT NOT NULL,message TEXT NOT NULL,
                 content_hash TEXT,state TEXT NOT NULL,reason TEXT NOT NULL,body TEXT,page TEXT NOT NULL)''')
@@ -1110,9 +1111,25 @@ class Frontier:
         return {'state': 'blocked', 'room_id': room, 'reason': str(error),
                 **({'scope': 'room'} if isinstance(error, RoomUnavailable) else {})}
 
-    def step(self, *, mode='backfill', cancelled=lambda: False, after_publish=lambda: None):
+    def step(self, *, mode='backfill', preferred_rooms=(), cancelled=lambda: False, after_publish=lambda: None):
         if mode not in {'backfill', 'live', 'reconcile'}:
             raise ValueError('messenger_mode_invalid')
+        if (not isinstance(preferred_rooms, (list, tuple)) or len(preferred_rooms) > 64
+                or any(not isinstance(room, str) or not 1 <= len(room) <= 128 for room in preferred_rooms)
+                or len(set(preferred_rooms)) != len(preferred_rooms) or mode == 'reconcile' and preferred_rooms):
+            raise ValueError('messenger_priority_invalid')
+        order, priority_args = 'coalesce(c.position,0),r.id', []
+        if preferred_rooms:
+            # Recency is a scheduling hint only. Priming must not repeatedly
+            # prefer an active room's old history over another room's first page.
+            unprimed = "json_extract(r.frontier,'$.live_head') IS NULL"
+            condition = ' AND ' + unprimed if mode == 'backfill' else ''
+            rank = 'CASE r.id ' + ' '.join('WHEN ? THEN ' + str(i) for i in range(len(preferred_rooms))) + ' ELSE ' + str(len(preferred_rooms)) + ' END'
+            if mode == 'backfill':
+                rank = 'CASE WHEN ' + unprimed + ' THEN ' + rank + ' ELSE ' + str(len(preferred_rooms)) + ' END'
+            priority = 'CASE WHEN r.id IN (' + ','.join('?' for _ in preferred_rooms) + ')' + condition + ' THEN 0 ELSE 1 END,'
+            order = priority + 'coalesce(c.position,0),' + rank + ',r.id'
+            priority_args = [*preferred_rooms, *preferred_rooms]
         descriptor = os.open(self.folder / 'writer.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:
             try:
@@ -1136,7 +1153,8 @@ class Frontier:
                     ON c.room=r.id AND c.mode=? WHERE r.retry_at<=? AND """ + eligibility + """
                     AND NOT EXISTS(SELECT 1 FROM pages p WHERE p.room=r.id AND p.state='prepared'
                       AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id))
-                    ORDER BY coalesce(c.position,0),r.id LIMIT 1""", (mode,time.time())).fetchall()
+                    ORDER BY """ + order + """ LIMIT 1""",
+                    (mode,time.time(),*priority_args)).fetchall()
             if release:
                 try:
                     return self._release_activity(release['page'], cancelled=cancelled, revalidate=True)
