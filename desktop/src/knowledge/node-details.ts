@@ -1,5 +1,6 @@
 import type { KnowledgeGraph, KnowledgeNode } from './graph-model';
 import { matchesSourceReference } from './graph-model';
+import { renderBodyNotation } from './body-notation';
 
 const STRIPPED_TEXT_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g;
 function text(value: unknown, limit = 1200): string {
@@ -101,6 +102,7 @@ export function setNodeDetailsVisible(visible: boolean, root: Document = documen
     pane.hidden = false;
     if (!pane.open) pane.showModal();
   } else {
+    root.querySelectorAll('.knowledge-body-notation').forEach(item => item.remove());
     if (pane.open) pane.close();
     pane.hidden = true;
     delete pane.dataset.nodeId;
@@ -183,6 +185,7 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const candidate = readingCandidate(selected, retainedCopy);
   const reading = candidate?.reading ?? copy;
   if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
+  if (body) renderBodyNotation(body, node, selected);
   root.querySelectorAll('.knowledge-body-limit').forEach(note => note.remove());
   if (body && reading && (clipped || selected?.truncated === true)) {
     const note = root.createElement('p'); note.className = 'knowledge-body-limit';

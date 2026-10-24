@@ -320,6 +320,12 @@ jobs:
       - name: Verify bounded watcher states and rejected source mutations
         run: python3 -B scripts/verify_alden_realtime_state.py
 
+      - name: Test declared and body notation normalization
+        run: python3 -B -m unittest tests.test_alden_time_normalization tests.test_alden_quantity_normalization tests.test_alden_normalization_evidence tests.test_alden_body_normalization tests.test_alden_body_details -v
+
+      - name: Verify body notation source mutation sensitivity
+        run: python3 -B scripts/verify_alden_body_normalization.py
+
       # The reader enforces a process peak RSS budget. Earlier test modules
       # must not consume the memory allowance of this independent CLI process.
       - name: Test bounded affinity in a fresh process
