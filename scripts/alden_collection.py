@@ -191,6 +191,24 @@ def normalized_body(value: str) -> str:
     return unicodedata.normalize("NFC", value).replace("\r\n", "\n").replace("\r", "\n")
 
 
+_INTEGER_DIGIT_LEXEME = re.compile(r'\d+(?:[.,]+\d+)*')
+
+
+def integer_digit_query(query):
+    """Bare ASCII digit query only; preserve advanced FTS and formatted values."""
+    if not isinstance(query, str):
+        return None
+    value = query.strip()
+    return value if re.fullmatch(r'[0-9]{2,64}', value) else None
+
+
+def integer_digit_matches(label, body, term):
+    # This is additive lexical recall, not quantity or identifier equivalence.
+    # Keep grouped/decimal/Unicode runs opaque, exactly as routed retrieval does.
+    return any(match.group() == term for field in (label, body)
+               for match in _INTEGER_DIGIT_LEXEME.finditer(field))
+
+
 def korean_literal_plan(query):
     """Positive literal AND/OR only; advanced FTS keeps its original meaning."""
     if not isinstance(query, str) or len(query) > 1024:
@@ -1143,11 +1161,30 @@ class CollectionStore:
                 if value is not None:
                     clauses.append('v.collected_at' + operator + '?');values.append(value)
             plan = korean_literal_plan(query) if expand_korean else None
-            if plan:
-                contains, params = korean_literal_sql(plan)
-                db.create_function('alden_korean_literal',3,
-                    lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
-                strict, strict_params = korean_literal_sql(plan,'s.label','s.body',numeric_boundaries=True)
+            integer_term = integer_digit_query(query) if expand_korean else None
+            token_sql = """WITH search_candidates AS MATERIALIZED (
+              SELECT document_id FROM version_search WHERE version_search MATCH ?)
+              SELECT d.id,v.label,v.body,v.metadata,bm25(version_search) AS rank
+              FROM version_search JOIN documents d ON d.id=version_search.document_id
+              JOIN (""" + self._scope_versions(projects, candidates=True) + """) s ON s.document_id=d.id
+              AND s.current_version=version_search.version_id JOIN versions v ON v.id=s.current_version
+              WHERE version_search MATCH ? AND d.availability='available' """ + ''.join(' AND ' + c for c in clauses) + ' ORDER BY rank,d.id LIMIT ?'
+            token_values = (query, *projects, query, *values, limit)
+            # Token hits always precede the supplement. A complete requested
+            # result cannot gain anything from scanning retained bodies again.
+            rows = db.execute(token_sql, token_values).fetchall() if integer_term else None
+            numeric_full = rows is not None and limit > 0 and len(rows) >= limit
+            if (plan or integer_term) and not numeric_full:
+                if integer_term:
+                    contains, params = '(instr(v.label,?)>0 OR instr(v.body,?)>0)', (integer_term, integer_term)
+                    db.create_function('alden_integer_digit', 3,
+                        lambda label,body,word:int(integer_digit_matches(label,body,word)), deterministic=True)
+                    strict, strict_params = 'alden_integer_digit(s.label,s.body,?)=1', (integer_term,)
+                else:
+                    contains, params = korean_literal_sql(plan)
+                    db.create_function('alden_korean_literal',3,
+                        lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
+                    strict, strict_params = korean_literal_sql(plan,'s.label','s.body',numeric_boundaries=True)
                 sql = """WITH search_candidates AS MATERIALIZED (
                     SELECT document_id FROM version_search WHERE version_search MATCH ?
                     UNION SELECT v.document_id FROM versions v WHERE """ + contains + """),
@@ -1165,15 +1202,8 @@ class CollectionStore:
                     SELECT s.id,s.label,s.body,s.metadata,m.rank FROM matches m JOIN scoped s ON s.id=m.id
                     ORDER BY m.priority,m.rank,m.id LIMIT ?"""
                 rows = db.execute(sql, (query, *params, *projects, *values, query, *strict_params, limit)).fetchall()
-            else:
-                rows = db.execute("""WITH search_candidates AS MATERIALIZED (
-              SELECT document_id FROM version_search WHERE version_search MATCH ?)
-              SELECT d.id,v.label,v.body,v.metadata,bm25(version_search) AS rank
-              FROM version_search JOIN documents d ON d.id=version_search.document_id
-              JOIN (""" + self._scope_versions(projects, candidates=True) + """) s ON s.document_id=d.id
-              AND s.current_version=version_search.version_id JOIN versions v ON v.id=s.current_version
-              WHERE version_search MATCH ? AND d.availability='available' """ + ''.join(' AND ' + c for c in clauses) + ' ORDER BY rank,d.id LIMIT ?',
-              (query, *projects, query, *values, limit)).fetchall()
+            elif rows is None:
+                rows = db.execute(token_sql, token_values).fetchall()
             results = []
             for row in rows:
                 metadata = json.loads(row['metadata'])
@@ -1344,10 +1374,12 @@ class CollectionStore:
                 # All overview outputs share one materialized permitted scope.
                 # LIMIT+1 remains inside SQL, including FTS pages.
                 plan = korean_literal_plan(query)
+                integer_term = integer_digit_query(query)
                 fts = (' OR '.join(' AND '.join('"' + word + '"' for word in clause) for clause in plan)
                        if plan else ' AND '.join('"' + term.replace('"', '""') + '"' for term in query.split()))
                 picking = ("SELECT s.id FROM version_search JOIN shown s ON s.visible_version=version_search.version_id WHERE version_search MATCH ? ORDER BY bm25(version_search),s.id" if fts else
                            "SELECT s.id FROM shown s LEFT JOIN degrees d ON d.id=s.id ORDER BY COALESCE(d.degree,0) DESC,s.id")
+                token_picking = picking
                 if overview and not fts:
                     # Interleave real source targets so a large project's hubs
                     # cannot occupy the whole unified overview. No fake links.
@@ -1361,11 +1393,18 @@ class CollectionStore:
                       WHERE alden_sample_rank(v.label, v.body, json_extract(v.metadata,'$.kind')) < 3)
                       WHERE label_copy=1 ORDER BY source_slot,id"""
                 search_cte = cte
-                if plan:
-                    contains, params = korean_literal_sql(plan)
-                    db.create_function('alden_korean_literal',3,
-                        lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
-                    strict, strict_params = korean_literal_sql(plan,numeric_boundaries=True)
+                if plan or integer_term:
+                    if integer_term:
+                        contains = '(instr(v.label,?)>0 OR instr(v.body,?)>0)'
+                        params = (integer_term, integer_term)
+                        db.create_function('alden_integer_digit', 3,
+                            lambda label,body,word:int(integer_digit_matches(label,body,word)), deterministic=True)
+                        strict, strict_params = 'alden_integer_digit(v.label,v.body,?)=1', (integer_term,)
+                    else:
+                        contains, params = korean_literal_sql(plan)
+                        db.create_function('alden_korean_literal',3,
+                            lambda label,body,word:int(korean_literal_matches(((word,),),label,body)),deterministic=True)
+                        strict, strict_params = korean_literal_sql(plan,numeric_boundaries=True)
                     search_cte += """,token_matches AS MATERIALIZED (
                       SELECT s.id,bm25(version_search) AS rank FROM version_search JOIN shown s
                       ON s.visible_version=version_search.version_id WHERE version_search MATCH ?),
@@ -1376,20 +1415,28 @@ class CollectionStore:
                     pick_args = [fts, *params, *strict_params, limit+1, offset, limit]
                 else:
                     pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
-                overview = search_cte + ",picked AS MATERIALIZED (" + picking + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
-                nodes_json, edges_json, total, total_edges, more, kinds, types, invalid_relations = db.execute(overview + """SELECT
-                  (SELECT json_group_array(json(item)) FROM (SELECT """ + json_node + """ AS item
-                    FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version
-                    LEFT JOIN degrees d ON d.id=s.id ORDER BY s.id)),
-                  (SELECT json_group_array(json(item)) FROM (SELECT json_object('id',r.id,'source',r.source,'target',r.target,'type',r.type) AS item
-                    FROM permitted_edges r JOIN selected a ON a.id=r.source JOIN selected b ON b.id=r.target ORDER BY r.id LIMIT """ + ("4096" if overview else "512") + """)),
-                  (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),(SELECT COUNT(*) FROM picked)>?,
-                  (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind FROM ranked s
-                    JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
-                    WHERE s.choice=1 AND d.availability='available' AND kind IS NOT NULL ORDER BY kind LIMIT 128)),
-                  (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128)),
-                  (SELECT COUNT(*) FROM permitted_relationships WHERE history_bound!=1)""", (*args, *pick_args, limit)).fetchone()
-                if invalid_relations: raise RuntimeError('collection_relation_integrity')
+                selections = [(search_cte, picking, pick_args)]
+                if integer_term:
+                    # A full token page plus lookahead is already final. Keep
+                    # its ordinary SQL path rather than materializing every
+                    # token/body candidate just to discard the supplement.
+                    selections.insert(0, (cte, token_picking, [fts, limit+1, offset, limit]))
+                for selection_cte, selection, selection_args in selections:
+                    overview = selection_cte + ",picked AS MATERIALIZED (" + selection + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
+                    nodes_json, edges_json, total, total_edges, more, kinds, types, invalid_relations = db.execute(overview + """SELECT
+                      (SELECT json_group_array(json(item)) FROM (SELECT """ + json_node + """ AS item
+                        FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version
+                        LEFT JOIN degrees d ON d.id=s.id ORDER BY s.id)),
+                      (SELECT json_group_array(json(item)) FROM (SELECT json_object('id',r.id,'source',r.source,'target',r.target,'type',r.type) AS item
+                        FROM permitted_edges r JOIN selected a ON a.id=r.source JOIN selected b ON b.id=r.target ORDER BY r.id LIMIT """ + ("4096" if overview else "512") + """)),
+                      (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),(SELECT COUNT(*) FROM picked)>?,
+                      (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind FROM ranked s
+                        JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
+                        WHERE s.choice=1 AND d.availability='available' AND kind IS NOT NULL ORDER BY kind LIMIT 128)),
+                      (SELECT json_group_array(type) FROM (SELECT DISTINCT type FROM permitted_relationships ORDER BY type LIMIT 128)),
+                      (SELECT COUNT(*) FROM permitted_relationships WHERE history_bound!=1)""", (*args, *selection_args, limit)).fetchone()
+                    if invalid_relations: raise RuntimeError('collection_relation_integrity')
+                    if more: break
                 rows = json.loads(nodes_json)
                 # JSON1 already validates and constructs the same edge JSON.
                 # An affinity caller needs its selected refs, not thousands of

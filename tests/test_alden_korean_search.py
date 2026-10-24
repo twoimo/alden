@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -15,6 +16,85 @@ from alden_collection import CollectionStore, digest, encoded, identity
 
 
 class KoreanSearchRegressionTests(unittest.TestCase):
+    def test_full_token_prefix_skips_supplement_but_keeps_graph_lookahead(self):
+        from alden_collection import integer_digit_matches
+        target = self.target()
+        self.store.ingest(target, [self.record('token-a', '수량은 100 입니다.'),
+            self.record('token-b', '수량은 100 입니다.'),
+            self.record('unit', '수량은 100개입니다.')])
+        with patch('alden_collection.integer_digit_matches', side_effect=AssertionError('unexpected body scan')):
+            self.assertEqual(len(self.search_ids('100', limit=1)), 1)
+            page = self.store.graph_page(projects=['one'], query='100', limit=1)
+            self.assertEqual(len(page['nodes']), 1)
+            self.assertEqual(page['next'], 1)
+        # Exactly filling a displayed page is insufficient: the suffix match
+        # must still establish that another page exists.
+        with patch('alden_collection.integer_digit_matches', wraps=integer_digit_matches) as match:
+            page = self.store.graph_page(projects=['one'], query='100', limit=2)
+            self.assertTrue(match.called)
+            self.assertEqual(page['next'], 2)
+
+    def test_bare_integer_keeps_fts_order_then_adds_complete_digit_runs(self):
+        target = self.target()
+        self.store.ingest(target, [
+            self.record('token', '보관 수량은 100 입니다.'),
+            self.record('unit', '보관 수량은 100개입니다.'),
+            self.record('identifier', '기록 ID100x를 확인합니다.'),
+            self.record('larger', '보관 수량은 1000개입니다.'),
+            self.record('leading', '보관 수량은 0100개입니다.'),
+            self.record('grouped', '보관 수량은 100,000개입니다.'),
+            self.record('decimal', '보관 수량은 100.5개입니다.'),
+            self.record('unicode-prefix', '보관 수량은 ١100개입니다.'),
+        ])
+        # Preserve existing FTS candidates/ranking, including its punctuation
+        # tokenization. This supplement does not interpret signs/units/values.
+        original = self.search_ids('100', expand_korean=False, limit=20)
+        self.assertIn(identity('graph', 'grouped'), original)
+        self.assertIn(identity('graph', 'decimal'), original)
+        expected = set(original) | {identity('graph', 'unit'), identity('graph', 'identifier')}
+        ranked = self.search_ids('100', limit=20)
+        self.assertEqual(set(ranked), expected)
+        self.assertEqual(ranked[:len(original)], original)
+        self.assertEqual(self.search_ids('100', limit=len(original)), original)
+        self.assertEqual(self.search_ids('"100"', limit=20), original)
+        pages = [self.store.graph_page(projects=['one'], query='100', limit=1, offset=i)
+                 for i in range(len(expected))]
+        self.assertEqual([p['nodes'][0]['id'] for p in pages], ranked)
+        self.assertEqual([p['next'] for p in pages], list(range(1, len(expected))) + [None])
+
+    def test_integer_supplement_uses_current_permitted_membership_and_time(self):
+        allowed = self.target('allowed')
+        foreign = self.target('foreign', project='two')
+        denied = self.target('denied', permission='denied')
+        removed = self.target('removed')
+        self.store.ingest(allowed, [self.record('shared', '보관 수량은 100개입니다.')])
+        self.store.ingest(foreign, [self.record('shared', '보관 수량은 1000개입니다.')])
+        self.store.ingest(denied, [self.record('hidden', '보관 수량은 100개입니다.')])
+        row = self.record('deleted', '보관 수량은 100개입니다.')
+        self.store.ingest(removed, [row], complete_snapshot=True,
+                          source_revision=digest(encoded([row])), source_order=1)
+        self.store.ingest(removed, [], complete_snapshot=True,
+                          source_revision=digest(encoded([])), source_order=2)
+        expected = [identity('graph', 'shared')]
+        self.assertEqual(self.search_ids('100'), expected)
+        self.assertEqual(self.graph_ids('100'), expected)
+        self.assertEqual(self.search_ids('100', project='two'), [])
+        self.assertEqual(self.graph_ids('100', project='two'), [])
+        self.assertEqual(self.search_ids('100', time_from=10**10), [])
+        self.assertEqual(self.graph_ids('100', until=1), [])
+
+    def test_integer_queries_preserve_source_bytes_and_later_digit_occurrences(self):
+        target = self.target()
+        text = '보관 수량은 1000개 이후 100개입니다.\t\t  \n  원문 간격 유지  '
+        raw = {'text': text, 'value': '100', 'unit': '개'}
+        self.store.ingest(target, [self.record('unchanged', text, raw=raw)])
+        baseline = self.persisted_source_state()
+        expected = [identity('graph', 'unchanged')]
+        for query in ('100', '1000'):
+            self.assertEqual(self.search_ids(query), expected)
+            self.assertEqual(self.graph_ids(query), expected)
+        self.assertEqual(self.persisted_source_state(), baseline)
+
     def test_numeric_literals_do_not_match_larger_values_and_check_later_occurrences(self):
         target = self.target()
         self.store.ingest(target, [
@@ -150,18 +230,23 @@ class KoreanSearchRegressionTests(unittest.TestCase):
             with self.subTest(query=query):
                 self.assertEqual(set(self.search_ids(query)), {identity("graph", name) for name in names})
 
-    def test_literal_bounds_and_korean_requirement(self):
+    def test_literal_bounds_and_korean_or_integer_requirement(self):
         target = self.target()
         self.store.ingest(target, [
             self.record("numeric", "이자리35년336"),
             self.record("length", "앞" + "가" * 65 + "뒤"),
             self.record("latin", "prefixABCtoken")
         ])
-        for query in ("년", "35", "ABC", "가" * 65):
+        for query in ("년", "3", "ABC", "가" * 65):
             with self.subTest(query=query, api="search"):
                 self.assertEqual(self.search_ids(query), [])
             with self.subTest(query=query, api="graph_page"):
                 self.assertEqual(self.graph_ids(query), [])
+        numeric = [identity('graph', 'numeric')]
+        self.assertEqual(self.search_ids('35'), numeric)
+        self.assertEqual(self.graph_ids('35'), numeric)
+        self.assertEqual(self.search_ids('35', expand_korean=False), [])
+        self.assertEqual(self.search_ids('"35"'), [])
         expected = [identity("graph", "length")]
         self.assertEqual(self.search_ids("가" * 64), expected)
         self.assertEqual(self.graph_ids("가" * 64), expected)
