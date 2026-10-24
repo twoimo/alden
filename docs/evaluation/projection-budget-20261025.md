@@ -49,8 +49,9 @@ counter and leaves output offsets unchanged on all three selected pin regimes.
 Resource argument: letN≤2048, P≤32, G≤8, V≤524288 and T≤131072. Counters start at0.
 Every admitted increment follows a remaining-capacity check, and local quotas are
 at most the remaining global capacity. Induction over admitted entries/pairs
-therefore preservesV/T ceilings. At mostP+G grids are built, at most9(P+G)N numeric
-Map queries occur, and the active/fixed/update arrays requireO(N) memory. Candidate
+therefore preservesV/T ceilings. At mostP+G grids are built, at most9(P+G)N neighbor
+lookups and(P+G)N grid-insertion lookups occur (10(P+G)N Map reads
+in total), and the active/fixed/update arrays requireO(N) memory. Candidate
 loop work is bounded byV rather than an uncounted quadratic suffix. This counts
 operations and does not establish worst-case JS Map latency, allocation/GC time,
 OS scheduling, primary UI latency, GPU/FPS or battery. Spatial pruning alone is
