@@ -36,6 +36,15 @@ class BodyNormalizationTests(unittest.TestCase):
         self.assertEqual(clock['status'], 'ambiguous')
         self.assertIsNone(clock['canonical'])
 
+    def test_sentence_period_is_not_a_date_component(self):
+        for body in ('기한 2026년 2월 23일.', '기한 2026.2.23.'):
+            with self.subTest(body=body):
+                items = self.candidates(body)
+                self.assertEqual(items[0]['canonical'],'2026-02-23')
+                self.assertFalse(items[0]['raw'].endswith('.'))
+        self.assertEqual(self.candidates('기한 2026.2.23.24'),[])
+        self.assertEqual(self.candidates('기한 26년 2월 23일.')[0]['status'],'ambiguous')
+
     def test_explicit_offset_and_gregorian_validity(self):
         value = self.candidates('시각 2026-02-23T12:30:00+09:00')[0]
         self.assertEqual(value['canonical'], '2026-02-23T03:30:00Z')

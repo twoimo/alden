@@ -26,7 +26,7 @@ _DATE = re.compile(
     r'(?<![\w/.:+\-])(?:'
     r'(?P<ky>[0-9]{4}|[0-9]{2})년' + _H + r'(?P<km>[0-9]{1,2})월' + _H + r'(?P<kd>[0-9]{1,2})일'
     r'|(?P<iy>[0-9]{4})(?P<sep>[-/.])(?P<im>[0-9]{1,2})(?P=sep)(?P<id>[0-9]{1,2}))'
-    r'(?P<clock>' + _CLOCK + r')?(?![A-Za-z0-9_./:])')
+    r'(?P<clock>' + _CLOCK + r')?(?![A-Za-z0-9_/:]|\.[0-9])')
 _SPECIAL_UNITS = {
     '원': ('money_won_unspecified', '원'), 'KRW': ('money_KRW', 'KRW'),
     'USD': ('money_USD', 'USD'), 'EUR': ('money_EUR', 'EUR'), 'JPY': ('money_JPY', 'JPY'),

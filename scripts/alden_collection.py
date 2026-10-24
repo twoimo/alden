@@ -1362,7 +1362,7 @@ class CollectionStore:
                 row = db.execute(exact + "SELECT " + fields + " FROM shown s JOIN versions v ON v.id=s.visible_version WHERE s.id=?", (focus, *args, focus)).fetchone()
                 if row is None:
                     raise ValueError("collection_graph_focus_not_in_scope")
-                return self._record_details(db, row, expected_version)
+                return self._record_details(db, row, expected_version, projects)
             json_node = """json_object('id',s.id,'platform',s.platform,'original_id',s.original_id,
               'visible_version',s.visible_version,'target_id',s.target_id,'collected_at',s.collected_at,
               'label',alden_display_label(v.label,v.body),'body',substr(v.body,1,2400),'metadata',json_object('kind',substr(CAST(json_extract(v.metadata,'$.kind') AS TEXT),1,256)),
@@ -1577,13 +1577,13 @@ class CollectionStore:
                     'projection': 'current_graph_references'}
             if details and focus:
                 row = next(r for r in rows if r["id"] == focus)
-                detail = self._record_details(db, row, expected_version)
+                detail = self._record_details(db, row, expected_version, projects)
                 if detail["ok"] is not True:
                     return detail
                 result["details"] = detail["details"]
             return result
 
-    def _record_details(self, db, row, expected_version) -> dict:
+    def _record_details(self, db, row, expected_version, projects) -> dict:
         if not db.execute('SELECT alden_source_allowed(?,?,?)',
                           (row['target_id'], row['id'], row['visible_version'])).fetchone()[0]:
             return {'ok': False, 'error': 'collection_source_authorization_required'}
@@ -1609,15 +1609,75 @@ class CollectionStore:
                 display_label = " · ".join(str(record[key]) for key in ("handle", "author", "date") if record.get(key))
         if not display_label:
             display_label = row["original_id"]
-        return {"ok": True, "details": {"node_id": row["id"], "basis": "source_record", "summary": row["label"], "display_label": display_label,
-                                     "body": body[:12000], "truncated": len(body) > 12000,
+        visible_body = body[:12000]
+        from alden_body_normalization import analyze_body_fields, POLICY as BODY_NOTATION_POLICY
+        from alden_content_evidence import content_evidence_class
+        metadata = json.loads(row['metadata'])
+        evidence_class = content_evidence_class(metadata,body,source=record,
+            body_source='retained_record.localOriginalText' if body_format=='retained_original_text' else 'stored_body')
+        analysis = analyze_body_fields(visible_body) if self.schema >= 3 and evidence_class=='content_candidate' else None
+        if analysis is not None and (analysis.get('policy') != BODY_NOTATION_POLICY
+                or analysis.get('body_sha256') != digest(visible_body.encode())
+                or analysis.get('body_characters') != len(visible_body)
+                or analysis.get('semantic_validity') != 'not_assessed'):
+            raise RuntimeError('collection_body_notation_binding_invalid')
+        result = {"ok": True, "details": {"node_id": row["id"], "basis": "source_record", "summary": row["label"], "display_label": display_label,
+                                     "body": visible_body, "truncated": len(body) > 12000,
                                      "body_format": body_format,
                                      "text_projection": projected['projection'],
                                      "reading_projection": reading_tail_presentation(body, record),
                                      "version": row["visible_version"], "collected_at": row["collected_at"],
                                      "raw_sha256": row["raw_sha256"], "source_url": row["source_url"],
                                      "target_id": row["target_id"], "platform": row["platform"],
-                                     "capture": self._source_capture_reference(db, row)}}
+                                     "capture": self._source_capture_reference(db, row),
+                                     "body_notation": {"binding": {"basis": "verified_source_record_detail",
+                                         "document_id": row['id'], "target_id": row['target_id'],
+                                         "version": row['visible_version'], "raw_sha256": row['raw_sha256'],
+                                         "body_sha256": analysis['body_sha256'],
+                                         "body_scope": "detail_body_excerpt" if len(body) > 12000 else "detail_body"},
+                                         "analysis": analysis} if analysis is not None else None}}
+        self._verify_current_detail(result['details'], projects)
+        return result
+
+    def _verify_current_detail(self, details, projects):
+        """A fresh read after parsing/projection, never the earlier graph snapshot."""
+        binding = {'document_id':details['node_id'],'target_id':details['target_id'],
+                   'version':details['version'],'raw_sha256':details['raw_sha256']}
+        marks = ','.join('?' for _ in projects)
+        availability = 'm.availability' if self.schema >= 3 else "'available'"
+        with self.database() as current:
+            current.execute('PRAGMA query_only=ON')
+            if not current.in_transaction:
+                current.execute('BEGIN')
+            row = current.execute('''SELECT m.current_version,v.*,d.availability AS document_availability,
+                ''' + availability + ''' AS membership_availability,
+                EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+                    AND p.permission!='denied' AND p.project IN (''' + marks + ''')) AS permitted,
+                alden_source_allowed(m.target_id,m.document_id,m.current_version) AS source_allowed
+                FROM memberships m JOIN documents d ON d.id=m.document_id
+                JOIN versions v ON v.id=m.current_version
+                WHERE m.target_id=? AND m.document_id=?''', (*projects,binding['target_id'],binding['document_id'])).fetchone()
+            if row is None or row['document_availability'] != 'available' or row['membership_availability'] != 'available':
+                raise RuntimeError('collection_graph_source_unavailable')
+            if not row['permitted'] or not row['source_allowed']:
+                raise RuntimeError('collection_source_authorization_changed')
+            if row['current_version'] != binding['version']:
+                raise RuntimeError('collection_graph_version_changed')
+            if row['raw_sha256'] != binding['raw_sha256']:
+                raise RuntimeError('collection_source_integrity')
+            if self.schema < 3 or row['processing_version']=='legacy':
+                details['body_notation'] = None
+            else:
+                metadata = json.loads(row['metadata'])
+                if not isinstance(metadata,dict):
+                    raise RuntimeError('collection_source_integrity')
+                projection = digest(encoded([row['label'],row['body'],{key:value for key,value in metadata.items() if key!='source'}]))
+                version = identity('version',encoded([binding['document_id'],row['raw_sha256'],row['processing_version'],projection]).decode())
+                if row['projection_sha256'] != projection or version != row['current_version']:
+                    raise RuntimeError('collection_source_integrity')
+            raw = self._verified_source_blob(self.blobs,row['raw_path'],MAX_RECORD_BYTES)
+            if digest(raw) != row['raw_sha256']:
+                raise RuntimeError('collection_source_integrity')
 
     @staticmethod
     def _verified_source_blob(folder: Path, name: str, budget: int) -> bytes:
@@ -1885,5 +1945,7 @@ def read_action(state_root: Path, action: str, query: str | None = None, *,
         with store.database() as db:
             if store._source_authority_snapshot(db, projects) != authority:
                 raise RuntimeError('collection_source_authorization_changed')
+        if result.get('details',{}).get('basis') == 'source_record':
+            store._verify_current_detail(result['details'],projects)
         return result
     raise ValueError("collection_action_invalid")

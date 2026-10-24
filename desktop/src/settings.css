@@ -602,6 +602,13 @@ body.settings-view {
 .knowledge-separated-tail summary { cursor:pointer; }
 .knowledge-separated-tail p { margin:8px 0; }
 .knowledge-separated-tail-text { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; }
+.knowledge-body-notation { margin:12px 0 18px; font-size:12px; line-height:1.65; color:var(--muted); }
+.knowledge-body-notation summary { cursor:pointer; }
+.knowledge-body-notation ul { list-style:none; padding:0; max-height:280px; overflow:auto; }
+.knowledge-body-notation li { padding:8px 0; border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.knowledge-body-notation q { display:block; white-space:pre-wrap; quotes:none; }
+.knowledge-body-notation mark { background:#6ad2d526; color:inherit; border-radius:3px; padding:0 2px; }
+.knowledge-body-notation li span { display:block; margin-top:4px; }
 .knowledge-node-facts { padding-left:20px; margin:0 0 22px; font-size:14px; line-height:1.8; white-space:pre-wrap; overflow-wrap:anywhere; }
 .knowledge-node-facts li + li { margin-top:8px; }
 .knowledge-note-subheading { font-size:12px; font-weight:600; color:var(--muted); margin:24px 0 8px; }
