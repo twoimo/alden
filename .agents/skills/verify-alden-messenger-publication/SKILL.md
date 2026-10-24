@@ -12,7 +12,7 @@ later refresh receipt. A wrong current membership/version must remain denied.
 
 Source coverage is `Frontier._prepare`, `_publish`, `_source_access`,
 `_release_activity`, `step` and `activity_releases` in
-`docs/evaluation/messenger-stream-20261021/messenger_candidate.py`, and
+`scripts/alden_messenger_runtime.py`, and
 `CollectionStore.ingest`, `release_activity`, `_event` and `activity_page` in
 `scripts/alden_collection.py`. The UI's history counts and terminal labels keep
 the readiness stage distinct from stored changes. Base inspected is
@@ -34,3 +34,10 @@ proof, complete source-visibility guarantee, installed UI/combat verification or
 unbounded liveness follows. Runtime/private native probes, external review and
 release gates remain separate. Source/claim mismatch is a modeling error;
 a real violated invariant remains a product finding.
+
+The stream/content separation has its own finite retry check:
+`python3 -B scripts/verify_alden_activity_stream.py`. Read
+`docs/evaluation/messenger-stream-20261021/STREAM_IDENTITY.md` for the covered
+functions, source hashes, bounds and the separate UI test. This checks three
+backend cases and rejects three process-local broken variants; it does not
+expand the fifteen-case publication check or verify native combat.

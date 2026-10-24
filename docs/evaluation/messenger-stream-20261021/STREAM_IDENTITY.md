@@ -61,3 +61,76 @@ signal rather than a pulse. Current native incremental validation must establish
 a baseline before collection, poll with the exact cursor/stream, and inspect
 committed origins afterward. Original installed UI/combat and external review
 remain separate gates.
+
+## Concurrent read failure and cursor recovery
+
+An actual private-root native observation at runtime source
+`c0ddb9c41a501c3a41e09cc45ac74715f0700e3c` reproduced
+`collection_source_authorization_changed` at the final strong-content check in
+`CollectionStore._install_source_access.verify`. A content revision changed
+while the read was in progress. The exception withholds the response; it is
+not an accepted empty page or a reason to advance the client cursor. The next
+poll retained that cursor and succeeded. This identifies the new observed
+failure, not retrospectively the unrecorded reason for the earlier RuntimeError.
+
+```mermaid
+stateDiagram-v2
+    [*] --> WaitingPoll
+    WaitingPoll --> Reading: request committed cursor and stream
+    Reading --> Rejected: final source revision differs
+    Rejected --> WaitingPoll: keep cursor; bounded retry delay
+    Reading --> AcceptedPage: source checks stable and page contract valid
+    AcceptedPage --> WaitingSnapshot: commit cursor; retain eligible receipts
+    WaitingSnapshot --> WaitingSnapshot: older or mismatched graph
+    WaitingSnapshot --> Emitted: current content, target and version match
+    WaitingSnapshot --> Discarded: expired, hidden, withdrawn or scope reset
+    Emitted --> WaitingPoll: subsequent pages do not repeat seen receipt
+    Discarded --> WaitingPoll
+```
+
+This is a review surface over independent backend and frontend transitions.
+There is no single transaction from the original database through collection,
+network and UI. The backend read transaction and its end-of-read verification
+are distinct from receipt delivery, client cursor adoption and graph refresh.
+
+| Boundary | Actual code | Checked promise |
+|---|---|---|
+| Source changes during read | `CollectionStore._install_source_access` / `database` | No response escapes after its final source check detects a change |
+| Authorization and content | `ProductionAuthority.stream_revision` / `revision` / `access` | New content does not reset the namespace; stale body remains withheld |
+| Same-cursor retry | `read_action` / `activity_page` | A rejected read does not consume the later eligible receipt |
+| Client failure and snapshot | `CollectionActivity.tick` / `snapshot` / `flush` | Retry starts from the old cursor; an eligible receipt emits once after a matching snapshot |
+
+Use the existing project test infrastructure:
+
+```sh
+python3 -B scripts/verify_alden_activity_stream.py --output /absolute/private-output/stream.json
+cd desktop
+npm test -- src/__tests__/collection-activity.test.ts
+```
+
+The backend checker runs three controlled real-store cases, then rejects three
+process-local mutations: data-dependent stream identity, authorization-only
+content checks and a missing final read check. It restores the original methods
+and reruns all three cases. Exact covered-file hashes, HEAD and dirty paths are
+recorded; product sources are never rewritten by the checker. The added retry
+case has two rooms, three message identities, one live addition, one withdrawal
+during reading, one retry and one repeated-cursor read. This finite trace is not
+an enumeration of all interleavings, a refinement proof, all-input correctness or
+unbounded liveness. The UI check uses its existing fake transport/clock and makes
+no native rendering or real-message-arrival claim.
+
+The new native window completed three automatic collection/index-ready cycles,
+with166 unique incremental receipts, all explicit backfill origins, no duplicate
+IDs and no namespace reset. Its eight activity reads had seven successes and
+one guarded exception; all four100-node graph reads succeeded. Activity median
+was0.457s and graph median1.342s on this small concurrent private workload.
+There is no matched earlier workload, whole-corpus measurement or speedup claim.
+A fourth attempt was interrupted by the owned graceful shutdown and retained
+`messenger_request_cancelled`; it is not a fourth completed cycle. The original
+collector and installed application were preserved. Source DB writes, sends and
+foreground UI actions remained zero.
+
+Evidence: task `outputs/messenger-concurrent-read-20261025/`, separate from the
+earlier native watch and its unresolved error reason. The current-source
+external review packet still binds the earlier exact runtime snapshot; these
+tests/docs do not retroactively change its hashes or establish provider access.

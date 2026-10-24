@@ -24,6 +24,28 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10000); });
 afterEach(() => { owned.forEach(c => c.stop()); owned.length = 0; vi.useRealTimers(); });
 
 describe('committed graph activity consumption', () => {
+  it('retries a failed source read from the same cursor and emits once after the matching snapshot', async () => {
+    const a = 'a'.repeat(64), b = 'b'.repeat(64);
+    const read = vi.fn().mockRejectedValueOnce(new Error('collection_source_authorization_changed'))
+      .mockResolvedValue(page(15, [event()], { content_revision: b }));
+    const { consumer, refresh, show } = setup(read);
+    consumer.snapshot({ ...point(10), content_revision: a }, nodes('v1'));
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(consumer.diagnostics()).toMatchObject({ cursor: 10, pending: 0 });
+    expect(refresh).not.toHaveBeenCalled(); expect(show).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(read.mock.calls.slice(0, 2)).toEqual([
+      [{ activity: true, after: 10, stream_id: 'stream-a', limit: 200 }],
+      [{ activity: true, after: 10, stream_id: 'stream-a', limit: 200 }],
+    ]);
+    expect(consumer.diagnostics()).toMatchObject({ cursor: 15, pending: 1 });
+    expect(show).not.toHaveBeenCalled();
+    consumer.snapshot({ ...point(15), content_revision: b }, nodes());
+    expect(show).toHaveBeenCalledExactlyOnceWith(event());
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(consumer.diagnostics()).toMatchObject({ cursor: 15, pending: 0 });
+  });
   it('preserves a new receipt across content refresh and waits for the matching source snapshot', async () => {
     const a='a'.repeat(64),b='b'.repeat(64);
     const read=vi.fn(async()=>page(15,[event()],{content_revision:b}));

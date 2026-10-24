@@ -366,6 +366,38 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(after['items'], [])
         self.assertEqual(len(self.graph()['nodes']), 1)
 
+    def test_content_change_during_activity_read_retries_the_same_cursor_without_losing_a_receipt(self):
+        self.enroll()
+        source = self.source()
+        source.step(); source.step()
+        query = {'projects': ['messenger'], 'activity': True}
+        baseline = read_action(self.root, 'collection-graph', json.dumps(query))
+        self.reader.pages[('a', None)] = ([item(3, '계약 검토 일정과 새 회의 자료가 도착했습니다.'), item(1)], False, None)
+        self.assertEqual(source.step(mode='live')['state'], 'published')
+        continuation = {**query, 'after': baseline['cursor'], 'stream_id': baseline['stream_id']}
+        original = self.reader.content_revisions
+        calls = []
+
+        def withdraw_other_source(keys):
+            calls.append(True)
+            if len(calls) == 2:
+                self.reader.pages[('b', None)] = ([item(2, visible=False)], False, None)
+            return original(keys)
+
+        with patch.object(self.reader, 'content_revisions', side_effect=withdraw_other_source):
+            with self.assertRaisesRegex(RuntimeError, 'collection_source_authorization_changed'):
+                read_action(self.root, 'collection-graph', json.dumps(continuation))
+        retried = read_action(self.root, 'collection-graph', json.dumps(continuation))
+        self.assertFalse(retried['reset'])
+        self.assertEqual(retried['stream_id'], baseline['stream_id'])
+        self.assertEqual([event['kind'] for event in retried['items']], ['added'])
+        self.assertEqual(retried['items'][0]['origin'], 'messenger-db:kakaotalk:live')
+        self.assertNotEqual(retried['content_revision'], baseline['content_revision'])
+        replay = read_action(self.root, 'collection-graph', json.dumps({**continuation, 'after': retried['cursor']}))
+        self.assertEqual(replay['items'], [])
+        self.assertEqual(replay['cursor'], retried['cursor'])
+        self.assertEqual(len(self.graph()['nodes']), 2)
+
     def test_changed_account_still_replaces_activity_namespace_and_withholds_receipts(self):
         self.enroll();self.source().step()
         query = {'projects': ['messenger'], 'activity': True}
