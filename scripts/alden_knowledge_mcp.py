@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import time
 
-from alden_abort import ABORT_STATE_NAME, AbortToken
+from alden_abort import ABORT_STATE_NAME, AbortToken, AldenCancelled
 from alden_collection import CollectionStore, read_action, require_collection_source_root
 from alden_collection_retrieval import retrieve
 from alden_status_mcp import StdioServer, _check
@@ -113,30 +113,43 @@ class KnowledgeServer(StdioServer):
         _check(control)
         args, name = params['arguments'], params['name']
         token = CallToken(self.root / ABORT_STATE_NAME, control)
+        def check():
+            # Keep client cancellation/deadline distinct from the global epoch.
+            _check(control)
+            token.raise_if_cancelled()
+        check()
         cancelled = lambda: token.is_cancelled() or control is not None and control.stopped.is_set()
         guards = self._source_guards(cancelled)
-        if name.endswith('search'):
-            import auto_reply_knowledge_graph as kg
-            with kg.embedding_abort_scope(token):
-                result = retrieve(self.root, args['query'], projects=args['projects'],
-                                  max_entities=args.get('limit', 6), cancelled=cancelled,
-                                  **guards, search_strategy=self.search_strategy)
-        else:
-            action = 'collection-graph' if name.endswith('graph') else 'collection-history'
-            options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
-            if 'after' in args:
-                options['after'] = args['after']
-            if 'focus' in args:
-                options['focus'], options['hops'] = args['focus'], 1
-            result = read_action(self.root, action, json.dumps(options),
-                                 source_access=guards['source_access'], source_revision=guards['source_revision'])
-            if action == 'collection-history':
-                # The UI catalog is global; MCP exposes only this request's projects.
-                requested = frozenset(args['projects'])
-                result = {**result, 'projects': [project for project in result['projects']
-                                                if project['project'] in requested]}
-        _check(control)
+        check()
+        try:
+            if name.endswith('search'):
+                import auto_reply_knowledge_graph as kg
+                with kg.embedding_abort_scope(token):
+                    result = retrieve(self.root, args['query'], projects=args['projects'],
+                                      max_entities=args.get('limit', 6), cancelled=cancelled,
+                                      **guards, search_strategy=self.search_strategy)
+            else:
+                action = 'collection-graph' if name.endswith('graph') else 'collection-history'
+                options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
+                if 'after' in args:
+                    options['after'] = args['after']
+                if 'focus' in args:
+                    options['focus'], options['hops'] = args['focus'], 1
+                result = read_action(self.root, action, json.dumps(options), cancelled=cancelled,
+                                     source_access=guards['source_access'], source_revision=guards['source_revision'])
+                if action == 'collection-history':
+                    # The UI catalog is global; MCP exposes only this request's projects.
+                    requested = frozenset(args['projects'])
+                    result = {**result, 'projects': [project for project in result['projects']
+                                                    if project['project'] in requested]}
+        except Exception:
+            check()
+            raise
+        check()
         return result
+
+    def tool_failure_code(self, error):
+        return 'alden_global_abort' if isinstance(error, AldenCancelled) else super().tool_failure_code(error)
 
 
 def main():

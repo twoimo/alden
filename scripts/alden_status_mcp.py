@@ -272,6 +272,9 @@ class StdioServer:
     def call_tool(self, params, control):
         return self.collector.collect(control=control) if control is not None else self.collector.collect()
 
+    def tool_failure_code(self, error):
+        return 'metadata_unavailable'
+
     def dispatch(self, request, control=None, *, validate_only=False):
         if not isinstance(request, dict) or request.get("jsonrpc") != "2.0":
             return _error(None, -32600, "Invalid request")
@@ -312,10 +315,10 @@ class StdioServer:
                 _check(control)
             except CallStopped:
                 raise
-            except Exception:
+            except Exception as error:
                 # A collector bug must never export raw exception text or paths.
                 return {"jsonrpc": "2.0", "id": identifier,
-                        "result": {"content": [{"type": "text", "text": "metadata_unavailable"}], "isError": True}}
+                        "result": {"content": [{"type": "text", "text": self.tool_failure_code(error)}], "isError": True}}
             result = {"content": [{"type": "text", "text": json.dumps(content, separators=(",", ":"), allow_nan=False)}], "isError": False}
         else:
             return _error(identifier, -32601, "Method not found")
