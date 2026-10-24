@@ -100,27 +100,34 @@ class RealtimeCollection:
         return hashlib.sha256(json.dumps([str(path), stamps], separators=(',', ':')).encode()).hexdigest()
 
     def scan(self, store, *, paused=lambda _id: False, now=None):
-        if not self.policy()['enabled']: return 0
+        policy = self.policy()
+        if not policy['enabled']: return 0
         now = time.time() if now is None else now
-        with store.database() as source:
-            ids = [r[0] for r in source.execute('''SELECT t.id FROM targets t WHERE t.enabled=1 AND
-              EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied') ORDER BY t.id LIMIT 200''')]
-        with self.database(write=True) as db:
-            for target_id in ids:
-                if paused(target_id): continue
-                try: signature, error = self.signature(store.target(target_id)), None
-                except (OSError, KeyError, ValueError) as exc:
-                    signature, error = None, str(exc) if str(exc).startswith('collection_realtime_') else 'collection_realtime_input_unavailable'
-                row = db.execute('SELECT * FROM inputs WHERE target_id=?', (target_id,)).fetchone()
-                if row is None:
-                    db.execute('INSERT INTO inputs VALUES(?,?,?,NULL,NULL,NULL,NULL,?)', (target_id, signature, now, error))
-                elif error:
-                    if row['error'] != error: db.execute('UPDATE inputs SET error=? WHERE target_id=?', (error, target_id))
-                elif row['seen'] != signature or row['error']:
-                    db.execute('UPDATE inputs SET seen=?,stable_since=?,error=NULL WHERE target_id=?', (signature, now, target_id))
-                elif now - row['stable_since'] >= SETTLE_SECONDS and signature != row['processed'] and signature != row['queued']:
-                    db.execute('UPDATE inputs SET queued=?,queued_at=COALESCE(queued_at,?) WHERE target_id=?', (signature, now, target_id))
-        return len(ids)
+        after, scanned = '', 0
+        while True:
+            # The page size bounds temporary IDs, not the supported target set.
+            # Release the source read before observing files or writing hints.
+            with store.database() as source:
+                ids = [r[0] for r in source.execute('''SELECT t.id FROM targets t WHERE t.id>? AND t.enabled=1 AND
+                  EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied')
+                  ORDER BY t.id LIMIT 200''', (after,))]
+            if not ids or self.policy() != policy: return scanned
+            with self.database(write=True) as db:
+                for target_id in ids:
+                    if paused(target_id): continue
+                    try: signature, error = self.signature(store.target(target_id)), None
+                    except (OSError, KeyError, ValueError) as exc:
+                        signature, error = None, str(exc) if str(exc).startswith('collection_realtime_') else 'collection_realtime_input_unavailable'
+                    row = db.execute('SELECT * FROM inputs WHERE target_id=?', (target_id,)).fetchone()
+                    if row is None:
+                        db.execute('INSERT INTO inputs VALUES(?,?,?,NULL,NULL,NULL,NULL,?)', (target_id, signature, now, error))
+                    elif error:
+                        if row['error'] != error: db.execute('UPDATE inputs SET error=? WHERE target_id=?', (error, target_id))
+                    elif row['seen'] != signature or row['error']:
+                        db.execute('UPDATE inputs SET seen=?,stable_since=?,error=NULL WHERE target_id=?', (signature, now, target_id))
+                    elif now - row['stable_since'] >= SETTLE_SECONDS and signature != row['processed'] and signature != row['queued']:
+                        db.execute('UPDATE inputs SET queued=?,queued_at=COALESCE(queued_at,?) WHERE target_id=?', (signature, now, target_id))
+            after, scanned = ids[-1], scanned + len(ids)
 
     def pending(self):
         if not self.policy()['enabled']: return {}
