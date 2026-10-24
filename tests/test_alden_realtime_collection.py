@@ -45,6 +45,64 @@ class RealtimeTests(unittest.TestCase):
         return self.scheduler.cycle(collector=collect_target, capturer=capture_source,
             indexer=changes.pop('indexer', lambda *a, **kw: {'state': 'ready'}), **changes)
 
+    def test_input_after_first_200_targets_is_collected_and_requeued_on_change(self):
+        eligible = {self.target}
+        for number in range(400):
+            eligible.add(self.store.register(platform='graph', original_id=f'large-live-{number}',
+                kind='graph_source', label='fixture', projects=['allowed'],
+                config={'adapter': 'source-graph', 'path': str(self.source)}, interval_seconds=21600))
+        with self.store.database() as db:
+            tail = db.execute('SELECT id FROM targets ORDER BY id DESC LIMIT 1').fetchone()[0]
+        self.enable()
+        self.assertEqual(self.live.scan(self.store, now=100), 401)
+        self.assertEqual(self.live.scan(self.store, now=103), 401)
+        queued = self.live.pending()
+        self.assertEqual(set(queued), eligible)
+        self.assertEqual(self.cycle(target_id=tail)['attempts'][0]['state'], 'complete')
+        self.assertEqual(set(self.live.pending()), eligible - {tail})
+        self.write('200개 뒤 대상의 새 원문')
+        self.queue(200)
+        self.assertNotEqual(self.live.pending()[tail]['queued'], queued[tail]['queued'])
+        self.assertEqual(self.cycle(target_id=tail)['attempts'][0]['state'], 'complete')
+        with self.store.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM versions').fetchone()[0], 2)
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM targets WHERE interval_seconds=21600').fetchone()[0], 401)
+        self.live.scan(self.store, now=210)
+        self.assertNotIn(tail, self.live.pending())
+
+    def test_page_traversal_keeps_disabled_denied_and_paused_targets_out(self):
+        eligible = {self.target}
+        for number in range(202):
+            eligible.add(self.store.register(platform='graph', original_id=f'scoped-live-{number}',
+                kind='graph_source', label='fixture', projects=['allowed'],
+                config={'adapter': 'source-graph', 'path': str(self.source)}, interval_seconds=21600))
+        disabled, denied, paused = sorted(eligible)[:3]
+        with self.store.database() as db:
+            db.execute('UPDATE targets SET enabled=0 WHERE id=?', (disabled,))
+            db.execute("UPDATE target_projects SET permission='denied' WHERE target_id=?", (denied,))
+        self.scheduler.pause(True, paused)
+        self.enable(); self.queue()
+        self.assertEqual(set(self.live.pending()), eligible - {disabled, denied, paused})
+        with self.live.database() as db:
+            observed = {row[0] for row in db.execute('SELECT target_id FROM inputs')}
+        self.assertEqual(observed, eligible - {disabled, denied, paused})
+
+    def test_live_policy_revision_change_stops_before_next_page(self):
+        for number in range(200):
+            self.store.register(platform='graph', original_id=f'policy-live-{number}',
+                kind='graph_source', label='fixture', projects=['allowed'],
+                config={'adapter': 'source-graph', 'path': str(self.source)}, interval_seconds=21600)
+        self.enable()
+        with patch.object(self.live, 'policy', side_effect=[
+                {'enabled': True, 'revision': 1}, {'enabled': True, 'revision': 1},
+                {'enabled': False, 'revision': 2}]):
+            self.assertEqual(self.live.scan(self.store, now=100), 200)
+        with self.live.database() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM inputs').fetchone()[0], 200)
+        self.assertEqual(self.live.scan(self.store, now=103), 201)
+        self.assertEqual(self.live.scan(self.store, now=106), 201)
+        self.assertEqual(len(self.live.pending()), 201)
+
     def test_default_read_is_side_effect_free_and_policy_cas_is_recoverable(self):
         self.assertFalse(self.live.policy()['enabled'])
         self.assertFalse(self.live.path.exists())
