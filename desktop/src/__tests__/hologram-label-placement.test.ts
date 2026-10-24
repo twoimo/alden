@@ -9,7 +9,7 @@ import { parseKnowledgeGraph } from '../knowledge/graph-model';
 // pipeline without a WebGL context, real accounts, or a physical window.
 type Box = { width: number; left: number; top: number; visible: boolean };
 type Bounds = { left: number; top: number; right: number; bottom: number };
-type NodeSpec = { id: string; x?: number; y?: number; z?: number };
+type NodeSpec = { id: string; label?: string; x?: number; y?: number; z?: number };
 type TestHologram = {
   render(dt: number): void;
   refreshOverviewLabels(): void;
@@ -97,7 +97,7 @@ function setup(
   if (opts.zoom) {
     camera.position.z = 5 / opts.zoom;
     const zoomNodes = parseKnowledgeGraph({nodes:specs.map(node=>({id:node.id,
-      label:'실제 자료 ' + node.id, category:opts.globalIds?.includes(node.id)?'topic':'document'})),edges:[]}).nodes;
+      label:node.label ?? '실제 자료 ' + node.id, category:opts.globalIds?.includes(node.id)?'topic':'document'})),edges:[]}).nodes;
     // The real view and zoom candidates reference the same typed source nodes.
     Object.assign(fake, { view: { hops: 0, focusId: opts.focus ?? null, nodes: zoomNodes } });
     Object.assign(fake, {desiredCamera:camera.position.clone(), labelFitDistance:5,
@@ -112,6 +112,41 @@ function setup(
 }
 
 describe("overview labels in the native hologram projection loop", () => {
+  it('hides passive career subjects throughout the fitted and far overview', () => {
+    const specs = [
+      { id: 'resume', label: '자소서', x: -.6 },
+      { id: 'salary', label: '연봉·복리후생', x: 0 },
+      { id: 'recruiting', label: '채용공고·지원시기', x: .6 },
+    ];
+    for (const zoom of [.3, .55, 1, 1.34, 1.47]) {
+      const r = setup(specs, { globalIds: specs.map(node => node.id), zoom, width: 1000, height: 600 });
+      try {
+        expect(r.fake.labels.size, `passive labels at ${zoom}x`).toBe(0);
+        expect(r.accessible.querySelectorAll('button')).toHaveLength(3);
+      } finally { r.shell.remove(); }
+    }
+  });
+
+  it('reveals career subjects on zoom-in and removes them again on zoom-out', () => {
+    const specs = [
+      { id: 'resume', label: '자소서', x: -.6 },
+      { id: 'salary', label: '연봉·복리후생', x: 0 },
+      { id: 'recruiting', label: '채용공고·지원시기', x: .6 },
+    ];
+    const r = setup(specs, { globalIds: specs.map(node => node.id), zoom: 1, width: 1000, height: 600 });
+    try {
+      for (const zoom of [1.85, 1, .55, 2, .3]) {
+        Object.assign(r.fake, { desiredCamera: new THREE.Vector3(0, 0, 5 / zoom) });
+        r.fake.render(1 / 60);
+        if (zoom > 1.5) {
+          expect([...r.fake.labels.values()].map(label => label.textContent).sort()).toEqual(specs.map(node => node.label).sort());
+          expect([...r.fake.labels.values()].every(label => !label.hidden && Number(label.style.opacity) > 0)).toBe(true);
+        } else expect(r.fake.labels.size, `passive labels after returning to ${zoom}x`).toBe(0);
+        expect(r.accessible.querySelectorAll('button')).toHaveLength(3);
+      }
+    } finally { r.shell.remove(); }
+  });
+
   it('reveals saved titles only after zooming in, with readable topic hierarchy and bounded boxes', () => {
     const specs=Array.from({length:20},(_,i)=>({id:'n'+i,x:(i%5-2)*.25,y:(Math.floor(i/5)-1.5)*.25}));
     const topics=specs.slice(0,8).map(n=>n.id);

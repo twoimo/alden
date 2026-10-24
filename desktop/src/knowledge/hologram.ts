@@ -219,7 +219,7 @@ export class KnowledgeHologram {
       : new ResizeObserver(() => this.resize());
     this.resizeObserver?.observe(canvas);
     const workspace = canvas.closest('.knowledge-section, .alden-panel');
-    for (const selector of ['.knowledge-heading, .mini-graph-heading', '.knowledge-focus-card', '.knowledge-hologram-toolbar, .mini-graph-title', '.knowledge-depth-legend']) {
+    for (const selector of ['.knowledge-heading, .mini-graph-heading', '.knowledge-focus-card', '.knowledge-hologram-toolbar, .mini-graph-title', '.knowledge-depth-legend', '.knowledge-map-caption']) {
       const overlay = workspace?.querySelector<HTMLElement>(selector);
       if (overlay) { this.labelOverlays.push(overlay); this.excludedLabelBounds.push({left:0,top:0,right:0,bottom:0}); this.resizeObserver?.observe(overlay); }
     }

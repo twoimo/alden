@@ -9,6 +9,7 @@ import struct
 import unicodedata
 
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, require_collection_source_root, korean_literal_plan, korean_literal_matches, korean_literal_sql
+from alden_collection import integer_digit_query as _integer_digit_query, integer_digit_matches as _integer_digit_matches
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations, ANNOTATION_FIELDS
 from alden_source_text import TEXT_VERSION, project_source_text
 
@@ -21,20 +22,6 @@ MAX_BODY_EVIDENCE_CHECKS = 100
 CONTEXT_TEXT_POLICY = 'retained-threads-annotation-context-v2'
 CONVERSATION_CONTEXT_POLICY = 'current-source-excerpt-v1'
 MAX_CONTEXT_ANCHORS = 2
-_DIGIT_LEXEME = re.compile(r'\d+(?:[.,]+\d+)*')
-
-
-def _integer_digit_query(query):
-    value=query.strip()
-    return value if re.fullmatch(r'[0-9]{2,64}',value) else None
-
-
-def _integer_digit_matches(label, body, term):
-    # Supplement literal digit runs only. No int/float, sign, unit, grouping or
-    # Unicode value conversion; a formatted numeric run stays one opaque token.
-    return any(match.group()==term for field in (label,body) for match in _DIGIT_LEXEME.finditer(field))
-
-
 def _verified_conversation_excerpt(proof, value):
     """Validate a trusted source owner's bounded response against the selected fact."""
     if not isinstance(value, dict):
