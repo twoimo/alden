@@ -323,6 +323,9 @@ jobs:
       - name: Test declared and body notation normalization
         run: python3 -B -m unittest tests.test_alden_time_normalization tests.test_alden_quantity_normalization tests.test_alden_normalization_evidence tests.test_alden_body_normalization tests.test_alden_body_details -v
 
+      - name: Test exact retained-source numeric tail reading
+        run: python3 -B -m unittest tests.test_alden_source_text -v
+
       - name: Verify body notation source mutation sensitivity
         run: python3 -B scripts/verify_alden_body_normalization.py
 
