@@ -43,6 +43,21 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
+    def test_busy_annotation_publication_returns_existing_public_failure_contract(self):
+        from alden_annotation_candidates import _publication_lock
+        self.store.ingest(self.target(), [{'platform':'graph','original_id':'owned-lock-fixture',
+            'label':'Synthetic evidence','text':'Synthetic body retained during a busy review.'}])
+        folder=self.store.root/'annotation-reviews'
+        folder.mkdir(mode=0o700)
+        query=json.dumps({'scope':'project','project':'one','include_annotation_review':True})
+        before=self.store.path.read_bytes()
+        with _publication_lock(folder):
+            result=action.read_action(self.root,query)
+        self.assert_error(result,'quality_annotation_review_unavailable',mode='project',project='one')
+        self.assertEqual(list(folder.glob('*.json')),[])
+        self.assertEqual(self.store.path.read_bytes(),before)
+        self.assertTrue(action.read_action(self.root,query)['ok'])
+
     def test_empty_body_is_counted_without_hiding_title_or_mutating_source(self):
         self.store.ingest(self.target(), [
             {'platform': 'graph', 'original_id': 'only-title', 'label': '찾을 수 있는 영상 제목', 'text': ''},
