@@ -250,6 +250,14 @@ class ProductionAuthority:
         except (ValueError, OSError, RuntimeError):
             return False
 
+    def stream_revision(self, target):
+        source = self._source(target)
+        state, _ = binding(self.root, source.platform, source.account)
+        authorization = source._source_revision(target)
+        if read_enrollment(self.root)['revision'] != state['revision']:
+            raise ValueError('messenger_enrollment_changed_during_read')
+        return hashlib.sha256(encoded([state['revision'], authorization])).hexdigest()
+
     def revision(self, target):
         source = self._source(target)
         state, _ = binding(self.root, source.platform, source.account)

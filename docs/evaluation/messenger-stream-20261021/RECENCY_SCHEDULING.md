@@ -74,7 +74,9 @@ A matched owned 24-room workload ran the actual earlier collector from
 the current Frontier's unchanged default-compatible path for the baseline.
 The newest room's first source read moved from position 46 to 1, and its first
 live step from 50 to 2. Both made 64 source page reads across eight cycles and
-ended with identical documents and room checkpoints, with zero activity. These
+ended with identical documents and room checkpoints. Their initial activity
+baseline responses were empty; this did not establish absence of readiness
+records or validate live effects (see [the correction](STREAM_IDENTITY.md)). These
 are scheduling-order measurements, not real elapsed latency or quota savings.
 
 A separate SQL-only experiment captured the actual selection query from

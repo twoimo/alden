@@ -405,8 +405,9 @@ def require_collection_source_root(state_root, *callbacks):
             raise ValueError('collection_source_root_mismatch') from error
 
 
-def source_callbacks(state_root, *, source_access=None, source_revision=None, source_context=None):
-    callbacks = dict(source_access=source_access, source_revision=source_revision, source_context=source_context)
+def source_callbacks(state_root, *, source_access=None, source_revision=None, source_context=None, source_stream=None):
+    callbacks = dict(source_access=source_access, source_revision=source_revision, source_context=source_context,
+                     source_stream=source_stream)
     # An explicit caller contract is never filled in or replaced implicitly.
     if any(value is not None for value in callbacks.values()):
         return callbacks
@@ -415,17 +416,19 @@ def source_callbacks(state_root, *, source_access=None, source_revision=None, so
         from alden_messenger_production import ProductionAuthority
         authority = ProductionAuthority(Path(state_root))
         return dict(source_access=authority.access, source_revision=authority.revision,
-                    source_context=authority.retrieval_context)
+                    source_context=authority.retrieval_context, source_stream=authority.stream_revision)
     return callbacks
 
 
 class CollectionStore:
-    def __init__(self, state_root: Path, *, source_access=None, source_revision=None):
-        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision)
+    def __init__(self, state_root: Path, *, source_access=None, source_revision=None, source_stream=None):
+        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision, source_stream=source_stream)
         source_access, source_revision = callbacks['source_access'], callbacks['source_revision']
-        require_collection_source_root(state_root, source_access, source_revision)
+        source_stream = callbacks['source_stream']
+        require_collection_source_root(state_root, source_access, source_revision, source_stream)
         self.source_access = source_access
         self.source_revision = source_revision
+        self.source_stream = source_stream
         self.read_only = False
         self.schema = SCHEMA
         self.root = safe_directory(state_root / "knowledge" / "collection")
@@ -570,10 +573,11 @@ class CollectionStore:
             db.execute('CREATE INDEX IF NOT EXISTS event_target_sequence ON events(target_id,sequence)')
 
     @classmethod
-    def open_existing(cls, state_root: Path, *, source_access=None, source_revision=None):
-        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision)
+    def open_existing(cls, state_root: Path, *, source_access=None, source_revision=None, source_stream=None):
+        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision, source_stream=source_stream)
         source_access, source_revision = callbacks['source_access'], callbacks['source_revision']
-        require_collection_source_root(state_root, source_access, source_revision)
+        source_stream = callbacks['source_stream']
+        require_collection_source_root(state_root, source_access, source_revision, source_stream)
         path = state_root.absolute() / "knowledge" / "collection" / "collection.sqlite3"
         if not path.exists():
             return None
@@ -582,6 +586,7 @@ class CollectionStore:
         store = cls.__new__(cls)
         store.source_access = source_access
         store.source_revision = source_revision
+        store.source_stream = source_stream
         store.read_only = True
         store.path, store.root = path, path.parent
         store.blobs, store.locks = store.root / "sources", store.root / "locks"
@@ -593,7 +598,7 @@ class CollectionStore:
         return store
 
     def _install_source_access(self, db, *, cancelled=None):
-        protected, decisions, scopes = None, {}, {}
+        protected, decisions, scopes, stream_scopes = None, {}, {}, {}
         def check_cancelled():
             if cancelled is not None and cancelled():
                 raise RuntimeError('collection_cancelled')
@@ -627,11 +632,29 @@ class CollectionStore:
             if target not in scopes:
                 scopes[target] = current_scope(target)
             return scopes[target]
+        def current_stream(target):
+            check_cancelled()
+            callback = getattr(self, 'source_stream', None)
+            if not callable(callback):
+                return 'unavailable'
+            try:
+                value = callback(target)
+                return value if isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) else 'unavailable'
+            except Exception:
+                return 'unavailable'
+        def source_stream_scope(target):
+            if target not in guarded_targets():
+                return None
+            if getattr(self, 'source_stream', None) is None:
+                return source_scope(target)
+            if target not in stream_scopes:
+                stream_scopes[target] = current_stream(target)
+            return stream_scopes[target]
         def source_allowed(target, document, version):
             check_cancelled()
             if target not in guarded_targets():
                 return 1
-            if source_scope(target) == 'unavailable':
+            if source_scope(target) == 'unavailable' or source_stream_scope(target) == 'unavailable':
                 return 0
             key = (target, document, version)
             if key not in decisions:
@@ -642,10 +665,14 @@ class CollectionStore:
         db.create_function('alden_source_allowed', 3, source_allowed)
         db.create_function('alden_has_source_guards', 0, lambda: int(bool(guarded_targets())))
         db.create_function('alden_source_scope', 1, source_scope)
+        db.create_function('alden_source_stream', 1, source_stream_scope)
         def verify():
             check_cancelled()
             for target, value in scopes.items():
                 if current_scope(target) != value:
+                    raise RuntimeError('collection_source_authorization_changed')
+            for target, value in stream_scopes.items():
+                if current_stream(target) != value:
                     raise RuntimeError('collection_source_authorization_changed')
             for key, (metadata, allowed) in decisions.items():
                 check_cancelled()
@@ -659,7 +686,7 @@ class CollectionStore:
             inherited = _READ_CANCELLATION.get()
             explicit = cancelled
             cancelled = inherited if explicit is None else explicit if inherited is None or inherited is explicit else lambda: inherited() or explicit()
-        require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision)
+        require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision, getattr(self, 'source_stream', None))
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
@@ -678,7 +705,7 @@ class CollectionStore:
                 if cancelled():
                     raise RuntimeError('collection_cancelled')
             yield db
-            require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision)
+            require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision, getattr(self, 'source_stream', None))
             verify_source_access()
             with publication_guard() if publication_guard is not None else nullcontext():
                 if cancelled is not None and cancelled():
@@ -1861,7 +1888,7 @@ class CollectionStore:
           AND (? IS NULL OR t.platform=?))"""
         args = [*projects, target_id, target_id, platform, platform]
         allowed = db.execute("SELECT DISTINCT p.target_id FROM target_projects p JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied' AND p.project IN (" + marks + ") AND (? IS NULL OR p.target_id=?) AND (? IS NULL OR t.platform=?) ORDER BY p.target_id", args).fetchall()
-        source_scopes = [(target[0], db.execute('SELECT alden_source_scope(?)', (target[0],)).fetchone()[0])
+        source_scopes = [(target[0], db.execute('SELECT alden_source_stream(?)', (target[0],)).fetchone()[0])
                          for target in allowed]
         source_scopes = [value for value in source_scopes if value[1] is not None]
         if source_scopes:
@@ -1879,7 +1906,13 @@ class CollectionStore:
             first_scoped = db.execute("SELECT e.sequence FROM events e WHERE " + where + " ORDER BY e.sequence LIMIT 1", args).fetchone()
             last_scoped = db.execute("SELECT e.sequence FROM events e WHERE " + where + " ORDER BY e.sequence DESC LIMIT 1", args).fetchone()
             earliest, latest = first_scoped[0] if first_scoped else 0, last_scoped[0] if last_scoped else 0
-        return {"stream_id": generation, "cursor": latest}, earliest, where, args
+        checkpoint = {"stream_id": generation, "cursor": latest}
+        content_scopes = [(target[0], db.execute('SELECT alden_source_scope(?)', (target[0],)).fetchone()[0])
+                          for target in allowed]
+        content_scopes = [value for value in content_scopes if value[1] is not None]
+        if content_scopes:
+            checkpoint['content_revision'] = digest(encoded(content_scopes))
+        return checkpoint, earliest, where, args
 
     def activity_page(self, *, projects: list[str], after=None, stream_id=None, limit=200,
                       target_id=None, platform=None) -> dict:
@@ -1905,8 +1938,8 @@ class CollectionStore:
             # identifies replacement/pruning; a rewind is checked separately.
             reset = after is None or stream_id != generation or after > latest
             if reset:
-                return {"ok": True, "items": [], "cursor": latest, "latest": latest,
-                        "stream_id": generation, "reset": True, "has_more": False}
+                return {"ok": True, "items": [], **checkpoint, "latest": latest,
+                        "reset": True, "has_more": False}
             rows = db.execute("""SELECT e.*,r.origin,r.state AS run_state FROM events e
               JOIN targets t ON t.id=e.target_id JOIN runs r ON r.id=e.run_id WHERE """ + where +
               " AND e.sequence>? ORDER BY e.sequence LIMIT ?", (*args, after, limit+1)).fetchall()
@@ -1929,8 +1962,9 @@ class CollectionStore:
                               "document_id": row["document_id"], "version": row["version"],
                               "at": row["at"], "target_id": row["target_id"], "run_id": row["run_id"],
                               "origin": row["origin"], "kind": details["change"], "success": True})
-            return {"ok": True, "items": items, "cursor": rows[min(len(rows),limit)-1]["sequence"] if rows else after,
-                    "latest": latest, "stream_id": generation, "reset": False, "has_more": len(rows)>limit,
+            return {"ok": True, "items": items, **checkpoint,
+                    "cursor": rows[min(len(rows),limit)-1]["sequence"] if rows else after,
+                    "latest": latest, "reset": False, "has_more": len(rows)>limit,
                     "refresh_required": refresh_required}
 
 

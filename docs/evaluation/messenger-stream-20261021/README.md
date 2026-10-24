@@ -4,6 +4,9 @@ Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 Latest runtime delta: [guarded production enrollment candidate](PRODUCTION_ENROLLMENT.md).
+The [stream identity correction](STREAM_IDENTITY.md) separates authorization
+identity from current content so a committed message is not silently baselined.
+It also narrows the interpretation of earlier empty initial activity reads.
 The subsequent [recent/fair scheduling candidate](RECENCY_SCHEDULING.md) improves
 initial recent-room discovery within the existing read budget and indexes pending
 pages without excluding any enrolled room from fair sweeps.

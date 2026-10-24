@@ -6,7 +6,7 @@ export type NodeActivity = {
   target_id: string; run_id: string; origin: string; at: number;
   kind: 'added' | 'revised' | 'read'; success: true;
 };
-type Checkpoint = { stream_id: string; cursor: number };
+type Checkpoint = { stream_id: string; cursor: number; content_revision?: string };
 type StructuralActivity = Omit<NodeActivity, 'kind' | 'document_id' | 'version'> & {
   kind: 'removed' | 'relations_changed'; document_id: string | null; version: string | null;
 };
@@ -15,8 +15,10 @@ const object = (value: unknown): Record<string, unknown> | null =>
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 function checkpoint(value: unknown): Checkpoint | null {
   const row = object(value);
-  return row && typeof row.stream_id === 'string' && row.stream_id.length > 0 && row.stream_id.length <= 128 && integer(row.cursor)
-    ? { stream_id: row.stream_id, cursor: row.cursor } : null;
+  if (!row || typeof row.stream_id !== 'string' || row.stream_id.length === 0 || row.stream_id.length > 128 || !integer(row.cursor)) return null;
+  if (row.content_revision !== undefined && (typeof row.content_revision !== 'string' || !/^[a-f0-9]{64}$/.test(row.content_revision))) return null;
+  return { stream_id: row.stream_id, cursor: row.cursor,
+    ...(typeof row.content_revision === 'string' ? { content_revision: row.content_revision } : {}) };
 }
 function receipt(value: unknown): NodeActivity | StructuralActivity | null {
   const row = object(value);
@@ -49,6 +51,7 @@ export class CollectionActivity {
   private readonly seen = new Set<string>();
   private nodes: readonly KnowledgeNode[] = [];
   private snapshotCursor = 0;
+  private snapshotContentRevision: string | undefined;
   constructor(private readonly read: (options: Record<string, unknown>) => Promise<Record<string, unknown> | null>,
     private readonly refresh: () => void, private readonly show: (receipt: NodeActivity) => void,
     private readonly clear: () => void, private readonly now = Date.now) {}
@@ -70,10 +73,14 @@ export class CollectionActivity {
     if (!this.active) return;
     const next = checkpoint(value);
     if (!next) return;
-    this.nodes = nodes; this.snapshotCursor = next.cursor;
+    if (this.committed?.stream_id === next.stream_id && this.committed.content_revision !== undefined
+      && next.content_revision === undefined) return;
+    this.nodes = nodes; this.snapshotCursor = next.cursor; this.snapshotContentRevision = next.content_revision;
     if (!this.committed || this.waitingSnapshot || next.stream_id !== this.committed.stream_id) {
       this.epoch++;
       this.committed = next; this.waitingSnapshot = false; this.pending.clear(); this.seen.clear(); this.clear();
+    } else if (this.committed.content_revision === undefined && next.content_revision !== undefined) {
+      this.epoch++; this.committed = { ...this.committed, content_revision: next.content_revision };
     }
     this.flush(); this.schedule(2500);
   }
@@ -82,6 +89,7 @@ export class CollectionActivity {
   }
   private flush(): void {
     const now = this.now();
+    if (this.snapshotContentRevision !== this.committed?.content_revision) return;
     for (const [id, event] of this.pending) {
       if (event.at * 1000 < this.visibleSince || event.at * 1000 > now || now - event.at * 1000 >= ACTIVITY_TTL_MS) {
         this.pending.delete(id); continue;
@@ -110,10 +118,13 @@ export class CollectionActivity {
       if (page.reset === true || next.stream_id !== before.stream_id || next.cursor < before.cursor) {
         this.pending.clear(); this.seen.clear(); this.clear(); this.waitingSnapshot = true; this.refresh(); return;
       }
+      if (before.content_revision !== undefined && next.content_revision === undefined) return;
       if (page.reset !== false || !integer(page.latest) || next.cursor > page.latest || !Array.isArray(page.items)
         || page.items.length > 200 || typeof page.has_more !== 'boolean' || page.has_more && next.cursor === before.cursor) return;
-      let previous = before.cursor, needsSnapshot = page.refresh_required === true;
-      if (needsSnapshot) { this.pending.clear(); this.clear(); }
+      let previous = before.cursor;
+      let needsSnapshot = page.refresh_required === true || next.content_revision !== this.snapshotContentRevision;
+      if (page.refresh_required === true) { this.pending.clear(); this.clear(); }
+      else if (next.content_revision !== before.content_revision) this.clear();
       for (const raw of page.items) {
         const event = receipt(raw);
         if (!event || event.sequence <= previous || event.sequence > next.cursor || this.seen.has(event.event_id)) continue;

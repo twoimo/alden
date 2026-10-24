@@ -335,6 +335,61 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(realtime.status()['inputs'], [])
         self.assertTrue(self.graph()['nodes'])
 
+    def test_new_live_content_keeps_stream_identity_and_delivers_its_committed_receipt(self):
+        self.enroll()
+        source = self.source()
+        source.step()
+        source.step()
+        query = {'projects': ['messenger'], 'activity': True}
+        baseline = read_action(self.root, 'collection-graph', json.dumps(query))
+        self.reader.pages[('a', None)] = ([item(3, '새로운 회의 일정과 계약 검토 자료가 도착했습니다.'), item(1)], False, None)
+        self.assertEqual(source.step(mode='live')['state'], 'published')
+        page = read_action(self.root, 'collection-graph', json.dumps({**query,
+            'after': baseline['cursor'], 'stream_id': baseline['stream_id']}))
+        self.assertFalse(page['reset'], page)
+        self.assertEqual(page['stream_id'], baseline['stream_id'])
+        self.assertEqual([event['kind'] for event in page['items']], ['added'])
+        self.assertEqual(page['items'][0]['origin'], 'messenger-db:kakaotalk:live')
+        self.assertNotEqual(page['content_revision'], baseline['content_revision'])
+
+    def test_source_edit_without_collection_refreshes_content_but_not_the_journal_namespace(self):
+        self.enroll()
+        source = self.source();source.step();source.step()
+        query = {'projects': ['messenger'], 'activity': True}
+        before = read_action(self.root, 'collection-graph', json.dumps(query))
+        self.reader.pages[('a', None)] = ([item(1, '수정되어 이전 저장 본문과 달라진 계약 자료입니다.')], False, None)
+        after = read_action(self.root, 'collection-graph', json.dumps({**query,
+            'after': before['cursor'], 'stream_id': before['stream_id']}))
+        self.assertFalse(after['reset'])
+        self.assertEqual(after['stream_id'], before['stream_id'])
+        self.assertNotEqual(after['content_revision'], before['content_revision'])
+        self.assertEqual(after['items'], [])
+        self.assertEqual(len(self.graph()['nodes']), 1)
+
+    def test_changed_account_still_replaces_activity_namespace_and_withholds_receipts(self):
+        self.enroll();self.source().step()
+        query = {'projects': ['messenger'], 'activity': True}
+        before = read_action(self.root, 'collection-graph', json.dumps(query))
+        self.reader.account = '456';self.reader.reads.clear()
+        after = read_action(self.root, 'collection-graph', json.dumps({**query,
+            'after': before['cursor'], 'stream_id': before['stream_id']}))
+        self.assertTrue(after['reset'])
+        self.assertNotEqual(after['stream_id'], before['stream_id'])
+        self.assertEqual(after['items'], [])
+        self.assertEqual(self.reader.reads, [])
+
+    def test_invalid_or_foreign_stream_authority_does_not_bypass_current_source_guards(self):
+        self.enroll();self.source().step()
+        store = CollectionStore.open_existing(self.root, source_access=lambda *args: True,
+            source_revision=lambda target: 'a' * 64, source_stream=lambda target: 'invalid')
+        self.assertEqual(store.graph_page(projects=['messenger'])['nodes'], [])
+        root = self.root
+        class Foreign:
+            def collection_source_root(self):return root / 'other'
+            def revision(self, target):return 'a' * 64
+        with self.assertRaisesRegex(ValueError, 'collection_source_root_mismatch'):
+            CollectionStore.open_existing(self.root, source_stream=Foreign().revision)
+
     def test_realtime_off_and_pause_and_voice_do_not_read_message_pages(self):
         self.enroll()
         scheduler = CollectionScheduler(self.root)

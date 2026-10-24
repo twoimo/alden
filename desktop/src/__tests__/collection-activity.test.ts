@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CollectionActivity, type NodeActivity } from '../knowledge/collection-activity';
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
+import { KnowledgeRefresh } from '../knowledge/refresh';
 
 const owned: CollectionActivity[] = [];
 const point = (cursor: number, stream_id = 'stream-a') => ({ cursor, stream_id });
@@ -23,6 +24,74 @@ beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(10000); });
 afterEach(() => { owned.forEach(c => c.stop()); owned.length = 0; vi.useRealTimers(); });
 
 describe('committed graph activity consumption', () => {
+  it('preserves a new receipt across content refresh and waits for the matching source snapshot', async () => {
+    const a='a'.repeat(64),b='b'.repeat(64);
+    const read=vi.fn(async()=>page(15,[event()],{content_revision:b}));
+    const {consumer,refresh,show}=setup(read);
+    consumer.snapshot({...point(10),content_revision:a},nodes('v1'));
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(consumer.diagnostics()).toMatchObject({cursor:15,pending:1});
+    expect(refresh).toHaveBeenCalledTimes(1);expect(show).not.toHaveBeenCalled();
+    consumer.snapshot({...point(15),content_revision:a},nodes());
+    expect(show).not.toHaveBeenCalled();
+    consumer.snapshot({...point(15),content_revision:b},nodes());
+    expect(show).toHaveBeenCalledExactlyOnceWith(event());
+  });
+  it('refreshes changed content with no journal event without inventing a pulse', async () => {
+    const a='a'.repeat(64),b='b'.repeat(64);
+    const {consumer,refresh,show,clear}=setup(vi.fn(async()=>page(10,[],{content_revision:b})));
+    consumer.snapshot({...point(10),content_revision:a},nodes('v1'));clear.mockClear();
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(refresh).toHaveBeenCalledTimes(1);expect(clear).toHaveBeenCalledTimes(1);
+    expect(show).not.toHaveBeenCalled();
+    consumer.snapshot({...point(10),content_revision:b},[]);
+    expect(show).not.toHaveBeenCalled();
+  });
+  it('keeps pending receipts while a content refresh is delayed across polls', async () => {
+    const a='a'.repeat(64),b='b'.repeat(64);
+    const read=vi.fn().mockResolvedValueOnce(page(15,[event()],{content_revision:b}))
+      .mockResolvedValue(page(15,[],{content_revision:b}));
+    const {consumer,show}=setup(read);consumer.snapshot({...point(10),content_revision:a},nodes('v1'));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(consumer.diagnostics().pending).toBe(1);expect(show).not.toHaveBeenCalled();
+    consumer.snapshot({...point(15),content_revision:b},nodes());
+    expect(show).toHaveBeenCalledExactlyOnceWith(event());
+  });
+  it.each([undefined,'bad',42])('does not drop declared content protection on a malformed page (%s)',async(value)=>{
+    const a='a'.repeat(64);
+    const {consumer,show}=setup(vi.fn(async()=>page(15,[event()],{content_revision:value})));
+    consumer.snapshot({...point(10),content_revision:a},nodes('v1'));
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(consumer.diagnostics()).toMatchObject({cursor:10,pending:0});expect(show).not.toHaveBeenCalled();
+  });
+  it('fences an older reply when a snapshot first declares content protection',async()=>{
+    let resolve!:(value:ReturnType<typeof page>)=>void;
+    const read=vi.fn(()=>new Promise<ReturnType<typeof page>>(done=>{resolve=done;}));
+    const {consumer,show}=setup(read);
+    await vi.advanceTimersByTimeAsync(2500);
+    consumer.snapshot({...point(10),content_revision:'a'.repeat(64)},nodes('v1'));
+    resolve(page(15,[event()]));await vi.advanceTimersByTimeAsync(0);
+    expect(consumer.diagnostics()).toMatchObject({cursor:10,pending:0});expect(show).not.toHaveBeenCalled();
+  });
+  it('coalesces content invalidation while a slower graph read remains in flight',async()=>{
+    const a='a'.repeat(64),b='b'.repeat(64);
+    let resolve!:(value:Record<string,unknown>)=>void;
+    const read=vi.fn().mockResolvedValueOnce(page(15,[event()],{content_revision:b}))
+      .mockResolvedValue(page(15,[],{content_revision:b}));
+    const show=vi.fn(),clear=vi.fn();
+    let consumer!:CollectionActivity;
+    const graph=new KnowledgeRefresh(()=>new Promise<Record<string,unknown>>(done=>{resolve=done;}),
+      payload=>consumer.snapshot(payload.activity_checkpoint,nodes()));
+    consumer=new CollectionActivity(read,()=>{graph.start();graph.invalidate();},show,clear);
+    owned.push(consumer);consumer.start();consumer.snapshot({...point(10),content_revision:a},nodes('v1'));
+    try{
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(consumer.diagnostics().pending).toBe(1);expect(show).not.toHaveBeenCalled();
+      resolve({ok:true,activity_checkpoint:{...point(15),content_revision:b}});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(show).toHaveBeenCalledExactlyOnceWith(event());
+    }finally{graph.stop();}
+  });
   it('discards a pending source receipt when a bodyless retirement invalidates its snapshot', async () => {
     const read = vi.fn().mockResolvedValueOnce(page(15, [event()]))
       .mockResolvedValue(page(20, [], { refresh_required: true }));
