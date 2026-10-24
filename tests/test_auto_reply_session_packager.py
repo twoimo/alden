@@ -218,6 +218,11 @@ class SessionRuntimePackagerTests(unittest.TestCase):
             "auto_reply_reference_store.py",
             "alden_abort.py",
             "local_mlx_gateway.py",
+            "alden_messenger_production.py",
+            "alden_messenger_runtime.py",
+            "alden_messenger_factory.py",
+            "alden_messenger_quality.py",
+            "alden_platform_identity.py",
         }
         self.assertTrue(required <= set(module.RUNTIME_SCRIPT_NAMES))
 
