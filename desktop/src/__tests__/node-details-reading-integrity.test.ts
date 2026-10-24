@@ -12,6 +12,19 @@ function render(body:string, extras:Record<string,unknown>={}) {
   renderNodeDetails(selected,selected.nodes[0],{details:{node_id:'record',basis:'source_record',version:'v1',target_id:'target-a',body,raw_sha256:'a'.repeat(64),...extras}});
 }
 describe('source-backed reading and numeric facts',()=>{
+  for (const newline of ['\n', '\r\n', '\r']) it(`accepts exact legacy Threads parts with outer whitespace and ${JSON.stringify(newline)}`,()=>{
+    const reading='\t 원문과 숫자 후보를 별도로 보존합니다.'+newline+'본문 앞의 공백도 유지합니다.';
+    const tail=newline+'11'+newline+'2 \t'+newline;
+    const projection={policy:'legacy-threads-reading-tail-v1',status:'unverified_presentation_candidate',
+      basis:'verified_retained_legacy_threads_record',original_preserved:true,semantic_validity:'unverified',
+      reading,tail,body_sha256:'b'.repeat(64),reading_sha256:'c'.repeat(64),tail_sha256:'d'.repeat(64)};
+    render(reading+tail,{body_format:'retained_original_text',reading_projection:projection});
+    expect(document.getElementById('knowledge-node-body')!.textContent).toBe(reading);
+    const fold=document.querySelector<HTMLDetailsElement>('.knowledge-reading-tail')!;
+    expect(fold.open).toBe(false);
+    expect(fold.querySelector('pre')!.textContent).toBe(tail);
+    expect(document.getElementById('knowledge-node-body')!.textContent!+fold.querySelector('pre')!.textContent!).toBe(reading+tail);
+  });
   for (const newline of ['\n', '\r\n', '\r']) it(`keeps exact source boundaries when folding ${JSON.stringify(newline)} with outer whitespace`, () => {
     const reading = '\t  원문의 들여쓰기와 줄바꿈을 보존합니다.' + newline + '준비 과정과 확인 가능한 근거입니다.  ';
     const tail = newline + ['1', '2', '6', '1', '3'].join(newline) + newline;

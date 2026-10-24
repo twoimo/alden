@@ -73,6 +73,27 @@ class SourceTextTests(unittest.TestCase):
             self.assertEqual(result['semantic_validity'], 'unverified')
             self.assertIsNone(project_source_text(body, source(body))['projection'])
 
+    def test_threads_reading_fold_preserves_outer_whitespace_and_line_endings(self):
+        for newline in ('\n', '\r\n', '\r'):
+            for leading, trailing in (('', ' \t' + newline), ('\t ' + newline, '')):
+                with self.subTest(newline=repr(newline), leading=repr(leading), trailing=repr(trailing)):
+                    reading = leading + BODY.replace('\n', newline)
+                    tail = newline + '11' + newline + '2' + trailing
+                    body = reading + tail
+                    record = source(body)
+                    result = reading_tail_presentation(body, record)
+                    self.assertIsNotNone(result)
+                    self.assertEqual(result['reading'], reading)
+                    self.assertEqual(result['tail'], tail)
+                    self.assertEqual(result['reading'] + result['tail'], body)
+                    self.assertEqual(result['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+                    self.assertEqual(record['localOriginalText'], body)
+                    self.assertIsNone(project_source_text(body, record)['projection'])
+
+    def test_outer_whitespace_cannot_make_short_text_eligible_for_folding(self):
+        body = ' ' * 80 + '짧은 메모\n11\n2'
+        self.assertIsNone(reading_tail_presentation(body, source(body)))
+
 
     def test_incremental_json_threads_capture_uses_the_same_reading_fold(self):
         body = BODY + '\n11\n2'
@@ -184,6 +205,27 @@ class SourceProjectionIntegrationTests(unittest.TestCase):
         self.assertEqual(self.store.path.read_bytes(), before)
         self.assertEqual({p.name: p.read_bytes() for p in self.store.blobs.iterdir()}, originals)
         with sqlite3.connect(self.store.root/'retrieval.sqlite3') as db:
+            self.assertEqual(db.execute('SELECT * FROM texts').fetchall(), indexed)
+
+    def test_threads_detail_fold_preserves_whitespace_body_source_and_search(self):
+        reading = '\t ' + BODY
+        tail = '\n11\n2\n \t\n'
+        body = reading + tail
+        self.store.ingest(self.target, [{**self.record, 'text': body, 'raw': source(body)}])
+        index_text(self.root, ['one'])
+        with sqlite3.connect(self.store.root / 'retrieval.sqlite3') as db:
+            indexed = db.execute('SELECT * FROM texts').fetchall()
+        before = self.store.path.read_bytes()
+        originals = {p.name: p.read_bytes() for p in self.store.blobs.iterdir()}
+        detail = self.store.graph_page(projects=['one'], focus=self.doc, details=True)['details']
+        self.assertEqual(detail['body'], body)
+        self.assertEqual(detail['reading_projection']['reading'], reading)
+        self.assertEqual(detail['reading_projection']['tail'], tail)
+        self.assertEqual(detail['reading_projection']['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+        self.assertIsNone(detail['text_projection'])
+        self.assertEqual(self.store.path.read_bytes(), before)
+        self.assertEqual({p.name: p.read_bytes() for p in self.store.blobs.iterdir()}, originals)
+        with sqlite3.connect(self.store.root / 'retrieval.sqlite3') as db:
             self.assertEqual(db.execute('SELECT * FROM texts').fetchall(), indexed)
 
     def test_detail_and_search_share_projection_without_source_or_version_mutation(self):
