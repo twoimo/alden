@@ -1,9 +1,11 @@
 import ast
+import json
 import os
 import plistlib
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -850,6 +852,7 @@ exit 99
             "scripts/auto_reply_ax_ui.py",
             "scripts/alden_browser_use.py",
             "scripts/auto_reply_metrics.py",
+            "scripts/alden_knowledge_mcp.py",
         )
         pending = [seed for seed in seeds if (ROOT / seed).is_file()]
         resolved: set[str] = set()
@@ -864,7 +867,7 @@ exit 99
                 filename=relative_path,
             )
             imported_modules: list[str] = []
-            for node in tree.body:
+            for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     imported_modules.extend(alias.name for alias in node.names)
                 elif (
@@ -886,6 +889,34 @@ exit 99
             missing,
             msg=f"staged entry scripts require unstaged local modules: {missing}",
         )
+
+    def test_staged_messenger_imports_without_checkout_or_native_source_reads(self) -> None:
+        resources = json.loads(read_repo_file('desktop/src-tauri/tauri.conf.json'))['bundle']['resources']
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            for source, destination in resources.items():
+                if destination.startswith('scripts/') and destination.endswith('.py'):
+                    staged = folder / destination
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    original = ROOT / 'scripts' / Path(source).name
+                    staged.write_bytes(original.read_bytes())
+            script = '''import sys,json
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import alden_messenger_factory as factory
+import alden_messenger_runtime as runtime
+import alden_platform_identity as identity
+for module in (factory,runtime,identity):
+    assert Path(module.__file__).parent == Path(sys.argv[1])
+assert identity._frameworks.cache_info().currsize == 0
+assert not any(name in sys.modules for name in factory.SDK_MODULES)
+print(json.dumps({'staged_imports':3,'native_frameworks_loaded':0,'canonical_reader_modules_loaded':0}))
+'''
+            run = subprocess.run([sys.executable,'-I','-B','-c',script,str(folder/'scripts')],
+                cwd=folder,capture_output=True,text=True,timeout=15)
+            self.assertEqual(run.returncode,0,run.stderr)
+            self.assertEqual(json.loads(run.stdout),{'staged_imports':3,'native_frameworks_loaded':0,'canonical_reader_modules_loaded':0})
+            self.assertEqual(list(folder.rglob('*.pyc')),[])
 
     def test_primary_and_compat_shell_scripts_pass_sh_syntax_check(self) -> None:
         scripts = (

@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import json
 import os
+import py_compile
 import select
 import shutil
 import sqlite3
@@ -186,9 +187,135 @@ with patch.object(socket.socket,'connect',side_effect=AssertionError('unexpected
 
 class CanonicalLoaderTests(unittest.TestCase):
     @staticmethod
+    def source_fixture(folder):
+        for name in factory.SDK_MODULES: (folder / (name + '.py')).write_text('')
+        source = folder / 'full_chat_reader.py'
+        source.write_text('import sqlcipher_adapter,media_context,room_participants,message_visibility\n'
+            'def resolve_identity(device): return ("verified-source", "fixture")\n'
+            'def snapshot(**options):\n import message_confirmation,emoticon_confirmation,room_catalog\n return {}\n'
+            'snapshot.supports_exact_confirmation=True\n')
+        return source
+
+    def isolate_modules(self, stack, folder):
+        stack.enter_context(patch.dict(sys.modules))
+        for name in factory.SDK_MODULES: sys.modules.pop(name,None)
+        stack.enter_context(patch.dict(factory._loaded,{},clear=True))
+        stack.enter_context(patch.object(factory,'SDK',folder))
+        return stack.enter_context(patch.object(factory.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(self.healthy()))))
+
+    @staticmethod
     def healthy():
         return {'status': 'installation_consistent', 'skill_integrity': {'status': 'verified'},
             **{k: 0 for k in ('chat_messages_read', 'identity_cache_reads', 'credential_reads', 'native_actions', 'send_calls', 'writes')}}
+
+    def test_unchecked_bytecode_cache_cannot_replace_verified_reader_source(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder = Path(temporary)
+            for name in factory.SDK_MODULES: (folder / (name + '.py')).write_text('')
+            source = folder / 'full_chat_reader.py'
+            source.write_text('import sqlcipher_adapter,media_context,room_participants,message_visibility\n'
+                'def resolve_identity(device): return ("verified-source", "fixture")\n'
+                'def snapshot(**options):\n import message_confirmation,emoticon_confirmation,room_catalog\n return {}\n'
+                'snapshot.supports_exact_confirmation=True\n')
+            unrelated = folder / 'cache_input.py'
+            unrelated.write_text('def resolve_identity(device): return ("unverified-cache", "fixture")\n'
+                'def snapshot(**options): return {}\nsnapshot.supports_exact_confirmation=True\n')
+            cache = Path(importlib.util.cache_from_source(str(source)))
+            cache.parent.mkdir()
+            py_compile.compile(str(unrelated),cfile=str(cache),doraise=True,
+                invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+            before = {p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('*.py')}
+            stack.enter_context(patch.dict(sys.modules))
+            for name in factory.SDK_MODULES: sys.modules.pop(name,None)
+            stack.enter_context(patch.dict(factory._loaded,{},clear=True))
+            stack.enter_context(patch.object(factory,'SDK',folder))
+            stack.enter_context(patch.object(factory.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(self.healthy()))))
+            module = factory.load_kakao_sdk()
+            self.assertEqual(module.resolve_identity(None)[0],'verified-source')
+            self.assertEqual(before,{p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.glob('*.py')})
+
+    def test_dependency_cache_is_ignored_and_import_path_stays_unchanged(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder=Path(temporary);source=self.source_fixture(folder)
+            (folder/'message_visibility.py').write_text('ORIGIN="source"\n')
+            source.write_text(source.read_text().replace('"verified-source"','message_visibility.ORIGIN'))
+            unrelated=folder/'cache_input.py';unrelated.write_text('ORIGIN="cache"\n')
+            cache=Path(importlib.util.cache_from_source(str(folder/'message_visibility.py')));cache.parent.mkdir()
+            py_compile.compile(str(unrelated),cfile=str(cache),doraise=True,invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+            self.isolate_modules(stack,folder);before=list(sys.path)
+            module=factory.load_kakao_sdk()
+            self.assertEqual(module.resolve_identity(None)[0],'source')
+            self.assertEqual(sys.path,before)
+            self.assertTrue(all(sys.modules[name].__cached__ is None for name in factory.SDK_MODULES))
+
+    def test_source_changed_during_qualification_is_never_executed(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder=Path(temporary);source=self.source_fixture(folder);health=self.isolate_modules(stack,folder)
+            def changed(*args,**kwargs):
+                source.write_text(source.read_text().replace('verified-source','changed-after-capture'))
+                return SimpleNamespace(returncode=0,stdout=json.dumps(self.healthy()))
+            health.side_effect=changed
+            with self.assertRaisesRegex(runtime.SourceBlocked,'loaded_revision_unverified'):factory.load_kakao_sdk()
+            self.assertEqual(factory._loaded,{})
+            self.assertTrue(all(name not in sys.modules for name in factory.SDK_MODULES))
+
+    def test_failed_initialization_rolls_back_only_owned_modules_and_can_retry(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder=Path(temporary);self.source_fixture(folder);self.isolate_modules(stack,folder)
+            (folder/'media_context.py').write_text('raise RuntimeError("controlled-initialization-failure")\n')
+            sentinel=SimpleNamespace();sys.modules['unrelated_owner_fixture']=sentinel
+            before=list(sys.path)
+            with self.assertRaisesRegex(RuntimeError,'controlled-initialization-failure'):factory.load_kakao_sdk()
+            self.assertTrue(all(name not in sys.modules for name in factory.SDK_MODULES))
+            self.assertEqual(factory._loaded,{})
+            self.assertIs(sys.modules['unrelated_owner_fixture'],sentinel)
+            self.assertEqual(sys.path,before)
+            (folder/'media_context.py').write_text('')
+            self.assertEqual(factory.load_kakao_sdk().resolve_identity(None)[0],'verified-source')
+
+    def test_failed_contract_never_becomes_a_loaded_attestation(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder=Path(temporary);source=self.source_fixture(folder);self.isolate_modules(stack,folder)
+            source.write_text(source.read_text().replace('supports_exact_confirmation=True','supports_exact_confirmation=False'))
+            with self.assertRaisesRegex(runtime.SourceBlocked,'contract_unavailable'):factory.load_kakao_sdk()
+            self.assertEqual(factory._loaded,{})
+            self.assertTrue(all(name not in sys.modules for name in factory.SDK_MODULES))
+
+    def test_source_replaced_by_its_initialization_is_rejected_without_attestation(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder=Path(temporary);source=self.source_fixture(folder);self.isolate_modules(stack,folder)
+            source.write_text(source.read_text()+'\nfrom pathlib import Path\nPath(__file__).write_text("changed=1\\n")\n')
+            with self.assertRaisesRegex(runtime.SourceBlocked,'loaded_revision_unverified'):factory.load_kakao_sdk()
+            self.assertEqual(factory._loaded,{})
+            self.assertTrue(all(name not in sys.modules for name in factory.SDK_MODULES))
+
+    def test_dependency_cycle_is_an_explicit_unsupported_contract(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder=Path(temporary);self.source_fixture(folder);self.isolate_modules(stack,folder)
+            (folder/'media_context.py').write_text('import full_chat_reader\n')
+            with self.assertRaisesRegex(runtime.SourceBlocked,'dependency_cycle'):factory.load_kakao_sdk()
+            self.assertEqual(factory._loaded,{})
+            self.assertTrue(all(name not in sys.modules for name in factory.SDK_MODULES))
+
+    def test_nonregular_or_oversized_sources_stop_before_qualification(self):
+        for kind in ('fifo','symlink','oversized'):
+            with self.subTest(kind=kind),TemporaryDirectory(dir='/private/tmp') as temporary,ExitStack() as stack:
+                folder=Path(temporary);self.source_fixture(folder);health=self.isolate_modules(stack,folder)
+                source=folder/'message_visibility.py';source.unlink()
+                if kind=='fifo':os.mkfifo(source)
+                elif kind=='symlink':source.symlink_to(folder/'media_context.py')
+                else:source.write_bytes(b'#'*(1024*1024+1))
+                with self.assertRaisesRegex(runtime.SourceBlocked,'module_unavailable'):factory.load_kakao_sdk()
+                health.assert_not_called()
+
+    def test_deleted_owned_module_is_not_silently_reloaded(self):
+        with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+            folder=Path(temporary);self.source_fixture(folder);self.isolate_modules(stack,folder)
+            module=factory.load_kakao_sdk();original=factory._loaded.copy()
+            sys.modules.pop('message_visibility')
+            with self.assertRaisesRegex(runtime.SourceBlocked,'loaded_revision_unverified'):factory.load_kakao_sdk()
+            self.assertEqual(factory._loaded,original)
+            self.assertIs(sys.modules['full_chat_reader'],module)
 
     def test_unverified_health_never_imports_a_reader(self):
         for report in [{}, {'status': 'installation_consistent', 'skill_integrity': 'verified'},
