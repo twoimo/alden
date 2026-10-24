@@ -106,6 +106,48 @@ class MessengerPolicyTests(unittest.TestCase):
             self.assertEqual(len(frontier.store.graph(projects=[candidate.PROJECT])['nodes']), 1)
         return frontier, reader
 
+    def test_prepared_v3_page_is_rejected_before_current_policy_publication(self):
+        link='HTTPS://example.test/'+'source-path-'*8
+        frontier,reader=self.frontier({('a',None):([item(1,link)],False,None)})
+        with frontier.database() as db:
+            room=dict(db.execute('SELECT * FROM rooms WHERE id=?',('a',)).fetchone())
+        with patch.object(candidate,'POLICY','messenger-triage-nfc-v3'):
+            job=frontier._prepare(room,'backfill',reader.page('a',None))
+        before=self.snapshot(frontier)
+        with self.assertRaisesRegex(ValueError,'messenger_prepared_policy_changed'):
+            frontier._publish(job,cancelled=lambda:False,after_publish=lambda:None)
+        self.assertEqual(self.snapshot(frontier),before)
+        self.assertEqual(frontier.store.graph(projects=[candidate.PROJECT])['nodes'],[])
+
+    def test_v3_url_candidate_rebuilds_in_a_separate_v4_projection(self):
+        from dataclasses import replace
+        import alden_messenger_quality as quality
+        link='HTTPS://example.test/'+'resource-path-'*8
+        pages={('a',None):([item(1,link),item(2,CODE)],False,None),
+               ('b',None):([item(3,link)],False,None)}
+        frontier,reader=self.frontier(pages)
+        def observed_v3(body):
+            current=quality.classify(body)
+            return replace(current,state='candidate',reason='substantive_text_candidate') if body==link else current
+        # An explicit observed v3 uppercase-link fixture, not a general v3 emulator.
+        with patch.object(candidate,'POLICY','messenger-triage-nfc-v3'),patch.object(candidate,'classify',observed_v3),patch.object(candidate,'text_without_urls',lambda body:body):
+            frontier.step();frontier.step()
+        with frontier.database() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM message_heads WHERE content_hash=? AND state='candidate'",(hashlib.sha256(link.encode()).hexdigest(),)).fetchone()[0],2)
+        before=self.snapshot(frontier)
+        migration=PolicyMigration.create([frontier],self.folder/'url-v4-staged')
+        self.finish(migration)
+        self.assertEqual(self.snapshot(frontier),before)
+        nodes=migration.read_action('collection-graph')['nodes']
+        self.assertEqual(len(nodes),1)
+        stage=migration._frontiers[frontier.target]
+        with stage.database() as db:
+            rows=db.execute("SELECT state,reason,body FROM message_heads WHERE content_hash=?",(hashlib.sha256(link.encode()).hexdigest(),)).fetchall()
+            self.assertEqual([tuple(r) for r in rows],[('context','link_content_not_acquired',None)]*2)
+            self.assertTrue(any(link in r[0] for r in db.execute('SELECT payload FROM pages')))
+        with stage.store.database() as db:
+            self.assertTrue(any(r[0]==link for r in db.execute('SELECT body FROM versions')))
+
     def test_exact_identity_preserves_code_semantics_and_all_whitespace(self):
         compile(CODE, '<original>', 'exec')
         with self.assertRaises(IndentationError):
@@ -332,6 +374,35 @@ class MessengerPolicyTests(unittest.TestCase):
         for destination in (self.root, self.root / 'nested', self.folder):
             with self.subTest(destination=destination), self.assertRaisesRegex(ValueError, 'destination_required'):
                 PolicyMigration.create([frontier], destination)
+
+
+class MessengerUrlTriageTests(unittest.TestCase):
+    def test_ascii_scheme_case_does_not_promote_a_link_to_knowledge(self):
+        for scheme in ('http','HTTP','HtTp','https','HTTPS','hTtPs'):
+            body='  '+scheme+'://example.test/'+'source-path-'*8+'\n'
+            with self.subTest(scheme=scheme):
+                result=classify(body)
+                self.assertEqual((result.state,result.reason),('context','link_content_not_acquired'))
+                self.assertEqual(result.text,body)
+                self.assertEqual(result.content_hash,hashlib.sha256(body.encode()).hexdigest())
+
+    def test_unicode_whitespace_preserves_useful_text_after_a_link(self):
+        from alden_messenger_quality import text_without_urls
+        body_text='정책 변경 공지입니다. 배송 일정과 주문 처리 방법이 바뀌었으니 원문 자료를 검토하고 확인해 주세요.'
+        for separator in ('\u00a0','\u202f','\u2003','\u3000','\n'):
+            body='HTTPS://example.test/read'+separator+body_text
+            with self.subTest(separator=repr(separator)):
+                self.assertEqual(text_without_urls(body),body_text)
+                self.assertEqual(classify(body).state,'candidate')
+                self.assertEqual(classify(body).text,body)
+
+    def test_unicode_case_confusables_do_not_become_ascii_url_schemes(self):
+        from alden_messenger_quality import text_without_urls
+        for scheme in ('httpſ','ＨＴＴＰＳ','https：'):
+            body=scheme+'://example.test/'+'source-path-'*8
+            with self.subTest(scheme=scheme):
+                self.assertEqual(text_without_urls(body),body)
+                self.assertEqual(classify(body).text,body)
 
 
 if __name__ == '__main__':
