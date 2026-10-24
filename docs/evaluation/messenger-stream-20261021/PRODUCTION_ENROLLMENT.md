@@ -5,13 +5,16 @@ ordinary graph/history reads and request-bound retrieval authority to the shared
 collection store. It is a source candidate. The installed app and production
 registry have not been changed for this delta.
 
-The current canonical Kakao SDK does **not** advertise the required content
-revision batch. Native startup therefore returns
+The locally reviewed canonical Kakao SDK now advertises the required content
+revision batch. Its private manifest contains 136 files, with digest
+`e4ae26c10e27d7f47eb4d947a4c7ca0c244ed5e5f1184f06d6f1573159f19b17`.
+This is a qualified local extension; it does not claim a new publisher release.
+Before that extension, actual candidate startup returned
 `kakao_content_revision_capability_required` before identity/body acquisition or
-registration. This is an implementation prerequisite, not a request for more
-user permission. Ordinary snapshot targets and the existing isolated evaluator
-retain their contracts. Telegram enrollment is unsupported by this delta; its
-decoder/account/consent holds remain in force.
+registration. That negative receipt remains historical evidence. Ordinary
+snapshot targets and the existing isolated evaluator retain their contracts.
+Telegram enrollment is unsupported by this delta; its decoder/account/consent
+holds remain in force.
 
 ## Storage and lifecycle
 
@@ -124,9 +127,52 @@ The revision pass is currently O(C + B) work and memory for C retained candidate
 origins and B text bytes. A pre-materialization limit of 100,000 origins and
 32 MiB prevents unbounded allocation; exceeding it withholds content rather than
 claiming completeness. These bounds are not a scalable final architecture.
-Request-scoped candidate batches, native SDK implementation, representative
-source/data readback and measured latency are required before promotion.
+Request-scoped candidate batches and representative scale/latency measurements
+remain required before promotion. The native batch implementation and the
+bounded positive source journey below now have separate execution evidence.
+
+## Native candidate execution, 2026-10-25
+
+The signed candidate built from `fbad00f3f833054971c11d8696f0c4b67d8952b3`
+loaded the qualified local SDK and read 13,310 exact, previously observed keys
+in two native batches. It returned 13,218 available, 83 withheld and 9 unavailable
+rows, exposing only the four declared identity/state/hash fields. The 198 rows
+without a prior content identity are not edits; one non-null prior identity
+differed. Source records, account identifiers and message bodies remain private.
+
+Using its actual packaged menu dispatcher, the same candidate enrolled the
+372-room local catalog into a new private production-style root. The original
+production root and installed application were not changed. A durable manual
+request completed native collection, retention and the normal E5 dense index:
+29 documents, 29 vectors, no substituted indexer. Actual menu reads returned
+29 graph nodes and 50 history items; standard hybrid retrieval returned two
+current-source facts with valid provenance and two conversation-context windows.
+These facts are source observations, not independently established truth.
+
+An owned `--watch` process then completed two automatic native cycles, growing
+the private root to 53 candidates/documents/vectors. The remaining observed
+classifications were 466 context rows and one withheld row. All eight live
+steps returned unchanged; the observed publications were backfill. The activity
+feed remained empty, as required for backfill rather than simulated combat.
+The owned process stopped gracefully with its stopped heartbeat; the original
+launchd collector retained the same identity. No launchd installation, live send,
+source DB write or foreground UI action was performed.
+
+The current runtime integration head
+`e78ea0a1cb0606fa08c320401d8f278ecad37913` passed all four CI jobs in run
+[40135446094](https://github.com/twoimo/alden/actions/runs/40135446094).
+The preceding run exposed five missing immutable-worker imports; their exact
+dependency closure was added and the 13 packager tests passed. This did not
+bake, activate or relax the supervisor proof of a live worker. The candidate app
+remains bound to its build revision above, separately from the later CI head.
+
+Private task evidence: `outputs/messenger-production-integration-20261025/`
+(`native-pipeline-readback.json`, `native-watch-readback.json`,
+`ci-e78-final.json`) and `outputs/kakao-content-revisions-20261025/`.
+These bounded observations do not establish all-room history completion,
+representative live latency, installed UI/combat delivery or whole-app resource
+performance. The original installed Alden 0.3.218 remains unchanged.
 
 Current-source Pro/Gemini/reverse review remains NOT_RUN under the preserved
 source-transfer rejection. This document and local tests do not replace that
-review, native positive execution, installed UI verification or normal release.
+review, broader native execution, installed UI verification or normal release.

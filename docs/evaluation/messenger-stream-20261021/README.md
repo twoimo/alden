@@ -3,16 +3,16 @@
 Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
-Latest runtime delta: [explicit existing-state MCP factory](RUNTIME_FACTORY.md).
-The next [guarded production enrollment candidate](PRODUCTION_ENROLLMENT.md)
-connects the existing scheduler/read boundaries, while requiring a canonical
-current-content revision batch before it can be activated. Native SDK support
-and installed promotion remain incomplete.
-The maintained messenger implementation is packaged under scripts, with legacy
-imports forwarding to it. Standard CLI/stdio opens existing enrollment using
-fresh request-bound authority. Controlled SDK journeys pass; actual SDK startup
-is withheld on current shared-file qualification failures before identity, SQL
-or body reads. Production enrollment/collector/UI and installed activation remain open.
+Latest runtime delta: [guarded production enrollment candidate](PRODUCTION_ENROLLMENT.md).
+The qualified local canonical SDK now supplies current-content revision batches.
+A signed candidate enrolled the actual 372-room catalog into an isolated private
+root, completed the normal dense index and graph/history/hybrid retrieval, and
+completed two automatic watch cycles. The original production root and installed
+application remain unchanged. Production activation, full history, meaningful live
+event/combat delivery and current-source external review remain open.
+The earlier [explicit existing-state MCP factory](RUNTIME_FACTORY.md) report
+preserves its original SDK failure observations; those failures predate the
+qualified local extension described in the latest report.
 
 Latest query delta: [additive digit-lexeme recall](INTEGER_QUERY.md) fixes the
 `100` → `100개` omission in retrieve/MCP while preserving existing token hits.
