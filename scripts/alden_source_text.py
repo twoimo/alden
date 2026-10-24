@@ -121,16 +121,17 @@ def reading_tail_presentation(body, source):
             or not _legacy_threads_source(body, source)
             or '```' in body or '~~~' in body):
         return None
-    display = body.strip()
-    match = re.search(r'(?:\r?\n[ \t\u00a0]*(?:[0-9]{1,4}|/)[ \t\u00a0]*)+[ \t\r\n\u00a0]*\Z', display)
+    # Bind the UI parts to the exact retained body, including outer whitespace.
+    # A stripped copy cannot satisfy the reader's reading + tail == body fence.
+    match = re.search(r'(?:(?:\r\n|[\r\n])[ \t\u00a0]*(?:[0-9]{1,4}|/)[ \t\u00a0]*)+[ \t\r\n\u00a0]*\Z', body)
     if match is None:
-        match = re.search(r'\s+[0-9]{1,4}\s+/\s+[0-9]{1,4}(?:\s+[0-9]{1,4})+\s*\Z', display)
+        match = re.search(r'\s+[0-9]{1,4}\s+/\s+[0-9]{1,4}(?:\s+[0-9]{1,4})+\s*\Z', body)
     if match is None:
         return None
-    reading = display[:match.start()].rstrip()
-    tail = display[len(reading):]
+    reading = body[:match.start()].rstrip()
+    tail = body[len(reading):]
     tokens = tail.split()
-    if (len(reading) < 80 or not re.search(r'[A-Za-z가-힣]', reading)
+    if (len(reading.strip()) < 80 or not re.search(r'[A-Za-z가-힣]', reading)
             or len(tail) > 128 or not 2 <= len(tokens) <= 8
             or sum(token != '/' for token in tokens) < 2
             or '/' in tokens and sum(token != '/' for token in tokens) < 3):
@@ -141,5 +142,5 @@ def reading_tail_presentation(body, source):
             'basis': 'verified_retained_legacy_threads_record',
             'original_preserved': True, 'semantic_validity': 'unverified',
             'reading': reading, 'tail': tail,
-            'body_sha256': sha(display), 'reading_sha256': sha(reading),
+            'body_sha256': sha(body), 'reading_sha256': sha(reading),
             'tail_sha256': sha(tail)}
