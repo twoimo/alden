@@ -13,6 +13,7 @@ import re
 import stat
 import tempfile
 import time
+import urllib.error
 import urllib.request
 
 ROUTER = "http://127.0.0.1:10101/v1"
@@ -21,6 +22,13 @@ DEFAULT_EFFORT = "high"
 EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
 MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:-]{0,199}\Z")
 MAX_BYTES = 4 * 1024 * 1024
+
+class ModelCatalogError(RuntimeError):
+    """Safe transport reason; catalog/provider payloads never become the code."""
+    def __init__(self, code):
+        if code not in ('routed_llm_authentication','routed_llm_quota','routed_llm_unavailable'):
+            raise ValueError('model_catalog_error_invalid')
+        super().__init__(code)
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -100,7 +108,14 @@ def host_workspace():
 
 def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
     stamp = time.time() if now is None else now
-    raw = fetcher(ROUTER + "/models")
+    try:
+        raw = fetcher(ROUTER + "/models")
+    except urllib.error.HTTPError as error:
+        code = ('routed_llm_authentication' if error.code in {401,403}
+                else 'routed_llm_quota' if error.code == 429 else 'routed_llm_unavailable')
+        raise ModelCatalogError(code) from error
+    except (OSError, urllib.error.URLError) as error:
+        raise ModelCatalogError('routed_llm_unavailable') from error
     rows = raw.get("models", raw.get("data", [])) if isinstance(raw, dict) else []
     if not isinstance(rows, list) or len(rows) > 256:
         raise RuntimeError("model_catalog_invalid")
