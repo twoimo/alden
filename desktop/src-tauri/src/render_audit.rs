@@ -1647,7 +1647,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
 // actual OrbitControls and the product projection path, not physical gestures.
 fn audit_graph_zoom(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, size: &str) -> Result<(),String> {
     let mut states=Vec::new();
-    for (name,ratio,expected) in [("distant",0.55_f64,0),("context",1.7,2),("detail",2.5,3),("returned",0.55,0)] {
+    for (name,ratio,expected) in [("distant",0.05_f64,0),("context",1.7,2),("detail",2.5,3),("returned",0.05,0)] {
         collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-camera-reset').click();return {reset:true};})())".into(),deadline)?;
         let reset = wait_for_audit_state("zoom reset",deadline,||collect_script(window,graph_collect_script(),deadline),
             |s|s["motion"]["camera"]==false&&s["motion"]["labelZoomRatio"].as_f64().is_some_and(|r|(r-1.0).abs()<0.02))?;
@@ -1658,6 +1658,14 @@ fn audit_graph_zoom(window: &tauri::WebviewWindow, output: &Output, deadline: In
         collect_script(window,format!(r#"JSON.stringify((()=>{{const c=document.querySelector('#knowledge-graph-canvas'),r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{{deltaY:{delta},deltaMode:0,clientX:r.x+r.width/2,clientY:r.y+r.height/2,bubbles:true,cancelable:true}}));return {{syntheticWheel:true}};}})())"#),deadline)?;
         let navigation=wait_for_audit_state("zoom labels paint",deadline,||collect_script(window,graph_collect_script(),deadline),
             |s|s["motion"]["camera"]==false && s["motion"]["labelZoom"]==expected)?;
+        if expected == 0 {
+            let motion = &navigation["motion"];
+            let actual = motion["requestedCameraDistance"].as_f64().ok_or("camera distance missing")?;
+            let maximum = motion["cameraMaxDistance"].as_f64().ok_or("camera maximum missing")?;
+            if !actual.is_finite() || !maximum.is_finite() || (actual-maximum).abs() > 0.001 {
+                return Err("distant zoom did not reach the actual camera maximum".into());
+            }
+        }
         let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
         if labels["overlapPairs"]!=0 || labels["clippedLabels"]!=0 || labels["visibleUnpositionedLabels"]!=0 || labels["truncated"]!=false || labels["hudOverlapPairs"]!=0 || labels["hudSampled"]!=1 {
             return Err(format!("zoom label geometry failed: {labels}"));

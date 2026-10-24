@@ -64,3 +64,22 @@ describe('settled projected display collision correction', () => {
     expect([...relaxProjectedCircles(points,{...viewport,width:0}).offsets]).toEqual([0,0,0,0]);
   });
 });
+
+describe('dense viewports keep core separation ahead of optional whitespace',()=>{
+  it.each([2.7,3])('does not turn a separated %s-pixel grid into overlapping cores',spacing=>{
+    const area={left:0,top:0,width:439,height:332};
+    const points=Array.from({length:1024},(_,i)=>({x:80+i%32*spacing,y:50+Math.floor(i/32)*spacing,radius:1.3}));
+    const original=JSON.stringify(points),before=projectedLayoutMetrics(points,area);
+    if(!before.available)throw Error('fixture projection unavailable');
+    expect(before.overlapPairs).toBe(0);
+    const {offsets,diagnostics}=relaxProjectedCircles(points,area);
+    const corrected=points.map((p,i)=>({...p,x:p.x+offsets[i*2],y:p.y+offsets[i*2+1]}));
+    const after=projectedLayoutMetrics(corrected,area);
+    if(!after.available)throw Error('corrected projection unavailable');
+    expect(after.visiblePoints).toBe(points.length);
+    expect(after.overlapPairs).toBe(0);
+    expect(JSON.stringify(points)).toBe(original);
+    expect(diagnostics.maxShift).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.shiftCssPx+1e-9);
+    expect(diagnostics.pairTests).toBeLessThanOrEqual(PROJECTED_RELAXATION_LIMITS.pairTests);
+  });
+});
