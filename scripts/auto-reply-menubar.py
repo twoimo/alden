@@ -2771,7 +2771,8 @@ def main():
             _print_json(settings_action(_menubar_state_root(), action, _argv_flag_value("--history-query"),
                 explicit_opt_in="--explicit-opt-in" in sys.argv))
         except (ValueError, RuntimeError, OSError) as error:
-            _print_json({"ok": False, "reason": type(error).__name__, "targets": []})
+            reason = str(error) if str(error) == 'kakao_content_revision_capability_required' else type(error).__name__
+            _print_json({"ok": False, "reason": reason, "targets": []})
         return 0
     if action in {"collection-history", "collection-graph", "collection-projects"}:
         from alden_collection import read_action
