@@ -6,6 +6,7 @@ identity mappings and stage receipts; it never sends messages or infers edges.
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from alden_abort import AldenCancelled
 import fcntl
 import hashlib
@@ -30,6 +31,25 @@ MAX_RECORD_BYTES = 2 * 1024 * 1024
 MAX_BATCH_RECORDS = 2000
 BODY_NORMALIZATION_VERSION = "body-nfc-lines-v2"
 STAGES = {"discovered", "parsed", "validated", "stored", "published", "indexed", "failed", "paused"}
+_READ_CANCELLATION = ContextVar('alden_collection_read_cancellation', default=None)
+
+
+@contextmanager
+def _read_cancellation(cancelled):
+    """Keep one request's cancellation on its nested read-only connections."""
+    if cancelled is not None and not callable(cancelled):
+        raise ValueError('collection_cancellation_invalid')
+    outer = _READ_CANCELLATION.get()
+    current = outer if cancelled is None else cancelled if outer is None or outer is cancelled else lambda: outer() or cancelled()
+    token = _READ_CANCELLATION.set(current)
+    try:
+        if current is not None and current():
+            raise AldenCancelled('collection_cancelled')
+        yield
+        if current is not None and current():
+            raise AldenCancelled('collection_cancelled')
+    finally:
+        _READ_CANCELLATION.reset(token)
 
 
 def digest(value: bytes) -> str:
@@ -617,6 +637,10 @@ class CollectionStore:
 
     @contextmanager
     def database(self, *, publication_guard=None, cancelled=None):
+        if self.read_only:
+            inherited = _READ_CANCELLATION.get()
+            explicit = cancelled
+            cancelled = inherited if explicit is None else explicit if inherited is None or inherited is explicit else lambda: inherited() or explicit()
         require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision)
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
@@ -1893,6 +1917,14 @@ class CollectionStore:
 
 
 def read_action(state_root: Path, action: str, query: str | None = None, *,
+                source_access=None, source_revision=None, cancelled=None) -> dict:
+    """Own cancellation across every nested read, including SQLite progress."""
+    with _read_cancellation(cancelled):
+        return _read_action(state_root, action, query,
+                            source_access=source_access, source_revision=source_revision)
+
+
+def _read_action(state_root: Path, action: str, query: str | None = None, *,
                 source_access=None, source_revision=None) -> dict:
     """Bounded read-only application boundary; never creates a store on lookup."""
     if action not in {"collection-projects", "collection-history", "collection-graph"}:
