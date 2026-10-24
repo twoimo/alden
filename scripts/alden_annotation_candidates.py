@@ -1,4 +1,6 @@
 """Bounded retained-tag candidate pages; never a tag verdict or merge command."""
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import math
 import os
@@ -77,6 +79,28 @@ def _load(folder, review_id):
     return value
 
 
+@contextmanager
+def _publication_lock(folder):
+    """Keep capacity admission and publication under one cross-process owner."""
+    directory=os.open(folder,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    fd=None
+    try:
+        fd=os.open('.publication.lock',os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_NONBLOCK,
+                   0o600,dir_fd=directory)
+        meta=os.fstat(fd)
+        if (not stat.S_ISREG(meta.st_mode) or meta.st_uid!=os.geteuid()
+                or stat.S_IMODE(meta.st_mode)!=0o600 or meta.st_nlink!=1 or meta.st_size!=0):
+            raise ValueError('annotation_review_cache_invalid')
+        try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:raise ValueError('annotation_review_cache_busy') from None
+        yield
+    finally:
+        # Keep the inode: unlinking it could give another publisher a different
+        # lock while an existing owner still holds the original descriptor.
+        if fd is not None:os.close(fd)
+        os.close(directory)
+
+
 def create_review(state_root, scope_dict, report):
     scope=_scope(scope_dict);store=CollectionStore.open_existing(Path(state_root))
     if store is None:raise ValueError('annotation_review_scope_unavailable')
@@ -119,20 +143,21 @@ def create_review(state_root, scope_dict, report):
     raw=encoded(value)
     if len(raw)>MAX_CACHE_BYTES:raise ValueError('annotation_review_cache_budget')
     folder=_folder(store,True)
-    files=list(folder.glob('*.json'))
-    if len(files)>=MAX_CACHE_FILES:
-        # Only exact-hash, expired generated metadata can be reclaimed here.
-        for path in files:
-            try:_load(folder,path.stem)
-            except ValueError as error:
-                if str(error)=='annotation_review_expired':path.unlink()
-        if len(list(folder.glob('*.json')))>=MAX_CACHE_FILES:raise ValueError('annotation_review_cache_budget')
-    review_id=digest(raw);fd,temp=tempfile.mkstemp(prefix='.review-',dir=folder)
-    try:
-        with os.fdopen(fd,'wb') as f:os.fchmod(f.fileno(),0o600);f.write(raw);f.flush();os.fsync(f.fileno())
-        os.replace(temp,folder/(review_id+'.json'))
-    finally:
-        if os.path.exists(temp):os.unlink(temp)
+    with _publication_lock(folder):
+        files=list(folder.glob('*.json'))
+        if len(files)>=MAX_CACHE_FILES:
+            # Only exact-hash, expired generated metadata can be reclaimed here.
+            for path in files:
+                try:_load(folder,path.stem)
+                except ValueError as error:
+                    if str(error)=='annotation_review_expired':path.unlink()
+            if len(list(folder.glob('*.json')))>=MAX_CACHE_FILES:raise ValueError('annotation_review_cache_budget')
+        review_id=digest(raw);fd,temp=tempfile.mkstemp(prefix='.review-',dir=folder)
+        try:
+            with os.fdopen(fd,'wb') as f:os.fchmod(f.fileno(),0o600);f.write(raw);f.flush();os.fsync(f.fileno())
+            os.replace(temp,folder/(review_id+'.json'))
+        finally:
+            if os.path.exists(temp):os.unlink(temp)
     return review_id
 
 

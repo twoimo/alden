@@ -10,8 +10,10 @@ import json
 from pathlib import Path
 import shutil
 import stat
+import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -21,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from alden_collection import CollectionStore, digest, identity
 from alden_graph_quality import audit_annotations
 from alden_annotation_candidates import create_review, read_review
+import alden_annotation_candidates as candidates
 
 
 class AnnotationCandidateContractTests(unittest.TestCase):
@@ -100,6 +103,144 @@ class AnnotationCandidateContractTests(unittest.TestCase):
         self.assertIsInstance(review_id, str)
         self.assertTrue(review_id)
         return scope, report, review_id
+
+    def test_concurrent_review_publications_respect_the_shared_file_budget(self):
+        self._seed_groups(1, first_members=3)
+        report = self._scan()
+        existing = {create_review(self.root, self.PROJECT_SCOPE, report)
+                    for _ in range(candidates.MAX_CACHE_FILES - 1)}
+        self.assertEqual(len(existing), candidates.MAX_CACHE_FILES - 1)
+        folder = self.store.root / 'annotation-reviews'
+        previous = {identity: hashlib.sha256((folder / (identity + '.json')).read_bytes()).hexdigest()
+                    for identity in existing}
+        report_path = self.root / 'owned-candidate-report.json'
+        report_path.write_text(json.dumps(report))
+        paused, release = threading.Event(), threading.Event()
+        original_mkstemp = candidates.tempfile.mkstemp
+        published, failures = [], []
+
+        def pause_before_publication(*args, **kwargs):
+            paused.set()
+            if not release.wait(10):
+                raise AssertionError('owned publisher was not released')
+            return original_mkstemp(*args, **kwargs)
+
+        def publish():
+            try:
+                published.append(create_review(self.root, self.PROJECT_SCOPE, report))
+            except Exception as error:
+                failures.append(error)
+
+        program = """
+import json,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from alden_annotation_candidates import create_review
+try:
+    review=create_review(Path(sys.argv[2]),{'scope':'project','project':'one'},
+                         json.loads(Path(sys.argv[3]).read_text()))
+    print(json.dumps({'review_id':review}))
+except ValueError as error:
+    print(json.dumps({'error':str(error)}))
+"""
+        with patch('alden_annotation_candidates.tempfile.mkstemp', side_effect=pause_before_publication):
+            owner = threading.Thread(target=publish)
+            owner.start()
+            try:
+                self.assertTrue(paused.wait(3), 'first publisher did not reach the real write boundary')
+                contender = subprocess.run(
+                    [sys.executable, '-B', '-c', program,
+                     str(Path(__file__).resolve().parents[1] / 'scripts'),
+                     str(self.root), str(report_path)],
+                    capture_output=True, text=True, timeout=5,
+                )
+            finally:
+                release.set()
+                owner.join(5)
+        self.assertFalse(owner.is_alive(), 'owned publisher leaked')
+        self.assertEqual(failures, [])
+        self.assertEqual(len(published), 1)
+        self.assertLessEqual(len(list(folder.glob('*.json'))), candidates.MAX_CACHE_FILES)
+        self.assertEqual(contender.returncode, 0, contender.stderr)
+        self.assertEqual(json.loads(contender.stdout), {'error': 'annotation_review_cache_busy'})
+        self.assertTrue(all((folder / (identity + '.json')).is_file() for identity in existing))
+        self.assertEqual({identity: hashlib.sha256((folder / (identity + '.json')).read_bytes()).hexdigest()
+                          for identity in existing}, previous)
+        # The owner released its guard. An ordinary full-cache error must not
+        # leave subsequent publishers permanently busy.
+        with self.assertRaisesRegex(ValueError, '^annotation_review_cache_budget$'):
+            create_review(self.root, self.PROJECT_SCOPE, report)
+
+    def test_process_exit_releases_publication_ownership_without_removing_the_lock_inode(self):
+        self._seed_groups(1, first_members=3)
+        report = self._scan()
+        folder = self.store.root / 'annotation-reviews'
+        folder.mkdir(mode=0o700)
+        program = """
+import os,sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from alden_annotation_candidates import _publication_lock
+with _publication_lock(Path(sys.argv[2])):
+    os._exit(0)
+"""
+        owner = subprocess.run(
+            [sys.executable, '-B', '-c', program,
+             str(Path(__file__).resolve().parents[1] / 'scripts'), str(folder)],
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(owner.returncode, 0, owner.stderr)
+        lock = folder / '.publication.lock'
+        identity = (lock.stat().st_dev, lock.stat().st_ino)
+        review_id = create_review(self.root, self.PROJECT_SCOPE, report)
+        self.assertTrue((folder / (review_id + '.json')).is_file())
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
+        self.assertEqual(lock.read_bytes(), b'')
+        self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
+
+    def test_unsafe_publication_lock_objects_never_publish_or_modify_their_targets(self):
+        self._seed_groups(1, first_members=3)
+        report = self._scan()
+        folder = self.store.root / 'annotation-reviews'
+        folder.mkdir(mode=0o700)
+        lock = folder / '.publication.lock'
+        outside = self.root / 'untouched-lock-target'
+        outside.write_bytes(b'')
+        outside.chmod(0o600)
+        for kind in ('symlink', 'hardlink', 'directory', 'nonempty', 'shared_permissions'):
+            with self.subTest(kind=kind):
+                if kind == 'symlink':
+                    lock.symlink_to(outside)
+                elif kind == 'hardlink':
+                    lock.hardlink_to(outside)
+                elif kind == 'directory':
+                    lock.mkdir(mode=0o700)
+                else:
+                    lock.write_bytes(b'not-a-lock' if kind == 'nonempty' else b'')
+                    lock.chmod(0o644 if kind == 'shared_permissions' else 0o600)
+                try:
+                    with self.assertRaises((OSError, ValueError)):
+                        create_review(self.root, self.PROJECT_SCOPE, report)
+                    self.assertEqual(list(folder.glob('*.json')), [])
+                    self.assertEqual(outside.read_bytes(), b'')
+                    self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o600)
+                finally:
+                    if lock.is_dir() and not lock.is_symlink():
+                        lock.rmdir()
+                    else:
+                        lock.unlink()
+
+    def test_failed_publication_cleans_staging_and_releases_ownership(self):
+        self._seed_groups(1, first_members=3)
+        report = self._scan()
+        with patch('alden_annotation_candidates.os.replace', side_effect=OSError('owned write failure')):
+            with self.assertRaisesRegex(OSError, 'owned write failure'):
+                create_review(self.root, self.PROJECT_SCOPE, report)
+        folder = self.store.root / 'annotation-reviews'
+        self.assertEqual(list(folder.glob('*.json')), [])
+        self.assertEqual(list(folder.glob('.review-*')), [])
+        review_id = create_review(self.root, self.PROJECT_SCOPE, report)
+        self.assertTrue((folder / (review_id + '.json')).is_file())
 
     @staticmethod
     def _query(scope, review_id, *, offset=0, group=None):
