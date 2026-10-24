@@ -17,6 +17,7 @@ import json
 import math
 import re
 from collections.abc import Mapping
+from alden_model_routes import EFFORTS
 
 MAX_GENERATION_JSON_BYTES = 4096
 _MAX_COUNTER = 9_007_199_254_740_991
@@ -25,7 +26,9 @@ _ID = re.compile(r"[0-9a-f]{32}\Z")
 _MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+:/-]{0,127}\Z")
 _RESPONSE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _TRANSPORTS = frozenset({"opencodex", "local"})
-_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "ultra"})
+# The route owns the vocabulary; its live catalog still checks each model's
+# supported levels. Recording a request does not attest backend reasoning.
+_EFFORTS = frozenset(EFFORTS)
 _STATES = frozenset({"selecting_model", "running", "completed", "failed", "cancelled", "superseded"})
 _STAGES = frozenset({"selection", "context", "input", "transport", "response", "completed"})
 _ERROR_CODES = frozenset({

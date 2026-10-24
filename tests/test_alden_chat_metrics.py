@@ -55,6 +55,16 @@ def json_bytes(result):
 
 
 class SanitizationTests(unittest.TestCase):
+    def test_max_effort_is_recorded_without_inventing_backend_effort(self):
+        selected={**selection(),'reasoning_effort':'max'}
+        result=sanitize_generation(selected,{'request':request(reasoning_effort='max')},ticket())
+        self.assertEqual(result['selection']['reasoning_effort'],'max')
+        self.assertEqual(result['request']['reasoning_effort'],'max')
+        self.assertNotIn('reasoning_effort',result.get('response',{}))
+        for effort in ['MAX','max ',True,{'effort':'max'}]:
+            with self.subTest(effort=effort),self.assertRaisesRegex(ValueError,'generation_metadata_invalid'):
+                sanitize_generation({**selection(),'reasoning_effort':effort},{},ticket())
+
     def test_request_source_route_and_model_conflicts_are_rejected(self):
         for change in [{'source':'microphone'},{'transport':'local'},{'model_id':'other/model'}]:
             with self.subTest(change=change), self.assertRaisesRegex(ValueError,'generation_metadata_invalid'):

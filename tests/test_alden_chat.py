@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import json
+import io
 import subprocess
 import threading
 import struct
@@ -32,6 +33,43 @@ def png(rgb=(255,0,0)):
 
 
 class AssistantInputTests(unittest.TestCase):
+    def test_advertised_max_route_completes_and_replays_without_losing_effort(self):
+        import alden_model_routes as routes
+        from functools import partial
+        model='fixture/model-with-max'
+        def catalog_source(url):
+            if '/v1/models' in url and ':1123' in url:
+                return {'data':[]}
+            return {'models':[{'slug':model,'reasoning_efforts':['high','max']}]}
+        actual_catalog=routes.catalog
+        class Response(io.BytesIO):
+            headers={'Content-Type':'application/json'}
+            def __exit__(self,*args):return False
+        payload={'model':model,'status':'completed','output':[{'type':'message','role':'assistant','content':[{'type':'output_text','text':'검증 응답'}]}]}
+        with patch.object(routes,'catalog',partial(actual_catalog,fetcher=catalog_source)), \
+                patch('alden_routed_llm.catalog',partial(actual_catalog,fetcher=catalog_source)), \
+                patch('urllib.request.OpenerDirector.open',side_effect=AssertionError('live HTTP forbidden')) as network, \
+                patch('alden_routed_llm.CancellableLocalResponse',side_effect=lambda *args,**kwargs:Response(json.dumps(payload).encode())) as transport:
+            routes.save(self.root,{'model':model,'reasoning_effort':'max'},fetcher=catalog_source)
+            settings=(self.root/'reply-model.json').read_bytes()
+            value=request(70)
+            first=chat.process_input(self.root,value,self.token)
+            self.assertTrue(first['ok'],first)
+            self.assertEqual(first['reply'],'검증 응답')
+            self.assertEqual(first['generation']['selection']['reasoning_effort'],'max')
+            self.assertEqual(first['generation']['request']['reasoning_effort'],'max')
+            body=json.loads(transport.call_args.args[0].data)
+            self.assertEqual(body['model'],model)
+            self.assertEqual(body['reasoning'],{'effort':'max'})
+            self.assertEqual(body['max_output_tokens'],2048)
+            replay=chat.process_input(self.root,value,self.token)
+            self.assertEqual(first,replay)
+            transport.assert_called_once()
+            network.assert_not_called()
+            self.assertEqual((self.root/'reply-model.json').read_bytes(),settings)
+        with database(self.root) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM voice_messages WHERE role='assistant'").fetchone()[0],1)
+
     def test_actual_transport_images_are_bound_to_selected_bytes(self):
         photo = {'name':'public.png','mime':'image/png','data':base64.b64encode(png()).decode()}
         proof = {'sha256':hashlib.sha256(png()).hexdigest(),'mime':'image/png','bytes':len(png())}

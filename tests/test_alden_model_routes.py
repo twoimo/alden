@@ -55,6 +55,7 @@ class RoutingTests(unittest.TestCase):
         before=(self.root/'reply-model.json').read_bytes()
         for options in [{'model':'not/registered','reasoning_effort':'high'},
                         {'model':routes.DEFAULT_MODEL,'reasoning_effort':'ultra'},
+                        {'model':routes.DEFAULT_MODEL,'reasoning_effort':'max'},
                         {'model':'mlx/unloaded','reasoning_effort':'high'}]:
             with self.assertRaises((ValueError,RuntimeError)):routes.save(self.root,options,fetcher=fixture)
             self.assertEqual((self.root/'reply-model.json').read_bytes(),before)
