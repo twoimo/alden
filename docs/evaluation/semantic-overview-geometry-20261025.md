@@ -79,3 +79,20 @@ This is a scoped defect fix restoring the meaning of an existing force solver.
 Current-source external Pro/Gemini/reverse validation remains incomplete under
 the preserved upload gate. Local regressions, observer alignment and the flowchart
 do not constitute an all-input refinement, safety or liveness proof.
+
+The first scope3 native capture succeeded, but the reused wrapper wrongly expected
+zoom and body-notation outputs that this source had not implemented. Its missing-file
+failure is retained; it is not zoom acceptance. The old path also could not attest
+transparent/minimized operation. The maintained graph-only audit now creates its
+owned windows hidden, unfocused and incognito, sets alpha0 and normal level before
+ordering the graph, verifies nonkey/inactive state for each zoom capture, then
+minimizes and reads back eight observations. The original primary app is not
+adopted or given synthetic input. A minimized-primary physical journey remains
+unverified. Actual native pass/failure receipts remain authoritative.
+
+Scope3 now checks distant/context/detail/returned zoom states at two sizes,
+including zero passive labels at fitted and distant zoom, positive labels when
+zoomed in, and bounded label/caption rectangles without overlap or clipping.
+This is actual product camera/render code with synthetic wheel input, not
+physical gestures, font-ink bounds, Retina or performance proof. The audit
+changes no product label policy or source data and admits no control writes.

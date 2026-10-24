@@ -5,7 +5,7 @@ use block2::RcBlock;
 use objc2::runtime::AnyObject;
 use objc2::{AnyThread, MainThreadMarker};
 use objc2_app_kit::{
-    NSBitmapImageFileType, NSBitmapImageRep, NSFloatingWindowLevel, NSImage, NSWindow,
+    NSApplication, NSBitmapImageFileType, NSBitmapImageRep, NSFloatingWindowLevel, NSImage, NSWindow,
 };
 use objc2_foundation::{NSDictionary, NSError, NSSize, NSString};
 use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
@@ -1031,7 +1031,11 @@ const LABEL_GEOMETRY_COLLECT: &str = r#"JSON.stringify((()=>{
       if(Math.min(r.right,q.right)-Math.max(r.left,q.left)>.5&&Math.min(r.bottom,q.bottom)-Math.max(r.top,q.top)>.5)overlapPairs++;
     }
   }
+  const hud=document.querySelector('.knowledge-map-caption'),hs=hud?getComputedStyle(hud):null,hr=hud?.getBoundingClientRect();
+  const hudVisible=!!hud&&!hud.hidden&&hs.display!=='none'&&hs.visibility!=='hidden'&&hr.width>0&&hr.height>0;
+  const hudOverlapPairs=hudVisible?visible.filter(r=>Math.min(r.right,hr.right)-Math.max(r.left,hr.left)>.5&&Math.min(r.bottom,hr.bottom)-Math.max(r.top,hr.top)>.5).length:0;
   return {scope:'audit-only bounded element rectangles; no label text/IDs or physical/font-ink proof',
+    hudSampled:hudVisible?1:0,hudOverlapPairs,hudBounds:hudVisible?{left:hr.left,top:hr.top,right:hr.right,bottom:hr.bottom}:null,
     totalLabels:all.length,sampledLabels:boxes.length,truncated:all.length>24,visibleLabels:visible.length,
     unpositionedLabels:boxes.filter(b=>!b.positioned).length,
     visibleUnpositionedLabels:visible.filter(b=>!b.positioned).length,
@@ -1633,7 +1637,7 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
         if case==10 {state["qualityComparison"]=audit_quality_comparison(window,output,deadline,size)?;}
         publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
         eprintln!("Alden scope {case}: {size} files delivered");
-        if case==0 {audit_graph_zoom(window,output,deadline,size)?;}
+        if case==0 || case==3 {audit_graph_zoom(window,output,deadline,size)?;}
         states.push(state);
     }
     Ok(json!({"case":case,"states":states,"scope":"fixed observed projects/filter/next-page, two owned window sizes, read-only"}))
@@ -1643,20 +1647,37 @@ fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: I
 // actual OrbitControls and the product projection path, not physical gestures.
 fn audit_graph_zoom(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, size: &str) -> Result<(),String> {
     let mut states=Vec::new();
-    for (name,ratio,expected) in [("distant",0.55_f64,0),("context",1.7,2),("detail",2.5,3)] {
+    for (name,ratio,expected) in [("distant",0.55_f64,0),("context",1.7,2),("detail",2.5,3),("returned",0.55,0)] {
         collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-camera-reset').click();return {reset:true};})())".into(),deadline)?;
-        wait_for_audit_state("zoom reset",deadline,||collect_script(window,graph_collect_script(),deadline),
+        let reset = wait_for_audit_state("zoom reset",deadline,||collect_script(window,graph_collect_script(),deadline),
             |s|s["motion"]["camera"]==false&&s["motion"]["labelZoomRatio"].as_f64().is_some_and(|r|(r-1.0).abs()<0.02))?;
+        if reset["labelGeometryObservation"]["visibleLabels"] != 0 {
+            return Err(format!("passive labels remained at fitted zoom: {reset}"));
+        }
         let delta:f64=-ratio.ln()/(-0.95_f64.ln()*0.7*0.01);
         collect_script(window,format!(r#"JSON.stringify((()=>{{const c=document.querySelector('#knowledge-graph-canvas'),r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{{deltaY:{delta},deltaMode:0,clientX:r.x+r.width/2,clientY:r.y+r.height/2,bubbles:true,cancelable:true}}));return {{syntheticWheel:true}};}})())"#),deadline)?;
         let navigation=wait_for_audit_state("zoom labels paint",deadline,||collect_script(window,graph_collect_script(),deadline),
             |s|s["motion"]["camera"]==false && s["motion"]["labelZoom"]==expected)?;
         let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
-        if labels["overlapPairs"]!=0 || labels["clippedLabels"]!=0 || labels["visibleUnpositionedLabels"]!=0 || labels["truncated"]!=false {
+        if labels["overlapPairs"]!=0 || labels["clippedLabels"]!=0 || labels["visibleUnpositionedLabels"]!=0 || labels["truncated"]!=false || labels["hudOverlapPairs"]!=0 || labels["hudSampled"]!=1 {
             return Err(format!("zoom label geometry failed: {labels}"));
         }
-        publish(output,&format!("graph-zoom-{size}-{name}.png"),&snapshot(window,deadline)?,deadline)?;
-        states.push(json!({"level":name,"requestedRatio":ratio,"navigation":navigation,"labels":labels}));
+        if expected == 0 && (labels["totalLabels"] != 0 || labels["visibleLabels"] != 0)
+            || expected >= 2 && labels["visibleLabels"].as_u64().unwrap_or(0) == 0 {
+            return Err(format!("zoom reveal/clear contract failed at {name}: {labels}"));
+        }
+        let native = minimized_native_state(window, false, deadline)?;
+        if native["applicationActive"] != false || native["key"] != false
+            || native["alpha"] != 0.0 || native["level"] != 0 {
+            return Err(format!("zoom capture violated background constraints: {native}"));
+        }
+        // Keep the existing fixed PNG allowlist. The fourth transition records
+        // actual native/render state without replacing the first distant image.
+        if name != "returned" {
+            publish(output,&format!("graph-zoom-{size}-{name}.png"),&snapshot(window,deadline)?,deadline)?;
+        }
+        states.push(json!({"level":name,"requestedRatio":ratio,"navigation":navigation,"labels":labels,
+            "resetLabels":reset["labelGeometryObservation"],"nativeBackground":native}));
     }
     publish(output,&format!("graph-zoom-{size}.json"),&serde_json::to_vec_pretty(&json!({"states":states,
         "scope":"owned native synthetic wheel input; actual product camera and labels; no physical gesture or FPS proof"})).map_err(|_|"zoom JSON failed")?,deadline)?;
@@ -1671,6 +1692,31 @@ fn scoped_blur_preserved(state: &Value) -> bool {
         })
 }
 
+// Audit-only: minimize the actual owned AppKit window without
+// injecting visibility events or modifying the production renderer lifecycle.
+fn minimized_native_state(
+    window: &tauri::WebviewWindow,
+    minimize: bool,
+    deadline: Instant,
+) -> Result<Value, String> {
+    live(deadline)?;
+    let target = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window.run_on_main_thread(move || {
+        let result = live(deadline).and_then(|_| {
+            let mtm = MainThreadMarker::new().ok_or("native state not on main thread")?;
+            let pointer = target.ns_window().map_err(|_| "native window missing")?;
+            let native = unsafe { &*pointer.cast::<NSWindow>() };
+            if minimize { native.miniaturize(None); }
+            Ok(json!({"visible":native.isVisible(),"minimized":native.isMiniaturized(),
+                "key":native.isKeyWindow(),"alpha":native.alphaValue(),
+                "level":native.level(),"applicationActive":NSApplication::sharedApplication(mtm).isActive()}))
+        });
+        let _ = tx.try_send(result);
+    }).map_err(|_| "native state dispatch failed")?;
+    receive(rx, deadline)
+}
+
 fn audit_settings(
     app: &tauri::AppHandle,
     output: &Output,
@@ -1682,8 +1728,8 @@ fn audit_settings(
     let window = app
         .get_webview_window("settings")
         .ok_or("settings window missing")?;
-    // Only this short-lived audit instance: keep its settings renderer
-    // unoccluded without activating the app or changing the user's key window.
+    // Graph QA stays transparent and noninteractive in this owned process.
+    let background_graph = graph_scope.is_some();
     live(deadline)?;
     let target = window.clone();
     let (tx, rx) = mpsc::sync_channel(1);
@@ -1695,7 +1741,8 @@ fn audit_settings(
                     .map_err(|_| "settings native window missing")?;
                 live(deadline)?;
                 unsafe {
-                    (&*native.cast::<NSWindow>()).setLevel(NSFloatingWindowLevel);
+                    (&*native.cast::<NSWindow>()).setLevel(if background_graph {0} else {NSFloatingWindowLevel});
+                    if background_graph { (&*native.cast::<NSWindow>()).setAlphaValue(0.0); }
                     // This audit uses fixed JS actions. Physical mouse input
                     // must continue to the user's existing app, not rotate our
                     // floating graph between the saved navigation snapshots.
@@ -1716,7 +1763,44 @@ fn audit_settings(
         )
     }, |state| state["mounted"] == true)?;
     if let Some(case) = graph_scope {
-        return audit_graph_scope(&window, output, deadline, case);
+        let target = window.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        window.run_on_main_thread(move || {
+            let result = live(deadline).and_then(|_| {
+                let mtm = MainThreadMarker::new().ok_or("audit deactivation not on main thread")?;
+                let app = NSApplication::sharedApplication(mtm);
+                let was_active = app.isActive();
+                app.deactivate();
+                Ok(json!({"wasActive":was_active,"afterDeactivateActive":app.isActive()}))
+            });
+            let _ = tx.try_send(result);
+            drop(target);
+        }).map_err(|_| "audit deactivation dispatch failed")?;
+        let deactivation = receive(rx, deadline)?;
+        let before = minimized_native_state(&window, false, deadline)?;
+        if before["applicationActive"] != false || before["key"] != false
+            || before["alpha"] != 0.0 || before["level"] != 0 {
+            return Err(format!("career zoom diagnostic violated background constraints: native={before}, deactivation={deactivation}"));
+        }
+        let mut result = audit_graph_scope(&window, output, deadline, case)?;
+        let immediate = minimized_native_state(&window, true, deadline)?;
+        let mut observations = Vec::new();
+        for _ in 0..8 {
+            live(deadline)?;
+            std::thread::sleep(Duration::from_millis(250));
+            let native = minimized_native_state(&window, false, deadline)?;
+            if native["applicationActive"] != false || native["key"] != false
+                || native["alpha"] != 0.0 || native["level"] != 0
+                || native["minimized"] != true || native["visible"] != false {
+                return Err("career zoom diagnostic did not remain minimized in background".into());
+            }
+            observations.push(native);
+        }
+        result["nativeBackgroundBefore"] = before;
+        result["nativeOwnedDeactivation"] = deactivation;
+        result["nativeMinimizeImmediate"] = immediate;
+        result["nativeMinimizedObservations"] = json!(observations);
+        return Ok(result);
     }
     graph_step(&window, "memory-page", deadline)?;
     let initial = wait_for_audit_state("initial graph render", deadline,
@@ -2750,6 +2834,14 @@ pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
     // This audit creates one incognito view itself; configured persistent
     // views must never be created or adopted by the fixture workflow.
     if request.entity { context.config_mut().app.windows.clear(); }
+    if request.graph_scope.is_some() {
+        for window in &mut context.config_mut().app.windows {
+            window.incognito = true;
+            window.visible = false;
+            window.focus = false;
+            window.always_on_top = false;
+        }
+    }
     let output = Output::open(&request.directory).unwrap_or_else(|error| {
         eprintln!("Alden render audit: {error}");
         std::process::exit(2);
