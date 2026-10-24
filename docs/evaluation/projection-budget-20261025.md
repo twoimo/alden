@@ -79,3 +79,13 @@ New canonical native/install results live under the task's projection-budget-
 Current-source external Pro/Gemini/reverse verification remainsNOT_RUN under the
 preserved upload rejection. Original tabs/jobs, exact requested model constraints,
 shared SDK/runtime pins, production queues and normal release/notary holds remain.
+
+A first native candidate reduced compact5→1 (default0), with25 rounds and no
+quota exhaustion. Its remaining penetration was0.00236px; the initial correction
+input was not recorded, so that snapshot alone did not establish a cause. A
+separate actual-frame regression reproduced a stationary-camera contract defect:
+correction was accepted at z8.0000906 while later interpolation moved it toward
+z8.0005000. The renderer now snaps position/look-at using the same rest criterion
+before accepting correction, outside active orbit input. The accepted-camera
+matrix remains exact through offset animation; no overlap oracle/tolerance is
+relaxed. The first native candidate remains preserved and was not installed.
