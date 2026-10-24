@@ -454,17 +454,26 @@ def _process_owned_input(state_root, value, decoded, token, *, generate, select_
                 'conversation_id': ticket['conversation_id'] if ticket else value['conversation_id'],
                 'error_code': 'assistant_input_superseded'}
     except Exception as error:
-        if ticket: cancel_turn(state_root, ticket, reason='failed', generation=failure_generation(selection,ticket,'failed'))
         from alden_chat_metrics import generation_error_code
         reason = str(error)
         code = reason if reason in KNOWN_INPUT_ERRORS else generation_error_code(reason) or 'assistant_input_failed'
+        if ticket: cancel_turn(state_root, ticket, reason='failed',
+            generation=failure_generation(selection,ticket,'failed',error_code=code))
         return {'ok': False, 'state': 'failed', 'request_id': value['request_id'],
                 'conversation_id': ticket['conversation_id'] if ticket else value['conversation_id'], 'error_code': code}
 
 
-def failure_generation(selection, ticket, state):
+def failure_generation(selection, ticket, state, *, error_code=None):
     try:
-        return generation_evidence(selection, ticket.get('adapter_metrics', {}), ticket, state)
+        result = generation_evidence(selection, ticket.get('adapter_metrics', {}), ticket, state)
+        # Model selection can fail before an adapter exists. Preserve only an
+        # exact safe reason, without inventing response/model/timing evidence
+        # or replacing a more specific bound adapter error.
+        from alden_chat_metrics import generation_error_code
+        safe = generation_error_code(error_code)
+        if state == 'failed' and safe is not None and 'error_code' not in result:
+            result['error_code'] = safe
+        return result
     except ValueError:
         # Preserve the cancellation/failure itself, without attributing unsafe
         # or mismatched observations to this request.

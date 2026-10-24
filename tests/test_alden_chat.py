@@ -33,6 +33,64 @@ def png(rgb=(255,0,0)):
 
 
 class AssistantInputTests(unittest.TestCase):
+    def test_pre_adapter_selection_failure_keeps_its_exact_reason_on_replay(self):
+        from alden_chat_turns import get_request
+        for number,code in [(81,'routed_llm_unavailable'),(82,'routed_llm_authentication'),
+                            (83,'routed_llm_quota'),(84,'model_effort_not_supported')]:
+            with self.subTest(code=code):
+                select=unittest.mock.Mock(side_effect=RuntimeError(code))
+                generate=unittest.mock.Mock(side_effect=AssertionError('generation must not start'))
+                value=request(number)
+                first=chat.process_input(self.root,value,self.token,select_model=select,generate=generate)
+                self.assertEqual(first['error_code'],code)
+                replay=chat.process_input(self.root,value,self.token,select_model=select,generate=generate)
+                self.assertEqual(replay.get('error_code'),code)
+                self.assertEqual(get_request(self.root,value['request_id'])['generation']['error_code'],code)
+                self.assertNotIn('response',replay['generation'])
+                self.assertEqual(replay['generation']['selection'],{})
+                self.assertNotIn('reply',replay)
+                select.assert_called_once();generate.assert_not_called()
+
+    def test_catalog_transport_failures_are_safe_selection_errors_with_durable_replay(self):
+        import alden_model_routes as routes
+        from urllib.error import HTTPError,URLError
+        cases=[(TimeoutError('private endpoint timed out'),'routed_llm_unavailable'),
+               (URLError('private endpoint unavailable'),'routed_llm_unavailable'),
+               (HTTPError('http://user:secret@127.0.0.1/private',401,'private',{},None),'routed_llm_authentication'),
+               (HTTPError('http://127.0.0.1/private',429,'private',{},None),'routed_llm_quota')]
+        for number,(failure,code) in enumerate(cases,90):
+            with self.subTest(code=code):
+                fetch=unittest.mock.Mock(side_effect=failure)
+                def select(root):return routes.catalog(root,fetcher=fetch)
+                generate=unittest.mock.Mock(side_effect=AssertionError('generation must not start'))
+                first=chat.process_input(self.root,request(number),self.token,select_model=select,generate=generate)
+                self.assertEqual(first['error_code'],code)
+                replay=chat.process_input(self.root,request(number),self.token,select_model=select,generate=generate)
+                self.assertEqual(replay.get('error_code'),code)
+                self.assertNotIn('private',json.dumps(first)+json.dumps(replay))
+                fetch.assert_called_once();generate.assert_not_called()
+
+    def test_adapter_catalog_rejection_keeps_its_reason_without_response_or_provider_health_write(self):
+        import alden_model_routes as routes
+        from urllib.error import HTTPError
+        for number,status,code in [(96,401,'routed_llm_authentication'),(97,429,'routed_llm_quota'),(98,503,'routed_llm_unavailable')]:
+            with self.subTest(status=status):
+                def catalog(root):
+                    def fetch(url):raise HTTPError(url,status,'private-provider-body',{},None)
+                    return routes.catalog(root,fetcher=fetch)
+                with patch('alden_routed_llm.catalog',side_effect=catalog), \
+                     patch('alden_routed_llm.CancellableLocalResponse') as transport, \
+                     patch('alden_routed_llm.record_result') as health:
+                    value=request(number)
+                    first=self.run_input(value,generate=chat.generate_input)
+                    self.assertEqual(first['error_code'],code)
+                    replay=self.run_input(value,generate=chat.generate_input)
+                    self.assertEqual(replay.get('error_code'),code)
+                    self.assertEqual(replay['generation']['request']['stage'],'selection')
+                    self.assertNotIn('response',replay['generation'])
+                    transport.assert_not_called();health.assert_not_called()
+
+
     def test_advertised_max_route_completes_and_replays_without_losing_effort(self):
         import alden_model_routes as routes
         from functools import partial

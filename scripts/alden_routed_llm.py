@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 import uuid
 from alden_local_http import CancellableLocalResponse
-from alden_model_routes import ROUTER, find_model, catalog, record_result
+from alden_model_routes import ROUTER, find_model, catalog, record_result, ModelCatalogError
 
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -186,7 +186,7 @@ class OpenCodexLlm:
             cancelled = token.is_cancelled()
             self.last_metrics["request"].update(state="cancelled" if cancelled else "failed", cancelled=cancelled)
             code = "cancelled" if cancelled else "quota" if isinstance(error, urllib.error.HTTPError) and error.code == 429 else "authentication" if isinstance(error, urllib.error.HTTPError) and error.code in {401, 403} else "unavailable"
-            reason = str(error) if isinstance(error, RoutedGenerationError) else "routed_llm_" + code
+            reason = str(error) if isinstance(error, (RoutedGenerationError, ModelCatalogError)) else "routed_llm_" + code
             self.last_metrics.update(stage=stage, error_code=reason)
             # A missing image, bad prompt or context failure says nothing about
             # provider readiness and must not poison the model picker indicator.
