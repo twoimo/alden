@@ -245,6 +245,7 @@ function placeOverviewStars(
   edges: ReadonlyArray<readonly [string, { source: string; target: string }]>,
   pinned: ReadonlySet<string>,
   nodes: readonly { id?: string; label?: string; category?: string }[],
+  semanticNodes: ReadonlySet<string>,
 ): Set<string> {
   const owned = new Set<string>();
   if (ids.length < 256 || pinned.size === 1) return owned;
@@ -286,7 +287,7 @@ function placeOverviewStars(
     const group = members.get(hub) ?? [hub];
     const disk = Math.min(.48, .035 * Math.sqrt(group.length));
     for (const id of group) {
-      if (pinned.has(id)) continue;
+      if (pinned.has(id) || semanticNodes.has(id)) continue;
       if (id === hub) { anchors.set(id, dest); owned.add(id); continue; }
       const offset = seed(id), span = Math.hypot(offset.x, offset.y, offset.z) || 1;
       const reach = .45 + .55 * ((hash(id) % 1000) / 1000);
@@ -1008,8 +1009,11 @@ export class SemanticLayoutEngine {
       const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
       anchors.set(id, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated));
     });
-    const starOwned = placeOverviewStars(ids, anchors, real, pinned, view.nodes);
-    placeDuplicateLabels(view.nodes, anchors, starOwned, pinned);
+    // Source hubs and equal titles are fallback geometry. They must not erase
+    // the positions already solved from admitted content affinities.
+    const semanticNodes = new Set(semantic.flatMap(([, pair]) => [pair.source, pair.target]));
+    const starOwned = placeOverviewStars(ids, anchors, real, pinned, view.nodes, semanticNodes);
+    placeDuplicateLabels(view.nodes, anchors, new Set([...starOwned, ...semanticNodes]), pinned);
     const dirtyIds = new Set<string>();
     for (const id of ids) {
       const prior = previousPositions.get(id), p = anchors.get(id)!;
