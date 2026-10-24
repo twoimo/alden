@@ -320,9 +320,16 @@ class CanonicalLoaderTests(unittest.TestCase):
     def test_unverified_health_never_imports_a_reader(self):
         for report in [{}, {'status': 'installation_consistent', 'skill_integrity': 'verified'},
                        {**self.healthy(), 'writes': 1}, {**self.healthy(), 'skill_integrity': {'status': 'manifest_invalid'}}]:
-            with patch.object(factory.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout=json.dumps(report))), \
-                 patch.object(factory, '_load_verified_sdk') as loader:
+            # Reach the health-report boundary using owned source fixtures.
+            # A missing developer SDK correctly fails at the earlier file gate.
+            with TemporaryDirectory(dir='/private/tmp') as temporary, ExitStack() as stack:
+                folder = Path(temporary)
+                self.source_fixture(folder)
+                health = self.isolate_modules(stack, folder)
+                health.return_value = SimpleNamespace(returncode=0, stdout=json.dumps(report))
+                loader = stack.enter_context(patch.object(factory, '_load_verified_sdk'))
                 with self.assertRaisesRegex(runtime.SourceBlocked, 'integrity_unverified'): factory.load_kakao_sdk()
+                health.assert_called_once()
                 loader.assert_not_called()
 
     def test_healthy_fixture_module_origins_are_verified_and_a_later_file_change_is_not_reloaded(self):
