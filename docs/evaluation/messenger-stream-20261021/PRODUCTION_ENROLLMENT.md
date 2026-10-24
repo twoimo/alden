@@ -133,6 +133,45 @@ bounded positive source journey below now have separate execution evidence.
 
 ## Native candidate execution, 2026-10-25
 
+### Subsequent room-failure isolation candidate
+
+A verified `room_not_found` response previously aborted the entire platform
+attempt before another room could publish or the normal index could run. The
+scheduler then applied target-wide backoff to otherwise accessible rooms. A
+second counterexample showed the same problem when recovering an activity
+receipt after the frontier commit.
+
+Only a native exact-room absence with read-only/schema confirmation and the
+same current account now receives room-scoped retry. Its existing 60-second
+room backoff and retained pages remain intact, while the bounded cycle may
+continue other rooms and index their authorized records. The collection result
+remains explicitly `partial`, including blocked-room counts; the settings
+schedule displays those counts after a successful index. Attempt completion
+means that bounded cycle/index finished, not that every room or its history was
+collected. Global identity, schema, read-only, integrity and unclassified source
+failures still abort the attempt. Absence is not used to delete stored originals
+or release stale activity; current-content read authorization remains separate.
+
+```mermaid
+stateDiagram-v2
+    [*] --> ReadExactRoom
+    ReadExactRoom --> RoomRetry: verified exact-room absence / no body
+    RoomRetry --> OtherRoom: keep room checkpoint and backoff
+    ReadExactRoom --> AbortAttempt: account, schema, readonly or unclassified failure
+    OtherRoom --> ScopedIndex: permitted publication succeeds
+    ScopedIndex --> PartialCycleComplete: index ready / report waiting rooms
+    RoomRetry --> ReadExactRoom: room retry expires
+    PartialCycleComplete --> [*]
+```
+
+This chart describes sequential boundaries; it is not a proof of atomicity or
+eventual availability. Owned implementation regressions cover one/all missing
+rooms, independent publication/indexing, room recovery, pending activity,
+unverified absences and account changes. A process-local broken variant removes
+the scope distinction and is rejected by both original counterexamples. The
+native execution in the following historical section predates this subsequent
+source delta and must not be treated as its installed/runtime acceptance.
+
 The signed candidate built from `fbad00f3f833054971c11d8696f0c4b67d8952b3`
 loaded the qualified local SDK and read 13,310 exact, previously observed keys
 in two native batches. It returned 13,218 available, 83 withheld and 9 unavailable

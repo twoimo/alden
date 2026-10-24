@@ -105,7 +105,10 @@ export function wireCollectionSchedule(load: typeof fetchSettingsAction = fetchS
       const retry=Number(target.retry_at)||0;
       const nextAt=target.last_state&&target.last_state!=='complete'&&retry>0?retry:Number(target.next_run)||0;
       entry.next.textContent=`${interval} · ${target.permitted===0?'접근 확인 필요':target.enabled===0?'대상 제외':aborted||globalPaused||paused?'중지됨':blocked?'확인 후 재개':target.manual_pending===true?'재실행 대기':nextAt<=Date.now()/1000?'실행 대기':'다음 '+time(nextAt)}`;
-      entry.last.textContent=`최근 ${lastStates[String(target.last_state)]??'결과 미확인'} · ${time(target.last_finished??target.last_success)}`;
+      const waitingRooms=target.collection_blocked_rooms;
+      const partial=target.last_state==='complete'&&target.collection_status==='partial'&&
+        typeof waitingRooms==='number'&&Number.isInteger(waitingRooms)&&waitingRooms>0&&waitingRooms<=100000;
+      entry.last.textContent=`최근 ${partial?`일부 방 대기 ${waitingRooms.toLocaleString()}개`:lastStates[String(target.last_state)]??'결과 미확인'} · ${time(target.last_finished??target.last_success)}`;
       const acquisition=target.acquisition&&typeof target.acquisition==='object'?target.acquisition as Row:{};
       entry.source.hidden=target.acquisition_supported!==true&&acquisition.enabled!==true;
       entry.source.dataset.enabled=String(acquisition.enabled===true);entry.source.dataset.revision=String(acquisition.revision??0);

@@ -11,6 +11,23 @@ beforeEach(()=>{vi.useFakeTimers();document.body.innerHTML='<section id="setting
 afterEach(()=>{for(const component of owned.splice(0))component.dispose();vi.useRealTimers();document.body.replaceChildren();});
 const setup=(load:ReturnType<typeof vi.fn<typeof fetchSettingsAction>>)=>{const component=wireCollectionSchedule(load);owned.push(component);component.select('history');return component;};
 describe('native collection schedule',()=>{
+  it('shows room-scoped waiting after successful indexing and clears it after recovery',async()=>{
+    const partial=result({targets:[{...result().targets[0],collection_status:'partial',collection_blocked_rooms:3}]});
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(partial).mockResolvedValue(result());
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    expect(document.body.textContent).toContain('일부 방 대기 3개');
+    expect(document.querySelector<HTMLButtonElement>('.collection-run')!.disabled).toBe(false);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(document.body.textContent).not.toContain('일부 방 대기');
+    expect(document.body.textContent).toContain('최근 완료');
+  });
+  it.each([0,-1,1.5,100001,'3',NaN])('does not treat malformed room counts as successful partial collection (%s)',async(count)=>{
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValue(result({targets:[{...result().targets[0],
+      collection_status:'partial',collection_blocked_rooms:count,last_state:'failed'}]}));
+    setup(load);await vi.advanceTimersByTimeAsync(0);
+    expect(document.body.textContent).not.toContain('일부 방 대기');
+    expect(document.body.textContent).toContain('최근 실패');
+  });
   it('enables live input detection with the observed CAS revision and reads back actual monitor state',async()=>{
     const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(result({realtime:{enabled:false,revision:3,state:'disabled',inputs:[]}}))
       .mockResolvedValue(result({realtime:{enabled:true,revision:4,state:'watching',inputs:[]}}));

@@ -317,11 +317,13 @@ def collect(root, target, *, cancelled=lambda: False, publication_guard=None, re
             raise RuntimeError('collection_cancelled')
         result = source.step(mode=mode, cancelled=cancelled)
         results.append(result)
-        if result['state'] in ('blocked', 'busy', 'cancelled'):
+        if result['state'] in ('busy', 'cancelled') or result['state'] == 'blocked' and result.get('scope') != 'room':
             raise RuntimeError(result.get('reason', 'messenger_' + result['state']))
     with (publication_guard() if publication_guard else nullcontext()), source.store.database() as db:
         if cancelled():
             raise RuntimeError('collection_cancelled')
         db.execute('UPDATE targets SET last_success=?,next_run=?+interval_seconds,last_error=NULL WHERE id=?', (time.time(), time.time(), target))
-    return {'target_id': target, 'steps': results, 'status': source.status(),
+    status = source.status()
+    return {'target_id': target, 'steps': results, 'status': status,
+            'state': 'partial' if status['blocked_rooms'] else 'complete',
             'coverage': 'bounded round-robin local backfill/live/reconciliation; original source server coverage unverified'}

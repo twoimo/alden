@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from types import SimpleNamespace
 import json
 import hashlib
 import sys
@@ -12,7 +13,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from alden_collection import CollectionStore, read_action
 from alden_messenger_runtime import Frontier
-from alden_collection_scheduler import CollectionScheduler
+from alden_collection_scheduler import CollectionScheduler, settings_action
 from alden_collection_retrieval import index_text
 from alden_realtime_collection import RealtimeCollection
 from alden_abort import AbortController
@@ -172,6 +173,112 @@ class ProductionTests(unittest.TestCase):
         with CollectionStore(self.root).database() as db:
             self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], before)
         self.assertTrue(self.graph()['nodes'])
+
+    @contextmanager
+    def missing_room_adapter(self, missing=('a',)):
+        from alden_messenger_runtime import KakaoReader
+        adapter = KakaoReader(SimpleNamespace(snapshot=lambda **options: {
+            'status': 'room_not_found', 'db_readonly_verified': True, 'schema_decryption_verified': True}))
+        adapter.identity = self.reader.identity
+        original = self.reader.page
+        original_verify = self.reader.verify_prepared
+        original_revisions = self.reader.content_revisions
+        def page(room, cursor):
+            return adapter.page(room, cursor) if room in missing else original(room, cursor)
+        def verify(payload):
+            return adapter.page(payload['room'], None) if payload['room'] in missing else original_verify(payload)
+        def revisions(keys):
+            return [dict(row, state='missing', content_hash=None) if row['room_id'] in missing else row
+                    for row in original_revisions(keys)]
+        with patch.object(self.reader, 'page', side_effect=page), patch.object(self.reader, 'verify_prepared', side_effect=verify), \
+                patch.object(self.reader, 'content_revisions', side_effect=revisions):
+            yield
+
+    def test_missing_room_does_not_delay_other_room_publication_or_index(self):
+        enrolled = self.enroll()
+        RealtimeCollection(self.root).update(True, 0)
+        scheduler = CollectionScheduler(self.root)
+        with self.missing_room_adapter(), patch.object(scheduler, '_voice_busy', return_value=False):
+            result = scheduler.cycle(indexer=index_text)
+        self.assertEqual(result['state'], 'complete', result)
+        self.assertEqual(result['attempts'][0]['stage'], 'index')
+        self.assertEqual(len(self.graph()['nodes']), 1)
+        with scheduler.database() as db:
+            attempt = json.loads(db.execute('SELECT result FROM attempts').fetchone()[0])
+            state = db.execute('SELECT failures,blocked FROM target_state WHERE target_id=?', (enrolled['target_id'],)).fetchone()
+        self.assertEqual(tuple(state), (0, 0))
+        self.assertEqual(attempt['collection']['state'], 'partial')
+        self.assertEqual(attempt['collection']['status']['blocked_rooms'], 1)
+        self.assertEqual(attempt['index']['state'], 'ready')
+        status = settings_action(self.root, 'collection-scheduler-status')
+        self.assertEqual(status['targets'][0]['collection_status'], 'partial')
+        self.assertEqual(status['targets'][0]['collection_blocked_rooms'], 1)
+
+    def test_all_missing_rooms_remain_explicitly_partial_and_publish_nothing(self):
+        target = self.enroll()['target_id']
+        with self.missing_room_adapter(('a', 'b')):
+            result = production.collect(self.root, target, reader=self.reader)
+        self.assertEqual(result['state'], 'partial')
+        self.assertEqual(result['status']['blocked_rooms'], 2)
+        self.assertEqual(self.graph()['nodes'], [])
+        with CollectionStore(self.root).database() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM events').fetchone()[0], 0)
+
+    def test_missing_room_rejoins_after_its_own_retry_without_global_backoff(self):
+        self.enroll()
+        RealtimeCollection(self.root).update(True, 0)
+        scheduler = CollectionScheduler(self.root)
+        with self.missing_room_adapter(), patch.object(scheduler, '_voice_busy', return_value=False):
+            first = scheduler.cycle(indexer=index_text)
+        self.assertEqual(first['state'], 'complete', first)
+        with self.source().database() as db:
+            db.execute("UPDATE rooms SET retry_at=0 WHERE id='a'")
+        with patch.object(scheduler, '_voice_busy', return_value=False):
+            second = scheduler.cycle(indexer=index_text, now=__import__('time').time() + 6)
+        self.assertEqual(second['state'], 'complete', second)
+        self.assertEqual(len(self.graph()['nodes']), 2)
+        self.assertEqual(self.source().status()['blocked_rooms'], 0)
+
+    def test_readonly_failure_still_stops_the_whole_collection_before_other_rooms(self):
+        from alden_messenger_runtime import KakaoReader
+        self.enroll()
+        RealtimeCollection(self.root).update(True, 0)
+        scheduler = CollectionScheduler(self.root)
+        adapter = KakaoReader(SimpleNamespace(snapshot=lambda **options: {'status': 'ok', 'db_readonly_verified': False}))
+        adapter.identity = self.reader.identity
+        with patch.object(self.reader, 'page', side_effect=adapter.page), patch.object(scheduler, '_voice_busy', return_value=False):
+            result = scheduler.cycle(indexer=lambda *args, **options: self.fail('index after readonly failure'))
+        self.assertEqual(result['state'], 'partial', result)
+        self.assertEqual(result['attempts'][0]['stage'], 'collection')
+        self.assertEqual(result['attempts'][0]['error'], 'kakao_readonly_or_schema_unconfirmed')
+        self.assertEqual(self.graph()['nodes'], [])
+
+    def test_missing_room_during_activity_recovery_does_not_block_other_rooms_or_release_stale_activity(self):
+        target = self.enroll()['target_id']
+        source = self.source()
+        with patch.object(source, '_release_activity', side_effect=SystemExit('after frontier commit')):
+            with self.assertRaisesRegex(SystemExit, 'after frontier commit'):
+                source.step()
+        with self.missing_room_adapter():
+            result = production.collect(self.root, target, reader=self.reader)
+            self.assertEqual(result['state'], 'partial')
+            self.assertEqual(result['status']['blocked_rooms'], 1)
+            self.assertEqual(result['status']['pending_activity'], 1)
+            self.assertEqual(len(self.graph()['nodes']), 1)
+            self.assertEqual(read_action(self.root, 'collection-graph', json.dumps({'projects': ['messenger'], 'activity': True}))['items'], [])
+
+    def test_unverified_missing_room_or_changed_account_never_gets_room_only_scope(self):
+        from alden_messenger_runtime import KakaoReader, RoomUnavailable, SourceBlocked
+        for changes, identities in [({'db_readonly_verified': False}, ['123', '123']),
+                                    ({'schema_decryption_verified': False}, ['123', '123']),
+                                    ({'reason': 'current_account_identity_unavailable'}, ['123', '123']),
+                                    ({}, ['123', '456'])]:
+            with self.subTest(changes=changes, identities=identities):
+                response = {'status': 'room_not_found', 'db_readonly_verified': True, 'schema_decryption_verified': True, **changes}
+                adapter = KakaoReader(SimpleNamespace(snapshot=lambda **options: response))
+                with patch.object(adapter, 'identity', side_effect=identities), self.assertRaises(SourceBlocked) as failure:
+                    adapter.page('a', None)
+                self.assertNotIsInstance(failure.exception, RoomUnavailable)
 
     def test_scheduler_indexes_and_updates_the_normal_graph_without_snapshot_fallback(self):
         enrolled = self.enroll()

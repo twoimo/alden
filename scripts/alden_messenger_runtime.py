@@ -64,6 +64,10 @@ class SourceBlocked(RuntimeError):
     pass
 
 
+class RoomUnavailable(SourceBlocked):
+    """A verified source read found this exact room absent; other rooms may run."""
+
+
 class MessengerAuthority:
     """Explicit read-side composition; never discovers/adopts a native account."""
     def __init__(self, frontiers):
@@ -254,7 +258,14 @@ class KakaoReader:
             **({'message_id': message_id} if message_id is not None else {}))
         if result.get('status') != 'ok':
             reason = result.get('reason') or result.get('status') or 'unavailable'
-            raise SourceBlocked('kakao_reader_' + (reason if isinstance(reason, str) and re.fullmatch(r'[a-z0-9_]{1,96}', reason) else 'unavailable'))
+            error = 'kakao_reader_' + (reason if isinstance(reason, str) and re.fullmatch(r'[a-z0-9_]{1,96}', reason) else 'unavailable')
+            if result.get('status') == 'room_not_found' and not result.get('reason'):
+                if result.get('db_readonly_verified') is not True or result.get('schema_decryption_verified') is not True:
+                    raise SourceBlocked('kakao_readonly_or_schema_unconfirmed')
+                if self.identity() != account:
+                    raise SourceBlocked('kakao_account_changed_during_page')
+                raise RoomUnavailable(error)
+            raise SourceBlocked(error)
         if result.get('db_readonly_verified') is not True or result.get('schema_decryption_verified') is not True:
             raise SourceBlocked('kakao_readonly_or_schema_unconfirmed')
         if self.identity() != account:
@@ -1096,7 +1107,8 @@ class Frontier:
             db.execute('UPDATE rooms SET checked=?,error=?,retry_at=? WHERE id=?',
                        (time.time(), str(error)[:160], time.time() + 60, room))
             self._checked(db, room, mode)
-        return {'state': 'blocked', 'room_id': room, 'reason': str(error)}
+        return {'state': 'blocked', 'room_id': room, 'reason': str(error),
+                **({'scope': 'room'} if isinstance(error, RoomUnavailable) else {})}
 
     def step(self, *, mode='backfill', cancelled=lambda: False, after_publish=lambda: None):
         if mode not in {'backfill', 'live', 'reconcile'}:
@@ -1113,7 +1125,8 @@ class Frontier:
                 raise ValueError('messenger_account_changed')
             self._allowed()
             with self.database() as db:
-                release = db.execute('''SELECT a.page FROM activity_releases a JOIN pages p ON p.id=a.page
+                release = db.execute('''SELECT a.page,p.room,json_extract(p.payload,'$.mode') AS mode
+                    FROM activity_releases a JOIN pages p ON p.id=a.page
                     WHERE a.state='pending' AND a.retry_at<=? ORDER BY p.rowid LIMIT 1''', (time.time(),)).fetchone()
                 pending = db.execute("SELECT p.id,p.room,json_extract(p.payload,'$.mode') AS mode FROM pages p JOIN rooms r ON r.id=p.room WHERE p.state='prepared' AND NOT EXISTS(SELECT 1 FROM retired_policy_pages x WHERE x.page=p.id) AND r.retry_at<=? ORDER BY p.rowid LIMIT 1", (time.time(),)).fetchone()
                 eligibility = {'backfill': "json_extract(r.frontier,'$.back_done')=0",
@@ -1131,6 +1144,8 @@ class Frontier:
                     with self.database() as db:
                         db.execute('UPDATE activity_releases SET error=?,retry_at=? WHERE page=?',
                                    (str(error)[:160], time.time() + 60, release['page']))
+                    if isinstance(error, RoomUnavailable):
+                        return {**self._blocked(release['room'], error, release['mode']), 'job': release['page']}
                     return {'state':'blocked', 'reason':str(error), 'job':release['page']}
             if pending:
                 try:
