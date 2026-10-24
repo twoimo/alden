@@ -405,8 +405,24 @@ def require_collection_source_root(state_root, *callbacks):
             raise ValueError('collection_source_root_mismatch') from error
 
 
+def source_callbacks(state_root, *, source_access=None, source_revision=None, source_context=None):
+    callbacks = dict(source_access=source_access, source_revision=source_revision, source_context=source_context)
+    # An explicit caller contract is never filled in or replaced implicitly.
+    if any(value is not None for value in callbacks.values()):
+        return callbacks
+    path = Path(state_root) / 'knowledge/collection/production-messengers.json'
+    if path.exists() or path.is_symlink():
+        from alden_messenger_production import ProductionAuthority
+        authority = ProductionAuthority(Path(state_root))
+        return dict(source_access=authority.access, source_revision=authority.revision,
+                    source_context=authority.retrieval_context)
+    return callbacks
+
+
 class CollectionStore:
     def __init__(self, state_root: Path, *, source_access=None, source_revision=None):
+        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision)
+        source_access, source_revision = callbacks['source_access'], callbacks['source_revision']
         require_collection_source_root(state_root, source_access, source_revision)
         self.source_access = source_access
         self.source_revision = source_revision
@@ -555,6 +571,8 @@ class CollectionStore:
 
     @classmethod
     def open_existing(cls, state_root: Path, *, source_access=None, source_revision=None):
+        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision)
+        source_access, source_revision = callbacks['source_access'], callbacks['source_revision']
         require_collection_source_root(state_root, source_access, source_revision)
         path = state_root.absolute() / "knowledge" / "collection" / "collection.sqlite3"
         if not path.exists():

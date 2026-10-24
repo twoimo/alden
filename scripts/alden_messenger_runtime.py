@@ -1,10 +1,10 @@
-"""Isolated all-room messenger frontier candidate; not an installed watcher.
+"""All-room frontier with explicit evaluation or guarded production enrollment.
 
 Readers must use their canonical account/visibility/consent gates. No transport,
 source SQL, model, source mutation, account switch or fabricated activity lives
 here. A durable prepared page bridges a crash between the two SQLite commits.
 """
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 from types import MappingProxyType
 import fcntl
@@ -276,6 +276,14 @@ class KakaoReader:
     def verify_prepared(self, payload):
         verify_prepared_items(payload['items'], self.refresh_prepared(payload)['items'])
 
+    def content_revisions(self, keys):
+        account = self.identity()
+        result = self.canonical.snapshot(revision_keys=keys)
+        if (result.get('status') != 'ok' or result.get('revision_scope') != 'current-account-message-content-v1'
+                or not isinstance(result.get('revision_rows'), list) or self.identity() != account):
+            raise SourceBlocked('kakao_content_revisions_unavailable')
+        return result['revision_rows']
+
     def refresh_prepared(self, payload):
         # Exact-ID lookup avoids advancing or replacing the retained page when
         # newer arrivals have moved its rows out of the latest window.
@@ -412,27 +420,36 @@ def create_root(path):
 
 class Frontier:
     @staticmethod
-    def _existing_root(root, platform, account):
+    def _existing_root(root, platform, account, *, production=False, active=True):
         if platform not in {'kakaotalk', 'telegram'} or not isinstance(account, str) or not account:
             raise ValueError('messenger_identity_invalid')
+        if production:
+            from alden_messenger_production import binding
+            binding(Path(root), platform, account, active=active)
+            return Path(root)
         return existing_messenger_root(root)
 
     @classmethod
-    def open_existing(cls, root, platform, account, reader):
+    def open_existing(cls, root, platform, account, reader, *, production=False):
         """Load explicitly selected enrolled state without creating/migrating it."""
-        root = cls._existing_root(root, platform, account)
+        root = cls._existing_root(root, platform, account, production=production)
         if not root.is_absolute() or '..' in root.parts:
             raise ValueError('messenger_existing_absolute_root_required')
-        folder = root / ('frontier-' + platform)
+        if production:
+            from alden_messenger_production import frontier_folder
+            folder = frontier_folder(root, platform, account)
+        else:
+            folder = root / ('frontier-' + platform)
         path = folder / 'frontier.sqlite3'
         if not path.is_file():
             raise ValueError('messenger_existing_frontier_missing')
-        if any(p.is_symlink() for p in (path, folder)) or path.stat().st_uid != os.geteuid():
+        if any(p.is_symlink() for p in (path, *path.parents)) or path.stat().st_uid != os.geteuid():
             raise ValueError('messenger_frontier_unsafe')
         if reader.identity() != account:
             raise ValueError('messenger_account_changed')
         source = cls.__new__(cls)
         source.root, source.platform, source.account, source.reader = root, platform, account, reader
+        source.production = production
         source._source_root, source.folder, source.path, source.read_only = root, folder, path, True
         source.target = identity('target-' + platform, 'local-db:' + account)
         with source.database() as db:
@@ -455,12 +472,17 @@ class Frontier:
             raise ValueError('messenger_account_changed')
         return source
 
-    def __init__(self, root, platform, account, reader):
-        root = self._existing_root(root, platform, account)
+    def __init__(self, root, platform, account, reader, *, production=False):
+        root = self._existing_root(root, platform, account, production=production, active=False)
         self.root, self.platform, self.account, self.reader = root, platform, account, reader
+        self.production = production
         self.read_only = False
         self._source_root = root.absolute()
-        self.folder = safe_directory(root / ('frontier-' + platform))
+        if production:
+            from alden_messenger_production import frontier_folder
+            self.folder = safe_directory(frontier_folder(root, platform, account))
+        else:
+            self.folder = safe_directory(root / ('frontier-' + platform))
         self.path = self.folder / 'frontier.sqlite3'
         with self.database() as db:
             db.executescript('''CREATE TABLE IF NOT EXISTS rooms(
@@ -521,13 +543,20 @@ class Frontier:
         with self.store.database() as db:
             present = db.execute('SELECT 1 FROM targets WHERE id=?', (self.target,)).fetchone()
         if not present:
+            if production:
+                raise ValueError('messenger_production_target_missing')
             self.store.register(platform=platform, original_id=account, kind='local-db', label=platform,
                 projects=[PROJECT], config={'adapter': 'messenger-evaluation', 'account': account})
 
     def collection_source_root(self):
         root = self._source_root
+        if getattr(self, 'production', False):
+            from alden_messenger_production import frontier_folder
+            expected_folder = frontier_folder(root, self.platform, self.account)
+        else:
+            expected_folder = root / ('frontier-' + self.platform)
         if (self.root.absolute() != root
-            or self.path.parent.parent != root
+            or self.folder != expected_folder or self.path != expected_folder / 'frontier.sqlite3'
             or hasattr(self, 'store') and self.store.path != root / 'knowledge/collection/collection.sqlite3'):
             raise ValueError('messenger_frontier_binding_invalid')
         return root
@@ -539,7 +568,7 @@ class Frontier:
             raise ValueError('messenger_frontier_unsafe')
         if readonly:
             self.collection_source_root()
-            self._existing_root(self.root, self.platform, self.account)
+            self._existing_root(self.root, self.platform, self.account, production=getattr(self, 'production', False))
         with closing(sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True, timeout=.5)
                      if readonly else sqlite3.connect(self.path, timeout=.5)) as db:
             db.row_factory = sqlite3.Row
@@ -1038,10 +1067,18 @@ class Frontier:
                      'equal-time order is not conversational causality'}
     @contextmanager
     def _publication_guard(self, payload):
+        external = getattr(self, 'external_publication_guard', None)
+        # Source-device/reader probes precede the scheduler's abort commit lock.
         self._authorize_publication(payload)
-        yield
+        with external() if external is not None else nullcontext():
+            if external is not None:
+                self._allowed()
+            yield
 
     def _allowed(self):
+        if getattr(self, 'production', False):
+            from alden_messenger_production import binding
+            binding(self.root, self.platform, self.account)
         target = self.store.target(self.target)
         if not target['enabled'] or not any(p['permission'] != 'denied' for p in target['projects']):
             raise SourceBlocked('messenger_target_disabled_or_denied')
@@ -1124,7 +1161,8 @@ class Frontier:
         return {'rooms': len(rooms), 'backfilled_rooms': sum(json.loads(r['frontier'])['back_done'] for r in rooms),
                 'blocked_rooms': sum(r['error'] is not None for r in rooms), 'prepared_pages': pending,
                 'pending_activity': pending_activity, 'blocked_activity': blocked_activity,
-                'triage': triage, 'unique_candidate_contents': unique, 'production_activated': False}
+                'triage': triage, 'unique_candidate_contents': unique,
+                **({'enrollment_mode': 'production'} if getattr(self, 'production', False) else {'production_activated': False})}
 
     def origins(self, content_hash, *, offset=0, limit=50):
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:

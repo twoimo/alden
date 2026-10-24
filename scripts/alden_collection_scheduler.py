@@ -58,7 +58,8 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
                 'interval':{'operation','target_id','interval_seconds','expected_interval'},
                 'run':{'operation','target_id','request_id'},
                 'acquisition':{'operation','target_id','enabled','expected_revision'},
-                'realtime':{'operation','target_id','enabled','expected_revision'}}
+                'realtime':{'operation','target_id','enabled','expected_revision'},
+                'messenger-enroll':{'operation','projects'}}
         if not isinstance(operation,str) or operation not in fields or set(options)-fields[operation]:
             raise ValueError('collection_scheduler_control_invalid')
         target=options.get('target_id')
@@ -71,6 +72,9 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
             with scheduler.control_lock():
                 RealtimeCollection(state_root).update(options.get('enabled'),options.get('expected_revision'))
             if options.get('enabled'):install_schedule(state_root)
+        elif operation=='messenger-enroll':
+            from alden_messenger_production import enroll
+            enroll(Path(state_root), options.get('projects'))
         elif not target:raise ValueError('collection_scheduler_target_invalid')
         elif operation=='interval':
             for field in ('interval_seconds','expected_interval'):
@@ -374,7 +378,13 @@ class CollectionScheduler:
                   FROM acquisition_policy p LEFT JOIN attempts a ON a.target_id=p.target_id WHERE p.enabled=1 GROUP BY p.target_id
                   HAVING last_started<=? ORDER BY last_started,p.target_id''',(stamp-REMOTE_SECONDS,))} if realtime_enabled else {}
             with store.database() as db:
-                eligible=sorted(pending|manual.keys()|realtime_pending.keys()|remote_due.keys())
+                messenger_targets={row[0] for row in db.execute("SELECT id FROM targets WHERE json_extract(config,'$.adapter')='messenger-db'")}
+            with self.database() as db:
+                messenger_started=dict(db.execute('SELECT target_id,MAX(started) FROM attempts GROUP BY target_id'))
+            messenger_due={target:messenger_started.get(target,0) for target in messenger_targets
+                           if realtime_enabled and messenger_started.get(target,0)<=stamp-5}
+            with store.database() as db:
+                eligible=sorted(pending|manual.keys()|realtime_pending.keys()|remote_due.keys()|messenger_due.keys())
                 due=[row[0] for row in db.execute('''SELECT t.id FROM targets t WHERE t.enabled=1 AND (t.next_run<=? OR t.id IN ('PLACEHOLDER'))
                   AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id AND p.permission!='denied')
                   ORDER BY t.next_run,t.id'''.replace("'PLACEHOLDER'",','.join('?' for _ in eligible) or 'NULL'),(stamp,*eligible))]
@@ -382,16 +392,18 @@ class CollectionScheduler:
             manual_order={target:index for index,target in enumerate(manual)}
             due.sort(key=lambda target:(0,manual_order[target]) if target in manual else
                 (1,realtime_pending[target]['queued_at']) if target in realtime_pending else
-                (2,remote_due[target]) if target in remote_due else (3,order[target]))
+                (2,remote_due[target]) if target in remote_due else
+                (2,messenger_due[target]) if target in messenger_due else (3,order[target]))
             due=[target for target in due if (not selected or target==selected) and not retry.get(target,{}).get('blocked')
-                 and retry.get(target,{}).get('retry_at',0)<=stamp and not self._paused(target)]
+                 and retry.get(target,{}).get('retry_at',0)<=stamp and not self._paused(target)
+                 and (target not in messenger_targets or realtime_enabled or target in manual)]
             if not due:return {'state':'idle','attempts':[]}
             with self.database() as db:db.execute('INSERT INTO cycles VALUES(?,?,NULL,?)',(cycle,stamp,'running'))
             for target_id in due:
                 if selected and target_id!=selected:continue
                 if len(attempts)>=max_targets or time.monotonic()-started>=max_seconds:break
                 previous=retry.get(target_id,{})
-                live_attempt=target_id not in manual and (target_id in realtime_pending or target_id in remote_due)
+                live_attempt=target_id not in manual and (target_id in realtime_pending or target_id in remote_due or target_id in messenger_due)
                 if previous.get('blocked') or previous.get('retry_at',0)>stamp or self._paused(target_id):continue
                 if stopping() or token.is_cancelled() or self._paused():break
                 with self.database() as db:
@@ -442,16 +454,21 @@ class CollectionScheduler:
                     stage='collection'
                     try:input_signature=realtime.signature(store.target(target_id)) if realtime_enabled else None
                     except (OSError,ValueError,KeyError):input_signature=None
-                    result['collection']=collector(store,target_id,cancelled=cancelled,publication_guard=publication_guard)
+                    if target_id in messenger_targets:
+                        from alden_messenger_production import collect
+                        result['collection']=collect(self.state_root,target_id,cancelled=cancelled,publication_guard=publication_guard)
+                    else:
+                        result['collection']=collector(store,target_id,cancelled=cancelled,publication_guard=publication_guard)
                     if cancelled():raise AldenCancelled('collection_scheduler_cancelled')
-                    stage='capture';result['capture']=capturer(store,target_id,cancelled=cancelled)
+                    stage='capture';result['capture']=({'state':'retained_by_frontier','source':'canonical_readonly_local_db'}
+                        if target_id in messenger_targets else capturer(store,target_id,cancelled=cancelled))
                     if cancelled():raise AldenCancelled('collection_scheduler_cancelled')
                     stage='index'
                     projects=[p['project'] for p in store.target(target_id)['projects'] if p['permission']!='denied']
                     result['index']=indexer(self.state_root,projects,cancelled=cancelled)
                     if result['index'].get('state') not in {'ready','empty'}:
                         state='pending';error='collection_index_pending'
-                    elif realtime_enabled:realtime.acknowledge(store.target(target_id),input_signature,
+                    elif realtime_enabled and input_signature is not None:realtime.acknowledge(store.target(target_id),input_signature,
                         observed_queued=realtime_pending.get(target_id,{}).get('queued'))
                 except (AldenCancelled,TargetBusy) as exc:
                     state='paused' if isinstance(exc,AldenCancelled) else 'busy';error=type(exc).__name__

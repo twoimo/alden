@@ -4,6 +4,10 @@ Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
 Latest runtime delta: [explicit existing-state MCP factory](RUNTIME_FACTORY.md).
+The next [guarded production enrollment candidate](PRODUCTION_ENROLLMENT.md)
+connects the existing scheduler/read boundaries, while requiring a canonical
+current-content revision batch before it can be activated. Native SDK support
+and installed promotion remain incomplete.
 The maintained messenger implementation is packaged under scripts, with legacy
 imports forwarding to it. Standard CLI/stdio opens existing enrollment using
 fresh request-bound authority. Controlled SDK journeys pass; actual SDK startup

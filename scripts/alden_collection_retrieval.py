@@ -8,7 +8,7 @@ import sqlite3
 import struct
 import unicodedata
 
-from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, require_collection_source_root, korean_literal_plan, korean_literal_matches, korean_literal_sql
+from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity, safe_directory, require_relation_binding, require_collection_source_root, korean_literal_plan, korean_literal_matches, korean_literal_sql, source_callbacks
 from alden_collection import integer_digit_query as _integer_digit_query, integer_digit_matches as _integer_digit_matches
 from alden_content_evidence import POLICY as CONTENT_POLICY, content_evidence_class, declared_source_annotations, ANNOTATION_FIELDS
 from alden_source_text import TEXT_VERSION, project_source_text
@@ -657,6 +657,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None,
              source_access=None, source_revision=None, source_context=None, search_strategy='complete'):
     import auto_reply_knowledge_graph as kg
+    callbacks = source_callbacks(root, source_access=source_access, source_revision=source_revision, source_context=source_context)
+    source_access, source_revision, source_context = (callbacks[key] for key in ('source_access', 'source_revision', 'source_context'))
     projects = _scope(projects)
     if search_strategy not in ('complete','indexed-lexical'):
         raise ValueError('collection_search_strategy_invalid')
