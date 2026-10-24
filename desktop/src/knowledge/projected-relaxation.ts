@@ -82,8 +82,8 @@ export function relaxProjectedCircles(input: readonly ProjectedCircle[], viewpor
     accumulate(0,true);
     // A retained correction is already a settled display choice. Reprojection
     // repairs new core contacts without repeatedly spending optional whitespace.
-    // Finish with core correction; a final gap pass could recreate overlap.
-    if (!retainedCorrection && !coreContacts && tested < budget && pass < limits.passes-1) accumulate(gap,false);
+    // Extra convergence rounds are for cores only, not repeated whitespace.
+    if (!retainedCorrection && !coreContacts && tested < budget && pass < Math.floor(limits.passes/2)) accumulate(gap,false);
     diagnostics.passes++;
     if (!contacts) break;
     for (let i = 0; i < count; i++) if (active[i] && !pinned.has(i)) {

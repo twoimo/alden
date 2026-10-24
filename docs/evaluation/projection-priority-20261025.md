@@ -22,7 +22,9 @@ semantic force, label policy, model, index or persistent data is changed.
 
 The node2048/pair131072/shift10px caps stay unchanged. The pass cap is16
 (previously8), allowing sparse core-only rounds to converge within the same
-arithmetic pair budget. The first actual8-pass candidate improved compact371→33
+arithmetic pair budget. Optional whitespace uses at most the first8 rounds;
+extra rounds are exclusively for actual cores, avoiding an accidental doubling
+of optional whitespace work. The first actual8-pass candidate improved compact371→33
 but left3 default-size contacts, so that candidate was not installed. The new core and gap
 check/contact counters make admission observable. WithN admitted points andP
 passes, storage remainsO(N); up to two grids are built per pass. Adversarial dense
