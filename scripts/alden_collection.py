@@ -74,6 +74,17 @@ def overview_label_tier(label) -> int:
     return 0
 
 
+def _overview_text_lines(body):
+    """Saved content lines shared by display titles and overview admission."""
+    for raw in body.splitlines():
+        line = ' '.join(raw.split())
+        if not line or re.fullmatch(r'\d+\s*시간', line) or re.fullmatch(r'@?[A-Za-z0-9_.]+', line):
+            continue
+        if _DISPLAY_LINK_LINE.fullmatch(line) or _DISPLAY_REACTION_LINE.fullmatch(line):
+            continue
+        yield line
+
+
 def overview_display_label(label, body=None) -> str:
     """Show a saved title, or the first substantive line when the title is blank.
 
@@ -86,14 +97,7 @@ def overview_display_label(label, body=None) -> str:
     if not isinstance(body, str):
         return ''
     short_korean = english = ''
-    for raw in body.splitlines():
-        line = ' '.join(raw.split())
-        if not line or re.fullmatch(r'\d+\s*시간', line) or re.fullmatch(r'@?[A-Za-z0-9_.]+', line):
-            continue
-        # Legacy export headers locate/count a source; a following saved line
-        # makes a more useful display title. The complete body stays retained.
-        if _DISPLAY_LINK_LINE.fullmatch(line) or _DISPLAY_REACTION_LINE.fullmatch(line):
-            continue
+    for line in _overview_text_lines(body):
         if re.search(r'[가-힣]', line):
             if len(line) >= 12:
                 return line[:80]
@@ -130,8 +134,9 @@ def overview_sample_tier(label, kind) -> int:
 def overview_sample_rank(label, body, kind) -> int:
     """Overview order when the stored title and body are both available.
 
-    An untitled source whose first line is only a short post stays stored.
-    A saved title, and an untitled note of at least 40 characters, do not.
+    A short untitled post stays stored without filling the overview. Count
+    substantive saved lines across the body, not just its first display line;
+    export headers and numeric counters do not make a short post substantive.
     """
     shown = overview_display_label(label if isinstance(label, str) else '', body if isinstance(body, str) else '')
     named = kind if isinstance(kind, str) else ''
@@ -139,8 +144,15 @@ def overview_sample_rank(label, body, kind) -> int:
     if tier >= 3:
         return tier
     stored = label.strip() if isinstance(label, str) else ''
-    if not stored and named == 'source' and len(shown.strip()) < 40:
-        return 3
+    if not stored and named == 'source':
+        size = 0
+        for line in _overview_text_lines(body if isinstance(body, str) else ''):
+            if re.search(r'[A-Za-z가-힣]', line):
+                size += len(line)
+            if size >= 40:
+                break
+        if size < 40:
+            return 3
     return tier
 
 

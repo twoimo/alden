@@ -47,6 +47,45 @@ class CollectionTests(unittest.TestCase):
                          '지원 기간 안내 https://example.com/apply 를 확인했습니다.'):
             self.assertEqual(overview_display_label('', sentence + '\n다음 설명입니다.'), sentence)
 
+    def test_overview_multiline_article_is_not_lost_for_a_short_first_line(self):
+        from alden_collection import overview_sample_rank
+        body = ('example_author\n1시간\n서류 평가의 핵심 기준입니다.\n'
+                '직무에서 요구하는 역량을 경험과 연결해 설명합니다.\n'
+                '성과를 비교할 때는 역할과 측정 기간도 함께 적습니다.')
+        self.assertLess(len(overview_display_label('', body)), 40)
+        self.assertEqual(overview_sample_rank('', body, 'source'), 0)
+
+    def test_overview_short_note_does_not_gain_substance_from_export_padding(self):
+        from alden_collection import overview_sample_rank
+        for padding in ('\n1\n/\n2\n6\n1\n3',
+                        '\n- 링크: https://example.com/' + 'a' * 100,
+                        '\n- 반응: 좋아요 1234567 · 답글 1234567 · 리포스트 1234567',
+                        '\n' + 'example_author\n1시간\n' * 10):
+            with self.subTest(padding=padding):
+                self.assertEqual(overview_sample_rank('', '짧은 소식입니다.' + padding, 'source'), 3)
+
+    def test_overview_and_affinity_refs_keep_multiline_articles_and_preserve_sources(self):
+        target = self.target()
+        body = ('서류 평가의 핵심 기준입니다.\n'
+                '직무에서 요구하는 역량을 경험과 연결해 설명합니다.\n'
+                '성과를 비교할 때는 역할과 측정 기간도 함께 적습니다.')
+        records = [{**self.record('multiline', text=body), 'label': '', 'kind': 'source'},
+                   {**self.record('short', text='짧은 소식입니다.\n- 링크: https://example.com/' + 'a' * 100),
+                    'label': '', 'kind': 'source'}]
+        self.store.ingest(target, records)
+        before = self.store.path.read_bytes()
+        blobs = {p.name: p.read_bytes() for p in self.store.blobs.iterdir()}
+        wanted = identity('youtube', 'multiline')
+        for reader in (self.store.graph_page, self.store.graph_references):
+            page = reader(projects=['one'], limit=1984, overview=True)
+            self.assertEqual(page['total_nodes'], 2)
+            self.assertEqual([n['id'] for n in page['nodes']], [wanted])
+        self.assertEqual(len(self.store.graph_page(projects=['one'])['nodes']), 2)
+        detail = self.store.graph_page(projects=['one'], focus=wanted, hops=0, details=True)['details']
+        self.assertEqual(detail['body'], body)
+        self.assertEqual(self.store.path.read_bytes(), before)
+        self.assertEqual({p.name: p.read_bytes() for p in self.store.blobs.iterdir()}, blobs)
+
     def test_graph_title_projection_preserves_distinct_sources_and_originals(self):
         target = self.target()
         heading = '서류 평가에서 경험과 직무의 연결 근거를 구체적으로 설명합니다.'
