@@ -185,7 +185,7 @@ def _source_rows(db, store, project, members, *, read_blobs, show_records, inclu
         row = db.execute("""SELECT m.current_version,m.availability AS membership_availability,
               d.availability AS document_availability,d.platform,d.original_id,
               v.document_id AS version_document_id,v.raw_sha256,v.raw_path,v.label,v.body,
-              v.metadata,v.collected_at,p.permission
+              v.metadata,v.collected_at,v.processing_version,v.projection_sha256,p.permission
               FROM memberships m JOIN documents d ON d.id=m.document_id
               LEFT JOIN versions v ON v.id=m.current_version
               LEFT JOIN target_projects p ON p.target_id=m.target_id AND p.project=?
@@ -225,6 +225,25 @@ def _source_rows(db, store, project, members, *, read_blobs, show_records, inclu
             raise RuntimeError("collection_resolution_metadata_integrity") from error
         if not isinstance(metadata, dict):
             raise RuntimeError("collection_resolution_metadata_integrity")
+        # A stable fingerprint of already corrupted bytes is not evidence that
+        # those bytes belong to this immutable version. Use the same v3 binding
+        # as the source-detail reader before preview, apply, or active projection.
+        if (not all(isinstance(row[key], str) for key in
+                    ('label', 'body', 'raw_sha256', 'processing_version', 'projection_sha256'))
+                or not row['processing_version']):
+            raise RuntimeError('collection_resolution_projection_integrity')
+        if row['processing_version'] == 'legacy':
+            # Migrated v1/v2 rows have no v3 projection digest. Preserve their
+            # existing read contract while rejecting mixed legacy/v3 fields.
+            if row['projection_sha256'] != '':
+                raise RuntimeError('collection_resolution_projection_integrity')
+        else:
+            projection = digest(encoded([row['label'], row['body'],
+                {key: value for key, value in metadata.items() if key != 'source'}]))
+            version = identity('version', encoded([member['document_id'], row['raw_sha256'],
+                row['processing_version'], projection]).decode())
+            if projection != row['projection_sha256'] or version != row['current_version']:
+                raise RuntimeError('collection_resolution_projection_integrity')
         fingerprint_rows.append({
             **member, "permission": row["permission"], "platform": row["platform"],
             "original_id": row["original_id"], "raw_sha256": row["raw_sha256"],

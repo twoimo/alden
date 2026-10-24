@@ -92,6 +92,79 @@ class EntityIntegrityTests(unittest.TestCase):
         blobs = {path.name: digest(path.read_bytes()) for path in self.store.blobs.iterdir() if path.is_file()}
         return tables, blobs
 
+    def test_v3_projection_corruption_rejects_fresh_preview_and_apply_before_bootstrap(self):
+        for column, replacement in (
+            ('label', 'Altered label without a new version'),
+            ('body', 'Altered body without a new version'),
+            ('metadata', '{"source_url":"local://altered-metadata"}'),
+            ('projection_sha256', '0' * 64),
+            ('processing_version', 'altered-processor-without-new-version'),
+        ):
+            with self.subTest(column=column):
+                plan = self.preview()['plan']
+                version = self.member(self.t1, 'a')['version']
+                with self.store.database() as db:
+                    original = db.execute('SELECT ' + column + ' FROM versions WHERE id=?', (version,)).fetchone()[0]
+                    db.execute('UPDATE versions SET ' + column + '=? WHERE id=?', (replacement, version))
+                try:
+                    with self.assertRaisesRegex(RuntimeError, '^collection_resolution_projection_integrity$'):
+                        self.preview()
+                    with self.assertRaisesRegex(RuntimeError, '^collection_resolution_projection_integrity$'):
+                        self.apply(plan, 'invalid-projection-' + column)
+                    self.assertEqual(self.feature_tables(), set())
+                    self.assertEqual(list(self.store.root.glob('collection.resolution-before-v1-*.sqlite3')), [])
+                finally:
+                    with self.store.database() as db:
+                        db.execute('UPDATE versions SET ' + column + '=? WHERE id=?', (original, version))
+                self.assertEqual(self.preview()['plan'], plan)
+
+    def test_projection_validation_is_repeated_inside_apply_transaction(self):
+        plan = self.preview()['plan']
+        version = self.member(self.t1, 'a')['version']
+        backup = resolution._backup_before_feature
+        def mutate_after_preflight(store):
+            backup(store)
+            with self.store.database() as db:
+                db.execute('UPDATE versions SET projection_sha256=? WHERE id=?', ('0' * 64, version))
+        with patch.object(resolution, '_backup_before_feature', side_effect=mutate_after_preflight):
+            with self.assertRaisesRegex(RuntimeError, '^collection_resolution_projection_integrity$'):
+                self.apply(plan, 'late-invalid-projection')
+        self.assertEqual(self.feature_tables(), set())
+
+    def test_active_overlay_stops_projecting_on_invalid_projection_and_recovers_without_reapply(self):
+        plan = self.preview()['plan']
+        applied = self.apply(plan, 'projection-current')
+        version = self.member(self.t1, 'a')['version']
+        with self.store.database() as db:
+            projection = db.execute('SELECT projection_sha256 FROM versions WHERE id=?', (version,)).fetchone()[0]
+            db.execute('UPDATE versions SET projection_sha256=? WHERE id=?', ('0' * 64, version))
+        try:
+            self.assertEqual(self.active(), [])
+            self.assertEqual(self.history()['items'][0]['current_validity'], {
+                'valid': False, 'state': 'collection_resolution_projection_integrity'})
+            # A replay is the historical receipt, not a new activation or a
+            # claim that the previously accepted source is still current.
+            self.assertEqual(self.apply(plan, 'projection-current'), applied)
+            self.assertEqual(self.active(), [])
+        finally:
+            with self.store.database() as db:
+                db.execute('UPDATE versions SET projection_sha256=? WHERE id=?', (projection, version))
+        self.assertEqual(self.active()[0]['resolution_id'], applied['resolution_id'])
+        self.assertEqual(len(self.history()['items']), 1)
+
+    def test_source_metadata_excluded_from_projection_keeps_its_provenance_guard(self):
+        plan = self.preview()['plan']
+        version = self.member(self.t1, 'a')['version']
+        with self.store.database() as db:
+            metadata = json.loads(db.execute('SELECT metadata FROM versions WHERE id=?', (version,)).fetchone()[0])
+            metadata['source'] = 'changed source declaration, not a new body projection'
+            db.execute('UPDATE versions SET metadata=? WHERE id=?', (encoded(metadata).decode(), version))
+        refreshed = self.preview()['plan']
+        self.assertNotEqual(refreshed['source_fingerprint'], plan['source_fingerprint'])
+        with self.assertRaisesRegex(ValueError, '^collection_resolution_source_fingerprint_changed$'):
+            self.apply(plan, 'old-source-metadata')
+        self.assertEqual(self.apply(refreshed, 'new-source-metadata')['state'], 'active')
+
     def test_selected_original_identity_mismatch_rejected_by_preview_and_apply(self):
         for column, replacement in (("platform", "youtube"), ("original_id", "a-replaced")):
             with self.subTest(column=column):
