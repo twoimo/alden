@@ -4,12 +4,13 @@ import hashlib
 import re
 import unicodedata
 
-POLICY = 'messenger-triage-nfc-v3'
+POLICY = 'messenger-triage-nfc-v4'
 ACKNOWLEDGEMENTS = frozenset({'네', '넵', '예', '응', 'ㅇㅇ', '감사합니다', '고마워요',
     '안녕하세요', '수고하세요', '넵 감사합니다', '확인했습니다', '감사합니다!', '네!', '넵!'})
 PROMOTIONS = ('수익 보장', '수익보장', '원금 보장', '원금보장', '리딩방 입장', '지금 입장하세요')
 TOPIC = re.compile(r'회의|마감|일정|계약|결정|공지|자료|설명|방법|원리|주의|변경|정책|업데이트|가격|배송|주문|운영|동기화')
-URL = re.compile(r'https?://\S+')
+# URI schemes are ASCII and case-insensitive; whitespace after a URL remains Unicode.
+URL = re.compile(r'(?ai:https?)://\S+')
 
 
 def text_without_urls(text):
@@ -41,7 +42,7 @@ def classify(body):
         # A number/date/time can be important in its surrounding conversation.
         # Keep it in the source ledger rather than deleting it as an outlier.
         return Triage(text, content_hash, 'context', 'numeric_or_symbol_context')
-    if re.fullmatch(r'https?://\S+', view):
+    if URL.fullmatch(view):
         return Triage(text, content_hash, 'context', 'link_content_not_acquired')
     substance = text_without_urls(text)
     if not any(character.isalpha() for character in substance):
