@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "version": "0.3.18",
+  "frontend_tests": {
+    "passed": 348,
+    "files": 39
+  },
+  "desktop_readonly_audit_tests": {
+    "passed": 7
+  },
+  "geeknews_tests": {
+    "new": 15,
+    "existing": 13,
+    "python": "installed menubar CPython 3.11.16",
+    "live_send": false
+  },
+  "installed_native": {
+    "success": true,
+    "scope": "owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation",
+    "global_nodes": 115,
+    "global_edges": 405,
+    "note_keeps_global": true,
+    "note_pane": {
+      "height": 728,
+      "hidden": false,
+      "scrollWidth": 374,
+      "width": 387.59375,
+      "x": 812.40625,
+      "y": 0
+    },
+    "compact_note_pane": {
+      "height": 350.28125,
+      "hidden": false,
+      "scrollWidth": 482,
+      "width": 495,
+      "x": 145,
+      "y": 297.71875
+    },
+    "compact_scroll_width": 640,
+    "workspace_signals": [
+      {
+        "hiddenRenderDelta": 0,
+        "postToStoppedObservationUpperBoundMs": 12.234375,
+        "sampleMs": 350,
+        "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+        "signal": "display-sleep"
+      },
+      {
+        "hiddenRenderDelta": 0,
+        "postToStoppedObservationUpperBoundMs": 14.138125,
+        "sampleMs": 350,
+        "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+        "signal": "session-inactive"
+      }
+    ]
+  },
+  "installation": {
+    "matched_files": 41,
+    "ad_hoc": true,
+    "notarized_production": false
+  },
+  "preservation": {
+    "config_differences": [],
+    "five_worker_births_unchanged": true
+  },
+  "video_review": {
+    "url": "https://www.youtube.com/shorts/LzF8Eoiv2bg",
+    "ui_frame_step_seconds": 0.03333333333333333,
+    "inspected_keyframes": 14,
+    "inspected_consecutive_contact_frames": 8,
+    "all_frames_inspected": false
+  },
+  "agents": {
+    "native_model": "gpt-6-astra",
+    "effort": "xhigh",
+    "provider": "openai",
+    "opus_high_additional_review": "quota-blocked; not performed"
+  },
+  "browser_recovery": {
+    "task_owned_tab_retained": true,
+    "ax_capture_failed": true,
+    "bounded_reattach_failed": true,
+    "no_external_writes_uncertain": true
+  },
+  "source_private_data_included": false,
+  "full_goal_status": "active"
+}

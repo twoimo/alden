@@ -1,0 +1,193 @@
+--- a/scripts/alden_collection_retrieval.py
++++ b/scripts/alden_collection_retrieval.py
+@@ -21,0 +22,124 @@
++
++
++
++CONTEXT_EXCERPT_POLICY = 'verified-body-coordinates-fair-context-candidate-v1'
++
++
++def _original_word_plans(query):
++    # FTS recall may prune words; complete source-title validation may not.
++    words = list(dict.fromkeys(re.findall(r'[0-9a-z가-힣]+', query.lower())))
++    if not 1 <= len(words) <= 24 or any(len(word) > 64 for word in words):
++        return None
++    return [((word,),) for word in words]
++
++
++def _retained_excerpt(body, plans, capacity, cancelled):
++    """Return exact slices of the verified NFC/LF body, with codepoint offsets.
++
++    At most 128 occurrences per query word are examined. A bounded literal
++    window is a presentation aid, never semantic relevance or fact validation.
++    ASCII-only case translation keeps coordinates stable for Unicode bodies.
++    """
++    capacity = max(0, capacity)
++    if len(body) <= capacity:
++        return body, [(0, len(body))] if body else []
++    folded = body.translate(str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ',
++                                        'abcdefghijklmnopqrstuvwxyz'))
++    events = []
++    for index, plan in enumerate(plans or []):
++        word = plan[0][0]
++        offset, accepted, scanned = folded.find(word), 0, 0
++        while offset >= 0 and accepted < 128 and scanned < 512:
++            _check(cancelled)
++            end = offset + len(word)
++            left = not word[0].isdigit() or offset == 0 or not folded[offset-1].isdigit()
++            right = not word[-1].isdigit() or end == len(body) or not folded[end].isdigit()
++            if left and right:
++                events.append((offset, end, index)); accepted += 1
++            scanned += 1
++            offset = folded.find(word, offset + 1)
++    if not events or not capacity:
++        return body[:capacity], [(0, min(len(body), capacity))] if capacity else []
++    events.sort()
++    counts, left, best = {}, 0, None
++    wanted = len({event[2] for event in events})
++    for right, event in enumerate(events):
++        _check(cancelled)
++        counts[event[2]] = counts.get(event[2], 0) + 1
++        while len(counts) == wanted:
++            width = max(e[1] for e in events[left:right+1]) - events[left][0]
++            if best is None or width < best[0]:
++                best = (width, left, right)
++            identity = events[left][2]
++            counts[identity] -= 1
++            if counts[identity] == 0:
++                del counts[identity]
++            left += 1
++    selected = {}
++    for start, end, index in events[best[1]:best[2]+1]:
++        selected.setdefault(index, (start, end))
++    core = sorted(selected.values())
++    def merge(values):
++        ranges = []
++        for start, end in sorted(values):
++            if ranges and start <= ranges[-1][1]:
++                ranges[-1] = (ranges[-1][0], max(end, ranges[-1][1]))
++            else:
++                ranges.append((start, end))
++        return ranges
++    separator = '\n[…생략…]\n'
++    def size(ranges):
++        return sum(end-start for start, end in ranges) + max(0, len(ranges)-1)*len(separator)
++    ranges = merge(core)
++    if size(ranges) > capacity:
++        # A too-small budget must report partial coverage, not drop query words
++        # from the matching contract or invent a complete passage.
++        ranges = []
++        for start, end in core:
++            room = capacity - size(ranges) - (len(separator) if ranges else 0)
++            if room <= 0:
++                break
++            ranges = merge(ranges + [(start, min(end, start+room))])
++    low, high = 0, 120
++    base = ranges
++    while low <= high:
++        _check(cancelled)
++        padding = (low+high)//2
++        expanded = merge([(max(0,start-padding), min(len(body),end+padding))
++                          for start,end in base])
++        if size(expanded) <= capacity:
++            ranges, low = expanded, padding+1
++        else:
++            high = padding-1
++    return separator.join(body[start:end] for start,end in ranges), ranges
++
++
++def _prefer_named_source_titles(store, rows, ranked, plans, projects, limit,
++                                body_preferred, budget, cancelled):
++    """Candidate: exact named-source lookup, explicitly not body grounding."""
++    matched = set()
++    for row in rows.values():
++        _check(cancelled)
++        if (row['id'] not in body_preferred and row['body'].strip()
++                and all(korean_literal_matches(plan, row['label'], '') for plan in plans)):
++            matched.add(row['id'])
++    ordered = list(dict.fromkeys(identity for identity, _ in ranked if identity in matched))
++    ordered.extend(sorted(matched - set(ordered)))
++    preferred, checked = set(), 0
++    with store.database() as db:
++        for identity in ordered[:budget]:
++            _check(cancelled)
++            row = rows[identity]
++            source, metadata, _memberships = _verified_source(db, store, row, projects)
++            checked += 1
++            if content_evidence_class(metadata, row['body'], source=source,
++                                      body_source=row['body_source']) == 'content_candidate':
++                preferred.add(identity)
++    ranked_ids = {identity for identity, _ in ranked}
++    candidates = ranked + [(identity, 0.) for identity in ordered
++                           if identity in preferred and identity not in ranked_ids]
++    candidates.sort(key=lambda item: 0 if item[0] in body_preferred else
++                    1 if item[0] in preferred else 2)
++    return candidates[:limit], preferred, {'matched': len(matched), 'verified': checked,
++        'preferred': len(preferred), 'verification_limit': budget,
++        'truncated': len(ordered) > checked, 'meaning': 'source_title_lookup_not_body_grounding'}
+@@ -506,0 +631 @@
++    title_preferred, title_coverage = set(), None
+@@ -509 +634 @@
+-    if plan and not latest_query and (mode != 'rrf' or kg._validated_rrf_weights(rrf_weights)[0] > 0):
++    if not latest_query and (mode != 'rrf' or kg._validated_rrf_weights(rrf_weights)[0] > 0):
+@@ -512,3 +637,3 @@
+-        words = list(dict.fromkeys(re.findall(r'[0-9a-z가-힣]+', query.casefold())))[:24]
+-        body_plans = [korean_literal_plan(kg._fts_query_terms([word])) for word in words]
+-        if body_plans and all(body_plans):
++        words = list(dict.fromkeys(re.findall(r'[0-9a-z가-힣]+', query.casefold())))
++        body_plans = [korean_literal_plan(kg._fts_query_terms([word])) for word in words[:24]]
++        if plan and body_plans and all(body_plans):
+@@ -517,0 +643,6 @@
++        title_plans = _original_word_plans(query)
++        if title_plans:
++            ranked, title_preferred, title_coverage = _prefer_named_source_titles(
++                store, eligible, ranked, title_plans, projects,
++                candidate_limit * (2 if mode == 'rrf' else 1), body_preferred,
++                max(0, MAX_BODY_EVIDENCE_CHECKS - (body_coverage or {}).get('verified', 0)), cancelled)
+@@ -551 +682 @@
+-    def append(text, proof):
++    def append(text, proof, limit=None):
+@@ -553,0 +685,2 @@
++        if limit is not None:
++            remaining = min(remaining, limit)
+@@ -556 +689 @@
+-        facts.append(text[:remaining]);proof['fact_truncated'] = len(text) > remaining
++        facts.append(text[:remaining]);proof['fact_truncated'] = proof.get('fact_truncated', False) or len(text) > remaining
+@@ -562 +695,4 @@
+-        for document_id, _score in ranked[:max(0, min(int(max_entities), 10))]:
++        selected_entities = ranked[:max(0, min(int(max_entities), 10))]
++        for entity_index, (document_id, _score) in enumerate(selected_entities):
++            entity_budget = ((max_context_chars-used)//(len(selected_entities)-entity_index)
++                             if compact_text else max_context_chars-used)
+@@ -591,0 +728,2 @@
++            elif document_id in title_preferred:
++                proof['selection_basis'] = 'matching_current_version_bound_title; source lookup, not body grounding'
+@@ -600 +738,18 @@
+-            text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
++            prefix = row['label'] + ': ' if row['label'] and row['body'] else row['label']
++            text = prefix + row['body']
++            if compact_text and evidence_class == 'content_candidate' and len(text) > entity_budget:
++                if len(prefix) > entity_budget//3:
++                    prefix = prefix[:max(0, entity_budget//3-2)] + '… '
++                    proof['label_excerpt'] = {'start': 0, 'end': max(0, entity_budget//3-2),
++                                              'unit': 'unicode_codepoints'}
++                excerpt, ranges = _retained_excerpt(row['body'], _original_word_plans(query),
++                                                   max(0, entity_budget-len(prefix)), cancelled)
++                text = prefix + excerpt
++                proof['body_excerpt'] = {'policy': CONTEXT_EXCERPT_POLICY,
++                    'ranges': [{'start': start, 'end': end} for start,end in ranges],
++                    'unit': 'unicode_codepoints', 'basis': 'verified_searchable_body_NFC_LF',
++                    'body_sha256': digest(row['body'].encode('utf-8')),
++                    'body_chars': len(row['body']), 'literal_occurrence_limit_per_word': 128,
++                    'literal_scan_limit_per_word': 512,
++                    'meaning': 'retained literal slices; not semantic completeness or source truth'}
++                proof['fact_truncated'] = True
+@@ -623 +778 @@
+-            elif append(text, proof) and match is not None and not proof['fact_truncated']:
++            elif append(text, proof, limit=entity_budget) and match is not None and not proof['fact_truncated']:
+@@ -681,0 +837 @@
++            **({'context_excerpt_policy':CONTEXT_EXCERPT_POLICY} if compact_text else {}),
+@@ -683,0 +840,3 @@
++            **({'source_title_policy':'current_version_bound_original_title_words_v2',
++                'source_title_evidence_coverage':title_coverage}
++               if title_coverage and title_coverage['matched'] else {}),

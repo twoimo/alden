@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "올든 프로세스와 저장 경계",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1020,
+      510
+    ]
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      50,
+      65
+    ],
+    "cols": 3,
+    "cellW": 220,
+    "cellH": 80,
+    "gapX": 100,
+    "gapY": 70
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "사용자",
+      "sublabel": "텍스트·직접 마이크",
+      "row": 0,
+      "col": 0
+    },
+    {
+      "id": "tauri",
+      "type": "frontend",
+      "label": "Tauri·Three.js",
+      "sublabel": "창·3D·IPC",
+      "row": 0,
+      "col": 1
+    },
+    {
+      "id": "mlx",
+      "type": "backend",
+      "label": "MLX 27B",
+      "sublabel": "기존 로컬 서버",
+      "row": 0,
+      "col": 2
+    },
+    {
+      "id": "voice",
+      "type": "backend",
+      "label": "음성 자식 작업",
+      "sublabel": "STT·TTS·턴 취소",
+      "row": 1,
+      "col": 0
+    },
+    {
+      "id": "bridge",
+      "type": "backend",
+      "label": "Python 작업",
+      "sublabel": "CLI·SDK·도구 실행",
+      "row": 1,
+      "col": 1
+    },
+    {
+      "id": "e5",
+      "type": "backend",
+      "label": "로컬 E5",
+      "sublabel": "별도 임베딩 서버",
+      "row": 1,
+      "col": 2
+    },
+    {
+      "id": "kakao",
+      "type": "external",
+      "label": "KakaoTalk",
+      "sublabel": "원본 DB·승인 AX",
+      "row": 2,
+      "col": 0
+    },
+    {
+      "id": "vault",
+      "type": "database",
+      "label": "OSK 정본",
+      "sublabel": "Raw·노트·실제 참조",
+      "row": 2,
+      "col": 1
+    },
+    {
+      "id": "index",
+      "type": "database",
+      "label": "검색 색인",
+      "sublabel": "폐기 가능한 FTS·벡터",
+      "row": 2,
+      "col": 2
+    }
+  ],
+  "connections": [
+    {
+      "id": "relation-0",
+      "from": "user",
+      "to": "tauri",
+      "label": "입력·조회"
+    },
+    {
+      "id": "relation-1",
+      "from": "tauri",
+      "to": "bridge",
+      "label": "고정 실행 경로",
+      "labelDy": 24
+    },
+    {
+      "id": "relation-2",
+      "from": "bridge",
+      "to": "mlx",
+      "label": "로컬 생성"
+    },
+    {
+      "id": "relation-3",
+      "from": "bridge",
+      "to": "voice",
+      "label": "소유한 작업"
+    },
+    {
+      "id": "relation-4",
+      "from": "bridge",
+      "to": "e5",
+      "label": "로컬 임베딩",
+      "labelDy": -24,
+      "labelDx": 64
+    },
+    {
+      "id": "relation-5",
+      "from": "bridge",
+      "to": "vault",
+      "label": "SDK 읽기·검토 쓰기",
+      "labelDy": 24
+    },
+    {
+      "id": "relation-6",
+      "from": "bridge",
+      "to": "kakao",
+      "label": "읽기·승인 AX"
+    },
+    {
+      "id": "relation-7",
+      "from": "vault",
+      "to": "index",
+      "label": "리비전 파생 색인"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "실행 경계",
+      "items": [
+        "음성·도구는 앱이 소유한 작업으로 실행한다.",
+        "27B·E5 기존 서버와 선택 모델을 보존한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "검증 범위",
+      "items": [
+        "Raw·정본·검색 색인은 서로 다른 저장 책임이다.",
+        "Flash-Next·Dot·공증·물리 음성 검증은 남아 있다."
+      ]
+    }
+  ]
+}

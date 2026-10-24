@@ -1,0 +1,109 @@
+{
+  "version": "0.3.41",
+  "runtime_source": "0946dcd4e0137d66c36d789b218830f2eee95668",
+  "matched_files": 52,
+  "signature": "local ad-hoc strict/deep verified",
+  "abort_preserved": true,
+  "default_model": {
+    "id": "google-antigravity/gemini-3.8-flash",
+    "user_alias": "agy/gemini-3.8-flash",
+    "effort": "high",
+    "mode": "manual"
+  },
+  "native_schedule": {
+    "interval_seconds": 60,
+    "per_target_seconds": 21600,
+    "max_targets": 1,
+    "budget_seconds": 180,
+    "process_type": "Standard",
+    "nice": 10,
+    "low_priority_io": false
+  },
+  "completed_targets": [
+    {
+      "target_id": "target-graph:c6acd81dad358203d9a321ba67fc00c132e1beef1b8bb8a4e294a6cd41c82875",
+      "label": "취업 지식 그래프",
+      "seconds": 21.124181032180786,
+      "index": {
+        "state": "ready",
+        "projects": [
+          "career"
+        ],
+        "documents": 12101,
+        "embedded_changed": 0,
+        "source_versions": 12561,
+        "unsearchable_versions": 460,
+        "embedded_windows": 0,
+        "reused_versions": 12101,
+        "model": "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0",
+        "encoding": "e5-char256-stride192-weighted-unit-pool-v1"
+      }
+    },
+    {
+      "target_id": "target-youtube:a75da4a3a8f23823d8801c4eea98b256156d6c4d2de7973f83f0eabb3b29c9ef",
+      "label": "장사의 신",
+      "seconds": 3.8338279724121094,
+      "index": {
+        "state": "ready",
+        "projects": [
+          "jangsin"
+        ],
+        "documents": 407,
+        "embedded_changed": 0,
+        "source_versions": 407,
+        "unsearchable_versions": 0,
+        "embedded_windows": 0,
+        "reused_versions": 407,
+        "model": "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0",
+        "encoding": "e5-char256-stride192-weighted-unit-pool-v1"
+      }
+    },
+    {
+      "target_id": "target-youtube:3a898913890fb75bd2b2c217d8252dcdb35fd37cb89d744029ae2b31ce972419",
+      "label": "쯔양",
+      "seconds": 8.603410005569458,
+      "index": {
+        "state": "ready",
+        "projects": [
+          "youtube-tzuyang"
+        ],
+        "documents": 1118,
+        "embedded_changed": 0,
+        "source_versions": 1118,
+        "unsearchable_versions": 0,
+        "embedded_windows": 0,
+        "reused_versions": 1118,
+        "model": "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0",
+        "encoding": "e5-char256-stride192-weighted-unit-pool-v1"
+      }
+    },
+    {
+      "target_id": "target-graph:d2404c13c7bf2950dc8d4378d0f07e65d2afb653738b8b4308eb9587e978a524",
+      "label": "Spark 파일 지식 그래프",
+      "seconds": 117.38717818260193,
+      "index": {
+        "state": "ready",
+        "projects": [
+          "sparkuniverse"
+        ],
+        "documents": 12536,
+        "embedded_changed": 0,
+        "source_versions": 12536,
+        "unsearchable_versions": 0,
+        "embedded_windows": 0,
+        "reused_versions": 12536,
+        "model": "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0",
+        "encoding": "e5-char256-stride192-weighted-unit-pool-v1"
+      }
+    }
+  ],
+  "counts": {
+    "documents": 26622,
+    "versions": 53244,
+    "relations": 48355,
+    "target_snapshots": 4
+  },
+  "independent_quality_verified": false,
+  "physical_voice_verified": false,
+  "signed_notarized_production_verified": false
+}

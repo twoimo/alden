@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import copy
 import struct
 import sys
 import threading
@@ -13,6 +14,7 @@ import importlib.util
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +38,107 @@ def load(name: str, path: Path):
 class ReferenceStoreTests(unittest.TestCase):
     def setUp(self):
         self.store = load("auto_reply_reference_store", STORE)
+        # Exercise only fixture data. Image analysis and temp cleanup must not
+        # reach a running worker's CLI, models, downloads or temporary files.
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        tempdir = mock.patch.object(self.store.tempfile, "gettempdir", return_value=temporary.name)
+        tempdir.start()
+        self.addCleanup(tempdir.stop)
+        vision = mock.patch.object(self.store, "_allow_image_analysis", return_value=False)
+        vision.start()
+        self.addCleanup(vision.stop)
+
+    def test_reference_terms_never_assign_predetermined_topics(self):
+        for terms in (
+            "AI ai ＡＩ 인공지능 머신러닝 딥러닝 OpenAI ChatGPT LLM",
+            "stocks 주식 코스피 ETF MACD 매수 매도 차트",
+            "coins 코인 비트코인 BTC ETH blockchain",
+            "투자 포트폴리오 부동산 아파트 경매 낙찰",
+            "연락처 전화번호 보이스오버 접근성 컴퓨터 맥북 윈도우",
+            "모델 프롬프트 카톡 openkakao 사업 창업 리눅스 linux 긱뉴스 나임",
+        ):
+            with self.subTest(terms=terms):
+                lecture = f"{terms}. " + "과정을 상세하게 설명하고 이유와 근거를 차례로 정리합니다. " * 8
+                cluster = [
+                    {"log_id": 1, "sender": "발표자", "sent_at": 1, "message": "사진", "message_type": 2, "author_id": 7, "is_self": False},
+                    {"log_id": 2, "sender": "발표자", "sent_at": 2, "message": lecture, "message_type": 1, "author_id": 7, "is_self": False},
+                ]
+                original = copy.deepcopy(cluster)
+                pack = self.store._pack_from_cluster(cluster, source="raw-fixture", chat="자료방", chat_id=123)
+                self.assertIsNotNone(pack)
+                self.assertEqual(pack["topics"], [])
+                self.assertEqual(pack["pack_key"], "123:1:2:발표자")
+                self.assertEqual(pack["source"], "raw-fixture")
+                self.assertEqual(pack["_texts"], ["사진", lecture.strip()])
+                self.assertEqual(cluster, original)
+                self.assertEqual(pack["_cluster"], original)
+
+    def test_topic_words_do_not_boost_quality_or_prefix_summaries(self):
+        def score(word):
+            return self.store.quality_score(
+                texts=[word * 60], image_count=1, message_count=3,
+                other_speaker_chars=0, author_chars=120,
+            )
+
+        self.assertEqual(score("주식"), score("화분"))
+        self.assertEqual(score("코인"), score("화분"))
+        texts = ["주식과 코인이라는 단어를 포함한 원문 설명을 그대로 참조합니다."]
+        self.assertEqual(
+            self.store.describe_what(texts, ["ai", "stocks", "coins"]),
+            self.store.describe_what(texts, []),
+        )
+        self.assertEqual(self.store.describe_what([], ["stocks"]), "설명 자료")
+
+    def test_legacy_tags_stay_inert_and_reference_writes_leave_raw_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            db = Path(temporary) / "context.sqlite3"
+            connection = sqlite3.connect(db)
+            self.store.ensure_reference_schema(connection)
+            connection.execute("CREATE TABLE context_messages(id INTEGER PRIMARY KEY, source TEXT, chat TEXT, date TEXT, user_name TEXT, message TEXT, vector BLOB)")
+            connection.execute("CREATE TABLE context_message_topics(message_id INTEGER, topic TEXT, PRIMARY KEY(message_id, topic))")
+            connection.execute("CREATE TABLE alden_messages(id INTEGER PRIMARY KEY, source_id TEXT, role TEXT, message TEXT, author_id TEXT, is_self INTEGER, message_type INTEGER)")
+            raw_rows = [
+                (1, "kakao:test:room:123:log:1", "human", "  AI ＡＩ stocks 주식 coins 코인\n원문  ", "7", 0, 1),
+                (2, "kakao:test:room:123:log:2", "assistant", "AI 예측이 아닌 원래 발화", "9", 1, 1),
+                (3, "kakao:test:room:123:log:3", "system", "입장 안내", "0", 0, 0),
+            ]
+            connection.executemany("INSERT INTO alden_messages VALUES (?, ?, ?, ?, ?, ?, ?)", raw_rows)
+            for operation in ("INSERT", "UPDATE", "DELETE"):
+                connection.execute(f"CREATE TRIGGER raw_no_{operation} BEFORE {operation} ON alden_messages BEGIN SELECT RAISE(ABORT, 'Raw is immutable'); END")
+            lecture = "AI stocks coins 주식 코인이라는 단어를 포함한 원문 설명입니다. " + "과정을 상세하게 설명하고 이유와 근거를 차례로 정리합니다. " * 8
+            pack = self.store._pack_from_cluster(
+                [
+                    {"log_id": 1, "sender": "발표자", "sent_at": 1, "message": "사진", "message_type": 2},
+                    {"log_id": 2, "sender": "발표자", "sent_at": 2, "message": lecture},
+                ], source="fixture", chat="자료방", chat_id=123,
+            )
+            # Even a legacy caller's supplied classifications cannot be written.
+            pack["topics"] = ["ai", "stocks", "coins"]
+            self.store._upsert_pack(connection, pack, encode_blob=self.store.encode_vector_blob, now="2026-10-04")
+            self.assertEqual(connection.execute("SELECT topics FROM context_reference_packs").fetchone(), ("",))
+            self.assertEqual(connection.execute("SELECT * FROM context_message_topics").fetchall(), [])
+            connection.execute("UPDATE context_reference_packs SET topics = 'ai,stocks,coins'")
+            before_pack = connection.execute("SELECT * FROM context_reference_packs").fetchall()
+            connection.commit()
+            connection.close()
+
+            for topic in ("", "stocks", "coins", "unrecognized"):
+                listed = self.store.collect_reference_list(db, query="AI", chat="자료방", topic=topic, harvest=False)
+                self.assertEqual(listed["count"], 1)
+                self.assertEqual(listed["topics"], [])
+                self.assertEqual(listed["rows"][0]["topics"], [])
+                self.assertEqual(listed["rows"][0]["topics_label"], "")
+                self.assertEqual(listed["rows"][0]["origin_label"], "fixture")
+                self.assertEqual(listed["rows"][0]["row_key"], "123:1:2:발표자")
+            self.assertEqual(self.store.collect_reference_list(db, query="no-such-text", harvest=False)["count"], 0)
+            self.assertEqual(self.store.collect_reference_list(db, chat="다른방", harvest=False)["count"], 0)
+            connection = sqlite3.connect(db)
+            try:
+                self.assertEqual(connection.execute("SELECT * FROM alden_messages ORDER BY id").fetchall(), raw_rows)
+                self.assertEqual(connection.execute("SELECT * FROM context_reference_packs").fetchall(), before_pack)
+            finally:
+                connection.close()
 
     def test_quality_gate_keeps_lecture_and_drops_noise(self):
         lecture = [
@@ -86,7 +189,7 @@ class ReferenceStoreTests(unittest.TestCase):
             )
             connection.commit()
             connection.close()
-            harvested = self.store.harvest_reference_packs(db)
+            harvested = self.store.harvest_reference_packs(db, local_groups=lambda: [])
             self.assertGreaterEqual(harvested["stored"], 1)
             listed = self.store.collect_reference_list(db, harvest=False)
             self.assertEqual(listed["source"], "references")
@@ -102,8 +205,12 @@ class ReferenceStoreTests(unittest.TestCase):
             self.assertFalse(row["editable"])
             self.assertEqual(row["vector_dim"], 128)
             self.assertTrue(row["vector_preview"].startswith("128차원"))
-            self.assertIn("stocks", row["topics"])
+            self.assertEqual(row["topics"], [])
+            self.assertEqual(row["topics_label"], "")
+            self.assertEqual(listed["topics"], [])
             connection = sqlite3.connect(db)
+            self.assertEqual(connection.execute("SELECT * FROM context_messages WHERE id <= 5 ORDER BY id").fetchall(), [(*item, b"\x00" * 512) for item in rows])
+            self.assertEqual(connection.execute("SELECT * FROM context_message_topics").fetchall(), [])
             synthesized = connection.execute(
                 "SELECT message FROM context_messages WHERE message LIKE ?",
                 ("%[설명자료]%",),
@@ -1063,8 +1170,12 @@ class ReferenceStoreTests(unittest.TestCase):
             self.assertGreaterEqual(harvested["stored"], 1)
             connection = sqlite3.connect(db)
             connection.execute(
-                "UPDATE context_reference_packs SET policy_version = ?, body = ?",
-                ("lecture-pack-v1", lecture),
+                "UPDATE context_reference_packs SET policy_version = ?, body = ?, topics = ?",
+                ("lecture-pack-v1", lecture, "ai,stocks,coins"),
+            )
+            connection.execute(
+                "INSERT INTO context_message_topics(message_id, topic) "
+                "SELECT context_message_id, 'stocks' FROM context_reference_packs"
             )
             connection.execute(
                 "INSERT OR REPLACE INTO context_retrieval_meta(key, value) VALUES (?, ?)",
@@ -1077,11 +1188,13 @@ class ReferenceStoreTests(unittest.TestCase):
             )
             self.assertGreaterEqual(rebuilt["stored"], 1)
             connection = sqlite3.connect(db)
-            policy, body = connection.execute(
-                "SELECT policy_version, body FROM context_reference_packs"
+            policy, body, topics = connection.execute(
+                "SELECT policy_version, body, topics FROM context_reference_packs"
             ).fetchone()
+            self.assertEqual(connection.execute("SELECT * FROM context_message_topics").fetchall(), [])
             connection.close()
             self.assertEqual(policy, self.store.PACK_POLICY_VERSION)
+            self.assertEqual(topics, "")
             self.assertNotEqual(body, lecture)
             self.assertIn("종합:", body)
 

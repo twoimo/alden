@@ -31,6 +31,60 @@ if str(SCRIPTS) not in sys.path:
 CONTEXT_SYNC_HEARTBEAT_KWARGS = ("on_wait", "on_tick")
 
 
+class ImmediateContextSyncWorker:
+    """Deterministic async-worker stand-in for the watcher's state-machine tests."""
+
+    def __init__(self, results, *, repeat_last: bool = False) -> None:
+        self.results = list(results)
+        self.repeat_last = repeat_last
+        self.last_result = self.results[-1] if self.results else None
+        self.pending = None
+        self.starts = []
+
+    def in_flight(self) -> bool:
+        return False
+
+    def start(self, chat_id, *, initial=False, on_wait=None, on_tick=None) -> bool:
+        self.starts.append((chat_id, initial, on_wait, on_tick))
+        if self.results:
+            self.pending = self.results.pop(0)
+        elif self.repeat_last:
+            self.pending = self.last_result
+        else:
+            return False
+        return True
+
+    def take_result(self):
+        result = self.pending
+        self.pending = None
+        return result
+
+    def take_proof(self):
+        return None
+
+    def note_proof(self):
+        return None
+
+    def stop(self):
+        return None
+
+
+class AdvancingTestClock:
+    """Fake monotonic clock whose sleeps advance time without blocking."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self.now = start
+
+    def time(self) -> float:
+        return 100.0 + self.now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def sync_call_kwargs(call, *, heartbeat: bool = False) -> dict:
     """Read one `sync_context_index` call's keyword arguments.
 
@@ -60,6 +114,15 @@ def held_open_stdin_pipe():
         os.close(write_fd)
 
 
+def context_sync_thread_running(worker) -> bool:
+    """Report only an executing sync thread, excluding a pending result."""
+    guard = getattr(worker, "_guard", None)
+    if guard is None:
+        return worker.in_flight()
+    with guard:
+        return getattr(worker, "_thread", None) is not None
+
+
 def settling_sleep(db_watch, real_sleep, real_monotonic, timeout: float = 5.0):
     """Return a `time.sleep` replacement that lets a started sync land.
 
@@ -76,15 +139,32 @@ def settling_sleep(db_watch, real_sleep, real_monotonic, timeout: float = 5.0):
 
     def sleep(_delay):
         deadline = real_monotonic() + timeout
-        while worker.in_flight() and real_monotonic() < deadline:
+        while context_sync_thread_running(worker) and real_monotonic() < deadline:
             real_sleep(0.001)
-        if worker.in_flight():
-            raise AssertionError("periodic context sync never finished")
+        if context_sync_thread_running(worker):
+            raise AssertionError("periodic context sync thread never finished")
 
     return sleep
 
 
 class AutoReplyCliRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        # Isolate user enrollment, prompts and model preferences. Model tests
+        # must explicitly supply a fake transport instead of using a live server.
+        # macOS /var is a symlink; the production filesystem boundary rejects
+        # it. Use the physical temp root for fixtures rather than relaxing it.
+        home = tempfile.TemporaryDirectory(prefix="autoreply-unit-home-", dir=Path("/private/tmp") if Path("/private/tmp").is_dir() else None)
+        self.addCleanup(home.cleanup)
+        home_patch = mock.patch.object(Path, "home", return_value=Path(home.name))
+        home_patch.start()
+        self.addCleanup(home_patch.stop)
+        model_transport = mock.patch(
+            "auto_reply_ondevice._local_only_urlopen",
+            side_effect=OSError("unit test requires an explicit model transport"),
+        )
+        model_transport.start()
+        self.addCleanup(model_transport.stop)
+
     @staticmethod
     def _load_auto_reply_module(name):
         spec = importlib.util.spec_from_file_location(
@@ -132,6 +212,58 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         return module._queue_connection()
 
     @staticmethod
+    def _empty_decision_store(module):
+        """Explicit empty supervisor projection for recovery-only fixtures."""
+        path = Path.home() / (module.__name__ + "-decisions.sqlite3")
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute("""CREATE TABLE reply_decisions(
+                event_id TEXT PRIMARY KEY,status TEXT NOT NULL,decision TEXT,
+                reason TEXT,category TEXT,reply TEXT,sent_at TEXT)""")
+            connection.commit()
+        finally:
+            connection.close()
+        path.chmod(0o600)
+        module.CONTEXT_DB = path
+
+    @contextmanager
+    def _fresh_room_state(self, module, event):
+        """Actual isolated watcher file; exercise the real freshness validator."""
+        for key in ('chat_id', 'log_id', 'source_epoch'):
+            self.assertIs(type(event.get(key)), int)
+            self.assertGreater(event[key], 0)
+        self.assertTrue(event.get('owner_id'))
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            path = Path(temporary) / 'db-watch-state.json'
+            path.write_text(json.dumps({
+                'schema_version': module.CLI_DB_STATE_SCHEMA_VERSION,
+                'target_chat_id': event['chat_id'], 'target_chat_name': module.CHAT,
+                'owner_id': event['owner_id'], 'source_epoch': event['source_epoch'],
+                'last_observed_log_id': event['log_id'],
+            }))
+            path.chmod(0o600)
+            with mock.patch.dict(os.environ, {
+                'OPENKAKAO_AUTO_REPLY_CLI': '1',
+                module.TARGET_CHAT_ID_ENV: str(event['chat_id']),
+                module.DB_SOURCE_EPOCH_ENV: str(event['source_epoch']),
+                module.SUPERVISOR_OWNER_ENV: event['owner_id'],
+                module.DB_WATCH_STATE_ENV: str(path),
+            }, clear=False):
+                self.assertEqual(module.stable_room_watermark_log_id(event), event['log_id'])
+                yield path
+
+    @staticmethod
+    def _legacy_transport_fixture(module):
+        """Isolate legacy CLI protocol tests from product model admission.
+
+        These tests supply a fake executable and fake process results. The
+        product disallows this legacy cloud ID; its policy is tested separately.
+        This component stub authorizes only that test's pinned primary ID.
+        """
+        allowed = module._product_local_model_allowed
+        module._product_local_model_allowed = lambda model: model == module.REPLY_MODEL or allowed(model)
+
+    @staticmethod
     def _load_db_watch_module(name):
         spec = importlib.util.spec_from_file_location(
             name,
@@ -168,6 +300,23 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
     def _write_executable(path, body):
         path.write_text(body, encoding="utf-8")
         path.chmod(0o700)
+
+    @contextmanager
+    def _hook_contract_interpreter(self, module):
+        """Owned metadata fixture; never execute the declared interpreter.
+
+        Hosted CI Python can be group writable. Contract tests must exercise
+        their declared safe/unsafe files without changing that host runtime.
+        Payload tests separately execute the real Python with explicit argv.
+        """
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            interpreter = Path(temporary) / "python-fixture"
+            self._write_executable(interpreter, "#!/bin/sh\nexit 99\n")
+            with (
+                mock.patch.object(module.sys, "executable", str(interpreter)),
+                mock.patch.dict(os.environ, {"OPENKAKAO_PYTHON": str(interpreter)}),
+            ):
+                yield interpreter
 
     def test_supervisor_signal_handler_only_records_the_request(self):
         module = self._load_supervisor_module("auto_reply_supervisor_signal_test")
@@ -451,7 +600,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     @staticmethod
     @contextmanager
-    def _fake_qwen27b_gateway(module, content, *, loaded=True):
+    def _fake_qwen27b_gateway(module, content, *, loaded=True, vision=False):
         """Serve one bounded local Qwen 27B generation without network access."""
 
         class Response:
@@ -481,6 +630,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                                 "owned_by": "mlx-serve",
                                 "loaded": loaded,
                                 "state": "ready" if loaded else "unloaded",
+                                "capabilities": ["vision"] if vision else [],
                             }
                         ]
                     }
@@ -671,11 +821,10 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             rng=ShortRng(),
         )
         self.assertEqual(social["component"], "short")
-        self.assertEqual(social["delay_seconds"], 20.0)
-        self.assertEqual(
-            social["scheduled_delay_cap_seconds"],
-            module.SCHEDULED_REPLY_DELAY_CAP_SECONDS,
-        )
+        self.assertEqual(social["delay_seconds"], 40.0)
+        self.assertEqual(social["anchor_delay_seconds"], 40.0)
+        self.assertEqual(social["remaining_seconds"], 40.0)
+        self.assertEqual(social["elapsed_seconds"], 0.0)
 
         class WideShortRng:
             @staticmethod
@@ -692,7 +841,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             rng=WideShortRng(),
         )
         self.assertEqual(capped["component"], "short")
-        self.assertEqual(capped["delay_seconds"], 20.0)
+        self.assertEqual(capped["delay_seconds"], 140.0)
+        self.assertEqual(capped["sampled_delay_seconds"], 140.0)
 
     def test_response_turn_kind_classifies_question_caption_and_statement(self):
         module = self._load_auto_reply_module("auto_reply_turn_kind_test")
@@ -1269,8 +1419,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "style:youtube_reaction_register:v1",
         )
 
-    def test_photo_fallback_varies_and_media_placeholder_is_not_echo(self):
-        module = self._load_auto_reply_module("auto_reply_photo_fallback_vary_test")
+    def test_photo_fallback_states_missing_pixels_without_visual_judgment(self):
+        module = self._load_auto_reply_module("auto_reply_photo_fallback_truth_test")
         self.assertTrue(module._inbound_is_media_placeholder("사진"))
         self.assertFalse(module._outbound_echoes_inbound("화면이 좀 깨지네", "사진"))
         self.assertTrue(
@@ -1278,13 +1428,43 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
         recent = [{"is_self": True, "message": "화면이 좀 깨지네"}]
         first = module._photo_fallback_reply("사진", recent)
-        self.assertNotEqual(first, "이거 뭐야")
-        self.assertNotIn(first, {"화면이 좀 깨지네"})
+        self.assertIn("사진 내용을 확인하지 못했어", first)
+        self.assertEqual(first.count("?"), 1)
         second = module._photo_fallback_reply(
             "사진",
             recent + [{"is_self": True, "message": first}],
         )
-        self.assertNotEqual(second, first)
+        self.assertEqual(second, first)
+        formal = module._photo_fallback_reply(
+            "사진", [{"author_nickname": "현준", "is_self": False}]
+        )
+        self.assertIn("사진 내용을 확인하지 못했어요", formal)
+        for reply in (first, second, formal):
+            for unsupported in ("화질", "구도", "색감", "깨지", "안 보이"):
+                self.assertNotIn(unsupported, reply)
+
+    def test_image_rank_fallback_does_not_invent_pixel_observations(self):
+        module = self._load_auto_reply_module("auto_reply_photo_rank_truth_test")
+        with mock.patch.object(module, "_policy_valid_draft", return_value=False):
+            ranked = module.select_ranked_reply(
+                "[사진]", "", [], {"attachment": "image"}, []
+            )
+        self.assertEqual(ranked["fallback"], "photo_passthrough")
+        self.assertIn("사진 내용을 확인하지 못했어", ranked["reply"])
+        self.assertEqual(ranked["reply"].count("?"), 1)
+
+    def test_photo_fallback_uses_current_recipient_and_explicit_register(self):
+        module = self._load_auto_reply_module("auto_reply_photo_recipient_truth_test")
+        for recipient, register, recent, formal in (
+            ("현준", None, [], True),
+            ("member", "honorific", [], True),
+            ("member", "informal", [{"author_nickname": "현준"}], False),
+        ):
+            with self.subTest(recipient=recipient, register=register):
+                reply = module._photo_fallback_reply(
+                    "[사진]", recent, recipient=recipient, register=register
+                )
+                self.assertEqual("못했어요" in reply, formal)
     def test_unsolicited_plan_is_rejected(self):
         module = self._load_auto_reply_module("auto_reply_unsolicited_plan_test")
         self.assertTrue(
@@ -1450,12 +1630,13 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertFalse(
             module._outbound_reaction_allows("ㅎㅎ 그건 좀", plain_inbound, laughter_allowed=True)
         )
-        self.assertEqual(
-            module._sanitize_outbound_reaction(
-                "ㅋㅋㅋㅋ 그건 좀", plain_inbound, laughter_allowed=True
-            ),
-            "ㅋㅋㅋㅋ 그건 좀",
+        sanitized = module._sanitize_outbound_reaction(
+            "ㅋㅋㅋㅋ 그건 좀", plain_inbound, laughter_allowed=True
         )
+        self.assertRegex(sanitized, r"^ㅋ{3,5} 그건 좀$")
+        self.assertTrue(module._outbound_reaction_allows(
+            sanitized, plain_inbound, laughter_allowed=True
+        ))
         reasons: list[str] = []
         # The draft must not echo the inbound, otherwise the echo rule rejects
         # it first and the laughter assertion would prove nothing.
@@ -1480,6 +1661,91 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 laughter_allowed=True,
             )
         )
+
+    def test_reply_receipts_initialize_private_root_without_cancelling_next_turn(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_root")
+        root = module._operator_state_root()
+        module.EVIDENCE_LEDGER = root / "reply-evidence.jsonl"
+        self.assertFalse(root.exists())
+        module._capture_job_abort_token().raise_if_cancelled()
+        event = {"event_id": "db:42:1"}
+        self.assertEqual(module.persist_reply_evidence_ledger(event, {}, status="pending"), module.EVIDENCE_LEDGER)
+        self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(module.EVIDENCE_LEDGER.stat().st_mode), 0o600)
+        module._capture_job_abort_token().raise_if_cancelled()
+        self.assertEqual(json.loads(module.EVIDENCE_LEDGER.read_text())["event_id"], event["event_id"])
+
+    def test_reply_receipts_refuse_links_and_shared_parent_without_mutating_them(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_links")
+        shared = Path.home() / "shared"
+        shared.mkdir(mode=0o755)
+        shared.chmod(0o755)
+        with self.assertRaises(PermissionError):
+            module._append_private_reply_receipt(shared / "receipt.jsonl", {"id": 1})
+        self.assertEqual(stat.S_IMODE(shared.stat().st_mode), 0o755)
+        self.assertEqual(list(shared.iterdir()), [])
+        victim = Path.home() / "unchanged.txt"
+        victim.write_bytes(b"original synthetic bytes")
+        victim.chmod(0o640)
+        for kind in ("symbolic", "hard"):
+            with self.subTest(kind=kind):
+                parent = Path.home() / kind
+                parent.mkdir(mode=0o700)
+                receipt = parent / "receipt.jsonl"
+                if kind == "symbolic":
+                    receipt.symlink_to(victim)
+                else:
+                    os.link(victim, receipt)
+                with self.assertRaises((OSError, PermissionError)):
+                    module._append_private_reply_receipt(receipt, {"id": 1})
+                self.assertEqual(victim.read_bytes(), b"original synthetic bytes")
+                self.assertEqual(stat.S_IMODE(victim.stat().st_mode), 0o640)
+
+    def test_reply_receipts_serialize_concurrent_writers_into_complete_json_lines(self):
+        from concurrent.futures import ThreadPoolExecutor
+        module = self._load_auto_reply_module("auto_reply_private_receipt_concurrency")
+        receipt = Path.home() / "private-receipts" / "receipt.jsonl"
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            list(pool.map(lambda i: module._append_private_reply_receipt(receipt, {"id": i, "body": "한글" * 100}), range(24)))
+        rows = [json.loads(line) for line in receipt.read_text().splitlines()]
+        self.assertEqual(sorted(row["id"] for row in rows), list(range(24)))
+        self.assertTrue(all(row["body"] == "한글" * 100 for row in rows))
+        self.assertEqual(stat.S_IMODE(receipt.stat().st_mode), 0o600)
+
+    def test_reply_receipts_complete_partial_writes_and_reject_zero_progress(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_partial")
+        receipt = Path.home() / "private-receipts" / "receipt.jsonl"
+        original_write = os.write
+        with mock.patch.object(module.os, "write", side_effect=lambda fd, raw: original_write(fd, raw[:7])) as write:
+            module._append_private_reply_receipt(receipt, {"body": "한글" * 20})
+        self.assertGreater(write.call_count, 2)
+        self.assertEqual(json.loads(receipt.read_text()), {"body": "한글" * 20})
+        before = receipt.read_bytes()
+        with mock.patch.object(module.os, "write", return_value=0):
+            with self.assertRaisesRegex(OSError, "no progress"):
+                module._append_private_reply_receipt(receipt, {"id": "must not be recorded"})
+        self.assertEqual(receipt.read_bytes(), before)
+        with mock.patch.object(module.os, "fsync", side_effect=FileNotFoundError("uncertain after write")):
+            with self.assertRaisesRegex(FileNotFoundError, "uncertain after write"):
+                module._append_private_reply_receipt(receipt, {"id": "one attempted append"})
+        self.assertEqual([json.loads(line) for line in receipt.read_text().splitlines()],
+            [{"body": "한글" * 20}, {"id": "one attempted append"}])
+
+    def test_reply_receipts_retry_only_a_prewrite_creation_failure(self):
+        module = self._load_auto_reply_module("auto_reply_private_receipt_creation")
+        receipt = Path.home() / "private-receipts" / "receipt.jsonl"
+        original_open = os.open
+        attempts = []
+        def contested_open(path, *args, **kwargs):
+            if path == receipt.name:
+                attempts.append(path)
+                if len(attempts) == 1:
+                    raise FileNotFoundError("first creation contention")
+            return original_open(path, *args, **kwargs)
+        with mock.patch.object(module.os, "open", side_effect=contested_open):
+            module._append_private_reply_receipt(receipt, {"id": "once"})
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(receipt.read_text().splitlines(), [json.dumps({"id": "once"})])
 
     def test_reply_evidence_ledger_links_retrieval_and_prompt(self):
         module = self._load_auto_reply_module("auto_reply_evidence_ledger_test")
@@ -1765,6 +2031,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         ]
         self.assertTrue(module._is_context_pointer(" ??? "))
         self.assertFalse(module._is_context_pointer("몇 명이야?"))
+        self.assertTrue(module._is_referential_context_question("뭐지저건"))
+        self.assertTrue(module._inbound_asks_question("뭐지 저건"))
+        self.assertFalse(module._is_contextual_followup("몇 명이야?"))
         self.assertTrue(
             module._is_contextless_confusion_reply("무슨 말인지 모르겠네요")
         )
@@ -1785,6 +2054,13 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             )
         )
         self.assertEqual(reasons, ["contextless_confusion"])
+        self.assertIsNone(
+            module._lenient_policy_draft(
+                ["무슨 말인지 모르겠네요"],
+                "???",
+                recent,
+            )
+        )
 
         result = module.select_ranked_reply(
             "???",
@@ -1799,6 +2075,14 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             module._contextual_clarification_reply("???", recent, recipient="현준"),
             "아까 “둘다 해병대네” 얘기예요?",
         )
+        self.assertEqual(
+            module._contextual_clarification_reply("뭐지저건", recent),
+            "아까 “둘다 해병대네” 얘기야?",
+        )
+        self.assertEqual(
+            module._contextual_clarification_target("뭐지저건", recent)["evidence_id"],
+            "recent:11",
+        )
         with mock.patch.object(
             module,
             "_load_operator_reply_prompts",
@@ -1810,9 +2094,142 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                     for item in module._reply_decision_instructions()
                 )
             )
-        unknown = module.select_ranked_reply("사람은 몇 명이야?", "", [], {}, [])
+        unknown = module.select_ranked_reply("사람은 몇 명이야?", "", [], {}, recent)
         self.assertEqual(unknown["fallback"], "question_unknown")
         self.assertEqual(unknown["reply"], "몇 명인진 안 나와서 모르겠네")
+
+    def test_discourse_followup_uses_recent_topic_instead_of_generic_confusion(self):
+        module = self._load_auto_reply_module("auto_reply_discourse_followup_test")
+        recent = [
+            {
+                "evidence_id": "recent:31",
+                "author_nickname": "다른 참여자",
+                "message": "배포 전에 설정 파일부터 다시 확인하자",
+                "is_self": False,
+            }
+        ]
+
+        self.assertTrue(module._is_discourse_context_followup("그래서?"))
+        self.assertTrue(module._is_contextual_followup("그래서?"))
+        reasons = []
+        self.assertFalse(
+            module._policy_valid_draft(
+                "무슨 말인지 모르겠네요",
+                "그래서?",
+                recent,
+                reasons_out=reasons,
+            )
+        )
+        self.assertEqual(reasons, ["contextless_confusion"])
+        self.assertIsNone(
+            module._lenient_policy_draft(
+                ["무슨 말인지 모르겠네요"],
+                "그래서?",
+                recent,
+            )
+        )
+
+        result = module.select_ranked_reply(
+            "그래서?",
+            "무슨 말인지 모르겠네요",
+            ["무슨 말인지 모르겠어요"],
+            {"author_nickname": "MOM"},
+            recent,
+        )
+        self.assertEqual(result["fallback"], "contextual_clarification")
+        self.assertEqual(
+            result["reply"],
+            "아까 “배포 전에 설정 파일부터 다시 확인하자” 얘기야?",
+        )
+        # Exercise the old strict -> lenient escape directly: the first draft
+        # is a non-generic overlong refusal, while a later draft is generic.
+        # Grounded clarification must win before lenient fallback can revive it.
+        overlong = "설명" * 120
+        escaped = module.select_ranked_reply(
+            "그래서",
+            overlong,
+            ["무슨 말인지 모르겠네요"],
+            {"author_nickname": "MOM"},
+            recent,
+        )
+        self.assertEqual(escaped["fallback"], "contextual_clarification")
+        self.assertEqual(
+            escaped["reply"],
+            "아까 “배포 전에 설정 파일부터 다시 확인하자” 얘기야?",
+        )
+        recent.append(
+            {
+                "evidence_id": "recent:32",
+                "author_nickname": "나",
+                "message": "무슨 말인지 모르겠네요",
+                "is_self": True,
+            }
+        )
+        target = module._contextual_clarification_target("그래서?", recent)
+        self.assertIsNotNone(target)
+        self.assertEqual(target["evidence_id"], "recent:31")
+
+    def test_missing_context_never_sends_generic_confusion(self):
+        module = self._load_auto_reply_module("auto_reply_discourse_no_context_test")
+        generic = "무슨 말인지 모르겠네요"
+
+        self.assertIsNone(module._contextual_clarification_target("그래서?", []))
+        for inbound in ("그래서?", "???", "ㅁㄴㅇㄹ"):
+            reasons = []
+            self.assertFalse(
+                module._policy_valid_draft(
+                    generic, inbound, [], reasons_out=reasons
+                )
+            )
+            self.assertEqual(reasons, ["contextless_confusion"])
+            self.assertIsNone(module._lenient_policy_draft([generic], inbound, []))
+            result = module.select_ranked_reply(
+                inbound, generic, [generic], {"author_nickname": "MOM"}, []
+            )
+            self.assertEqual(result["fallback"], "missing_context_clarification")
+            self.assertEqual(result["reply"], "어느 얘기 말하는 거야?")
+            self.assertTrue(
+                module._valid_missing_context_clarification(
+                    result["reply"], inbound, [], recipient="MOM"
+                )
+            )
+            self.assertFalse(
+                module._valid_missing_context_clarification(
+                    generic, inbound, [], recipient="MOM"
+                )
+            )
+
+        honorific = module.select_ranked_reply(
+            "???", generic, [generic], {"author_nickname": "현준"}, []
+        )
+        self.assertEqual(honorific["reply"], "어느 부분 말씀하시는 거예요?")
+        self.assertTrue(
+            module._valid_missing_context_clarification(
+                honorific["reply"], "???", [], recipient="현준"
+            )
+        )
+        self.assertFalse(
+            module._valid_missing_context_clarification(
+                "어느 얘기 말하는 거야?", "???", [], recipient="현준"
+            )
+        )
+
+        recent = [{"message": "배포 일정은 금요일이야", "is_self": False}]
+        self.assertFalse(
+            module._valid_missing_context_clarification(
+                "어느 얘기 말하는 거야?", "???", recent, recipient="MOM"
+            )
+        )
+        factual = module.select_ranked_reply(
+            "사람은 몇 명이야?", generic, [generic], {}, []
+        )
+        self.assertEqual(factual["fallback"], "question_unknown")
+        self.assertEqual(factual["reply"], "몇 명인진 안 나와서 모르겠네")
+
+        normal = module.select_ranked_reply(
+            "그래서?", "확인했어", [generic], {"author_nickname": "MOM"}, []
+        )
+        self.assertEqual(normal["reply"], "확인했어")
 
     def test_punctuation_followup_can_clarify_the_last_self_reply(self):
         module = self._load_auto_reply_module("auto_reply_self_context_pointer_test")
@@ -2529,19 +2946,18 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             },
             ensure_ascii=False,
         )
-        summary = db_watch._message_summary(
-            {
-                "chat_id": 417780809780519,
-                "log_id": 3910767403422096201,
-                "author_id": 209319606,
-                "sender_name": "현준",
-                "message": "샵검색: #대만 44만원",
-                "message_type": 71,
-                "attachment": attachment,
-                "sent_at": 1787137003,
-                "is_self": False,
-            }
-        )
+        message = {
+            "chat_id": 417780809780519,
+            "log_id": 3910767403422096201,
+            "author_id": 209319606,
+            "sender_name": "현준",
+            "message": "샵검색: #대만 44만원",
+            "message_type": 71,
+            "attachment": attachment,
+            "sent_at": 1787137003,
+            "is_self": False,
+        }
+        summary = db_watch._message_summary(message)
         self.assertIn("민심 달래기", summary["message"])
         self.assertIn("샵검색: #대만 44만원", summary["message"])
         self.assertEqual(
@@ -2552,6 +2968,69 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         dumped = json.dumps(summary, ensure_ascii=False)
         self.assertNotIn("SECRETCODEBLOB", dumped)
         self.assertNotIn("kakaocdn.net", dumped)
+        persisted = db_watch._merge_recent_tail([], [message])
+        self.assertEqual(persisted[0]["urls"], summary["urls"])
+        self.assertEqual(
+            db_watch._recent_messages(
+                persisted,
+                message["log_id"],
+                ordered_messages=persisted,
+            )[0]["urls"],
+            summary["urls"],
+        )
+        worker = self._load_auto_reply_module(
+            "auto_reply_recent_card_url_round_trip_test"
+        )
+        followup = {
+            "log_id": message["log_id"] + 1,
+            "recent_messages": persisted,
+        }
+        recent = worker._recent_conversation(followup)
+        self.assertEqual(recent[0]["urls"], summary["urls"])
+        self.assertEqual(worker._event_link_urls(followup, recent), summary["urls"])
+
+    def test_recent_tail_urls_are_bounded_canonical_and_ordered(self):
+        db_watch = self._load_db_watch_module("auto_reply_recent_url_validation_test")
+        base = {
+            "chat_id": 42,
+            "log_id": 10,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "card",
+            "message_type": 71,
+            "attachment": False,
+            "sent_at": 100,
+            "is_self": False,
+        }
+        urls = [
+            "HTTPS://V.KAKAO.COM:443/v/first?b=2&a=1",
+            "http://EXAMPLE.COM:80/second#part",
+        ]
+        validated = db_watch._validated_recent_summary({**base, "urls": urls})
+        self.assertEqual(
+            validated["urls"],
+            [
+                "https://v.kakao.com/v/first?b=2&a=1",
+                "http://example.com/second#part",
+            ],
+        )
+        self.assertEqual(
+            db_watch._validated_recent_tail([validated])[0]["urls"],
+            validated["urls"],
+        )
+        for invalid in (
+            ["https://example.com/1", "https://example.com/2", "https://example.com/3"],
+            ["javascript:alert(1)"],
+            ["https://user:secret@example.com/path"],
+            ["https://example.com/has space"],
+            ["https://example.com/same", "https://EXAMPLE.COM:443/same"],
+            ["https://example.com/" + "x" * db_watch.MAX_RECENT_URL_BYTES],
+            "https://example.com/not-a-list",
+        ):
+            with self.subTest(invalid=repr(invalid)):
+                self.assertIsNone(
+                    db_watch._validated_recent_summary({**base, "urls": invalid})
+                )
 
     def test_shop_search_article_guess_and_rerank_query(self):
         module = self._load_auto_reply_module("auto_reply_shop_search_article_guess")
@@ -3114,6 +3593,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
         with (
             mock.patch.dict(os.environ, {"OPENKAKAO_ALLOW_LINK_FETCH": "0"}, clear=False),
+            # This checks link opt-in/count gates after the separate freshness
+            # boundary; never query the user's DB for this isolated fixture.
+            mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
             mock.patch.object(module, "fetch_link_previews") as fetch,
         ):
             one_result = module.analyze_event(one)
@@ -3393,6 +3875,19 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         saved = []
         polled = []
         call_order = []
+        clock = AdvancingTestClock()
+        worker = ImmediateContextSyncWorker(
+            [
+                ("ok", valid),
+                (
+                    "transient",
+                    db_watch.ContextSyncTransient(
+                        "context_sync_snapshot_retry_exhausted"
+                    ),
+                ),
+                ("ok", valid),
+            ]
+        )
 
         def save_state(state, **_kwargs):
             call_order.append("save")
@@ -3404,8 +3899,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             self.assertTrue(saved)
             self.assertFalse(saved[-1]["delivery_enabled"])
 
-        def poll_after_recovery(state, interval):
-            polled.append((dict(state), interval))
+        def poll_after_recovery(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
             if (
                 state.get("context_sync_checkpoint_log_id") == 999
                 and "context_sync_transient_failures" not in state
@@ -3434,54 +3929,16 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 side_effect=lambda state: dict(state),
             ),
             mock.patch.object(db_watch, "CONTEXT_SYNC_INTERVAL_SECONDS", 5.0),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[
-                    valid,
-                    db_watch.ContextSyncTransient(
-                        "context_sync_snapshot_retry_exhausted"
-                    ),
-                    valid,
-                ],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
             mock.patch.object(
                 db_watch,
                 "_poll_with_bounded_clean_retry",
                 side_effect=poll_after_recovery,
             ),
-            mock.patch.object(
-                db_watch.time,
-                "monotonic",
-                side_effect=[
-                    20.0,
-                    26.0,
-                    26.1,
-                    26.2,
-                    26.3,
-                    26.4,
-                    26.5,
-                    32.0,
-                    32.1,
-                    32.2,
-                    32.3,
-                ],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0, 111.0, 112.0, 113.0, 120.0],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "sleep",
-                side_effect=settling_sleep(
-                    db_watch,
-                    real_sleep,
-                    real_monotonic,
-                ),
-            ),
+            mock.patch.object(db_watch.time, "monotonic", side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(
                 db_watch, "_stop_poll_stream", side_effect=stop_poll_stream
             ),
@@ -3490,12 +3947,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             db_watch.main()
 
         self.assertEqual(
-            [call.args for call in sync.call_args_list],
-            [(42,), (42,), (42,)],
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False, False],
         )
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[1]), {})
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[2]), {})
         fenced = [
             item
             for item in saved
@@ -3505,26 +3959,29 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertFalse(fenced["delivery_enabled"])
         self.assertEqual(fenced["fence"], "starting")
         self.assertEqual(fenced["fence_reason"], "context_sync_transient")
-        self.assertEqual(fenced["context_sync_retry_at"], 115.0)
+        self.assertEqual(fenced["context_sync_retry_at"], 112.0)
         self.assertEqual(fenced["context_sync_transient_failures"], 1)
         self.assertNotIn("context_sync_deferred_log_id", fenced)
-        self.assertEqual(call_order[:2], ["save", "stop"])
+        self.assertLess(call_order.index("stop"), len(call_order) - 1)
         # The room kept polling with the authority it had already published
         # while the transient sync was still in flight.
-        self.assertEqual(len(polled), 2)
-        in_flight_state, in_flight_interval = polled[0]
+        self.assertGreater(len(polled), 2)
+        in_flight_state, in_flight_interval, in_flight_kwargs = polled[0]
         self.assertEqual(in_flight_interval, 1.0)
         self.assertEqual(in_flight_state["fence_reason"], "")
         self.assertFalse(in_flight_state["delivery_enabled"])
         self.assertNotIn("context_sync_transient_failures", in_flight_state)
-        recovered, interval = polled[1]
+        self.assertFalse(in_flight_kwargs["delivery_ready"])
+        self.assertTrue(any(item[0].get("fence_reason") == "context_sync_transient" for item in polled))
+        recovered, interval, ready_kwargs = polled[-1]
         self.assertEqual(interval, 1.0)
+        self.assertEqual(ready_kwargs, {})
         self.assertEqual(recovered["capability_state"], "starting")
         self.assertFalse(recovered["delivery_enabled"])
         self.assertEqual(recovered["fence_reason"], "")
-        self.assertEqual(recovered["context_sync_at"], 120.0)
+        self.assertEqual(recovered["context_sync_at"], 113.0)
         self.assertEqual(recovered["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(recovered["context_sync_retry_at"], 125.0)
+        self.assertEqual(recovered["context_sync_retry_at"], 118.0)
         self.assertNotIn("context_sync_transient_failures", recovered)
         self.assertNotIn("context_sync_failure_at", recovered)
 
@@ -3568,7 +4025,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 in_flight["active"] = False
             return valid
 
-        def poll(state, _interval):
+        def poll(state, _interval, **_kwargs):
             polls_total.append((time.monotonic(), dict(state)))
             if in_flight["active"]:
                 polls_while_blocked.append((time.monotonic(), dict(state)))
@@ -3642,7 +4099,11 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertTrue(
             all(state == first_state for _, state in polls_while_blocked)
         )
-        self.assertFalse(db_watch._PERIODIC_CONTEXT_SYNC.in_flight())
+        worker = db_watch._PERIODIC_CONTEXT_SYNC
+        self.assertFalse(context_sync_thread_running(worker))
+        self.assertTrue(worker.in_flight())
+        self.assertEqual(worker.take_result(), ("ok", valid))
+        self.assertFalse(worker.in_flight())
 
     def test_periodic_context_sync_publishes_worker_liveness_from_the_loop(self):
         db_watch = self._load_db_watch_module(
@@ -3682,7 +4143,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             saved.append(dict(state))
             return True
 
-        def poll(state, _interval):
+        def poll(state, _interval, **_kwargs):
             if proofs and any(
                 item["heartbeat_at"] >= proofs[0] for item in saved
             ):
@@ -3739,6 +4200,28 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             )
         )
 
+    def test_settling_sleep_ignores_unconsumed_context_sync_result(self):
+        db_watch = self._load_db_watch_module(
+            "auto_reply_periodic_context_sync_settling_sleep_test"
+        )
+        worker = db_watch._PERIODIC_CONTEXT_SYNC
+        result = {"authoritative": True, "checkpoint_log_id": 999}
+        real_sleep = mock.Mock()
+
+        with mock.patch.object(
+            db_watch,
+            "sync_context_index",
+            return_value=result,
+        ):
+            worker._run(42, True, None, None)
+
+        self.assertFalse(context_sync_thread_running(worker))
+        self.assertTrue(worker.in_flight())
+        settling_sleep(db_watch, real_sleep, time.monotonic, timeout=0.01)(1.0)
+        real_sleep.assert_not_called()
+        self.assertEqual(worker.take_result(), ("ok", result))
+        self.assertFalse(worker.in_flight())
+
     def test_periodic_context_sync_worker_clears_in_flight_after_cancellation(self):
         db_watch = self._load_db_watch_module(
             "auto_reply_periodic_context_sync_cancelled_test"
@@ -3766,11 +4249,11 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
         def wait_for_worker():
             deadline = time.monotonic() + 5.0
-            while worker.in_flight() and time.monotonic() < deadline:
+            while context_sync_thread_running(worker) and time.monotonic() < deadline:
                 time.sleep(0.005)
             self.assertFalse(
-                worker.in_flight(),
-                "the worker never reported that its sync had finished",
+                context_sync_thread_running(worker),
+                "the worker thread never finished",
             )
 
         with mock.patch.object(
@@ -3793,7 +4276,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         ):
             self.assertTrue(worker.start(42))
             wait_for_worker()
+        self.assertTrue(worker.in_flight())
         self.assertEqual(worker.take_result(), ("ok", valid))
+        self.assertFalse(worker.in_flight())
 
     def test_periodic_context_sync_worker_clears_in_flight_when_the_watcher_stops(self):
         db_watch = self._load_db_watch_module(
@@ -3863,17 +4348,23 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         saved = []
         polled = []
         call_order = []
+        clock = AdvancingTestClock()
+        worker = ImmediateContextSyncWorker(
+            [("ok", valid), ("ok", deferred), ("ok", valid)]
+        )
 
         def save_state(state, **_kwargs):
             call_order.append("save")
             saved.append(dict(state))
             return True
 
-        def poll(state, interval):
-            polled.append((dict(state), interval))
+        def poll(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
             if (
-                state.get("context_sync_checkpoint_log_id") == 999
+                len(worker.starts) >= 3
+                and state.get("context_sync_checkpoint_log_id") == 999
                 and "context_sync_transient_failures" not in state
+                and "context_sync_deferred_log_id" not in state
                 and any(
                     item.get("fence_reason") == "context_sync_deferred"
                     for item in saved
@@ -3902,48 +4393,16 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 side_effect=lambda state: dict(state),
             ),
             mock.patch.object(db_watch, "CONTEXT_SYNC_INTERVAL_SECONDS", 5.0),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[valid, deferred, valid],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
             mock.patch.object(
                 db_watch,
                 "_poll_with_bounded_clean_retry",
                 side_effect=poll,
             ),
-            mock.patch.object(
-                db_watch.time,
-                "monotonic",
-                side_effect=[
-                    20.0,
-                    26.0,
-                    26.1,
-                    26.2,
-                    26.3,
-                    26.4,
-                    26.5,
-                    32.0,
-                    32.1,
-                    32.2,
-                    32.3,
-                ],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0, 111.0, 112.0, 113.0, 120.0],
-            ),
-            mock.patch.object(
-                db_watch.time,
-                "sleep",
-                side_effect=settling_sleep(
-                    db_watch,
-                    real_sleep,
-                    real_monotonic,
-                ),
-            ),
+            mock.patch.object(db_watch.time, "monotonic", side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(
                 db_watch,
                 "_stop_poll_stream",
@@ -3954,10 +4413,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             db_watch.main()
 
         self.assertEqual(
-            [call.args for call in sync.call_args_list],
-            [(42,), (42,), (42,)],
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False, False],
         )
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
         deferred_publish = [
             item
             for item in saved
@@ -3966,10 +4424,10 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertEqual(deferred_publish["capability_state"], "starting")
         self.assertEqual(deferred_publish["fence"], "starting")
         self.assertFalse(deferred_publish["delivery_enabled"])
-        self.assertEqual(deferred_publish["context_sync_at"], 110.0)
+        self.assertEqual(deferred_publish["context_sync_at"], 107.0)
         self.assertEqual(deferred_publish["context_sync_checkpoint_log_id"], 999)
         self.assertEqual(deferred_publish["context_sync_deferred_log_id"], 1000)
-        self.assertEqual(deferred_publish["context_sync_retry_at"], 115.0)
+        self.assertEqual(deferred_publish["context_sync_retry_at"], 112.0)
         # A deferral fences delivery without stopping the poll stream: the only
         # stop is the watcher's own shutdown unwind.
         self.assertEqual(call_order[-1], "stop")
@@ -3977,23 +4435,31 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         # Only the poll that ran while the deferred result was still landing,
         # then the poll that ran once the sync proved authoritative again: no
         # inbound observation is delivered while the room is deferred.
-        self.assertEqual(len(polled), 2)
-        self.assertTrue(
-            all(
-                state.get("fence_reason") != "context_sync_deferred"
-                for state, _ in polled
-            )
+        self.assertGreater(len(polled), 2)
+        deferred_poll = next(
+            (state, kwargs)
+            for state, _interval, kwargs in polled
+            if state.get("fence_reason") == "context_sync_deferred"
         )
-        in_flight_state, in_flight_interval = polled[0]
+        self.assertFalse(deferred_poll[1]["delivery_ready"])
+        in_flight_state, in_flight_interval, in_flight_kwargs = polled[0]
         self.assertEqual(in_flight_interval, 1.0)
+        self.assertFalse(in_flight_kwargs["delivery_ready"])
         self.assertEqual(in_flight_state["fence_reason"], "")
         self.assertNotIn("context_sync_deferred_log_id", in_flight_state)
-        recovered, interval = polled[1]
+        deferred_capture = next(
+            (state, kwargs)
+            for state, _interval, kwargs in polled
+            if kwargs.get("not_ready_reason") == "context_sync_deferred"
+        )
+        self.assertFalse(deferred_capture[1]["delivery_ready"])
+        recovered, interval, ready_kwargs = polled[-1]
         self.assertEqual(interval, 1.0)
+        self.assertEqual(ready_kwargs, {})
         self.assertEqual(recovered["fence_reason"], "")
-        self.assertEqual(recovered["context_sync_at"], 120.0)
+        self.assertEqual(recovered["context_sync_at"], 113.0)
         self.assertEqual(recovered["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(recovered["context_sync_retry_at"], 125.0)
+        self.assertEqual(recovered["context_sync_retry_at"], 118.0)
         self.assertNotIn("context_sync_deferred_log_id", recovered)
         self.assertNotIn("context_sync_transient_failures", recovered)
 
@@ -4016,14 +4482,23 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         }
         saved = []
         polled = []
+        clock = AdvancingTestClock()
+        transient = db_watch.ContextSyncTransient(
+            "context_sync_snapshot_retry_exhausted"
+        )
+        worker = ImmediateContextSyncWorker(
+            [("transient", transient), ("ok", valid)]
+        )
 
         def save_state(state, **_kwargs):
             saved.append(dict(state))
             return True
 
-        def poll_once(state, interval):
-            polled.append((dict(state), interval))
-            raise StopIteration
+        def poll_once(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            if not kwargs:
+                raise StopIteration
+            return state, 0
 
         with (
             mock.patch.dict(
@@ -4034,59 +4509,50 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
             mock.patch.object(db_watch.signal, "signal"),
             mock.patch.object(db_watch, "load_state", return_value={}),
+            mock.patch.object(db_watch, "_state", side_effect=lambda state: dict(state)),
             mock.patch.object(
                 db_watch,
                 "_state",
                 side_effect=lambda state: dict(state),
             ),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[
-                    db_watch.ContextSyncTransient(
-                        "context_sync_snapshot_retry_exhausted"
-                    ),
-                    valid,
-                ],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
             mock.patch.object(
                 db_watch,
                 "_poll_with_bounded_clean_retry",
                 side_effect=poll_once,
             ),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
             mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0],
+                db_watch.time, "monotonic", side_effect=clock.monotonic
             ),
-            mock.patch.object(
-                db_watch.time,
-                "monotonic",
-                side_effect=[20.0, 20.0],
-            ),
-            mock.patch.object(db_watch.time, "sleep") as sleep,
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(db_watch, "_stop_poll_stream"),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
 
-        self.assertEqual(len(saved), 1)
-        fenced = saved[0]
-        self.assertEqual(fenced["capability_state"], "starting")
-        self.assertFalse(fenced["delivery_enabled"])
-        self.assertEqual(fenced["fence_reason"], "context_sync_transient")
-        self.assertEqual(fenced["context_sync_retry_at"], 105.0)
-        sleep.assert_called_once_with(5.0)
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[1]), {"initial": False})
-        self.assertEqual(len(polled), 1)
-        recovered, interval = polled[0]
-        self.assertEqual(interval, 1.0)
-        self.assertFalse(recovered["delivery_enabled"])
-        self.assertEqual(recovered["fence_reason"], "")
-        self.assertNotIn("context_sync_transient_failures", recovered)
-        self.assertNotIn("context_sync_failure_at", recovered)
+        transient_states = [
+            item
+            for item in saved
+            if item.get("context_sync_transient_failures") == 1
+        ]
+        self.assertTrue(transient_states)
+        self.assertEqual(transient_states[0]["capability_state"], "starting")
+        self.assertFalse(transient_states[0]["delivery_enabled"])
+        self.assertEqual(transient_states[0]["context_sync_retry_at"], 106.0)
+        self.assertEqual(
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False],
+        )
+        self.assertGreaterEqual(len(polled), 4)
+        self.assertTrue(all(item[1] == 1.0 for item in polled))
+        self.assertTrue(all(item[2].get("delivery_ready") is False for item in polled[:3]))
+        # The authoritative sync is applied, then the watcher performs its
+        # normal ready poll; the mock stops before it can mutate readiness.
+        self.assertEqual(polled[-1][2], {})
+        self.assertFalse(polled[-1][0]["delivery_enabled"])
+        self.assertEqual(polled[-1][0]["fence_reason"], "")
 
     def test_startup_context_sync_persistent_transient_never_becomes_ready(self):
         db_watch = self._load_db_watch_module(
@@ -4094,7 +4560,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
         db_watch.SELF = "self"
         saved = []
-        waited = []
+        polled = []
+        clock = AdvancingTestClock()
 
         def save_state(state, **_kwargs):
             saved.append(dict(state))
@@ -4104,10 +4571,18 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "context_sync_snapshot_retry_exhausted"
         )
 
-        def wait_retry(_state, *, retry_delay):
-            waited.append(retry_delay)
-            if len(waited) == 3:
+        def poll_once(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            if (
+                len(worker.starts) == 3
+                and saved[-1].get("context_sync_transient_failures") == 3
+            ):
                 raise StopIteration
+            return state, 0
+
+        worker = ImmediateContextSyncWorker(
+            [("transient", transient)], repeat_last=True
+        )
 
         with (
             mock.patch.dict(
@@ -4123,61 +4598,56 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 "_state",
                 side_effect=lambda state: dict(state),
             ),
-            mock.patch.object(
-                db_watch,
-                "sync_context_index",
-                side_effect=[transient, transient, transient],
-            ) as sync,
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
             mock.patch.object(
-                db_watch.time,
-                "time",
-                side_effect=[100.0, 110.0, 130.0],
+                db_watch.time, "monotonic", side_effect=clock.monotonic
             ),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(
-                db_watch,
-                "_wait_context_sync_startup_retry",
-                side_effect=wait_retry,
+                db_watch, "_poll_with_bounded_clean_retry", side_effect=poll_once
             ),
-            mock.patch.object(db_watch, "_poll_with_bounded_clean_retry") as poll,
             mock.patch.object(db_watch, "_stop_poll_stream"),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
 
-        self.assertEqual(len(saved), 3)
+        self.assertEqual(
+            sorted(
+                {
+                    item["context_sync_transient_failures"]
+                    for item in saved
+                    if "context_sync_transient_failures" in item
+                }
+            ),
+            [1, 2, 3],
+        )
+        transient_states = [
+            item
+            for item in saved
+            if "context_sync_transient_failures" in item
+        ]
         self.assertTrue(
             all(
                 item["capability_state"] == "starting"
                 and item["delivery_enabled"] is False
                 and item["fence_reason"] == "context_sync_transient"
-                for item in saved
+                for item in transient_states
             )
         )
         self.assertEqual(
-            [item["context_sync_transient_failures"] for item in saved],
+            sorted({item["context_sync_transient_failures"] for item in transient_states}),
             [1, 2, 3],
         )
-        self.assertEqual(waited, [5.0, 10.0, 30.0])
         self.assertEqual(
-            [sync_call_kwargs(call) for call in sync.call_args_list],
-            [
-                {"initial": True},
-                {"initial": False},
-                {"initial": False},
-            ],
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True, False, False],
         )
-        # Every sync proves liveness through the same watcher heartbeat, both
-        # while queuing for the shared writer slot and while its child runs.
-        self.assertTrue(
-            all(
-                callable(sync_call_kwargs(call, heartbeat=True)["on_wait"])
-                and sync_call_kwargs(call, heartbeat=True)["on_wait"]
-                is sync_call_kwargs(call, heartbeat=True)["on_tick"]
-                for call in sync.call_args_list
-            )
-        )
-        poll.assert_not_called()
+        self.assertGreaterEqual(len(polled), 16)
+        self.assertLess(len(polled), 30)
+        self.assertTrue(all(item[1] == 1.0 for item in polled))
+        self.assertTrue(all(item[2].get("delivery_ready") is False for item in polled))
 
     def test_startup_context_sync_retry_refreshes_heartbeat_while_fenced(self):
         db_watch = self._load_db_watch_module(
@@ -4244,11 +4714,20 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             "network": False,
         }
         saved = []
+        polled = []
+        clock = AdvancingTestClock()
+        worker = ImmediateContextSyncWorker([("ok", deferred)])
 
         def save_state(state, **_kwargs):
             saved.append(dict(state))
             return True
 
+        def poll_capture(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            if kwargs.get("not_ready_reason") == "context_sync_deferred":
+                raise StopIteration
+            return state, 0
+
         with (
             mock.patch.dict(
                 os.environ,
@@ -4258,97 +4737,84 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
             mock.patch.object(db_watch.signal, "signal"),
             mock.patch.object(db_watch, "load_state", return_value={}),
-            mock.patch.object(db_watch, "sync_context_index", return_value=deferred) as sync,
+            mock.patch.object(db_watch, "_state", side_effect=lambda state: dict(state)),
+            mock.patch.object(db_watch, "_PERIODIC_CONTEXT_SYNC", worker),
             mock.patch.object(db_watch, "save_state", side_effect=save_state),
-            mock.patch.object(db_watch, "poll_once") as poll,
-            mock.patch.object(db_watch.time, "monotonic", side_effect=[10.0, 10.0, 10.0]),
-            mock.patch.object(db_watch.time, "time", side_effect=[100.0, 101.0]),
-            mock.patch.object(db_watch.time, "sleep", side_effect=StopIteration),
+            mock.patch.object(
+                db_watch, "_poll_with_bounded_clean_retry", side_effect=poll_capture
+            ),
+            mock.patch.object(db_watch.time, "monotonic", side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, "time", side_effect=clock.time),
+            mock.patch.object(db_watch.time, "sleep", side_effect=clock.sleep),
             mock.patch.object(db_watch, "_stop_poll_stream"),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
 
-        self.assertEqual(sync.call_count, 1)
-        self.assertEqual(sync.call_args_list[0].args, (42,))
-        self.assertEqual(sync_call_kwargs(sync.call_args_list[0]), {"initial": True})
-        poll.assert_not_called()
-        self.assertEqual(len(saved), 1)
-        self.assertEqual(saved[0]["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(saved[0]["context_sync_deferred_log_id"], 1000)
-        self.assertEqual(saved[0]["capability_state"], "starting")
-        self.assertFalse(saved[0]["delivery_enabled"])
-        self.assertEqual(saved[0]["fence_reason"], "context_sync_deferred")
+        self.assertEqual(
+            [initial for _chat_id, initial, _on_wait, _on_tick in worker.starts],
+            [True],
+        )
+        deferred_state = next(
+            item for item in saved if item.get("fence_reason") == "context_sync_deferred"
+        )
+        self.assertEqual(deferred_state["context_sync_checkpoint_log_id"], 999)
+        self.assertEqual(deferred_state["context_sync_deferred_log_id"], 1000)
+        self.assertEqual(deferred_state["context_sync_at"], 101.0)
+        self.assertEqual(deferred_state["capability_state"], "starting")
+        self.assertFalse(deferred_state["delivery_enabled"])
+        self.assertEqual(len(polled), 2)
+        self.assertEqual(polled[0][2].get("not_ready_reason", ""), "")
+        self.assertEqual(polled[1][2]["not_ready_reason"], "context_sync_deferred")
+        self.assertFalse(polled[1][2]["delivery_ready"])
 
     def test_authoritative_context_sync_deferral_preserves_watcher_readiness(self):
-        db_watch = self._load_db_watch_module(
-            "auto_reply_context_sync_authoritative_deferred_test"
-        )
+        db_watch = self._load_db_watch_module("auto_reply_context_sync_authoritative_deferred_test")
         db_watch.SELF = "self"
-        deferred = {
-            "schema_version": 1,
-            "action": "context_sync_local",
-            "chat_id": 42,
-            "chat": db_watch.CHAT,
-            "checkpoint_log_id": 999,
-            "pages": 1,
-            "authoritative": True,
-            "deferred": {
-                "reason": "fresh_unmatched_self",
-                "log_id": 1000,
-                "retry_after_seconds": 5,
-            },
-            "totals": {key: 0 for key in db_watch.CONTEXT_SYNC_TOTAL_KEYS},
-            "network": False,
-        }
-        polled = []
-        saved = []
-
-        def poll_once(state, interval):
-            polled.append((dict(state), interval))
-            ready = dict(state)
-            ready.update(
-                capability_state="ready",
-                delivery_enabled=True,
-                fence_reason="",
-                fence="ready",
-            )
-            return ready, 0
-
-        def save_polled_state(state):
+        deferred = {"schema_version": 1, "action": "context_sync_local", "chat_id": 42,
+            "chat": db_watch.CHAT, "checkpoint_log_id": 999, "pages": 1, "authoritative": True,
+            "deferred": {"reason": "fresh_unmatched_self", "log_id": 1000, "retry_after_seconds": 5},
+            "totals": {key: 0 for key in db_watch.CONTEXT_SYNC_TOTAL_KEYS}, "network": False}
+        worker = ImmediateContextSyncWorker([("ok", deferred)])
+        clock = AdvancingTestClock(start=100.0)
+        polled, saved = [], []
+        def poll_once(state, interval, **kwargs):
+            polled.append((dict(state), interval, dict(kwargs)))
+            ready = kwargs.get('delivery_ready', True)
+            return {**state, 'capability_state': 'ready' if ready else 'starting',
+                'delivery_enabled': ready, 'fence_reason': '', 'fence': 'ready' if ready else 'starting'}, 0
+        def save_polled(state):
             saved.append(dict(state))
             return True
-
+        def sleep(delay):
+            clock.sleep(delay)
+            if len(polled) >= 2:
+                raise StopIteration
         with (
-            mock.patch.dict(
-                os.environ,
-                {db_watch.TARGET_CHAT_ID_ENV: "42"},
-                clear=False,
-            ),
-            mock.patch.object(sys, "argv", ["auto-reply-db-watch.py"]),
-            mock.patch.object(db_watch.signal, "signal"),
-            mock.patch.object(db_watch, "load_state", return_value={}),
-            mock.patch.object(db_watch, "sync_context_index", return_value=deferred),
-            mock.patch.object(db_watch, "poll_once", side_effect=poll_once),
-            mock.patch.object(
-                db_watch, "_save_polled_state", side_effect=save_polled_state
-            ),
-            mock.patch.object(db_watch.time, "monotonic", side_effect=[10.0, 11.0]),
-            mock.patch.object(db_watch.time, "time", return_value=100.0),
-            mock.patch.object(db_watch.time, "sleep", side_effect=StopIteration),
-            mock.patch.object(db_watch, "_stop_poll_stream"),
+            mock.patch.dict(os.environ, {db_watch.TARGET_CHAT_ID_ENV: '42'}, clear=False),
+            mock.patch.object(sys, 'argv', ['auto-reply-db-watch.py']),
+            mock.patch.object(db_watch.signal, 'signal'),
+            mock.patch.object(db_watch, 'load_state', return_value={}),
+            mock.patch.object(db_watch, '_state', side_effect=lambda state: dict(state)),
+            mock.patch.object(db_watch, 'save_state', return_value=True),
+            mock.patch.object(db_watch, '_PERIODIC_CONTEXT_SYNC', worker),
+            mock.patch.object(db_watch, 'poll_once', side_effect=poll_once),
+            mock.patch.object(db_watch, '_save_polled_state', side_effect=save_polled),
+            mock.patch.object(db_watch.time, 'monotonic', side_effect=clock.monotonic),
+            mock.patch.object(db_watch.time, 'time', side_effect=clock.time),
+            mock.patch.object(db_watch.time, 'sleep', side_effect=sleep),
+            mock.patch.object(db_watch, '_stop_poll_stream'),
             self.assertRaises(StopIteration),
         ):
             db_watch.main()
-
-        self.assertEqual(len(polled), 1)
-        observed, interval = polled[0]
-        self.assertEqual(interval, 1.0)
-        self.assertEqual(observed["context_sync_checkpoint_log_id"], 999)
-        self.assertEqual(observed["context_sync_deferred_log_id"], 1000)
-        self.assertEqual(saved[0]["capability_state"], "ready")
-        self.assertTrue(saved[0]["delivery_enabled"])
-        self.assertEqual(saved[0]["fence"], "ready")
+        self.assertEqual(len(polled), 2)
+        self.assertFalse(polled[0][2]['delivery_ready'])
+        self.assertEqual(polled[1][0]['context_sync_checkpoint_log_id'], 999)
+        self.assertEqual(polled[1][0]['context_sync_deferred_log_id'], 1000)
+        self.assertEqual(saved[0]['capability_state'], 'starting')
+        self.assertFalse(saved[0]['delivery_enabled'])
+        self.assertEqual(saved[-1]['capability_state'], 'ready')
+        self.assertTrue(saved[-1]['delivery_enabled'])
 
     def test_clean_transient_poll_fence_is_persisted_before_bounded_retry(self):
         db_watch = self._load_db_watch_module("auto_reply_clean_poll_retry_test")
@@ -4918,6 +5384,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
 
     def test_recipient_bundle_is_strict_and_exposes_register_hint(self):
         module = self._load_auto_reply_module("auto_reply_recipient_bundle_test")
+        module.BIN = Path.home() / "retrieval-cli-fixture"
+        self._write_executable(module.BIN, "#!/bin/sh\nexit 99\n")
 
         def raw_profile(endings):
             return {
@@ -4961,6 +5429,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         event = {
             "chat_id": 42,
             "log_id": 99,
+            "source_epoch": 7,
+            "owner_id": "owner",
             "author_nickname": "현준",
             "burst_source_log_ids": [97, 98, 99],
             "burst_tail_log_id": 99,
@@ -4988,7 +5458,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 module, "_run_json_command", return_value=payload
             ) as run_json,
         ):
-            bundle = module.run_context_reply_bundle("결과 나왔어요", event)
+            with self._fresh_room_state(module, event):
+                bundle = module.run_context_reply_bundle("결과 나왔어요", event)
         command = run_json.call_args_list[0].args[0]
         self.assertEqual(
             [
@@ -5018,7 +5489,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 module.RetrievalError, "recipient_style_profile_malformed"
             ),
         ):
-            module.run_context_reply_bundle("결과 나왔어요", event)
+            with self._fresh_room_state(module, event):
+                module.run_context_reply_bundle("결과 나왔어요", event)
 
         legacy = json.loads(json.dumps(payload, ensure_ascii=False))
         legacy["schema_version"] = 2
@@ -5028,7 +5500,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             mock.patch.object(module, "_run_json_command", return_value=legacy),
             self.assertRaisesRegex(module.RetrievalError, "retrieval_schema_mismatch"),
         ):
-            module.run_context_reply_bundle("결과 나왔어요", event)
+            with self._fresh_room_state(module, event):
+                module.run_context_reply_bundle("결과 나왔어요", event)
 
         malformed_event = dict(event, burst_source_log_ids=[97, 99, 98])
         with (
@@ -5422,6 +5895,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             module, _runner = self._load_trusted_codex_module(
                 "auto_reply_runner_force_hash_test", root
             )
+            self._legacy_transport_fixture(module)
             response = {
                 "should_reply": False,
                 "reply": "",
@@ -5516,6 +5990,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             }
             with mock.patch.dict(os.environ, environment, clear=False):
                 module = self._load_auto_reply_module("auto_reply_codex_runner_test")
+            self._legacy_transport_fixture(module)
             module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
             self.assertTrue(module.runner_is_trusted())
             captured = {}
@@ -5592,6 +6067,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 "auto_reply_direct_target_prompt_test",
                 temporary,
             )
+            self._legacy_transport_fixture(module)
             recent = [
                 {
                     "evidence_id": "recent:500",
@@ -5706,6 +6182,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                     f"auto_reply_target_evidence_{module_suffix}",
                     temporary,
                 )
+                self._legacy_transport_fixture(module)
                 event = {
                     "type": "item.completed",
                     "item": {
@@ -5938,6 +6415,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 module = self._load_auto_reply_module(
                     "auto_reply_rate_limit_circuit_test"
                 )
+                self._legacy_transport_fixture(module)
             calls = []
 
             def limited(command, **kwargs):
@@ -5978,6 +6456,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 restarted = self._load_auto_reply_module(
                     "auto_reply_rate_limit_restart_test"
                 )
+                self._legacy_transport_fixture(restarted)
             restarted._run_bounded_process = mock.Mock(
                 side_effect=AssertionError("runner must remain circuit-broken")
             )
@@ -6893,7 +7372,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         module = self._load_auto_reply_module("auto_reply_model_queue_defer_test")
         stats = self._timing_stats(module)
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             now = int(time.time())
             event = self._burst_event(module, 321, "question?", now)
             event["recent_messages"] = [self._recent_row(event)]
@@ -6935,7 +7414,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                     mock.patch.object(module, "record_context_decision") as record,
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous_status, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous_status, connection)
                 row = connection.execute(
                     """
                     SELECT status, event_json, due_at, decision, reason, error_class
@@ -7016,7 +7496,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             with mock.patch.object(module.time, "time", return_value=base):
                 self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
@@ -7052,6 +7532,12 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                         return_value=True,
                     ) as record_skip,
                     mock.patch.object(module, "complete_event") as complete,
+                    mock.patch.object(module, "_run_bounded_process", return_value=(0, json.dumps([{
+                        "log_id": event["log_id"], "chat_id": event["chat_id"],
+                        "author_id": event["author_id"], "is_self": False,
+                        "sender_name": event["author_nickname"], "message": event["message"],
+                        "attachment": "", "message_type": 1, "sent_at": event["sent_at"],
+                    }]).encode(), b"")),
                 ):
                     first_now = base + module.BURST_SETTLE_SECONDS + 1.0
                     with mock.patch.object(
@@ -7063,7 +7549,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                             first_now,
                             connection,
                         )
-                        module.process_job(first_job, first_status, connection)
+                        with self._fresh_room_state(module, json.loads((first_job)["event_json"])):
+                            module.process_job(first_job, first_status, connection)
 
                     first_row = connection.execute(
                         "SELECT status, due_at, event_json FROM reply_jobs "
@@ -7087,7 +7574,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                             base + 100.0,
                             connection,
                         )
-                        module.process_job(second_job, second_status, connection)
+                        with self._fresh_room_state(module, json.loads((second_job)["event_json"])):
+                            module.process_job(second_job, second_status, connection)
 
                     second_row = connection.execute(
                         "SELECT status, due_at, event_json FROM reply_jobs "
@@ -7111,7 +7599,8 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                             original_deadline,
                             connection,
                         )
-                        module.process_job(final_job, final_status, connection)
+                        with self._fresh_room_state(module, json.loads((final_job)["event_json"])):
+                            module.process_job(final_job, final_status, connection)
 
                 final_row = connection.execute(
                     "SELECT status, due_at, decision, reason, category "
@@ -7542,6 +8031,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         )
 
         with (
+            self._hook_contract_interpreter(module),
             mock.patch.object(module.sys, "version_info", (3, 11)),
             mock.patch.dict(
                 os.environ,
@@ -7561,6 +8051,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             )
 
         with (
+            self._hook_contract_interpreter(module),
             mock.patch.object(module.sys, "version_info", (3, 14)),
             mock.patch.dict(
                 os.environ,
@@ -7609,6 +8100,9 @@ print(json.dumps({
             try:
                 module.HOOK = hook
                 with (
+                    mock.patch.object(module, "_verified_hook_command", return_value=[
+                        sys.executable, "-E", "-B", "-S", str(hook),
+                    ]) as verified_command,
                     mock.patch.object(module.sys, "version_info", (3, 11)),
                     mock.patch.dict(
                         os.environ,
@@ -7620,6 +8114,7 @@ print(json.dumps({
                         {"event_id": "ax:test:99"},
                         dry_run=True,
                     )
+                    verified_command.assert_called_once_with()
             finally:
                 module.HOOK = original_hook
 
@@ -7651,6 +8146,7 @@ print(json.dumps({
             other = root / "other-python"
             self._write_executable(other, "#!/bin/sh\nexit 0\n")
             with (
+                self._hook_contract_interpreter(module),
                 mock.patch.object(module.sys, "version_info", (3, 11)),
                 mock.patch.dict(
                     os.environ,
@@ -9601,6 +10097,10 @@ print(json.dumps({
                     },
                 }
 
+                db_watch.QUEUE = Path.home() / "42" / "reply-queue.sqlite3"
+                db_watch.QUEUE.parent.mkdir(mode=0o700)
+                fixture = db_watch.transition_journal.open_queue(db_watch.QUEUE, create=True, expected_chat_id=42)
+                fixture.close()
                 state, emitted = db_watch.poll_once(db_watch._state({}), 1.0)
 
                 self.assertEqual(started, [(42, 1.0, 123)])
@@ -9742,7 +10242,10 @@ print(json.dumps({
         ]
         bounded = db_watch._merge_recent_tail([], many)
         self.assertEqual(len(bounded), db_watch.RECENT_MESSAGE_LIMIT)
-        self.assertEqual(bounded[0]["log_id"], 7)
+        self.assertEqual(
+            bounded[0]["log_id"],
+            many[-db_watch.RECENT_MESSAGE_LIMIT]["log_id"],
+        )
         self.assertEqual(
             db_watch._merge_recent_tail(tail, [second]),
             tail,
@@ -9960,6 +10463,209 @@ print(json.dumps({
                 [source],
             )
         )
+
+    def test_db_watch_off_tail_quote_requires_exact_authoritative_poll_row(self):
+        db_watch = self._load_db_watch_module(
+            "auto_reply_off_tail_quote_authority_test"
+        )
+        source = {
+            "chat_id": 42,
+            "log_id": 400,
+            "author_id": 900,
+            "sender_name": "최연우",
+            "message": "authoritative off-tail body",
+            "message_type": 1,
+            "attachment": "",
+            "is_self": True,
+            "sent_at": 4_000,
+        }
+        current = {
+            "chat_id": 42,
+            "log_id": 410,
+            "author_id": 700,
+            "sender_name": "member",
+            "message": "이 내용 기준으로",
+            "message_type": db_watch.QUOTED_REPLY_MESSAGE_TYPE,
+            "attachment": json.dumps(
+                {
+                    "src_logId": source["log_id"],
+                    "src_userId": source["author_id"],
+                    "src_type": source["message_type"],
+                    "src_message": source["message"],
+                }
+            ),
+            "is_self": False,
+            "sent_at": 4_010,
+        }
+        recent = [db_watch._message_summary(current)]
+        descriptor = db_watch._quoted_reply_descriptor(
+            current,
+            recent,
+            [source, current],
+        )
+        self.assertEqual(
+            descriptor["quoted_source"],
+            {
+                "log_id": 400,
+                "author_id": 900,
+                "author_nickname": "최연우",
+                "message": "authoritative off-tail body",
+                "message_type": 1,
+                "is_self": True,
+            },
+        )
+        self.assertIsNone(
+            db_watch._quoted_reply_descriptor(
+                current,
+                recent,
+                [{**source, "message": "different local row"}, current],
+            )
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"OPENKAKAO_AUTO_REPLY_CLI": "1"},
+                clear=False,
+            ),
+            mock.patch.object(
+                db_watch,
+                "_cli_enrollment_target",
+                return_value={
+                    "reply_author_bindings": [
+                        {"author_id": 900, "nickname": "최연우"}
+                    ]
+                },
+            ),
+        ):
+            self.assertIsNone(
+                db_watch._quoted_reply_descriptor(current, recent, [current])
+            )
+
+    def test_db_watch_file_provenance_distinguishes_type26_quote_and_alias_conflicts(self):
+        db_watch = self._load_db_watch_module(
+            "auto_reply_file_provenance_test"
+        )
+        attachment = {
+            "k": "safe/report.pdf",
+            "name": "report.pdf",
+            "size": 1234,
+            "mt": "application/pdf",
+            "cs": "opaque-kakao-checksum",
+        }
+        message = {
+            "chat_id": 42,
+            "log_id": 420,
+            "author_id": 700,
+            "sender_name": "member",
+            "message": "",
+            "message_type": 26,
+            "attachment": json.dumps(attachment, separators=(",", ":")),
+            "sent_at": 4_200,
+            "source_epoch": 7,
+            "is_self": False,
+            "reply_authorized": True,
+        }
+        provenance = db_watch._file_provenance(message)
+        self.assertEqual(provenance["filename"], "report.pdf")
+        self.assertEqual(provenance["declared_type"], "application/pdf")
+        self.assertEqual(provenance["declared_size"], 1234)
+        self.assertEqual(provenance["declared_digest"], "opaque-kakao-checksum")
+        self.assertEqual(provenance["availability"], "metadata_only")
+        self.assertEqual(
+            provenance["attachment_sha256"],
+            hashlib.sha256(message["attachment"].encode("utf-8")).hexdigest(),
+        )
+        self.assertNotIn("url", provenance)
+        self.assertNotIn("k", provenance)
+        recent_summary = db_watch._message_summary(message)
+        self.assertEqual(recent_summary["message"], "")
+        self.assertFalse(recent_summary["attachment"])
+        self.assertEqual(recent_summary["file_provenance"], provenance)
+        self.assertEqual(
+            db_watch._validated_recent_summary(recent_summary)["file_provenance"],
+            provenance,
+        )
+
+        without_optional = {
+            **message,
+            "attachment": json.dumps(
+                {"name": "plain.txt", "size": 0},
+                separators=(",", ":"),
+            ),
+        }
+        self.assertEqual(
+            db_watch._file_provenance(without_optional)["declared_type"],
+            "",
+        )
+        for conflicting in (
+            {**attachment, "type": "application/octet-stream"},
+            {**attachment, "digest": "second-checksum"},
+        ):
+            with self.subTest(keys=sorted(conflicting)):
+                self.assertIsNone(
+                    db_watch._file_provenance(
+                        {
+                            **message,
+                            "attachment": json.dumps(conflicting),
+                        }
+                    )
+                )
+
+        quote = {
+            **message,
+            "attachment": json.dumps(
+                {
+                    "src_logId": 419,
+                    "src_userId": 900,
+                    "src_type": 1,
+                    "src_message": "quoted",
+                    "name": "must-not-become-a-file.txt",
+                    "size": 10,
+                }
+            ),
+        }
+        self.assertIsNone(db_watch._file_provenance(quote))
+
+        completed = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=json.dumps(
+                {
+                    "ack": "accepted",
+                    "event_id": "db:42:420",
+                    "owner_id": "owner",
+                    "source_epoch": 7,
+                }
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"OPENKAKAO_SUPERVISOR_OWNER": "owner"},
+                clear=False,
+            ),
+            mock.patch.object(
+                db_watch,
+                "_run_bounded_hook",
+                return_value=completed,
+            ) as hook,
+        ):
+            self.assertEqual(
+                db_watch.emit(
+                    message,
+                    None,
+                    recent_messages=[db_watch._message_summary(message)],
+                    authoritative_messages=[message],
+                    candidate={},
+                ),
+                "accepted",
+            )
+        emitted = json.loads(hook.call_args.args[0])
+        self.assertEqual(emitted["message"], "[파일]")
+        self.assertEqual(emitted["attachment"], "file")
+        self.assertEqual(emitted["file_provenance"], provenance)
+        self.assertIsNone(emitted["reply_to"])
 
     def test_long_replay_backlog_keeps_each_cursor_page_bounded(self):
         db_watch = self._load_db_watch_module("auto_reply_long_replay_test")
@@ -10580,7 +11286,8 @@ print(json.dumps({
                 return_value=model_result,
             ) as generate,
         ):
-            analysis = module.analyze_event(prepared)
+            with self._fresh_room_state(module, prepared):
+                analysis = module.analyze_event(prepared)
         self.assertEqual(analysis["decision"], "reply")
         self.assertEqual(
             generate.call_args.kwargs["conversation_target"],
@@ -10640,7 +11347,8 @@ print(json.dumps({
                 return_value=model_result,
             ) as generate,
         ):
-            analysis = module.analyze_event(prepared)
+            with self._fresh_room_state(module, prepared):
+                analysis = module.analyze_event(prepared)
 
         self.assertEqual(analysis["decision"], "reply")
         incoming = generate.call_args.args[0]
@@ -10879,14 +11587,14 @@ print(json.dumps({
                         status="sending",
                         error_class=None,
                     ),
-                    "updated",
+                    "superseded",
                 )
                 self.assertEqual(
                     connection.execute(
                         "SELECT status FROM reply_jobs WHERE event_id = ?",
                         (first["event_id"],),
                     ).fetchone()[0],
-                    "sending",
+                    "projection_pending",
                 )
             finally:
                 connection.close()
@@ -10935,7 +11643,8 @@ print(json.dumps({
                         (second["event_id"],),
                     ).fetchone()[0]
                 )
-                self.assertEqual(queued_second["burst_source_log_ids"], [402])
+                # Sending has not yet proved receipt; preserve both source IDs.
+                self.assertEqual(queued_second["burst_source_log_ids"], [401, 402])
             finally:
                 connection.close()
 
@@ -11324,7 +12033,7 @@ print(json.dumps({
         )
 
         now = int(time.time())
-        event = self._burst_event(module, 425, "old question?", now - 301)
+        event = self._burst_event(module, 425, "previous statement", now - 301)
         event["recent_messages"] = [self._recent_row(event)]
         bundle = {
             "context": [{"evidence_id": "ctx:one"}],
@@ -11340,7 +12049,8 @@ print(json.dumps({
             mock.patch.object(module, "fetch_link_previews", return_value=[]),
             mock.patch.object(module, "generate_reply") as model,
         ):
-            analysis = module.analyze_event(event)
+            with self._fresh_room_state(module, event):
+                analysis = module.analyze_event(event)
         self.assertEqual(analysis["decision"], "skip")
         self.assertEqual(analysis["reason"], "stale_backlog")
         self.assertEqual(analysis["category"], "policy")
@@ -11418,6 +12128,169 @@ print(json.dumps({
             analysis["provenance"]["context_sync"]["mode"], "recent_only"
         )
         self.assertTrue(analysis["provenance"]["context_sync"]["degraded"])
+
+    def test_recent_only_timeout_compensates_verified_ingress_and_settle(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_recent_only_ingress_budget_test"
+        )
+        module.BIN = Path(__file__)
+        sent_at = 1_700_000_000
+        queue_created_at = sent_at + 160.0
+        analysis_now = (
+            queue_created_at
+            + 15.926
+            + module.CONTEXT_BUNDLE_TIMEOUT_SECONDS
+        )
+        prior = self._burst_event(
+            module,
+            700,
+            "앞에서 나눈 얘기",
+            sent_at - 10,
+            author="MOM",
+        )
+        event = self._burst_event(
+            module,
+            701,
+            "오늘 일정 그대로 진행해",
+            sent_at,
+            author="MOM",
+            recent=[self._recent_row(prior)],
+        )
+        event["recent_messages"].append(self._recent_row(event))
+        module._attach_verified_queue_created_at(
+            event,
+            queue_created_at,
+            now=analysis_now,
+        )
+        timeout = subprocess.TimeoutExpired(
+            [str(module.BIN), "context-reply-bundle"],
+            module.CONTEXT_BUNDLE_TIMEOUT_SECONDS,
+        )
+        with (
+            mock.patch.object(module, "_reply_turn_hold_reason", return_value=None),
+            mock.patch.object(
+                module, "conversation_advanced_past_event", return_value=False
+            ),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch.object(module, "runner_is_trusted", return_value=True),
+            mock.patch.object(module, "record_learned_style_tells"),
+            mock.patch.object(module, "fetch_link_previews", return_value=[]),
+            mock.patch.object(module, "_partner_streak_hold_reason", return_value=None),
+            mock.patch.object(module, "_active_journal_checkpoint"),
+            mock.patch.object(module, "_run_bounded_process", side_effect=timeout),
+            mock.patch.object(module.time, "time", return_value=analysis_now),
+            mock.patch.object(
+                module,
+                "generate_reply",
+                return_value={
+                    "should_reply": False,
+                    "reply": "",
+                    "reason": "model_no_reply",
+                    "category": "uncertain",
+                },
+            ) as generate,
+        ):
+            analysis = module.analyze_event(event)
+
+        expected_upper = (
+            160.0
+            + module.BURST_SETTLE_SECONDS
+            + module.CONTEXT_BUNDLE_TIMEOUT_SECONDS
+            + module.RECENT_ONLY_TIMEOUT_BASE_WINDOW_SECONDS
+        )
+        self.assertEqual(expected_upper, 185.0)
+        self.assertLess(analysis_now - sent_at, expected_upper)
+        self.assertEqual(
+            module.response_delay_distribution(analysis["response_time"])[
+                "global_upper_seconds"
+            ],
+            expected_upper,
+        )
+        self.assertEqual(analysis["reason"], "model_no_reply")
+        generate.assert_called_once()
+
+    def test_recent_only_timeout_missing_or_stale_ingress_proof_stays_closed(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_recent_only_ingress_closed_test"
+        )
+        module.BIN = Path(__file__)
+        sent_at = 1_700_000_000
+        timeout = subprocess.TimeoutExpired(
+            [str(module.BIN), "context-reply-bundle"],
+            module.CONTEXT_BUNDLE_TIMEOUT_SECONDS,
+        )
+
+        for label, queue_created_at, analysis_now in (
+            ("missing", None, sent_at + 177.926),
+            (
+                "stale",
+                sent_at + module.RECENT_ONLY_TIMEOUT_MAX_INGRESS_LAG_SECONDS + 1.0,
+                sent_at
+                + module.RECENT_ONLY_TIMEOUT_MAX_INGRESS_LAG_SECONDS
+                + 1.0
+                + module.BURST_SETTLE_SECONDS
+                + module.CONTEXT_BUNDLE_TIMEOUT_SECONDS,
+            ),
+        ):
+            with self.subTest(label=label):
+                prior = self._burst_event(
+                    module,
+                    710,
+                    "앞에서 나눈 얘기",
+                    sent_at - 10,
+                    author="MOM",
+                )
+                event = self._burst_event(
+                    module,
+                    711,
+                    "오늘 일정 그대로 진행해",
+                    sent_at,
+                    author="MOM",
+                    recent=[self._recent_row(prior)],
+                )
+                event["recent_messages"].append(self._recent_row(event))
+                if queue_created_at is not None:
+                    module._attach_verified_queue_created_at(
+                        event,
+                        queue_created_at,
+                        now=analysis_now,
+                    )
+                self.assertNotIn(module._QUEUE_CREATED_AT_PROOF_KEY, event)
+                with (
+                    mock.patch.object(
+                        module, "_reply_turn_hold_reason", return_value=None
+                    ),
+                    mock.patch.object(
+                        module,
+                        "conversation_advanced_past_event",
+                        return_value=False,
+                    ),
+                    mock.patch.object(
+                        module, "privacy_attestation_current", return_value=True
+                    ),
+                    mock.patch.object(module, "runner_is_trusted", return_value=True),
+                    mock.patch.object(module, "record_learned_style_tells"),
+                    mock.patch.object(module, "fetch_link_previews", return_value=[]),
+                    mock.patch.object(
+                        module, "_partner_streak_hold_reason", return_value=None
+                    ),
+                    mock.patch.object(module, "_active_journal_checkpoint"),
+                    mock.patch.object(
+                        module, "_run_bounded_process", side_effect=timeout
+                    ),
+                    mock.patch.object(module.time, "time", return_value=analysis_now),
+                    mock.patch.object(module, "generate_reply") as generate,
+                ):
+                    analysis = module.analyze_event(event)
+
+                self.assertEqual(analysis["reason"], "stale_backlog")
+                self.assertEqual(
+                    module.response_delay_distribution(analysis["response_time"])[
+                        "global_upper_seconds"
+                    ],
+                    module.RECENT_ONLY_TIMEOUT_BASE_WINDOW_SECONDS,
+                )
+                generate.assert_not_called()
 
     def test_analyze_event_fails_closed_when_retrieval_fails(self):
         module = self._load_auto_reply_module("auto_reply_retrieval_fallback_test")
@@ -11500,7 +12373,7 @@ print(json.dumps({
             style_profile={"policy_version": module.STYLE_POLICY_VERSION},
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(event))
             connection = self._worker_queue_connection(module)
             try:
@@ -11550,7 +12423,8 @@ print(json.dumps({
                         return_value=True,
                     ) as record_context,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 row = connection.execute(
                     "SELECT status, due_at, event_json FROM reply_jobs WHERE event_id = ?",
                     (event["event_id"],),
@@ -11577,6 +12451,91 @@ print(json.dumps({
             finally:
                 connection.close()
 
+    def test_local_context_refresh_restores_authoritative_attachment_urls(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_context_refresh_attachment_urls_test"
+        )
+        attachment = json.dumps(
+            {
+                "C": {
+                    "TI": {
+                        "L": {
+                            "LPC": "HTTPS://V.KAKAO.COM:443/v/first?b=2&a=1",
+                            "LMO": "https://v.kakao.com/v/first?b=2&a=1",
+                        }
+                    },
+                    "ITL": [
+                        {
+                            "L": {
+                                "LPC": "https://v.daum.net/v/second",
+                                "LMO": "https://outside.invalid/ignored",
+                            }
+                        }
+                    ],
+                    "THL": [
+                        {"L": {"LPC": "https://v.kakao.com/v/third"}}
+                    ],
+                }
+            }
+        )
+        rows = [
+            {
+                "log_id": 420,
+                "chat_id": 42,
+                "author_id": 700,
+                "is_self": False,
+                "sender_name": "member",
+                "message": "샵검색: #합성",
+                "attachment": attachment,
+                "message_type": 71,
+                "sent_at": 1_000,
+            }
+        ]
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(
+                module,
+                "_run_bounded_process",
+                return_value=(0, json.dumps(rows).encode(), b""),
+            ),
+        ):
+            refreshed = module.refresh_recent_messages_from_local_db(
+                {"chat_id": 42, "log_id": 420},
+                420,
+            )
+        self.assertEqual(refreshed[0]["message"], "샵검색: #합성")
+        self.assertEqual(
+            refreshed[0]["urls"],
+            [
+                "https://v.kakao.com/v/first?b=2&a=1",
+                "https://v.daum.net/v/second",
+            ],
+        )
+        self.assertNotIn("outside.invalid", json.dumps(refreshed))
+
+        malformed = json.dumps(
+            {"C": {"TI": {"L": {"LPC": "https://v.kakao.com/first"}}}}
+        ).replace('"LPC":', '"LPC":"https://v.kakao.com/duplicate","LPC":', 1)
+        self.assertEqual(
+            module._authoritative_local_attachment_urls(malformed, 71),
+            [],
+        )
+        foreign = json.dumps(
+            {"C": {"TI": {"L": {"LPC": "https://outside.invalid/card"}}}}
+        )
+        self.assertEqual(
+            module._authoritative_local_attachment_urls(foreign, 71),
+            [],
+        )
+        self.assertEqual(
+            module._authoritative_local_attachment_urls(attachment, 1),
+            [],
+        )
+
     def test_scheduled_question_restart_preserves_timing_without_resampling(self):
         module = self._load_auto_reply_module(
             "auto_reply_question_restart_timing_test"
@@ -11585,6 +12544,7 @@ print(json.dumps({
         event = self._burst_event(module, 443, "질문이에요?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         prepared["response_timing"] = {
             "delay_seconds": 12.4,
@@ -11597,7 +12557,7 @@ print(json.dumps({
             "response_window_upper_seconds": 300.0,
         }
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             first_connection = self._worker_queue_connection(module)
             first_connection.execute(
@@ -11661,7 +12621,8 @@ print(json.dumps({
                         "sample_response_delay_for_analysis",
                     ) as resample,
                 ):
-                    module.process_job(job, previous, restarted)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, restarted)
                 resample.assert_not_called()
                 sender.assert_called_once()
                 self.assertEqual(sender.call_args.args[0], "저장된 답변")
@@ -11684,7 +12645,7 @@ print(json.dumps({
         prepared = module._prepare_burst_event(event)
         prepared["response_window_upper_seconds"] = 60.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -11722,7 +12683,8 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as sender,
                     mock.patch.object(module, "complete_event"),
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 sender.assert_not_called()
                 self.assertEqual(
                     tuple(
@@ -11791,6 +12753,7 @@ print(json.dumps({
                         },
                     ),
                     mock.patch.object(module, "send_reply", return_value=False) as sender,
+                    mock.patch.object(module, "durable_policy_skip", return_value=True) as skip,
                     mock.patch.object(
                         module,
                         "reply_job_delivery_phase",
@@ -11802,6 +12765,7 @@ print(json.dumps({
                 # Past the window plus grace a formed draft is dropped before
                 # the AX attempt: an expired reply must not reach KakaoTalk.
                 sender.assert_not_called()
+                skip.assert_called_once()
                 complete.assert_called_once_with(event["event_id"], "")
                 row = connection.execute(
                     """
@@ -11822,9 +12786,10 @@ print(json.dumps({
         event = self._burst_event(module, 446, "old scheduled", now - 70)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 60.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -11878,7 +12843,8 @@ print(json.dumps({
                     ),
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 sender.assert_called_once()
                 complete.assert_not_called()
                 row = connection.execute(
@@ -11903,9 +12869,10 @@ print(json.dumps({
         event = self._burst_event(module, 447, "question?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -11955,7 +12922,8 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as sender,
                     mock.patch.object(module, "finish_delivery_unknown") as unknown,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 sender.assert_not_called()
                 unknown.assert_not_called()
                 row = connection.execute(
@@ -11985,9 +12953,10 @@ print(json.dumps({
         event = self._burst_event(module, 448, "question?", now)
         event["recent_messages"] = [self._recent_row(event)]
         prepared = module._prepare_burst_event(event)
+        prepared["analysis_watermark_log_id"] = prepared["log_id"]
         prepared["response_window_upper_seconds"] = 300.0
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(prepared))
             connection = self._worker_queue_connection(module)
             try:
@@ -12032,7 +13001,8 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply", return_value=False),
                     mock.patch.object(module, "finish_delivery_unknown") as unknown,
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
                 unknown.assert_not_called()
                 self.assertEqual(
                     connection.execute(
@@ -12102,7 +13072,8 @@ print(json.dumps({
                     ),
                     mock.patch.object(module, "record_delivery_unknown"),
                 ):
-                    module.process_job(job, "scheduled", connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "scheduled", connection)
                 self.assertEqual(
                     connection.execute(
                         "SELECT status FROM reply_jobs WHERE event_id = ?",
@@ -12121,6 +13092,7 @@ print(json.dumps({
         first = self._burst_event(module, 453, "first", now)
         first["recent_messages"] = [self._recent_row(first)]
         first = module._prepare_burst_event(first)
+        first["analysis_watermark_log_id"] = first["log_id"]
         first["response_window_upper_seconds"] = 300.0
         second = self._burst_event(
             module,
@@ -12131,7 +13103,7 @@ print(json.dumps({
         )
         second["recent_messages"].append(self._recent_row(second))
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             self.assertTrue(module.enqueue_event(first))
             connection = self._worker_queue_connection(module)
             try:
@@ -12208,7 +13180,8 @@ print(json.dumps({
                     ),
                     mock.patch.object(module, "record_delivery_unknown"),
                 ):
-                    module.process_job(job, previous, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous, connection)
 
                 row = connection.execute(
                     """
@@ -12228,7 +13201,7 @@ print(json.dumps({
                         "delivery_unknown",
                     ),
                 )
-                self.assertEqual(conversation.call_count, 2)
+                self.assertEqual(conversation.call_count, 1)  # No post-mutation freshness rollback.
                 skip_audit.assert_not_called()
             finally:
                 connection.close()
@@ -13165,7 +14138,7 @@ print(json.dumps({
     def test_burst_projection_retries_audit_without_delivery_authority(self):
         module = self._load_auto_reply_module("auto_reply_burst_projection_retry_test")
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             first = self._burst_event(module, 551, "first", 5_500)
             first["recent_messages"] = [self._recent_row(first)]
             second = self._burst_event(
@@ -13177,10 +14150,15 @@ print(json.dumps({
             )
             second["recent_messages"].append(self._recent_row(second))
             self.assertTrue(module.enqueue_event(first))
-            self.assertTrue(module.enqueue_event(second))
             connection = self._worker_queue_connection(module)
+            initial = module.claim_job(time.time() + module.BURST_SETTLE_SECONDS + 1, connection)
+            self.assertIsNotNone(initial)
+            self.assertEqual(initial[1], "pending")
+            self.assertTrue(module.enqueue_event(second))
+            self.assertEqual(module.transition_processing_job(first["event_id"], connection=connection,
+                status="scheduled"), "superseded")
             try:
-                claimed = module.claim_job(time.time(), connection)
+                claimed = module.claim_job(time.time() + module.BURST_SETTLE_SECONDS + 1, connection)
                 self.assertIsNotNone(claimed)
                 job, previous_status = claimed
                 self.assertEqual(previous_status, "projection_pending")
@@ -13198,7 +14176,8 @@ print(json.dumps({
                     mock.patch.object(module, "record_delivery_unknown") as unknown,
                 ):
                     before = time.time()
-                    module.process_job(job, previous_status, connection)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, previous_status, connection)
                 row = connection.execute(
                     """
                     SELECT status, due_at, reason, category, error_class
@@ -13225,7 +14204,8 @@ print(json.dumps({
                     mock.patch.object(module, "complete_event"),
                     mock.patch.object(module, "cleanup_media_path"),
                 ):
-                    module.process_job(retry_job, retry_status, connection)
+                    with self._fresh_room_state(module, json.loads((retry_job)["event_json"])):
+                        module.process_job(retry_job, retry_status, connection)
                 self.assertEqual(
                     connection.execute(
                         "SELECT status FROM reply_jobs WHERE event_id = ?",
@@ -13238,6 +14218,7 @@ print(json.dumps({
 
     def test_stale_processing_with_successor_recovers_for_projection(self):
         module = self._load_auto_reply_module("auto_reply_burst_recovery_test")
+        self._empty_decision_store(module)
         with tempfile.TemporaryDirectory() as temporary:
             module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
             first = self._burst_event(module, 601, "first", 6_000)
@@ -13653,7 +14634,7 @@ print(json.dumps({
         }
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            module.QUEUE = root / "reply-queue.sqlite3"
+            module.QUEUE = root / "42" / "reply-queue.sqlite3"
             queue = self._worker_queue_connection(module)
             queue.execute(
                 """
@@ -13691,7 +14672,8 @@ print(json.dumps({
                     mock.patch.object(module, "_context_terminal_decision", return_value=terminal),
                     mock.patch.object(module, "complete_event"),
                 ):
-                    module.process_job(job, "pending", queue)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "pending", queue)
                 row = queue.execute(
                     "SELECT status,reason,error_class FROM reply_jobs WHERE event_id=?",
                     (event["event_id"],),
@@ -13814,18 +14796,18 @@ print(json.dumps({
             "auto_reply_scheduled_strict_skip_test"
         )
         cases = (
-            ("context", True, "planned", "context_only_author", "context_only"),
+            ("not-enrolled", True, "planned", "author_not_allowlisted", "policy"),
             ("empty", False, None, "empty_scheduled_reply", "uncertain"),
             (
                 "short-laughter",
                 False,
                 "좋네ㅋㅋ",
-                module.REPLY_LAUGHTER_POLICY_REASON,
+                "policy_reaction_mismatch",
                 "policy",
             ),
         )
         with tempfile.TemporaryDirectory() as temporary:
-            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            module.QUEUE = Path(temporary) / "42" / "reply-queue.sqlite3"
             queue = self._worker_queue_connection(module)
             try:
                 for index, (name, context_only, reply, reason, category) in enumerate(
@@ -13839,6 +14821,7 @@ print(json.dumps({
                             name,
                             int(time.time()),
                         )
+                        event["analysis_watermark_log_id"] = event["log_id"]
                         event["response_window_upper_seconds"] = 300.0
                         job = {
                             "event_id": event["event_id"],
@@ -13884,7 +14867,7 @@ print(json.dumps({
                             mock.patch.object(
                                 module,
                                 "numeric_author_identity_status",
-                                return_value="allowed",
+                                return_value="not_allowlisted" if context_only else "allowed",
                             ),
                             mock.patch.object(
                                 module,
@@ -13913,7 +14896,8 @@ print(json.dumps({
                             ),
                             mock.patch.object(module, "complete_event"),
                         ):
-                            module.process_job(job, "scheduled", queue)
+                            with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                                module.process_job(job, "scheduled", queue)
                         row = queue.execute(
                             """
                             SELECT status,decision,reason,category,reply,
@@ -14295,9 +15279,18 @@ print(json.dumps({
             holder.execute(
                 "UPDATE choi_yeonwoo_style_profile SET sample_count = 4"
             )
+            busy_timeouts = []
+            connect_idle = module._idle_context_connection
+
+            def observed_idle_connection():
+                connection = connect_idle()
+                busy_timeouts.append(connection.execute("PRAGMA busy_timeout").fetchone()[0])
+                return connection
+
             try:
                 started = time.perf_counter()
-                profiles = module._load_proactive_vector_profiles()
+                with mock.patch.object(module, "_idle_context_connection", side_effect=observed_idle_connection):
+                    profiles = module._load_proactive_vector_profiles()
                 elapsed = time.perf_counter() - started
             finally:
                 holder.rollback()
@@ -14311,9 +15304,11 @@ print(json.dumps({
             module.IDLE_CONTEXT_BUSY_TIMEOUT_MS, module.CONTEXT_BUSY_TIMEOUT_MS
         )
         self.assertLessEqual(module.IDLE_CONTEXT_BUSY_TIMEOUT_MS, 2000)
-        self.assertLessEqual(
-            elapsed, module.IDLE_CONTEXT_BUSY_TIMEOUT_MS / 1000.0 + 1.0
-        )
+        # Assert the real connection's SQLite busy bound separately from the
+        # wall clock. A hosted runner took2.71s with a1500ms SQLite handler;
+        # scheduling/IO delay is not a change to the configured lock timeout.
+        # The existing4s integration ceiling still rejects the default5s wait.
+        self.assertEqual(busy_timeouts, [module.IDLE_CONTEXT_BUSY_TIMEOUT_MS])
 
     def test_supervisor_still_fences_a_stale_idle_phase(self):
         """The idle liveness fence stays tight; only the published proof changed."""
@@ -14654,6 +15649,12 @@ print(json.dumps({
         module = self._load_auto_reply_module("auto_reply_worker_sqlite_busy_test")
         first_connection = mock.Mock()
         reopened_connection = mock.Mock()
+        # The independent reconciliation sweep sees an empty queue. Recovery
+        # below remains the component that raises the transient SQLite error.
+        first_connection.execute.return_value.fetchall.return_value = []
+        first_connection.execute.return_value.fetchone.return_value = (0,)
+        reopened_connection.execute.return_value.fetchall.return_value = []
+        reopened_connection.execute.return_value.fetchone.return_value = (0,)
         circuit_connection = mock.Mock()
         health = mock.Mock()
         rerank = mock.Mock()
@@ -14679,7 +15680,7 @@ print(json.dumps({
             mock.patch.object(module, "apply_operator_request"),
             mock.patch.object(
                 module,
-                "recover_stale_jobs",
+                "claim_job",
                 side_effect=sqlite3.OperationalError("database is locked"),
             ),
             mock.patch.object(module.time, "sleep") as sleep,
@@ -15223,6 +16224,7 @@ print(json.dumps({
                     mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
                     mock.patch.object(module, "privacy_attestation_current", return_value=True),
                     mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                    mock.patch.object(module, "stable_room_watermark_log_id", return_value=920),
                     mock.patch.object(module, "run_context_reply_bundle", return_value=bundle),
                     mock.patch.object(
                         module,
@@ -15234,7 +16236,10 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as send,
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous_status, queue)
+                    with mock.patch.object(
+                        module, "_operator_state_root", return_value=Path(temporary)
+                    ):
+                        module.process_job(job, previous_status, queue)
 
                 row = queue.execute(
                     """
@@ -15300,7 +16305,10 @@ print(json.dumps({
                     mock.patch.object(module, "send_reply") as send,
                     mock.patch.object(module, "complete_event") as complete,
                 ):
-                    module.process_job(job, previous_status, queue)
+                    with mock.patch.object(
+                        module, "_operator_state_root", return_value=Path(temporary)
+                    ):
+                        module.process_job(job, previous_status, queue)
                 row = queue.execute(
                     "SELECT status,decision,reason,category,reply FROM reply_jobs WHERE event_id=?",
                     (event["event_id"],),
@@ -15334,6 +16342,418 @@ print(json.dumps({
             dict(valid, reply_authorized=False),
         )
         self.assertFalse(any(map(module._media_unavailable_clarification_event, invalid)))
+
+    @staticmethod
+    def _file_unavailable_event(module, log_id, sent_at):
+        raw_attachment = json.dumps(
+            {
+                "k": "safe/report.pdf",
+                "name": "report.pdf",
+                "size": 1234,
+                "mt": "application/pdf",
+                "cs": "opaque-kakao-checksum",
+            },
+            separators=(",", ":"),
+        )
+        event = AutoReplyCliRuntimeTests._burst_event(
+            module,
+            log_id,
+            "[파일]",
+            sent_at,
+            message_type=26,
+        )
+        event.update(
+            attachment="file",
+            image_path="",
+            image_paths=[],
+            media_manifest=None,
+            media_marker="",
+            file_provenance={
+                "schema_version": module.FILE_PROVENANCE_SCHEMA_VERSION,
+                "kind": "file",
+                "availability": "metadata_only",
+                "filename": "report.pdf",
+                "message_type": 26,
+                "declared_type": "application/pdf",
+                "declared_size": 1234,
+                "attachment_sha256": hashlib.sha256(
+                    raw_attachment.encode("utf-8")
+                ).hexdigest(),
+                "declared_digest": "opaque-kakao-checksum",
+                "chat_id": 42,
+                "log_id": log_id,
+                "author_id": 700,
+                "author_nickname": "member",
+                "sent_at": sent_at,
+            },
+        )
+        return module._prepare_burst_event(event)
+
+    def test_metadata_only_file_uses_one_fixed_clarification_without_model(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_file_unavailable_clarification_test"
+        )
+        event = self._file_unavailable_event(module, 923, int(time.time()))
+        self.assertTrue(module._file_unavailable_clarification_event(event))
+        with (
+            mock.patch.object(module, "_reply_turn_hold_reason", return_value=None),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch.object(module, "generate_reply") as generate,
+        ):
+            analysis = module.analyze_file_unavailable_clarification(event)
+        self.assertEqual(analysis["decision"], "reply")
+        self.assertEqual(
+            analysis["reason"],
+            module.FILE_UNAVAILABLE_CLARIFICATION_REASON,
+        )
+        self.assertEqual(
+            analysis["reply"],
+            "파일 내용은 확인할 수 없어서, 필요한 부분을 텍스트로 알려줘.",
+        )
+        self.assertFalse(analysis["provenance"]["file_content_available"])
+        self.assertFalse(analysis["provenance"]["model_invoked"])
+        self.assertTrue(
+            module._policy_valid_draft(
+                analysis["reply"],
+                event["message"],
+                analysis["recent_conversation"],
+                recipient="member",
+            )
+        )
+        generate.assert_not_called()
+
+        invalid = (
+            dict(event, file_provenance=None),
+            {
+                **event,
+                "file_provenance": {
+                    **event["file_provenance"],
+                    "availability": "owned_local",
+                },
+            },
+            {
+                **event,
+                "file_provenance": {
+                    **event["file_provenance"],
+                    "author_id": 701,
+                },
+            },
+            dict(event, file_path="/tmp/unowned.pdf"),
+            dict(event, burst_source_log_ids=[922, 923], burst_message_count=2),
+        )
+        self.assertFalse(any(map(module._file_unavailable_clarification_event, invalid)))
+
+        timing = {
+            "delay_seconds": 5.0,
+            "component": "immediate",
+            "component_weight": 0.5,
+            "component_lower_seconds": 5.0,
+            "component_upper_seconds": 17.0,
+            "distribution_schema_version": module.RESPONSE_TIME_DISTRIBUTION_SCHEMA_VERSION,
+            "distribution_policy_version": module.RESPONSE_TIME_DISTRIBUTION_POLICY_VERSION,
+            "response_window_upper_seconds": 300.0,
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            module.QUEUE = Path(temporary) / "reply-queue.sqlite3"
+            self.assertTrue(module.enqueue_event(event))
+            queue = self._worker_queue_connection(module)
+            try:
+                claimed = module.claim_job(
+                    time.time() + module.BURST_SETTLE_SECONDS + 1,
+                    queue,
+                )
+                self.assertIsNotNone(claimed)
+                job, previous_status = claimed
+                with (
+                    mock.patch.object(
+                        module, "db_authoritative_event_allowed", return_value=True
+                    ),
+                    mock.patch.object(
+                        module, "privacy_attestation_current", return_value=True
+                    ),
+                    mock.patch.object(
+                        module, "numeric_author_identity_status", return_value="allowed"
+                    ),
+                    mock.patch.object(
+                        module, "stable_room_watermark_log_id", return_value=923
+                    ),
+                    mock.patch.object(
+                        module,
+                        "sample_response_delay_for_analysis",
+                        return_value=timing,
+                    ),
+                    mock.patch.object(
+                        module, "record_context_decision", return_value=True
+                    ),
+                    mock.patch.object(module, "generate_reply") as generate,
+                    mock.patch.object(module, "analyze_event") as general_analysis,
+                    mock.patch.object(module, "send_reply") as send,
+                    mock.patch.object(module, "complete_event") as complete,
+                ):
+                    with mock.patch.object(
+                        module, "_operator_state_root", return_value=Path(temporary)
+                    ):
+                        module.process_job(job, previous_status, queue)
+                row = queue.execute(
+                    """
+                    SELECT status,decision,reason,category,reply,
+                           scheduled_delay_seconds,error_class
+                    FROM reply_jobs WHERE event_id=?
+                    """,
+                    (event["event_id"],),
+                ).fetchone()
+                self.assertEqual(
+                    tuple(row),
+                    (
+                        "scheduled",
+                        "reply",
+                        module.FILE_UNAVAILABLE_CLARIFICATION_REASON,
+                        "question",
+                        analysis["reply"],
+                        5.0,
+                        None,
+                    ),
+                )
+                generate.assert_not_called()
+                general_analysis.assert_not_called()
+                send.assert_not_called()
+                complete.assert_not_called()
+            finally:
+                queue.close()
+
+    def test_recent_file_metadata_does_not_break_normal_question_prompt(self):
+        module = self._load_auto_reply_module("auto_reply_file_prompt_init_test")
+        file_event = self._file_unavailable_event(module, 924, 10_000)
+        file_row = {
+            "chat_id": 42,
+            "log_id": 924,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "",
+            "message_type": 26,
+            "attachment": False,
+            "sent_at": 10_000,
+            "is_self": False,
+            "file_provenance": file_event["file_provenance"],
+        }
+
+        class PromptCaptured(Exception):
+            pass
+
+        captured = []
+
+        def capture_prompt(prompt, _budget):
+            captured.append(prompt)
+            raise PromptCaptured
+
+        with (
+            mock.patch.object(module, "_load_dream_rsi_checkpoint_metadata", return_value=None),
+            mock.patch.object(module, "record_learned_style_tells"),
+            mock.patch.object(module, "learned_style_tell_avoids", return_value=[]),
+            mock.patch.object(module, "runner_is_trusted", return_value=True),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch("auto_reply_knowledge_graph.retrieve_knowledge_bundle", return_value={}),
+            mock.patch.object(module, "_fit_prompt_to_budget", side_effect=capture_prompt),
+            mock.patch.object(module, "_run_generation_candidate") as generate,
+            mock.patch.object(module, "_run_bounded_process") as process,
+        ):
+            for recent in ([file_row], []):
+                with self.subTest(with_file=bool(recent)), self.assertRaises(PromptCaptured):
+                    module.generate_reply(
+                        "내일 몇 시에 만나", [], [], [], [],
+                        recent_conversation=recent,
+                    )
+            generate.assert_not_called()
+            process.assert_not_called()
+        self.assertEqual(len(captured), 2)
+        for prompt in captured:
+            self.assertEqual(prompt["incoming_message"], "내일 몇 시에 만나")
+            self.assertIsInstance(prompt["instructions"], list)
+        self.assertIn("metadata_only", "\n".join(captured[0]["instructions"]))
+        self.assertNotIn("metadata_only", "\n".join(captured[1]["instructions"]))
+
+    def test_file_provenance_survives_refresh_and_guards_grounded_followup(self):
+        module = self._load_auto_reply_module(
+            "auto_reply_file_followup_provenance_test"
+        )
+        file_event = self._file_unavailable_event(module, 924, 10_000)
+        file_row = {
+            "chat_id": 42,
+            "log_id": 924,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "",
+            "message_type": 26,
+            "attachment": False,
+            "sent_at": 10_000,
+            "is_self": False,
+            "file_provenance": file_event["file_provenance"],
+        }
+        followup_row = {
+            "chat_id": 42,
+            "log_id": 925,
+            "author_id": 700,
+            "author_nickname": "member",
+            "message": "이거 요약해줘",
+            "message_type": 1,
+            "attachment": False,
+            "sent_at": 10_005,
+            "is_self": False,
+        }
+        followup = self._burst_event(
+            module,
+            925,
+            "이거 요약해줘",
+            10_005,
+            recent=[file_row, followup_row],
+        )
+        prepared = module._prepare_burst_event(followup)
+        reference = module._recent_unavailable_file_followup(prepared)
+        self.assertIsNotNone(reference)
+        self.assertEqual(reference["evidence_id"], "recent:924")
+        with (
+            mock.patch.object(module, "_reply_turn_hold_reason", return_value=None),
+            mock.patch.object(module, "privacy_attestation_current", return_value=True),
+            mock.patch.object(module, "generate_reply") as generate,
+        ):
+            analysis = module.analyze_recent_file_unavailable_clarification(
+                prepared,
+                reference,
+            )
+        self.assertEqual(
+            analysis["reply"],
+            "파일 내용은 확인할 수 없어서, 필요한 부분을 텍스트로 알려줘.",
+        )
+        self.assertEqual(analysis["evidence_ids"], ["recent:924"])
+        self.assertFalse(analysis["provenance"]["file_content_available"])
+        self.assertTrue(
+            module._policy_valid_draft(
+                analysis["reply"],
+                prepared["message"],
+                analysis["recent_conversation"],
+                recipient="member",
+            )
+        )
+        generate.assert_not_called()
+
+        unrelated = {
+            **prepared,
+            "message": "내일 몇 시에 만나",
+        }
+        self.assertIsNone(module._recent_unavailable_file_followup(unrelated))
+        different_author = {
+            **prepared,
+            "author_id": 701,
+            "author_nickname": "other",
+        }
+        self.assertIsNone(
+            module._recent_unavailable_file_followup(different_author)
+        )
+
+        invalid_file_rows = []
+        for is_self in (None, True, 0, "false"):
+            invalid_file_rows.append({**file_row, "is_self": is_self})
+        missing_self = dict(file_row)
+        missing_self.pop("is_self")
+        invalid_file_rows.append(missing_self)
+        invalid_file_rows.append({**file_row, "direction": "outgoing"})
+        invalid_file_rows.append({**file_row, "direction": None})
+        invalid_file_rows.append(
+            {
+                **file_row,
+                "chat_id": 43,
+                "file_provenance": {**file_row["file_provenance"], "chat_id": 43},
+            }
+        )
+        for index, invalid_file in enumerate(invalid_file_rows):
+            with self.subTest(invalid_file_source=index):
+                invalid_event = {
+                    **prepared,
+                    "recent_messages": [invalid_file, followup_row],
+                }
+                self.assertIsNone(
+                    module._recent_unavailable_file_followup(invalid_event)
+                )
+
+        raw_attachment = json.dumps(
+            {
+                "k": "safe/report.pdf",
+                "name": "report.pdf",
+                "size": 1234,
+                "mt": "application/pdf",
+                "cs": "opaque-kakao-checksum",
+            },
+            separators=(",", ":"),
+        )
+        local_rows = [
+            {
+                "chat_id": 42,
+                "log_id": 924,
+                "author_id": 700,
+                "sender_name": "member",
+                "message": "",
+                "message_type": 26,
+                "attachment": raw_attachment,
+                "sent_at": 10_000,
+                "is_self": False,
+            },
+            {
+                "chat_id": 42,
+                "log_id": 925,
+                "author_id": 700,
+                "sender_name": "member",
+                "message": "이거 요약해줘",
+                "message_type": 1,
+                "attachment": "",
+                "sent_at": 10_005,
+                "is_self": False,
+            },
+        ]
+        completed = (0, json.dumps(local_rows).encode("utf-8"), b"")
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(
+                module,
+                "_run_bounded_process",
+                return_value=completed,
+            ),
+        ):
+            refreshed = module.refresh_recent_messages_from_local_db(
+                prepared,
+                925,
+            )
+        self.assertEqual(refreshed[0]["message"], "")
+        self.assertFalse(refreshed[0]["attachment"])
+        self.assertEqual(
+            refreshed[0]["file_provenance"],
+            file_event["file_provenance"],
+        )
+
+        changed_rows = [
+            {
+                **local_rows[0],
+                "attachment": raw_attachment.replace("report.pdf", "other.pdf"),
+            },
+            local_rows[1],
+        ]
+        with (
+            mock.patch.dict(
+                os.environ,
+                {module.TARGET_CHAT_ID_ENV: "42"},
+                clear=False,
+            ),
+            mock.patch.object(
+                module,
+                "_run_bounded_process",
+                return_value=(0, json.dumps(changed_rows).encode("utf-8"), b""),
+            ),
+        ):
+            changed = module.refresh_recent_messages_from_local_db(prepared, 925)
+        self.assertNotIn("file_provenance", changed[0])
 
     def test_distinct_image_digests_and_fallback_prior_do_not_false_duplicate(self):
         module = self._load_auto_reply_module(
@@ -15512,200 +16932,42 @@ print(json.dumps({
             capture.assert_not_called()
             generate.assert_not_called()
 
-    def test_generate_reply_passes_ordered_multi_image_flags(self):
-        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
-            root = Path(temporary)
-            module, _runner = self._load_trusted_codex_module(
-                "auto_reply_ordered_multi_image_test", root
-            )
-            with self._owned_image_bundle(
-                module,
-                count=3,
-                message_type=27,
-            ) as media:
-                evidence_id = f"media:{media['manifest']['bundle_sha256']}"
-                response = {
-                    "should_reply": True,
-                    "reply": "세 장 모두 봤어요",
-                    "category": "social",
-                    "reason": "useful_image_response",
-                    "evidence_ids": [evidence_id],
-                }
+    def test_generate_reply_preserves_ordered_images_on_admitted_vision_route(self):
+        module = self._load_auto_reply_module("auto_reply_ordered_vision_test")
+        with self._owned_image_bundle(module, count=2) as media:
+            evidence = "media:" + media["manifest"]["bundle_sha256"]
+            answer = json.dumps({"should_reply": True, "reply": "메뉴판 내용 확인했어요",
+                "category": "social", "reason": "photo", "evidence_ids": [evidence]}, ensure_ascii=False)
+            with (
+                self._fake_qwen27b_gateway(module, answer, vision=True) as gateway,
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": True, "lease_token": "c" * 32, "retry_at": time.time() + 180}),
+                mock.patch.object(module, "_finish_model_call_success", return_value=True),
+                mock.patch.object(module, "_run_bounded_process") as process,
+            ):
+                result = module.generate_reply("메뉴 확인해줘", [], [], [], [], attachment="image",
+                    image_path=media["paths"][0], image_paths=media["paths"],
+                    image_marker=media["marker"], media_evidence_id=evidence)
+            self.assertTrue(result["should_reply"], result)
+            parts = gateway["payloads"][0]["messages"][1]["content"]
+            received = [base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
+                        for part in parts if part["type"] == "image_url"]
+            self.assertEqual(received, [path.read_bytes() for path in media["paths"]])
+            process.assert_not_called()
+            gateway["external_urlopen"].assert_not_called()
 
-                with (
-                    self._fake_qwen27b_gateway(
-                        module,
-                        json.dumps(response, ensure_ascii=False),
-                    ) as gateway,
-                    mock.patch.object(
-                        module, "privacy_attestation_current", return_value=True
-                    ),
-                    mock.patch.object(module, "runner_is_trusted", return_value=True),
-                    mock.patch.object(
-                        module,
-                        "_acquire_model_call_slot",
-                        return_value={
-                            "allowed": True,
-                            "failure_class": "",
-                            "retry_at": time.time() + 180,
-                            "lease_token": "a" * 32,
-                        },
-                    ),
-                    mock.patch.object(
-                        module, "_finish_model_call_success", return_value=True
-                    ),
-                    mock.patch.object(
-                        module, "_run_bounded_process"
-                    ) as process_runner,
-                ):
-                    result = module.generate_reply(
-                        "사진들 봐줘",
-                        [],
-                        [],
-                        [],
-                        [],
-                        attachment="image",
-                        image_path=media["paths"][0],
-                        image_marker=media["marker"],
-                        image_paths=media["paths"],
-                        media_evidence_id=evidence_id,
-                    )
-
-                self.assertEqual(len(gateway["payloads"]), 1)
-                payload = gateway["payloads"][0]
-                self.assertEqual(
-                    payload["model"],
-                    module.QWEN38_27B_MODEL_ID.removeprefix("mlx/"),
-                )
-                content = payload["messages"][1]["content"]
-                self.assertIsInstance(content, list)
-                prompt = content[0]["text"]
-                self.assertIn('"image_input_count": 3', prompt)
-                self.assertIn(evidence_id, prompt)
-                image_bytes = [
-                    base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
-                    for part in content[1:]
-                ]
-                self.assertEqual(
-                    image_bytes,
-                    [path.read_bytes() for path in media["paths"]],
-                )
-                gateway["external_urlopen"].assert_not_called()
-                process_runner.assert_not_called()
-                self.assertTrue(result["should_reply"])
-                self.assertEqual(result["evidence_ids"], [evidence_id])
-
-    def test_gjc_generate_reply_sends_prompt_on_stdin_with_at_images(self):
-        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
-            root = Path(temporary)
-            runner = root / "gjc"
-            self._write_executable(runner, "#!/bin/sh\nexit 0\n")
-            environment = {
-                "OPENKAKAO_REPLY_RUNNER": str(runner),
-                "OPENKAKAO_REPLY_RUNNER_KIND": "gjc",
-                "OPENKAKAO_REPLY_RUNNER_SHA256": hashlib.sha256(runner.read_bytes()).hexdigest(),
-                "OPENKAKAO_REPLY_MODEL": "omlx/Qwen3.6-35B-A3B-8bit",
-                "OPENKAKAO_REPLY_REASONING_EFFORT": "high",
-                "OPENKAKAO_REPLY_SERVICE_TIER": "default",
-                "OPENKAKAO_REPLY_QUEUE": str(root / "reply-queue.sqlite3"),
-            }
-            with mock.patch.dict(os.environ, environment, clear=False):
-                module = self._load_auto_reply_module("auto_reply_gjc_stdin_image_test")
-            module._operator_state_root = lambda: root
-            (root / "reply-image-model.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "model": module.QWEN38_27B_MODEL_ID,
-                        "updated_at": 1,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            with self._owned_image_bundle(module, count=1, message_type=2) as media:
-                evidence_id = f"media:{media['manifest']['bundle_sha256']}"
-                response = {
-                    "should_reply": True,
-                    "reply": "메뉴판이네",
-                    "category": "social",
-                    "reason": "useful_image_response",
-                    "evidence_ids": [evidence_id],
-                }
-
-                with (
-                    self._fake_qwen27b_gateway(
-                        module,
-                        json.dumps(response, ensure_ascii=False),
-                    ) as gateway,
-                    mock.patch.object(
-                        module, "privacy_attestation_current", return_value=True
-                    ),
-                    mock.patch.object(module, "runner_is_trusted", return_value=True),
-                    mock.patch.object(
-                        module,
-                        "_acquire_model_call_slot",
-                        return_value={
-                            "allowed": True,
-                            "failure_class": "",
-                            "retry_at": time.time() + 180,
-                            "lease_token": "b" * 32,
-                        },
-                    ),
-                    mock.patch.object(
-                        module, "_finish_model_call_success", return_value=True
-                    ),
-                    mock.patch.object(
-                        module, "_run_bounded_process"
-                    ) as process_runner,
-                    mock.patch.object(module, "_ensure_omlx_model_resident"),
-                ):
-                    result = module.generate_reply(
-                        "이 사진 뭐야",
-                        [],
-                        [],
-                        [],
-                        [],
-                        attachment="image",
-                        image_path=media["paths"][0],
-                        image_marker=media["marker"],
-                        image_paths=media["paths"],
-                        media_evidence_id=evidence_id,
-                    )
-
-                self.assertEqual(len(gateway["payloads"]), 1)
-                payload = gateway["payloads"][0]
-                self.assertEqual(
-                    payload["model"],
-                    module.QWEN38_27B_MODEL_ID.removeprefix("mlx/"),
-                )
-                content = payload["messages"][1]["content"]
-                self.assertIsInstance(content, list)
-                prompt = content[0]["text"]
-                prompt_payload = json.loads(prompt)
-                self.assertEqual(prompt_payload["incoming_message"], "이 사진 뭐야")
-                self.assertEqual(prompt_payload["attachment"], "image")
-                self.assertIs(prompt_payload["image_input_available"], True)
-                self.assertEqual(prompt_payload["image_input_count"], 1)
-                self.assertEqual(
-                    prompt_payload["media_evidence"],
-                    {
-                        "evidence_id": evidence_id,
-                        "source_log_id": None,
-                        "image_count": 1,
-                    },
-                )
-                self.assertNotIn(str(media["paths"][0]), prompt)
-                self.assertEqual(content[0]["type"], "text")
-                self.assertEqual(content[1]["type"], "image_url")
-                image_url = content[1]["image_url"]["url"]
-                self.assertEqual(
-                    base64.b64decode(image_url.split(",", 1)[1]),
-                    media["paths"][0].read_bytes(),
-                )
-                gateway["external_urlopen"].assert_not_called()
-                process_runner.assert_not_called()
-                self.assertTrue(result["should_reply"])
-                self.assertEqual(result["reply"], "메뉴판이네")
+    def test_unregistered_cli_model_cannot_receive_images_or_private_prompt(self):
+        module = self._load_auto_reply_module("auto_reply_unknown_cli_image_route")
+        with self._owned_image_bundle(module, count=2) as media:
+            original = [path.read_bytes() for path in media["paths"]]
+            with mock.patch.object(module, "_run_bounded_process") as process:
+                result = module._run_generation_candidate("unregistered/private-cli-model", "private system",
+                    b"private input", command=["unused-cli"], env={}, model_stdin_bytes=b"private input",
+                    image_paths=media["paths"], timeout=1)
+            self.assertEqual(result, (1, b"", b"product_cloud_fallback_disabled"))
+            process.assert_not_called()
+            self.assertEqual([path.read_bytes() for path in media["paths"]], original)
 
     def test_image_bundle_manifest_is_complete_ordered_and_hash_bound(self):
         module = self._load_auto_reply_module(
@@ -15836,6 +17098,7 @@ print(json.dumps({
                         media["paths"],
                         media["manifest"],
                         recent_messages=[],
+                        authoritative_messages=[message],
                         candidate={},
                     )
             self.assertEqual(hook.call_count, 1)
@@ -15886,7 +17149,7 @@ print(json.dumps({
         self.assertIsNotNone(skipped)
         self.assertFalse(skipped["should_reply"])
 
-    def test_delivery_unknown_removes_bundle_and_scrubs_durable_event(self):
+    def test_delivery_unknown_retains_bundle_and_scrubs_durable_event(self):
         module = self._load_auto_reply_module(
             "auto_reply_delivery_unknown_media_scrub_test"
         )
@@ -15919,13 +17182,13 @@ print(json.dumps({
                     connection.close()
                 durable = json.loads(row["event_json"])
                 self.assertEqual(row["status"], module.DELIVERY_UNKNOWN)
-                self.assertFalse(media["directory"].exists())
+                self.assertTrue(media["directory"].exists())
                 self.assertEqual(durable["image_path"], "")
                 self.assertEqual(durable["image_paths"], [])
                 self.assertEqual(durable["media_marker"], "")
                 self.assertIsNone(durable["media_manifest"])
 
-    def test_author_terminal_removes_bundle_and_scrubs_durable_event(self):
+    def test_author_terminal_retains_bundle_and_scrubs_durable_event(self):
         module = self._load_auto_reply_module(
             "auto_reply_author_terminal_media_scrub_test"
         )
@@ -15960,7 +17223,7 @@ print(json.dumps({
                     connection.close()
                 durable = json.loads(row["event_json"])
                 self.assertEqual(row["status"], "skipped")
-                self.assertFalse(media["directory"].exists())
+                self.assertTrue(media["directory"].exists())
                 self.assertEqual(durable["image_path"], "")
                 self.assertEqual(durable["image_paths"], [])
                 self.assertEqual(durable["media_marker"], "")
@@ -16376,6 +17639,7 @@ print(json.dumps({
                     self._fake_qwen27b_gateway(
                         module,
                         stdout.decode("utf-8"),
+                        vision=True,
                     ) as gateway,
                     mock.patch.object(
                         module, "privacy_attestation_current", return_value=True
@@ -16886,38 +18150,21 @@ print(json.dumps({
 
     def test_generate_reply_preserves_attested_database_media_marker(self):
         module = self._load_auto_reply_module("auto_reply_db_media_marker_test")
-        image = Path("/tmp/openkakao-auto-reply-media-owned/1_image.png")
-        marker = image.parent / module.MEDIA_ACTIVE_MARKER
-        with (
-            mock.patch.object(module, "runner_is_trusted", return_value=True),
-            mock.patch.object(
-                module,
-                "_image_path_within_cap",
-                return_value=True,
-            ) as validate_image,
-            mock.patch.object(
-                module,
-                "_acquire_model_call_slot",
-                return_value={
-                    "allowed": False,
-                    "failure_class": "rate_limit",
-                    "retry_at": time.time() + 60,
-                },
-            ),
-        ):
-            result = module.generate_reply(
-                "이미지 확인해줘",
-                [{"evidence_id": "ctx:1", "message": "맥락"}],
-                [],
-                [],
-                [],
-                attachment="image",
-                image_path=image,
-                image_marker=marker,
-                media_evidence_id=f"media:{'a' * 64}",
-            )
-        self.assertEqual(result["reason"], "model_rate_limited")
-        validate_image.assert_called_once_with(image, marker)
+        with self._owned_image_bundle(module) as media:
+            image, marker = media["paths"][0], media["marker"]
+            with (
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_image_path_within_cap", wraps=module._image_path_within_cap) as validate,
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": False, "failure_class": "rate_limit", "retry_at": time.time() + 60}),
+            ):
+                result = module.generate_reply("이미지 확인해줘", [], [], [], [], attachment="image",
+                    image_path=image, image_marker=marker,
+                    media_evidence_id="media:" + media["manifest"]["bundle_sha256"])
+            self.assertEqual(result["reason"], "model_rate_limited")
+            validate.assert_called_once_with(image, marker)
+            self.assertTrue(image.is_file())
+            self.assertTrue(marker.is_file())
 
     def test_model_defer_keeps_owned_image_for_retry(self):
         module = self._load_auto_reply_module(
@@ -17144,7 +18391,7 @@ print("EOF" if value == b"" else "DATA", flush=True)
                 (3, 11),
             )
         )
-        with mock.patch.dict(
+        with self._hook_contract_interpreter(db_watch), mock.patch.dict(
             os.environ,
             {"OPENKAKAO_PYTHON": sys.executable},
             clear=False,
@@ -17179,15 +18426,14 @@ print(json.dumps({"ack": VALUE, "event_id": payload["event_id"]}), flush=True)
             original_hook = db_watch.HOOK
             try:
                 db_watch.HOOK = hook
-                with mock.patch.dict(
-                    os.environ,
-                    {"OPENKAKAO_PYTHON": ""},
-                    clear=False,
-                ):
+                with mock.patch.object(db_watch, "_verified_hook_command", return_value=[
+                    sys.executable, "-E", "-B", "-S", str(hook),
+                ]) as verified_command:
                     result = db_watch._run_bounded_hook(
                         b'{"event_id":"db:42:99"}',
                         timeout=2.0,
                     )
+                    verified_command.assert_called_once_with()
             finally:
                 db_watch.HOOK = original_hook
             self.assertEqual(result.returncode, 0)
@@ -17203,7 +18449,7 @@ print(json.dumps({"ack": VALUE, "event_id": payload["event_id"]}), flush=True)
             )
             self.assertFalse((root / "__pycache__").exists())
 
-            with mock.patch.dict(
+            with self._hook_contract_interpreter(db_watch), mock.patch.dict(
                 os.environ,
                 {"OPENKAKAO_PYTHON": str(hook)},
                 clear=False,
@@ -17366,8 +18612,13 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             os.umask(previous_umask)
 
     def test_proactive_topic_uses_vector_tokens_and_skips_when_conversation_advanced(self):
-        os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
+        self.enterContext(mock.patch.dict(os.environ, {
+            "OPENKAKAO_TARGET_CHAT_ID": "42", "OPENKAKAO_GEEKNEWS_ENABLED": "1",
+        }))
         module = self._load_auto_reply_module("auto_reply_proactive_topic_test")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
         module._geeknews_slot_open = lambda now: True
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
@@ -17382,7 +18633,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
         def search(query):
             self.assertIn("긱뉴스", query)
-            return [{"title": "세금 일정 업데이트", "url": "https://example.test/tax"}]
+            return [{"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}]
 
         style = {"common_tokens_json": json.dumps({"세금": 40, "ㅋㅋ": 99, "ㅇㅇ": 80}, ensure_ascii=False)}
         now = 1_000_000.0
@@ -17461,7 +18712,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertNotEqual(queued[0]["event_id"], f"db:42:{queued[0]['log_id']}")
         self.assertEqual(queued[0]["author_id"], 7)
         self.assertEqual(queued[0]["author_nickname"], "문승현")
-        self.assertEqual(queued[0]["urls"], ["https://example.test/tax"])
+        self.assertEqual(queued[0]["urls"], ["https://news.hada.io/topic?id=10"])
         self.assertEqual(queued[0]["proactive_source_log_id"], 99)
         self.assertTrue(module.canonical_db_event(queued[0]))
         recent_room = dict(source)
@@ -17712,14 +18963,20 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertEqual(first["ids"], [10, 11])
         self.assertEqual(
             first["message"],
-            "GeekNews TOP5 · 2026-08-17 16:20 KST\n\n1. 새 글 A https://news.hada.io/topic?id=10\n\n2. 새 글 B https://news.hada.io/topic?id=11",
+            "GeekNews TOP5 · 2026-08-17 16:20 KST\n\n"
+            "1. 새 글 A\n첫번째 요약입니다\nhttps://news.hada.io/topic?id=10\n\n"
+            "2. 새 글 B\n두번째 요약입니다\nhttps://news.hada.io/topic?id=11",
         )
         self.assertEqual(first["message"].splitlines(keepends=False), [
             "GeekNews TOP5 · 2026-08-17 16:20 KST",
             "",
-            "1. 새 글 A https://news.hada.io/topic?id=10",
+            "1. 새 글 A",
+            "첫번째 요약입니다",
+            "https://news.hada.io/topic?id=10",
             "",
-            "2. 새 글 B https://news.hada.io/topic?id=11",
+            "2. 새 글 B",
+            "두번째 요약입니다",
+            "https://news.hada.io/topic?id=11",
         ])
         self.assertIsNone(second)
     def test_geeknews_enqueue_does_not_persist_seen_until_confirmed(self):
@@ -17914,6 +19171,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_usage_limit_unknown_heals_to_skip_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_usage_limit_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -17952,6 +19210,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_model_temporarily_unavailable_unknown_reopens_pending(self):
         module = self._load_auto_reply_module("auto_reply_model_retry_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -18000,6 +19259,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         module = self._load_auto_reply_module(
             "auto_reply_model_retry_leftover_give_up"
         )
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -18042,6 +19302,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_retrieval_failed_unknown_heals_to_skip_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_retrieval_failed_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -18090,6 +19351,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_pre_send_blank_unknown_reopens_pending_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_blank_unknown_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -18166,6 +19428,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_identity_policy_blank_unknown_skips_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_identity_unknown_skip")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -18215,6 +19478,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_high_attempt_blank_unknown_skips_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_blank_unknown_high_attempt_skip")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         with tempfile.TemporaryDirectory() as temporary:
@@ -18254,6 +19518,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_high_attempt_formed_unknown_skips_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_formed_unknown_high_attempt_skip")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준"}
@@ -18304,6 +19569,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         module = self._load_auto_reply_module(
             "auto_reply_high_attempt_ax_authorized_unknown_skip"
         )
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준", "is_self": False}
@@ -18382,6 +19648,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_formed_ordinary_unknown_reschedules_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_formed_ordinary_unknown_heal")
+        self._empty_decision_store(module)
         previous_owner = os.environ.get("OPENKAKAO_SUPERVISOR_OWNER")
         previous_epoch = os.environ.get("OPENKAKAO_DB_SOURCE_EPOCH")
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
@@ -18456,6 +19723,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_ax_confirmed_unknown_heals_to_sent_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_ax_confirmed_unknown_sent")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         digest = "GeekNews TOP5 · 2026-08-19 12:23 KST\n\n1. example"
@@ -18533,6 +19801,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_ax_authorized_unknown_without_confirm_stays_delivery_unknown(self):
         module = self._load_auto_reply_module("auto_reply_ax_authorized_unknown_hold")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         previous_owner = os.environ.get("OPENKAKAO_SUPERVISOR_OWNER")
         previous_epoch = os.environ.get("OPENKAKAO_DB_SOURCE_EPOCH")
@@ -18618,6 +19887,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_empty_stale_backlog_unknown_skips_without_blocking(self):
         module = self._load_auto_reply_module("auto_reply_empty_stale_unknown_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {"chat_id": 42, "log_id": 11, "author_nickname": "현준"}
@@ -18657,6 +19927,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_proactive_unix_unknown_heals_to_stale_backlog_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_proactive_unix_leftover_heal")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {
@@ -18709,6 +19980,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         module = self._load_auto_reply_module(
             "auto_reply_formed_proactive_unix_leftover_heal"
         )
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         digest = "GeekNews TOP5 · 2026-08-19 08:49 KST\n\n1. example"
@@ -18764,6 +20036,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_proactive_real_tail_unknown_heals_to_stale_backlog_without_retransmit(self):
         module = self._load_auto_reply_module("auto_reply_proactive_real_tail_leftover")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         event = {
@@ -18848,6 +20121,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
                     mock.patch.object(module, "privacy_attestation_current", return_value=True),
                     mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                    mock.patch.object(module, "_proactive_unknown_is_closed_slot", return_value=False),
                     mock.patch.object(
                         module,
                         "sample_response_delay_for_analysis",
@@ -18860,7 +20134,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     mock.patch.object(module, "record_context_decision", return_value=True),
                     mock.patch.object(module, "analyze_event") as analyze,
                 ):
-                    module.process_job(job, "pending", queue)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "pending", queue)
                 analyze.assert_not_called()
                 row = queue.execute(
                     "SELECT status,decision,reason,category,reply FROM reply_jobs WHERE event_id=?",
@@ -18881,6 +20156,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_in_slot_proactive_unknown_retries_instead_of_stale_skip(self):
         module = self._load_auto_reply_module("auto_reply_proactive_in_slot_retry")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         now = 1_787_052_957
@@ -18971,11 +20247,13 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
                     mock.patch.object(module, "privacy_attestation_current", return_value=True),
                     mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                    mock.patch.object(module, "_proactive_unknown_is_closed_slot", return_value=False),
                     mock.patch.object(module, "sample_response_delay_for_analysis") as sample,
                     mock.patch.object(module, "record_context_decision") as record,
                     mock.patch.object(module, "analyze_event") as analyze,
                 ):
-                    module.process_job(job, "pending", queue)
+                    with self._fresh_room_state(module, json.loads((job)["event_json"])):
+                        module.process_job(job, "pending", queue)
                 sample.assert_not_called()
                 record.assert_not_called()
                 analyze.assert_not_called()
@@ -19164,6 +20442,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         event["canonical_event_id"] = "db:42:1787182399"
         event["rerank_fallback"] = "lenient_policy"
         event["response_window_upper_seconds"] = 600.0
+        event["analysis_watermark_log_id"] = 120
         reply_text = "잘 쉬어"
         try:
             with tempfile.TemporaryDirectory() as temporary:
@@ -19215,6 +20494,11 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                         ),
                         mock.patch.object(
                             module,
+                            "stable_room_watermark_log_id",
+                            return_value=120,
+                        ),
+                        mock.patch.object(
+                            module,
                             "pre_ax_delivery_probe",
                             return_value={"result": "ready"},
                         ),
@@ -19250,8 +20534,76 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             else:
                 os.environ["OPENKAKAO_TARGET_CHAT_ID"] = previous
 
+    def test_scheduled_missing_context_clarification_survives_pre_send(self):
+        module = self._load_auto_reply_module("auto_reply_missing_context_scheduled")
+        previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
+        os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
+        now = int(time.time())
+        event = self._burst_event(module, 121, "???", now, author="MOM")
+        event["rerank_fallback"] = "missing_context_clarification"
+        event["response_window_upper_seconds"] = 600.0
+        event["analysis_watermark_log_id"] = 121
+        reply_text = "어느 얘기 말하는 거야?"
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                module.QUEUE = root / "42" / "reply-queue.sqlite3"
+                module.EVIDENCE_LEDGER = root / "evidence.jsonl"
+                connection = self._worker_queue_connection(module)
+                try:
+                    connection.execute(
+                        """
+                        INSERT INTO reply_jobs(
+                            event_id,event_json,status,due_at,decision,reason,category,
+                            reply,scheduled_delay_seconds,error_class,created_at,updated_at
+                        ) VALUES(
+                            ?, ?, 'scheduled', ?, 'reply', 'direct_question', 'question',
+                            ?, 0.4, NULL, 1.0, 1.0
+                        )
+                        """,
+                        (
+                            event["event_id"],
+                            json.dumps(event, ensure_ascii=False),
+                            time.time() - 1.0,
+                            reply_text,
+                        ),
+                    )
+                    connection.commit()
+                    job, previous_status = module.claim_job(time.time(), connection)
+                    self.assertEqual(previous_status, "scheduled")
+                    with (
+                        mock.patch.object(module, "db_authoritative_event_allowed", return_value=True),
+                        mock.patch.object(module, "privacy_attestation_current", return_value=True),
+                        mock.patch.object(module, "numeric_author_identity_status", return_value="allowed"),
+                        mock.patch.object(module, "conversation_advanced_past_event", return_value=False),
+                        mock.patch.object(module, "stable_room_watermark_log_id", return_value=121),
+                        mock.patch.object(module, "pre_ax_delivery_probe", return_value={"result": "ready"}),
+                        mock.patch.object(module, "send_reply", return_value=True) as sender,
+                        mock.patch.object(module, "update_context_decision", return_value=True),
+                        mock.patch.object(module, "complete_event"),
+                    ):
+                        module.process_job(job, previous_status, connection)
+                    sender.assert_called_once()
+                    self.assertEqual(sender.call_args.args[0], reply_text)
+                    row = connection.execute(
+                        "SELECT status, reply FROM reply_jobs WHERE event_id = ?",
+                        (event["event_id"],),
+                    ).fetchone()
+                    self.assertEqual(tuple(row), ("sent", reply_text))
+                finally:
+                    connection.close()
+        finally:
+            if previous is None:
+                os.environ.pop("OPENKAKAO_TARGET_CHAT_ID", None)
+            else:
+                os.environ["OPENKAKAO_TARGET_CHAT_ID"] = previous
+
     def test_geeknews_skipped_attempt_occupies_current_slot(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_skip_occupies")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
+        self.enterContext(mock.patch.dict(os.environ, {"OPENKAKAO_GEEKNEWS_ENABLED": "1"}))
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
         connection.execute(
@@ -19307,7 +20659,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNone(again)
@@ -19325,7 +20677,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNotNone(later)
@@ -19333,6 +20685,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_geeknews_stale_backlog_skip_does_not_occupy_current_slot(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_stale_skip_free")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
+        self.enterContext(mock.patch.dict(os.environ, {"OPENKAKAO_GEEKNEWS_ENABLED": "1"}))
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
         connection.execute(
@@ -19388,7 +20744,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNotNone(again)
@@ -19396,6 +20752,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_in_slot_formed_proactive_high_attempts_reopens_instead_of_skip(self):
         module = self._load_auto_reply_module("auto_reply_proactive_in_slot_high_attempt")
+        self._empty_decision_store(module)
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_ID")
         os.environ["OPENKAKAO_TARGET_CHAT_ID"] = "42"
         digest = "GeekNews TOP5 · 2026-08-21 19:30 KST\n\n1. example"
@@ -19451,6 +20808,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_operator_forced_geeknews_enqueues_outside_slot(self):
         module = self._load_auto_reply_module("auto_reply_operator_forced_geeknews")
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        module.QUEUE = root / "reply-queue.sqlite3"
+        module._operator_state_root = lambda: root
+        self.enterContext(mock.patch.dict(os.environ, {"OPENKAKAO_GEEKNEWS_ENABLED": "1"}))
         stats = self._timing_stats(module)
         connection = sqlite3.connect(":memory:")
         connection.execute(
@@ -19481,7 +20842,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
         )
         self.assertIsNone(refused)
@@ -19495,7 +20856,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             source_event=source,
             enqueue=lambda event: queued.append(event) or True,
             search=lambda query: [
-                {"title": "세금 일정 업데이트", "url": "https://example.test/tax"}
+                {"title": "세금 일정 업데이트", "url": "https://news.hada.io/topic?id=10"}
             ],
             operator_forced=True,
         )
@@ -19565,10 +20926,12 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                             return_value=True,
                         ),
                         mock.patch.object(module, "send_reply") as sender,
+                        mock.patch.object(module, "durable_policy_skip", return_value=True) as skip,
                         mock.patch.object(module, "complete_event"),
                     ):
                         module.process_job(job, previous_status, connection)
                     sender.assert_not_called()
+                    skip.assert_called_once()
                     row = connection.execute(
                         """
                         SELECT status, decision, reason, category, error_class
@@ -19592,6 +20955,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
 
     def test_lexical_overlay_recalls_room_keyword_without_shared_vector(self):
         module = self._load_auto_reply_module("auto_reply_lexical_overlay")
+        module.BIN = Path.home() / "lexical-cli-fixture"
+        self._write_executable(module.BIN, "#!/bin/sh\nexit 99\n")
         inbound = "어제 번호 이야기해줫던거 머더라"
         event = {
             "chat_id": 417780809780519,
@@ -19731,7 +21096,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with mock.patch.object(
             module,
             "_resolve_link_addresses",
-            return_value=[(0, 0, 0, "", ("8.8.8.8", 443))],
+            return_value=[(2, 1, 6, "", ("8.8.8.8", 443))],
         ), mock.patch.object(module, "_open_pinned_link", side_effect=open_pinned):
             preview, size = module._fetch_link_preview_once(
                 "https://v.kakao.com/v/20260818174953765",
@@ -19765,7 +21130,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         with mock.patch.object(
             module,
             "_resolve_link_addresses",
-            return_value=[(0, 0, 0, "", ("8.8.8.8", 443))],
+            return_value=[(2, 1, 6, "", ("8.8.8.8", 443))],
         ), mock.patch.object(
             module, "_open_pinned_link", return_value=(Conn(), Resp())
         ):
@@ -19823,48 +21188,33 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         self.assertTrue(module._inbound_asks_question("리드미 요약해줘"))
 
     def test_unreadable_image_is_named_and_never_answered_blind(self):
-        """A photo the worker cannot read must not be dropped in silence.
-
-        The old code swallowed the read error, so a question about a photo was
-        sent as plain text and answered as if no photo had been attached
-        (2026-09-16).
-        """
-
+        """Incomplete image evidence never becomes a text-only model request."""
         module = self._load_auto_reply_module("image_unreadable_payload")
-        captured: dict = {}
-
-        class _Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps(
-                    {"choices": [{"message": {"content": "ok"}}]}
-                ).encode("utf-8")
-
-        def fake_urlopen(request, timeout=None):
-            captured["body"] = json.loads(request.data.decode("utf-8"))
-            return _Response()
-
-        missing = Path(tempfile.gettempdir()) / "openkakao-not-here-20260916.png"
-        with mock.patch.object(module.urllib.request, "urlopen", fake_urlopen):
-            code, _stdout, _stderr = module._run_opencodex_generation(
-                "opencode-go-session/deepseek-v4.1-flash",
-                "시스템",
-                '{"inbound":"얼마나 먹는 거임"}'.encode("utf-8"),
-                image_paths=[missing],
-                timeout=5.0,
-            )
-        self.assertEqual(code, 0)
-        content = captured["body"]["messages"][1]["content"]
-        # The text is still sent, but with an explicit note that the photo was
-        # not readable, so the model cannot guess at a picture it never saw.
-        self.assertIsInstance(content, str)
-        self.assertIn("사진을 읽지 못했습니다", content)
-        self.assertIn("추측하지 말고", content)
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing.png"
+            readable = Path(temporary) / "present.png"
+            readable.write_bytes(b"PNG fixture")
+            for images in ([missing], [readable, missing]):
+                with self.subTest(images=len(images)):
+                    with mock.patch.object(module.urllib.request, "urlopen") as request:
+                        code, stdout, stderr = module._run_opencodex_generation(
+                            "opencode-go-session/deepseek-v4.1-flash",
+                            "시스템", b"fixture", image_paths=images, timeout=5.0,
+                        )
+                    self.assertEqual(code, 1)
+                    self.assertEqual(stdout, b"")
+                    self.assertEqual(stderr, b"image_input_unavailable")
+                    request.assert_not_called()
+            with (
+                mock.patch.object(Path, "read_bytes", side_effect=PermissionError("fixture")),
+                mock.patch.object(module.urllib.request, "urlopen") as request,
+            ):
+                code, stdout, stderr = module._run_opencodex_generation(
+                    "opencode-go-session/deepseek-v4.1-flash",
+                    "시스템", b"fixture", image_paths=[readable], timeout=5.0,
+                )
+            self.assertEqual((code, stdout, stderr), (1, b"", b"image_input_unavailable"))
+            request.assert_not_called()
 
     def test_readable_image_is_still_attached_as_a_data_url(self):
         """The failure path must not disturb the working path."""
@@ -19905,6 +21255,88 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         urls = [part.get("image_url", {}).get("url", "") for part in content]
         self.assertTrue(any(url.startswith("data:image/") for url in urls), urls)
 
+    def test_missing_image_input_does_not_fallback_or_open_model_cooldown(self):
+        module = self._load_auto_reply_module("image_missing_generation_boundary")
+        with tempfile.TemporaryDirectory() as temporary:
+            # The adapter below simulates loss after model-lease admission.
+            (Path(temporary) / "disappeared.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+            with (
+                mock.patch.object(module, "_operator_state_root", return_value=Path(temporary)),
+                mock.patch.object(module.alden_local_vision, "input_byte_budget", return_value=module.MAX_MODEL_PROMPT_BYTES),
+                mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_image_path_within_cap", return_value=True),
+                mock.patch.object(module, "_generation_reply_model", return_value=module.QWEN38_27B_MODEL_ID),
+                mock.patch.object(module, "_ensure_omlx_model_resident"),
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": True, "failure_class": "", "retry_at": time.time() + 180,
+                    "lease_token": "c" * 32,
+                }),
+                mock.patch.object(module, "_run_generation_candidate", return_value=(1, b"", b"image_input_unavailable")),
+                mock.patch.object(module, "_release_cancelled_model_call", return_value=True) as release,
+                mock.patch.object(module, "_model_fallback_chain") as fallback,
+                mock.patch.object(module, "_finish_model_call_failure") as failure,
+                mock.patch.object(module, "_finish_model_call_success") as success,
+            ):
+                result = module.generate_reply(
+                    "[사진]", [], [], [], [], attachment="image",
+                    image_paths=[Path(temporary) / "disappeared.png"],
+                    media_evidence_id="media:" + "a" * 64,
+                )
+        self.assertEqual(result["reason"], "image_unavailable")
+        self.assertFalse(result["should_reply"])
+        self.assertFalse(result["model_invoked"])
+        self.assertEqual(result["evidence_ids"], [])
+        release.assert_called_once_with("c" * 32, module.QWEN38_27B_MODEL_ID)
+        fallback.assert_not_called()
+        failure.assert_not_called()
+        success.assert_not_called()
+
+    def test_cooldown_fallback_image_error_is_terminal_without_provider_failure(self):
+        module = self._load_auto_reply_module("image_missing_cooldown_fallback")
+        with tempfile.TemporaryDirectory() as temporary:
+            # The adapter below simulates loss after model-lease admission.
+            (Path(temporary) / "missing.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"payload")
+            first = "opencode-go-session/vision-first"
+            second = "opencode-go-session/vision-second"
+            with (
+                mock.patch.object(module, "_operator_state_root", return_value=Path(temporary)),
+                mock.patch.object(module.alden_local_vision, "input_byte_budget", return_value=module.MAX_MODEL_PROMPT_BYTES),
+                mock.patch.object(module, "REPLY_RUNNER_KIND", "opencodex"),
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "_image_path_within_cap", return_value=True),
+                mock.patch.object(module, "_generation_reply_model", return_value=module.QWEN38_27B_MODEL_ID),
+                mock.patch.object(module, "_ensure_omlx_model_resident"),
+                mock.patch.object(module, "_acquire_model_call_slot", return_value={
+                    "allowed": False, "failure_class": "quota_exhausted",
+                    "retry_at": time.time() + 180,
+                }),
+                mock.patch.object(module, "_reply_fallback_candidates", return_value=[first, second]),
+                mock.patch.object(module, "_open_fallback_lease", return_value={
+                    "lease_token": "d" * 32, "retry_at": time.time() + 180,
+                }) as opened,
+                mock.patch.object(module, "_run_generation_candidate", return_value=(1, b"", b"image_input_unavailable")) as generated,
+                mock.patch.object(module, "_release_cancelled_model_call", return_value=True) as release,
+                mock.patch.object(module, "_close_model_lease") as closed,
+                mock.patch.object(module, "_finish_model_call_failure") as failure,
+                mock.patch.object(module, "_finish_model_call_success") as success,
+            ):
+                result = module.generate_reply(
+                    "[사진]", [], [], [], [], attachment="image",
+                    image_paths=[Path(temporary) / "missing.png"],
+                    media_evidence_id="media:" + "a" * 64,
+                )
+        self.assertEqual(result["reason"], "image_unavailable")
+        self.assertFalse(result["model_invoked"])
+        self.assertEqual(result["evidence_ids"], [])
+        opened.assert_called_once_with(first)
+        self.assertEqual(generated.call_count, 1)
+        self.assertEqual(generated.call_args.args[0], first)
+        release.assert_called_once_with("d" * 32, first)
+        closed.assert_not_called()
+        failure.assert_not_called()
+        success.assert_not_called()
+
     def test_empty_image_list_leaves_the_text_message_alone(self):
         """No images means no note about images."""
 
@@ -19940,6 +21372,67 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             content = captured["body"]["messages"][1]["content"]
             self.assertIsInstance(content, str)
             self.assertNotIn("사진을 읽지 못했습니다", content)
+            self.assertNotIn("response_format", captured["body"])
+
+    def test_mlx_serve_uses_its_advertised_strict_json_schema(self):
+        module = self._load_auto_reply_module("mlx_strict_response_format")
+        captured: dict = {}
+
+        class _Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _limit=None):
+                return json.dumps(
+                    {
+                        "model": module.FLASH_NEXT_MODEL_ID,
+                        "choices": [{"message": {"content": "{}"}}],
+                    }
+                ).encode("utf-8")
+
+        def fake_urlopen(request, timeout=None):
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            return _Response()
+
+        with mock.patch.object(
+            module,
+            "discover_mlx_gateway",
+            return_value=("http://127.0.0.1:11234/v1", ""),
+        ), mock.patch.object(
+            module,
+            "detect_mlx_gateway_models",
+            return_value=[
+                {
+                    "id": module.FLASH_NEXT_MODEL_ID,
+                    "owned_by": "mlx-serve",
+                    "loaded": True,
+                    "state": "ready",
+                    "capabilities": ["json_schema"],
+                }
+            ],
+        ), mock.patch.object(
+            module.auto_reply_ondevice,
+            "_local_only_urlopen",
+            side_effect=fake_urlopen,
+        ):
+            code, _stdout, _stderr = module._run_opencodex_generation_unleased(
+                module.FLASH_NEXT_MODEL_ID,
+                "시스템",
+                '{"inbound":"안녕"}'.encode("utf-8"),
+                timeout=5.0,
+            )
+
+        self.assertEqual(code, 0)
+        response_format = captured["body"]["response_format"]
+        self.assertEqual(response_format["type"], "json_schema")
+        self.assertTrue(response_format["json_schema"]["strict"])
+        schema = response_format["json_schema"]["schema"]
+        self.assertEqual(set(schema["required"]), set(schema["properties"]))
+        self.assertFalse(schema["additionalProperties"])
+        self.assertNotIn("minItems", schema["properties"]["drafts"])
 
     def test_rerank_client_consumes_late_sidecar_greeting(self):
         module = self._load_auto_reply_module("rerank_late_greeting")

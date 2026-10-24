@@ -1,0 +1,199 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "올든 음성·취소·비상 중단",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "input",
+      "label": "입력"
+    },
+    {
+      "id": "turn",
+      "label": "확정 턴"
+    },
+    {
+      "id": "stop",
+      "label": "중단과 복구",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "mic",
+    "vad",
+    "stt",
+    "context",
+    "llm",
+    "tts",
+    "commit"
+  ],
+  "nodes": [
+    {
+      "id": "mic",
+      "lane": "input",
+      "col": 0,
+      "type": "frontend",
+      "label": "직접 마이크",
+      "sublabel": "자동 호출어 미출시",
+      "width": 132
+    },
+    {
+      "id": "vad",
+      "lane": "input",
+      "col": 1,
+      "type": "backend",
+      "label": "발화 확정",
+      "sublabel": "PCM·침묵·VAD",
+      "width": 132
+    },
+    {
+      "id": "stt",
+      "lane": "turn",
+      "col": 1,
+      "type": "backend",
+      "label": "로컬 STT",
+      "sublabel": "Whisper·메모리 기준",
+      "width": 132
+    },
+    {
+      "id": "context",
+      "lane": "turn",
+      "col": 2,
+      "type": "database",
+      "label": "최신 맥락",
+      "sublabel": "턴 ID·출처·OSK",
+      "width": 132
+    },
+    {
+      "id": "llm",
+      "lane": "turn",
+      "col": 3,
+      "type": "backend",
+      "label": "로컬 생성",
+      "sublabel": "선택 모델·취소",
+      "width": 132
+    },
+    {
+      "id": "tts",
+      "lane": "turn",
+      "col": 4,
+      "type": "backend",
+      "label": "합성과 재생",
+      "sublabel": "Qwen3-TTS·에코 차단",
+      "width": 132
+    },
+    {
+      "id": "commit",
+      "lane": "turn",
+      "col": 5,
+      "type": "database",
+      "label": "답변 기록",
+      "sublabel": "현재 턴만 반영",
+      "width": 132
+    },
+    {
+      "id": "cancel",
+      "lane": "stop",
+      "col": 3,
+      "type": "security",
+      "label": "전역 중단",
+      "sublabel": "명시 재개까지 잠금",
+      "width": 132
+    },
+    {
+      "id": "resume",
+      "lane": "stop",
+      "col": 5,
+      "type": "frontend",
+      "label": "명시적 재개",
+      "sublabel": "새 취소 세대",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-0",
+      "from": "mic",
+      "to": "vad",
+      "label": "오디오",
+      "role": "main"
+    },
+    {
+      "id": "edge-1",
+      "from": "vad",
+      "to": "stt",
+      "label": "입력 확정",
+      "role": "main"
+    },
+    {
+      "id": "edge-2",
+      "from": "stt",
+      "to": "context",
+      "label": "인식 결과",
+      "role": "main"
+    },
+    {
+      "id": "edge-3",
+      "from": "context",
+      "to": "llm",
+      "label": "최신 사용자 발화",
+      "role": "main"
+    },
+    {
+      "id": "edge-4",
+      "from": "llm",
+      "to": "tts",
+      "label": "완결된 응답",
+      "role": "main"
+    },
+    {
+      "id": "edge-5",
+      "from": "tts",
+      "to": "commit",
+      "label": "재생 후 검증",
+      "role": "main"
+    },
+    {
+      "id": "edge-6",
+      "from": "llm",
+      "to": "cancel",
+      "label": "⌘⌥⇧Esc",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "edge-7",
+      "from": "cancel",
+      "to": "resume",
+      "label": "사용자 재개",
+      "role": "branch"
+    },
+    {
+      "id": "edge-8",
+      "from": "tts",
+      "to": "vad",
+      "label": "끼어들기: 이전 턴 취소",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "입력과 결과",
+      "items": [
+        "자기 TTS·도구 로그는 사용자 발화로 넣지 않는다.",
+        "늦거나 취소된 결과는 현재 답변을 덮지 못한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "현재 검증 한계",
+      "items": [
+        "자동 호출어 출시 기준은 통과하지 않았다.",
+        "물리 마이크·발화 종료→재생 지연은 미검증이다."
+      ]
+    }
+  ]
+}
