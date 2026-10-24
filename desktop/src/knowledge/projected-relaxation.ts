@@ -1,6 +1,6 @@
 import type { ProjectedCircle, ProjectionViewport } from './projected-layout-metrics';
 
-export const PROJECTED_RELAXATION_LIMITS = Object.freeze({ nodes: 2048, passes: 8, pairTests: 131072, shiftCssPx: 10, gapCssPx: 4.5 });
+export const PROJECTED_RELAXATION_LIMITS = Object.freeze({ nodes: 2048, passes: 16, pairTests: 131072, shiftCssPx: 10, gapCssPx: 4.5 });
 export interface RelaxationResult {
   offsets: Float64Array;
   diagnostics: { nodes: number; passes: number; effectiveGapCssPx:number; pairTests: number; corePairTests:number; gapPairTests:number; coreContacts:number; moved: number; maxShift: number; budgetExhausted: boolean; inputTruncated: boolean };

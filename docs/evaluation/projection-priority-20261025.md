@@ -20,7 +20,10 @@ spacing choice while still allowing actual new core contacts to be repaired;
 this preserves stable re-projection. No source coordinate, edge, membership,
 semantic force, label policy, model, index or persistent data is changed.
 
-The node2048/pass8/pair131072/shift10px caps stay unchanged. The new core and gap
+The node2048/pair131072/shift10px caps stay unchanged. The pass cap is16
+(previously8), allowing sparse core-only rounds to converge within the same
+arithmetic pair budget. The first actual8-pass candidate improved compact371→33
+but left3 default-size contacts, so that candidate was not installed. The new core and gap
 check/contact counters make admission observable. WithN admitted points andP
 passes, storage remainsO(N); up to two grids are built per pass. Adversarial dense
 cell traversal is stillO(P*N²), including candidates skipped before the arithmetic
@@ -29,12 +32,13 @@ Average spatial pruning does not establish universal linear complexity. Bounded
 repeated corrections do not prove all feasible packings converge or preserve
 all semantic distances; the authority is still the unchanged3D source solver.
 
-Separate prototypes compared fixed-gap core priority and density-only spacing,
+Separate8-pass prototypes compared fixed-gap core priority and density-only spacing,
 then combined them. On saved *already corrected* compact screen points used as
 fresh input, baseline336 residual overlaps, priority7, density0 and combined7
 were observed. This is a controlled replay, not the unrecorded original input
 of the installed correction and not a production speedup. Both separated grid
-regressions have0 with the combined candidate. A densely overlapping2.5px grid
+regressions have0 with the combined candidate (also verified in the final16-pass
+full frontend run). A densely overlapping2.5px grid
 remains difficult: baseline1043 versus combined1344 residual pairs for1024nodes.
 That tradeoff is retained; there is no all-input non-regression or zero-overlap
 claim. The displacement envelope and iterations can make dense packing infeasible.
