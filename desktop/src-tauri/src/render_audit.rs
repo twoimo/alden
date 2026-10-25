@@ -1700,6 +1700,11 @@ fn scoped_blur_preserved(state: &Value) -> bool {
         })
 }
 
+fn native_background_ready(state: &Value) -> bool {
+    state["applicationActive"] == false && state["key"] == false
+        && state["alpha"] == 0.0 && state["level"] == 0
+}
+
 // Audit-only: minimize the actual owned AppKit window without
 // injecting visibility events or modifying the production renderer lifecycle.
 fn minimized_native_state(
@@ -1785,11 +1790,17 @@ fn audit_settings(
             drop(target);
         }).map_err(|_| "audit deactivation dispatch failed")?;
         let deactivation = receive(rx, deadline)?;
-        let before = minimized_native_state(&window, false, deadline)?;
-        if before["applicationActive"] != false || before["key"] != false
-            || before["alpha"] != 0.0 || before["level"] != 0 {
-            return Err(format!("career zoom diagnostic violated background constraints: native={before}, deactivation={deactivation}"));
-        }
+        // AppKit may complete deactivate() on a later event-loop turn. Observe
+        // the real state before starting QA; never re-activate another app or
+        // weaken the transparency/key-window constraints to get a passing run.
+        let background_deadline = deadline.min(Instant::now() + Duration::from_secs(2));
+        let before = wait_for_audit_state("native background deactivation", background_deadline, || {
+            let state = minimized_native_state(&window, false, background_deadline)?;
+            if state["key"] != false || state["alpha"] != 0.0 || state["level"] != 0 {
+                return Err(format!("audit window violated background constraints: {state}"));
+            }
+            Ok(state)
+        }, native_background_ready).map_err(|error| format!("{error}; deactivation={deactivation}"))?;
         let mut result = audit_graph_scope(&window, output, deadline, case)?;
         let immediate = minimized_native_state(&window, true, deadline)?;
         let mut observations = Vec::new();
@@ -1797,8 +1808,7 @@ fn audit_settings(
             live(deadline)?;
             std::thread::sleep(Duration::from_millis(250));
             let native = minimized_native_state(&window, false, deadline)?;
-            if native["applicationActive"] != false || native["key"] != false
-                || native["alpha"] != 0.0 || native["level"] != 0
+            if !native_background_ready(&native)
                 || native["minimized"] != true || native["visible"] != false {
                 return Err("career zoom diagnostic did not remain minimized in background".into());
             }
@@ -3142,6 +3152,31 @@ mod tests {
         assert_eq!(samples, 0);
         assert!(error.contains("settings mount"));
         assert!(error.contains("native audit deadline exceeded"));
+    }
+
+    #[test]
+    fn audit_deactivation_observes_late_native_state_without_accepting_the_request_as_completion() {
+        let mut samples = 0;
+        let settled = wait_for_audit_state("native background deactivation",
+            Instant::now() + Duration::from_secs(1), || {
+                samples += 1;
+                Ok(json!({"applicationActive":samples < 3,"key":false,"alpha":0.0,"level":0}))
+            }, native_background_ready).unwrap();
+        assert_eq!(samples, 3);
+        assert_eq!(settled["applicationActive"], false);
+    }
+
+    #[test]
+    fn audit_background_contract_rejects_missing_or_unsafe_native_fields() {
+        let valid = json!({"applicationActive":false,"key":false,"alpha":0.0,"level":0});
+        assert!(native_background_ready(&valid));
+        for (key, unsafe_value) in [("applicationActive", json!(true)),
+            ("key", json!(true)), ("alpha", json!(1.0)), ("level", json!(1))] {
+            let mut state = valid.clone(); state[key] = unsafe_value;
+            assert!(!native_background_ready(&state));
+            state.as_object_mut().unwrap().remove(key);
+            assert!(!native_background_ready(&state));
+        }
     }
 
     fn entity_stage_state(nodes: u64) -> Value {

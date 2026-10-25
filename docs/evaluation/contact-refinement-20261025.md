@@ -96,3 +96,26 @@ source/update/quality/resource checks remain separate.
 The current-source Pro→Gemini→Pro audit remains NOT_RUN under the existing upload
 readiness restriction. No lower model or other upload route replaces it. The full
 18/ST01-16/Cursor8 and other production, source, physical and release gates remain.
+
+## Initial signed native candidate
+
+Source79e99f9 passed all four CI jobs and produced an86-file0.3.220 candidate with
+the same Apple Development identity as installed0.3.219. The candidate's owned
+background career diagnostic passed two sizes/eight zoom stages: distant/returned
+passive labels0, default context/detail15/22 and compact8/9, with zero measured
+rectangle overlap/clipping. Six PNGs were directly inspected. The actual producer
+reports the new partition method and arithmetic; the native worker reports four
+final contact passes and shared tests within131072.
+
+The first all-scope comparison correctly rejected a source update during its
+read. A subsequent observation under the supported cycle lock stopped before
+reading the graph because AppKit still reported the audit app active immediately
+after deactivate(). The collector PID, policies and configurations stayed exact;
+no persistent pause or service stop occurred. Those failed receipts are retained.
+
+The audit now observes the actual native state for at most two seconds after its
+single deactivation request. Opaque/key/floating windows fail immediately; capture
+and subsequent minimized observations still require the original strict inactive
+state. It does not activate another app, retry deactivation or weaken data-source
+freshness. Two new regressions plus all36 render-audit cases pass. Rebuilt native
+acceptance and installation are still required; the installed app remains0.3.219.
