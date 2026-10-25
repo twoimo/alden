@@ -800,7 +800,8 @@ class Frontier:
             try:
                 result = reconcile(self.root, self.target, row['room'], row['message'], reader=self.reader,
                     cancelled=cancelled, publication_guard=getattr(self, 'external_publication_guard', None))
-                if result.get('state') not in {'ready', 'pending_endpoints', 'withheld', 'not_admitted', 'self_reference'}:
+                if result.get('state') not in {'ready', 'pending_endpoints', 'withheld', 'not_admitted',
+                                               'self_reference', 'retained_context', 'retained_review'}:
                     raise RuntimeError('messenger_reference_result_invalid')
             except (ValueError, RuntimeError, OSError, sqlite3.Error) as error:
                 if cancelled():

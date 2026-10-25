@@ -32,6 +32,25 @@ def _owned_edge(db, edge, target, origin, account, room, message):
     return row
 
 
+def _retained_disposition(source, room, message, content_hash):
+    """Current-policy context/review is retained evidence, not a missing node."""
+    original = encoded([source.account, room, message]).decode()
+    with source.database() as db:
+        row = db.execute('''SELECT h.id,h.room,h.message,h.page,h.state AS disposition,
+            h.content_hash,p.payload,p.next_frontier,p.state AS page_state
+            FROM message_heads h JOIN pages p ON p.id=h.page WHERE h.id=?''', (original,)).fetchone()
+    if row is None or row['page_state'] != 'complete' or row['content_hash'] != content_hash:
+        return None
+    payload = source._current_page(row)
+    item = next((item for item in payload['items'] if item['id'] == message), None)
+    if item is None:
+        return None
+    triage = source._observation(room, item)[2]
+    if triage.content_hash == content_hash and triage.state == row['disposition'] and triage.state in {'context', 'review'}:
+        return triage.state
+    return None
+
+
 def observe(source, room, message, *, cancelled=lambda: False):
     from alden_messenger_runtime import SourceBlocked
     def check():
@@ -204,6 +223,13 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
                     (target, document, target, document)).fetchone()
                 if row: versions.append(row[0])
             state = 'self_reference' if documents[0] == documents[1] else 'ready' if len(versions) == 2 else 'pending_endpoints'
+            if state == 'pending_endpoints':
+                dispositions = [_retained_disposition(source, room, message, proof['source_content_hash']),
+                    _retained_disposition(source, room, proof['target_message_id'], observed['target_content_hash'])]
+                if 'review' in dispositions:
+                    state = 'retained_review'
+                elif 'context' in dispositions:
+                    state = 'retained_context'
             if state == 'ready':
                 evidence = encoded({'kind': KIND, 'observation': observed,
                                     'source_version': versions[0], 'target_version': versions[1]}).decode()

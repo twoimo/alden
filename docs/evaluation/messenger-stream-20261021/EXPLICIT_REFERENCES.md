@@ -196,6 +196,15 @@ separate persisted history. Permission, pause, voice, abort and publication
 guards remain in the existing reconciler. This is additive frontier metadata;
 only an actual stored claim opts its derived collection into format4.
 
+A verified endpoint already retained as current-policy context/review is not a
+missing graph node. `retained_context` / `retained_review` settle that job while
+keeping its watch, source hash and reversible classification. They neither
+promote short/noisy text into a graph node nor make every collection partial
+forever. A later meaningful body edit and normal reclassification can admit the
+endpoint and publish the current version-bound reply. The native queue exposed
+this distinction: its one initially pending endpoint was already a context row,
+not an uncollected original. Actual missing endpoints still remain pending.
+
 The scheduler's supplied `publication_guard` owns the complete control/abort
 commit boundary. The reconciler uses that gate and rechecks its own source,
 pause/voice/abort conditions inside it. Standalone calls acquire their own

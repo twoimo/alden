@@ -247,5 +247,27 @@ class ReferenceJobTests(unittest.TestCase):
         self.assertEqual(status['collection_pending_references'], 1)
         self.assertIsNone(status['collection_blocked_rooms'])
 
+    def test_filtered_endpoint_settles_without_noise_node_and_can_become_ready_after_edit(self):
+        self.reader.pages[('123', None)][0][-1] = item(7, '네')
+        result = production.collect(self.root, self.target, reader=self.reader)
+        self.assertEqual(result['state'], 'complete')
+        self.assertEqual(len(self.graph()['nodes']), 2); self.assertEqual(self.graph()['edges'], [])
+        job = next(j for j in self.jobs() if j['message'] == '9')
+        self.assertEqual(json.loads(job['result'])['state'], 'retained_context')
+        self.assertEqual(job['state'], 'settled'); self.assertEqual(job['watch'], 1)
+        self.reader.pages[('123', None)][0][-1] = item(7, '계약 검토 자료 7과 운영 회의 일정에 대한 구체적인 결과입니다.')
+        self.source.step(mode='reconcile')
+        for _ in range(3): self.source.reference_step()
+        self.assertEqual(len(self.graph()['nodes']), 3); self.assertEqual(len(self.graph()['edges']), 1)
+
+    def test_review_endpoint_remains_reversible_review_without_a_permanent_pending_job(self):
+        self.reader.pages[('123', None)][0][-1] = item(7, '수익 보장 입장 안내와 자세한 가입 방법을 전달합니다.')
+        result = production.collect(self.root, self.target, reader=self.reader)
+        self.assertEqual(result['state'], 'complete')
+        job = next(j for j in self.jobs() if j['message'] == '9')
+        self.assertEqual(json.loads(job['result'])['state'], 'retained_review')
+        self.assertEqual(job['state'], 'settled'); self.assertEqual(job['watch'], 1)
+        self.assertEqual(self.graph()['edges'], [])
+
 
 if __name__ == '__main__': unittest.main()
