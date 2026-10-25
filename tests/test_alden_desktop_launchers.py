@@ -27,6 +27,40 @@ printf 'ALDEN_CPYTHON_3_11_OK\n'
 """
 
 
+FAKE_CODESIGN = r'''#!/bin/sh
+set -eu
+for arg do app=$arg; done
+role=installed
+case "$app" in */source/*|*/.openkakao-alden.install.*/*) role=candidate;; esac
+mode=${OPENKAKAO_FAKE_CODESIGN_MODE:-stable}
+if [ -n "${OPENKAKAO_FAKE_CODESIGN_CALLS:-}" ]; then
+  printf '%s\n' "$*" >> "$OPENKAKAO_FAKE_CODESIGN_CALLS"
+fi
+requirement='identifier "com.openkakao.alden.desktop" and anchor apple generic'
+if [ "$role" = candidate ]; then
+  case "$mode" in
+    changed) requirement='identifier "com.openkakao.alden.desktop" and certificate leaf = H"aabb"';;
+    adhoc) requirement='cdhash H"aabb"';;
+  esac
+fi
+if [ "$mode" = changed-staged ]; then
+  case "$app" in */.openkakao-alden.install.*/*) requirement='identifier "different.staged.identity"';; esac
+fi
+case "$1" in
+  -d)
+    [ "$mode" != missing ] || exit 0
+    printf 'designated => %s\n' "$requirement"
+    [ "$mode" != ambiguous ] || printf 'designated => other\n'
+    ;;
+  --verify)
+    if [ "$mode" = invalid-candidate ] && [ "$role" = candidate ]; then exit 1; fi
+    if [ "$mode" = invalid-installed ] && [ "$role" = installed ]; then exit 1; fi
+    ;;
+  *) exit 97;;
+esac
+'''
+
+
 def read_optional(path: Path) -> str | None:
     if path.is_file():
         return path.read_text(encoding="utf-8")
@@ -46,6 +80,9 @@ class AldenDesktopLauncherTests(unittest.TestCase):
         runtime_python.parent.mkdir(parents=True, exist_ok=True)
         runtime_python.write_text(FAKE_CPYTHON_311, encoding="utf-8")
         runtime_python.chmod(0o755)
+        signer = runtime_python.with_name("codesign")
+        signer.write_text(FAKE_CODESIGN, encoding="utf-8")
+        signer.chmod(0o755)
         return runtime_python
 
     def _run_installer_fixture(
@@ -76,6 +113,7 @@ class AldenDesktopLauncherTests(unittest.TestCase):
         block_pid_print: bool = False,
         block_bootout: bool = False,
         send_signal: int | None = None,
+        codesign_mode: str = "stable",
     ) -> dict[str, object]:
         installer = ROOT / "scripts/install-alden-desktop.sh"
 
@@ -130,6 +168,7 @@ class AldenDesktopLauncherTests(unittest.TestCase):
             )
             runtime_python.parent.mkdir(parents=True)
             write_executable(runtime_python, FAKE_CPYTHON_311)
+            write_executable(runtime_python.with_name("codesign"), FAKE_CODESIGN)
 
             if has_previous_app:
                 target_bin.parent.mkdir(parents=True)
@@ -432,6 +471,8 @@ exit 1
                     "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                     "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                     "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                    "OPENKAKAO_ALDEN_CODESIGN_TEST_ONLY": str(runtime_python.with_name("codesign")),
+                    "OPENKAKAO_FAKE_CODESIGN_MODE": codesign_mode,
                     "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(
                         runtime_python
                     ),
@@ -611,6 +652,67 @@ exit 1
                     / f"{JARVIS_LABEL}.process-after-bootout.txt"
                 ),
             }
+
+    def test_installer_identity_preflight_preserves_consent_identity_before_any_cutover(self):
+        cases = [(mode, True) for mode in ('stable', 'changed', 'adhoc', 'missing',
+                 'ambiguous', 'invalid-candidate', 'invalid-installed')]
+        cases += [('changed', False), ('adhoc', False)]
+        for mode, check_only in cases:
+            with self.subTest(mode=mode, check_only=check_only), tempfile.TemporaryDirectory() as folder:
+                tmp = Path(folder)
+                runtime = self._fake_installer_runtime(tmp)
+                installed = tmp / 'Applications/Alden.app'
+                candidate = tmp / 'source/Alden.app'
+                for app, content in ((installed, 'old-build'), (candidate, 'new-build')):
+                    binary = app / 'Contents/MacOS/openkakao-alden-desktop'
+                    binary.parent.mkdir(parents=True)
+                    binary.write_text(content)
+                    binary.chmod(0o755)
+                calls = tmp / 'mutating-tools.called'
+                identity_calls = tmp / 'codesign.called'
+                inert = tmp / 'inert'
+                inert.write_text('#!/bin/sh\nprintf called >> "$IDENTITY_TEST_CALLS"\nexit 1\n')
+                inert.chmod(0o755)
+                env = {**os.environ,
+                       'OPENKAKAO_APPLICATIONS_DIR': str(installed.parent),
+                       'OPENKAKAO_LAUNCH_AGENTS_DIR': str(tmp / 'LaunchAgents'),
+                       'OPENKAKAO_ALDEN_BACKUP_DIR': str(tmp / 'backups'),
+                       'OPENKAKAO_ALDEN_APP_SOURCE': str(candidate),
+                       'OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY': '1',
+                       'OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY': str(runtime),
+                       'OPENKAKAO_ALDEN_CODESIGN_TEST_ONLY': str(runtime.with_name('codesign')),
+                       'OPENKAKAO_FAKE_CODESIGN_MODE': mode,
+                       'OPENKAKAO_FAKE_CODESIGN_CALLS': str(identity_calls),
+                       'IDENTITY_TEST_CALLS': str(calls)}
+                for tool in ('LAUNCHCTL', 'DITTO', 'PLISTBUDDY', 'PLUTIL', 'PS', 'PGREP', 'LSOF'):
+                    env['OPENKAKAO_' + tool] = str(inert)
+                command = ['/bin/sh', str(ROOT / 'scripts/install-alden-desktop.sh')]
+                if check_only:
+                    command.append('--check-identity-only')
+                result = subprocess.run(command, env=env, capture_output=True,
+                                        text=True, timeout=8)
+                if mode == 'stable':
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('same signing identity', result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('signing identity continuity', result.stderr)
+                self.assertTrue(identity_calls.exists())
+                self.assertFalse(calls.exists())
+                self.assertFalse((tmp / 'LaunchAgents').exists())
+                self.assertFalse((tmp / 'backups').exists())
+                self.assertEqual((installed / 'Contents/MacOS/openkakao-alden-desktop').read_text(), 'old-build')
+                self.assertEqual((candidate / 'Contents/MacOS/openkakao-alden-desktop').read_text(), 'new-build')
+
+    def test_installer_rechecks_staged_identity_before_stopping_existing_runtime(self):
+        result = self._run_installer_fixture(initial_alden_loaded=True,
+                                             codesign_mode='changed-staged')
+        self.assertNotEqual(result['returncode'], 0)
+        self.assertIn('signing identity continuity', result['stderr'])
+        self.assertEqual(result['target_marker'], 'old')
+        self.assertTrue(result['service_loaded'])
+        self.assertNotIn('bootout', result['launchctl_calls'])
+        self.assertNotIn('kickstart', result['launchctl_calls'])
 
     def _run_runtime_preflight_fixture(
         self,
@@ -1207,6 +1309,7 @@ exit 1
                         "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                         "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                         "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                    "OPENKAKAO_ALDEN_CODESIGN_TEST_ONLY": str(runtime_python.with_name("codesign")),
                         "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(runtime_python),
                         "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                         "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
@@ -1369,6 +1472,7 @@ exit 1
                     "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                     "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                     "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                    "OPENKAKAO_ALDEN_CODESIGN_TEST_ONLY": str(runtime_python.with_name("codesign")),
                     "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(runtime_python),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),
@@ -1497,6 +1601,7 @@ printf '4242\n'
                     "OPENKAKAO_ALDEN_BACKUP_DIR": str(backup_dir),
                     "OPENKAKAO_ALDEN_APP_SOURCE": str(source_app),
                     "OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY": "1",
+                    "OPENKAKAO_ALDEN_CODESIGN_TEST_ONLY": str(runtime_python.with_name("codesign")),
                     "OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY": str(runtime_python),
                     "OPENKAKAO_LAUNCHCTL": str(bin_dir / "launchctl"),
                     "OPENKAKAO_DITTO": str(bin_dir / "ditto"),

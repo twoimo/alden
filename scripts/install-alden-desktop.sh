@@ -3,6 +3,19 @@
 set -eu
 umask 077
 
+CHECK_IDENTITY_ONLY=0
+case "$#" in
+  0) ;;
+  1)
+    if [ "$1" != "--check-identity-only" ]; then
+      echo "usage: install-alden-desktop.sh [--check-identity-only]" >&2
+      exit 2
+    fi
+    CHECK_IDENTITY_ONLY=1
+    ;;
+  *) echo "usage: install-alden-desktop.sh [--check-identity-only]" >&2; exit 2 ;;
+esac
+
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 APP_NAME="Alden.app"
 APP_EXECUTABLE="openkakao-alden-desktop"
@@ -21,6 +34,14 @@ PLUTIL=${OPENKAKAO_PLUTIL:-/usr/bin/plutil}
 PS=${OPENKAKAO_PS:-/bin/ps}
 PGREP=${OPENKAKAO_PGREP:-/usr/bin/pgrep}
 LSOF=${OPENKAKAO_LSOF:-/usr/sbin/lsof}
+CODESIGN=/usr/bin/codesign
+if [ -n "${OPENKAKAO_ALDEN_CODESIGN_TEST_ONLY:-}" ]; then
+  if [ "${OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY:-0}" != "1" ]; then
+    echo "install-alden-desktop: test-only codesign override requires OPENKAKAO_ALDEN_INSTALLER_TEST_ONLY=1" >&2
+    exit 2
+  fi
+  CODESIGN=$OPENKAKAO_ALDEN_CODESIGN_TEST_ONLY
+fi
 
 RUNTIME_PYTHON="$HOME/Library/Application Support/openkakao/runtimes/menubar/bin/python3.11"
 if [ -n "${OPENKAKAO_ALDEN_RUNTIME_PYTHON_TEST_ONLY:-}" ]; then
@@ -87,6 +108,54 @@ runtime_preflight_fail() {
   echo "install-alden-desktop: CPython 3.11 runtime preflight failed: $1" >&2
   exit 2
 }
+
+identity_preflight_fail() {
+  echo "install-alden-desktop: signing identity continuity check failed: $1; installation unchanged" >&2
+  exit 2
+}
+
+designated_requirement() {
+  identity_display=$("$CODESIGN" -d -r- "$1" 2>&1) || return 1
+  identity_requirement=$(printf '%s\n' "$identity_display" | /usr/bin/sed -n 's/^designated => //p')
+  case "$identity_requirement" in
+    ''|*'
+'*) return 1 ;;
+  esac
+  printf '%s\n' "$identity_requirement"
+}
+
+verify_identity_continuity() {
+  identity_candidate=$1
+  if [ ! -e "$TARGET_APP" ]; then
+    if [ "$CHECK_IDENTITY_ONLY" -eq 1 ]; then
+      printf '%s\n' "identity continuity: first install, no existing consent identity to compare"
+    fi
+    return 0
+  fi
+  [ -x "$CODESIGN" ] || identity_preflight_fail "codesign unavailable"
+  identity_installed_requirement=$(designated_requirement "$TARGET_APP") || \
+    identity_preflight_fail "installed designated requirement unavailable"
+  identity_candidate_requirement=$(designated_requirement "$identity_candidate") || \
+    identity_preflight_fail "candidate designated requirement unavailable"
+  "$CODESIGN" --verify --deep --strict "$TARGET_APP" >/dev/null 2>&1 || \
+    identity_preflight_fail "installed signature invalid"
+  "$CODESIGN" --verify --deep --strict -R "=$identity_installed_requirement" \
+    "$identity_candidate" >/dev/null 2>&1 || \
+    identity_preflight_fail "candidate does not satisfy the installed code requirement"
+  [ "$identity_candidate_requirement" = "$identity_installed_requirement" ] || \
+    identity_preflight_fail "candidate designated requirement changed"
+  if [ "$CHECK_IDENTITY_ONLY" -eq 1 ]; then
+    printf '%s\n' "identity continuity: same signing identity; app content may change"
+  fi
+  return 0
+}
+
+# Static code-signature reads only: no launchd, staging, permission reset or app
+# start. A changed identity needs an explicit migration, not a silent replacement.
+if [ "$CHECK_IDENTITY_ONLY" -eq 1 ]; then
+  verify_identity_continuity "$SOURCE_APP"
+  exit 0
+fi
 
 runtime_path_component=$RUNTIME_PYTHON
 case "$runtime_path_component" in
@@ -169,6 +238,8 @@ if ! printf '%s\n' "$RUNTIME_PROBE_SENTINEL" | /usr/bin/cmp -s - "$runtime_probe
   runtime_preflight_fail "interpreter did not emit exact CPython 3.11 sentinel"
 fi
 rm -f "$runtime_probe_output"
+
+verify_identity_continuity "$SOURCE_APP"
 
 mkdir -p "$LAUNCH_AGENTS_DIR" "$BACKUP_BASE"
 STAMP=$(/bin/date +%Y%m%dT%H%M%S)
@@ -885,6 +956,7 @@ if [ ! -x "$STAGED_APP/Contents/MacOS/$APP_EXECUTABLE" ]; then
   echo "install-alden-desktop: staged app is incomplete" >&2
   exit 2
 fi
+verify_identity_continuity "$STAGED_APP"
 if [ -x /usr/bin/xattr ]; then
   /usr/bin/xattr -dr com.apple.quarantine "$STAGED_APP" 2>/dev/null || true
 fi
