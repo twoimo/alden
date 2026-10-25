@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { webcrypto } from 'node:crypto';
+import { createHash, webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from './fixtures/body-notation.json';
 import { verifiedBodyNotation, renderBodyNotation } from '../knowledge/body-notation';
@@ -47,6 +47,23 @@ describe('exact source body notation boundary', () => {
   it('supports canonical IDs after unified graph ID rewriting', async () => {
     const node = { ...graph().nodes[0], id: 'scoped:record-a', canonicalId: 'record-a' };
     expect(await verifiedBodyNotation(node, { ...data(), node_id: node.id })).not.toBeNull();
+  });
+  it.each([
+    { label: 'rejects a candidate at a cut excerpt boundary', excerpt: true, suffix: '', accepted: false },
+    { label: 'keeps a complete body ending in a candidate', excerpt: false, suffix: '', accepted: true },
+    { label: 'keeps an excerpt candidate with a visible delimiter', excerpt: true, suffix: '.', accepted: true },
+  ])('$label', async ({ excerpt, suffix, accepted }) => {
+    const value = data();
+    const analysis = value.body_notation.analysis;
+    const last = analysis.candidates.at(-1)!;
+    value.body = Array.from(value.body).slice(0, last.end).join('') + suffix;
+    value.truncated = excerpt;
+    value.body_notation.binding.body_scope = excerpt ? 'detail_body_excerpt' : 'detail_body';
+    analysis.body_characters = Array.from(value.body).length;
+    value.body_notation.binding.body_sha256 = analysis.body_sha256 = createHash('sha256').update(value.body).digest('hex');
+    const result = await verifiedBodyNotation(graph().nodes[0], value);
+    if (accepted) expect(result?.items).toHaveLength(8);
+    else expect(result).toBeNull();
   });
   it('leaves the source readable if WebCrypto is absent or rejects', async () => {
     vi.stubGlobal('crypto', {});

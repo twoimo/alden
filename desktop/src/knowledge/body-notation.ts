@@ -65,6 +65,8 @@ export async function verifiedBodyNotation(node: KnowledgeNode, selected: Object
     if (start < previousEnd || end <= start || end >= boundaries.length
       || value.utf16_start !== boundaries[start] || value.utf16_end !== boundaries[end]
       || typeof value.raw !== 'string' || value.raw.length > 512 || value.raw !== body.slice(boundaries[start], boundaries[end])) return null;
+    // A clipped token can have valid syntax while hiding a different unit or time.
+    if (selected.truncated === true && end === boundaries.length - 1) return null;
     const copy = display(value); if (!copy) return null;
     items.push({ raw: value.raw, start: boundaries[start], end: boundaries[end], status: statuses[String(value.status)], value: copy });
     previousEnd = end;

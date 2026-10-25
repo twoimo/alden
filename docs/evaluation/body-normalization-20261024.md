@@ -17,6 +17,16 @@ source authority, projection/version identity and the retained archive again
 after analysis, and after the entity projection before returning the packet.
 These are bounded read validation points, not perpetual freshness after delivery.
 
+The detail read caps its displayed excerpt at 12,000 code points. At that cut,
+the displayed text alone cannot establish whether a terminal token is complete:
+`2026-02-23T12:30Z...` may appear as a date, and `5mg` may appear as `5m`.
+The API conservatively withholds candidates touching a truncated excerpt's end,
+retains earlier candidates and reports `bounded_candidates`/`truncated`. A
+complete body ending at the same length and a candidate followed by a visible
+delimiter retain their existing interpretation. No hidden suffix is interpreted
+or added to the displayed body. The client independently rejects packets that
+still contain a candidate at the cut boundary, leaving the source readable.
+
 The popup independently checks the node/target/version/archive/excerpt binding,
 UTF-16 and codepoint spans and a WebCrypto digest of the exact delivered body.
 Failed/absent WebCrypto omits annotations and keeps the original source readable.
@@ -117,7 +127,10 @@ Application regressions include committed version changes, project/native grant
 revocation, native revision changes, stored-body corruption, archive substitution,
 late entity projection and legacy schema reads. Frontend regressions cover exact
 parser output, malformed packets, emoji offsets, delayed digest cancellation,
-literal HTML, bounded disclosures and canonical IDs in the unified graph.
+literal HTML, bounded disclosures, clipped token rejection and canonical IDs in
+the unified graph. Excerpt regressions cover six clipped date/time/unit/range/
+magnitude forms and ten complete-body/visible-delimiter controls; three client
+boundary cases distinguish cut excerpts from complete bodies and delimiters.
 The pure-parser complexity discussion excludes the caller's database queries and
 bounded archive revalidation; it is not a whole-popup performance claim.
 

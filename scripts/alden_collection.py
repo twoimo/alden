@@ -1789,6 +1789,12 @@ class CollectionStore:
                 or analysis.get('body_characters') != len(visible_body)
                 or analysis.get('semantic_validity') != 'not_assessed'):
             raise RuntimeError('collection_body_notation_binding_invalid')
+        if analysis is not None and len(body) > len(visible_body):
+            # Token completion cannot be established at the displayed cut.
+            # Preserve earlier annotations and disclose the excerpt limit.
+            complete = [item for item in analysis['candidates'] if item['end'] < len(visible_body)]
+            if len(complete) != len(analysis['candidates']):
+                analysis = {**analysis, 'candidates': complete, 'truncated': True, 'state': 'bounded_candidates'}
         result = {"ok": True, "details": {"node_id": row["id"], "basis": "source_record", "summary": row["label"], "display_label": display_label,
                                      "body": visible_body, "truncated": len(body) > 12000,
                                      "body_format": body_format,

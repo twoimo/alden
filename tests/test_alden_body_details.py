@@ -66,6 +66,43 @@ class BodyDetailTests(unittest.TestCase):
         self.assertEqual(detail['body_notation']['binding']['body_scope'],'detail_body_excerpt')
         self.assertEqual(detail['body_notation']['analysis']['candidates'],[])
 
+    def test_excerpt_cut_cannot_normalize_the_end_of_a_partial_token(self):
+        cases = (('2026-02-23T12:30Z+09:00', '2026-02-23'),
+                 ('2026-02-23T12:30Z+09:00', '2026-02-23T12:30Z'),
+                 ('5mg', '5m'), ('2%p', '2%'), ('10~20ms', '10~20m'),
+                 ('1억5000만원', '1억5000만'))
+        for full, visible in cases:
+            with self.subTest(full=full, visible=visible):
+                prefix = '😀 수량 3kg ' + 'x' * (12000 - len(visible) - len('😀 수량 3kg ') - 1) + ' '
+                self.ingest(prefix + full)
+                self.node = self.store.graph_page(projects=['project'])['nodes'][0]
+                detail = self.details()['details']
+                self.assertEqual(detail['body'], prefix + visible)
+                self.assertTrue(detail['truncated'])
+                note = detail['body_notation']
+                self.assertEqual(note['binding']['body_scope'], 'detail_body_excerpt')
+                self.assertEqual(note['binding']['body_sha256'], hashlib.sha256(detail['body'].encode()).hexdigest())
+                analysis = note['analysis']
+                self.assertEqual([item['raw'] for item in analysis['candidates']], ['3kg'])
+                self.assertTrue(analysis['truncated'])
+                self.assertEqual(analysis['state'], 'bounded_candidates')
+
+    def test_complete_body_and_visible_delimiter_preserve_terminal_notation(self):
+        for literal in ('2026-02-23T12:30Z', '5mg', '2%p', '10~20ms', '1억5000만원'):
+            for excerpt in (False, True):
+                with self.subTest(literal=literal, excerpt=excerpt):
+                    visible = literal + ('.' if excerpt else '')
+                    prefix = '😀 수량 3kg ' + 'x' * (12000 - len(visible) - len('😀 수량 3kg ') - 1) + ' '
+                    body = prefix + visible + (' 뒤의 본문' if excerpt else '')
+                    self.ingest(body)
+                    self.node = self.store.graph_page(projects=['project'])['nodes'][0]
+                    detail = self.details()['details']
+                    self.assertEqual(detail['truncated'], excerpt)
+                    analysis = detail['body_notation']['analysis']
+                    self.assertEqual([item['raw'] for item in analysis['candidates']], ['3kg', literal])
+                    self.assertTrue(all(item['status'] == 'normalized' for item in analysis['candidates']))
+                    self.assertFalse(analysis['truncated'])
+
     def test_metadata_only_records_are_not_annotated_as_body_content(self):
         self.ingest('본문을 획득하지 않은 파일 목록 50GB',content_indexed=False)
         self.node = self.store.graph_page(projects=['project'])['nodes'][0]
