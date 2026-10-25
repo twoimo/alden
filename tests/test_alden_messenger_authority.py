@@ -223,6 +223,23 @@ class MessengerAuthorityTests(unittest.TestCase):
         self.reader.blocked = True
         self.assertEqual(self.graph()['nodes'], [])
 
+    def test_source_detail_does_not_substitute_a_different_current_origin(self):
+        node = self.graph()['nodes'][0]
+        with self.kk.store.database() as db:
+            memberships = db.execute('SELECT target_id,current_version FROM memberships WHERE document_id=?',
+                                     [node['id']]).fetchall()
+        self.assertEqual({row['target_id'] for row in memberships}, {self.kk.target, self.tg.target})
+        self.assertEqual({row['current_version'] for row in memberships}, {node['source_version']})
+        server = self.server(source_context=self.authority.retrieval_context)
+        request = {'name': 'alden_knowledge_source', 'arguments': {'projects': self.projects,
+            'node_id': node['id'], 'expected_version': node['source_version']}}
+        self.assertEqual(server.call_tool(request, None)['details']['body'], self.case.text)
+        selected = {self.kk.target: self.kk, self.tg.target: self.tg}[node['source_target']]
+        with patch.object(selected, 'context_window', side_effect=candidate.SourceBlocked('source_changed')):
+            reply = server.dispatch({'jsonrpc': '2.0', 'id': 12, 'method': 'tools/call', 'params': request})
+        self.assertTrue(reply['result']['isError'])
+        self.assertEqual(reply['result']['content'], [{'type': 'text', 'text': 'alden_source_context_unavailable'}])
+
     def test_shared_content_remains_one_version_with_separate_allowed_origins(self):
         node = self.graph()['nodes'][0]
         self.assertEqual({c['target_id'] for c in node['source_contexts']}, {self.kk.target, self.tg.target})

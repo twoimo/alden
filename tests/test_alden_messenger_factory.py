@@ -81,6 +81,73 @@ class ExistingFactoryTests(unittest.TestCase):
             self.query(server)
         self.assertEqual(self.hashes(), before)
 
+    def test_source_detail_rechecks_the_factory_and_current_message(self):
+        server = self.server()
+        graph = server.call_tool({'name': 'alden_knowledge_graph',
+            'arguments': {'projects': [runtime.PROJECT], 'limit': 1}}, CallControl())
+        node = graph['nodes'][0]
+        request = {'name': 'alden_knowledge_source', 'arguments': {'projects': [runtime.PROJECT],
+            'node_id': node['id'], 'expected_version': node['source_version']}}
+        before = self.hashes()
+        result = server.call_tool(request, CallControl())
+        self.assertEqual(result['details']['body'], self.sdk.body)
+        self.sdk.owner = 'different'
+        with self.assertRaisesRegex(ValueError, 'account_binding_invalid'):
+            server.call_tool(request, CallControl())
+        self.sdk.owner = 'owner'
+        self.sdk.body = 'CHANGED_CANONICAL_MESSAGE_CANARY'
+        with self.assertRaises((ValueError, RuntimeError)):
+            server.call_tool(request, CallControl())
+        server.dispatch({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
+            'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': {}}})
+        server.dispatch({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        reply = server.dispatch({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': request})
+        self.assertTrue(reply['result']['isError'])
+        self.assertEqual(reply['result']['content'], [{'type': 'text', 'text': 'alden_source_context_unavailable'}])
+        self.assertNotIn('CHANGED_CANONICAL_MESSAGE_CANARY', json.dumps(reply))
+        self.assertEqual(self.hashes(), before)
+
+    def test_source_detail_requires_current_context_and_its_final_recheck(self):
+        server = self.server()
+        graph = server.call_tool({'name': 'alden_knowledge_graph',
+            'arguments': {'projects': [runtime.PROJECT], 'limit': 1}}, CallControl())
+        node = graph['nodes'][0]
+        request = {'name': 'alden_knowledge_source', 'arguments': {'projects': [runtime.PROJECT],
+            'node_id': node['id'], 'expected_version': node['source_version']}}
+        before = self.hashes()
+        authority = factory.open_existing_kakao(self.root)
+        without_context = KnowledgeServer(self.root, [runtime.PROJECT],
+            source_access=authority.access, source_revision=authority.revision)
+        with self.assertRaisesRegex(ValueError, 'context_authority_required'):
+            without_context.call_tool(request, CallControl())
+        original = factory.ExistingAuthority.retrieval_context
+        def no_longer_current(owner, proof, **options):
+            value = original(owner, proof, **options)
+            return False if options.get('expected_window') is not None else value
+        with patch.object(factory.ExistingAuthority, 'retrieval_context', no_longer_current):
+            with self.assertRaisesRegex(ValueError, 'source_context_unavailable'):
+                server.call_tool(request, CallControl())
+        self.assertEqual(self.hashes(), before)
+
+    def test_source_detail_cannot_rebind_its_proof_through_a_context_callback(self):
+        server = self.server()
+        graph = server.call_tool({'name': 'alden_knowledge_graph',
+            'arguments': {'projects': [runtime.PROJECT], 'limit': 1}}, CallControl())
+        node = graph['nodes'][0]
+        request = {'name': 'alden_knowledge_source', 'arguments': {'projects': [runtime.PROJECT],
+            'node_id': node['id'], 'expected_version': node['source_version']}}
+        original = factory.ExistingAuthority.retrieval_context
+        def rebound(owner, proof, **options):
+            if options.get('expected_window') is not None:
+                return True
+            value = original(owner, proof, **options)
+            proof['source_version'] = 'forged'
+            value['window']['source_version'] = 'forged'
+            return value
+        with patch.object(factory.ExistingAuthority, 'retrieval_context', rebound):
+            with self.assertRaisesRegex(ValueError, 'source_context_binding'):
+                server.call_tool(request, CallControl())
+
     def test_cancelled_request_stops_before_sdk_load_and_existing_authority_observes_late_cancel(self):
         server = self.server(); self.load.reset_mock()
         control = CallControl(); control.stopped.set()
@@ -173,8 +240,17 @@ with patch.object(socket.socket,'connect',side_effect=AssertionError('unexpected
             result = lookup(2)['result']; self.assertFalse(result['isError'])
             contents = json.loads(result['content'][0]['text']); self.assertEqual(len(contents['facts']), 1)
             self.assertEqual(len(contents['conversation_context']['items']), 1)
+            proof = next(row for row in contents['fact_provenance'] if row['fact_type'] == 'entity')
+            def source_lookup(identity):
+                return rpc({'jsonrpc': '2.0', 'id': identity, 'method': 'tools/call', 'params': {
+                    'name': 'alden_knowledge_source', 'arguments': {'projects': [runtime.PROJECT],
+                        'node_id': proof['entity_id'], 'expected_version': proof['source_version']}}})
+            detail = source_lookup(6)['result']; self.assertFalse(detail['isError'])
+            self.assertEqual(json.loads(detail['content'][0]['text'])['details']['body'], self.sdk.body)
             owner.write_text('different'); self.assertTrue(lookup(3)['result']['isError'])
+            self.assertTrue(source_lookup(7)['result']['isError'])
             owner.write_text('owner'); self.assertFalse(lookup(4)['result']['isError'])
+            self.assertFalse(source_lookup(8)['result']['isError'])
             self.assertIn('result', rpc({'jsonrpc': '2.0', 'id': 5, 'method': 'ping'}))
         finally:
             child.stdin.close()

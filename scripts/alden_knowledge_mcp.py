@@ -7,7 +7,7 @@ import time
 
 from alden_abort import ABORT_STATE_NAME, AbortToken, AldenCancelled
 from alden_collection import CollectionStore, read_action, require_collection_source_root
-from alden_collection_retrieval import retrieve
+from alden_collection_retrieval import retrieve, verify_source_detail_context, SourceContextUnavailable
 from alden_status_mcp import StdioServer, _check
 
 
@@ -19,6 +19,10 @@ class CallToken(AbortToken):
     def is_cancelled(self):
         return super().is_cancelled() or self.control is not None and (
             self.control.stopped.is_set() or time.monotonic() >= self.control.deadline)
+
+
+class SourceVersionChanged(Exception):
+    """Fixed public failure; never carries a source body or a current version."""
 
 
 class KnowledgeServer(StdioServer):
@@ -95,19 +99,36 @@ class KnowledgeServer(StdioServer):
                 result[-1]['inputSchema']['properties']['limit'] = {'type': 'integer', 'minimum': 1, 'maximum': 10}
                 if self.search_strategy=='indexed-lexical':
                     result[-1]['description'] += ' Bounded lexical candidates from stored-version text; not exhaustive or archived-only-text search.'
+        result.append({'name': 'alden_knowledge_source',
+                       'description': 'Read version-bound retained source detail in an allowed project. '
+                                      'Use id and source_version from graph, or entity_id and source_version from search provenance. '
+                                      'Rejects stale versions. Body text follows the disclosed text_projection; '
+                                      'the first 12,000 characters carry an explicit truncated flag and archive hash. Read-only.',
+                       'inputSchema': {'type': 'object', 'properties': {
+                           'projects': common['projects'],
+                           'node_id': {'type': 'string', 'minLength': 1, 'maxLength': 256},
+                           'expected_version': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
+                           'required': ['projects', 'node_id', 'expected_version'], 'additionalProperties': False},
+                       'annotations': {'readOnlyHint': True, 'destructiveHint': False,
+                                       'idempotentHint': True, 'openWorldHint': False}})
         return result
 
     def valid_call(self, params):
         name, args = params.get('name'), params.get('arguments')
         options = {'alden_knowledge_search': {'query'}, 'alden_knowledge_graph': {'focus'},
-                   'alden_knowledge_history': {'after'}}
-        if not isinstance(name, str) or name not in options or not isinstance(args, dict) or set(args) - ({'projects', 'limit'} | options[name]):
+                   'alden_knowledge_history': {'after'},
+                   'alden_knowledge_source': {'node_id', 'expected_version'}}
+        common = {'projects'} if name == 'alden_knowledge_source' else {'projects', 'limit'}
+        if not isinstance(name, str) or name not in options or not isinstance(args, dict) or set(args) - (common | options[name]):
             return False
         projects = args.get('projects')
         if not isinstance(projects, list) or not 1 <= len(projects) <= 16 or any(not isinstance(p, str) or p not in self.allowed for p in projects):
             return False
         if len(set(projects)) != len(projects):
             return False
+        if name == 'alden_knowledge_source':
+            return all(isinstance(value, str) and value.strip() and len(value) <= 256
+                       for value in (args.get('node_id'), args.get('expected_version')))
         limit = args.get('limit', 6 if name.endswith('search') else 50)
         if type(limit) is not int or not 1 <= limit <= (10 if name.endswith('search') else 50):
             return False
@@ -137,16 +158,32 @@ class KnowledgeServer(StdioServer):
                                       max_entities=args.get('limit', 6), cancelled=cancelled,
                                       **guards, search_strategy=self.search_strategy)
             else:
-                action = 'collection-graph' if name.endswith('graph') else 'collection-history'
-                options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
-                if 'after' in args:
-                    options['after'] = args['after']
-                if 'focus' in args:
-                    options['focus'], options['hops'] = args['focus'], 1
+                source_read = name == 'alden_knowledge_source'
+                action = 'collection-graph' if source_read or name.endswith('graph') else 'collection-history'
+                if source_read:
+                    options = {'projects': args['projects'], 'limit': 1, 'focus': args['node_id'],
+                               'expected_version': args['expected_version'], 'details': True, 'hops': 0}
+                else:
+                    options = {'projects': args['projects'], 'limit': args.get('limit', 50)}
+                    if 'after' in args:
+                        options['after'] = args['after']
+                    if 'focus' in args:
+                        options['focus'], options['hops'] = args['focus'], 1
                 result = read_action(self.root, action, json.dumps(options), cancelled=cancelled,
                                      source_access=guards['source_access'], source_revision=guards['source_revision'],
                                      source_relation_access=guards['source_relation_access'])
-                if action == 'collection-history':
+                if source_read:
+                    if result.get('error') == 'collection_graph_version_changed':
+                        raise SourceVersionChanged()
+                    details = result.get('details')
+                    if (result.get('ok') is not True or not isinstance(details, dict)
+                            or details.get('basis') != 'source_record' or details.get('node_id') != args['node_id']
+                            or details.get('version') != args['expected_version']):
+                        raise ValueError('knowledge_source_binding_unavailable')
+                    verify_source_detail_context(self.root, details, projects=args['projects'],
+                                                 cancelled=cancelled, **guards)
+                    result = {'ok': True, 'details': details}
+                elif action == 'collection-history':
                     # The UI catalog is global; MCP exposes only this request's projects.
                     requested = frozenset(args['projects'])
                     result = {**result, 'projects': [project for project in result['projects']
@@ -158,7 +195,13 @@ class KnowledgeServer(StdioServer):
         return result
 
     def tool_failure_code(self, error):
-        return 'alden_global_abort' if isinstance(error, AldenCancelled) else super().tool_failure_code(error)
+        if isinstance(error, AldenCancelled):
+            return 'alden_global_abort'
+        if isinstance(error, SourceVersionChanged):
+            return 'alden_source_version_changed'
+        if isinstance(error, SourceContextUnavailable):
+            return 'alden_source_context_unavailable'
+        return super().tool_failure_code(error)
 
 
 def main():

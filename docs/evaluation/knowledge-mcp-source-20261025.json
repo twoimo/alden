@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "production_baseline": "36d5d18f1e868f6b9bd6a5b3072a7745b61df456",
+  "runtime_source_sha256": {
+    "mcp": "e23ba279dfe69d7d9b716829ee20806dea0479f195999273ceaac6f2d89e4ea5",
+    "retrieval": "0d092c274f5fd151111fff107c8b0c1b2efaec4cc12019757fd316bf6f6b87af"
+  },
+  "tool": "alden_knowledge_source",
+  "required_arguments": [
+    "projects",
+    "node_id",
+    "expected_version"
+  ],
+  "read_only": true,
+  "body_character_bound": 12000,
+  "fixed_failures": [
+    "alden_source_version_changed",
+    "alden_source_context_unavailable"
+  ],
+  "tests": {
+    "affected": 164,
+    "failures": 0,
+    "skipped": 0,
+    "isolated_runtime_source_mutations_detected": 6
+  },
+  "actual_owned_stdio": {
+    "installed_tool_count": 3,
+    "source_tool_count": 4,
+    "read_project": "career",
+    "verified_source_records": 3,
+    "body_characters": [
+      24,
+      54,
+      1607
+    ],
+    "archive_bytes_match": true,
+    "owned_processes_terminal": true,
+    "independent_aside_tool_call_attested": false
+  },
+  "host_readback": {
+    "aside_ephemeral": true,
+    "aside_incognito": true,
+    "aside_stored_osk_inventory_tools": 12,
+    "aside_source_command_args_match": true,
+    "cached_inventory_is_live_authentication_proof": false,
+    "documented_messageRows_available": false,
+    "browser_actions": 0,
+    "model_requests": 0,
+    "global_registration_changes": 0
+  },
+  "authorization_scope": "Existing owned Alden task sessions and previously authorized project allowlist",
+  "installed_app": "0.3.219, remains off",
+  "local_app_launch": false,
+  "installation": false,
+  "external_review": "NOT_RUN; existing upload/readiness and owner holds retained",
+  "raw_local_evidence_sha256": {
+    "source-stdio-readback.json": "5d6c142f004f51c415a5a37891d21c465f36baa26a8bf11bd3b1e80658e10fdc",
+    "source-largest-record-readback.json": "f6e0655e538b497c4a8015b2ae204654456f6780a904d09067e4834cd89328e5",
+    "mutation-release-readback.json": "aa76c711a5210f5ab145c606462eb6588ac481fc6bdea4174f48578ad2dddb4c",
+    "affected-tests-final-all.log": "51ccdb087d44c307bf8dbb40061146bb649658c0d6c6bd002a978db83daf7e82",
+    "aside-osk-metadata-corrected.json": "4bce61bbb3389ac974ebe49a01cc2542adc7cab05493791c331decb6ef2ec6f9"
+  },
+  "limits": [
+    "Synthetic SDK controls are not current native messenger account execution",
+    "Actual source bodies cover career only, not all authorized projects",
+    "No two independent knowledge-MCP host attestation",
+    "Source/control evidence is distinct from candidate, installed, native UI, external audit and release evidence"
+  ]
+}

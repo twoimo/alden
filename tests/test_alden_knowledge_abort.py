@@ -24,6 +24,7 @@ class KnowledgeAbortTests(unittest.TestCase):
                                      label='Synthetic source', projects=['qa'])
         self.store.ingest(target, [{'original_id':'canary', 'label':'Synthetic item',
                                     'text':'PRIVATE_CANCEL_CANARY'}])
+        self.source = self.store.graph_page(projects=['qa'], limit=1)['nodes'][0]
         self.server = knowledge.KnowledgeServer(self.root, ['qa'])
         self.server.dispatch({'jsonrpc':'2.0', 'id':1, 'method':'initialize', 'params':{
             'protocolVersion':'2025-11-25', 'capabilities':{}, 'clientInfo':{}}})
@@ -33,6 +34,9 @@ class KnowledgeAbortTests(unittest.TestCase):
     def request(self, tool):
         args = {'projects':['qa'], 'limit':2}
         if tool == 'search': args['query'] = 'canary'
+        if tool == 'source':
+            args = {'projects':['qa'], 'node_id':self.source['id'],
+                    'expected_version':self.source['source_version']}
         return {'jsonrpc':'2.0', 'id':2, 'method':'tools/call', 'params':{
             'name':'alden_knowledge_' + tool, 'arguments':args}}
 
@@ -45,7 +49,7 @@ class KnowledgeAbortTests(unittest.TestCase):
         self.abort.abort('PRIVATE_CANCEL_CANARY')
         with patch.object(knowledge, 'read_action') as read, patch.object(knowledge, 'retrieve') as retrieve, \
              patch.object(self.server, '_source_guards', wraps=self.server._source_guards) as guards:
-            for tool in ['graph', 'history', 'search']:
+            for tool in ['graph', 'history', 'search', 'source']:
                 with self.subTest(tool=tool):
                     self.assert_aborted(self.server.dispatch(self.request(tool)))
             read.assert_not_called(); retrieve.assert_not_called(); guards.assert_not_called()
@@ -56,7 +60,7 @@ class KnowledgeAbortTests(unittest.TestCase):
             self.abort.resume_after_human_action()
             return {'nodes':['PRIVATE_CANCEL_CANARY'], 'items':['PRIVATE_CANCEL_CANARY']}
         with patch.object(knowledge, 'read_action', side_effect=late), patch.object(knowledge, 'retrieve', side_effect=late):
-            for tool in ['graph', 'history', 'search']:
+            for tool in ['graph', 'history', 'search', 'source']:
                 with self.subTest(tool=tool):
                     self.assert_aborted(self.server.dispatch(self.request(tool)))
         self.assertIn('result', self.server.dispatch({'jsonrpc':'2.0','id':3,'method':'ping'}))
@@ -67,8 +71,9 @@ class KnowledgeAbortTests(unittest.TestCase):
             control.stop()
             return {'nodes':['PRIVATE_CANCEL_CANARY']}
         with patch.object(knowledge, 'read_action', side_effect=late):
-            with self.assertRaises(CallStopped):
-                self.server.dispatch(self.request('graph'), control)
+            for tool in ['graph', 'source']:
+                with self.subTest(tool=tool), self.assertRaises(CallStopped):
+                    self.server.dispatch(self.request(tool), control)
 
     def test_nested_read_connection_interrupts_sqlite_before_query_finishes(self):
         polls = []; finished = []
@@ -99,11 +104,35 @@ class KnowledgeAbortTests(unittest.TestCase):
             self.assertTrue(first.result()['items'])
             self.assertTrue(second.result()['nodes'])
 
+    def test_source_control_interrupts_nested_sql_before_it_finishes(self):
+        control = CallControl(10)
+        finished = []
+        def expensive(store, *args, **kwargs):
+            polls = []
+            def interrupt(value):
+                polls.append(value)
+                if len(polls) == 20:
+                    control.stop()
+                return value
+            with store.database() as db:
+                db.create_function('source_control_probe', 1, interrupt)
+                db.execute('''WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL
+                    SELECT x+1 FROM n WHERE x<1000000)
+                    SELECT sum(source_control_probe(x)) FROM n''').fetchone()
+            finished.append(True)
+            return {'ok': True, 'details': {'basis': 'source_record', 'node_id': self.source['id'],
+                                           'version': self.source['source_version']}}
+        with patch.object(CollectionStore, '_record_details', expensive):
+            with self.assertRaises(CallStopped):
+                self.server.dispatch(self.request('source'), control)
+        self.assertFalse(finished, 'a post-return check alone would allow the SQL to finish')
+
     def test_unknown_backend_error_still_cannot_export_its_message(self):
         with patch.object(knowledge, 'read_action', side_effect=RuntimeError('PRIVATE_CANCEL_CANARY')):
-            result = self.server.dispatch(self.request('graph'))
-        self.assertTrue(result['result']['isError'])
-        self.assertEqual(result['result']['content'], [{'type':'text','text':'metadata_unavailable'}])
+            for tool in ['graph', 'source']:
+                result = self.server.dispatch(self.request(tool))
+                self.assertTrue(result['result']['isError'])
+                self.assertEqual(result['result']['content'], [{'type':'text','text':'metadata_unavailable'}])
 
 
 if __name__ == '__main__': unittest.main()

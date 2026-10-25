@@ -170,6 +170,115 @@ class KnowledgeResponseScopeTests(unittest.TestCase):
         graph, _ = self.call('graph', [self.FIRST], focus=identity('graph', 'quoted'), limit=1)
         self.assertEqual(graph['nodes'][0]['description'], text)
 
+    def source_request(self, node, request_projects, **changes):
+        arguments = {'projects': request_projects, 'node_id': node['id'],
+                     'expected_version': node['source_version'], **changes}
+        self.request_id += 1
+        return self.server.dispatch({'jsonrpc': '2.0', 'id': self.request_id,
+            'method': 'tools/call', 'params': {'name': 'alden_knowledge_source',
+                                             'arguments': arguments}})
+
+    def test_source_reads_version_bound_text_beyond_the_graph_preview(self):
+        body = 'scopeprobe ' + '가나다 ' * 900 + 'ORIGINAL_TEXT_AFTER_PREVIEW'
+        self.store.ingest(self.first, [{'original_id': 'alpha', 'label': 'scopeprobe alpha', 'text': body}])
+        self.before = self.snapshot()
+        graph, _ = self.call('graph', [self.FIRST], focus=identity('graph', 'alpha'), limit=1)
+        node = graph['nodes'][0]
+        self.assertNotIn('ORIGINAL_TEXT_AFTER_PREVIEW', node['description'])
+        reply = self.source_request(node, [self.FIRST])
+        self.assertNotIn('error', reply)
+        self.assertFalse(reply['result']['isError'], reply)
+        result = json.loads(reply['result']['content'][0]['text'])
+        expected = read_action(self.root, 'collection-graph', json.dumps({
+            'projects': [self.FIRST], 'focus': node['id'], 'expected_version': node['source_version'],
+            'details': True, 'hops': 0, 'limit': 1}))
+        self.assertEqual(result, {'ok': True, 'details': expected['details']})
+        self.assertEqual(result['details']['body'], body)
+        self.assertEqual(result['details']['version'], node['source_version'])
+        self.assertFalse(result['details']['truncated'])
+
+    def test_source_keeps_the_existing_excerpt_and_annotation_bounds(self):
+        prefix = '앞부분 2026-04-10.\n'
+        body = prefix + 'X' * (12000 - len(prefix) - 3) + ' 5mg 뒷부분'
+        self.store.ingest(self.first, [{'original_id': 'alpha', 'label': 'long source', 'text': body}])
+        self.before = self.snapshot()
+        graph, _ = self.call('graph', [self.FIRST], focus=identity('graph', 'alpha'), limit=1)
+        reply = self.source_request(graph['nodes'][0], [self.FIRST])
+        self.assertFalse(reply['result']['isError'], reply)
+        details = json.loads(reply['result']['content'][0]['text'])['details']
+        self.assertEqual(details['body'], body[:12000])
+        self.assertTrue(details['body'].endswith('5m'))
+        self.assertTrue(details['truncated'])
+        self.assertEqual(details['body_notation']['binding']['body_scope'], 'detail_body_excerpt')
+        self.assertTrue(all(item['end'] < 12000 for item in details['body_notation']['analysis']['candidates']))
+
+    def test_source_accepts_the_actual_search_provenance_pointer(self):
+        result, _ = self.call('search', [self.FIRST], query='scopeprobe alpha', limit=1)
+        proof = next(row for row in result['fact_provenance'] if row['fact_type'] == 'entity')
+        reply = self.source_request({'id': proof['entity_id'], 'source_version': proof['source_version']},
+                                    [self.FIRST])
+        self.assertFalse(reply['result']['isError'], reply)
+        details = json.loads(reply['result']['content'][0]['text'])['details']
+        self.assertEqual(details['raw_sha256'], proof['note_hash'])
+        self.assertEqual(details['body'], 'retained body for alpha')
+
+    def test_source_rejects_stale_versions_without_returning_the_new_body(self):
+        graph, _ = self.call('graph', [self.FIRST], focus=identity('graph', 'alpha'), limit=1)
+        node = graph['nodes'][0]
+        self.store.ingest(self.first, [{'original_id': 'alpha', 'label': 'new alpha',
+                                       'text': 'NEW_VERSION_BODY_CANARY'}])
+        self.before = self.snapshot()
+        with patch.object(CollectionStore, '_verified_source_blob',
+                          side_effect=AssertionError('stale request opened a source archive')) as opened:
+            reply = self.source_request(node, [self.FIRST])
+            opened.assert_not_called()
+        self.assertTrue(reply['result']['isError'], reply)
+        self.assertEqual(reply['result']['content'], [{'type': 'text', 'text': 'alden_source_version_changed'}])
+        self.assertNotIn('NEW_VERSION_BODY_CANARY', json.dumps(reply))
+        refreshed, _ = self.call('graph', [self.FIRST], focus=node['id'], limit=1)
+        fresh = self.source_request(refreshed['nodes'][0], [self.FIRST])
+        self.assertFalse(fresh['result']['isError'], fresh)
+        self.assertEqual(json.loads(fresh['result']['content'][0]['text'])['details']['body'],
+                         'NEW_VERSION_BODY_CANARY')
+
+    def test_source_rejects_an_outside_node_and_an_unknown_node_without_leaks(self):
+        outside = self.store.graph_page(projects=[self.OUTSIDE], limit=50)['nodes']
+        node = next(row for row in outside if row['id'] == identity('graph', 'external-document-canary-0'))
+        second = next(row for row in self.store.graph_page(projects=[self.SECOND], limit=50)['nodes']
+                      if row['id'] == identity('graph', 'beta'))
+        for value in (node, second, {'id': 'unknown-node', 'source_version': 'unknown-version'}):
+            reply = self.source_request(value, [self.FIRST])
+            self.assertTrue(reply['result']['isError'], reply)
+            self.assertEqual(reply['result']['content'], [{'type': 'text', 'text': 'metadata_unavailable'}])
+            self.assertNotIn(self.OUTSIDE, json.dumps(reply))
+            self.assertNotIn('external-document-canary', json.dumps(reply))
+
+    def test_source_requires_an_explicit_version_and_accepts_no_path_or_limit(self):
+        graph, _ = self.call('graph', [self.FIRST], focus=identity('graph', 'alpha'), limit=1)
+        node = graph['nodes'][0]
+        for changes in ({'expected_version': None}, {'expected_version': ''}, {'expected_version': True},
+                        {'node_id': None}, {'node_id': ''}, {'node_id': 7}, {'node_id': 'x' * 257},
+                        {'expected_version': 'x' * 257}, {'limit': 1}, {'path': '/PRIVATE_PATH_CANARY'},
+                        {'projects': [self.OUTSIDE]}):
+            with self.subTest(changes=changes):
+                reply = self.source_request(node, [self.FIRST], **changes)
+                self.assertEqual(reply['error']['code'], -32602)
+                self.assertNotIn('PRIVATE_PATH_CANARY', json.dumps(reply))
+        catalog = next(row for row in self.server.tool_catalog() if row['name'] == 'alden_knowledge_source')
+        self.assertEqual(set(catalog['inputSchema']['required']), {'projects', 'node_id', 'expected_version'})
+        self.assertNotIn('limit', catalog['inputSchema']['properties'])
+        self.assertTrue(catalog['annotations']['readOnlyHint'])
+
+    def test_source_shared_membership_retains_only_the_requested_source_context(self):
+        for projects in ([self.FIRST], [self.SECOND], [self.FIRST, self.SECOND]):
+            graph, _ = self.call('graph', projects, focus=identity('graph', 'shared'), limit=1)
+            reply = self.source_request(graph['nodes'][0], projects)
+            self.assertFalse(reply['result']['isError'], reply)
+            result = json.loads(reply['result']['content'][0]['text'])
+            self.assertEqual(result['details']['body'], 'retained body for shared')
+            self.assertNotIn(self.OUTSIDE, json.dumps(reply))
+            self.assertEqual(set(result), {'ok', 'details'})
+
     def test_missing_store_and_rejected_scope_do_not_create_state(self):
         absent = self.root / 'not-configured'
         missing = KnowledgeServer(absent, [self.FIRST])
@@ -177,6 +286,14 @@ class KnowledgeResponseScopeTests(unittest.TestCase):
                                     'arguments': {'projects': [self.FIRST]}}, None)
         self.assertEqual(result['state'], 'not_configured')
         self.assertEqual(result['projects'], [])
+        self.assertFalse(absent.exists())
+        missing.dispatch({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
+            'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': {}}})
+        missing.dispatch({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        reply = missing.dispatch({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {
+            'name': 'alden_knowledge_source', 'arguments': {'projects': [self.FIRST],
+                'node_id': 'missing-node', 'expected_version': 'missing-version'}}})
+        self.assertTrue(reply['result']['isError'])
         self.assertFalse(absent.exists())
         for tool in ('history', 'graph', 'search'):
             arguments = {'projects': [self.OUTSIDE]}

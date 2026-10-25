@@ -22,6 +22,12 @@ MAX_BODY_EVIDENCE_CHECKS = 100
 CONTEXT_TEXT_POLICY = 'retained-threads-annotation-context-v2'
 CONVERSATION_CONTEXT_POLICY = 'current-source-excerpt-v1'
 MAX_CONTEXT_ANCHORS = 2
+
+
+class SourceContextUnavailable(ValueError):
+    """A fixed source-detail failure, without canonical message contents."""
+
+
 def _verified_conversation_excerpt(proof, value):
     """Validate a trusted source owner's bounded response against the selected fact."""
     if not isinstance(value, dict):
@@ -205,6 +211,48 @@ def _verified_source(db, store, row, projects):
     if any(m['permission'] not in ('public','local-private') for m in memberships):
         raise RuntimeError('collection_source_scope_integrity')
     return record, metadata, memberships
+
+
+def verify_source_detail_context(root, details, *, projects, source_access=None,
+                                 source_revision=None, source_relation_access=None,
+                                 source_context=None, cancelled=lambda: False):
+    """A retained messenger blob alone is not a current native-source receipt."""
+    _check(cancelled)
+    store = CollectionStore.open_existing(root, source_access=source_access,
+        source_revision=source_revision, source_relation_access=source_relation_access)
+    if store is None:
+        raise ValueError('collection_source_context_unavailable')
+    with store.database(cancelled=cancelled) as db:
+        row = db.execute('''SELECT d.id,d.platform,d.original_id,v.id AS version,
+            v.label,v.body,v.metadata,v.collected_at,v.raw_sha256,v.raw_path
+            FROM versions v JOIN documents d ON d.id=v.document_id
+            WHERE d.id=? AND v.id=?''', (details['node_id'], details['version'])).fetchone()
+        if row is None or row['raw_sha256'] != details['raw_sha256']:
+            raise RuntimeError('collection_source_integrity')
+        metadata = _strict_json(row['metadata'])
+        derived = metadata.get('source')
+        if not isinstance(derived, dict) or derived.get('kind') != 'messenger-exact-content-provenance':
+            _check(cancelled)
+            return
+        row = {**dict(row), 'body_source': 'stored_body'}
+        _record, metadata, memberships = _verified_source(db, store, row, projects)
+    derived = metadata.get('source')
+    if source_context is None:
+        raise SourceContextUnavailable('collection_source_context_authority_required')
+    memberships = [value for value in memberships if value['target_id'] == details['target_id']]
+    if not memberships:
+        raise SourceContextUnavailable('collection_source_context_unavailable')
+    proof = {'entity_id': row['id'], 'source_version': row['version'],
+             'source_memberships': memberships,
+             'derived_from': {'kind': derived['kind'], 'content_hash': derived.get('content_hash')}}
+    options = {'projects': projects, 'source_root': Path(root).absolute(), 'cancelled': cancelled}
+    _check(cancelled)
+    window = _verified_conversation_excerpt(proof, source_context(_strict_json(encoded(proof)), **options))
+    _check(cancelled)
+    if window is None or source_context(_strict_json(encoded(proof)),
+            expected_window=_strict_json(encoded(window)), **options) is not True:
+        raise SourceContextUnavailable('collection_source_context_unavailable')
+    _check(cancelled)
 
 
 def _check(cancelled):
