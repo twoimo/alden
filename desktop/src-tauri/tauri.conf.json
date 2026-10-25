@@ -115,6 +115,7 @@
       "bundle-resources/scripts/alden_graph_transport.py": "scripts/alden_graph_transport.py",
       "bundle-resources/scripts/alden_entity_projection.py": "scripts/alden_entity_projection.py",
       "bundle-resources/scripts/alden_semantic_affinity.py": "scripts/alden_semantic_affinity.py",
+      "bundle-resources/scripts/alden_affinity_sampling.py": "scripts/alden_affinity_sampling.py",
       "bundle-resources/scripts/alden_layout_affinity.py": "scripts/alden_layout_affinity.py",
       "bundle-resources/scripts/alden_collection_retrieval.py": "scripts/alden_collection_retrieval.py",
       "bundle-resources/scripts/alden_retrieval_time.py": "scripts/alden_retrieval_time.py",

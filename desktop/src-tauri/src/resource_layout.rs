@@ -73,6 +73,7 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/alden_graph_transport.py",
     "scripts/alden_entity_projection.py",
     "scripts/alden_semantic_affinity.py",
+    "scripts/alden_affinity_sampling.py",
     "scripts/alden_layout_affinity.py",
     "scripts/alden_collection_retrieval.py",
     "scripts/alden_retrieval_time.py",

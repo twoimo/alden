@@ -27,6 +27,7 @@ import time
 from alden_collection import CollectionStore, MAX_RECORD_BYTES, digest, encoded, identity
 from alden_content_evidence import POLICY as CONTENT_EVIDENCE_POLICY, content_evidence_class
 from alden_source_text import TEXT_VERSION, project_source_text
+from alden_affinity_sampling import build_plan, TREES, WIDTH, LEAF_SIZE
 from alden_graph_quality import _json as _strict_json
 
 MODEL = "mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0"
@@ -437,7 +438,6 @@ def _candidates(loaded, budgets, threshold, guard):
     heaps = [[] for _ in loaded]
     proofs = [entry[0] for entry in loaded]
     eligible = _eligible_pairs(proofs, guard)
-    pair_cap = min(budgets.max_pairs, budgets.max_products // E5Profile().dimension)
     projects = {}
     for i, proof in enumerate(proofs):
         if i % 64 == 0:
@@ -445,10 +445,11 @@ def _candidates(loaded, budgets, threshold, guard):
         for project in sorted(set(proof["projects"])):
             projects.setdefault(project, []).append(i)
     groups = [members for _, members in sorted(projects.items()) if len(members) > 1]
+    plan = build_plan(loaded, groups, eligible, budgets, guard, dimension=E5Profile().dimension)
     eligible_nodes = {i for members in groups for i in members}
     comparisons = [0] * len(loaded)
     evaluated = passing = 0
-    for i, j in _project_matchings(groups, len(loaded), pair_cap, guard):
+    for i, j in plan.pairs(_project_matchings, guard):
         if evaluated % 16 == 0:
             guard.check()
         _, x, nx = loaded[i]
@@ -480,6 +481,12 @@ def _candidates(loaded, budgets, threshold, guard):
     return candidates, {"possible_vector_pairs": len(loaded) * (len(loaded) - 1) // 2,
         "eligible_same_project_pairs": eligible, "pairs_evaluated": evaluated,
         "dimension_products": evaluated * E5Profile().dimension, "pairs_above_threshold": passing,
+        "projection_products": plan.projection_products,
+        "total_dimension_products": evaluated * E5Profile().dimension + plan.projection_products,
+        "projection_trees": TREES if plan.projection_products else 0,
+        "projection_width": WIDTH if plan.projection_products else 0,
+        "projection_leaf_size": LEAF_SIZE if plan.projection_products else 0,
+        "coverage_seed_pairs": len(plan.cover),
         "neighbor_union_candidates": len(ranked), "candidates_returned": len(candidates),
         "candidates_truncated": len(ranked) - len(candidates),
         "candidate_selection": CANDIDATE_SELECTION_POLICY,
@@ -490,7 +497,7 @@ def _candidates(loaded, budgets, threshold, guard):
         "candidate_max_degree": max(selected_degree.values(), default=0),
         "pair_coverage": evaluated / eligible if eligible else None,
         "pair_budget_exhausted": evaluated < eligible,
-        "pair_sampling": "project-round-robin-v1",
+        "pair_sampling": plan.method,
         "vector_nodes_compared": sum(count > 0 for count in comparisons),
         "eligible_vector_nodes": len(eligible_nodes),
         "comparison_min": min((comparisons[i] for i in eligible_nodes), default=0),
@@ -617,7 +624,7 @@ def _affinity_on_reads(store, db, cache, projects, nodes, *, profile=E5Profile()
                 "similarity is not identity, factual relation, semantic gold or independent-source proof",
                 "read-time versions can change; consumer must revalidate",
                 "WAL sidecars must already exist; concurrent sidecar removal after preflight is not fenced",
-                "pair traversal is deterministic ID order; truncated pairs are not global nearest neighbors",
+                "pair traversal uses deterministic ID-bound proposals; truncated pairs are not global nearest neighbors",
                 "neighbor union bounds outgoing selections; incoming degree can exceed neighbors_per_node",
                 "no UI placement, rest-state, build, install or delivery integration verified"]}
 

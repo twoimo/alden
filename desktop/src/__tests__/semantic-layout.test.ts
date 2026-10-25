@@ -436,6 +436,69 @@ describe('bounded semantic overview layout', () => {
     expect(c.diagnostics.affinityPairs).toBe(0);
   });
 
+  it('keeps a saved map within one clearance on ordinary affinity updates and preserves an exact repeat', () => {
+    const view = scene(64, Array.from({ length: 63 }, (_, i) => R(0, i + 1)));
+    const pairs = Array.from({ length: 31 }, (_, i) => S(i * 2 + 1, i * 2 + 2));
+    const engine = new SemanticLayoutEngine(), first = engine.layout(view, empty(), pairs);
+    const prior = structuredClone([...first.anchors]);
+    const next = engine.layout(view, first.anchors, pairs.slice(1));
+    expect(next.diagnostics.affinityPairs).toBe(pairs.length - 1);
+    expect(next.dirtyIds.size).toBeGreaterThan(0);
+    for (const [id, p] of next.anchors) {
+      const old = first.anchors.get(id)!;
+      expect(Math.hypot(p.x - old.x, p.y - old.y, p.z - old.z), id).toBeLessThanOrEqual(.140000001);
+    }
+    expect([...first.anchors]).toEqual(prior);
+    const repeat = engine.layout(view, next.anchors, pairs.slice(1));
+    expect(repeat.anchors).toEqual(next.anchors);
+    expect(repeat.diagnostics.solverIterations).toBe(0);
+  });
+
+  it('restores the incremental bound from a checkpoint while explicit reflow can rebuild the map', () => {
+    const view = scene(32, Array.from({ length: 31 }, (_, i) => R(0, i + 1)));
+    const engine = new SemanticLayoutEngine(), first = engine.layout(view, empty(), [S(1, 2)]);
+    const restored = new SemanticLayoutEngine(); restored.restore(structuredClone(engine.checkpoint()));
+    const next = restored.layout(view, first.anchors, [S(3, 4)]);
+    for (const [id, p] of next.anchors) {
+      const old = first.anchors.get(id)!;
+      expect(Math.hypot(p.x - old.x, p.y - old.y, p.z - old.z)).toBeLessThanOrEqual(.140000001);
+    }
+    const reflow = restored.layout(view, next.anchors, [S(3, 4)], { reflow: true });
+    expect([...reflow.anchors].some(([id, p]) => {
+      const old = next.anchors.get(id)!;
+      return Math.hypot(p.x - old.x, p.y - old.y, p.z - old.z) > .14;
+    })).toBe(true);
+    expect(reflow.diagnostics.reflow).toBe(true);
+  });
+
+  it('readmits an out-of-frame restored prior before applying temporal constraints', () => {
+    const view = scene(6, [R(0, 1)]), engine = new SemanticLayoutEngine();
+    engine.layout(view, empty(), [S(1, 2)]);
+    const checkpoint = structuredClone(engine.checkpoint());
+    checkpoint.positions = checkpoint.positions.map(([id, p]) =>
+      [id, id === 'n0001' ? { x: Number.MAX_VALUE, y: 0, z: 0 } : p]);
+    const prior = new Map(checkpoint.positions), restored = new SemanticLayoutEngine();
+    restored.restore(checkpoint);
+    const result = restored.layout(view, prior, [S(1, 3)]);
+    const point = result.anchors.get('n0001')!;
+    expect(Object.values(point).every(Number.isFinite)).toBe(true);
+    expect(Math.hypot(point.x / 2.3, point.y / 1.55, point.z / 1.1)).toBeLessThanOrEqual(1.000000001);
+    expect(prior.get('n0001')!.x).toBe(Number.MAX_VALUE);
+  });
+
+  it('retains the temporal bound for a prior only a rounding step outside the ellipsoid', () => {
+    const view = scene(6, [R(0, 1)]), engine = new SemanticLayoutEngine();
+    engine.layout(view, empty(), [S(1, 2)]);
+    const checkpoint = structuredClone(engine.checkpoint());
+    const nearBoundary = { x: 2.3 * (1 + Number.EPSILON), y: 0, z: 0 };
+    checkpoint.positions = checkpoint.positions.map(([id, p]) => [id, id === 'n0001' ? nearBoundary : p]);
+    const prior = new Map(checkpoint.positions), restored = new SemanticLayoutEngine();
+    restored.restore(checkpoint);
+    const result = restored.layout(view, prior, [S(1, 3)]), p = result.anchors.get('n0001')!;
+    expect(Math.hypot(p.x - nearBoundary.x, p.y, p.z)).toBeLessThanOrEqual(.140000001);
+    expect(Math.hypot(p.x / 2.3, p.y / 1.55, p.z / 1.1)).toBeLessThanOrEqual(1.000000001);
+  });
+
   it('zero weights, navigation and nonpositive cosine never contribute to communities or springs', () => {
     const plain = new SemanticLayoutEngine().layout(scene(), empty());
     const result = new SemanticLayoutEngine().layout(scene(6, [R(0, 1, 0), R(2, 3, 100, { purpose: 'navigation' })]), empty(), [S(0, 1, 0), S(2, 3, -.5)]);

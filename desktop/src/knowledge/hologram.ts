@@ -417,6 +417,8 @@ export class KnowledgeHologram {
       comparisonMin: this.graph.layoutAffinity.comparisonMin ?? null,
       comparisonMax: this.graph.layoutAffinity.comparisonMax ?? null,
       nodePairCoverage: this.graph.layoutAffinity.nodePairCoverage ?? null,
+      projectionProducts: this.graph.layoutAffinity.projectionProducts ?? null,
+      totalProducts: this.graph.layoutAffinity.totalProducts ?? null,
       pairCoverage: this.graph.layoutAffinity.pairCoverage ?? null } : null }; }
 
   /** Constant-cost readiness geometry; no projection or pair audit. */

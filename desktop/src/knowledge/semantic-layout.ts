@@ -8,7 +8,7 @@ import { centerCandidates } from './center-candidates';
 export const SEMANTIC_LAYOUT_LIMITS = Object.freeze({
   nodes: 2048, inputNodes: 8192, inputEdges: 32768, inputAffinities: 32768,
   relationPairs: 4096, affinityPairs: 4096, affinityDegree: 4,
-  communityPasses: 8, solverIterations: 32, collisionTests: 131072, cellOccupancy: 16,
+  incrementalDisplacement: .14, communityPasses: 8, solverIterations: 32, collisionTests: 131072, cellOccupancy: 16,
 });
 
 export interface SemanticLayoutOptions {
@@ -786,6 +786,32 @@ export class SemanticLayoutEngine {
       // components too. They need projection, not another force solve.
       if (!pinOrigin && this.pins.size === 1 && !movable[i]) anchors.set(ids[i], copy(points[i]));
     }
+    // A saved bounded solve need not be at force equilibrium. Reapplying its
+    // residual forces after one changed edge must not rearrange the whole map.
+    // Constrain ordinary cached updates to one collision clearance per snapshot;
+    // new nodes, explicit reflow and a changed pin frame retain a full solve.
+    const pinFrameChanged = pinned.size !== this.pins.size || [...pinned].some(id => {
+      const before = this.positions.get(id), after = anchors.get(id);
+      return !this.pins.has(id) || !finite(before) || !finite(after)
+        || before.x !== after.x || before.y !== after.y || before.z !== after.z;
+    });
+    const trustPrior = ids.map((id, i) => {
+      const supplied = base.get(id)!, admitted = origins[i];
+      // An imported checkpoint outside the current world/pin bounds must first
+      // return to that frame; a temporal constraint cannot override admission.
+      return !options.reflow && !pinFrameChanged && !pinned.has(id) && this.positions.has(id)
+        && Math.hypot(supplied.x - admitted.x, supplied.y - admitted.y, supplied.z - admitted.z) <= 1e-9;
+    });
+    const trustStep = (i: number, p: Point3): Point3 => {
+      if (!trustPrior[i]) return p;
+      const o = origins[i];
+      const scale = Math.max(1, Math.abs(p.x), Math.abs(p.y), Math.abs(p.z), Math.abs(o.x), Math.abs(o.y), Math.abs(o.z));
+      const dx = scaledDifference(p.x, o.x, scale), dy = scaledDifference(p.y, o.y, scale), dz = scaledDifference(p.z, o.z, scale);
+      const length = Math.hypot(dx, dy, dz);
+      const radius = limits.incrementalDisplacement;
+      if (length <= radius / scale) return p;
+      return { x: o.x + radius * dx / length, y: o.y + radius * dy / length, z: o.z + radius * dz / length };
+    };
     // Keep authoritative pins in world coordinates. Scale ALL force terms in
     // an extreme component together, including rest lengths and collisions;
     // per-pin clipping would lose relative attraction (e.g. +MAX vs -MAX/2).
@@ -1022,7 +1048,7 @@ export class SemanticLayoutEngine {
         const step = scale === 1
           ? { x: p.x + gain * forces[at], y: p.y + gain * forces[at + 1], z: p.z + gain * forces[at + 2] }
           : { x: p.x + .08 * (forces[at] / divisor), y: p.y + .08 * (forces[at + 1] / divisor), z: p.z + .08 * (forces[at + 2] / divisor) };
-        const next = pinOrigin ? boundNear(step, pinOrigin) : bound(step);
+        const next = trustStep(i, pinOrigin ? boundNear(step, pinOrigin) : bound(step));
         points[i] = next; anchors.set(id, next);
       });
     }
@@ -1037,7 +1063,7 @@ export class SemanticLayoutEngine {
       if (Math.hypot(p.x - origin.x, p.y - origin.y, p.z - origin.z) >= .07) return;
       const v = seed(id), gain = .14 / Math.max(1e-9, Math.hypot(v.x, v.y, v.z));
       const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
-      anchors.set(id, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated));
+      anchors.set(id, trustStep(i, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated)));
     });
     const dirtyIds = new Set<string>();
     for (const id of ids) {

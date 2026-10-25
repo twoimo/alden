@@ -49,7 +49,7 @@ All retain the existing1,024-pair return cap and endpoint-degree4 bound. Project
 arithmetic counts against the same25,165,824 scalar-product budget; the partition
 proposal uses888,832 projection products and25,165,696 total. The last proposal
 fails the predeclared incident-node criterion despite its higher numerical
-recall. None has replaced the product sampler. The prototypes use precomputed
+recall. None of these offline prototypes is the installed sampler. They use precomputed
 exact scores; their timings are not product generation or pair-scoring performance.
 
 Current traversal sees193/5,952 top3 incidences before final allocation; the
@@ -87,6 +87,10 @@ compatibility; installed rendering and incremental pins/camera; and independent
 semantic/time/identity gold. Metadata-only projects need authorized original-body
 acquisition. Current-source external Pro→Gemini→Pro review and normal release
 remain incomplete under the earlier readiness hold.
+
+The subsequent [generalized source candidate](affinity-partition-20261025.md)
+records implementation, producer/consumer checks and the remaining layout-stability
+gate. It supersedes the fixed-input prototype without claiming installed delivery.
 
 ## Research boundaries
 

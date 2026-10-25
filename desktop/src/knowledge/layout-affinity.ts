@@ -15,19 +15,22 @@ export interface LayoutAffinity {
   truncatedCandidates: number;
   // Optional for existing in-process callers; parsed wire replies always
   // populate explicit null when the evaluator did not report a statistic.
-  pairSampling?: 'project-round-robin-v1' | null;
+  pairSampling?: 'project-round-robin-v1' | 'sparse-partition-tournament-v1' | null;
   vectorNodesCompared?: number | null;
   eligibleVectorNodes?: number | null;
   comparisonMin?: number | null;
   comparisonMax?: number | null;
   nodePairCoverage?: number | null;
   pairCoverage?: number | null;
+  projectionProducts?: number | null;
+  totalProducts?: number | null;
 }
 type SamplingDiagnostics = Required<Pick<LayoutAffinity, 'pairSampling' | 'vectorNodesCompared' | 'eligibleVectorNodes'
-  | 'comparisonMin' | 'comparisonMax' | 'nodePairCoverage' | 'pairCoverage'>>;
+  | 'comparisonMin' | 'comparisonMax' | 'nodePairCoverage' | 'pairCoverage' | 'projectionProducts' | 'totalProducts'>>;
 const UNREPORTED_SAMPLING: SamplingDiagnostics = {
   pairSampling: null, vectorNodesCompared: null, eligibleVectorNodes: null,
   comparisonMin: null, comparisonMax: null, nodePairCoverage: null, pairCoverage: null,
+  projectionProducts: null, totalProducts: null,
 };
 const MODEL = 'mlx-community/multilingual-e5-small-mlx@5030c7625865046d350eeea28f427d80353d0ac0';
 const ENDPOINT = '5956b9388ba26ec18062d7a95c02b4d02eb01a467e383f7ddd505ecba2508844';
@@ -42,13 +45,20 @@ const ref = (value: unknown): { id: string; sourceVersion: string; sourceTarget:
   return { id: row.id as string, sourceVersion: row.source_version as string, sourceTarget: row.source_target as string };
 };
 
+function partitionProducts(size: number): number {
+  return size <= 16 ? 0 : size * 16 + partitionProducts(Math.floor(size / 2)) + partitionProducts(Math.ceil(size / 2));
+}
+
 /** Legacy payloads have no sampling method or per-node comparison evidence.
  * All absent/null fields remain unreported; a partly reported tuple is invalid. */
-function parseSampling(coverage: Record<string, unknown>, usable: number, evaluated: number, candidates: number): SamplingDiagnostics | null {
+function parseSampling(coverage: Record<string, unknown>, usable: number, evaluated: number, candidates: number, rawBudgets: unknown): SamplingDiagnostics | null {
   const keys = ['pair_sampling', 'vector_nodes_compared', 'eligible_vector_nodes',
     'comparison_min', 'comparison_max', 'node_pair_coverage'] as const;
+  const arithmeticKeys = ['projection_products', 'total_dimension_products', 'projection_trees',
+    'projection_width', 'projection_leaf_size', 'coverage_seed_pairs'] as const;
+  const hasArithmetic = arithmeticKeys.some(key => coverage[key] != null);
   if (keys.every(key => coverage[key] == null)) {
-    return { ...UNREPORTED_SAMPLING };
+    return hasArithmetic ? null : { ...UNREPORTED_SAMPLING };
   }
   const eligiblePairs = coverage.eligible_same_project_pairs;
   const compared = coverage.vector_nodes_compared;
@@ -56,7 +66,8 @@ function parseSampling(coverage: Record<string, unknown>, usable: number, evalua
   const min = coverage.comparison_min;
   const max = coverage.comparison_max;
   const expectedPairs = usable * (usable - 1) / 2;
-  if (coverage.pair_sampling !== 'project-round-robin-v1'
+  const partition = coverage.pair_sampling === 'sparse-partition-tournament-v1';
+  if ((!partition && coverage.pair_sampling !== 'project-round-robin-v1')
     || !count(compared, usable) || !count(eligibleNodes, usable) || compared > eligibleNodes
     || !count(coverage.possible_vector_pairs, expectedPairs) || coverage.possible_vector_pairs !== expectedPairs
     || !count(eligiblePairs, expectedPairs) || evaluated > eligiblePairs
@@ -84,10 +95,34 @@ function parseSampling(coverage: Record<string, unknown>, usable: number, evalua
       && Math.abs(value - expected) <= 1e-9;
   if (!matchesRatio(pairCoverage, expectedPairCoverage)
     || !matchesRatio(nodeCoverage, expectedNodeCoverage)) return null;
+  let projectionProducts: number | null = null, totalProducts: number | null = null;
+  if (partition || hasArithmetic) {
+    const budgets = object(rawBudgets);
+    if (!budgets || !count(budgets.max_products, 50_331_648) || budgets.max_products < 1
+      || !count(budgets.max_pairs, 131072) || budgets.max_pairs < 1
+      || evaluated > budgets.max_pairs
+      || coverage.dimension_products !== evaluated * 384
+      || !count(coverage.projection_products, 917_504)
+      || !count(coverage.total_dimension_products, budgets.max_products)
+      || coverage.total_dimension_products !== evaluated * 384 + coverage.projection_products
+      || !count(coverage.coverage_seed_pairs, eligibleNodes)) return null;
+    if (partition) {
+      if (usable < 128 || coverage.pair_budget_exhausted !== true || compared !== eligibleNodes
+        || coverage.projection_trees !== 4 || coverage.projection_width !== 16 || coverage.projection_leaf_size !== 16
+        || coverage.projection_products !== 4 * partitionProducts(usable)
+        || coverage.projection_products > budgets.max_products / 8
+        || coverage.coverage_seed_pairs * 2 < eligibleNodes
+        || evaluated !== Math.min(budgets.max_pairs, Math.floor((budgets.max_products - coverage.projection_products) / 384))) return null;
+    } else if (coverage.projection_products !== 0 || coverage.projection_trees !== 0
+      || coverage.projection_width !== 0 || coverage.projection_leaf_size !== 0 || coverage.coverage_seed_pairs !== 0) return null;
+    projectionProducts = coverage.projection_products;
+    totalProducts = coverage.total_dimension_products;
+  }
   return {
-    pairSampling: 'project-round-robin-v1', vectorNodesCompared: compared, eligibleVectorNodes: eligibleNodes,
+    pairSampling: coverage.pair_sampling as NonNullable<LayoutAffinity['pairSampling']>, vectorNodesCompared: compared, eligibleVectorNodes: eligibleNodes,
     comparisonMin: min as number | null, comparisonMax: max as number | null,
     nodePairCoverage: nodeCoverage as number | null, pairCoverage: pairCoverage as number | null,
+    projectionProducts, totalProducts,
   };
 }
 
@@ -167,7 +202,7 @@ export function parseLayoutAffinity(raw: unknown, nodes: readonly KnowledgeNode[
     || (value.state === 'bounded_ready' && (proofs.size !== references.length
       || coverage.pair_budget_exhausted === true || coverage.candidates_truncated > 0))
     || (value.candidates.length > 0 && coverage.pairs_evaluated === 0)) return fail('affinity_invalid_coverage');
-  const sampling = parseSampling(coverage, proofs.size, coverage.pairs_evaluated, value.candidates.length);
+  const sampling = parseSampling(coverage, proofs.size, coverage.pairs_evaluated, value.candidates.length, value.budgets);
   if (!sampling) return fail('affinity_invalid_coverage');
   return { affinity: { state: value.state, inputKey: inputHash, profileKey: PROFILE, inputNodes: references,
     pairs: [...pairs.values()].sort((a, b) => a.source.localeCompare(b.source) || a.target.localeCompare(b.target)),

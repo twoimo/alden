@@ -16,7 +16,57 @@ const sampledPayload = (ids = ['a', 'b']): any => {
   return payload;
 };
 
+const partitionPayload = (): any => {
+  const ids = Array.from({ length: 128 }, (_, i) => `n${i}`), payload = sampledPayload(ids);
+  payload.state = 'bounded_partial';
+  payload.budgets = { max_pairs: 4096, max_products: 25_165_824 };
+  Object.assign(payload.coverage, { pair_sampling: 'sparse-partition-tournament-v1',
+    vector_nodes_compared: 128, eligible_vector_nodes: 128, comparison_min: 1, comparison_max: 127,
+    possible_vector_pairs: 8128, eligible_same_project_pairs: 8128, pairs_evaluated: 4096,
+    node_pair_coverage: 1, pair_coverage: 4096 / 8128, pair_budget_exhausted: true,
+    dimension_products: 4096 * 384, projection_products: 24576,
+    total_dimension_products: 4096 * 384 + 24576, projection_trees: 4,
+    projection_width: 16, projection_leaf_size: 16, coverage_seed_pairs: 64 });
+  return payload;
+};
+
 describe('source-bound separate layout channel', () => {
+  it('admits partition evidence with independently checked arithmetic and preserves graph facts', () => {
+    const payload = partitionPayload(), current = graph(payload.input_nodes.map((n: any) => n.id));
+    const facts = JSON.stringify(current.edges);
+    const parsed = parseLayoutAffinity(payload, current.nodes);
+    expect(parsed.reason).toBeNull();
+    expect(parsed.affinity).toMatchObject({ pairSampling: 'sparse-partition-tournament-v1',
+      evaluatedPairs: 4096, projectionProducts: 24576, totalProducts: 4096 * 384 + 24576 });
+    expect(JSON.stringify(current.edges)).toBe(facts);
+  });
+
+  it('rejects partial, impossible and over-budget partition work claims', () => {
+    const mutations = [
+      (p: any) => { delete p.coverage.projection_products; },
+      (p: any) => { p.coverage.total_dimension_products--; },
+      (p: any) => { p.coverage.dimension_products++; },
+      (p: any) => { p.coverage.projection_trees = 3; },
+      (p: any) => { p.coverage.projection_products = 1; p.coverage.total_dimension_products = 4096 * 384 + 1; },
+      (p: any) => { p.coverage.coverage_seed_pairs = 0; },
+      (p: any) => { p.coverage.pair_sampling = 'project-round-robin-v1'; },
+      (p: any) => { p.budgets.max_products = 1; },
+      (p: any) => { p.budgets.max_pairs = 4095; },
+      (p: any) => { delete p.budgets; },
+    ];
+    for (const change of mutations) {
+      const payload = partitionPayload(); change(payload);
+      expect(parseLayoutAffinity(payload, graph(payload.input_nodes.map((n: any) => n.id)).nodes).reason).toBe('affinity_invalid_coverage');
+    }
+  });
+
+  it('validates measured zero projection work and leaves legacy absence unreported', () => {
+    const payload = sampledPayload(); payload.budgets = { max_pairs: 65536, max_products: 25165824 };
+    Object.assign(payload.coverage, { dimension_products: 384, projection_products: 0, total_dimension_products: 384,
+      projection_trees: 0, projection_width: 0, projection_leaf_size: 0, coverage_seed_pairs: 0 });
+    expect(parseLayoutAffinity(payload, graph().nodes).affinity).toMatchObject({ projectionProducts: 0, totalProducts: 384 });
+    expect(parseLayoutAffinity(sampledPayload(), graph().nodes).affinity).toMatchObject({ projectionProducts: null, totalProducts: null });
+  });
   it('rejects old affinities predating reference-only or empty-body exclusion',()=>{
     for (const policy of ['source-content-evidence-v4', 'source-content-evidence-v5']) {
       const payload=affinityPayload();payload.content_evidence_policy=policy;
