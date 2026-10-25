@@ -607,6 +607,13 @@ class Frontier:
                 room TEXT NOT NULL,mode TEXT NOT NULL,position INTEGER NOT NULL CHECK(position>0),
                 PRIMARY KEY(room,mode))''')
             db.execute('CREATE INDEX IF NOT EXISTS mode_check_order ON room_mode_checks(mode,position,room)')
+            db.execute('''CREATE TABLE IF NOT EXISTS reference_jobs(
+                id TEXT PRIMARY KEY,room TEXT NOT NULL,message TEXT NOT NULL,page TEXT NOT NULL,
+                generation INTEGER NOT NULL CHECK(generation>0),
+                state TEXT NOT NULL CHECK(state IN ('pending','settled')),
+                attempts INTEGER NOT NULL DEFAULT 0,retry_at REAL NOT NULL,error TEXT,result TEXT,
+                watch INTEGER NOT NULL DEFAULT 0 CHECK(watch IN (0,1)))''')
+            db.execute("CREATE INDEX IF NOT EXISTS reference_due ON reference_jobs(retry_at,id) WHERE state='pending' OR watch=1")
             if not claims_exist:
                 for pending in db.execute("SELECT id,room,payload FROM pages WHERE state='prepared'"):
                     self._claim_page_content(db, pending['id'], pending['room'], json.loads(pending['payload'])['items'])
@@ -740,6 +747,79 @@ class Frontier:
         db.executemany('INSERT OR IGNORE INTO page_content_claims VALUES(?,?)',
                        [(job, content_hash) for content_hash in sorted(affected)])
 
+    def reference_supported(self):
+        return (getattr(self, 'production', False) and self.platform == 'kakaotalk'
+                and callable(getattr(self.reader, 'reply_reference', None)))
+
+    def _queue_references(self, db, page, room, items):
+        if not self.reference_supported():
+            return
+        now = time.time()
+        for item in items:
+            original, _, triage = self._observation(room, item)
+            previous = db.execute('SELECT state FROM message_heads WHERE id=?', (original,)).fetchone()
+            known = db.execute('SELECT 1 FROM reference_jobs WHERE id=?', (original,)).fetchone()
+            if triage.state != 'candidate' and not known and not (previous and previous['state'] == 'candidate'):
+                continue
+            # Head/cursor completion and work registration share this frontier
+            # transaction. Repeated pages can change reference metadata alone.
+            db.execute('''INSERT INTO reference_jobs(id,room,message,page,generation,state,retry_at)
+                VALUES(?,?,?,?,1,'pending',?) ON CONFLICT(id) DO UPDATE SET
+                page=excluded.page,generation=reference_jobs.generation+1,state='pending',result=NULL,
+                retry_at=CASE WHEN reference_jobs.state='pending' THEN reference_jobs.retry_at ELSE excluded.retry_at END,
+                error=CASE WHEN reference_jobs.state='pending' THEN reference_jobs.error ELSE NULL END''',
+                (original, room, item['id'], page, now))
+
+    def reference_step(self, *, cancelled=lambda: False):
+        """One durable job under the same source writer lock, outside page work."""
+        if not self.reference_supported():
+            return {'state': 'unsupported'}
+        if getattr(self, 'read_only', False):
+            raise ValueError('messenger_reference_worker_readonly')
+        descriptor = os.open(self.folder / 'writer.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {'state': 'busy'}
+            if cancelled():
+                return {'state': 'cancelled'}
+            if self.reader.identity() != self.account:
+                raise ValueError('messenger_account_changed')
+            self._allowed()
+            with self.database() as db:
+                row = db.execute("SELECT * FROM reference_jobs WHERE (state='pending' OR watch=1) AND retry_at<=? ORDER BY retry_at,id LIMIT 1",
+                                 (time.time(),)).fetchone()
+                if row is None:
+                    return {'state': 'idle'}
+                # Pending remains durable during execution. A crash after the
+                # relation commit retries that same origin after this backoff.
+                db.execute("UPDATE reference_jobs SET state='pending',attempts=attempts+1,retry_at=?,error=NULL WHERE id=? AND generation=?",
+                           (time.time() + 60, row['id'], row['generation']))
+            from alden_messenger_references import reconcile
+            try:
+                result = reconcile(self.root, self.target, row['room'], row['message'], reader=self.reader,
+                    cancelled=cancelled, publication_guard=getattr(self, 'external_publication_guard', None))
+                if result.get('state') not in {'ready', 'pending_endpoints', 'withheld', 'not_admitted', 'self_reference'}:
+                    raise RuntimeError('messenger_reference_result_invalid')
+            except (ValueError, RuntimeError, OSError, sqlite3.Error) as error:
+                if cancelled():
+                    return {'state': 'cancelled'}
+                with self.database() as db:
+                    db.execute("UPDATE reference_jobs SET state='pending',error=? WHERE id=? AND generation=?",
+                               (str(error)[:160], row['id'], row['generation']))
+                return {'state': 'blocked', 'scope': 'reference', 'reason': str(error), 'job': row['id']}
+            settled = result['state'] != 'pending_endpoints'
+            with self.database() as db:
+                changed = db.execute('''UPDATE reference_jobs SET state=?,result=?,error=?,watch=?
+                    WHERE id=? AND generation=?''',
+                    ('settled' if settled else 'pending', encoded(result).decode(),
+                     None if settled else 'messenger_reference_endpoints_pending',
+                     int(result.get('tracked', False)), row['id'], row['generation'])).rowcount
+            return {**result, 'job': row['id'], 'queue_state': ('settled' if settled else 'pending') if changed else 'superseded'}
+        finally:
+            os.close(descriptor)
+
     def _prepare(self, room, mode, page, *, policy_reprocess=False, observation_cursor=None):
         if page.get('account_id') != self.account or page.get('room_id') != room['id']:
             raise ValueError('messenger_page_scope_mismatch')
@@ -870,6 +950,7 @@ class Frontier:
             # only its own cursor; never rewind another mode's later progress.
             current_state.update({key: next_state[key] for key in fields})
             with self.database() as db:
+                self._queue_references(db, job, row['room'], payload['items'])
                 if row['state'] == 'prepared':
                     db.executemany('UPDATE message_heads SET page=? WHERE id=?',
                         [(job, self._observation(row['room'], item)[0]) for item in payload['items']])
@@ -921,6 +1002,7 @@ class Frontier:
             cursor={'page': job, 'scope': 'one observed page; not complete DB coverage'})
         after_publish()
         with self.database() as db:
+            self._queue_references(db, job, row['room'], payload['items'])
             db.executemany('''INSERT INTO message_heads(id,room,message,content_hash,state,reason,body,page)
                 VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
                 content_hash=excluded.content_hash,state=excluded.state,reason=excluded.reason,body=excluded.body,page=excluded.page''', updates)
@@ -1268,9 +1350,16 @@ class Frontier:
             unique = db.execute("SELECT count(DISTINCT content_hash) FROM message_heads WHERE state='candidate'").fetchone()[0]
             pending_activity = db.execute("SELECT count(*) FROM activity_releases WHERE state='pending'").fetchone()[0]
             blocked_activity = db.execute("SELECT count(*) FROM activity_releases WHERE state='pending' AND error IS NOT NULL").fetchone()[0]
+            reference_counts = {}
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reference_jobs'").fetchone():
+                reference_counts = dict(db.execute('SELECT state,count(*) FROM reference_jobs GROUP BY state'))
+                reference_counts['blocked'] = db.execute("SELECT count(*) FROM reference_jobs WHERE state='pending' AND error IS NOT NULL").fetchone()[0]
+                reference_counts['watched'] = db.execute('SELECT count(*) FROM reference_jobs WHERE watch=1').fetchone()[0]
+                reference_counts['due'] = db.execute("SELECT count(*) FROM reference_jobs WHERE (state='pending' OR watch=1) AND retry_at<=?", (time.time(),)).fetchone()[0]
         return {'rooms': len(rooms), 'backfilled_rooms': sum(json.loads(r['frontier'])['back_done'] for r in rooms),
                 'blocked_rooms': sum(r['error'] is not None for r in rooms), 'prepared_pages': pending,
                 'pending_activity': pending_activity, 'blocked_activity': blocked_activity,
+                'reference_jobs': reference_counts,
                 'triage': triage, 'unique_candidate_contents': unique,
                 **({'enrollment_mode': 'production'} if getattr(self, 'production', False) else {'production_activated': False})}
 

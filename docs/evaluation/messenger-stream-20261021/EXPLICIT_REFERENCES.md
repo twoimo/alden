@@ -91,8 +91,9 @@ The current manual `reconcile` path implements origin/version-bound claims,
 waiting for missing stored endpoints, publication, retirement and fresh read
 withholding. Its claim, edge history and structural refresh event commit in one
 collection transaction; no atomic transaction with original/frontier databases
-is assumed. A failed commit gate rolls all three back. Automatic job scheduling,
-fair retry and native UI delivery still require implementation/verification.
+is assumed. A failed commit gate rolls all three back. Automatic jobs are now
+connected as described below; original installed production and native UI
+delivery still require verification.
 The architecture and material delta require current-source external cross-audit. Temporal
 neighbors, similar force positions and shared vocabulary do not replace an
 explicit reply, source citation, identity decision or semantic gold evaluation.
@@ -158,6 +159,91 @@ first triggered cancellation; it now stops after one. A single blocking native
 call is not thereby given a hard deadline. The caller's existing cancellation,
 source callback ownership and commit guards remain separate checks.
 
-Broader source coverage, automatic acquisition/retry, duplicate view-edge
+Broader source coverage, automatic acquisition/retry qualification, duplicate view-edge
 projection, exact-cost measurements, native graph/UI, original production
 installation and all main-goal release gates remain open.
+
+## Automatic reference jobs
+
+The normal production `collect` keeps its nine source-frontier steps, including
+recent-room hints and all-room sweeps. A separate lane then attempts at most
+three reference jobs. A reference failure cannot consume a source-room slot.
+The baseline normal-collector regression reached three stored candidates but
+zero reply edges; the connected path publishes its one explicit reply without
+calling the manual API from the test.
+
+`Frontier._queue_references` registers each candidate origin (and previously
+tracked origin becoming context/withheld) in the transaction that commits page
+completion, heads and that mode's cursor. Unchanged-body pages also requeue:
+reference metadata can change independently. Context/noise that was never a
+candidate creates no reference work or graph node. Older stored origins become
+eligible when source reconciliation revisits them; an empty new queue is not
+evidence of complete historical reference coverage.
+
+`reference_step` shares the source's nonblocking `writer.lock`, persists an
+attempt and 60-second retry time, then executes the existing authorized
+`reconcile`. It acknowledges only the selected generation. There is no database
+transaction held across source reads, and no distributed atomic transaction:
+the relation transaction can commit before queue acknowledgement. Interruption
+there leaves the same origin retryable; idempotent reconciliation emits no
+second event. A new generation cannot be settled by an older completion.
+
+Known claims retain a periodic watch after settlement, including withdrawal.
+This retires deleted references even if later source pages omit their original
+message. Ordinary nonreply observations settle without a periodic watch. Fresh
+read authority still withholds a stale edge immediately; periodic retirement is
+separate persisted history. Permission, pause, voice, abort and publication
+guards remain in the existing reconciler. This is additive frontier metadata;
+only an actual stored claim opts its derived collection into format4.
+
+The scheduler's supplied `publication_guard` owns the complete control/abort
+commit boundary. The reconciler uses that gate and rechecks its own source,
+pause/voice/abort conditions inside it. Standalone calls acquire their own
+control/abort locks. Combining both owners deadlocked on a second file-lock
+descriptor; the normal scheduler/index regression reproduced that wait, and
+the caller-owned gate now avoids nested acquisition. A supplied guard is a
+complete commit-boundary contract, not an untrusted callback or an extra hook.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Unqueued
+    Unqueued --> Pending: page/head/cursor commit registers origin
+    Pending --> Attempting: source writer lock and retry due
+    Attempting --> Pending: transient failure or pending endpoint / retain backoff
+    Attempting --> RelationCommitted: authorized claim/edge/event transaction
+    RelationCommitted --> Pending: interruption before queue acknowledgement
+    RelationCommitted --> Settled: acknowledge matching generation
+    RelationCommitted --> Pending: newer generation / older acknowledgement rejected
+    Settled --> Pending: current page observed again
+    Settled --> Attempting: tracked claim's periodic watch is due
+```
+
+Attempting and RelationCommitted describe distinct process/store observations;
+the queue remains durable pending during work. A crash holds no durable lease:
+the OS releases the source lock, and the recorded retry time gates recovery.
+Jobs are ordered by due time then stable identity, with an indexed due range.
+New observations preserve an already pending job's backoff. Under continuing
+collector cycles, finite native calls, an advancing clock, eventual source
+availability and finite arrivals before any deadline, old due work can advance.
+The finite traces are not a proof of liveness under an unbounded input rate,
+permanent failure or a permanently blocking native call. Backlog and source
+coverage remain explicit in `status.reference_jobs`; pending work makes the
+bounded collection result partial.
+
+For a page of P <=50 items, registration performs bounded indexed lookups and
+upserts in the existing frontier transaction. Dequeue uses the partial due
+index and acknowledges one origin. Counts in status still scan retained job
+state, and fresh reference authority still has O(R) native observations. Three
+attempts bound count, not elapsed time, CPU or memory. Representative native
+batching, latency and total-workload measurements remain required before
+original all-room rollout. A synchronous per-message source-page design was
+not selected because reference failures would delay that page's cursor; the
+durable lane preserves independent progress and observable recovery.
+
+The job regressions cover normal collector and scheduler/index paths, both
+commit gaps, rollback, generation fencing, source-writer exclusion, backoff,
+other-job progress, missing endpoints, metadata-only changes, deletion outside
+later pages, unchanged periodic replay, pause/cancel/permission and context
+filtering. Tests use actual owned SQLite stores and controlled readers, without
+native source writes or sends. Native/installed/runtime and source tests must
+remain separately reported.

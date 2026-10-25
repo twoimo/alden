@@ -155,13 +155,16 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
 
     @contextmanager
     def commit_guard():
-        with scheduler.control_lock(), abort.commit_guard():
-            gate()
-            if publication_guard is None:
+        # The scheduled caller supplies its complete control/abort commit gate.
+        # Taking these file locks again through another descriptor deadlocks.
+        if publication_guard is not None:
+            with publication_guard():
+                gate()
                 yield
-            else:
-                with publication_guard():
-                    yield
+        else:
+            with scheduler.control_lock(), abort.commit_guard():
+                gate()
+                yield
 
     gate()
     observed = observe(source, room, message, cancelled=authority._cancelled)
@@ -170,7 +173,7 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
         with source.store.database() as db:
             exists = db.execute("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (TABLE,)).fetchone()
             if not exists or not db.execute('SELECT 1 FROM messenger_references WHERE target_id=? AND origin=?', (target, origin)).fetchone():
-                return {'state': observed['state'], 'changed': False}
+                return {'state': observed['state'], 'changed': False, 'tracked': False}
     store = CollectionStore(root, source_access=authority.access, source_revision=authority.revision,
         source_stream=authority.stream_revision, source_relation_access=authority.relation_access)
     with store.database() as db:
@@ -206,7 +209,7 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
                                     'source_version': versions[0], 'target_version': versions[1]}).decode()
                 edge = identity('relation', encoded([target, documents[0], TYPE, documents[1], origin]).decode())
         if old is None and observed['state'] != 'verified':
-            return {'state': state, 'changed': False}
+            return {'state': state, 'changed': False, 'tracked': False}
         if old is not None and old['state'] == state and old['relation_id'] == edge and json.loads(old['observation']) == observed:
             unchanged = True
             if edge:
@@ -215,7 +218,7 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
             if unchanged:
                 if observe(source, room, message, cancelled=authority._cancelled) != observed:
                     raise SourceBlocked('messenger_reference_changed_during_commit')
-                return {'state': state, 'changed': False}
+                return {'state': state, 'changed': False, 'tracked': True}
         generation = old['generation'] + 1 if old else 1
         if old and old['relation_id']:
             _owned_edge(db, old['relation_id'], target, origin, source.account, room, message)
@@ -257,4 +260,4 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
                          reason='현재 원문의 명시적 답글 관계가 갱신되었습니다.')
         if observe(source, room, message, cancelled=authority._cancelled) != observed:
             raise SourceBlocked('messenger_reference_changed_during_commit')
-        return {'state': state, 'changed': True, 'relation_id': edge, 'generation': generation}
+        return {'state': state, 'changed': True, 'tracked': True, 'relation_id': edge, 'generation': generation}

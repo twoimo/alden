@@ -343,13 +343,26 @@ def collect(root, target, *, cancelled=lambda: False, publication_guard=None, re
         results.append(result)
         if result['state'] in ('busy', 'cancelled') or result['state'] == 'blocked' and result.get('scope') != 'room':
             raise RuntimeError(result.get('reason', 'messenger_' + result['state']))
+    # Source acquisition keeps all nine fair-sweep slots. References have a
+    # separate bounded lane, so a deferred origin cannot consume a room's slot.
+    reference_results = []
+    if source.reference_supported():
+        for _ in range(3):
+            result = source.reference_step(cancelled=cancelled)
+            reference_results.append(result)
+            if result['state'] == 'cancelled':
+                raise RuntimeError('collection_cancelled')
+            if result['state'] in {'busy', 'idle'}:
+                break
     with (publication_guard() if publication_guard else nullcontext()), source.store.database() as db:
         if cancelled():
             raise RuntimeError('collection_cancelled')
         db.execute('UPDATE targets SET last_success=?,next_run=?+interval_seconds,last_error=NULL WHERE id=?', (time.time(), time.time(), target))
     status = source.status()
-    return {'target_id': target, 'steps': results, 'status': status,
-            'state': 'partial' if status['blocked_rooms'] else 'complete',
+    return {'target_id': target, 'steps': results, 'reference_steps': reference_results, 'status': status,
+            'state': 'partial' if (status['blocked_rooms'] or status['reference_jobs'].get('pending', 0)
+                                   or any(r['state'] == 'busy' for r in reference_results)) else 'complete',
             'schedule': {'policy': 'recent-with-fair-sweeps' if recent else 'fair-sweeps',
-                         'preferred_room_count': len(recent), 'total_rooms': len(catalog['rooms'])},
+                         'preferred_room_count': len(recent), 'total_rooms': len(catalog['rooms']),
+                         'reference_slot_budget': 3 if source.reference_supported() else 0},
             'coverage': 'bounded round-robin local backfill/live/reconciliation; original source server coverage unverified'}

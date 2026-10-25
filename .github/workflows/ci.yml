@@ -302,7 +302,7 @@ jobs:
       - name: Test explicit messenger runtime factory in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_factory -v
       - name: Production messenger authority and scheduler fixtures
-        run: python3 -B -m unittest tests.test_alden_messenger_production tests.test_alden_messenger_references tests.test_alden_messenger_reference_lifecycle -v
+        run: python3 -B -m unittest tests.test_alden_messenger_production tests.test_alden_messenger_references tests.test_alden_messenger_reference_lifecycle tests.test_alden_messenger_reference_jobs -v
 
       - name: Test exact messenger policy migration in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_policy -v

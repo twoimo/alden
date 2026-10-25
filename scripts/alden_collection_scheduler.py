@@ -111,13 +111,17 @@ def settings_action(state_root, action, query=None, *, explicit_opt_in=False):
         collection_status=collection.get('status')
         blocked_rooms=collection_status.get('blocked_rooms') if isinstance(collection_status,dict) else None
         partial_rooms=(collection.get('state')=='partial' and type(blocked_rooms) is int and 0<blocked_rooms<=100000)
+        references=collection_status.get('reference_jobs') if isinstance(collection_status,dict) else None
+        pending_references=references.get('pending') if isinstance(references,dict) else None
+        partial_references=(collection.get('state')=='partial' and type(pending_references) is int and 0<pending_references<2**53)
         targets.append({**target,'paused':bool(controls.get(target['id'])),
             'manual_pending':target['id'] in data.get('manual_pending',[]),
             'blocked':bool(state.get('blocked')),'retry_at':state.get('retry_at',0),
             'last_state':last.get('state'),'last_started':last.get('started'),'last_finished':last.get('finished'),
             'last_stage':stage if stage in {'acquisition','collection','capture','index'} else None,
-            'collection_status':'partial' if partial_rooms else None,
+            'collection_status':'partial' if partial_rooms or partial_references else None,
             'collection_blocked_rooms':blocked_rooms if partial_rooms else None,
+            'collection_pending_references':pending_references if partial_references else None,
             'acquisition_supported':available,'acquisition':policy,
             'last_acquisition':acquired.get('observed_at') if isinstance(acquired,dict) else None,
             'acquisition_error':last.get('error') if stage=='acquisition' else None})
