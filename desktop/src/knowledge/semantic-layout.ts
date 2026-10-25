@@ -27,6 +27,7 @@ export interface SemanticLayoutDiagnostics {
   semanticUpperPairs: number; semanticLowerPairs: number;
   semanticUpperMedianDistance: number | null; semanticLowerMedianDistance: number | null;
   affectedNodes: number; dirtyNodes: number; pinnedNodes: number; clusters: number; depthRingNodes: number;
+  fallbackAnchorNodes: number;
   communityPasses: number; communityMoves: number; communityVisits: number;
   solverIterations: number; springEvaluations: number; collisionTests: number;
   densityEvaluations: number; neighborhoodDensityEvaluations: number; crowdedCells: number; collisionBudgetExhausted: boolean; collisionCandidatesTruncated: boolean;
@@ -245,7 +246,8 @@ function placeOverviewStars(
   edges: ReadonlyArray<readonly [string, { source: string; target: string }]>,
   pinned: ReadonlySet<string>,
   nodes: readonly { id?: string; label?: string; category?: string }[],
-  semanticNodes: ReadonlySet<string>,
+  protectedIds: ReadonlySet<string>,
+  targets: Map<string, Point3>,
 ): Set<string> {
   const owned = new Set<string>();
   if (ids.length < 256 || pinned.size === 1) return owned;
@@ -287,8 +289,8 @@ function placeOverviewStars(
     const group = members.get(hub) ?? [hub];
     const disk = Math.min(.48, .035 * Math.sqrt(group.length));
     for (const id of group) {
-      if (pinned.has(id) || semanticNodes.has(id)) continue;
-      if (id === hub) { anchors.set(id, dest); owned.add(id); continue; }
+      if (pinned.has(id) || protectedIds.has(id)) continue;
+      if (id === hub) { anchors.set(id, dest); targets.set(id, copy(dest)); owned.add(id); continue; }
       const offset = seed(id), span = Math.hypot(offset.x, offset.y, offset.z) || 1;
       const reach = .45 + .55 * ((hash(id) % 1000) / 1000);
       anchors.set(id, bound({
@@ -307,6 +309,7 @@ function placeDuplicateLabels(
   anchors: Map<string, Point3>,
   owned: ReadonlySet<string>,
   pinned: ReadonlySet<string>,
+  targets: Map<string, Point3>,
 ): void {
   if (nodes.length < 256 || pinned.size === 1) return;
   const groups = new Map<string, string[]>();
@@ -334,6 +337,7 @@ function placeDuplicateLabels(
         y: dest.y + offset.y / span * disk * reach,
         z: dest.z + offset.z / span * disk * reach * .3,
       }));
+      targets.set(id, copy(anchors.get(id)!));
     }
   });
 }
@@ -508,6 +512,7 @@ export class SemanticLayoutEngine {
       semanticUpperMedianDistance: null, semanticLowerMedianDistance: null,
       inputTruncated: view.nodes.length > limits.inputNodes || view.edges.length > limits.inputEdges || validatedPairs.length > limits.inputAffinities,
       affectedNodes: 0, dirtyNodes: 0, pinnedNodes: 0, clusters: 0, depthRingNodes: 0,
+      fallbackAnchorNodes: 0,
       communityPasses: 0, communityMoves: 0, communityVisits: 0, solverIterations: 0,
       springEvaluations: 0, collisionTests: 0, densityEvaluations: 0, neighborhoodDensityEvaluations: 0, crowdedCells: 0,
       collisionBudgetExhausted: false, collisionCandidatesTruncated: false,
@@ -706,6 +711,25 @@ export class SemanticLayoutEngine {
       anchors.set(id, prior ? copy(base.get(id)!) : bound({ x: c.x + offset.x * radialJitter, y: c.y + offset.y * radialJitter, z: c.z + offset.z * radialJitter }));
     }
     const movable = ids.map((id, i) => active[i] && !pinned.has(id));
+    // Fallback geometry seeds the bounded solve; it must not overwrite the
+    // collision result. Keep semantic placements, cached priors and inactive
+    // components authoritative unless the user explicitly requests reflow.
+    const semanticNodes = new Set(semantic.flatMap(([, pair]) => [pair.source, pair.target]));
+    const protectedNodes = new Set([...semanticNodes, ...ids.filter((id, i) => !movable[i]
+      || !options.reflow && (finite(previousPositions.get(id)) || this.positions.has(id)))]);
+    const fallbackTargets = new Map<string, Point3>();
+    const starOwned = placeOverviewStars(ids, anchors, real, pinned, view.nodes, protectedNodes, fallbackTargets);
+    // Saved subject hubs are geometric region anchors, not extra user pins or
+    // semantic evidence. Hold only these seed centers while surrounding nodes
+    // still participate in the same collision solve.
+    const fallbackHubIds = new Set(fallbackTargets.keys());
+    for (const id of fallbackHubIds) movable[index.get(id)!] = false;
+    d.fallbackAnchorNodes = fallbackHubIds.size;
+    placeDuplicateLabels(view.nodes, anchors, new Set([...starOwned, ...protectedNodes]), pinned, fallbackTargets);
+    for (const [id, target] of fallbackTargets) {
+      const label = clusterIds.get(id)!;
+      if (membersByLabel.get(label)?.length === 1) centers.set(label, copy(target));
+    }
     // Imported coincident coordinates carry no ordering authority. Give each
     // affected movable identity a deterministic direction before solving; pins
     // and unchanged components remain exact.
@@ -725,7 +749,7 @@ export class SemanticLayoutEngine {
     // center inward. Preserve positions only after a solve or an explicit prior.
     const hasPrior = ids.map(id => (pinned.has(id) || !options.reflow)
       && (finite(previousPositions.get(id)) || this.positions.has(id)));
-    const clusterCenters = ids.map(id => centers.get(clusterIds.get(id)!)!);
+    const clusterCenters = ids.map(id => fallbackTargets.get(id) ?? centers.get(clusterIds.get(id)!)!);
     const indexedPairs = pairs.map(pair => ({ ...pair, a: index.get(pair.source)!, b: index.get(pair.target)! }));
     const relationDepth = new Int16Array(ids.length).fill(-1);
     let depthRoot = -1;
@@ -1009,11 +1033,6 @@ export class SemanticLayoutEngine {
       const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
       anchors.set(id, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated));
     });
-    // Source hubs and equal titles are fallback geometry. They must not erase
-    // the positions already solved from admitted content affinities.
-    const semanticNodes = new Set(semantic.flatMap(([, pair]) => [pair.source, pair.target]));
-    const starOwned = placeOverviewStars(ids, anchors, real, pinned, view.nodes, semanticNodes);
-    placeDuplicateLabels(view.nodes, anchors, new Set([...starOwned, ...semanticNodes]), pinned);
     const dirtyIds = new Set<string>();
     for (const id of ids) {
       const prior = previousPositions.get(id), p = anchors.get(id)!;
