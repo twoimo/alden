@@ -834,15 +834,23 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 publisher_scopes={}
                 for target_id,label in source.execute('''SELECT DISTINCT t.id,t.label FROM targets t JOIN memberships m ON m.target_id=t.id
                     WHERE m.document_id=? AND m.availability='available'
+                    AND m.current_version=?
                     AND alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
                     AND EXISTS(SELECT 1 FROM target_projects p
-                    WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,*projects)):
+                    WHERE p.target_id=t.id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,row['version'],*projects)):
                     publisher_scopes.setdefault(label,[]).append(target_id)
+                # Titles and aliases are lexical mentions, just like publisher
+                # labels. Bind them to this version's authorized origins too.
+                origin_ids=sorted({target for targets in publisher_scopes.values() for target in targets})
+                mention_scopes={label:list(targets) for label,targets in publisher_scopes.items()}
+                for mention in [row['label'],*aliases[:32]]:
+                    if isinstance(mention,str) and mention:
+                        mention_scopes.setdefault(mention,[]).extend(origin_ids)
                 conflict=source.execute('''SELECT r.source,r.target FROM relations r WHERE r.active=1 AND r.type IN ('conflicts','contradicts')
                     AND (r.source=? OR r.target=?) AND ''' + store._source_relation_scope() + '''
                     AND EXISTS(SELECT 1 FROM target_projects p
                     WHERE p.target_id=r.target_id AND p.permission!='denied' AND p.project IN ('''+marks+'))',(identity,identity,*projects))
-                temporal_records.append({'id':identity,'name':row['label'],'aliases':aliases+list(publisher_scopes),'mention_scopes':publisher_scopes,
+                temporal_records.append({'id':identity,'name':row['label'],'aliases':aliases+list(publisher_scopes),'mention_scopes':mention_scopes,
                     'has_conflict':any(a in eligible and b in eligible for a,b in conflict),
                     'observed_at':metadata.get('published_at'),'time_basis':'source_published_at',
                     'pinned':identity in (also or [])})

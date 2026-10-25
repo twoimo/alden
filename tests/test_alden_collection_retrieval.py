@@ -494,6 +494,86 @@ class CollectionRetrievalTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError,'collection_version_integrity'):
             retrieve(self.root,'shared',projects=['one'],also=[doc],max_entities=1,max_relations=0)
 
+    def test_public_source_temporal_identity_reference(self):
+        packet = json.loads((Path(__file__).parent / 'fixtures' /
+            'alden-temporal-source-reference.json').read_text())
+        records = packet['records']
+        ids = {r['id']:identity('graph',r['url']) for r in records}
+        for publisher,label in [('technology','mercury.com'),
+                                ('insurance','newsroom.mercuryinsurance.com')]:
+            target = self.store.register(platform='graph', original_id=label,
+                kind='source', label=label, projects=['reference',publisher])
+            self.store.ingest(target, [{'original_id':r['url'], 'label':r['label'],
+                'text':r['excerpt'], 'published_at':r['date'], 'aliases':['Mercury'],
+                'url':r['url'], 'reference_extent':'literal excerpt; not complete article'}
+                for r in records if r['publisher']==publisher])
+        cases = [
+            ('Mercury latest',['reference'],list(ids),None),
+            ('Mercury latest',['technology'],['technology-20251219'],None),
+            # Date-only sources two days apart can overlap across timezones.
+            ('Mercury latest',['insurance'],['insurance-20261020','insurance-20261022'],None),
+            ('Mercury history comparison',['reference'],list(ids),None),
+            ('Mercury latest',['technology'],['technology-20250325','technology-20251219'],
+                [ids['technology-20250325']]),
+            ('Mercury 최신',['reference'],list(ids),None)]
+        before = self.store.path.read_bytes()
+        for query,projects,expected,also in cases:
+            with self.subTest(query=query,projects=projects,also=also):
+                result = retrieve(self.root,query,projects=projects,max_entities=10,
+                                  max_relations=0,also=also)
+                self.assertEqual({p['entity_id'] for p in result['fact_provenance']},
+                                 {ids[key] for key in expected})
+                self.assertTrue(all(p['provenance_valid'] for p in result['fact_provenance']))
+                self.assertEqual(result['search_mode'],'bm25_only')
+        self.assertEqual(self.store.path.read_bytes(),before)
+
+    def test_latest_matching_titles_do_not_conflate_distinct_sources(self):
+        second = self.store.register(platform='graph', original_id='second-publisher',
+            kind='source', label='separate publisher', projects=['one'])
+        self.store.ingest(self.allowed, [{'original_id':'first-publication',
+            'label':'shared term', 'text':'first source retained body',
+            'published_at':'2025-03-25'}])
+        self.store.ingest(second, [{'original_id':'second-publication',
+            'label':'shared term', 'text':'second source retained body',
+            'published_at':'2026-10-20'}])
+        result = retrieve(self.root, 'shared term latest', projects=['one'], max_relations=0)
+        self.assertEqual({p['entity_id'] for p in result['fact_provenance']},
+            {identity('graph','first-publication'), identity('graph','second-publication')})
+        self.assertEqual(result['temporal_selection']['excluded_older_observations'], 0)
+        self.assertEqual(result['temporal_selection']['ambiguous_identity_mentions'], 1)
+
+    def test_latest_matching_aliases_do_not_conflate_distinct_sources(self):
+        second = self.store.register(platform='graph', original_id='second-publisher',
+            kind='source', label='separate publisher', projects=['one'])
+        self.store.ingest(self.allowed, [{'original_id':'first-publication',
+            'label':'Mercury financing', 'aliases':['Mercury'],
+            'text':'Mercury first source retained body', 'published_at':'2025-03-25'}])
+        self.store.ingest(second, [{'original_id':'second-publication',
+            'label':'Mercury road safety', 'aliases':['Mercury'],
+            'text':'Mercury second source retained body', 'published_at':'2026-10-20'}])
+        result = retrieve(self.root, 'Mercury latest', projects=['one'], max_relations=0)
+        self.assertEqual({p['entity_id'] for p in result['fact_provenance']},
+            {identity('graph','first-publication'), identity('graph','second-publication')})
+        self.assertEqual(result['temporal_selection']['excluded_older_observations'], 0)
+        self.assertEqual(result['temporal_selection']['ambiguous_identity_mentions'], 1)
+
+    def test_latest_mentions_use_origins_of_the_selected_version(self):
+        second = self.store.register(platform='graph', original_id='second-publisher',
+            kind='source', label='separate publisher', projects=['one'])
+        self.store.ingest(self.allowed, [{'original_id':'revised', 'label':'Mercury source',
+            'aliases':['Mercury'], 'text':'Mercury earlier revision', 'published_at':'2024-03-25'},
+            {'original_id':'other', 'label':'Mercury different source', 'aliases':['Mercury'],
+             'text':'Mercury separate observation', 'published_at':'2025-03-25'}])
+        self.store.ingest(second, [{'original_id':'revised', 'label':'Mercury source',
+            'aliases':['Mercury'], 'text':'Mercury selected revision', 'published_at':'2026-09-01'}])
+        result = retrieve(self.root, 'Mercury latest', projects=['one'], max_relations=0)
+        self.assertEqual({p['entity_id'] for p in result['fact_provenance']},
+            {identity('graph','revised'), identity('graph','other')})
+        self.assertEqual(result['temporal_selection']['excluded_older_observations'], 0)
+        self.assertEqual(result['temporal_selection']['ambiguous_identity_mentions'], 1)
+        self.assertTrue(any('selected revision' in text for text in result['facts']))
+        self.assertFalse(any('earlier revision' in text for text in result['facts']))
+
     def test_latest_source_uses_publication_not_collection_time_and_keeps_history(self):
         self.store.ingest(self.allowed,[{'original_id':'old','label':'shared term','text':'older terms','published_at':'2026-08-01T00:00:00Z'}])
         self.store.ingest(self.allowed,[{'original_id':'new','label':'shared term','text':'recent terms','published_at':'2026-09-01T00:00:00Z'}])
