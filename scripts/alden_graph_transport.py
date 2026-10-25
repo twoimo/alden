@@ -3,9 +3,11 @@ import json
 
 CODEC = 'display-source-context-v1'
 RECORD_CODEC = 'record-keys-v1'
+OBJECT_RECORD_CODEC = 'record-keys-v2'
+OBJECT_FIELDS = {'nodes': ('evidence', 'source_metadata'), 'edges': ('evidence', 'reference_group')}
 
 
-def _record_table(records):
+def _record_table(records, *, dense=False):
     if not isinstance(records, list) or any(not isinstance(row, dict) for row in records):
         raise ValueError('graph_transport_records_invalid')
     all_keys = {key for row in records for key in row}
@@ -15,7 +17,26 @@ def _record_table(records):
     index = {key: i for i, key in enumerate(keys)}
     # Every present key/value is retained. An absent field differs from null;
     # rows do not fill missing columns or reinterpret nested source records.
-    return keys, [[item for key, value in row.items() for item in (index[key], value)] for row in records]
+    return keys, [[-1, *(row[key] for key in keys)] if dense and len(row) == len(keys)
+                  else [item for key, value in row.items() for item in (index[key], value)] for row in records]
+
+
+def _object_tables(records, fields):
+    """Share nested field names; preserve missing/null and every object value."""
+    rows = [dict(row) for row in records]
+    tables = {}
+    for field in fields:
+        present = [i for i, row in enumerate(rows) if field in row and row[field] is not None]
+        if not present or any(not isinstance(rows[i][field], dict) for i in present):
+            continue
+        try:
+            keys, packed = _record_table([rows[i][field] for i in present], dense=True)
+        except ValueError:
+            continue  # v1 already retains unencodable nested values verbatim.
+        tables[field] = keys
+        for i, value in zip(present, packed):
+            rows[i][field] = value
+    return rows, tables
 
 
 def pack_graph(value):
@@ -44,5 +65,17 @@ def pack_graph(value):
         raise ValueError('graph_transport_encoding_collision')
     node_keys, node_rows = _record_table(packed['nodes'])
     edge_keys, edge_rows = _record_table(packed.get('edges', []))
-    return {**packed, 'nodes': node_rows, 'edges': edge_rows,
-            'source_record_encoding': {'codec': RECORD_CODEC, 'nodes': node_keys, 'edges': edge_keys}}
+    records = {**packed, 'nodes': node_rows, 'edges': edge_rows,
+               'source_record_encoding': {'codec': RECORD_CODEC, 'nodes': node_keys, 'edges': edge_keys}}
+    tables, object_tables = {}, {}
+    for kind, fields in OBJECT_FIELDS.items():
+        rows, nested = _object_tables(packed.get(kind, []), fields)
+        tables[kind] = _record_table(rows, dense=True)[1]
+        if nested:
+            object_tables[kind] = nested
+    if not object_tables:
+        return records
+    nested_records = {**records, **tables, 'source_record_encoding': {
+        'codec': OBJECT_RECORD_CODEC, 'nodes': node_keys, 'edges': edge_keys, 'objects': object_tables}}
+    size = lambda item: len(json.dumps(item, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode())
+    return nested_records if size(nested_records) < size(records) else records

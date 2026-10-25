@@ -42,13 +42,40 @@ Four behavioral regressions cover dense fallback placement, explicit reflow,
 semantic-hub authority and exact user pins/repeat state. An isolated actual-source
 check passed these four plus 67 existing layout cases; restoring the late
 overwrite failed two cases and removing the semantic guard failed its case.
-The complete UI suite passed 1,199 tests in 105 files, and TypeScript passed.
+The complete UI suite passed 1,201 tests in 105 files after the transport
+correction below, and TypeScript passed.
 These are finite checks, not an all-input nonoverlap proof.
 
 Source, logs, private input/position snapshots, initial harness failures and the
 comparison alternatives remain in the task's
 `outputs/layout-career-hubs-20261025/`. The initial 120-node harness output is
 partial and is not the full-page evidence; use `fixed-scope/comparison.json`.
+
+## Native transport regression found during acceptance
+
+The first signed candidate timed out before any scoped layout could run. The
+installed 0.3.218 control completed the same two-size diagnostic, with zero
+passive labels in overview, maximum zoom-out and after returning from zoom.
+The candidate's exact career packet exceeded the unchanged 4,194,304-byte Rust
+boundary: the existing lossless `record-keys-v1` transport needed 4,821,445 bytes
+after the new relation evidence fields were included.
+
+Large packets can now use `record-keys-v2`. It shares nested evidence/metadata
+field names and uses a tagged dense row only when every declared key is present.
+Sparse rows retain their explicit indices, so absent and null remain distinct.
+Unencodable nested values retain the previous representation. The consumer
+accepts both versions, validates field names, indices, dense lengths and allowed
+nested tables, and builds fresh objects without inheriting prototype-named keys.
+No source fields, claims, identifiers or revisions are omitted.
+
+The exact retained packet is 4,116,581 bytes with v2. Its production TypeScript
+consumer restores all 1,984 nodes and 4,096 edges field-for-field and does not
+mutate the wire input. Python and UI cases cover sparse/dense rows, null/missing,
+future fields, prototype-named fields and malformed nested metadata. The old
+source is retained as the failing over-budget control. This qualifies this
+specific packet; it does not guarantee that arbitrary future pages fit the
+native limit. Native acceptance is rerun on the newly signed artifact and kept
+separate from this source/consumer check.
 
 Native rendering, installed delivery, physical input, GPU/FPS, whole-app resource
 and semantic quality are separate acceptance stages. No performance gain is

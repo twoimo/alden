@@ -2,6 +2,36 @@ import { describe, it, expect } from 'vitest';
 import { expandGraphTransport } from '../graph-transport';
 
 describe('lossless bounded source context transport', () => {
+  const nestedPacket=()=>({source_context_encoding:'display-source-context-v1',
+    source_record_encoding:{codec:'record-keys-v2',nodes:['id','evidence'],edges:['id','reference_group'],objects:{
+      nodes:{evidence:['kind','source_event_ids','future','__proto__']},edges:{reference_group:['count','revision']}}},
+    nodes:[[-1,'a',[-1,'snapshot',['original'],{proof:true},{injected:true}]],[0,'b'],[-1,'c',null]],
+    edges:[[-1,'edge',[-1,2,'current-version']]]});
+  it('restores v2 dense and sparse nested records with exact null/missing/source proofs',()=>{
+    const value=nestedPacket(),before=JSON.stringify(value),decoded:any=expandGraphTransport(value);
+    expect(decoded.nodes[0].evidence).toEqual({kind:'snapshot',source_event_ids:['original'],future:{proof:true},['__proto__']:{injected:true}});
+    expect(Object.getPrototypeOf(decoded.nodes[0].evidence)).toBe(null);
+    expect(Object.hasOwn(decoded.nodes[1],'evidence')).toBe(false);expect(decoded.nodes[2].evidence).toBe(null);
+    expect(decoded.edges[0].reference_group).toEqual({count:2,revision:'current-version'});
+    expect(({} as any).injected).toBeUndefined();expect(JSON.stringify(value)).toBe(before);
+  });
+  it('rejects malformed v2 metadata and nested records before mutating the packet',()=>{
+    for(const change of [
+      (v:any)=>{delete v.source_record_encoding.objects;},
+      (v:any)=>{v.source_record_encoding.objects={unknown:{evidence:[]}};},
+      (v:any)=>{v.source_record_encoding.objects.nodes={id:[]};},
+      (v:any)=>{v.source_record_encoding.objects.edges={evidence:['kind']};},
+      (v:any)=>{v.source_record_encoding.objects.nodes.evidence=['kind','kind'];},
+      (v:any)=>{v.nodes[0]=[-1,'a'];},
+      (v:any)=>{v.nodes[0][2]=[-1,'snapshot'];},
+      (v:any)=>{v.nodes[0][2]=[0,'snapshot',0,'other'];},
+      (v:any)=>{v.nodes[0][2]={kind:'snapshot'};},
+      (v:any)=>{v.source_record_encoding.codec='record-keys-v1';},
+    ]){
+      const value:any=nestedPacket();change(value);const before=JSON.stringify(value);
+      expect(()=>expandGraphTransport(value)).toThrow('graph_transport_invalid');expect(JSON.stringify(value)).toBe(before);
+    }
+  });
   it('retains missing/null, future fields and prototype-named keys in record tables',()=>{
     const value:any={source_context_encoding:'display-source-context-v1',source_record_encoding:{codec:'record-keys-v1',nodes:['id','optional','future','__proto__'],edges:['id']},
       nodes:[[0,'a',1,null,2,{proof:['v1','public']},3,{injected:true}],[0,'b']],edges:[[0,'e']]};

@@ -39,6 +39,37 @@ class GraphTransportTests(TestCase):
         self.assertEqual(value['nodes'][0]['source_contexts'], [current, foreign, additional])
         self.assertEqual(packed['edges'], value['edges'])
 
+    def test_v2_retains_nested_proofs_null_missing_and_future_fields_without_mutation(self):
+        proof={'kind':'snapshot','source_event_ids':['original-id'],'confirmed_at':None,'future':{'claim':'original'}}
+        nodes=[{'id':str(i),'description':'x'*400000,'evidence':proof}for i in range(8)]
+        nodes.extend([{'id':'absent'},{'id':'null','evidence':None}])
+        value={'ok':True,'nodes':nodes,'edges':[{'id':str(i),'evidence':proof,
+          'reference_group':{'kind':'directed-relation-group-v1','count':2,'truncated':False,'revision':'v1'}}for i in range(32)]}
+        original=json.loads(json.dumps(value));packed=pack_graph(value)
+        self.assertEqual(packed['source_record_encoding']['codec'],'record-keys-v2')
+        self.assertEqual(value,original)
+        encoding=packed['source_record_encoding']
+        def restore(row,keys):
+            return dict(zip(keys,row[1:]))if row and row[0]==-1 else {keys[row[i]]:row[i+1]for i in range(0,len(row),2)}
+        for kind in ('nodes','edges'):
+            rows=[restore(row,encoding[kind])for row in packed[kind]]
+            for row in rows:
+                for field,keys in encoding.get('objects',{}).get(kind,{}).items():
+                    if field in row and row[field] is not None:row[field]=restore(row[field],keys)
+            self.assertEqual(rows,original[kind])
+
+    def test_v2_dense_marker_requires_all_keys_and_does_not_fill_absent_values(self):
+        keys,rows=_record_table([{'id':'a','optional':None},{'id':'b'}],dense=True)
+        self.assertEqual(keys,['id','optional']);self.assertEqual(rows,[[-1,'a',None],[0,'b']])
+
+    def test_large_packets_keep_unencodable_nested_values_verbatim(self):
+        for evidence in ('text',['array'],{str(i):i for i in range(257)}):
+            value={'nodes':[{'id':'a','future':'x'*(3*1024*1024),'evidence':evidence}],'edges':[]}
+            packed=pack_graph(value)
+            self.assertEqual(packed['source_record_encoding']['codec'],'record-keys-v1')
+            keys=packed['source_record_encoding']['nodes'];row=packed['nodes'][0]
+            self.assertEqual(row[row.index(keys.index('evidence'))+1],evidence)
+
     def test_compact_graph_flag_round_trips_fields_without_changing_other_actions(self):
         module = load('alden_graph_transport_test')
         value = {'ok': True, 'nodes': [{'id': 'a', 'label': '지식',
