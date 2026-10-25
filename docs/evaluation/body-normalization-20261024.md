@@ -35,6 +35,14 @@ with no unit and an ambiguous status. Two-digit years, missing timezones,
 hyphen-as-range-versus-subtraction, factual claim roles and temporal validity
 are not guessed. Written endpoint order and explicit signs remain visible.
 
+An immediately joined second timezone, sign/range marker or bracketed zone after
+a clock must not turn its valid prefix into a normalized timestamp. For example,
+`2026-02-23T12:30Z+09:00` and `2026-02-23T12:30:00+09:00-05:00` retain the exact
+matched prefix and its offsets, with `unsupported`, no canonical value and
+`time_suffix_not_fully_parsed`. The suffix is not silently interpreted or added
+to the matched span. Sentence punctuation, Korean particles, line boundaries and
+separate expressions retain existing behavior and declared time precision.
+
 The safety promise is exact, bounded syntax annotation without invented units,
 centuries, timezones or source authorization. It is not semantic fact extraction.
 Inputs above 131,072 code points return a budget result with no claimed body
@@ -87,12 +95,16 @@ python3 -B -m unittest tests.test_alden_time_normalization tests.test_alden_quan
 python3 -B scripts/verify_alden_body_normalization.py --output /absolute/private/fresh/body-verification.json
 ```
 
-The verifier checks current and restored source and rejects six deliberately
+The verifier checks current and restored source and rejects seven deliberately
 broken source copies: lost signs, wrong magnitude, wrong UTF-16 offsets, malformed
-grouping admitted, guessed century and URL numbers admitted. Mutations occur only
+grouping admitted, guessed century, URL numbers admitted and ignored joined time
+suffixes. Mutations occur only
 in temporary copies and the working parser remains unchanged. Tests include 112
 generated standalone magnitude cases and ten compound cases using independent
-integer sum/product oracles. These are bounded checks, not a theorem, a full
+integer sum/product oracles, plus 39 joined timestamp suffix cases and 24 valid
+timestamp boundary controls. The source-detail read regression binds the changed
+result to the unchanged displayed body and exact codepoint/UTF-16 spans.
+These are bounded checks, not a theorem, a full
 Unicode grammar audit, independent semantic gold or an installed product result.
 
 Offline evaluation of two saved canonical source pairs (four records, two unique

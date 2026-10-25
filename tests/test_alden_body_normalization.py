@@ -57,6 +57,34 @@ class BodyNormalizationTests(unittest.TestCase):
         self.assertNotEqual(value['status'], 'normalized')
         self.assertIsNone(value['canonical'])
 
+    def test_joined_datetime_suffix_cannot_normalize_a_valid_prefix(self):
+        stems = ('2026-02-23T12:30Z', '2026-02-23T12:30:00+09:00', '2026-02-23t12:30:00z')
+        suffixes = ('+09:00', '-05:00', '−05:00', '－1', '﹣1', '＋1', '﹢1',
+                    '~2', '～2', '–2', '—2', '‐2', '[Asia/Seoul]')
+        for stem in stems:
+            for suffix in suffixes:
+                with self.subTest(stem=stem, suffix=suffix):
+                    body = '😀 가\r\n시각 ' + stem + suffix
+                    items = self.candidates(body)
+                    self.assertEqual(len(items), 1)
+                    item = items[0]
+                    self.assertEqual(item['raw'], stem)
+                    self.assertEqual(item['status'], 'unsupported')
+                    self.assertIsNone(item['canonical'])
+                    self.assertEqual(item['reason'], 'time_suffix_not_fully_parsed')
+                    self.assertGreater(item['utf16_start'], item['start'])
+
+    def test_datetime_sentence_boundaries_keep_supported_times(self):
+        stems = {'2026-02-23T12:30Z': '2026-02-23T12:30Z',
+                 '2026-02-23T12:30:00+09:00': '2026-02-23T03:30:00Z',
+                 '2026-02-23t12:30:00z': '2026-02-23T12:30:00Z'}
+        for stem, canonical in stems.items():
+            for suffix in ('.', ', 5kg', '; 9명', ')', ']', '에서', '\r\n', ' +09:00'):
+                with self.subTest(stem=stem, suffix=suffix):
+                    item = self.candidates('😀 시각 ' + stem + suffix)[0]
+                    self.assertEqual(item['raw'], stem)
+                    self.assertEqual((item['status'], item['canonical']), ('normalized', canonical))
+
     def test_urls_and_identifiers_are_not_number_sources(self):
         self.assertEqual(self.candidates('https://example.test/2026-02-23/5kg HTTPS://example.test/?mass=5kg abc2026-02-23def id_10kg 0x10B'), [])
 

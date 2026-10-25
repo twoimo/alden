@@ -30,6 +30,23 @@ class BodyDetailTests(unittest.TestCase):
         return read_action(self.root,'collection-graph',json.dumps({'projects':['project'],
             'focus':self.node['id'],'hops':0,'details':True,'expected_version':self.node['source_version']}),**kwargs)
 
+    def test_joined_time_suffix_reaches_details_without_a_false_canonical_time(self):
+        body = '😀 시각 2026-02-23T12:30Z+09:00, 확인 2026-02-23T12:30:00+09:00.'
+        self.ingest(body)
+        self.node = self.store.graph_page(projects=['project'])['nodes'][0]
+        detail = self.details()['details']
+        self.assertEqual(detail['body'], body)
+        note = detail['body_notation']
+        self.assertEqual(note['binding']['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+        times = [item for item in note['analysis']['candidates'] if item['kind'] == 'time']
+        self.assertEqual(len(times), 2)
+        self.assertEqual((times[0]['status'], times[0]['canonical']), ('unsupported', None))
+        self.assertEqual(times[0]['reason'], 'time_suffix_not_fully_parsed')
+        self.assertEqual((times[1]['status'], times[1]['canonical']), ('normalized', '2026-02-23T03:30:00Z'))
+        for item in times:
+            self.assertEqual(body[item['start']:item['end']], item['raw'])
+            self.assertEqual(body.encode('utf-16-le')[item['utf16_start'] * 2:item['utf16_end'] * 2].decode('utf-16-le'), item['raw'])
+
     def test_actual_read_boundary_binds_the_exact_displayed_body_and_source_receipt(self):
         detail = self.details()['details']
         note = detail['body_notation']

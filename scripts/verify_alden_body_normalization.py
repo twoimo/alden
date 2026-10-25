@@ -25,6 +25,7 @@ def main():
         'malformed_grouping_accepted': ('(?:,[0-9]{3})+', '(?:,[0-9]{1,3})+'),
         'guessed_century': ("year = match['ky'] or match['iy']", "year = match['ky'] or match['iy']\n        if len(year) == 2: year = '20' + year"),
         'url_numbers_admitted': ("if url_index < len(urls) and urls[url_index][0] < candidate['end'] and candidate['start'] < urls[url_index][1]:", 'if False:'),
+        'joined_time_suffix_ignored': ('if unparsed_clock or unparsed_suffix:', 'if unparsed_clock:'),
     }
     variants = {'current': source}
     for name, (before, after) in replacements.items():
@@ -57,12 +58,13 @@ def main():
                     handle.write(run.stdout + run.stderr)
             assert (run.returncode == 0) == expected, name + ': mutation sensitivity or current parser check failed'
     assert SOURCE.read_bytes() == original
-    report = {'scope': 'Real parser source and six isolated mutations; bounded unit/generated-input checks, not a theorem or semantic gold.',
+    report = {'scope': 'Real parser source and seven isolated mutations; bounded unit/generated-input checks, not a theorem or semantic gold.',
               'source_sha256': hashlib.sha256(original).hexdigest(),
               'covered': ['exact source/codepoint/UTF16 span equality', 'signs', 'Korean magnitudes',
-                          'grouping syntax', 'no century guess', 'URL exclusion'],
+                          'grouping syntax', 'no century guess', 'URL exclusion', 'no normalized joined timestamp prefix'],
               'bounds': {'body_characters': 131072, 'candidates_per_body': 64, 'token_characters': 128,
-                         'integer_oracle_generated_cases': 112, 'compound_integer_oracle_cases': 10},
+                         'integer_oracle_generated_cases': 112, 'compound_integer_oracle_cases': 10,
+                         'joined_timestamp_suffix_cases': 39, 'timestamp_boundary_controls': 24},
               'results': results, 'python_version': sys.version, 'production_source_modified': False,
               'limits': ['No fact extraction/authorization/current-version integration, physical UI, liveness, full Unicode grammar or independent precision/recall proof.',
                          'Range/subtraction, relative dates, implicit timezone/currency and unsupported notation stay unresolved.']}

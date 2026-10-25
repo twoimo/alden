@@ -165,7 +165,13 @@ def _dates(body):
             if match['clock']:
                 iso += 'T' + match['clock'][1:]
             result = normalize_declared_time(iso)
-            if not match['clock'] and re.match(r'[Tt ][0-9]{2}:', body[match.end():match.end() + 7]):
+            attached = body[match.end():match.end() + 1]
+            unparsed_clock = not match['clock'] and re.match(r'[Tt ][0-9]{2}:', body[match.end():match.end() + 7])
+            # A joined second zone, operator or bracketed zone is not a
+            # delimiter: the matched timestamp is only a prefix of its token.
+            unparsed_suffix = match['clock'] and attached and (
+                attached in '+−－﹣＋﹢~～[' or unicodedata.category(attached) == 'Pd')
+            if unparsed_clock or unparsed_suffix:
                 result = {'status': 'unsupported', 'canonical': None, 'reason': 'time_suffix_not_fully_parsed', 'precision': None, 'basis': 'body_notation'}
         yield {'kind': 'time', 'start': match.start(), 'end': match.end(), 'raw': match[0], **result}
 
