@@ -1154,6 +1154,7 @@ class CollectionStore:
                     if cancelled():raise RuntimeError('collection_cancelled')
                     db.execute('DELETE FROM document_search WHERE document_id IN (SELECT document_id FROM search_updates)')
                     db.execute('INSERT INTO document_search SELECT document_id,label,body FROM search_updates')
+                    changed_relation_records = 0
                     for relation in relations:
                         source = identity(relation["source_platform"], relation["source_id"])
                         destination = identity(relation["target_platform"], relation["target_id"])
@@ -1176,6 +1177,9 @@ class CollectionStore:
                             require_relation_binding(db, {'id':rel_id,'version':digest(evidence.encode()),
                                 'target_id':target_id,'source':source,'target':destination,
                                 'type':relation['type'],'evidence':evidence}, allow_new=True)
+                            old_state = db.execute('SELECT version,active FROM relations WHERE id=?',(rel_id,)).fetchone()
+                            if old_state is None or old_state['version']!=digest(evidence.encode()) or not old_state['active']:
+                                changed_relation_records += 1
                             db.execute("INSERT INTO relations VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET evidence=excluded.evidence,version=excluded.version,active=1",
                                        (rel_id, target_id, source, destination, relation["type"], evidence, digest(evidence.encode())))
                             db.execute('INSERT OR IGNORE INTO relation_versions VALUES(?,?,?,?,?,?,?,?)',
@@ -1184,13 +1188,15 @@ class CollectionStore:
                             if not all(db.execute('SELECT 1 FROM snapshot_members WHERE document_id=?', (value,)).fetchone() for value in (source, destination)):
                                 raise ValueError('collection_orphan_relation')
                             db.execute('INSERT OR IGNORE INTO snapshot_relations VALUES(?)', (rel_id,))
-                    removed = 0
+                    removed = 0; removed_relation_records = 0
                     for document_id in retracted_ids:
                         if cancelled():raise RuntimeError('collection_cancelled')
                         row = db.execute("SELECT current_version FROM memberships WHERE target_id=? AND document_id=? AND availability='available'", (target_id, document_id)).fetchone()
                         if row is None:continue
                         db.execute("UPDATE memberships SET availability='deleted' WHERE target_id=? AND document_id=?", (target_id, document_id))
                         db.execute("UPDATE documents SET availability='deleted' WHERE id=? AND NOT EXISTS(SELECT 1 FROM memberships WHERE document_id=? AND availability='available')", (document_id, document_id))
+                        removed_relation_records += db.execute('''UPDATE relations SET active=0 WHERE target_id=?
+                            AND active=1 AND (source=? OR target=?)''',(target_id,document_id,document_id)).rowcount
                         self._event(db, run_id, target_id, 'stored', document_id=document_id, version=row['current_version'], change='removed', reason='현재 원본 리더가 본문을 제공하지 않습니다. 이전 버전은 보존했습니다.', **activity_details)
                         removed += 1
                     if complete_snapshot:
@@ -1209,6 +1215,10 @@ class CollectionStore:
                                         reason='저장된 관계와 근거가 갱신되었습니다.', **activity_details)
                         db.execute('INSERT OR REPLACE INTO target_snapshots VALUES(?,?,?,?,?,?)',
                                    (target_id, source_revision, effective_order, processing_version, projection, run_id))
+                    elif changed_relation_records or removed_relation_records:
+                        self._event(db,run_id,target_id,'stored',change='relations_changed',
+                            changed_records=changed_relation_records,removed=removed_relation_records,
+                            reason='현재 출처의 관계와 근거가 갱신되었습니다.',**activity_details)
                     if cancelled():
                         raise RuntimeError("collection_cancelled")
                     now = time.time()

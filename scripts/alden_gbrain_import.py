@@ -71,14 +71,29 @@ class FullProjection:
                 content+'\n---\nAlden source graph metadata; not original body or claim validity.\n')
 
     @classmethod
-    def prepare(cls,generation,*,check=lambda:None,max_index_records=4_000_000,max_index_bytes=2*1024**3,policy=POLICY):
+    def prepare(cls,generation,*,check=lambda:None,max_index_records=4_000_000,max_index_bytes=2*1024**3,policy=POLICY,previous=None):
         self=cls(generation,check,policy=policy)
         if type(max_index_records) is not int or max_index_records<1 or type(max_index_bytes) is not int or max_index_bytes<65536:
             raise GbrainError('gbrain_full_index_budget_invalid')
         if self.path.exists():raise GbrainError('gbrain_full_new_index_required')
+        self.index_updates={'mode':'full_index' if previous is None else 'index_delta',
+            'pages_put':0,'pages_deleted':0,'links_put':0,'links_deleted':0}
+        if previous is not None:
+            if (policy!=STABLE_POLICY or previous.policy!=policy or previous.projects!=self.projects
+                    or previous.receipt['source_root_sha256']!=self.receipt['source_root_sha256']):
+                raise GbrainError('gbrain_full_index_base_invalid')
+            with closing(_db(previous.path)) as prior,closing(sqlite3.connect(self.path)) as destination:
+                self.path.chmod(0o600)
+                prior.backup(destination,pages=128,progress=lambda *_:check(),sleep=.01)
+            if _file_token(previous.path)!=previous.index_token:raise GbrainError('gbrain_full_projection_changed')
         self._index_records=0;self._index_record_budget=max_index_records;self._index_byte_budget=max_index_bytes
         with closing(_db(self.archive/'graph.sqlite3')) as source, closing(sqlite3.connect(self.path)) as db:
-            self.path.chmod(0o600);db.executescript(INDEX_SCHEMA);db.execute('BEGIN IMMEDIATE')
+            self.path.chmod(0o600)
+            if previous is None:db.executescript(INDEX_SCHEMA)
+            else:db.execute('PRAGMA foreign_keys=ON');db.execute('PRAGMA journal_mode=DELETE')
+            db.execute('CREATE TEMP TABLE seen_pages(slug TEXT PRIMARY KEY) WITHOUT ROWID')
+            db.execute('CREATE TEMP TABLE seen_links(a TEXT,b TEXT,verb TEXT,PRIMARY KEY(a,b,verb)) WITHOUT ROWID')
+            db.execute('BEGIN IMMEDIATE')
             targets={r['id']:_json(r['payload']) for r in source.execute('SELECT id,payload FROM targets')}
             for row in source.execute('SELECT payload FROM nodes ORDER BY id'):
                 check();node=_json(row['payload']);_text(node['id']);_text(node['label'],1024)
@@ -94,16 +109,13 @@ class FullProjection:
                         selected.setdefault(context['target_id'],[]).append(context)
                 if target not in selected:raise GbrainError('gbrain_full_source_unbound')
                 slug=self.slug(node['id'])
-                db.execute('INSERT INTO pages(slug,id,kind,payload,content) VALUES(?,?,?,?,?)',self._page(slug,node,'record'))
-                self._index_budget(db)
+                self._insert_page(db,self._page(slug,node,'record'))
                 for origin_target,current in sorted(selected.items()):
                     origin={'id':self.origin(origin_target),'label':'출처 · '+targets[origin_target]['label'],
                         'category':'source','source_target':origin_target,
                         'basis':'current selected-version source membership; not independent corroboration'}
                     origin_slug=self.origin_slug(origin_target)
-                    inserted=db.execute('INSERT OR IGNORE INTO pages(slug,id,kind,payload,content) VALUES(?,?,?,?,?)',
-                                        self._page(origin_slug,origin,'origin'))
-                    if inserted.rowcount:self._index_budget(db)
+                    self._insert_page(db,self._page(origin_slug,origin,'origin'))
                     edge={'id':'alden-origin-edge:'+_digest([self.prefix,node['id'],origin_target]),
                         'source':node['id'],'target':origin['id'],'relation':'sourced_from',
                         'source_contexts':sorted(current,key=encoded),
@@ -117,6 +129,9 @@ class FullProjection:
                         or evidence.get('retracted') is not False):raise GbrainError('gbrain_full_relation_unbound')
                 verb='alden_'+_digest(edge['relation'])[:24]
                 self._insert_link(db,self.slug(edge['source']),self.slug(edge['target']),verb,'observed',edge)
+            self.index_updates['links_deleted']=db.execute('''DELETE FROM links WHERE NOT EXISTS(
+                SELECT 1 FROM seen_links s WHERE s.a=links.a AND s.b=links.b AND s.verb=links.verb)''').rowcount
+            self.index_updates['pages_deleted']=db.execute('DELETE FROM pages WHERE slug NOT IN (SELECT slug FROM seen_pages)').rowcount
             if db.execute('PRAGMA foreign_key_check').fetchone() is not None:raise GbrainError('gbrain_full_endpoint_invalid')
             count=db.execute('SELECT (SELECT COUNT(*) FROM pages)+(SELECT COUNT(*) FROM links)').fetchone()[0]
             size=db.execute('PRAGMA page_count').fetchone()[0]*db.execute('PRAGMA page_size').fetchone()[0]
@@ -125,12 +140,22 @@ class FullProjection:
         if self.path.stat().st_size>max_index_bytes:raise GbrainError('gbrain_full_index_budget')
         return self
 
+    def _insert_page(self,db,page):
+        if db.execute('INSERT OR IGNORE INTO seen_pages VALUES(?)',(page[0],)).rowcount:self._index_budget(db)
+        self.index_updates['pages_put']+=db.execute('''INSERT INTO pages(slug,id,kind,payload,content) VALUES(?,?,?,?,?)
+            ON CONFLICT(slug) DO UPDATE SET id=excluded.id,kind=excluded.kind,payload=excluded.payload,
+                content=excluded.content,revision=NULL WHERE pages.id!=excluded.id OR pages.kind!=excluded.kind
+                OR pages.payload!=excluded.payload OR pages.content!=excluded.content''',page).rowcount
+
     def _insert_link(self,db,a,b,verb,kind,edge):
         context={'policy':self.policy,'edge':edge}
         if self.policy==POLICY:context['snapshot']=self.fingerprint
         context=encoded(context).decode()
-        db.execute('INSERT INTO links VALUES(?,?,?,?,?,?)',(a,b,verb,kind,encoded(edge).decode(),context))
-        self._index_budget(db)
+        if db.execute('INSERT OR IGNORE INTO seen_links VALUES(?,?,?)',(a,b,verb)).rowcount:self._index_budget(db)
+        self.index_updates['links_put']+=db.execute('''INSERT INTO links VALUES(?,?,?,?,?,?)
+            ON CONFLICT(a,b,verb) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,context=excluded.context
+            WHERE links.kind!=excluded.kind OR links.payload!=excluded.payload OR links.context!=excluded.context''',
+            (a,b,verb,kind,encoded(edge).decode(),context)).rowcount
 
     def _index_budget(self,db):
         self.check();self._index_records+=1
@@ -335,10 +360,19 @@ class FullGbrainCache(ManagedGbrainCache):
             _write(generation/'generation.json',{'kind':self.KIND,'owner':self.owner['owner'],'generation':name})
             try:
                 old=FullProjection.open(self._generation(active['generation']),check) if active else None
-                export_graph(self.collection_root,self.owner['projects'],generation/'source-archive',
-                    store_factory=store_factory,cancelled=cancelled)
+                if incremental and old is not None:
+                    from alden_collection_delta import export_incremental
+                    source_receipt=export_incremental(self.collection_root,self.owner['projects'],generation/'source-archive',
+                        previous=old.archive,store_factory=store_factory,cancelled=cancelled)
+                else:
+                    source_receipt=export_graph(self.collection_root,self.owner['projects'],generation/'source-archive',
+                        store_factory=store_factory,cancelled=cancelled)
                 policy=STABLE_POLICY if incremental else old.policy if old is not None else POLICY
-                projection=FullProjection.prepare(generation,check=check,policy=policy);current(projection)
+                reuse_index=None
+                if incremental and old is not None and old.policy==policy:
+                    from alden_collection_delta import _compatible
+                    if _compatible(old.receipt['as_of'],source_receipt['as_of']):reuse_index=old
+                projection=FullProjection.prepare(generation,check=check,policy=policy,previous=reuse_index);current(projection)
                 if active and active['fingerprint']==projection.fingerprint and not rebuild:
                     old=FullProjection.open(self._generation(active['generation']),check)
                     if old.fingerprint!=projection.fingerprint:raise GbrainError('gbrain_full_projection_changed')
@@ -356,6 +390,9 @@ class FullGbrainCache(ManagedGbrainCache):
                     removed=self._retire(active,preserve=name)
                     acceptance=self._build(generation,projection,fd=fd,check=check)
                     if incremental:acceptance['update_mode']='full_rebuild'
+                if incremental:
+                    acceptance['source_update']=source_receipt.get('source_update',{'mode':'full_export','reason':'new_baseline'})
+                    acceptance['index_updates']=projection.index_updates
                 current(projection);check()
                 manifest=projection.manifest();_write(generation/'projection.json',manifest)
                 _write(generation/'ready.json',{'fingerprint':projection.fingerprint,

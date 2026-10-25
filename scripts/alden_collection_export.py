@@ -131,7 +131,7 @@ def _stamp(db, store, projects):
             'checkpoint':checkpoint,'file_identity':[info.st_dev,info.st_ino]}
 
 
-def _records(db, store, projects, check):
+def _records(db, store, projects, check, *, node_ids=None, edge_keys=None):
     """No visual filtering, page cap, degree sampling, or resolution overlay."""
     db.create_function('alden_relation_digest',1,relation_evidence_digest,deterministic=True)
     db.create_function('alden_display_label',2,overview_display_label,deterministic=True)
@@ -162,10 +162,11 @@ def _records(db, store, projects, check):
             WHERE p.permission!='denied' AND p.project IN ('''+marks+''')
             ORDER BY r.document_id COLLATE BINARY,p.project COLLATE BINARY,r.target_id COLLATE BINARY,r.current_version COLLATE BINARY)
             GROUP BY document_id)'''
+        node_filter='' if node_ids is None else ' WHERE s.id IN (SELECT value FROM json_each(?))'
         cursor = db.execute(cte+contexts+''' SELECT s.id,s.visible_version,s.target_id,s.original_id,
             alden_display_label(v.label,v.body) AS label,json_extract(v.metadata,'$.kind') AS category,c.value AS contexts
-            FROM shown s JOIN versions v ON v.id=s.visible_version JOIN contexts c ON c.document_id=s.id
-            ORDER BY s.id COLLATE BINARY''',(*args,*projects))
+            FROM shown s JOIN versions v ON v.id=s.visible_version JOIN contexts c ON c.document_id=s.id'''+node_filter+
+            ' ORDER BY s.id COLLATE BINARY',(*args,*projects,*(() if node_ids is None else (encoded(node_ids).decode(),))))
         for row in cursor:
             check()
             category = row['category']
@@ -182,8 +183,11 @@ def _records(db, store, projects, check):
                 'evidence':{'kind':'snapshot','source_event_ids':sample,'chat_id':'',
                             'confirmed_at':None,'retracted':False}}
         last = None
-        for row in db.execute(cte+'''SELECT id,source,type,target,version FROM permitted_edges
-            ORDER BY source COLLATE BINARY,type COLLATE BINARY,target COLLATE BINARY,id COLLATE BINARY''',args):
+        edge_filter='' if edge_keys is None else ''' WHERE (source,type,target) IN (
+            SELECT json_extract(value,'$[0]'),json_extract(value,'$[1]'),json_extract(value,'$[2]') FROM json_each(?))'''
+        for row in db.execute(cte+'SELECT id,source,type,target,version FROM permitted_edges'+edge_filter+
+            ' ORDER BY source COLLATE BINARY,type COLLATE BINARY,target COLLATE BINARY,id COLLATE BINARY',
+            (*args,*(() if edge_keys is None else (encoded(edge_keys).decode(),)))):
             check();key=(row['source'],row['type'],row['target'])
             if key != previous:
                 if previous is not None:yield 'edges',edge()

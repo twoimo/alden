@@ -12,7 +12,7 @@ import stat
 import uuid
 
 from alden_gbrain_cache import _read,_write
-from alden_gbrain_client import GbrainError,_path,validate_runtime
+from alden_gbrain_client import GbrainError,_path,_json,validate_runtime
 from alden_gbrain_import import STABLE_POLICY,_db,_digest,GbrainImportClient
 from alden_collection_export import _file_token
 
@@ -131,6 +131,17 @@ def build_delta(cache,generation,projection,previous,*,fd,check):
     plan=clone_closed(cache,previous,projection,generation,check)
     plan.carry_revisions()
     removed=cache._retire(cache.active(),preserve=generation.name)
+    # The copied pack describes the old graph. Admit new observed verbs before
+    # opening this private writer; no inference or extraction is enabled.
+    pack=_path(generation/'home/.gbrain/schema-packs/alden-scoped-graph/pack.yaml')
+    pack.write_text(projection.schema_yaml())
+    validated=cache._command(generation,['schema','validate','alden-scoped-graph'],fd=fd,check=check)
+    if b'valid manifest' not in validated:raise GbrainError('gbrain_cache_schema_invalid')
+    cache._command(generation,['schema','use','alden-scoped-graph'],fd=fd,check=check)
+    active=_json(cache._command(generation,['schema','active','--source','default','--json'],fd=fd,check=check))
+    if not isinstance(active,dict) or active.get('pack')!='alden-scoped-graph' or active.get('degraded'):
+        raise GbrainError('gbrain_cache_schema_invalid')
+    validate_runtime(cache.root/'runtime-receipt.json',cache.root,generation/'home',check)
     writes={'pages_put':0,'pages_purged':0,'links_added':0,'links_removed':0}
     def request(phase,key):
         identity=str(uuid.uuid5(uuid.UUID(cache.owner['owner']),generation.name+':'+phase+':'+key))
@@ -139,7 +150,6 @@ def build_delta(cache,generation,projection,previous,*,fd,check):
     for page in plan.deleted_pages():
         result=cache._command(generation,['delete',page['slug'],'--source-id','default','--expected-revision',page['revision'],
             '--purge','--json'],fd=fd,check=check,write=True)
-        from alden_gbrain_client import _json
         result=_json(result)
         if (not isinstance(result,dict) or result.get('status')!='purged'
                 or result.get('slug')!=page['slug'] or result.get('source_id')!='default'):

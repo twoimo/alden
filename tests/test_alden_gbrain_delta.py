@@ -94,6 +94,9 @@ class DeltaTests(unittest.TestCase):
         old=self.initial();before={p['slug']:p for p in old.pages()};self.change()
         value=self.cache.refresh(incremental=True);new=self.f.projection()
         self.assertEqual(value['update_mode'],'engine_delta');self.assertEqual(value['engine_writes']['pages_put'],1)
+        self.assertEqual(value['source_update']['mode'],'journal_delta')
+        self.assertEqual(value['source_update']['archive_rows']['nodes_put'],1)
+        self.assertEqual(value['index_updates'],{'mode':'index_delta','pages_put':1,'pages_deleted':0,'links_put':1,'links_deleted':0})
         changed=new.slug(identity('graph','a'))
         self.assertEqual(self.engine.puts,[changed]);self.assertFalse(old.root.exists())
         for page in new.pages():
@@ -291,6 +294,8 @@ class DeltaTests(unittest.TestCase):
         value=self.cache.refresh(incremental=True)
         self.assertEqual(value['engine_writes'],{'pages_put':120,'pages_purged':0,'links_added':120,'links_removed':0})
         self.assertEqual(value['pages'],124);self.assertEqual(len(self.engine.puts),120)
+        self.assertEqual(value['source_update']['candidate_nodes'],120)
+        self.assertEqual(value['index_updates']['pages_put'],120)
         self.assertEqual(len(set(self.engine.puts)),120);self.assertTrue(self.f.query('added-119')['ok'])
 
     def test_one_update_in_a_large_stable_generation_keeps_all_other_revisions(self):
@@ -300,8 +305,27 @@ class DeltaTests(unittest.TestCase):
         value=self.cache.refresh(incremental=True)
         self.assertEqual(value['pages'],2104);self.assertEqual(value['verified_queries'],2104)
         self.assertEqual(value['engine_writes']['pages_put'],1)
+        self.assertEqual(value['source_update']['candidate_nodes'],1)
+        self.assertEqual(value['source_update']['archive_rows']['nodes_put'],1)
+        self.assertEqual(value['index_updates']['pages_put'],1)
         after={p['slug']:p['revision'] for p in self.f.projection().pages()}
         self.assertEqual(sum(before[k]==after[k] for k in before),2103)
+
+    def test_reused_index_prunes_retracted_pages_before_engine_mutation(self):
+        old=self.initial();self.remove();root=self.f.base/'next-index';root.mkdir(mode=0o700)
+        full.export_graph(self.f.root,['one'],root/'source-archive')
+        index=full.FullProjection.prepare(root,policy=full.STABLE_POLICY,previous=old)
+        self.assertNotIn(index.slug(identity('graph','c')),{p['slug'] for p in index.pages()})
+        self.assertEqual(index.index_updates['pages_deleted'],1);self.assertEqual(index.index_updates['links_deleted'],2)
+
+    def test_new_observed_relation_type_updates_the_private_schema_pack(self):
+        self.initial()
+        relation=self.f.relation('a','c');relation['type']='contrasts-with'
+        self.f.store.ingest(self.f.target,[],relations=[relation]);value=self.cache.refresh(incremental=True)
+        self.assertEqual(value['engine_writes'],{'pages_put':0,'pages_purged':0,'links_added':1,'links_removed':0})
+        index=self.f.projection();verb='alden_'+full._digest('contrasts-with')[:24]
+        self.assertIn(verb,(index.root/'home/.gbrain/schema-packs/alden-scoped-graph/pack.yaml').read_text())
+        self.assertTrue(self.f.query()['ok'])
 
 
 if __name__=='__main__':unittest.main()
