@@ -133,3 +133,9 @@ product. Emptying the center while concentrating points elsewhere is not an
 accepted result. Neighbor ranks describe only admitted-pair geometry and do
 not constitute independent semantic gold. Task evidence and failed alternatives
 remain in `outputs/central-affinity-balance-20261025/`.
+
+The subsequent [numerical neighbor oracle](../evaluation/affinity-neighbor-oracle-20261025.md)
+separates fair pair access, exact nearest-vector recall and final pair allocation.
+It adds a reproducible private-snapshot evaluator and records the prototype's
+remaining central-core regression. Neither the production sampler nor semantic
+quality is declared improved by that offline comparison alone.
