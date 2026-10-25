@@ -32,12 +32,16 @@ def _owned_edge(db, edge, target, origin, account, room, message):
     return row
 
 
-def observe(source, room, message):
+def observe(source, room, message, *, cancelled=lambda: False):
     from alden_messenger_runtime import SourceBlocked
+    def check():
+        if cancelled(): raise RuntimeError('collection_cancelled')
+    check()
     callback = getattr(source.reader, 'reply_reference', None)
     if source.platform != 'kakaotalk' or not callable(callback):
         raise SourceBlocked('messenger_reference_capability_required')
     proof = callback(room, message)
+    check()
     if not isinstance(proof, dict):
         raise SourceBlocked('messenger_reference_invalid')
     if proof.get('state') in {'withheld', 'not_admitted'}:
@@ -60,6 +64,7 @@ def observe(source, room, message):
     proof = {k: proof[k] for k in (*fields, 'state', 'reference_revision', 'source')}
     keys = [{'room_id': room, 'message_id': value} for value in dict.fromkeys((message, proof['target_message_id']))]
     rows = source.reader.content_revisions(keys)
+    check()
     if not isinstance(rows, list) or len(rows) != len(keys):
         raise SourceBlocked('messenger_reference_content_invalid')
     found = {}
@@ -82,7 +87,7 @@ def observe(source, room, message):
     return {'state': 'verified', 'reference': proof, 'target_content_hash': target['content_hash']}
 
 
-def scopes(source):
+def scopes(source, *, cancelled=lambda: False):
     """Fresh metadata for known claims. No claim table is created on a read."""
     with source.store.database() as db:
         if not db.execute("SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (TABLE,)).fetchone():
@@ -94,10 +99,12 @@ def scopes(source):
             raise ValueError('messenger_reference_revision_budget')
     result = []
     for row in rows:
+        if cancelled(): raise RuntimeError('collection_cancelled')
         try:
-            current = observe(source, row['room'], row['message'])
+            current = observe(source, row['room'], row['message'], cancelled=cancelled)
         except (ValueError, RuntimeError, OSError):
             current = {'state': 'unavailable'}
+        if cancelled(): raise RuntimeError('collection_cancelled')
         result.append([*tuple(row), current])
     return result
 
@@ -112,7 +119,7 @@ def allowed(authority, target, source_id, destination, relation_type, evidence):
         return False
     proof = observed['reference']
     source = authority._source(target)
-    current = observe(source, proof.get('room_id'), proof.get('source_message_id'))
+    current = observe(source, proof.get('room_id'), proof.get('source_message_id'), cancelled=authority._cancelled)
     if current != observed:
         return False
     expected = [identity('graph', 'messenger-content:' + value) for value in
@@ -157,7 +164,7 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
                     yield
 
     gate()
-    observed = observe(source, room, message)
+    observed = observe(source, room, message, cancelled=authority._cancelled)
     origin = identity('reference-origin', encoded([source.account, room, message]).decode())
     if observed['state'] != 'verified':
         with source.store.database() as db:
@@ -206,7 +213,7 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
                 row = _owned_edge(db, edge, target, origin, source.account, room, message)
                 unchanged = bool(row['active']) and row['evidence'] == evidence
             if unchanged:
-                if observe(source, room, message) != observed:
+                if observe(source, room, message, cancelled=authority._cancelled) != observed:
                     raise SourceBlocked('messenger_reference_changed_during_commit')
                 return {'state': state, 'changed': False}
         generation = old['generation'] + 1 if old else 1
@@ -248,6 +255,6 @@ def reconcile(root, target, room, message, *, reader=None, cancelled=lambda: Fal
                          reference_origin=origin, reference_generation=generation, reference_state=state,
                          relation_id=edge, previous_relation_id=old['relation_id'] if old else None,
                          reason='현재 원문의 명시적 답글 관계가 갱신되었습니다.')
-        if observe(source, room, message) != observed:
+        if observe(source, room, message, cancelled=authority._cancelled) != observed:
             raise SourceBlocked('messenger_reference_changed_during_commit')
         return {'state': state, 'changed': True, 'relation_id': edge, 'generation': generation}

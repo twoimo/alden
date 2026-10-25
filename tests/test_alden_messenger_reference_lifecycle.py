@@ -192,5 +192,18 @@ class ReferenceLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'root_mismatch'):
             CollectionStore.open_existing(root, source_relation_access=Foreign().check)
 
+    def test_request_cancellation_stops_before_the_next_known_reference_read(self):
+        self.update()
+        reconcile(self.root, self.target, '123', '8', reader=self.reader)
+        original = self.reader.reply_reference
+        flag = [False]
+        before = self.reader.reference_reads
+        def cancel_after_first(room, message):
+            result = original(room, message); flag[0] = True; return result
+        with patch.object(self.reader, 'reply_reference', side_effect=cancel_after_first):
+            with self.assertRaisesRegex(RuntimeError, 'collection_cancelled'):
+                read_action(self.root, 'collection-graph', json.dumps({'projects': ['messenger']}), cancelled=lambda: flag[0])
+        self.assertEqual(self.reader.reference_reads - before, 1)
+
 
 if __name__ == '__main__': unittest.main()

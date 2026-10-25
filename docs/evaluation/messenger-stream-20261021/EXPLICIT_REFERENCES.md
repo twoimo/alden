@@ -151,6 +151,13 @@ finite actual-store traces, not a proof of every interleaving or all-input
 correctness. Earlier raw receipts/counterexamples retain their original source
 hashes rather than being relabeled as current verification.
 
+Request cancellation is carried into automatically resolved production authority
+and checked before/after canonical reference calls and between known claims.
+The two-claim counterexample previously made a second reference read after the
+first triggered cancellation; it now stops after one. A single blocking native
+call is not thereby given a hard deadline. The caller's existing cancellation,
+source callback ownership and commit guards remain separate checks.
+
 Broader source coverage, automatic acquisition/retry, duplicate view-edge
 projection, exact-cost measurements, native graph/UI, original production
 installation and all main-goal release gates remain open.

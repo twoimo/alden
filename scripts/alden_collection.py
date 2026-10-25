@@ -423,7 +423,10 @@ def source_callbacks(state_root, *, source_access=None, source_revision=None, so
     path = Path(state_root) / 'knowledge/collection/production-messengers.json'
     if path.exists() or path.is_symlink():
         from alden_messenger_production import ProductionAuthority
-        authority = ProductionAuthority(Path(state_root))
+        def read_cancelled():
+            callback = _READ_CANCELLATION.get()
+            return callback is not None and bool(callback())
+        authority = ProductionAuthority(Path(state_root), cancelled=read_cancelled)
         return dict(source_access=authority.access, source_revision=authority.revision,
                     source_context=authority.retrieval_context, source_stream=authority.stream_revision,
                     source_relation_access=authority.relation_access)

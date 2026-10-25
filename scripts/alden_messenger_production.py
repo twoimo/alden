@@ -310,7 +310,7 @@ class ProductionAuthority:
             raise ValueError('messenger_enrollment_changed_during_read')
         self.current[target] = source, bodies
         from alden_messenger_references import scopes
-        reference_scopes = scopes(source)
+        reference_scopes = scopes(source, cancelled=self._cancelled)
         return hashlib.sha256(encoded([state['revision'], revision, heads,
             [[room, message, *observed[(room, message)]] for room, message in sorted(observed)], reference_scopes])).hexdigest()
 
