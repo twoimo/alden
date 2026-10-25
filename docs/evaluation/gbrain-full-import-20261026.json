@@ -1,0 +1,76 @@
+{
+  "kind": "full-source-gbrain-import-local-evidence-v1",
+  "base_head": "787055f0a59c1aeb84938dec9a46a57bdeea7df7",
+  "source_sha256": {
+    "scripts/alden_gbrain_import.py": "1fea717b202383e9b09798078274d29c9e038831dc261535512ee355ea8b1661",
+    "scripts/alden_gbrain_cache.py": "9309b6a316376e888e3e324c772a6fbddcd651c5fa749e66c5d63b4d0b690b31",
+    "scripts/alden_gbrain_client.py": "6747303ff346df82f28bc654de103bfa620687b742892f3ff9b5fafd7bfa0165",
+    "scripts/alden_knowledge_mcp.py": "2b2b26fbdb888427543f6b5d0a5df2a3c48fe4bddcae046ee4f90f96b6023f90",
+    "tests/test_alden_gbrain_import.py": "1ece8ea531426afb9d66e32ab4c6c3e1e2391074d0be8617d31b6985419829e6",
+    "tests/test_alden_gbrain.py": "11cae96eff861233b78f9f53478dbecc5da01c7d60b9fae43f51628ec9e20278",
+    ".github/workflows/ci.yml": "c31752346efcc6bf805ec90ccefcb811d464b3f8de1e6029b6e17759e23e68e3",
+    "desktop/src-tauri/tauri.conf.json": "8dea6f033c0e2b58e656c03865c4523fc43d717bd1c1c64d4738f4f2a489c0e7",
+    "desktop/src-tauri/src/resource_layout.rs": "a3bb72982216f2d5dd07b9f3912abf740c9ee31666f002606ae713b03da6d189"
+  },
+  "python_tests": 425,
+  "full_import_tests": 26,
+  "isolated_mutants": 11,
+  "full_goal": "active",
+  "installation": false,
+  "native_app_launch": false,
+  "global_registration_change": false,
+  "independent_external_review": "NOT_RUN",
+  "worker_contract": {
+    "required_model": "chatgpt-web/gpt-6-astra",
+    "required_effort": "max",
+    "exposed_models": [
+      "gpt-6.1-sol",
+      "gpt-6-astra",
+      "gpt-6-sol",
+      "gpt-6-luna",
+      "chatgpt-web/gpt-6-sol"
+    ],
+    "required_model_exposed": false,
+    "worker_dispatched": false,
+    "substitution": false,
+    "external_review": "NOT_RUN under inherited source-upload/readiness/coordinator holds"
+  },
+  "current_source_acceptance": {
+    "receipt": "outputs/gbrain-full-import-20261025T195140Z/public-full-delivery/acceptance.json",
+    "sha256": "e2950ddf1865d44d649ec2d235c2aab6b1902b495addafce763a1d46c6f271c2",
+    "counts": {
+      "source_nodes": 3048,
+      "origins": 1,
+      "observed_groups": 3057,
+      "membership_links": 3048,
+      "pages": 3049,
+      "links": 6105,
+      "verified_queries": 3049
+    },
+    "independent_readback": {
+      "all_pages": 3049,
+      "all_judgment_groups": 3057,
+      "all_membership_links": 3048
+    },
+    "mcp_queries": [
+      {
+        "phase": "full-record-path",
+        "expected_error": false,
+        "clean_exit": true
+      },
+      {
+        "phase": "denied-before-cleanup",
+        "expected_error": true,
+        "clean_exit": true
+      },
+      {
+        "phase": "withdrawn-cache",
+        "expected_error": true,
+        "clean_exit": true
+      }
+    ],
+    "original_frozen_fixture_unchanged": true,
+    "final_generation_count": 0,
+    "current_modules_exact": true
+  }
+}

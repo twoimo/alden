@@ -270,6 +270,27 @@ class ToolPayloadTests(unittest.TestCase):
                     self.client(result).graph('sources/example')
                 self.assertNotIn('SECRET', str(caught.exception))
 
+    def test_reviewed_feature_coaching_is_recorded_without_running_its_fix(self):
+        notice={'code':'features_auto_fix','kind':'coaching','why':'publisher recommendation',
+                'fix':{'argv':['DO_NOT_EXECUTE'],'consent':['paid']}}
+        result={'content':[{'type':'text','text':'[]'},
+            {'type':'text','text':'[gbrain notice features_auto_fix kind=coaching]\nwhy: publisher recommendation'}],
+            '_meta':{'gbrain_notices':[notice]}}
+        client=self.client(result)
+        self.assertEqual(client.graph('sources/example'),[])
+        self.assertEqual(client.notice_codes,{'features_auto_fix'})
+        self.assertEqual(client.transport.last_request[1]['name'],'traverse_graph')
+
+    def test_feature_notice_kind_or_unpaired_prefix_cannot_hide_degraded_data(self):
+        for code,kind,prefix in [('features_auto_fix','degraded','features_auto_fix kind=degraded'),
+                                 ('features_auto_fix','coaching','different kind=coaching'),
+                                 ('unknown',None,'unknown')]:
+            result={'content':[{'type':'text','text':'[]'},
+                {'type':'text','text':'[gbrain notice '+prefix+']\n'}],
+                '_meta':{'gbrain_notices':[{'code':code,'kind':kind}]}}
+            with self.subTest(code=code,kind=kind),self.assertRaises(GbrainError):
+                self.client(result).graph('sources/example')
+
     def test_all_sources_and_invalid_graph_options_never_reach_the_transport(self):
         client = self.client({'content':[{'type':'text','text':'[]'}]})
         for kwargs in ({'depth':True},{'depth':4},{'direction':'sideways'},{'link_type':['sourced_from']}):

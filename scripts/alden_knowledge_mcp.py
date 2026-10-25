@@ -12,6 +12,7 @@ from alden_status_mcp import StdioServer, _check
 from alden_gbrain_bridge import GbrainGraphReader
 from alden_gbrain_client import GbrainError
 from alden_gbrain_cache import ManagedGbrainReader
+from alden_gbrain_import import FullGbrainReader
 
 
 class CallToken(AbortToken):
@@ -182,6 +183,11 @@ class KnowledgeServer(StdioServer):
                                       max_entities=args.get('limit', 6), cancelled=cancelled,
                                       **guards, search_strategy=self.search_strategy)
             elif name == 'alden_knowledge_paths':
+                def current_store():
+                    check()
+                    current_guards = self._source_guards(cancelled)
+                    return CollectionStore.open_existing(self.root,source_access=current_guards['source_access'],
+                        source_revision=current_guards['source_revision'],source_relation_access=current_guards['source_relation_access'])
                 def current_graph():
                     check()
                     current_guards = self._source_guards(cancelled)
@@ -189,9 +195,9 @@ class KnowledgeServer(StdioServer):
                         json.dumps({'projects': args['projects'], 'limit': 50}), cancelled=cancelled,
                         source_access=current_guards['source_access'], source_revision=current_guards['source_revision'],
                         source_relation_access=current_guards['source_relation_access'])
+                authority = {'store_factory':current_store} if isinstance(self.gbrain,FullGbrainReader) else {'current':current_graph}
                 result = self.gbrain.query(projects=args['projects'], focus=args['focus'],
-                    current=current_graph, check=check, depth=args.get('depth', 2),
-                    direction=args.get('direction', 'both'))
+                    **authority, check=check, depth=args.get('depth', 2),direction=args.get('direction', 'both'))
             else:
                 source_read = name == 'alden_knowledge_source'
                 action = 'collection-graph' if source_read or name.endswith('graph') else 'collection-history'
@@ -252,12 +258,13 @@ def main():
     for name in ('root', 'receipt', 'home', 'manifest'):
         parser.add_argument('--gbrain-' + name, type=Path)
     parser.add_argument('--gbrain-managed-root', type=Path)
+    parser.add_argument('--gbrain-full-root', type=Path)
     args = parser.parse_args()
     paths = [getattr(args, 'gbrain_' + name) for name in ('root', 'receipt', 'home', 'manifest')]
     if any(paths) and not all(paths):
         parser.error('all four --gbrain-* paths are required together')
-    if args.gbrain_managed_root and any(paths):
-        parser.error('managed root and explicit unmanaged paths are mutually exclusive')
+    if sum((bool(args.gbrain_managed_root),bool(args.gbrain_full_root),any(paths)))>1:
+        parser.error('bounded managed root, full root and unmanaged paths are mutually exclusive')
     try:
         factory = None
         if args.messenger_source:
@@ -266,6 +273,8 @@ def main():
         gbrain = GbrainGraphReader(owned_root=paths[0], receipt=paths[1], home=paths[2], manifest=paths[3]) if all(paths) else None
         if args.gbrain_managed_root:
             gbrain = ManagedGbrainReader(args.gbrain_managed_root, collection_root=args.state_root, projects=args.allow_project)
+        if args.gbrain_full_root:
+            gbrain = FullGbrainReader(args.gbrain_full_root,collection_root=args.state_root,projects=args.allow_project)
         KnowledgeServer(args.state_root, args.allow_project, search_strategy=args.search_strategy,
                         source_factory=factory, gbrain=gbrain).serve(sys.stdin.buffer, sys.stdout.buffer)
     except (BrokenPipeError, KeyboardInterrupt):

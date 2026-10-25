@@ -87,6 +87,8 @@ class _UnreapedWorker(GbrainError):
 
 
 class ManagedGbrainCache:
+    KIND = KIND
+
     def __init__(self, root, *, collection_root, projects):
         self.root = _path(root)
         info = self.root.stat()
@@ -95,7 +97,7 @@ class ManagedGbrainCache:
         self.root_identity = (info.st_dev, info.st_ino)
         self.owner = _read(self.root / 'owner.json')
         expected = {'kind', 'owner', 'collection_root_sha256', 'projects'}
-        if (not isinstance(self.owner, dict) or set(self.owner) != expected or self.owner['kind'] != KIND
+        if (not isinstance(self.owner, dict) or set(self.owner) != expected or self.owner['kind'] != self.KIND
                 or not isinstance(self.owner['owner'], str) or not re.fullmatch('[0-9a-f]{32}', self.owner['owner'])
                 or self.owner['collection_root_sha256'] != _sha(str(_path(collection_root)).encode())
                 or self.owner['projects'] != _projects(projects)):
@@ -131,7 +133,7 @@ class ManagedGbrainCache:
             check()
             # owner.json is the bootstrap commit record; partial roots cannot
             # construct a manager or reader. The creator holds the lease too.
-            _write(root / 'owner.json', {'kind': KIND, 'owner': uuid.uuid4().hex,
+            _write(root / 'owner.json', {'kind': cls.KIND, 'owner': uuid.uuid4().hex,
                 'collection_root_sha256': _sha(str(collection_root).encode()), 'projects': projects})
             _sync(root.parent)
             complete = True
@@ -188,7 +190,7 @@ class ManagedGbrainCache:
         if not isinstance(name, str) or not _GEN.fullmatch(name):
             raise GbrainError('gbrain_cache_generation_invalid')
         path = _path(self.generations / name)
-        if _read(path / 'generation.json') != {'kind': KIND, 'owner': self.owner['owner'], 'generation': name}:
+        if _read(path / 'generation.json') != {'kind': self.KIND, 'owner': self.owner['owner'], 'generation': name}:
             raise GbrainError('gbrain_cache_generation_invalid')
         return path
 
@@ -409,7 +411,7 @@ class ManagedGbrainCache:
             name = 'g' + uuid.uuid4().hex
             generation = self.generations / name
             generation.mkdir(mode=0o700)
-            _write(generation / 'generation.json', {'kind': KIND, 'owner': self.owner['owner'], 'generation': name})
+            _write(generation / 'generation.json', {'kind': self.KIND, 'owner': self.owner['owner'], 'generation': name})
             try:
                 acceptance = self._build(generation, projection, fd=fd, check=check)
                 check()

@@ -292,13 +292,18 @@ class GbrainReadClient:
                 or any(not isinstance(part, str) for part in text)):
             raise GbrainError('gbrain_graph_unavailable')
         # Upstream's first block is data; following blocks mirror structured
-        # notices. Retain setup notice codes, never execute their suggested steps.
+        # notices. The pinned publisher's features_auto_fix is coaching, not
+        # degraded graph data. Record it, never execute its suggested fixes
+        # (which can include paid/provider operations). Unknown notices fail.
+        reviewed_notices = {'first_run_decisions': 'ask', 'features_auto_fix': 'coaching'}
         for notice, block in zip(notices, text[1:]):
-            if (not isinstance(notice, dict) or notice.get('code') != 'first_run_decisions'
-                    or notice.get('kind') != 'ask'
-                    or not block.startswith('[gbrain notice first_run_decisions kind=ask]\n')):
+            if not isinstance(notice, dict):
                 raise GbrainError('gbrain_graph_notice_unreviewed')
-            self.notice_codes.add('first_run_decisions')
+            code, kind = notice.get('code'), notice.get('kind')
+            if (not isinstance(code, str) or code not in reviewed_notices or reviewed_notices[code] != kind
+                    or not block.startswith('[gbrain notice ' + code + ' kind=' + kind + ']\n')):
+                raise GbrainError('gbrain_graph_notice_unreviewed')
+            self.notice_codes.add(code)
         data = _json(text[0])
         if not isinstance(data, list) or len(data) > 8192:
             raise GbrainError('gbrain_graph_shape_invalid')
