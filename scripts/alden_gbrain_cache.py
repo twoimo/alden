@@ -469,7 +469,7 @@ def main():
     parser.add_argument('--runtime-root', type=Path)
     parser.add_argument('--runtime-receipt', type=Path)
     parser.add_argument('--runtime-home', type=Path)
-    parser.add_argument('--messenger-source', choices=('kakaotalk',))
+    parser.add_argument('--messenger-source', choices=('kakaotalk','enrolled'))
     parser.add_argument('--rebuild', action='store_true')
     args = parser.parse_args()
     runtime = (args.runtime_root, args.runtime_receipt, args.runtime_home)
@@ -493,8 +493,8 @@ def main():
             return
         factory = None
         if args.messenger_source:
-            from alden_messenger_factory import open_existing_kakao
-            factory = open_existing_kakao
+            from alden_messenger_factory import open_existing_kakao, open_enrolled_messengers
+            factory = open_enrolled_messengers if args.messenger_source=='enrolled' else open_existing_kakao
         authority = KnowledgeServer(args.state_root, args.project, source_factory=factory)
         def current():
             check()

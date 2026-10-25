@@ -227,3 +227,18 @@ def open_existing_kakao(root, cancelled=lambda: False):
     source = Frontier.open_existing(root, 'kakaotalk', reader.identity(), reader)
     check()
     return ExistingAuthority(root, MessengerAuthority([source]), cancelled)
+
+
+def open_enrolled_messengers(root,cancelled=lambda:False):
+    """Use an existing production binding; never enroll or discover accounts."""
+    from alden_messenger_production import ProductionAuthority,read_enrollment
+    root=Path(root)
+    if not root.is_absolute() or '..' in root.parts:raise ValueError('messenger_existing_absolute_root_required')
+    if cancelled() or AbortToken(root/ABORT_STATE_NAME).is_cancelled():
+        raise SourceBlocked('messenger_request_cancelled')
+    state=read_enrollment(root)
+    if not any(s['state']=='active' for s in state['sources']):
+        raise SourceBlocked('messenger_production_binding_unavailable')
+    # ProductionAuthority opens only a requested enrolled target, lazily. A
+    # graph-only project must not load an unrelated account's SDK/reader.
+    return ProductionAuthority(root,cancelled=cancelled)

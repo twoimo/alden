@@ -213,6 +213,11 @@ class ProductionAuthority:
     def collection_source_root(self):
         return self.root
 
+    def _identity(self,source):
+        from alden_messenger_runtime import SourceBlocked
+        if self._cancelled():raise SourceBlocked('messenger_request_cancelled')
+        if source.reader.identity()!=source.account:raise SourceBlocked('messenger_account_changed')
+
     def _source(self, target):
         from alden_messenger_runtime import Frontier, SourceBlocked
         if self._cancelled():
@@ -225,6 +230,7 @@ class ProductionAuthority:
         if target not in self.sources:
             reader = self.reader_factory()
             self.sources[target] = Frontier.open_existing(self.root, entry['platform'], entry['account'], reader, production=True)
+        self._identity(self.sources[target])
         return self.sources[target]
 
     def access(self, target, document, version, metadata):
@@ -232,6 +238,7 @@ class ProductionAuthority:
             if target not in self.current:
                 self.revision(target)
             source, bodies = self.current[target]
+            self._identity(source)
             claimed = metadata.get('source', {}) if isinstance(metadata, dict) else {}
             if not isinstance(claimed, dict):
                 return False
@@ -254,6 +261,7 @@ class ProductionAuthority:
         source = self._source(target)
         state, _ = binding(self.root, source.platform, source.account)
         authorization = source._source_revision(target)
+        self._identity(source)
         if read_enrollment(self.root)['revision'] != state['revision']:
             raise ValueError('messenger_enrollment_changed_during_read')
         return hashlib.sha256(encoded([state['revision'], authorization])).hexdigest()
@@ -269,6 +277,7 @@ class ProductionAuthority:
         source = self._source(target)
         state, _ = binding(self.root, source.platform, source.account)
         revision = source._source_revision(target)
+        self._identity(source)
         with source.database() as db:
             count, size = db.execute("SELECT count(*),coalesce(sum(length(CAST(body AS BLOB))),0) FROM message_heads WHERE state='candidate'").fetchone()
             if count > MAX_REVISION_ORIGINS or size > MAX_REVISION_TEXT_BYTES:
@@ -282,7 +291,9 @@ class ProductionAuthority:
             if self._cancelled():
                 raise RuntimeError('messenger_request_cancelled')
             requested = keys[offset:offset + 8192]
+            self._identity(source)
             rows = source.reader.content_revisions(requested)
+            self._identity(source)
             expected = {(key['room_id'], key['message_id']) for key in requested}
             if not isinstance(rows, list) or len(rows) != len(expected):
                 raise ValueError('messenger_content_revision_invalid')
@@ -308,9 +319,11 @@ class ProductionAuthority:
                 bodies[head['content_hash']] = head['body']
         if read_enrollment(self.root)['revision'] != state['revision']:
             raise ValueError('messenger_enrollment_changed_during_read')
-        self.current[target] = source, bodies
+        self._identity(source)
         from alden_messenger_references import scopes
         reference_scopes = scopes(source, cancelled=self._cancelled)
+        self._identity(source)
+        self.current[target] = source, bodies
         return hashlib.sha256(encoded([state['revision'], revision, heads,
             [[room, message, *observed[(room, message)]] for room, message in sorted(observed)], reference_scopes])).hexdigest()
 

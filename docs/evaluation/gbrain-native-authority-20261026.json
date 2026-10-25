@@ -1,0 +1,155 @@
+{
+  "basis": "candidate implementation; externally unvalidated; owned production root and isolated SDK fixture only",
+  "previous_head": "e48574d02be90cf78cc41556dfdff8e0e3c9b2fe",
+  "source_modules_sha256": {
+    "alden_collection.py": "1983ae346572822537885b834e896e7beba06ed667b2d42b80c059eed1da78f7",
+    "alden_collection_export.py": "3c552cd4625d834559b8e1f8be400d2e623cbed70f05dd134b155a0df21bc56c",
+    "alden_collection_delta.py": "ee3d846b7d09cd2ee473901a4854556aa1140ba421fcfc209f1e83709bbbf751",
+    "alden_gbrain_import.py": "8d69fe6b946ce4fe51799cb12ee37b136bca638f95d3eded070efaa8bfd270eb",
+    "alden_gbrain_delta.py": "bd6fa96640c7bdb1e4a2ac75406d2d9b798fef8384f917d55ccbc61118367266",
+    "alden_gbrain_cache.py": "5862029e748d2d99c06fdaad2477b7756e9441ced1fb570b43ce33f0ec63cb3f",
+    "alden_gbrain_watch.py": "52399360a15c2920bb10c399ae66ccea29d2209292814c5b8e0f0390b790c934",
+    "alden_gbrain_client.py": "6747303ff346df82f28bc654de103bfa620687b742892f3ff9b5fafd7bfa0165",
+    "alden_knowledge_mcp.py": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+    "alden_messenger_factory.py": "e50b3e770687504bc7f8d7e40fe0a5f085c4309ea140672050d01bcba259dd04",
+    "alden_messenger_production.py": "84847b230f6d4834672f66f1fb5cad36b0669d7f47ba7afa7829f4d748a89d97",
+    "alden_messenger_runtime.py": "db5902ff6f952ad783eb6cc275d630f268ea388442e415c9d37021276672633c",
+    "alden_messenger_references.py": "09d02ea66384cd2414440be9232720ebcca6d28296f6f12562fea1767fc39e40"
+  },
+  "native_regressions": 20,
+  "messenger_relation_tests": 342,
+  "isolated_mutants_detected": 7,
+  "actual_engine": "reviewed pinned GBrain actual binary; embeddings disabled",
+  "production_fixture_evaluation_marker": false,
+  "separate_writer_process": true,
+  "mcp": {
+    "total": 10,
+    "accepted": 6,
+    "rejected": 4,
+    "clean_exits": 10
+  },
+  "incremental_trials": [
+    {
+      "phase": "published-message-revision",
+      "engine_writes": {
+        "links_added": 1,
+        "links_removed": 0,
+        "pages_purged": 1,
+        "pages_put": 1
+      },
+      "source_update": {
+        "after": {
+          "content_revision": "287c06ba140838ead3e11b3875230de4cc2fd24e7aba1dc4307edd35248cf2c6",
+          "cursor": 18,
+          "stream_id": "stream:228c031d0b057a5eabda0dd241083d1f92dd7c741317621a986b0e3147bc724a"
+        },
+        "archive_rows": {
+          "edges_deleted": 0,
+          "edges_put": 0,
+          "nodes_deleted": 1,
+          "nodes_put": 1,
+          "targets_put": 0
+        },
+        "base_database_sha256": "2a48774d09157e2c809442dccf3d6722584a2f0b9721003b3e8ea6eaca75c716",
+        "candidate_groups": 0,
+        "candidate_nodes": 2,
+        "complete_source_comparison": true,
+        "events": 8,
+        "mode": "journal_delta",
+        "through": {
+          "content_revision": "977eb00f7bf0ec213e54751325b17591d7f6777ce64e18e67b8f97ddc5dfec5b",
+          "cursor": 26,
+          "stream_id": "stream:228c031d0b057a5eabda0dd241083d1f92dd7c741317621a986b0e3147bc724a"
+        }
+      },
+      "index_updates": {
+        "links_deleted": 1,
+        "links_put": 1,
+        "mode": "index_delta",
+        "pages_deleted": 1,
+        "pages_put": 1
+      },
+      "unchanged_revisions": 3
+    },
+    {
+      "phase": "published-message-addition",
+      "engine_writes": {
+        "links_added": 1,
+        "links_removed": 0,
+        "pages_purged": 0,
+        "pages_put": 1
+      },
+      "source_update": {
+        "after": {
+          "content_revision": "977eb00f7bf0ec213e54751325b17591d7f6777ce64e18e67b8f97ddc5dfec5b",
+          "cursor": 26,
+          "stream_id": "stream:228c031d0b057a5eabda0dd241083d1f92dd7c741317621a986b0e3147bc724a"
+        },
+        "archive_rows": {
+          "edges_deleted": 0,
+          "edges_put": 0,
+          "nodes_deleted": 0,
+          "nodes_put": 1,
+          "targets_put": 0
+        },
+        "base_database_sha256": "3e48da8052a53811a8f026c87c047df1d371c1c98a8a852ece2023909d88f12a",
+        "candidate_groups": 0,
+        "candidate_nodes": 3,
+        "complete_source_comparison": true,
+        "events": 16,
+        "mode": "journal_delta",
+        "through": {
+          "content_revision": "1bf0f6b37d8ef26282e82e47846d5a51391dcf89909411eb4fbfdd5cb6efec07",
+          "cursor": 42,
+          "stream_id": "stream:228c031d0b057a5eabda0dd241083d1f92dd7c741317621a986b0e3147bc724a"
+        }
+      },
+      "index_updates": {
+        "links_deleted": 0,
+        "links_put": 1,
+        "mode": "index_delta",
+        "pages_deleted": 0,
+        "pages_put": 1
+      }
+    }
+  ],
+  "withdrawal_controls": [
+    "withheld current content",
+    "different current account",
+    "changed authorization policy"
+  ],
+  "fixture_observation_contract": "writer commits controlled SDK+Frontier publication before each owned watcher observation",
+  "final_remaining_generations": 0,
+  "evidence_sha256": {
+    "PLAN.json": "5a630cd95e765d0438c417c773526ec9d4473dab910df5171a46ac70890db512",
+    "operational-metadata-only.json": "1423cb50d8321e0e01f4124bfa12d6f1d8a249755cd70ca554f9c20ae5ccee59",
+    "native-runtime-final/acceptance.json": "6fd42220ea26113ee0de9d190a9e061e4c655d08166c53854f351b1d2ac1df03",
+    "negative-controls.json": "38f553c4e1591f6dc4a4080464f3afd88794b3106c543f191792d2626be22e9e",
+    "consumer-tests.json": "36ae3e009865f7e9f08c1bab82606d9f5d57174ef604afeebd2e1c01aff0b8ab",
+    "run_native_authority.py": "c19cddefff666bad50de5bfc1e3050a1ad146a715a11fd53cfd0ca70b7daee61",
+    "affected-tests-final.log": "31843822d00b23f8e729d77bfd43b86bf8626d9bf59cb73da5aa1e972496b6a6",
+    "production-final.log": "d8b27be518c0ee3d9851c85307aa65a6c53127e35dd561efef7181f8db047c71"
+  },
+  "original_metadata_only": {
+    "declared_targets": 43,
+    "project_count": 5,
+    "production_messenger_enrollment": false,
+    "evaluation_marker": false,
+    "body_reads": 0,
+    "writes": 0
+  },
+  "original_state_mutations": false,
+  "install_gui_release": false,
+  "external_review": "NOT_RUN; inherited source upload/readiness/coordinator holds",
+  "required_independent_worker": "chatgpt-web/gpt-6-astra/max unavailable; no substitution",
+  "limits": [
+    "not real account/device or OS permission acceptance",
+    "not a native service installation or concurrency/resource bound",
+    "full source compare/index regeneration/DB copy/full engine verification remain",
+    "no installed native/account/device/permission proof",
+    "no OWL/SHACL/Lean/certificate execution",
+    "full original goal remains active"
+  ],
+  "related_tests": 445,
+  "post_final_production_reference_tests": 78
+}

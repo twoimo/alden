@@ -61,8 +61,22 @@ class KnowledgeServer(StdioServer):
             self.source_relation_access = guards['source_relation_access']
         require_collection_source_root(self.root, source_access, source_revision, source_context, self.source_relation_access)
         # Opening existing data validates paths/schema without creating or migrating it.
-        CollectionStore.open_existing(self.root, source_access=source_access, source_revision=source_revision,
-                                      source_relation_access=self.source_relation_access)
+        self._collection_store_from_guards({'source_access':source_access,'source_revision':source_revision,
+            'source_context':source_context,'source_relation_access':self.source_relation_access})
+
+    def _collection_store_from_guards(self,guards):
+        owner=getattr(guards['source_revision'],'__self__',None)
+        stream=getattr(owner,'stream_revision',None)
+        if stream is not None:
+            if (not callable(stream) or getattr(stream,'__self__',None) is not owner
+                    or any(value is not None and getattr(value,'__self__',None) is not owner for value in guards.values())):
+                raise ValueError('knowledge_source_stream_authority_invalid')
+        return CollectionStore.open_existing(self.root,source_access=guards['source_access'],
+            source_revision=guards['source_revision'],source_relation_access=guards['source_relation_access'],source_stream=stream)
+
+    def collection_store(self,cancelled=lambda:False):
+        """Fresh bound read-only store, retaining a declared stream callback."""
+        return self._collection_store_from_guards(self._source_guards(cancelled))
 
     def _source_guards(self, cancelled):
         if self.source_factory is None:
@@ -185,9 +199,7 @@ class KnowledgeServer(StdioServer):
             elif name == 'alden_knowledge_paths':
                 def current_store():
                     check()
-                    current_guards = self._source_guards(cancelled)
-                    return CollectionStore.open_existing(self.root,source_access=current_guards['source_access'],
-                        source_revision=current_guards['source_revision'],source_relation_access=current_guards['source_relation_access'])
+                    return self.collection_store(cancelled)
                 def current_graph():
                     check()
                     current_guards = self._source_guards(cancelled)
@@ -254,7 +266,7 @@ def main():
     parser.add_argument('--state-root', type=Path, required=True)
     parser.add_argument('--allow-project', action='append', required=True)
     parser.add_argument('--search-strategy', choices=('complete','indexed-lexical'), default='complete')
-    parser.add_argument('--messenger-source', choices=('kakaotalk',))
+    parser.add_argument('--messenger-source', choices=('kakaotalk','enrolled'))
     for name in ('root', 'receipt', 'home', 'manifest'):
         parser.add_argument('--gbrain-' + name, type=Path)
     parser.add_argument('--gbrain-managed-root', type=Path)
@@ -268,8 +280,8 @@ def main():
     try:
         factory = None
         if args.messenger_source:
-            from alden_messenger_factory import open_existing_kakao
-            factory = open_existing_kakao
+            from alden_messenger_factory import open_existing_kakao, open_enrolled_messengers
+            factory = open_enrolled_messengers if args.messenger_source=='enrolled' else open_existing_kakao
         gbrain = GbrainGraphReader(owned_root=paths[0], receipt=paths[1], home=paths[2], manifest=paths[3]) if all(paths) else None
         if args.gbrain_managed_root:
             gbrain = ManagedGbrainReader(args.gbrain_managed_root, collection_root=args.state_root, projects=args.allow_project)

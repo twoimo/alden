@@ -543,7 +543,7 @@ def main():
     parser.add_argument('--root',type=Path,required=True);parser.add_argument('--state-root',type=Path,required=True)
     parser.add_argument('--project',action='append',required=True)
     parser.add_argument('--runtime-root',type=Path);parser.add_argument('--runtime-home',type=Path);parser.add_argument('--runtime-receipt',type=Path)
-    parser.add_argument('--messenger-source',choices=('kakaotalk',));parser.add_argument('--focus')
+    parser.add_argument('--messenger-source',choices=('kakaotalk','enrolled'));parser.add_argument('--focus')
     parser.add_argument('--depth',type=int,default=1);parser.add_argument('--direction',choices=('in','out','both'),default='both')
     parser.add_argument('--timeout-seconds',type=int,default=1800)
     parser.add_argument('--incremental',action='store_true',help='refresh: mutate only changed engine rows; full source/readback scans remain')
@@ -562,13 +562,11 @@ def main():
         else:
             source_factory=None
             if args.messenger_source:
-                from alden_messenger_factory import open_existing_kakao
-                source_factory=open_existing_kakao
+                from alden_messenger_factory import open_existing_kakao, open_enrolled_messengers
+                source_factory=open_enrolled_messengers if args.messenger_source=='enrolled' else open_existing_kakao
             authority=KnowledgeServer(args.state_root,args.project,source_factory=source_factory)
             def factory():
-                guards=authority._source_guards(token.is_cancelled)
-                return CollectionStore.open_existing(args.state_root,source_access=guards['source_access'],
-                    source_revision=guards['source_revision'],source_relation_access=guards['source_relation_access'])
+                return authority.collection_store(token.is_cancelled)
             if args.action=='create':
                 store=factory()
                 with store.database() as db:_stamp(db,store,_projects(args.project))

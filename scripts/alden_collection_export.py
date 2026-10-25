@@ -125,6 +125,19 @@ def _stamp(db, store, projects):
            (not isinstance(scope,str) or not re.fullmatch('[0-9a-f]{64}',scope))
            for _,_,permission,scope in authority):
         raise ExportError('collection_export_authority_unavailable')
+    # A declared authorization stream can remain stable while current content
+    # changes. Preserve the full content revision in the checkpoint below;
+    # never weaken its per-record guards or the final snapshot comparison.
+    if callable(getattr(store,'source_stream',None)):
+        access=tuple(tuple(r) for r in db.execute('''SELECT target_id,project,permission,
+            CASE WHEN permission!='denied' THEN alden_source_stream(target_id) END
+            FROM target_projects WHERE project IN ('''+marks+') ORDER BY target_id,project',projects))
+        if any(scope is not None for _,_,permission,scope in access if permission!='denied'):
+            if any(permission!='denied' and scope is not None and
+                    (not isinstance(scope,str) or re.fullmatch('[0-9a-f]{64}',scope) is None)
+                    for _,_,permission,scope in access):
+                raise ExportError('collection_export_authority_unavailable')
+            authority={'policy':'declared-source-access-stream-v1','scope':access}
     checkpoint = store._activity_scope(db, projects)[0]
     info = store.path.stat()
     return {'authority':hashlib.sha256(encoded(authority)).hexdigest(),
@@ -385,7 +398,7 @@ def main():
     parser.add_argument('--state-root',type=Path,required=True)
     parser.add_argument('--project',action='append',required=True)
     parser.add_argument('--output',type=Path,required=True)
-    parser.add_argument('--messenger-source',choices=('kakaotalk',))
+    parser.add_argument('--messenger-source',choices=('kakaotalk','enrolled'))
     parser.add_argument('--max-records',type=int,default=2_000_000)
     parser.add_argument('--max-bytes',type=int,default=2*1024**3)
     args=parser.parse_args();until=time.monotonic()+300
@@ -394,13 +407,11 @@ def main():
     try:
         factory=None
         if args.messenger_source:
-            from alden_messenger_factory import open_existing_kakao
-            factory=open_existing_kakao
+            from alden_messenger_factory import open_existing_kakao, open_enrolled_messengers
+            factory=open_enrolled_messengers if args.messenger_source=='enrolled' else open_existing_kakao
         authority=KnowledgeServer(args.state_root,args.project,source_factory=factory)
         def store_factory():
-            guards=authority._source_guards(cancelled)
-            return CollectionStore.open_existing(args.state_root,source_access=guards['source_access'],
-                source_revision=guards['source_revision'],source_relation_access=guards['source_relation_access'])
+            return authority.collection_store(cancelled)
         if args.action=='export':
             result=export_graph(args.state_root,args.project,args.output,store_factory=store_factory,
                 cancelled=cancelled,max_records=args.max_records,max_bytes=args.max_bytes)

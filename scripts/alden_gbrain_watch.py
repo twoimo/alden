@@ -301,7 +301,7 @@ def main():
     parser.add_argument('action',choices=('once','run','status'))
     parser.add_argument('--root',type=Path,required=True);parser.add_argument('--state-root',type=Path,required=True)
     parser.add_argument('--project',action='append',required=True)
-    parser.add_argument('--messenger-source',choices=('kakaotalk',))
+    parser.add_argument('--messenger-source',choices=('kakaotalk','enrolled'))
     parser.add_argument('--interval-seconds',type=float,default=5)
     parser.add_argument('--audit-seconds',type=float,default=60)
     parser.add_argument('--max-ticks',type=int)
@@ -324,15 +324,13 @@ def main():
             print(json.dumps({'ok':True,'basis':'stored consumer receipt only','receipt':watcher._state()}));return
         source_factory=None
         if args.messenger_source:
-            from alden_messenger_factory import open_existing_kakao
-            source_factory=open_existing_kakao
+            from alden_messenger_factory import open_existing_kakao, open_enrolled_messengers
+            source_factory=open_enrolled_messengers if args.messenger_source=='enrolled' else open_existing_kakao
         authority=[]
         def factory():
             check()
             if not authority:authority.append(KnowledgeServer(args.state_root,args.project,source_factory=source_factory))
-            guards=authority[0]._source_guards(lambda:token.is_cancelled() or stopped)
-            return CollectionStore.open_existing(args.state_root,source_access=guards['source_access'],
-                source_revision=guards['source_revision'],source_relation_access=guards['source_relation_access'])
+            return authority[0].collection_store(lambda:token.is_cancelled() or stopped)
         with GbrainSourceWatcher(args.root,collection_root=args.state_root,projects=args.project,
                 store_factory=factory,audit_seconds=args.audit_seconds,incremental=args.incremental) as watcher:
             count=0

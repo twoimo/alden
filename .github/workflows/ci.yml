@@ -312,6 +312,9 @@ jobs:
       - name: Production messenger authority and scheduler fixtures
         run: python3 -B -m unittest tests.test_alden_messenger_production tests.test_alden_messenger_references tests.test_alden_messenger_reference_lifecycle tests.test_alden_messenger_reference_jobs -v
 
+      - name: Existing production enrollment through GBrain and MCP
+        run: python3 -B -m unittest tests.test_alden_gbrain_native_authority -v
+
       - name: Test exact messenger policy migration in a fresh process
         run: python3 -B -m unittest tests.test_alden_messenger_policy -v
 
