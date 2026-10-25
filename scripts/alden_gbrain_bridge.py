@@ -8,10 +8,11 @@ from alden_gbrain_projection import GbrainProjection
 
 
 class GbrainGraphReader:
-    def __init__(self, *, owned_root, receipt, home, manifest):
+    def __init__(self, *, owned_root, receipt, home, manifest, lease_fd=None):
         self.root, self.receipt, self.home, self.manifest = map(_path, (owned_root, receipt, home, manifest))
         if any(not p.is_relative_to(self.root) for p in (self.receipt, self.home, self.manifest)):
             raise GbrainError('gbrain_root_mismatch')
+        self.lease_fd = lease_fd
 
     def query(self, *, projects, focus, current, check=lambda: None, depth=2, direction='both'):
         check()
@@ -34,7 +35,8 @@ class GbrainGraphReader:
             raise GbrainError('gbrain_projection_stale')
         if not isinstance(focus, str) or focus not in projection.nodes:
             raise GbrainError('gbrain_focus_unavailable')
-        with GbrainReadClient(self.receipt, owned_root=self.root, home=self.home, check=check) as client:
+        with GbrainReadClient(self.receipt, owned_root=self.root, home=self.home, check=check,
+                              lease_fd=self.lease_fd) as client:
             rows = client.graph(projection.slugs[focus], depth=depth, direction=direction)
             check()
             result = projection.bind(rows, focus=focus, current_packet=current(), projects=projects,

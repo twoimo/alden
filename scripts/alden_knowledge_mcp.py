@@ -11,6 +11,7 @@ from alden_collection_retrieval import retrieve, verify_source_detail_context, S
 from alden_status_mcp import StdioServer, _check
 from alden_gbrain_bridge import GbrainGraphReader
 from alden_gbrain_client import GbrainError
+from alden_gbrain_cache import ManagedGbrainReader
 
 
 class CallToken(AbortToken):
@@ -250,16 +251,21 @@ def main():
     parser.add_argument('--messenger-source', choices=('kakaotalk',))
     for name in ('root', 'receipt', 'home', 'manifest'):
         parser.add_argument('--gbrain-' + name, type=Path)
+    parser.add_argument('--gbrain-managed-root', type=Path)
     args = parser.parse_args()
     paths = [getattr(args, 'gbrain_' + name) for name in ('root', 'receipt', 'home', 'manifest')]
     if any(paths) and not all(paths):
         parser.error('all four --gbrain-* paths are required together')
+    if args.gbrain_managed_root and any(paths):
+        parser.error('managed root and explicit unmanaged paths are mutually exclusive')
     try:
         factory = None
         if args.messenger_source:
             from alden_messenger_factory import open_existing_kakao
             factory = open_existing_kakao
         gbrain = GbrainGraphReader(owned_root=paths[0], receipt=paths[1], home=paths[2], manifest=paths[3]) if all(paths) else None
+        if args.gbrain_managed_root:
+            gbrain = ManagedGbrainReader(args.gbrain_managed_root, collection_root=args.state_root, projects=args.allow_project)
         KnowledgeServer(args.state_root, args.allow_project, search_strategy=args.search_strategy,
                         source_factory=factory, gbrain=gbrain).serve(sys.stdin.buffer, sys.stdout.buffer)
     except (BrokenPipeError, KeyboardInterrupt):

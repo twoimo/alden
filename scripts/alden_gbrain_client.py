@@ -67,12 +67,12 @@ def _path(value):
     return path
 
 
-def validate_runtime(receipt_path, owned_root, home, check=lambda: None):
-    """Read only a private owned root; never use ambient GBrain configuration."""
-    root, receipt_path, home = map(_path, (owned_root, receipt_path, home))
+def validate_binary(receipt_path, owned_root, check=lambda: None):
+    """Verify the private publisher pin before even initializing a new store."""
+    root, receipt_path = map(_path, (owned_root, receipt_path))
     if not root.is_dir() or root.stat().st_uid != os.getuid() or stat.S_IMODE(root.stat().st_mode) & 0o077:
         raise GbrainError('gbrain_private_root_required')
-    if not receipt_path.is_relative_to(root) or not home.is_relative_to(root):
+    if not receipt_path.is_relative_to(root):
         raise GbrainError('gbrain_root_mismatch')
     if not receipt_path.is_file() or receipt_path.stat().st_size > 65536:
         raise GbrainError('gbrain_receipt_budget')
@@ -97,6 +97,15 @@ def validate_runtime(receipt_path, owned_root, home, check=lambda: None):
             digest.update(data)
     if digest.hexdigest() != ASSET_SHA256 or fingerprint() != before:
         raise GbrainError('gbrain_runtime_bytes_changed')
+    return binary, root
+
+
+def validate_runtime(receipt_path, owned_root, home, check=lambda: None):
+    """Read only a private owned root; never use ambient GBrain configuration."""
+    binary, root = validate_binary(receipt_path, owned_root, check)
+    home = _path(home)
+    if not home.is_relative_to(root):
+        raise GbrainError('gbrain_root_mismatch')
     config_path = _path(home / '.gbrain/config.json')
     if not config_path.is_file() or config_path.stat().st_size > 65536:
         raise GbrainError('gbrain_config_unavailable')
@@ -117,14 +126,14 @@ def validate_runtime(receipt_path, owned_root, home, check=lambda: None):
 
 
 class _Stdio:
-    def __init__(self, args, *, cwd, env, check, timeout):
+    def __init__(self, args, *, cwd, env, check, timeout, pass_fds=()):
         self.check, self.timeout = check, timeout
         self.buffer, self.sequence, self.stderr_bytes = b'', 0, 0
         self.stderr_open = True
         self.stderr_tail, self.graph_truncated = b'', False
         self.proc = subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.PIPE,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     start_new_session=True, bufsize=0)
+                                     start_new_session=True, bufsize=0, pass_fds=pass_fds)
         os.set_blocking(self.proc.stdin.fileno(), False)
 
     def send(self, message, deadline=None):
@@ -220,11 +229,12 @@ class _Stdio:
 
 class GbrainReadClient:
     def __init__(self, receipt_path, *, owned_root, home, source_id='default',
-                 check=lambda: None, timeout=30):
+                 check=lambda: None, timeout=30, lease_fd=None):
         if (not isinstance(source_id, str) or not _NAME.fullmatch(source_id)
                 or type(timeout) not in (int, float) or not 0 < timeout <= 60):
             raise GbrainError('gbrain_read_options_invalid')
         self.check, self.timeout, self.source_id = check, timeout, source_id
+        self.lease_fd = lease_fd
         self.binary, self.root, self.home = validate_runtime(receipt_path, owned_root, home, check)
         self.transport = None
         self.notice_codes = set()
@@ -232,11 +242,12 @@ class GbrainReadClient:
     def __enter__(self):
         self.check()
         env = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'HOME', 'TMPDIR') if k in os.environ}
-        env.update(GBRAIN_HOME=str(self.home), GBRAIN_AUDIT_DIR=str(self.root / 'audit'),
+        env.update(GBRAIN_HOME=str(self.home), GBRAIN_AUDIT_DIR=str(self.home.parent / 'audit'),
                    GBRAIN_SOURCE=self.source_id, GBRAIN_SWEEP='0', GBRAIN_SERVE_SYNC_IPC='0')
         args = [str(self.binary), 'serve', '--surface', 'full', '--access', 'read-only',
                 '--source-guard', '--stdio-idle-timeout', '30', '--fail-fast']
-        self.transport = _Stdio(args, cwd=self.root, env=env, check=self.check, timeout=self.timeout)
+        self.transport = _Stdio(args, cwd=self.root, env=env, check=self.check, timeout=self.timeout,
+                                pass_fds=() if self.lease_fd is None else (self.lease_fd,))
         try:
             result = self.transport.request('initialize', {'protocolVersion': PROTOCOL,
                 'capabilities': {}, 'clientInfo': {'name': 'alden-gbrain', 'version': '1'}})

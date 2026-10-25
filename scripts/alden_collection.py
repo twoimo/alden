@@ -1463,8 +1463,10 @@ class CollectionStore:
                     return {"ok": True, "nodes": [], "total_nodes": 0, "total_edges": 0,
                             "next": None, "revision": 0, "projection": "current_graph_references"}
                 return {"ok": True, "nodes": [], "edges": [], "total_nodes": 0, "total_edges": 0,
-                        "next": None, "activity_checkpoint": checkpoint}
+                        "next": None, "scope": [], "targets": [], "revision": 0,
+                        "focus": focus, "activity_checkpoint": checkpoint}
             marks = ",".join("?" for _ in projects)
+            scope_revision = (db.execute("SELECT e.sequence FROM events e WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id AND p.permission!='denied' AND p.project IN (" + marks + ")) ORDER BY e.sequence DESC LIMIT 1", projects).fetchone() or [0])[0]
             # Materialize the permitted versions once per SQL statement. Target
             # selection precedes version ranking, so another target's revision
             # cannot replace the selected target's record.
@@ -1642,9 +1644,10 @@ class CollectionStore:
             if not ids:
                 if _references_only:
                     return {"ok": True, "nodes": [], "total_nodes": total, "total_edges": total_edges,
-                            "next": None, "revision": 0, "projection": "current_graph_references"}
+                            "next": None, "revision": scope_revision, "projection": "current_graph_references"}
                 return {"ok": True, "nodes": [], "edges": [], "total_nodes": total, "total_edges": total_edges,
-                        "next": None, "facets": facets, "activity_checkpoint": checkpoint}
+                        "next": None, "facets": facets, "scope": projects, "targets": self.targets(projects),
+                        "revision": scope_revision, "focus": focus, "activity_checkpoint": checkpoint}
             selected = ",".join("?" for _ in ids)
             if focus:
                 incident_cte, incident_args = incident_scope(ids)
@@ -1735,7 +1738,7 @@ class CollectionStore:
             result = {"ok": True, "nodes": nodes, "edges": edges, "total_nodes": total, "total_edges": total_edges,
                     "next": offset+limit if more else None, "focus": focus, "scope": projects,
                     "facets": facets, "targets": self.targets(projects),
-                    "revision": (db.execute("SELECT e.sequence FROM events e WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id AND p.permission!='denied' AND p.project IN (" + marks + ")) ORDER BY e.sequence DESC LIMIT 1", projects).fetchone() or [0])[0],
+                    "revision": scope_revision,
                     "display_scope": "bounded derived projection; not full graph", "activity_checkpoint": checkpoint}
             result['edge_projection'] = {'kind': 'directed-relation-group-v1', 'groups': len(edges),
                 'selected_claim_records': sum(edge['reference_group']['count'] for edge in edges),
