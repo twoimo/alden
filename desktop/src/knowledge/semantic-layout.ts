@@ -20,7 +20,7 @@ export interface SemanticLayoutOptions {
 export interface SemanticLayoutDiagnostics {
   nodes: number; omittedNodes: number; removedNodes: number; invalidPreviousPositions: number;
   relationPairs: number; affinityPairs: number; ignoredRelations: number; rejectedAffinities: number;
-  relationPairsDropped: number; affinityPairsDropped: number; inputTruncated: boolean;
+  relationPairsDropped: number; affinityPairsDropped: number; numericallyInactivePairs: number; inputTruncated: boolean;
   semanticHighPairs: number; semanticLowPairs: number;
   semanticHighMedianDistance: number | null; semanticLowMedianDistance: number | null;
   semanticCosineMin: number | null; semanticCosineMedian: number | null; semanticCosineMax: number | null;
@@ -504,7 +504,7 @@ export class SemanticLayoutEngine {
     const d: SemanticLayoutDiagnostics = {
       nodes: 0, omittedNodes: 0, removedNodes: 0, invalidPreviousPositions: 0,
       relationPairs: 0, affinityPairs: 0, ignoredRelations: 0, rejectedAffinities: 0,
-      relationPairsDropped: 0, affinityPairsDropped: 0,
+      relationPairsDropped: 0, affinityPairsDropped: 0, numericallyInactivePairs: 0,
       semanticHighPairs: 0, semanticLowPairs: 0,
       semanticHighMedianDistance: null, semanticLowMedianDistance: null,
       semanticCosineMin: null, semanticCosineMedian: null, semanticCosineMax: null,
@@ -536,7 +536,9 @@ export class SemanticLayoutEngine {
         || edge.evidence.retracted || edge.purpose === 'navigation' || !Number.isFinite(edge.weight) || edge.weight <= 0
         || Number.isFinite(from) && from > now || Number.isFinite(until) && until <= now) { d.ignoredRelations++; continue; }
       const key = pairKey(edge.source, edge.target), [source, target] = JSON.parse(key) as [string, string];
-      const value = 1 - 1 / (1 + edge.weight);
+      // This bounded transform must retain small positive inputs. Subtracting
+      // from one rounds them to zero and later creates a zero-degree ratio.
+      const value = edge.weight / (1 + edge.weight);
       if (!r.has(key) || r.get(key)!.value < value) r.set(key, { source, target, value });
     }
     for (const pair of validatedPairs.slice(0, limits.inputAffinities)) {
@@ -575,10 +577,14 @@ export class SemanticLayoutEngine {
       }
     // Normalize stiffness, but retain raw strength in rest lengths. Otherwise
     // uniform cosine/weight changes at high degree cancel out of normalization.
-    for (const p of nextPairs.values()) {
+    for (const [key, p] of nextPairs) {
+      // A normalized contribution can underflow even with a valid positive
+      // source weight. Keep the source relation, but do not divide by zero to
+      // manufacture a spring. This is distinct from invalid/denied evidence.
+      if (p.weight === 0) { nextPairs.delete(key); d.numericallyInactivePairs++; continue; }
       const realRest = .3 + .45 * (1 - (r.get(p.key)?.value ?? 0));
       const semanticRest = .62 - .35 * (s.get(p.key)?.value ?? 0);
-      p.rest = (p.r * realRest + p.s * semanticRest) / p.weight;
+      p.rest = p.r / p.weight * realRest + p.s / p.weight * semanticRest;
     }
     const pairs = [...nextPairs.values()].sort((a, b) => order(a.key, b.key));
     const adjacency: Array<Array<{ to: number; weight: number }>> = ids.map(() => []);

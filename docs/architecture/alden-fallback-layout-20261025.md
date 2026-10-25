@@ -81,3 +81,55 @@ Native rendering, installed delivery, physical input, GPU/FPS, whole-app resourc
 and semantic quality are separate acceptance stages. No performance gain is
 inferred from one engine timing. The current-source external Pro/Gemini/reverse
 audit remains incomplete; original source-upload restrictions remain in force.
+
+## Small positive weights: arithmetic state and regression
+
+`1 - 1 / (1 + w)` rounds sufficiently small positive weights to zero. The ensuing
+zero degree ratio produces NaN, and the actual worker can return
+`semantic_layout_failed` rather than a completed layout. Use the equivalent
+`w / (1 + w)` to retain representable positive inputs. Normalization can still
+underflow a contribution beside a stronger edge, so an exactly zero total
+stiffness is counted as `numericallyInactivePairs` and excluded from the solver.
+Its source relation remains in the input and rendered graph.
+
+| Arithmetic state | Solver transition | Source/evidence meaning |
+| --- | --- | --- |
+| Invalid or nonpositive input | Existing validation rejection | No new authority |
+| Positive bounded/normalized stiffness | Mix rest lengths using stiffness ratios first | Existing relation/affinity retained |
+| Exactly zero normalized stiffness | Count numerical inactivity; omit that force | Source relation is retained; no outlier deletion |
+
+For admitted finite positive relation weights, the bounded value is positive
+and at most one; degree sums are bounded by the admitted pair count. Admitted
+semantic contributions are finite and nonnegative. A retained pair's positive
+total permits finite ratios in [0,1]. Compute `r/total * rRest + s/total * sRest`
+instead of multiplying tiny stiffness by a rest length before division. This
+avoids losing the subnormal product and retains a finite positive rest length.
+The real and semantic rest ranges are [.3,.75] and [.27,.62], up to floating
+rounding. These are local arithmetic assumptions and bounds, not a whole-app,
+concurrency, semantic-quality or universal layout proof.
+
+Six actual-engine regressions failed before the correction. They cover four
+isolated positive scales, underflow beside a stronger relation, and a semantic
+contribution below representable scale. The actual retained worker entry plus
+structured-clone driver also returns finite completed coordinates. Source
+objects are unchanged. The full UI suite passed 1,208 tests in 106 files and
+TypeScript passed. An isolated source check passed 77 layout cases and detected
+all three broken variants: subtractive transform, zero-force division and an
+underflowing rest product. These suites overlap and must not be summed.
+
+On the same full 1,984-node page, the maximum coordinate difference was
+4.28e-15 with relationships alone and 8.67e-14 with admitted cached affinities;
+the measured world/pixel close-pair counts were unchanged. This demonstrates
+the finite ordinary-input comparison, not bitwise equality for all inputs.
+
+## Central-mass alternatives remain experimental
+
+Six source variants compared weaker hub-spoke attraction, soft leaf region
+targets, collision pressure and local sampling rotation. Each used the same
+retained full page with and without admitted cached affinities. None satisfied
+all stated central-quarter, .07-unit, four-pixel, repeat-state and admitted-pair
+neighbor-rank criteria. No force/rotation alternative was applied to the
+product. Emptying the center while concentrating points elsewhere is not an
+accepted result. Neighbor ranks describe only admitted-pair geometry and do
+not constitute independent semantic gold. Task evidence and failed alternatives
+remain in `outputs/central-affinity-balance-20261025/`.

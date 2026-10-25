@@ -32,6 +32,18 @@ function fixture(bucket = '미분류', duplicates = false): KnowledgeView {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('layout label semantics through the actual worker entry', () => {
+  it('returns a completed finite graph through the driver when valid relation weights underflow after normalization',async()=>{
+    const port=await worker(),apply=vi.fn(),driver=new SemanticLayoutDriver(apply,()=>port);
+    const base=fixture(),source={...base,edges:base.edges.map(edge=>({...edge,weight:Number.MIN_VALUE}))};
+    const before=structuredClone(source);
+    driver.request(source,new Map(),new Set(),new Set());port.flush();
+    expect(apply).toHaveBeenCalledTimes(1);expect(driver.settled).toBe(true);
+    const response=apply.mock.calls[0][0]as LayoutResponse;
+    expect(response.error).toBeUndefined();expect(response.anchors).toHaveLength(256);
+    expect(response.diagnostics!.numericallyInactivePairs).toBeGreaterThan(0);
+    expect(response.anchors!.every(([,p])=>[p.x,p.y,p.z].every(Number.isFinite))).toBe(true);
+    expect(source).toEqual(before);driver.clear();
+  });
   it.each(['미분류', '홍보 안내', '면접 준비'])('matches direct layout for the saved %s label without source mutation', async bucket => {
     const port = await worker(), apply = vi.fn();
     const driver = new SemanticLayoutDriver(apply, () => port), source = fixture(bucket, true);
