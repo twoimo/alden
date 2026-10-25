@@ -303,7 +303,7 @@ class UpstreamQwen35NumericsTests(unittest.TestCase):
             raise unittest.SkipTest("MLX numerical test requires the pinned evaluation runtime") from exc
         cls.mx, cls.qwen = mx, qwen3_5
 
-    def test_upstream_sanitizer_preserves_folded_norms_and_shifts_raw_norms_once(self):
+    def test_scorer_preserves_folded_norms_and_shifts_raw_norms_once(self):
         mx, qwen = self.mx, self.qwen
         original = qwen.Model.sanitize
         args = qwen.ModelArgs(model_type="qwen3_5", text_config={
@@ -322,12 +322,13 @@ class UpstreamQwen35NumericsTests(unittest.TestCase):
         conv_key = "model.layers.0.linear_attn.conv1d.weight"
         converted = {key: folded for key in keys}
         converted.update({gdn_key: raw, conv_key: mx.zeros((12, 4, 1)), "mtp.weight": mx.zeros((1,))})
-        # Exercise the real upstream heuristic: retaining MTP would shift a second time.
-        wrong = qwen.Model(args).sanitize(dict(converted))
-        self.assertEqual(wrong["language_model.model.norm.weight"].tolist(), (folded + 1.0).tolist())
+        # Older MLX-LM releases used MTP as a signal to shift norms, whereas
+        # newer releases rely on the Conv1d layout. The scorer's numerical
+        # contract must hold for both without requiring the upstream bug.
         selected = {}
         scoped = S._scoped_qwen35_model_class(qwen.Model, S.CHECKPOINT_FORMAT_MLX_SERVE, selected)
         correct = scoped(args).sanitize(converted)
+        self.assertEqual(selected["format"], S.CHECKPOINT_FORMAT_MLX_SERVE)
         for key in keys:
             self.assertEqual(correct["language_model." + key].tolist(), folded.tolist())
         self.assertEqual(correct["language_model." + gdn_key].tolist(), raw.tolist())

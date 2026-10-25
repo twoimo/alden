@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-25T13:14:41.375409+00:00",
+  "production_source_baseline": "7f3f40fc3a87a308576f1b4e55553585ff8502a3",
+  "production_runtime_source_fingerprint": "82b4bb44a52677d5c6c5aab88985f41dd26085c329a1ab7ceba763b602f9833b",
+  "checkpoint": {
+    "repository": "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+    "revision": "901aa73a1ff5456752c02e55582609e0040ca470",
+    "core_files": 14,
+    "bytes": 18219586850,
+    "manifest_sha256": "3e6863117a55e46921727b1f353f407d75755df0379f4851605e2a0245ed8c6b",
+    "verified_before_and_after": true
+  },
+  "publisher_base_linkage": {
+    "declared_base": "Qwen/Qwen3.8-27B",
+    "base_current_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "configuration_fields_equal": true,
+    "tensor_equivalence_verified": false
+  },
+  "runtime": {
+    "python": "3.12.13",
+    "mlx": "0.32.2",
+    "mlx-lm": "0.32.2",
+    "transformers": "5.20.2"
+  },
+  "mlx_lm_wheel_sha256": "5c0991248cfff5872503d74f466d2532dd8cb7fb3670cb9be7a06d7305dadc04",
+  "tokenizer_pairs": 6,
+  "focused_tests": {
+    "current_runtime": {
+      "tests": 60,
+      "failures": 0,
+      "skipped": 0
+    },
+    "old_0_31_3_code_current_dependencies": {
+      "tests": 1,
+      "failures": 0
+    },
+    "removed_mtp_filter_detected": true
+  },
+  "teacher_forcing": {
+    "validation_pairs": 3,
+    "response_tokens": 36,
+    "reference_reused_identical_checkpoint": true,
+    "mean_loss": 0.6931471805599453,
+    "training_updates": 0,
+    "final_test_consumed": false
+  },
+  "dialogue": {
+    "synthetic": true,
+    "fact_matches": 3,
+    "cases": 3,
+    "turns": [
+      {
+        "case": "schedule",
+        "answer": "2026년 10월 26일 오후 3시에 자료실 B에서 진행됩니다."
+      },
+      {
+        "case": "followup",
+        "answer": "자료실 B"
+      },
+      {
+        "case": "cancellation",
+        "answer": "아니요, 일정이 취소되었으므로 내일 방문할 필요가 없습니다."
+      }
+    ]
+  },
+  "tool": {
+    "parser": "mlx_lm.tool_parsers.qwen3_coder",
+    "allowlisted_reads": 1,
+    "exact_revision_in_answer": true,
+    "answer_token_limit": 128,
+    "answer_truncated": true,
+    "product_integration_verified": false
+  },
+  "process": {
+    "child_seconds": 29.323964707989944,
+    "peak_rss_bytes": 17420533760,
+    "free_bytes_min_observed": 38736855040,
+    "swap_growth_bytes_max_observed": 0,
+    "runtime_network_attempts": 0,
+    "network_negative_probe_passed": true,
+    "protected_processes_unchanged": true,
+    "model_server_started": false,
+    "desktop_app_launched": false,
+    "mlx_memory_limit_is_guideline": true
+  },
+  "raw_local_artifact_sha256": {
+    "offline-score.json": "239a72910c146db1c600695f4d2743a2fbc8dc953dfc4f48c326eb45c943ed88",
+    "offline-token-logprobs.json": "0a331a30b15024bf2a6677e42e83473ebf2f830aad68d109b748fb0370eac8fd",
+    "offline-dialogue.json": "5d51fec50ce4d3377f00703222e28ed85285abb884228d3467aebbca74e2bc20",
+    "offline-monitor.json": "e7f645e22dec9669d1c70c1d46285a52148341c36ed51c8364a9f4195b2cca8d",
+    "offline-model-result.json": "931994468a6d717d0e800ac695c3275b8270fc06aba732ae63871a0a933010e2",
+    "tokenizer-control.json": "f27e79686f8f56f59b586ddef82a5e7b702b25173168c9b8d93eafd16a99d828",
+    "runtime-compatibility-tests.json": "9b57c34ab7ed972b0a020793c2d1cee88e15b0925a1afca377e9e7fc1264538f"
+  },
+  "limits": [
+    "Task-owned offline environment, not installed application or managed model readiness",
+    "Small synthetic controls, not personal-source or independent final quality gold",
+    "No new training, adapter promotion, product selection or deployment",
+    "Tool final answer reached its token limit; complete-answer behavior unverified"
+  ]
+}
