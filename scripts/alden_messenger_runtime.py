@@ -16,6 +16,7 @@ import sqlite3
 import stat
 import re
 import time
+import unicodedata
 
 from alden_collection import CollectionStore, encoded, identity, normalized_body, overview_display_label, safe_directory
 from alden_messenger_quality import POLICY, classify, text_without_urls
@@ -283,6 +284,82 @@ class KakaoReader:
         return {'account_id': account, 'room_id': room, 'items': values,
                 'more': result['messages_truncated'], 'next_cursor': result.get('next_cursor'),
                 'scope': 'canonical current-account visible local SQLCipher rows; live WAL included'}
+
+    def reply_reference(self, room, message):
+        """One current canonical reference observation, never inferred agreement.
+
+        The canonical snapshot checks the quoted row's same-room visibility in
+        its own SQL transaction. This does not authorize later publication or
+        bind a stored target version. A consumer must validate both endpoints
+        and recheck this reference at its actual read/publication boundary.
+        Existing page/prepared formats deliberately remain unchanged.
+        """
+        def source_id(value):
+            return (isinstance(value, str) and re.fullmatch(r'[1-9][0-9]{0,18}', value)
+                    and int(value) < 2**63)
+        if not source_id(room) or not source_id(message):
+            raise ValueError('kakao_reply_reference_scope_invalid')
+        account = self.identity()
+        result = self.canonical.snapshot(chat_id=room, message_id=message, limit=1,
+            show_text=True, include_media=True, include_raw_attachment=True)
+        if not isinstance(result, dict) or result.get('status') != 'ok':
+            raise SourceBlocked('kakao_reply_reference_unavailable')
+        if (result.get('db_readonly_verified') is not True or result.get('schema_decryption_verified') is not True
+                or any(type(result.get(key)) is not int or result[key] != 0 for key in
+                    ('server_calls', 'send_calls', 'database_row_writes', 'app_settings_writes'))):
+            raise SourceBlocked('kakao_reply_reference_readonly_unconfirmed')
+        if self.identity() != account:
+            raise SourceBlocked('kakao_account_changed_during_reply_reference')
+        rows = result.get('messages')
+        chat = result.get('chat')
+        if (not isinstance(chat, dict) or chat.get('chatId') != room or result.get('messages_truncated') is not False
+                or not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict)
+                or rows[0].get('chatId') != room or rows[0].get('logId') != message):
+            raise SourceBlocked('kakao_reply_reference_scope_mismatch')
+        row = rows[0]
+        if row.get('message_state') or not isinstance(row.get('message'), str):
+            return {'state': 'withheld', 'reason': 'reply_body_not_visible'}
+        media = row.get('media')
+        if not isinstance(media, dict) or media.get('kind') != 'reply':
+            return {'state': 'not_admitted', 'reason': 'no_verified_reply_metadata'}
+        if media.get('state') in {'quoted_content_withheld', 'quoted_source_unverified'}:
+            return {'state': 'withheld', 'reason': media['state']}
+        raw = row.get('rawAttachment')
+        if isinstance(raw, str):
+            try:
+                raw = raw.encode()
+            except UnicodeError as error:
+                raise SourceBlocked('kakao_reply_reference_unverified') from error
+        if media.get('state') != 'quoted_context' or not isinstance(raw, bytes) or not 1 <= len(raw) <= 262144:
+            raise SourceBlocked('kakao_reply_reference_unverified')
+        attachment_hash = hashlib.sha256(raw).hexdigest()
+        if media.get('attachment_sha256') != attachment_hash:
+            raise SourceBlocked('kakao_reply_reference_unverified')
+
+        def unique_pairs(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('duplicate_attachment_key')
+                value[key] = item
+            return value
+        try:
+            value = json.loads(raw, object_pairs_hook=unique_pairs)
+        except (ValueError, UnicodeError, RecursionError) as error:
+            raise SourceBlocked('kakao_reply_reference_unverified') from error
+        quoted = value.get('src_logId') if isinstance(value, dict) and 'src_message' in value else None
+        if isinstance(quoted, bool) or not isinstance(quoted, (str, int)) or not source_id(str(quoted)):
+            raise SourceBlocked('kakao_reply_reference_unverified')
+        try:
+            content_hash = hashlib.sha256(unicodedata.normalize('NFC', row['message']).encode()).hexdigest()
+        except UnicodeError as error:
+            raise SourceBlocked('kakao_reply_reference_unverified') from error
+        proof = {'platform': 'kakaotalk', 'account_id': account, 'room_id': room,
+                 'source_message_id': message, 'target_message_id': str(quoted),
+                 'source_content_hash': content_hash, 'attachment_sha256': attachment_hash}
+        return {'state': 'verified', **proof,
+                'reference_revision': hashlib.sha256(encoded(proof)).hexdigest(),
+                'source': 'canonical-explicit-visible-reply-v1'}
 
     def verify_prepared(self, payload):
         verify_prepared_items(payload['items'], self.refresh_prepared(payload)['items'])

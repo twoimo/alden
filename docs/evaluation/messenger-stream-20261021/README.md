@@ -3,6 +3,10 @@
 Status: reversible isolated evaluation, not installed or externally validated.
 Base: `1a6e0fd5e78e5f1462a6a2ce59af059ebf9de0b3` (installed Alden 0.3.214).
 
+Follow-up: [explicit current reply-reference evidence](EXPLICIT_REFERENCES.md)
+adds a guarded canonical read without changing prepared-page recovery. Its
+durable relationship lifecycle and graph publication are not yet implemented.
+
 Latest runtime delta: [guarded production enrollment candidate](PRODUCTION_ENROLLMENT.md).
 The [stream identity correction](STREAM_IDENTITY.md) separates authorization
 identity from current content so a committed message is not silently baselined.
