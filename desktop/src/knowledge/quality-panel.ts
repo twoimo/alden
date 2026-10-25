@@ -127,6 +127,9 @@ const ERROR_TEXT = {
   quality_query_invalid: '품질 확인 요청 범위가 올바르지 않습니다.',
   quality_comparison_unavailable: '후보의 현재 원문·출처를 대사하지 못했습니다. 다시 검사해 주세요.',
   quality_annotation_review_unavailable: '태그 후보 목록을 보존하지 못했습니다. 다시 검사해 주세요.',
+  quality_annotation_review_stale: '검사 중 수집 자료가 갱신되었습니다. 최신 자료로 다시 검사해 주세요.',
+  quality_annotation_review_busy: '다른 태그 검사가 결과를 저장 중입니다. 잠시 후 다시 검사해 주세요.',
+  quality_annotation_review_capacity: '보관 중인 태그 검사 결과가 한도에 도달했습니다. 잠시 후 다시 검사해 주세요.',
 } as const;
 
 // Reviewed keys from alden_graph_quality.py. Unknown keys get a generic label;

@@ -43,7 +43,7 @@ PRIVATE_MARKERS = (
 
 
 class QualityActionContractTests(unittest.TestCase):
-    def test_busy_annotation_publication_returns_existing_public_failure_contract(self):
+    def test_busy_annotation_publication_preserves_retryable_cause(self):
         from alden_annotation_candidates import _publication_lock
         self.store.ingest(self.target(), [{'platform':'graph','original_id':'owned-lock-fixture',
             'label':'Synthetic evidence','text':'Synthetic body retained during a busy review.'}])
@@ -53,10 +53,37 @@ class QualityActionContractTests(unittest.TestCase):
         before=self.store.path.read_bytes()
         with _publication_lock(folder):
             result=action.read_action(self.root,query)
-        self.assert_error(result,'quality_annotation_review_unavailable',mode='project',project='one')
+        self.assert_error(result,'quality_annotation_review_busy',mode='project',project='one')
         self.assertEqual(list(folder.glob('*.json')),[])
         self.assertEqual(self.store.path.read_bytes(),before)
         self.assertTrue(action.read_action(self.root,query)['ok'])
+
+    def test_annotation_scope_change_during_inspection_is_reported_as_stale(self):
+        target=self.target()
+        self.store.ingest(target,[{'platform':'graph','original_id':'changing',
+            'label':'Before','text':'Original source body.'}])
+        def changed(*args,**options):
+            report=quality.audit_annotations(*args,**options)
+            self.store.ingest(target,[{'platform':'graph','original_id':'changing',
+                'label':'After','text':'Changed while inspection was running.'}])
+            return report
+        query=json.dumps({'scope':'project','project':'one','include_annotation_review':True})
+        with patch.object(action,'audit_annotations',side_effect=changed):
+            result=action.read_action(self.root,query)
+        self.assert_error(result,'quality_annotation_review_stale',mode='project',project='one')
+        self.assertFalse((self.store.root/'annotation-reviews').exists())
+        self.assertTrue(action.read_action(self.root,query)['ok'])
+
+    def test_annotation_cache_capacity_is_distinct_and_unknown_errors_stay_private(self):
+        self.store.ingest(self.target(),[{'platform':'graph','original_id':'capacity',
+            'label':'Source','text':'A retained source body.'}])
+        query=json.dumps({'scope':'project','project':'one','include_annotation_review':True})
+        for error,expected in [('annotation_review_cache_budget','quality_annotation_review_capacity'),
+                ('private-body-sentinel annotation_review_stale','quality_annotation_review_unavailable')]:
+            with self.subTest(error=error),patch('alden_annotation_candidates.create_review',side_effect=ValueError(error)):
+                result=action.read_action(self.root,query)
+                self.assert_error(result,expected,mode='project',project='one')
+                self.assertNotIn('private-body-sentinel',json.dumps(result))
 
     def test_empty_body_is_counted_without_hiding_title_or_mutating_source(self):
         self.store.ingest(self.target(), [

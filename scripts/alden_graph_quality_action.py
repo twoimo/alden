@@ -16,7 +16,9 @@ COUNT_FIELDS=('memberships','project_current_versions','relations','distinct_cur
               'metadata_description_current_versions','reference_only_current_versions','empty_body_current_versions')
 ERRORS=frozenset(('quality_scope_unavailable','quality_scan_budget','quality_time_budget',
                  'quality_cancelled','quality_report_unavailable','quality_query_invalid',
-                 'quality_comparison_unavailable','quality_annotation_review_unavailable'))
+                 'quality_comparison_unavailable','quality_annotation_review_unavailable',
+                 'quality_annotation_review_stale','quality_annotation_review_busy',
+                 'quality_annotation_review_capacity'))
 
 def _count(value):
     if type(value) is not int or not 0<=value<=9_007_199_254_740_991:
@@ -338,7 +340,14 @@ def read_action(state_root,query_raw,cancelled=None):
             try:
                 review_id=create_review(state_root,requested,verified)
                 candidates=initial_page(requested,verified,review_id)
-            except (ValueError,RuntimeError,OSError):raise ValueError('quality_annotation_review_unavailable') from None
+            except (ValueError,RuntimeError,OSError) as error:
+                # Keep retryable publication states distinct without exposing
+                # arbitrary exception text or weakening snapshot validation.
+                reason={'annotation_review_stale':'quality_annotation_review_stale',
+                    'annotation_review_cache_busy':'quality_annotation_review_busy',
+                    'annotation_review_cache_budget':'quality_annotation_review_capacity'}.get(
+                        str(error),'quality_annotation_review_unavailable')
+                raise ValueError(reason) from None
             checked=time.time();elapsed=(time.monotonic()-started)*1000
             if not math.isfinite(checked) or checked<=0 or not math.isfinite(elapsed) or elapsed<0:
                 raise ValueError('quality_report_unavailable')

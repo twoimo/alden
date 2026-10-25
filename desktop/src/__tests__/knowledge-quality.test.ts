@@ -562,6 +562,23 @@ describe('manual collection-quality report and fixed native selectors', () => {
     expect(calls(load)).toHaveLength(2);
   });
 
+  it.each([
+    ['quality_annotation_review_stale', '검사 중 수집 자료가 갱신'],
+    ['quality_annotation_review_busy', '다른 태그 검사'],
+    ['quality_annotation_review_capacity', '한도에 도달'],
+  ])('explains %s without an automatic retry or a successful report', async (reason, message) => {
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(success())
+      .mockResolvedValueOnce({ ok: false, schema: 3, reason,
+        scope: { requested_scope: 'all', requested_project: null } });
+    setup(load); info().open = true; button().click(); await settle();
+    (report().querySelector('button.knowledge-quality-annotations') as HTMLButtonElement).click(); await settle();
+    expect(state()).toBe('unavailable');
+    expect(report().hidden).toBe(true);
+    expect(status().textContent).toContain(message);
+    expect(button().disabled).toBe(false);
+    expect(calls(load)).toHaveLength(2);
+  });
+
   it('exposes known errors and transport failures as unavailable, then allows retry', async () => {
     const load = vi.fn<typeof fetchSettingsAction>()
       .mockResolvedValueOnce({ ok: false, schema: 3, reason: 'quality_time_budget',
