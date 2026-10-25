@@ -84,6 +84,7 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/alden_gbrain_cache.py",
     "scripts/alden_gbrain_import.py",
     "scripts/alden_gbrain_watch.py",
+    "scripts/alden_gbrain_delta.py",
     "scripts/alden_knowledge_mcp.py",
     "scripts/alden_messenger_runtime.py",
     "scripts/alden_messenger_references.py",

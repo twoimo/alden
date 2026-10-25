@@ -96,7 +96,8 @@ class SourceMonitor:
 
 
 class GbrainSourceWatcher:
-    def __init__(self,root,*,collection_root,projects,store_factory=None,audit_seconds=60,clock=time.monotonic):
+    def __init__(self,root,*,collection_root,projects,store_factory=None,audit_seconds=60,clock=time.monotonic,incremental=False):
+        if type(incremental) is not bool:raise GbrainError('gbrain_watch_options_invalid')
         if type(audit_seconds) not in (int,float) or not math.isfinite(audit_seconds) or not 5<=audit_seconds<=3600:
             raise GbrainError('gbrain_watch_options_invalid')
         self.cache=FullGbrainCache(root,collection_root=collection_root,projects=projects)
@@ -104,6 +105,7 @@ class GbrainSourceWatcher:
         self.factory=store_factory;self.clock=clock;self.audit_seconds=audit_seconds
         self.fd=None;self.trusted=None;self.last_audit=None
         self.process_id=uuid.uuid4().hex
+        self.incremental=incremental
 
     def _verify_lock(self):
         if self.fd is None:raise GbrainError('gbrain_watch_not_started')
@@ -244,7 +246,8 @@ class GbrainSourceWatcher:
             removed=0
             if current is not None and (reset or current['source']['authority']!=observed['source']['authority']):
                 removed=self._withdraw(check)['removed_generations']
-            result=self.cache.refresh(store_factory=self.factory,check=check)
+            result=self.cache.refresh(store_factory=self.factory,check=check,
+                **({'incremental':True} if self.incremental else {}))
             confirmed=self._accepted(check)
             after=self.monitor.observe(check)
             if (confirmed is None or confirmed['fingerprint']!=result['fingerprint']
@@ -302,6 +305,7 @@ def main():
     parser.add_argument('--interval-seconds',type=float,default=5)
     parser.add_argument('--audit-seconds',type=float,default=60)
     parser.add_argument('--max-ticks',type=int)
+    parser.add_argument('--incremental',action='store_true',help='use verified engine row/link deltas when eligible')
     args=parser.parse_args()
     if not math.isfinite(args.interval_seconds) or not .25<=args.interval_seconds<=300 or args.max_ticks is not None and (args.action!='run' or not 1<=args.max_ticks<=1_000_000):
         parser.error('interval .25–300 seconds; max-ticks1–1000000 only for run')
@@ -330,7 +334,7 @@ def main():
             return CollectionStore.open_existing(args.state_root,source_access=guards['source_access'],
                 source_revision=guards['source_revision'],source_relation_access=guards['source_relation_access'])
         with GbrainSourceWatcher(args.root,collection_root=args.state_root,projects=args.project,
-                store_factory=factory,audit_seconds=args.audit_seconds) as watcher:
+                store_factory=factory,audit_seconds=args.audit_seconds,incremental=args.incremental) as watcher:
             count=0
             while True:
                 receipt=watcher.tick(check);count+=1

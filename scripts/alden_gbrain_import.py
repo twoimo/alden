@@ -24,6 +24,7 @@ from alden_gbrain_client import (GbrainError,GbrainReadClient,PROTOCOL,VERSION,
 from alden_gbrain_projection import GbrainProjection,_text
 
 POLICY='alden-gbrain-full-source-v1'
+STABLE_POLICY='alden-gbrain-record-content-v2'
 MAX_QUERY_EDGES=8192
 INDEX_SCHEMA='''PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;
 CREATE TABLE pages(slug TEXT PRIMARY KEY,id TEXT UNIQUE NOT NULL,kind TEXT NOT NULL,
@@ -46,11 +47,13 @@ def _db(path,write=False):
 
 class FullProjection:
     """A disk index of all source records plus actual selected-version origins."""
-    def __init__(self,generation,check=lambda:None):
+    def __init__(self,generation,check=lambda:None,*,policy=POLICY):
+        if policy not in (POLICY,STABLE_POLICY):raise GbrainError('gbrain_full_policy_invalid')
+        self.policy=policy
         self.root=_path(generation);self.archive=self.root/'source-archive';self.path=self.root/'graph-index.sqlite3'
         self.check=check;self.receipt=verify_export(self.archive,check=check)
         self.projects=_projects(self.receipt['projects'])
-        self.fingerprint=_digest({'policy':POLICY,**{k:self.receipt[k] for k in
+        self.fingerprint=_digest({'policy':self.policy,**{k:self.receipt[k] for k in
             ('source_root_sha256','projects','as_of','counts','row_hashes')}})
         self.prefix=_digest(self.projects)
 
@@ -59,17 +62,17 @@ class FullProjection:
     def origin_slug(self,target):return 'sources/alden-origin-'+_digest([self.prefix,target])
 
     def _page(self,slug,node,kind):
-        fields={'type':'source','title':node['label'],'alden_policy':POLICY,
-            'alden_snapshot':self.fingerprint,'alden_node_id':node['id'],
-            'alden_source_target':node['source_target'],'alden_record_sha256':_digest(node)}
+        fields={'type':'source','title':node['label'],'alden_policy':self.policy}
+        if self.policy==POLICY:fields['alden_snapshot']=self.fingerprint
+        fields.update(alden_node_id=node['id'],alden_source_target=node['source_target'],alden_record_sha256=_digest(node))
         if kind=='record':fields['alden_source_version']=node['source_version']
         content='---\n'+'\n'.join(k+': '+json.dumps(v,ensure_ascii=False) for k,v in fields.items())
         return (slug,node['id'],kind,encoded(node).decode(),
                 content+'\n---\nAlden source graph metadata; not original body or claim validity.\n')
 
     @classmethod
-    def prepare(cls,generation,*,check=lambda:None,max_index_records=4_000_000,max_index_bytes=2*1024**3):
-        self=cls(generation,check)
+    def prepare(cls,generation,*,check=lambda:None,max_index_records=4_000_000,max_index_bytes=2*1024**3,policy=POLICY):
+        self=cls(generation,check,policy=policy)
         if type(max_index_records) is not int or max_index_records<1 or type(max_index_bytes) is not int or max_index_bytes<65536:
             raise GbrainError('gbrain_full_index_budget_invalid')
         if self.path.exists():raise GbrainError('gbrain_full_new_index_required')
@@ -123,7 +126,9 @@ class FullProjection:
         return self
 
     def _insert_link(self,db,a,b,verb,kind,edge):
-        context=encoded({'policy':POLICY,'snapshot':self.fingerprint,'edge':edge}).decode()
+        context={'policy':self.policy,'edge':edge}
+        if self.policy==POLICY:context['snapshot']=self.fingerprint
+        context=encoded(context).decode()
         db.execute('INSERT INTO links VALUES(?,?,?,?,?,?)',(a,b,verb,kind,encoded(edge).decode(),context))
         self._index_budget(db)
 
@@ -178,12 +183,14 @@ class FullProjection:
     schema_yaml=GbrainProjection.schema_yaml
 
     def manifest(self):
-        return {'policy':POLICY,'fingerprint':self.fingerprint,'counts':self.counts(),
+        return {'policy':self.policy,'fingerprint':self.fingerprint,'counts':self.counts(),
             'index_sha256':_sha_file(self.path,self.check),'source_database_sha256':self.receipt['database_sha256']}
 
     @classmethod
     def open(cls,generation,check=lambda:None):
-        self=cls(generation,check)
+        manifest=_read(_path(generation)/'projection.json')
+        if not isinstance(manifest,dict):raise GbrainError('gbrain_full_projection_changed')
+        self=cls(generation,check,policy=manifest.get('policy'))
         token=_file_token(self.path)
         if self.manifest()!=_read(self.root/'projection.json'):raise GbrainError('gbrain_full_projection_changed')
         if _file_token(self.path)!=token:raise GbrainError('gbrain_full_projection_changed')
@@ -233,13 +240,15 @@ class FullProjection:
             nodes=[]
             for slug in sorted(wanted):nodes.append(_json(db.execute('SELECT payload FROM pages WHERE slug=?',(slug,)).fetchone()[0]))
         return {'ok':True,'nodes':nodes,'edges':edges,'scope':self.projects,
-            'basis':{'engine':'gbrain','policy':POLICY,'snapshot':self.fingerprint,'checked_edges':len(expected),
+            'basis':{'engine':'gbrain','policy':self.policy,'snapshot':self.fingerprint,'checked_edges':len(expected),
                 'depth':depth,'direction':direction,'complete_within_snapshot':True,
                 'scope_limit':'all authorized source records at the verified collection revision; not semantic truth'}}
 
 
 class GbrainImportClient(GbrainReadClient):
     """Only a generation writer uses this private full-access engine session."""
+    WRITE_TOOLS=('put_pages','add_link','get_page','list_pages')
+    REQUIRED_TOOLS=frozenset(WRITE_TOOLS)|{'traverse_graph'}
     def __enter__(self):
         self.check()
         env={k:os.environ[k] for k in ('PATH','LANG','LC_ALL','TZ','HOME','TMPDIR') if k in os.environ}
@@ -257,7 +266,7 @@ class GbrainImportClient(GbrainReadClient):
             tools=self.transport.request('tools/list',{});listing=tools.get('tools')
             if (tools.get('nextCursor') or not isinstance(listing,list) or len(listing)>512
                     or any(not isinstance(t,dict) or not isinstance(t.get('name'),str) for t in listing)
-                    or not {'put_pages','add_link','get_page','list_pages','traverse_graph'}<={t['name'] for t in listing}):
+                    or not self.REQUIRED_TOOLS<={t['name'] for t in listing}):
                 raise GbrainError('gbrain_full_import_surface_invalid')
         except BaseException:
             self.transport.close()
@@ -272,7 +281,7 @@ class GbrainImportClient(GbrainReadClient):
         if kind is None and code!=0:raise GbrainError('gbrain_unclean_shutdown')
 
     def _call(self,name,arguments):
-        if name not in ('put_pages','add_link','get_page','list_pages'):raise GbrainError('gbrain_full_operation_invalid')
+        if name not in self.WRITE_TOOLS:raise GbrainError('gbrain_full_operation_invalid')
         self.check();result=self.transport.request('tools/call',{'name':name,'arguments':arguments})
         content=result.get('content');meta=result.get('_meta',{});notices=meta.get('gbrain_notices',[]) if isinstance(meta,dict) else None
         if (result.get('isError') or not isinstance(content,list) or not isinstance(notices,list) or len(notices)>16
@@ -294,7 +303,8 @@ class GbrainImportClient(GbrainReadClient):
         self.check();return value
 
     def put(self,pages,request):
-        return self._call('put_pages',{'pages':[{'slug':p['slug'],'content':p['content']} for p in pages],
+        return self._call('put_pages',{'pages':[{'slug':p['slug'],'content':p['content'],
+            **({'expected_revision':p['revision']} if p.get('revision') is not None else {})} for p in pages],
             'source_id':'default','request_id':request,'wait_ms':25000})
 
     def link(self,row,request):
@@ -313,7 +323,8 @@ class FullGbrainCache(ManagedGbrainCache):
         super().__init__(root,collection_root=collection_root,projects=projects)
         self.collection_root=_path(collection_root)
 
-    def refresh(self,*,store_factory=None,check=lambda:None,rebuild=False):
+    def refresh(self,*,store_factory=None,check=lambda:None,rebuild=False,incremental=False):
+        if type(incremental) is not bool:raise GbrainError('gbrain_full_options_invalid')
         def cancelled():check();return False
         def current(projection):
             return verify_current_export(self.collection_root,self.owner['projects'],projection.archive,
@@ -323,9 +334,11 @@ class FullGbrainCache(ManagedGbrainCache):
             generation.mkdir(mode=0o700)
             _write(generation/'generation.json',{'kind':self.KIND,'owner':self.owner['owner'],'generation':name})
             try:
+                old=FullProjection.open(self._generation(active['generation']),check) if active else None
                 export_graph(self.collection_root,self.owner['projects'],generation/'source-archive',
                     store_factory=store_factory,cancelled=cancelled)
-                projection=FullProjection.prepare(generation,check=check);current(projection)
+                policy=STABLE_POLICY if incremental else old.policy if old is not None else POLICY
+                projection=FullProjection.prepare(generation,check=check,policy=policy);current(projection)
                 if active and active['fingerprint']==projection.fingerprint and not rebuild:
                     old=FullProjection.open(self._generation(active['generation']),check)
                     if old.fingerprint!=projection.fingerprint:raise GbrainError('gbrain_full_projection_changed')
@@ -333,8 +346,16 @@ class FullGbrainCache(ManagedGbrainCache):
                     if _file_token(old.path)!=old.index_token:raise GbrainError('gbrain_full_projection_changed')
                     return {'ok':True,'state':'unchanged','fingerprint':old.fingerprint,
                         'removed_generations':removed,**old.counts()}
-                removed=self._retire(active,preserve=name)
-                acceptance=self._build(generation,projection,fd=fd,check=check)
+                use_delta=False
+                if incremental and not rebuild and old is not None:
+                    from alden_gbrain_delta import eligible,build_delta
+                    use_delta=eligible(old,projection)
+                if use_delta:
+                    acceptance,removed=build_delta(self,generation,projection,old,fd=fd,check=check)
+                else:
+                    removed=self._retire(active,preserve=name)
+                    acceptance=self._build(generation,projection,fd=fd,check=check)
+                    if incremental:acceptance['update_mode']='full_rebuild'
                 current(projection);check()
                 manifest=projection.manifest();_write(generation/'projection.json',manifest)
                 _write(generation/'ready.json',{'fingerprint':projection.fingerprint,
@@ -372,62 +393,70 @@ class FullGbrainCache(ManagedGbrainCache):
             return identity
         with GbrainImportClient(self.root/'runtime-receipt.json',owned_root=self.root,
                 home=generation/'home',check=check,lease_fd=fd,timeout=60) as client:
-            batch=[];pages_written=0;links_written=0;verified=0
-            def put(batch):
-                saved=client.put(batch,request('pages',batch[0]['slug']))
-                if (saved.get('state')!='committed' or saved.get('terminal') is not True or saved.get('source_id')!='default'
-                        or saved.get('counts')!={'total':len(batch),'committed':len(batch),'pending':0,'failed':0}
-                        or any(type(v) is not int for v in saved.get('counts',{}).values())
-                        or not isinstance(saved.get('pages'),list) or len(saved['pages'])!=len(batch)):
-                    raise GbrainError('gbrain_cache_batch_uncommitted')
-                revisions=[]
-                for index,(expected,page) in enumerate(zip(batch,saved['pages'])):
-                    if (not isinstance(page,dict) or type(page.get('index')) is not int or page['index']!=index
-                            or page.get('slug')!=expected['slug'] or page.get('state')!='committed'
-                            or page.get('embedding_state')!='disabled'):
-                        raise GbrainError('gbrain_cache_batch_uncommitted')
-                    revisions.append(_text(page.get('revision')))
-                projection.record_revisions(batch,revisions)
+            batch=[];pages_written=0;links_written=0
             for page in projection.pages():
                 batch.append(page)
-                if len(batch)==50:put(batch);pages_written+=len(batch);batch=[]
-            if batch:put(batch);pages_written+=len(batch)
-            counts=projection.counts();expected_pages=iter(projection.pages());enumerated=0
-            for offset in range(0,counts['pages']+101,100):
-                listed=client.list(offset)
-                if not isinstance(listed,list) or len(listed)>100:raise GbrainError('gbrain_full_page_enumeration_invalid')
-                for listed_page in listed:
-                    expected_page=next(expected_pages,None)
-                    if (expected_page is None or not isinstance(listed_page,dict)
-                            or listed_page.get('source_id')!='default' or listed_page.get('slug')!=expected_page['slug']):
-                        raise GbrainError('gbrain_full_page_enumeration_invalid')
-                    enumerated+=1
-                if len(listed)<100:break
-            if enumerated!=counts['pages'] or next(expected_pages,None) is not None:
-                raise GbrainError('gbrain_full_page_enumeration_invalid')
+                if len(batch)==50:self._put_batch(client,projection,batch,request);pages_written+=len(batch);batch=[]
+            if batch:self._put_batch(client,projection,batch,request);pages_written+=len(batch)
             for row in projection.links():
                 result=client.link(row,request('link',_digest([row['a'],row['b'],row['verb']])))
                 if result.get('status')!='ok':raise GbrainError('gbrain_full_link_uncommitted')
                 links_written+=1
-            for page in projection.pages():
-                result=client.get(page['slug']);node=_json(page['payload'])
-                expected={'alden_policy':POLICY,'alden_snapshot':projection.fingerprint,'alden_node_id':node['id'],
-                    'alden_source_target':node['source_target'],'alden_record_sha256':_digest(node)}
-                if page['kind']=='record':expected['alden_source_version']=node['source_version']
-                if (result.get('slug')!=page['slug'] or result.get('source_id')!='default'
-                        or result.get('title')!=node['label'] or result.get('revision')!=page['revision']
-                        or not isinstance(page['revision'],str) or not isinstance(result.get('frontmatter'),dict)
-                        or any(result['frontmatter'].get(k)!=v for k,v in expected.items())):
-                    raise GbrainError('gbrain_cache_readback_invalid')
-                # Every page's outgoing set covers every stored link once.
-                # A source origin with many incoming memberships need not fit
-                # into one traverse_graph reply to prove complete import.
-                rows=client.graph(page['slug'],depth=1,direction='out')
-                projection.bind(rows,focus=node['id'],direction='out');verified+=1
-            if pages_written!=counts['pages'] or links_written!=counts['links'] or verified!=counts['pages']:
+            acceptance=self._verify(client,projection)
+            if pages_written!=acceptance['pages'] or links_written!=acceptance['links']:
                 raise GbrainError('gbrain_full_import_incomplete')
-        _write(generation/'operation.json',{'state':'verified','pages':pages_written,'links':links_written,'verified_queries':verified})
+        _write(generation/'operation.json',{'state':'verified',**acceptance})
+        return acceptance
+
+    def _put_batch(self,client,projection,batch,request):
+        saved=client.put(batch,request('pages',batch[0]['slug']))
+        if (saved.get('state')!='committed' or saved.get('terminal') is not True or saved.get('source_id')!='default'
+                or saved.get('counts')!={'total':len(batch),'committed':len(batch),'pending':0,'failed':0}
+                or any(type(v) is not int for v in saved.get('counts',{}).values())
+                or not isinstance(saved.get('pages'),list) or len(saved['pages'])!=len(batch)):
+            raise GbrainError('gbrain_cache_batch_uncommitted')
+        revisions=[]
+        for index,(expected,page) in enumerate(zip(batch,saved['pages'])):
+            if (not isinstance(page,dict) or type(page.get('index')) is not int or page['index']!=index
+                    or page.get('slug')!=expected['slug'] or page.get('state')!='committed'
+                    or page.get('embedding_state')!='disabled'):
+                raise GbrainError('gbrain_cache_batch_uncommitted')
+            revisions.append(_text(page.get('revision')))
+        projection.record_revisions(batch,revisions)
+
+    def _verify(self,client,projection):
+        counts=projection.counts();expected_pages=iter(projection.pages());enumerated=0;verified=0
+        for offset in range(0,counts['pages']+101,100):
+            listed=client.list(offset)
+            if not isinstance(listed,list) or len(listed)>100:raise GbrainError('gbrain_full_page_enumeration_invalid')
+            for listed_page in listed:
+                expected_page=next(expected_pages,None)
+                if (expected_page is None or not isinstance(listed_page,dict)
+                        or listed_page.get('source_id')!='default' or listed_page.get('slug')!=expected_page['slug']):
+                    raise GbrainError('gbrain_full_page_enumeration_invalid')
+                enumerated+=1
+            if len(listed)<100:break
+        if enumerated!=counts['pages'] or next(expected_pages,None) is not None:
+            raise GbrainError('gbrain_full_page_enumeration_invalid')
+        for page in projection.pages():
+            result=client.get(page['slug']);node=_json(page['payload'])
+            expected={'alden_policy':projection.policy,'alden_node_id':node['id'],
+                'alden_source_target':node['source_target'],'alden_record_sha256':_digest(node)}
+            if projection.policy==POLICY:expected['alden_snapshot']=projection.fingerprint
+            if page['kind']=='record':expected['alden_source_version']=node['source_version']
+            if (result.get('slug')!=page['slug'] or result.get('source_id')!='default'
+                    or result.get('title')!=node['label'] or result.get('revision')!=page['revision']
+                    or not isinstance(page['revision'],str) or not isinstance(result.get('frontmatter'),dict)
+                    or any(result['frontmatter'].get(k)!=v for k,v in expected.items())):
+                raise GbrainError('gbrain_cache_readback_invalid')
+            # Every page's outgoing set covers every stored link once.
+            # A source origin with many incoming memberships need not fit
+            # into one traverse_graph reply to prove complete import.
+            rows=client.graph(page['slug'],depth=1,direction='out')
+            projection.bind(rows,focus=node['id'],direction='out');verified+=1
+        if verified!=counts['pages']:raise GbrainError('gbrain_full_import_incomplete')
         return {**counts,'verified_queries':verified,'verified_direction':'out','enumerated_pages':enumerated}
+
 
 
 class FullGbrainReader(GbrainGraphReader):
@@ -480,8 +509,10 @@ def main():
     parser.add_argument('--messenger-source',choices=('kakaotalk',));parser.add_argument('--focus')
     parser.add_argument('--depth',type=int,default=1);parser.add_argument('--direction',choices=('in','out','both'),default='both')
     parser.add_argument('--timeout-seconds',type=int,default=1800)
+    parser.add_argument('--incremental',action='store_true',help='refresh: mutate only changed engine rows; full source/readback scans remain')
     args=parser.parse_args();runtime=(args.runtime_root,args.runtime_home,args.runtime_receipt)
     if (args.action=='create' and not all(runtime) or args.action!='create' and any(runtime)
+            or args.incremental and args.action!='refresh'
             or (args.action=='query')!=(args.focus is not None) or not 1<=args.depth<=3 or not 30<=args.timeout_seconds<=3600):
         parser.error('runtime paths only/together for create; focus only for query; depth1–3 and deadline30–3600')
     token=AbortToken(args.state_root/ABORT_STATE_NAME);until=time.monotonic()+args.timeout_seconds
@@ -508,7 +539,8 @@ def main():
                     runtime_root=args.runtime_root,runtime_home=args.runtime_home,runtime_receipt=args.runtime_receipt,check=check)
                 result={'ok':True,'state':'created'}
             elif args.action=='refresh':
-                result=FullGbrainCache(args.root,collection_root=args.state_root,projects=args.project).refresh(store_factory=factory,check=check)
+                result=FullGbrainCache(args.root,collection_root=args.state_root,projects=args.project).refresh(
+                    store_factory=factory,check=check,incremental=args.incremental)
             else:
                 result=FullGbrainReader(args.root,collection_root=args.state_root,projects=args.project).query(
                     projects=args.project,focus=args.focus,store_factory=factory,check=check,depth=args.depth,direction=args.direction)
