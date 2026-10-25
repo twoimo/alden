@@ -24,6 +24,15 @@ from alden_source_text import project_source_text, reading_tail_presentation
 
 
 SCHEMA = 3
+REFERENCE_SCHEMA = 4
+
+
+def validate_reference_schema(db):
+    protocol = db.execute("SELECT value FROM meta WHERE key='reference_protocol'").fetchone()
+    columns = {r[1] for r in db.execute('PRAGMA table_info(messenger_references)')}
+    if (protocol is None or protocol[0] != 'messenger-explicit-reply-v1'
+            or not {'target_id', 'origin', 'room', 'message', 'relation_id', 'generation', 'state', 'observation', 'updated'} <= columns):
+        raise RuntimeError('collection_reference_schema_invalid')
 PLATFORMS = frozenset({'threads', 'youtube', 'files', 'graph', 'kakaotalk', 'telegram'})
 _GRAPH_REFERENCES = object()  # Internal capability, never a JSON query flag.
 SNAPSHOT_RECORD_BUDGET = 100000
@@ -405,9 +414,9 @@ def require_collection_source_root(state_root, *callbacks):
             raise ValueError('collection_source_root_mismatch') from error
 
 
-def source_callbacks(state_root, *, source_access=None, source_revision=None, source_context=None, source_stream=None):
+def source_callbacks(state_root, *, source_access=None, source_revision=None, source_context=None, source_stream=None, source_relation_access=None):
     callbacks = dict(source_access=source_access, source_revision=source_revision, source_context=source_context,
-                     source_stream=source_stream)
+                     source_stream=source_stream, source_relation_access=source_relation_access)
     # An explicit caller contract is never filled in or replaced implicitly.
     if any(value is not None for value in callbacks.values()):
         return callbacks
@@ -416,19 +425,22 @@ def source_callbacks(state_root, *, source_access=None, source_revision=None, so
         from alden_messenger_production import ProductionAuthority
         authority = ProductionAuthority(Path(state_root))
         return dict(source_access=authority.access, source_revision=authority.revision,
-                    source_context=authority.retrieval_context, source_stream=authority.stream_revision)
+                    source_context=authority.retrieval_context, source_stream=authority.stream_revision,
+                    source_relation_access=authority.relation_access)
     return callbacks
 
 
 class CollectionStore:
-    def __init__(self, state_root: Path, *, source_access=None, source_revision=None, source_stream=None):
-        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision, source_stream=source_stream)
+    def __init__(self, state_root: Path, *, source_access=None, source_revision=None, source_stream=None, source_relation_access=None):
+        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision, source_stream=source_stream, source_relation_access=source_relation_access)
         source_access, source_revision = callbacks['source_access'], callbacks['source_revision']
         source_stream = callbacks['source_stream']
         require_collection_source_root(state_root, source_access, source_revision, source_stream)
         self.source_access = source_access
         self.source_revision = source_revision
         self.source_stream = source_stream
+        self.source_relation_access = callbacks['source_relation_access']
+        require_collection_source_root(state_root, self.source_relation_access)
         self.read_only = False
         self.schema = SCHEMA
         self.root = safe_directory(state_root / "knowledge" / "collection")
@@ -443,8 +455,11 @@ class CollectionStore:
         with self.database() as db:
             has_meta = db.execute("SELECT 1 FROM sqlite_master WHERE name='meta'").fetchone()
             prior = db.execute("SELECT value FROM meta WHERE key='schema'").fetchone() if has_meta else None
-            if prior and int(prior[0]) not in {1, 2, SCHEMA}:
+            if prior and int(prior[0]) not in {1, 2, SCHEMA, REFERENCE_SCHEMA}:
                 raise RuntimeError("collection_schema_requires_migration")
+            if prior and int(prior[0]) == REFERENCE_SCHEMA:
+                validate_reference_schema(db)
+                self.schema = REFERENCE_SCHEMA
             journal = db.execute("SELECT value FROM meta WHERE key='journal_id'").fetchone() if has_meta else None
             counts = db.execute("SELECT value FROM meta WHERE key='journal_counts_v1'").fetchone() if has_meta else None
             if prior and (int(prior[0]) < SCHEMA or journal is None or counts is None):
@@ -543,7 +558,7 @@ class CollectionStore:
                     db.execute("ALTER TABLE memberships ADD COLUMN availability TEXT NOT NULL DEFAULT 'available'")
                 db.execute('''INSERT OR IGNORE INTO relation_versions
                     SELECT id,version,target_id,source,target,type,evidence,? FROM relations''', (time.time(),))
-            db.execute("INSERT INTO meta VALUES('schema',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(SCHEMA),))
+            db.execute("INSERT INTO meta VALUES('schema',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(self.schema),))
             # Identity precedes the first event and survives reopen. Read-only
             # lookup never initializes it; legacy stores retain their old ID
             # until their next ordinary writer opens this backed-up store.
@@ -573,8 +588,8 @@ class CollectionStore:
             db.execute('CREATE INDEX IF NOT EXISTS event_target_sequence ON events(target_id,sequence)')
 
     @classmethod
-    def open_existing(cls, state_root: Path, *, source_access=None, source_revision=None, source_stream=None):
-        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision, source_stream=source_stream)
+    def open_existing(cls, state_root: Path, *, source_access=None, source_revision=None, source_stream=None, source_relation_access=None):
+        callbacks = source_callbacks(state_root, source_access=source_access, source_revision=source_revision, source_stream=source_stream, source_relation_access=source_relation_access)
         source_access, source_revision = callbacks['source_access'], callbacks['source_revision']
         source_stream = callbacks['source_stream']
         require_collection_source_root(state_root, source_access, source_revision, source_stream)
@@ -587,18 +602,22 @@ class CollectionStore:
         store.source_access = source_access
         store.source_revision = source_revision
         store.source_stream = source_stream
+        store.source_relation_access = callbacks['source_relation_access']
+        require_collection_source_root(state_root, store.source_relation_access)
         store.read_only = True
         store.path, store.root = path, path.parent
         store.blobs, store.locks = store.root / "sources", store.root / "locks"
         with store.database() as db:
             row = db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
-            if row is None or int(row[0]) not in {2, SCHEMA}:
+            if row is None or int(row[0]) not in {2, SCHEMA, REFERENCE_SCHEMA}:
                 raise RuntimeError("collection_schema_requires_migration")
             store.schema = int(row[0])
+            if store.schema == REFERENCE_SCHEMA:
+                validate_reference_schema(db)
         return store
 
     def _install_source_access(self, db, *, cancelled=None):
-        protected, decisions, scopes, stream_scopes = None, {}, {}, {}
+        protected, decisions, scopes, stream_scopes, relation_decisions = None, {}, {}, {}, {}
         def check_cancelled():
             if cancelled is not None and cancelled():
                 raise RuntimeError('collection_cancelled')
@@ -666,6 +685,41 @@ class CollectionStore:
         db.create_function('alden_has_source_guards', 0, lambda: int(bool(guarded_targets())))
         db.create_function('alden_source_scope', 1, source_scope)
         db.create_function('alden_source_stream', 1, source_stream_scope)
+        def check_relation(key):
+            check_cancelled()
+            callback = getattr(self, 'source_relation_access', None)
+            try:
+                metadata = json.loads(key[-1])
+                if callback is None:
+                    # Preserve an explicit legacy contract, but never admit the
+                    # new reference protocol using endpoint checks alone.
+                    return key[-2] != 'replies-to' and (not isinstance(metadata, dict)
+                        or metadata.get('kind') != 'messenger-explicit-reply-v1')
+                return callable(callback) and callback(*key[:-1], metadata) is True
+            except Exception:
+                return False
+        def relation_allowed(target, source, destination, relation_type, evidence):
+            if target not in guarded_targets():
+                return 1
+            if relation_type == 'replies-to':
+                try:
+                    value = json.loads(evidence)
+                    proof = value['observation']['reference']
+                    origin = identity('reference-origin', encoded([proof['account_id'], proof['room_id'], proof['source_message_id']]).decode())
+                    edge = identity('relation', encoded([target, source, relation_type, destination, origin]).decode())
+                    schema = db.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+                    if schema is None or schema[0] != str(REFERENCE_SCHEMA): return 0
+                    validate_reference_schema(db)
+                    claim = db.execute('''SELECT observation FROM messenger_references
+                        WHERE target_id=? AND origin=? AND relation_id=? AND state='ready' ''', (target, origin, edge)).fetchone()
+                    if claim is None or json.loads(claim[0]) != value['observation']: return 0
+                except (ValueError, KeyError, TypeError, sqlite3.Error, RuntimeError):
+                    return 0
+            key = target, source, destination, relation_type, evidence
+            if key not in relation_decisions:
+                relation_decisions[key] = check_relation(key)
+            return int(relation_decisions[key])
+        db.create_function('alden_source_relation_allowed', 5, relation_allowed)
         def verify():
             check_cancelled()
             for target, value in scopes.items():
@@ -678,6 +732,9 @@ class CollectionStore:
                 check_cancelled()
                 if allowed and not check_source(key, metadata):
                     raise RuntimeError('collection_source_authorization_changed')
+            for key, allowed in relation_decisions.items():
+                if allowed and not check_relation(key):
+                    raise RuntimeError('collection_source_authorization_changed')
         return verify
 
     @contextmanager
@@ -687,6 +744,7 @@ class CollectionStore:
             explicit = cancelled
             cancelled = inherited if explicit is None else explicit if inherited is None or inherited is explicit else lambda: inherited() or explicit()
         require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision, getattr(self, 'source_stream', None))
+        require_collection_source_root(self.path.parents[2], getattr(self, 'source_relation_access', None))
         db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
@@ -706,6 +764,7 @@ class CollectionStore:
                     raise RuntimeError('collection_cancelled')
             yield db
             require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision, getattr(self, 'source_stream', None))
+            require_collection_source_root(self.path.parents[2], getattr(self, 'source_relation_access', None))
             verify_source_access()
             with publication_guard() if publication_guard is not None else nullcontext():
                 if cancelled is not None and cancelled():
@@ -1298,7 +1357,7 @@ class CollectionStore:
             AND p.permission!='denied' AND p.project IN (""" + marks + "))) WHERE choice=1"
 
     def _source_relation_scope(self):
-        guards = []
+        guards = ['alden_source_relation_allowed(r.target_id,r.source,r.target,r.type,r.evidence)=1']
         for endpoint in ('source', 'target'):
             allowed = 'alden_source_allowed(r.target_id,r.' + endpoint + ',m.current_version)'
             available = 'm.current_version IS NOT NULL' + (" AND m.availability='available'" if self.schema >= 3 else '')
@@ -1969,22 +2028,23 @@ class CollectionStore:
 
 
 def read_action(state_root: Path, action: str, query: str | None = None, *,
-                source_access=None, source_revision=None, cancelled=None) -> dict:
+                source_access=None, source_revision=None, source_relation_access=None, cancelled=None) -> dict:
     """Own cancellation across every nested read, including SQLite progress."""
     with _read_cancellation(cancelled):
         return _read_action(state_root, action, query,
-                            source_access=source_access, source_revision=source_revision)
+                            source_access=source_access, source_revision=source_revision, source_relation_access=source_relation_access)
 
 
 def _read_action(state_root: Path, action: str, query: str | None = None, *,
-                source_access=None, source_revision=None) -> dict:
+                source_access=None, source_revision=None, source_relation_access=None) -> dict:
     """Bounded read-only application boundary; never creates a store on lookup."""
     if action not in {"collection-projects", "collection-history", "collection-graph"}:
         raise ValueError("collection_action_invalid")
     options = json.loads(query) if query else {}
     if not isinstance(options, dict):
         raise ValueError("collection_query_invalid")
-    store = CollectionStore.open_existing(state_root, source_access=source_access, source_revision=source_revision)
+    store = CollectionStore.open_existing(state_root, source_access=source_access, source_revision=source_revision,
+                                         source_relation_access=source_relation_access)
     if store is None:
         return {"ok": True, "items": [], "nodes": [], "edges": [], "projects": [], "next": None, "state": "not_configured"}
     known = [p["project"] for p in store.projects()]

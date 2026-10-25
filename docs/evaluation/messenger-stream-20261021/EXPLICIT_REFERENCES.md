@@ -3,8 +3,9 @@
 This follow-up is based on frozen integration source
 `a0fde92e2f1f72effcadbc2571a2217c890c352b`. Its separate worktree preserves the
 existing review packet, PR47, installed application and original collector.
-The first implementation adds a current canonical Kakao reply-reference read.
-Graph publication, persistent reference lifecycle and UI integration remain open.
+The implementation adds current canonical reply-reference reads and atomic
+manual claim/edge/history/refresh transitions with fresh read authorization.
+Automatic reference-job scheduling and installed UI integration remain open.
 This is a reversible candidate, not an installed or externally validated change.
 
 ## Observed gap
@@ -86,9 +87,13 @@ stateDiagram-v2
     Withheld --> EndpointValidated: current source permits a new version
 ```
 
-Only `ObservedReference` is implemented in this delta. Later transitions are
-explicit design requirements, not verified runtime behavior. Their architecture
-and material delta still require current-source external cross-audit. Temporal
+The current manual `reconcile` path implements origin/version-bound claims,
+waiting for missing stored endpoints, publication, retirement and fresh read
+withholding. Its claim, edge history and structural refresh event commit in one
+collection transaction; no atomic transaction with original/frontier databases
+is assumed. A failed commit gate rolls all three back. Automatic job scheduling,
+fair retry and native UI delivery still require implementation/verification.
+The architecture and material delta require current-source external cross-audit. Temporal
 neighbors, similar force positions and shared vocabulary do not replace an
 explicit reply, source citation, identity decision or semantic gold evaluation.
 
@@ -113,6 +118,39 @@ python3 -B -m unittest tests.test_alden_messenger_references \
   tests.test_alden_messenger_factory
 ```
 
-The persisted-claim/read-withholding/retirement/refresh protocol, broader source
-coverage, exact-cost measurements, native graph/UI, original production
+## Manual publication and compatibility
+
+`alden_messenger_references.reconcile` checks current source reference/body hashes,
+both stored endpoint versions, pause/voice/abort/permission gates and the commit
+guard. It preserves prior relation versions, retires changed references, emits a
+real `relations_changed` refresh and treats unchanged replay as no activity.
+No source body is added by this operation. A changed reference with unchanged
+bodies changes the graph content token while preserving journal stream identity.
+The graph and retrieval/MCP paths carry a separate relation-authority callback;
+an explicit legacy endpoint-only callback cannot admit this new protocol.
+
+The first persisted claim upgrades only that derived collection to format4,
+retaining a verified private SQLite backup. Ordinary format3 roots remain3.
+Format4 requires the exact protocol and claim-table shape, and current writers
+preserve4. Older cold loaders that support only3 must reject it; hot old-client
+fencing and original-process rollout need separate verification before any
+production migration. Existing original installation/data have not migrated.
+
+The source revision samples all known reference origins, including withheld
+claims, so attachment-only changes can invalidate a view. Current correctness
+uses exact canonical reference reads per origin. This is O(R) native observations
+on top of the existing body checks and is not qualified for large source scope.
+The existing100,000-origin admission ceiling applies; native batching, latency,
+resource measurements and explicit coverage are required before promotion.
+
+The controlled lifecycle tests cover publish/replay, same-body reference change,
+withdrawal, temporary failure, pending endpoints, rollback/retry, pause/cancel,
+changes during publication, opt-in schema/protocol validation, absent relation
+authority, stored-version rebinding and mismatched callback roots. They are
+finite actual-store traces, not a proof of every interleaving or all-input
+correctness. Earlier raw receipts/counterexamples retain their original source
+hashes rather than being relabeled as current verification.
+
+Broader source coverage, automatic acquisition/retry, duplicate view-edge
+projection, exact-cost measurements, native graph/UI, original production
 installation and all main-goal release gates remain open.

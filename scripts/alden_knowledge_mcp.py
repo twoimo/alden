@@ -24,16 +24,17 @@ class CallToken(AbortToken):
 class KnowledgeServer(StdioServer):
     server_name = 'alden-readonly-knowledge'
 
-    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, search_strategy='complete', source_factory=None):
+    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, source_relation_access=None, search_strategy='complete', source_factory=None):
         super().__init__(None, tool_timeout=tool_timeout)
         self.root = Path(root)
-        if source_factory is not None and (not callable(source_factory) or any(value is not None for value in (source_access, source_revision, source_context))):
+        if source_factory is not None and (not callable(source_factory) or any(value is not None for value in (source_access, source_revision, source_context, source_relation_access))):
             raise ValueError('knowledge_source_factory_invalid')
         self.source_factory, self._factory_root = source_factory, self.root
         self.source_access, self.source_revision = source_access, source_revision
         if source_context is not None and not all(callable(value) for value in (source_access, source_revision, source_context)):
             raise ValueError('knowledge_source_context_authority_required')
         self.source_context = source_context
+        self.source_relation_access = source_relation_access
         if search_strategy not in ('complete','indexed-lexical'):
             raise ValueError('knowledge_search_strategy_invalid')
         self.search_strategy=search_strategy
@@ -46,13 +47,16 @@ class KnowledgeServer(StdioServer):
             guards = self._source_guards(lambda: False)
             source_access, source_revision, source_context = guards['source_access'], guards['source_revision'], guards['source_context']
             self.source_access, self.source_revision, self.source_context = source_access, source_revision, source_context
-        require_collection_source_root(self.root, source_access, source_revision, source_context)
+            self.source_relation_access = guards['source_relation_access']
+        require_collection_source_root(self.root, source_access, source_revision, source_context, self.source_relation_access)
         # Opening existing data validates paths/schema without creating or migrating it.
-        CollectionStore.open_existing(self.root, source_access=source_access, source_revision=source_revision)
+        CollectionStore.open_existing(self.root, source_access=source_access, source_revision=source_revision,
+                                      source_relation_access=self.source_relation_access)
 
     def _source_guards(self, cancelled):
         if self.source_factory is None:
-            return {'source_access': self.source_access, 'source_revision': self.source_revision, 'source_context': self.source_context}
+            return {'source_access': self.source_access, 'source_revision': self.source_revision, 'source_context': self.source_context,
+                    'source_relation_access': self.source_relation_access}
         if self.root != self._factory_root:
             raise ValueError('knowledge_source_factory_root_changed')
         authority = self.source_factory(self.root, cancelled)
@@ -62,6 +66,10 @@ class KnowledgeServer(StdioServer):
                   [('source_access', 'access'), ('source_revision', 'revision'), ('source_context', 'retrieval_context')]}
         if any(not callable(value) or getattr(value, '__self__', None) is not authority for value in result.values()):
             raise ValueError('knowledge_source_factory_authority_invalid')
+        relation = getattr(authority, 'relation_access', None)
+        if relation is not None and (not callable(relation) or getattr(relation, '__self__', None) is not authority):
+            raise ValueError('knowledge_source_factory_authority_invalid')
+        result['source_relation_access'] = relation
         require_collection_source_root(self.root, *result.values())
         return result
 
@@ -136,7 +144,8 @@ class KnowledgeServer(StdioServer):
                 if 'focus' in args:
                     options['focus'], options['hops'] = args['focus'], 1
                 result = read_action(self.root, action, json.dumps(options), cancelled=cancelled,
-                                     source_access=guards['source_access'], source_revision=guards['source_revision'])
+                                     source_access=guards['source_access'], source_revision=guards['source_revision'],
+                                     source_relation_access=guards['source_relation_access'])
                 if action == 'collection-history':
                     # The UI catalog is global; MCP exposes only this request's projects.
                     requested = frozenset(args['projects'])

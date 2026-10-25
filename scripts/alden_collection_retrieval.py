@@ -655,9 +655,10 @@ def _index_dense(root, projects, *, cancelled, embed, progress, source_access=No
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              candidate_limit=40, max_context_chars=8000, rrf_k=60, rrf_weights=None,
              cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None,
-             source_access=None, source_revision=None, source_context=None, search_strategy='complete'):
+             source_access=None, source_revision=None, source_context=None, source_relation_access=None, search_strategy='complete'):
     import auto_reply_knowledge_graph as kg
-    callbacks = source_callbacks(root, source_access=source_access, source_revision=source_revision, source_context=source_context)
+    callbacks = source_callbacks(root, source_access=source_access, source_revision=source_revision, source_context=source_context,
+                                 source_relation_access=source_relation_access)
     source_access, source_revision, source_context = (callbacks[key] for key in ('source_access', 'source_revision', 'source_context'))
     projects = _scope(projects)
     if search_strategy not in ('complete','indexed-lexical'):
@@ -673,8 +674,10 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         raise ValueError('collection_candidate_budget')
     if also is not None and (not isinstance(also,(list,tuple)) or len(also)>40 or any(not isinstance(i,str) for i in also)):
         raise ValueError('collection_explicit_ids_invalid')
-    require_collection_source_root(root, source_access, source_revision, source_context)
-    store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
+    source_relation_access = callbacks['source_relation_access']
+    require_collection_source_root(root, source_access, source_revision, source_context, source_relation_access)
+    store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision,
+                                         source_relation_access=source_relation_access)
     if store is None:
         return {'facts': [], 'fact_provenance': [], 'search_mode': 'bm25_only', 'projects': projects}
     with store.database() as db:

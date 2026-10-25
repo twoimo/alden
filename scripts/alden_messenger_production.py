@@ -258,6 +258,13 @@ class ProductionAuthority:
             raise ValueError('messenger_enrollment_changed_during_read')
         return hashlib.sha256(encoded([state['revision'], authorization])).hexdigest()
 
+    def relation_access(self, target, source, destination, relation_type, evidence):
+        from alden_messenger_references import allowed
+        try:
+            return allowed(self, target, source, destination, relation_type, evidence)
+        except (ValueError, OSError, RuntimeError, TypeError, KeyError):
+            return False
+
     def revision(self, target):
         source = self._source(target)
         state, _ = binding(self.root, source.platform, source.account)
@@ -302,8 +309,10 @@ class ProductionAuthority:
         if read_enrollment(self.root)['revision'] != state['revision']:
             raise ValueError('messenger_enrollment_changed_during_read')
         self.current[target] = source, bodies
+        from alden_messenger_references import scopes
+        reference_scopes = scopes(source)
         return hashlib.sha256(encoded([state['revision'], revision, heads,
-            [[room, message, *observed[(room, message)]] for room, message in sorted(observed)]])).hexdigest()
+            [[room, message, *observed[(room, message)]] for room, message in sorted(observed)], reference_scopes])).hexdigest()
 
     def retrieval_context(self, proof, **options):
         from alden_messenger_runtime import MessengerAuthority
