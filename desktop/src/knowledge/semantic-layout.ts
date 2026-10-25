@@ -9,6 +9,7 @@ export const SEMANTIC_LAYOUT_LIMITS = Object.freeze({
   nodes: 2048, inputNodes: 8192, inputEdges: 32768, inputAffinities: 32768,
   relationPairs: 4096, affinityPairs: 4096, affinityDegree: 4,
   incrementalDisplacement: .14, communityPasses: 8, solverIterations: 32, collisionTests: 131072, cellOccupancy: 16,
+  contactTests: 16384, contactPasses: 4,
 });
 
 export interface SemanticLayoutOptions {
@@ -31,6 +32,8 @@ export interface SemanticLayoutDiagnostics {
   communityPasses: number; communityMoves: number; communityVisits: number;
   solverIterations: number; springEvaluations: number; collisionTests: number;
   densityEvaluations: number; neighborhoodDensityEvaluations: number; crowdedCells: number; collisionBudgetExhausted: boolean; collisionCandidatesTruncated: boolean;
+  finalContactTests: number; finalContactPasses: number; finalContactMovedNodes: number;
+  finalContactSkippedNodes: number; finalContactCandidatesTruncated: boolean;
   cachedNodes: number; cachedPairs: number; cachedClusters: number; reflow: boolean;
 }
 export interface SemanticLayoutResult {
@@ -361,9 +364,9 @@ function unionFind(count: number) {
 function denseCollisionPass(ids: readonly string[], points: Point3[], movable: boolean[],
   forces: Float64Array, d: SemanticLayoutDiagnostics, movableCount: number, iteration: number,
   sampleSlots: Array<CollisionCell | undefined>, neighborSlots: Array<CollisionNeighborhood | undefined>,
-  collisionSeeds: readonly number[]): void {
+  collisionSeeds: readonly number[], collisionLimit: number = SEMANTIC_LAYOUT_LIMITS.collisionTests): void {
   const limits = SEMANTIC_LAYOUT_LIMITS, neighborhoodCrowdThreshold = 24;
-  if (d.collisionTests < limits.collisionTests) {
+  if (d.collisionTests < collisionLimit) {
     // Numeric cells and one candidate list per occupied cell avoid repeating
     // 27 string lookups for every node. Rotate crowded representatives and
     // reserve a share of the snapshot budget for every pass and movable ID.
@@ -432,7 +435,7 @@ function denseCollisionPass(ids: readonly string[], points: Point3[], movable: b
           pressure: .4 * Math.min(1, (count - neighborhoodCrowdThreshold) / neighborhoodCrowdThreshold) }
         : null };
     }
-    const passBudget = Math.floor((limits.collisionTests - d.collisionTests) / (limits.solverIterations - iteration));
+    const passBudget = Math.floor((collisionLimit - d.collisionTests) / (limits.solverIterations - iteration));
     const perNode = Math.max(1, Math.floor(passBudget / movableCount));
     let passTests = 0;
     for (let a = 0; a < ids.length; a++) {
@@ -475,7 +478,93 @@ function denseCollisionPass(ids: readonly string[], points: Point3[], movable: b
         forces[a * 3] -= gain * dx; forces[a * 3 + 1] -= gain * dy; forces[a * 3 + 2] -= gain * dz;
       }
     }
-  } else d.collisionBudgetExhausted = true;
+  } else d.collisionCandidatesTruncated = true;
+}
+
+/** Bounded geometric cleanup, not additional relationships or an all-contact solve.
+ * Frozen points per pass keep cell membership consistent while corrections are
+ * accumulated. Every final position still passes the caller's pin/world/prior
+ * constraints. Counters include each directed distance test in the shared cap. */
+export function refineLayoutContacts(ids: readonly string[], points: Point3[], movable: boolean[],
+  d: SemanticLayoutDiagnostics, budget: number, constrain: (i: number, point: Point3) => Point3): void {
+  const radius = .14, count = movable.filter(Boolean).length;
+  if (!count) return;
+  let remaining = Math.min(budget, Math.max(0, SEMANTIC_LAYOUT_LIMITS.collisionTests - d.collisionTests));
+  const cursors = new Uint32Array(ids.length), moved = new Uint8Array(ids.length), skipped = new Uint8Array(ids.length);
+  for (let pass = 0; pass < SEMANTIC_LAYOUT_LIMITS.contactPasses && remaining > 0; pass++) {
+    d.finalContactPasses++;
+    const cells = new Map<string | number, number[]>(), keys: Array<[number, number, number] | null> = [];
+    let dense = true;
+    points.forEach((p, i) => {
+      const xyz: [number, number, number] = [Math.floor(p.x / radius), Math.floor(p.y / radius), Math.floor(p.z / radius)];
+      if (!xyz.every(Number.isSafeInteger)) {
+        keys.push(null); skipped[i] = 1; dense = false; d.finalContactCandidatesTruncated = true; return;
+      }
+      keys.push(xyz);
+      if (xyz.some(value => Math.abs(value) > 30)) dense = false;
+    });
+    // Ordinary world coordinates fit a collision-free 64^3 integer key,
+    // including all adjacent cells. Off-center pins use the sparse key path.
+    const cellKey = (x: number, y: number, z: number): number | string => dense
+      ? ((x + 32) * 64 + y + 32) * 64 + z + 32 : `${x},${y},${z}`;
+    keys.forEach((xyz, i) => {
+      if (!xyz) return;
+      const key = cellKey(...xyz), members = cells.get(key) ?? [];
+      members.push(i); cells.set(key, members);
+    });
+    const neighborhoods = new Map<string | number, number[]>(), delta = new Float64Array(ids.length * 3);
+    const passBudget = Math.ceil(remaining / (SEMANTIC_LAYOUT_LIMITS.contactPasses - pass));
+    const quota = Math.max(1, Math.floor(passBudget / count));
+    let tested = 0;
+    for (let a = 0; a < ids.length && tested < passBudget; a++) {
+      if (!movable[a] || !keys[a]) continue;
+      const xyz = keys[a]!, key = cellKey(...xyz);
+      let neighbors = neighborhoods.get(key);
+      if (!neighbors) {
+        neighbors = [];
+        for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++)
+          neighbors.push(...cells.get(dense ? (key as number) + x * 4096 + y * 64 + z
+            : cellKey(xyz[0] + x, xyz[1] + y, xyz[2] + z)) ?? []);
+        neighborhoods.set(key, neighbors);
+      }
+      if (neighbors.length > quota + 1) d.finalContactCandidatesTruncated = true;
+      // Advance by visited candidates, including self, rather than a fixed
+      // stride that can alias a neighborhood's size and repeat the same sample.
+      const start = (hash(ids[a]) + cursors[a]) % neighbors.length;
+      let used = 0, trial = 0;
+      for (; trial < neighbors.length && used < quota && tested < passBudget; trial++) {
+        const b = neighbors[(start + trial) % neighbors.length];
+        if (a === b) continue;
+        tested++; used++; d.collisionTests++; d.finalContactTests++;
+        const p = points[a], q = points[b];
+        let dx = p.x - q.x, dy = p.y - q.y, dz = p.z - q.z;
+        const distance = Math.hypot(dx, dy, dz);
+        if (distance >= radius) continue;
+        let length = distance;
+        if (length < 1e-9) {
+          const direction = seed(ids[a]); dx = direction.x; dy = direction.y; dz = direction.z;
+          length = Math.hypot(dx, dy, dz);
+        }
+        const gain = (radius - distance) * (movable[b] ? .5 : 1) / length;
+        delta[a * 3] += gain * dx; delta[a * 3 + 1] += gain * dy; delta[a * 3 + 2] += gain * dz;
+      }
+      cursors[a] += trial;
+    }
+    remaining -= tested;
+    for (let i = 0; i < ids.length; i++) if (movable[i]) {
+      const at = i * 3, length = Math.hypot(delta[at], delta[at + 1], delta[at + 2]);
+      const gain = Math.min(1, .035 / Math.max(1e-9, length)), p = points[i];
+      const next = constrain(i, { x: p.x + gain * delta[at], y: p.y + gain * delta[at + 1], z: p.z + gain * delta[at + 2] });
+      if (next.x !== p.x || next.y !== p.y || next.z !== p.z) moved[i] = 1;
+      points[i] = next;
+    }
+    if (tested === 0) break;
+  }
+  d.finalContactMovedNodes = moved.reduce((sum, value) => sum + value, 0);
+  d.finalContactSkippedNodes = skipped.reduce((sum, value) => sum + value, 0);
+  if (remaining === 0) d.finalContactCandidatesTruncated = true;
+  d.collisionCandidatesTruncated ||= d.finalContactCandidatesTruncated;
+  d.collisionBudgetExhausted = d.collisionTests >= SEMANTIC_LAYOUT_LIMITS.collisionTests;
 }
 
 export class SemanticLayoutEngine {
@@ -516,6 +605,8 @@ export class SemanticLayoutEngine {
       communityPasses: 0, communityMoves: 0, communityVisits: 0, solverIterations: 0,
       springEvaluations: 0, collisionTests: 0, densityEvaluations: 0, neighborhoodDensityEvaluations: 0, crowdedCells: 0,
       collisionBudgetExhausted: false, collisionCandidatesTruncated: false,
+      finalContactTests: 0, finalContactPasses: 0, finalContactMovedNodes: 0,
+      finalContactSkippedNodes: 0, finalContactCandidatesTruncated: false,
       cachedNodes: 0, cachedPairs: 0, cachedClusters: 0, reflow: options.reflow === true,
     };
     const unique = new Set(view.nodes.slice(0, limits.inputNodes).filter(n => n.id && !n.evidence.retracted).map(n => n.id));
@@ -570,8 +661,9 @@ export class SemanticLayoutEngine {
         // Unequal endpoint energy is a hub spoke. Keep the link, but do not
         // let it outrank a pair whose force magnitude and direction agree.
         if (kind === 'r') {
-          const similar = Math.min(degree[a], degree[b]) / Math.max(degree[a], degree[b]);
-          p.r *= 0.35 + 0.65 * similar;
+          // Take roots before dividing so a positive ratio does not underflow
+          // before the attenuation is formed. Saved R records remain intact.
+          p.r *= Math.sqrt(Math.min(degree[a], degree[b])) / Math.sqrt(Math.max(degree[a], degree[b]));
         }
         p.weight = p.r + p.s; nextPairs.set(key, p);
       }
@@ -828,6 +920,8 @@ export class SemanticLayoutEngine {
       }
     }
     const forceScales = ids.map((_, i) => componentScales.get(impact.find(i)) ?? 1);
+    const contactBudget = Math.min(limits.contactTests, 8 * movableCount);
+    const solverCollisionBudget = limits.collisionTests - contactBudget;
     const forces = new Float64Array(ids.length * 3);
     const corrections = componentScales.size ? new Float64Array(forces.length) : null;
     // Bounded 32^3 cell keys. Reuse direct slots during this snapshot rather
@@ -900,8 +994,8 @@ export class SemanticLayoutEngine {
         forces[i * 3 + 1] += corrections[i * 3 + 1];
         forces[i * 3 + 2] += corrections[i * 3 + 2];
       }
-      if (denseGrid) denseCollisionPass(ids, points, movable, forces, d, movableCount, iteration, sampleSlots, neighborSlots, collisionSeeds);
-      else if (d.collisionTests < limits.collisionTests) {
+      if (denseGrid) denseCollisionPass(ids, points, movable, forces, d, movableCount, iteration, sampleSlots, neighborSlots, collisionSeeds, solverCollisionBudget);
+      else if (d.collisionTests < solverCollisionBudget) {
         // Numeric cells and one candidate list per occupied cell avoid repeating
         // 27 string lookups for every node. Rotate crowded representatives and
         // reserve a share of the snapshot budget for every pass and movable ID.
@@ -993,7 +1087,7 @@ export class SemanticLayoutEngine {
           if (denseGrid) neighborSlots[key as number] = neighborhood;
           else neighborhoods.set(key, neighborhood);
         }
-        const passBudget = Math.floor((limits.collisionTests - d.collisionTests) / (limits.solverIterations - iteration));
+        const passBudget = Math.floor((solverCollisionBudget - d.collisionTests) / (limits.solverIterations - iteration));
         const perNode = Math.max(1, Math.floor(passBudget / movableCount));
         let passTests = 0;
         for (let a = 0; a < ids.length; a++) {
@@ -1036,7 +1130,7 @@ export class SemanticLayoutEngine {
             forces[a * 3] -= gain * dx; forces[a * 3 + 1] -= gain * dy; forces[a * 3 + 2] -= gain * dz;
           }
         }
-      } else d.collisionBudgetExhausted = true;
+      } else d.collisionCandidatesTruncated = true;
       ids.forEach((id, i) => {
         if (!movable[i]) return;
         const p = points[i], at = i * 3;
@@ -1065,6 +1159,11 @@ export class SemanticLayoutEngine {
       const separated = {x:origin.x+v.x*gain,y:origin.y+v.y*gain,z:origin.z+v.z*gain};
       anchors.set(id, trustStep(i, pinOrigin ? boundNear(separated, pinOrigin) : bound(separated)));
     });
+    // Include the coincident-origin correction above in the final contact input.
+    ids.forEach((id, i) => { points[i] = copy(anchors.get(id)!); });
+    refineLayoutContacts(ids, points, movable, d, contactBudget,
+      (i, p) => trustStep(i, pinOrigin ? boundNear(p, pinOrigin) : bound(p)));
+    ids.forEach((id, i) => { if (movable[i]) anchors.set(id, points[i]); });
     const dirtyIds = new Set<string>();
     for (const id of ids) {
       const prior = previousPositions.get(id), p = anchors.get(id)!;

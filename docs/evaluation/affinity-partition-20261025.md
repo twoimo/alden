@@ -1,5 +1,9 @@
 # Bounded partition sampler: source candidate and delivery gates
 
+This page records the partition/temporal candidate at source `77343ee`.
+The subsequent [contact refinement](contact-refinement-20261025.md) changes its
+cold geometry; the earlier measurements below remain historical evidence.
+
 This candidate follows the [numerical oracle](affinity-neighbor-oracle-20261025.md).
 It generalizes the fixed-page experiment and connects truthful work counters to
 the real frontend. It is not installed. The app remains0.3.219/sourcea09cd79.
