@@ -439,7 +439,10 @@ class CollectionTests(unittest.TestCase):
                   'target_id':'to','type':'reference','evidence':{'quote':'first source'}}
         self.store.ingest(owner,records,relations=[relation])
         self.store.ingest(mirror,records,relations=[{**relation,'evidence':{'quote':'second source'}}])
-        self.assertEqual(len(self.store.graph_page(projects=['one'])['edges']),2)
+        grouped=self.store.graph_page(projects=['one'])
+        self.assertEqual(len(grouped['edges']),1)
+        self.assertEqual(grouped['edges'][0]['reference_group']['count'],2)
+        self.assertEqual(len(self.store.graph(projects=['one'])['edges']),2)
         self.store.ingest(owner,[],retractions=[{'platform':'youtube','original_id':'from'}])
         with self.store.database() as db:
             expected=db.execute('SELECT id FROM relations WHERE target_id=?',(mirror,)).fetchone()[0]
@@ -448,7 +451,7 @@ class CollectionTests(unittest.TestCase):
                 result=read(projects=['one'])
                 self.assertEqual(len(result['nodes']),2)
                 self.assertEqual(len(result['edges']),1)
-                self.assertEqual(result['edges'][0]['id'],expected)
+                self.assertEqual(result['edges'][0]['evidence_message_id'],expected)
 
     def test_explicit_external_reference_does_not_require_owning_the_endpoint(self):
         owner=self.target('reference-owner');external=self.target('external-document')

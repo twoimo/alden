@@ -74,6 +74,7 @@ export interface KnowledgeEdge {
   purpose?: 'semantic' | 'navigation' | 'reference';
   originalSource?: string;
   originalTarget?: string;
+  referenceGroup?: { count: number; truncated: boolean; revision: string };
 }
 
 export interface KnowledgeGraph {
@@ -158,6 +159,16 @@ function parseEvidence(value: unknown): KnowledgeEvidence {
   };
 }
 
+function parseReferenceGroup(value: unknown, evidence: KnowledgeEvidence): KnowledgeEdge['referenceGroup'] {
+  const item=objectValue(value), count=item?.count, ids=evidence.sourceEventIds;
+  if(item?.kind!=='directed-relation-group-v1'||evidence.kind!=='snapshot'
+    ||typeof count!=='number'||!Number.isSafeInteger(count)||count<1
+    ||ids.length!==Math.min(count,16)||new Set(ids).size!==ids.length
+    ||ids.some(id=>!id||id.length>256)||item.truncated!==(count>ids.length)
+    ||typeof item.revision!=='string'||!/^[a-f0-9]{64}$/.test(item.revision))return undefined;
+  return {count,truncated:item.truncated as boolean,revision:item.revision};
+}
+
 export function parseKnowledgeGraph(payload: Record<string, unknown> | null, nowMs = Date.now()): KnowledgeGraph {
   const nodes = Array.isArray(payload?.nodes)
     ? payload.nodes.flatMap((raw): KnowledgeNode[] => {
@@ -220,6 +231,7 @@ export function parseKnowledgeGraph(payload: Record<string, unknown> | null, now
         purpose: item.purpose === 'navigation' || item.purpose === 'reference' ? item.purpose : 'semantic',
         originalSource: stringValue(item.original_source).slice(0, 256),
         originalTarget: stringValue(item.original_target).slice(0, 256),
+        referenceGroup: parseReferenceGroup(item.reference_group,evidence),
       }];
     })
     : [];

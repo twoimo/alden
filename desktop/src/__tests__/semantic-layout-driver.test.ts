@@ -30,6 +30,16 @@ const withAffinity=(source:KnowledgeView):KnowledgeView=>({...source,layoutAffin
 }});
 
 describe('owned asynchronous semantic layout', () => {
+  it('does not recalculate geometry when only grouped source-record evidence changes',()=>{
+    const worker=new WorkerStub(),driver=new SemanticLayoutDriver(vi.fn(),()=>worker);
+    const source=view();source.edges[0].referenceGroup={count:24,truncated:true,revision:'a'.repeat(64)};
+    driver.request(source,new Map(),new Set(),new Set());worker.flush();
+    const changed={...source,edges:source.edges.map(edge=>({...edge,referenceGroup:{count:25,truncated:true,revision:'b'.repeat(64)}}))};
+    driver.request(changed,new Map(),new Set(),new Set());
+    expect(worker.requests).toHaveLength(1);
+    expect(worker.requests[0].view.edges[0].referenceGroup).toBeUndefined();
+    driver.clear();
+  });
   it('reuses pending and completed snapshots across equivalent node, R and S array permutations',()=>{
     const worker=new WorkerStub(),apply=vi.fn(),driver=new SemanticLayoutDriver(apply,()=>worker);
     const source=withAffinity(view(['a','b','c','d']));

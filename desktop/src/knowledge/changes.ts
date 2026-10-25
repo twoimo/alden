@@ -11,7 +11,8 @@ function relations(graph: KnowledgeGraph): Map<string, string> {
     const key = JSON.stringify([e.source, e.target, e.relation, e.roomId, e.purpose]);
     const values = groups.get(key) ?? [];
     values.push(JSON.stringify([e.weight, e.context, e.validFrom, e.validTo, e.evidenceMessageId, e.evidence.kind, e.originalSource, e.originalTarget,
-      e.evidence.chatId, [...e.evidence.sourceEventIds].sort(), e.evidence.confirmedAt, e.evidence.retracted]));
+      e.evidence.chatId, [...e.evidence.sourceEventIds].sort(), e.evidence.confirmedAt, e.evidence.retracted,
+      e.referenceGroup&&[e.referenceGroup.count,e.referenceGroup.truncated,e.referenceGroup.revision]]));
     groups.set(key, values);
   }
   return new Map([...groups].map(([key, values]) => [key, JSON.stringify(values.sort())]));

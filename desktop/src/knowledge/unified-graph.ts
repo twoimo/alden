@@ -26,6 +26,7 @@ export function unifiedGraph(collection: Record<string, unknown> | null, memory:
     evidence: { ...node.evidence, source_event_ids: node.evidence.sourceEventIds, chat_id: node.evidence.chatId,
       room_ids: node.evidence.roomIds, confirmed_at: node.evidence.confirmedAt } }));
   const rawEdges = edges.filter(edge => shownIds.has(edge.source) && shownIds.has(edge.target)).map(edge => ({ ...edge, source: prefix(edge.source), target: prefix(edge.target),
+    reference_group:edge.referenceGroup?{kind:'directed-relation-group-v1',...edge.referenceGroup}:undefined,
     room_id: edge.roomId, valid_from: edge.validFrom, valid_to: edge.validTo, evidence_message_id: edge.evidenceMessageId,
     evidence: { ...edge.evidence, source_event_ids: edge.evidence.sourceEventIds, chat_id: edge.evidence.chatId,
       room_ids: edge.evidence.roomIds, confirmed_at: edge.evidence.confirmedAt } }));

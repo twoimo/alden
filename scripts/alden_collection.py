@@ -35,6 +35,28 @@ def validate_reference_schema(db):
         raise RuntimeError('collection_reference_schema_invalid')
 PLATFORMS = frozenset({'threads', 'youtube', 'files', 'graph', 'kakaotalk', 'telegram'})
 _GRAPH_REFERENCES = object()  # Internal capability, never a JSON query flag.
+
+
+class _RelationViewProof:
+    """A bounded ID sample and a revision over every authorized current claim."""
+    def __init__(self):
+        self.claims = []
+
+    def step(self, relation_id, version):
+        self.claims.append((relation_id, version))
+
+    def finalize(self):
+        self.claims.sort(key=lambda claim: claim[0])
+        revision = hashlib.sha256(b'alden-directed-relation-view-v1\x00')
+        for relation_id, version in self.claims:
+            for value in (relation_id, version):
+                raw = value.encode('utf-8')
+                revision.update(len(raw).to_bytes(8, 'big'))
+                revision.update(raw)
+        return encoded({'count': len(self.claims), 'ids': [claim[0] for claim in self.claims[:16]],
+                        'revision': revision.hexdigest()}).decode()
+
+
 SNAPSHOT_RECORD_BUDGET = 100000
 MAX_RECORD_BYTES = 2 * 1024 * 1024
 MAX_BATCH_RECORDS = 2000
@@ -1428,6 +1450,7 @@ class CollectionStore:
         draw_topical_edges = overview is True and focus is None and query == "" and relation is None
         with self.database() as db:
             db.create_function('alden_relation_digest', 1, relation_evidence_digest, deterministic=True)
+            db.create_aggregate('alden_relation_view_proof', 2, _RelationViewProof)
             from alden_content_evidence import content_evidence_class
             db.create_function('alden_content_class',2,lambda meta,body:content_evidence_class(json.loads(meta),body),deterministic=True)
             db.create_function('alden_overview_tier', 1, overview_label_tier, deterministic=True)
@@ -1558,8 +1581,11 @@ class CollectionStore:
                       (SELECT json_group_array(json(item)) FROM (SELECT """ + json_node + """ AS item
                         FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version
                         LEFT JOIN degrees d ON d.id=s.id ORDER BY s.id)),
-                      (SELECT json_group_array(json(item)) FROM (SELECT json_object('id',r.id,'source',r.source,'target',r.target,'type',r.type) AS item
-                        FROM permitted_edges r JOIN selected a ON a.id=r.source JOIN selected b ON b.id=r.target ORDER BY r.id LIMIT """ + ("4096" if overview else "512") + """)),
+                      (SELECT json_group_array(json(item)) FROM (SELECT json_object('id',r.id,'source',r.source,'target',r.target,'type',r.type,'proof',json(r.proof)) AS item
+                        FROM (SELECT MIN(r.id) AS id,r.source,r.target,r.type,alden_relation_view_proof(r.id,r.version) AS proof
+                          FROM permitted_edges r JOIN selected a ON a.id=r.source JOIN selected b ON b.id=r.target
+                          WHERE """ + ('0' if _references_only else '1') + """ GROUP BY r.source,r.target,r.type) r
+                        ORDER BY r.id LIMIT """ + ("4096" if overview else "512") + """)),
                       (SELECT COUNT(*) FROM shown),(SELECT COUNT(*) FROM permitted_edges),(SELECT COUNT(*) FROM picked)>?,
                       (SELECT json_group_array(kind) FROM (SELECT DISTINCT json_extract(v.metadata,'$.kind') AS kind FROM ranked s
                         JOIN versions v ON v.id=s.current_version JOIN documents d ON d.id=s.document_id
@@ -1631,9 +1657,10 @@ class CollectionStore:
                     + "(SELECT json_group_array(json(node)) FROM (SELECT " + focus_node
                     + " AS node FROM visible s JOIN versions v ON v.id=s.visible_version "
                     + "LEFT JOIN degrees d ON d.id=s.id WHERE s.id IN (" + selected + ") ORDER BY s.id)),"
-                    + "(SELECT json_group_array(json_object('id',id,'source',source,'target',target,'type',type)) "
-                    + "FROM (SELECT id,source,target,type FROM permitted_edges WHERE source IN (" + selected
-                    + ") AND target IN (" + selected + ") ORDER BY id COLLATE BINARY LIMIT 144))",
+                    + "(SELECT json_group_array(json_object('id',id,'source',source,'target',target,'type',type,'proof',json(proof))) "
+                    + "FROM (SELECT MIN(id) AS id,source,target,type,alden_relation_view_proof(id,version) AS proof FROM permitted_edges WHERE source IN (" + selected
+                    + ") AND target IN (" + selected + ") " + ("AND 0 " if _references_only else "")
+                    + "GROUP BY source,target,type ORDER BY id COLLATE BINARY LIMIT 144))",
                     (*incident_args, *ids, *ids, *ids)).fetchone()
                 rows = json.loads(nodes_json)
                 edge_rows = [] if _references_only else json.loads(edges_json)
@@ -1692,7 +1719,14 @@ class CollectionStore:
                               "source_contexts": source_contexts.get(row["id"], []),
                               "degree": row["degree"], "degree_scope": "permitted filtered graph",
                               "source_metadata": {"kind": kind, "content_evidence": evidence_class}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
-            edges = [{"id": row["id"], "source": row["source"], "target": row["target"], "relation": row["type"], "context": "explicit source relationship", "weight": 1, "purpose": "reference", "evidence_message_id": row["id"], "evidence": {"kind": "snapshot", "source_event_ids": [row["id"]], "chat_id": "", "confirmed_at": None, "retracted": False}}
+            edges = [{"id": row['id'],
+                      "display_id": identity('view-relation', encoded([row['source'], row['type'], row['target']]).decode()),
+                      "source": row["source"], "target": row["target"], "relation": row["type"],
+                      "context": "explicit source relationship", "weight": 1, "purpose": "reference",
+                      "evidence_message_id": row["id"],
+                      "reference_group": {"kind": "directed-relation-group-v1", "count": row['proof']['count'],
+                          "truncated": row['proof']['count'] > len(row['proof']['ids']), "revision": row['proof']['revision']},
+                      "evidence": {"kind": "snapshot", "source_event_ids": row['proof']['ids'], "chat_id": "", "confirmed_at": None, "retracted": False}}
                      for row in edge_rows]
             if draw_topical_edges:
                 topical = [edge for edge in edges if edge["relation"] not in {"contains", "in-group", "imports", "generated-import"}]
@@ -1703,6 +1737,9 @@ class CollectionStore:
                     "facets": facets, "targets": self.targets(projects),
                     "revision": (db.execute("SELECT e.sequence FROM events e WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=e.target_id AND p.permission!='denied' AND p.project IN (" + marks + ")) ORDER BY e.sequence DESC LIMIT 1", projects).fetchone() or [0])[0],
                     "display_scope": "bounded derived projection; not full graph", "activity_checkpoint": checkpoint}
+            result['edge_projection'] = {'kind': 'directed-relation-group-v1', 'groups': len(edges),
+                'selected_claim_records': sum(edge['reference_group']['count'] for edge in edges),
+                'evidence_id_limit': 16, 'count_scope': 'stored relation records; not independent corroboration'}
             if _references_only:
                 return {key: result[key] for key in ('ok', 'nodes', 'total_nodes', 'total_edges', 'next', 'revision')} | {
                     'projection': 'current_graph_references'}

@@ -379,7 +379,7 @@ export class CollectionGraphController {
   private describeScope(): void {
     const view = this.graph.currentView;
     this.setText('knowledge-scope', this.collection
-      ? `표시 ${view.nodes.length}개 · 연결 ${view.edges.length}개 / 허용한 필터 범위 ${this.totals.nodes.toLocaleString('ko-KR')}개 · 연결 ${this.totals.edges.toLocaleString('ko-KR')}개. 크기는 해당 범위의 이웃 수이며 신뢰도를 뜻하지 않습니다.`
+      ? `표시 ${view.nodes.length}개 · 연결 ${view.edges.length}개 / 허용한 필터 범위 ${this.totals.nodes.toLocaleString('ko-KR')}개 · 관계 기록 ${this.totals.edges.toLocaleString('ko-KR')}개. 크기는 해당 범위의 이웃 수이며 신뢰도를 뜻하지 않습니다.`
       : '현재 표시한 기억과 저장된 관계입니다.');
   }
 

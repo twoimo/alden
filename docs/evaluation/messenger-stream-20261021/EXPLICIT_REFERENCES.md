@@ -165,6 +165,10 @@ installation and all main-goal release gates remain open.
 
 ## Automatic reference jobs
 
+Displayed duplicate claims use the source-preserving
+[directed relation projection](RELATION_PROJECTION.md); source claims and their
+publication history remain distinct from one displayed connection.
+
 The normal production `collect` keeps its nine source-frontier steps, including
 recent-room hints and all-room sweeps. A separate lane then attempts at most
 three reference jobs. A reference failure cannot consume a source-room slot.

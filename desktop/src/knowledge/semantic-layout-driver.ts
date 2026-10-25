@@ -77,7 +77,8 @@ export class SemanticLayoutDriver {
     const pairs = view.layoutAffinity?.pairs ?? [];
     const visibleIds=new Set(view.nodes.filter(node=>!node.evidence.retracted).map(node=>node.id));
     const compact = { ...view, nodes: view.nodes.map(n => ({ ...n, description: '', facts: [] })),
-      edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', evidence: { ...e.evidence, sourceEventIds: [] } })) };
+      edges: view.edges.map(e => ({ ...e, context: '', evidenceMessageId: '', referenceGroup:undefined,
+        evidence: { ...e.evidence, sourceEventIds: [] } })) };
     const nowMs=Date.now(),key = snapshotKey(view,pinned,nowMs);
     const pinCoordinates=()=>[...pinned].filter(id=>visibleIds.has(id)).sort().map(id=>{
       const p=previous.get(id);return [id,p?.x??null,p?.y??null,p?.z??null];
