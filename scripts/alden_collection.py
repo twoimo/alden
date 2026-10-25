@@ -37,6 +37,13 @@ PLATFORMS = frozenset({'threads', 'youtube', 'files', 'graph', 'kakaotalk', 'tel
 _GRAPH_REFERENCES = object()  # Internal capability, never a JSON query flag.
 
 
+def _relation_proof_update(revision, relation_id, version):
+    for value in (relation_id, version):
+        raw = value.encode('utf-8')
+        revision.update(len(raw).to_bytes(8, 'big'))
+        revision.update(raw)
+
+
 class _RelationViewProof:
     """A bounded ID sample and a revision over every authorized current claim."""
     def __init__(self):
@@ -49,10 +56,7 @@ class _RelationViewProof:
         self.claims.sort(key=lambda claim: claim[0])
         revision = hashlib.sha256(b'alden-directed-relation-view-v1\x00')
         for relation_id, version in self.claims:
-            for value in (relation_id, version):
-                raw = value.encode('utf-8')
-                revision.update(len(raw).to_bytes(8, 'big'))
-                revision.update(raw)
+            _relation_proof_update(revision, relation_id, version)
         return encoded({'count': len(self.claims), 'ids': [claim[0] for claim in self.claims[:16]],
                         'revision': revision.hexdigest()}).decode()
 
@@ -1419,6 +1423,48 @@ class CollectionStore:
               WHERE EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=t.id
               AND p.permission!='denied' AND p.project IN (""" + ",".join("?" for _ in projects) + ")) ORDER BY t.label,t.id", projects)]
 
+    def _graph_scope_sql(self, projects, *, target_id=None, platform=None, node_type=None,
+                         since=None, until=None, relation=None):
+        """One source/version/relation eligibility contract for views and exports."""
+        marks = ",".join("?" for _ in projects)
+        available = "m.availability='available' AND " if self.schema >= 3 else ""
+        cte = """WITH scoped_memberships AS MATERIALIZED (
+          SELECT m.document_id,m.current_version,m.target_id,v.collected_at
+          FROM memberships m JOIN versions v ON v.id=m.current_version JOIN targets t ON t.id=m.target_id
+          WHERE """ + available + """EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+            AND p.permission!='denied' AND p.project IN (""" + marks + """))
+            AND (? IS NULL OR m.target_id=?) AND (? IS NULL OR t.platform=?)),
+          ranked AS MATERIALIZED (
+          SELECT m.document_id,m.current_version,m.target_id,ROW_NUMBER() OVER(
+            PARTITION BY m.document_id ORDER BY m.collected_at DESC,m.target_id) AS choice
+          FROM scoped_memberships m WHERE alden_source_allowed(m.target_id,m.document_id,m.current_version)=1),
+          visible AS MATERIALIZED (
+          SELECT d.id,d.platform,d.original_id,s.current_version AS visible_version,s.target_id,v.collected_at
+          FROM ranked s JOIN documents d ON d.id=s.document_id JOIN versions v ON v.id=s.current_version
+          WHERE s.choice=1 AND d.availability='available' AND (? IS NULL OR json_extract(v.metadata,'$.kind')=?)
+            AND (? IS NULL OR v.collected_at>=?) AND (? IS NULL OR v.collected_at<?)),
+          scoped_relationships AS MATERIALIZED (
+          SELECT r.*
+          FROM relations r JOIN visible a ON a.id=r.source JOIN visible b ON b.id=r.target
+          WHERE r.active=1 AND (? IS NULL OR r.target_id=?)
+            AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
+              AND p.permission!='denied' AND p.project IN (""" + marks + """))),
+          permitted_relationships AS MATERIALIZED (
+          SELECT r.*, (""" + RELATION_HISTORY_MATCH + """
+            AND r.version IS alden_relation_digest(r.evidence)) AS history_bound
+          FROM scoped_relationships r LEFT JOIN relation_versions h ON h.relation_id=r.id AND h.version=r.version
+          WHERE """ + self._source_relation_scope() + """),
+          permitted_edges AS MATERIALIZED (SELECT * FROM permitted_relationships WHERE ? IS NULL OR type=?),
+          shown AS MATERIALIZED (SELECT * FROM visible WHERE ? IS NULL OR id IN (
+            SELECT source FROM permitted_edges UNION SELECT target FROM permitted_edges)),
+          degrees AS (SELECT id,COUNT(DISTINCT neighbor) AS degree FROM (
+            SELECT source AS id,target AS neighbor FROM permitted_edges WHERE source!=target
+            UNION ALL SELECT target AS id,source AS neighbor FROM permitted_edges WHERE source!=target) GROUP BY id) """
+        visible_args = [*projects, target_id, target_id, platform, platform, node_type, node_type,
+                        since, since, until, until]
+        relation_args = [target_id, target_id, *projects, relation, relation, relation]
+        return cte, visible_args, relation_args, available
+
     def graph_references(self, **options) -> dict:
         """Internal affinity selection; the ordinary graph view stays complete."""
         return self.graph_page(**options, _references_only=_GRAPH_REFERENCES)
@@ -1470,37 +1516,8 @@ class CollectionStore:
             # Materialize the permitted versions once per SQL statement. Target
             # selection precedes version ranking, so another target's revision
             # cannot replace the selected target's record.
-            available = "m.availability='available' AND " if self.schema >= 3 else ""
-            cte = """WITH ranked AS MATERIALIZED (
-              SELECT m.document_id,m.current_version,m.target_id,ROW_NUMBER() OVER(
-                PARTITION BY m.document_id ORDER BY v.collected_at DESC,m.target_id) AS choice
-              FROM memberships m JOIN versions v ON v.id=m.current_version JOIN targets t ON t.id=m.target_id
-              WHERE """ + available + """alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
-                AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
-                AND p.permission!='denied' AND p.project IN (""" + marks + """))
-                AND (? IS NULL OR m.target_id=?) AND (? IS NULL OR t.platform=?)),
-              visible AS MATERIALIZED (
-              SELECT d.id,d.platform,d.original_id,s.current_version AS visible_version,s.target_id,v.collected_at
-              FROM ranked s JOIN documents d ON d.id=s.document_id JOIN versions v ON v.id=s.current_version
-              WHERE s.choice=1 AND d.availability='available' AND (? IS NULL OR json_extract(v.metadata,'$.kind')=?)
-                AND (? IS NULL OR v.collected_at>=?) AND (? IS NULL OR v.collected_at<?)),
-              permitted_relationships AS MATERIALIZED (
-              SELECT r.*, (""" + RELATION_HISTORY_MATCH + """
-                AND r.version IS alden_relation_digest(r.evidence)) AS history_bound
-              FROM relations r JOIN visible a ON a.id=r.source JOIN visible b ON b.id=r.target
-              LEFT JOIN relation_versions h ON h.relation_id=r.id AND h.version=r.version
-              WHERE r.active=1 AND """ + self._source_relation_scope() + """ AND (? IS NULL OR r.target_id=?)
-                AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=r.target_id
-                  AND p.permission!='denied' AND p.project IN (""" + marks + """))),
-              permitted_edges AS MATERIALIZED (SELECT * FROM permitted_relationships WHERE ? IS NULL OR type=?),
-              shown AS MATERIALIZED (SELECT * FROM visible WHERE ? IS NULL OR id IN (
-                SELECT source FROM permitted_edges UNION SELECT target FROM permitted_edges)),
-              degrees AS (SELECT id,COUNT(DISTINCT neighbor) AS degree FROM (
-                SELECT source AS id,target AS neighbor FROM permitted_edges WHERE source!=target
-                UNION ALL SELECT target AS id,source AS neighbor FROM permitted_edges WHERE source!=target) GROUP BY id) """
-            visible_args = [*projects, target_id, target_id, platform, platform, node_type, node_type,
-                            since, since, until, until]
-            relation_args = [target_id, target_id, *projects, relation, relation, relation]
+            cte, visible_args, relation_args, available = self._graph_scope_sql(projects,
+                target_id=target_id, platform=platform, node_type=node_type, since=since, until=until, relation=relation)
             args = [*visible_args, *relation_args]
 
             def incident_scope(current_ids):
@@ -1513,8 +1530,8 @@ class CollectionStore:
             if details and focus and hops == 0 and relation is None:
                 # An already-selected record needs one exact permitted lookup,
                 # not repeated materialization of all 26k nodes and 48k edges.
-                exact = cte.replace("WHERE " + available + "alden_source_allowed(",
-                                    "WHERE m.document_id=? AND " + available + "alden_source_allowed(", 1)
+                exact = cte.replace("WHERE " + available + "EXISTS(",
+                                    "WHERE m.document_id=? AND " + available + "EXISTS(", 1)
                 row = db.execute(exact + "SELECT " + fields + " FROM shown s JOIN versions v ON v.id=s.visible_version WHERE s.id=?", (focus, *args, focus)).fetchone()
                 if row is None:
                     raise ValueError("collection_graph_focus_not_in_scope")
