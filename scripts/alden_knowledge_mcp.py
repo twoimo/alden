@@ -9,6 +9,8 @@ from alden_abort import ABORT_STATE_NAME, AbortToken, AldenCancelled
 from alden_collection import CollectionStore, read_action, require_collection_source_root
 from alden_collection_retrieval import retrieve, verify_source_detail_context, SourceContextUnavailable
 from alden_status_mcp import StdioServer, _check
+from alden_gbrain_bridge import GbrainGraphReader
+from alden_gbrain_client import GbrainError
 
 
 class CallToken(AbortToken):
@@ -28,9 +30,12 @@ class SourceVersionChanged(Exception):
 class KnowledgeServer(StdioServer):
     server_name = 'alden-readonly-knowledge'
 
-    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, source_relation_access=None, search_strategy='complete', source_factory=None):
+    def __init__(self, root, allowed_projects, *, tool_timeout=10, source_access=None, source_revision=None, source_context=None, source_relation_access=None, search_strategy='complete', source_factory=None, gbrain=None):
         super().__init__(None, tool_timeout=tool_timeout)
         self.root = Path(root)
+        if gbrain is not None and not isinstance(gbrain, GbrainGraphReader):
+            raise ValueError('knowledge_gbrain_config_invalid')
+        self.gbrain = gbrain
         if source_factory is not None and (not callable(source_factory) or any(value is not None for value in (source_access, source_revision, source_context, source_relation_access))):
             raise ValueError('knowledge_source_factory_invalid')
         self.source_factory, self._factory_root = source_factory, self.root
@@ -111,6 +116,18 @@ class KnowledgeServer(StdioServer):
                            'required': ['projects', 'node_id', 'expected_version'], 'additionalProperties': False},
                        'annotations': {'readOnlyHint': True, 'destructiveHint': False,
                                        'idempotentHint': True, 'openWorldHint': False}})
+        if self.gbrain is not None:
+            result.append({'name': 'alden_knowledge_paths',
+                'description': 'Read GBrain paths bound to current Alden IDs, versions and source permissions. '
+                               'Completeness covers one explicitly provisioned bounded snapshot. A stale cache is an error.',
+                'inputSchema': {'type': 'object', 'properties': {
+                    'projects': common['projects'],
+                    'focus': {'type': 'string', 'minLength': 1, 'maxLength': 256},
+                    'depth': {'type': 'integer', 'minimum': 1, 'maximum': 3},
+                    'direction': {'type': 'string', 'enum': ['in', 'out', 'both']}},
+                    'required': ['projects', 'focus'], 'additionalProperties': False},
+                'annotations': {'readOnlyHint': True, 'destructiveHint': False,
+                                'idempotentHint': True, 'openWorldHint': False}})
         return result
 
     def valid_call(self, params):
@@ -118,7 +135,9 @@ class KnowledgeServer(StdioServer):
         options = {'alden_knowledge_search': {'query'}, 'alden_knowledge_graph': {'focus'},
                    'alden_knowledge_history': {'after'},
                    'alden_knowledge_source': {'node_id', 'expected_version'}}
-        common = {'projects'} if name == 'alden_knowledge_source' else {'projects', 'limit'}
+        if self.gbrain is not None:
+            options['alden_knowledge_paths'] = {'focus', 'depth', 'direction'}
+        common = {'projects'} if name in ('alden_knowledge_source', 'alden_knowledge_paths') else {'projects', 'limit'}
         if not isinstance(name, str) or name not in options or not isinstance(args, dict) or set(args) - (common | options[name]):
             return False
         projects = args.get('projects')
@@ -129,6 +148,10 @@ class KnowledgeServer(StdioServer):
         if name == 'alden_knowledge_source':
             return all(isinstance(value, str) and value.strip() and len(value) <= 256
                        for value in (args.get('node_id'), args.get('expected_version')))
+        if name == 'alden_knowledge_paths':
+            return (isinstance(args.get('focus'), str) and 1 <= len(args['focus']) <= 256
+                    and type(args.get('depth', 2)) is int and 1 <= args.get('depth', 2) <= 3
+                    and args.get('direction', 'both') in ('in', 'out', 'both'))
         limit = args.get('limit', 6 if name.endswith('search') else 50)
         if type(limit) is not int or not 1 <= limit <= (10 if name.endswith('search') else 50):
             return False
@@ -157,6 +180,17 @@ class KnowledgeServer(StdioServer):
                     result = retrieve(self.root, args['query'], projects=args['projects'],
                                       max_entities=args.get('limit', 6), cancelled=cancelled,
                                       **guards, search_strategy=self.search_strategy)
+            elif name == 'alden_knowledge_paths':
+                def current_graph():
+                    check()
+                    current_guards = self._source_guards(cancelled)
+                    return read_action(self.root, 'collection-graph',
+                        json.dumps({'projects': args['projects'], 'limit': 50}), cancelled=cancelled,
+                        source_access=current_guards['source_access'], source_revision=current_guards['source_revision'],
+                        source_relation_access=current_guards['source_relation_access'])
+                result = self.gbrain.query(projects=args['projects'], focus=args['focus'],
+                    current=current_graph, check=check, depth=args.get('depth', 2),
+                    direction=args.get('direction', 'both'))
             else:
                 source_read = name == 'alden_knowledge_source'
                 action = 'collection-graph' if source_read or name.endswith('graph') else 'collection-history'
@@ -201,6 +235,10 @@ class KnowledgeServer(StdioServer):
             return 'alden_source_version_changed'
         if isinstance(error, SourceContextUnavailable):
             return 'alden_source_context_unavailable'
+        if isinstance(error, GbrainError):
+            if str(error) in ('gbrain_projection_stale', 'gbrain_projection_incomplete'):
+                return 'alden_gbrain_refresh_required'
+            return 'alden_gbrain_unavailable'
         return super().tool_failure_code(error)
 
 
@@ -210,14 +248,20 @@ def main():
     parser.add_argument('--allow-project', action='append', required=True)
     parser.add_argument('--search-strategy', choices=('complete','indexed-lexical'), default='complete')
     parser.add_argument('--messenger-source', choices=('kakaotalk',))
+    for name in ('root', 'receipt', 'home', 'manifest'):
+        parser.add_argument('--gbrain-' + name, type=Path)
     args = parser.parse_args()
+    paths = [getattr(args, 'gbrain_' + name) for name in ('root', 'receipt', 'home', 'manifest')]
+    if any(paths) and not all(paths):
+        parser.error('all four --gbrain-* paths are required together')
     try:
         factory = None
         if args.messenger_source:
             from alden_messenger_factory import open_existing_kakao
             factory = open_existing_kakao
+        gbrain = GbrainGraphReader(owned_root=paths[0], receipt=paths[1], home=paths[2], manifest=paths[3]) if all(paths) else None
         KnowledgeServer(args.state_root, args.allow_project, search_strategy=args.search_strategy,
-                        source_factory=factory).serve(sys.stdin.buffer, sys.stdout.buffer)
+                        source_factory=factory, gbrain=gbrain).serve(sys.stdin.buffer, sys.stdout.buffer)
     except (BrokenPipeError, KeyboardInterrupt):
         pass
 
