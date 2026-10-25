@@ -8,7 +8,8 @@ import { centerCandidates } from './center-candidates';
 export const SEMANTIC_LAYOUT_LIMITS = Object.freeze({
   nodes: 2048, inputNodes: 8192, inputEdges: 32768, inputAffinities: 32768,
   relationPairs: 4096, affinityPairs: 4096, affinityDegree: 4,
-  incrementalDisplacement: .14, communityPasses: 8, solverIterations: 32, collisionTests: 131072, cellOccupancy: 16,
+  incrementalDisplacement: .14, affinityUpdateHops: 2,
+  communityPasses: 8, solverIterations: 32, collisionTests: 131072, cellOccupancy: 16,
   contactTests: 16384, contactPasses: 4,
 });
 
@@ -808,7 +809,39 @@ export class SemanticLayoutEngine {
         : Math.min(.42, .04 * Math.sqrt(group.length)) / span;
       anchors.set(id, prior ? copy(base.get(id)!) : bound({ x: c.x + offset.x * radialJitter, y: c.y + offset.y * radialJitter, z: c.z + offset.z * radialJitter }));
     }
-    const movable = ids.map((id, i) => active[i] && !pinned.has(id));
+    // An affinity-only delta must not restart every cached spoke through an
+    // unrelated structural hub. Community evaluation keeps its complete
+    // affected component; only residual position forces use this local set.
+    const stablePins = pinned.size === this.pins.size && [...pinned].every(id => {
+      const before = this.positions.get(id), after = base.get(id);
+      return this.pins.has(id) && finite(before) && finite(after)
+        && before.x === after.x && before.y === after.y && before.z === after.z;
+    });
+    const cachedPinOrigin = pinned.size === 1 ? base.get([...pinned][0])! : null;
+    const admittedPriors = ids.every(id => {
+      if (pinned.has(id)) return true;
+      const p = base.get(id)!, admitted = cachedPinOrigin ? boundNear(p, cachedPinOrigin) : bound(p);
+      return Math.hypot(p.x - admitted.x, p.y - admitted.y, p.z - admitted.z) <= 1e-9;
+    });
+    // Preserve the existing solve for topology/content changes, explicit
+    // reflow, changed pin frames and priors needing world/frame admission.
+    const localAffinityUpdate = !options.reflow && stablePins && admittedPriors && !options.changedIds?.size
+      && this.positions.size === ids.length && ids.every(id => this.positions.has(id))
+      && [...nextPairs].every(([key, p]) => p.r === (this.pairs.get(key)?.r ?? 0))
+      && [...this.pairs].every(([key, p]) => p.r === (nextPairs.get(key)?.r ?? 0));
+    const positional = new Set(touched);
+    if (localAffinityUpdate) {
+      let frontier = [...touched];
+      for (let hop = 0; hop < limits.affinityUpdateHops; hop++) {
+        const next: number[] = [];
+        for (const at of frontier) for (const neighbor of adjacency[at]) {
+          if (!positional.has(neighbor.to)) { positional.add(neighbor.to); next.push(neighbor.to); }
+        }
+        frontier = next;
+      }
+    }
+    const movable = ids.map((id, i) => active[i] && !pinned.has(id)
+      && (!localAffinityUpdate || positional.has(i)));
     // Fallback geometry seeds the bounded solve; it must not overwrite the
     // collision result. Keep semantic placements, cached priors and inactive
     // components authoritative unless the user explicitly requests reflow.

@@ -454,6 +454,53 @@ describe('bounded semantic overview layout', () => {
     expect(repeat.diagnostics.solverIterations).toBe(0);
   });
 
+  it.each([0, 3])('keeps distant cached spokes fixed across repeated affinity-only changes with %i pins', pinCount => {
+    const view = scene(64, Array.from({ length: 63 }, (_, i) => R(0, i + 1)));
+    const pairs = [S(1, 2), S(2, 3), S(3, 4), S(24, 25)];
+    const original = JSON.stringify([view, pairs]);
+    const engine = new SemanticLayoutEngine(), first = engine.layout(view, empty(), pairs);
+    const pins = new Set(['n0000', 'n0020', 'n0030'].slice(0, pinCount));
+    const settled = engine.layout(view, first.anchors, pairs, { pinnedIds: pins });
+    const distant = view.nodes.filter(node => Number(node.id.slice(1)) >= 8).map(node => node.id);
+    let prior = settled.anchors;
+    for (let step = 0; step < 24; step++) {
+      const nextPairs = step % 2 ? pairs : pairs.slice(1);
+      const before = structuredClone(prior);
+      const next = engine.layout(view, prior, nextPairs, { pinnedIds: pins });
+      expect(next.anchors.size).toBe(64);
+      expect(next.diagnostics.relationPairs).toBe(63);
+      expect(next.diagnostics.affinityPairs).toBe(nextPairs.length);
+      expect(changed(settled.anchors, next.anchors, distant)).toEqual([]);
+      for (const id of pins) expect(next.anchors.get(id)).toEqual(settled.anchors.get(id));
+      for (const [id, p] of next.anchors) {
+        const old = prior.get(id)!;
+        expect(Math.hypot(p.x - old.x, p.y - old.y, p.z - old.z)).toBeLessThanOrEqual(.140000001);
+      }
+      expect(prior).toEqual(before);
+      const unchanged = engine.layout(view, next.anchors, nextPairs, { pinnedIds: pins });
+      expect(unchanged.anchors).toEqual(next.anchors);
+      expect(unchanged.diagnostics.solverIterations).toBe(0);
+      prior = next.anchors;
+    }
+    expect(JSON.stringify([view, pairs])).toBe(original);
+  });
+
+  it('readmits a distant out-of-frame checkpoint even during an affinity-only update', () => {
+    const view = scene(64, Array.from({ length: 63 }, (_, i) => R(0, i + 1)));
+    const engine = new SemanticLayoutEngine(), pairs = [S(1, 2), S(2, 3), S(3, 4)];
+    engine.layout(view, empty(), pairs);
+    const checkpoint = structuredClone(engine.checkpoint());
+    checkpoint.positions = checkpoint.positions.map(([id, p]) =>
+      [id, id === 'n0060' ? { x: Number.MAX_VALUE, y: 0, z: 0 } : p]);
+    const prior = new Map(checkpoint.positions), restored = new SemanticLayoutEngine();
+    restored.restore(checkpoint);
+    const next = restored.layout(view, prior, pairs.slice(1));
+    const point = next.anchors.get('n0060')!;
+    expect(Object.values(point).every(Number.isFinite)).toBe(true);
+    expect(Math.hypot(point.x / 2.3, point.y / 1.55, point.z / 1.1)).toBeLessThanOrEqual(1.000000001);
+    expect(prior.get('n0060')!.x).toBe(Number.MAX_VALUE);
+  });
+
   it('restores the incremental bound from a checkpoint while explicit reflow can rebuild the map', () => {
     const view = scene(32, Array.from({ length: 31 }, (_, i) => R(0, i + 1)));
     const engine = new SemanticLayoutEngine(), first = engine.layout(view, empty(), [S(1, 2)]);
