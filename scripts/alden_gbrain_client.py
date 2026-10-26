@@ -40,6 +40,35 @@ class GbrainWorkerUnreaped(GbrainError):
     """A child still owns its inherited lease; its store must not be retired."""
 
 
+def _passive_behavior_disclosure(notice, block):
+    """Recognize only the pinned publisher's read-only disclosure, never a fix.
+
+    The same upstream code can instead carry a source-claim or chat-routing
+    action. Those variants remain unreviewed; receiving a notice grants no
+    authority and this client never executes its command.
+    """
+    if (not isinstance(notice, dict)
+            or set(notice) != {'code', 'kind', 'contract_version', 'why', 'fix'}
+            or notice.get('code') != 'behavior_changes' or notice.get('kind') != 'safety'
+            or type(notice.get('contract_version')) is not int or notice['contract_version'] != 1):
+        return False
+    why, fix = notice.get('why'), notice.get('fix')
+    command = 'gbrain doctor --only behavior_changes --json --brain host'
+    expected = {'argv': command.split(), 'command': command, 'consent': [],
+        'actor': 'user', 'next': 'tell_user_to_run',
+        'why': 'Shows this disclosure again; read-only.',
+        'docs': 'https://github.com/garrytan/gbrain/blob/v' + VERSION + '/docs/guides/chat-fallback.md',
+        'requires_exclusive': False}
+    if (not isinstance(why, str) or not 1 <= len(why) <= 2000 or not why.startswith('gbrain v')
+            or 'All stay on; this is a one-time disclosure, not a request for consent.' not in why
+            or not isinstance(fix, dict) or fix != expected
+            or not isinstance(fix.get('consent'), list) or not isinstance(fix.get('argv'), list)
+            or fix.get('requires_exclusive') is not False):
+        return False
+    return block == ('[gbrain notice behavior_changes kind=safety]\nwhy: ' + why
+        + '\nfix: ' + command + '\nnext: tell_user_to_run')
+
+
 def _pairs(items):
     result = {}
     for key, value in items:
@@ -318,13 +347,15 @@ class GbrainReadClient:
         # notices. The pinned publisher's features_auto_fix is coaching, not
         # degraded graph data. Record it, never execute its suggested fixes
         # (which can include paid/provider operations). Unknown notices fail.
-        reviewed_notices = {'first_run_decisions': 'ask', 'features_auto_fix': 'coaching', 'backup_coverage': 'coaching'}
+        reviewed_notices = {'first_run_decisions': 'ask', 'features_auto_fix': 'coaching',
+            'backup_coverage': 'coaching', 'behavior_changes': 'safety'}
         for notice, block in zip(notices, text[1:]):
             if not isinstance(notice, dict):
                 raise GbrainError('gbrain_graph_notice_unreviewed')
             code, kind = notice.get('code'), notice.get('kind')
             if (not isinstance(code, str) or code not in reviewed_notices or reviewed_notices[code] != kind
-                    or not block.startswith('[gbrain notice ' + code + ' kind=' + kind + ']\n')):
+                    or not block.startswith('[gbrain notice ' + code + ' kind=' + kind + ']\n')
+                    or code == 'behavior_changes' and not _passive_behavior_disclosure(notice, block)):
                 raise GbrainError('gbrain_graph_notice_unreviewed')
             self.notice_codes.add(code)
         data = _json(text[0])
@@ -356,12 +387,14 @@ class GbrainReadClient:
                     or len(notices)>16 or len(content)!=1+len(notices)
                     or any(not isinstance(p,dict) or p.get('type')!='text' or not isinstance(p.get('text'),str) for p in content)):
                 raise GbrainError('gbrain_link_page_invalid')
-            reviewed={'first_run_decisions':'ask','features_auto_fix':'coaching','backup_coverage':'coaching','listing_truncated':'info'}
+            reviewed={'first_run_decisions':'ask','features_auto_fix':'coaching','backup_coverage':'coaching',
+                'listing_truncated':'info','behavior_changes':'safety'}
             for notice,block in zip(notices,content[1:]):
                 if not isinstance(notice,dict):raise GbrainError('gbrain_graph_notice_unreviewed')
                 code,kind=notice.get('code'),notice.get('kind')
                 if (not isinstance(code,str) or code not in reviewed or reviewed[code]!=kind
-                        or not block['text'].startswith('[gbrain notice '+code+' kind='+kind+']\n')):
+                        or not block['text'].startswith('[gbrain notice '+code+' kind='+kind+']\n')
+                        or code=='behavior_changes' and not _passive_behavior_disclosure(notice,block['text'])):
                     raise GbrainError('gbrain_graph_notice_unreviewed')
                 self.notice_codes.add(code)
             rows=_json(content[0]['text']);page=meta.get('pagination')

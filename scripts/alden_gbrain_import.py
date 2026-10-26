@@ -20,7 +20,7 @@ from alden_gbrain_bridge import GbrainGraphReader
 from alden_gbrain_cache import (ManagedGbrainCache,_UnreapedWorker,_write,_read,
     _projects,_sha,_sync)
 from alden_gbrain_client import (GbrainError,GbrainReadClient,PROTOCOL,VERSION,
-    _Stdio,_json,_path,validate_binary,validate_runtime,TRAVERSE_ROW_LIMIT,LINK_CONTEXT_LIMIT)
+    _Stdio,_json,_path,_passive_behavior_disclosure,validate_binary,validate_runtime,TRAVERSE_ROW_LIMIT,LINK_CONTEXT_LIMIT)
 from alden_gbrain_projection import GbrainProjection,_text
 
 POLICY='alden-gbrain-full-source-v1'
@@ -379,14 +379,16 @@ class GbrainImportClient(GbrainReadClient):
         if (result.get('isError') or not isinstance(content,list) or not isinstance(notices,list) or len(notices)>16
                 or len(content)!=1+len(notices) or any(not isinstance(p,dict) or p.get('type')!='text' or not isinstance(p.get('text'),str) for p in content)):
             raise GbrainError('gbrain_full_operation_failed')
-        reviewed={'first_run_decisions':'ask','backup_coverage':'coaching'}
+        reviewed={'first_run_decisions':'ask','backup_coverage':'coaching','behavior_changes':'safety'}
         if name=='list_pages':reviewed['listing_truncated']='info'
         for notice,block in zip(notices,content[1:]):
             if not isinstance(notice,dict):raise GbrainError('gbrain_graph_notice_unreviewed')
             code,kind=notice.get('code'),notice.get('kind')
             if (not isinstance(code,str) or code not in reviewed or reviewed[code]!=kind
-                    or not block['text'].startswith('[gbrain notice '+code+' kind='+kind+']\n')):
+                    or not block['text'].startswith('[gbrain notice '+code+' kind='+kind+']\n')
+                    or code=='behavior_changes' and not _passive_behavior_disclosure(notice,block['text'])):
                 raise GbrainError('gbrain_graph_notice_unreviewed')
+            if code=='behavior_changes':self.notice_codes.add(code)
         value=_json(content[0]['text'])
         if name=='list_pages':
             if not isinstance(value,list):raise GbrainError('gbrain_full_operation_failed')
@@ -829,6 +831,7 @@ class FullGbrainCache(ManagedGbrainCache):
         if _file_token(projection.path)!=token:raise GbrainError('gbrain_full_projection_changed')
         return {**counts,'verified_queries':verified,'verified_direction':'out','enumerated_pages':enumerated,
             'provenance_verified_pages':verified,
+            **({'reviewed_notice_codes':sorted(client.notice_codes)} if getattr(client,'notice_codes',None) else {}),
             **({'paged_outgoing_pages':paged_pages,'paged_outgoing_links':paged_links} if paged_pages else {})}
 
 

@@ -210,6 +210,7 @@ jobs:
           tests.test_alden_gbrain_catchup_adversarial
           tests.test_alden_gbrain_checkpoint_commit
           tests.test_alden_gbrain_catchup_export
+          tests.test_alden_gbrain_behavior_notice
           tests.test_alden_gbrain_cache
           tests.test_alden_gbrain_import
           tests.test_alden_gbrain_paged_links
