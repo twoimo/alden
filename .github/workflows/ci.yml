@@ -178,6 +178,9 @@ jobs:
           tests.test_alden_osk
           tests.test_alden_voice_retrieval
           tests.test_alden_knowledge_request_scope
+          tests.test_alden_knowledge_tool_protocol
+          tests.test_alden_knowledge_authority
+          tests.test_alden_knowledge_turn
           tests.test_alden_voice_turns
           tests.test_alden_voice_metrics
           tests.test_alden_local_completion

@@ -352,7 +352,8 @@ class AssistantInputTests(unittest.TestCase):
                 entered, release = threading.Event(), threading.Event()
                 results = []
 
-                def retrieve(text, *args):
+                def retrieve(text, *args, **kwargs):
+                    self.assertIs(kwargs.get('voice_style'), False)
                     if text == 'Paused followup':
                         entered.set()
                         if not release.wait(5):
@@ -462,7 +463,8 @@ class AssistantInputTests(unittest.TestCase):
     def test_changed_image_between_intake_and_transport_never_reaches_provider(self):
         from tests.test_alden_routed_llm import JsonResponse
         original=png();image={'name':'photo.png','mime':'image/png','data':base64.b64encode(original).decode()}
-        def retrieve(*args):
+        def retrieve(*args, **kwargs):
+            self.assertIs(kwargs.get('voice_style'), False)
             path=next((self.root/'assistant-input-images').glob('*.png'))
             path.write_bytes(png((0,0,255)))
             return '',{}

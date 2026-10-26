@@ -1571,11 +1571,10 @@ def _voice_collection_projects(root: Path, query: str) -> list[str]:
     return sorted(matches)
 
 
-def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], root: Path | None,
-                               token: AbortToken) -> tuple[str,dict[str,Any]]:
-    """Only explicit knowledge turns read quoted context; speech stays last."""
+def _knowledge_request(text: str, history: Sequence[Mapping[str,str]]) -> str | None:
+    """Resolve host-owned intent without reading stores or creating authority."""
     if _voice_blocks_knowledge_lookup(text):
-        return '',{'state':'not_requested','mode':'none','sources':0}
+        return None
     explicit_request = _voice_requests_knowledge(text)
     followup_prefixes=('그','거기','아까','계속','또','그러면')
     earlier=''
@@ -1589,9 +1588,19 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         if not unicodedata.normalize('NFC', previous).strip().startswith(followup_prefixes):
             break
     followup=unicodedata.normalize('NFC', text).strip().startswith(followup_prefixes)
-    if root is None or not ((root/'knowledge/corpus/current.json').is_file() or (root/'knowledge/osk/sync.json').is_file() or (root/'knowledge/collection/collection.sqlite3').is_file()) or not (explicit_request or (earlier and followup)):
+    if not (explicit_request or (earlier and followup)):
+        return None
+    # Preserve the existing pre-normalization codepoint bound and query order.
+    return unicodedata.normalize('NFC',(text+(' '+earlier if followup and not explicit_request else '')).strip()[:1024])
+
+
+def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], root: Path | None,
+                               token: AbortToken, *, authority_observer=None, voice_style=True) -> tuple[str,dict[str,Any]]:
+    """Only explicit knowledge turns read quoted context; speech stays last."""
+    query = _knowledge_request(text, history)
+    if query is None or root is None or not ((root/'knowledge/corpus/current.json').is_file() or (root/'knowledge/osk/sync.json').is_file() or (root/'knowledge/collection/collection.sqlite3').is_file()):
         return '',{'state':'not_requested','mode':'none','sources':0}
-    token.raise_if_cancelled();query=unicodedata.normalize('NFC',(text+(' '+earlier if followup and not explicit_request else '')).strip()[:1024]);started=time.perf_counter()
+    token.raise_if_cancelled();started=time.perf_counter()
     try:
         from alden_corpus import search,resolve_room
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle,embedding_abort_scope
@@ -1662,8 +1671,8 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'collected_source의 source_author.date는 보존 원문의 날짜 표기이며 발행·수집 날짜로 확정되지 않았다. time_evidence.collected_at_utc와 updated_at은 해당 수집 버전의 저장 시각이다. 원문 날짜 표기를 수집 날짜라고 바꾸어 말하지 마라. 수집·저장 시각으로 원문의 최신 효력도 확정하지 마라. '
                    '현재 접수 가능 여부나 종료 여부를 외부에서 확인하지 않았다면 둘 다 단정하지 마라. 원문상 마감일이 지났다는 설명과 현재 실제 모집 상태 미확인을 함께 구분한다. 과거 날짜 질문에는 당시 원문상 일정만 비교하고 현재 상태를 과거 상태로 덮어쓰지 마라. '
                    'OSK 노트에는 검증되지 않은 설계 가설도 있다. 저장된 내용을 승인된 사실로 승격하지 마라. '
-                   '음성 답변은 서론과 목록 없이 짧은 완결 문장 두 개 이내로 핵심과 한계만 말한다. '
-                   'fact_truncated가 참인 자료는 일부만 읽었다고 취급한다. '
+                   + ('음성 답변은 서론과 목록 없이 짧은 완결 문장 두 개 이내로 핵심과 한계만 말한다. ' if voice_style else '')
+                   + 'fact_truncated가 참인 자료는 일부만 읽었다고 취급한다. '
                    'matching_sources는 같은 보존 본문의 개별 출처이며 서로 독립적인 확인 근거라는 뜻은 아니다. '
                    'source_annotations는 원문별 미검증 태그 표기다. annotation_differences가 비어 있지 않으면 같은 본문의 주제·기관 표기도 다르며, 태그를 사실이나 동일인으로 단정하지 마라. '
                    '검색 결과가 없다는 사실을 사용자 발화를 이해하지 못했다는 뜻으로 바꾸지 마라.\n'
@@ -1672,6 +1681,8 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         if partial_reference:
             reference=('입력 한도로 검색 근거 일부만 전달했다. 전달하지 못한 자료를 읽거나 전체 자료를 검토했다고 말하지 마라. '+reference)
         full_provenance=full_provenance[:len(context['graph_facts'])]
+        if authority_observer is not None:
+            authority_observer({**context, 'graph_provenance': full_provenance})
         note_sources=len({source['note_id'] for row in full_provenance
                           for source in [row,*row.get('matching_sources',{}).get('sources',[])]
                           if source.get('note_id')})
@@ -1683,6 +1694,8 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
     except AldenCancelled:raise
     except Exception:
         token.raise_if_cancelled()
+        if authority_observer is not None:
+            raise
         return '',{'state':'unavailable','mode':'none','sources':0,'seconds':time.perf_counter()-started}
 
 
@@ -1723,6 +1736,12 @@ class LocalMlxLlm:
             return self.generate(text, token, history=history)
         finally:
             self._turn_context.reset(binding)
+
+    def generate_knowledge_for_turn(self, text, token, *, history, ticket, check_context):
+        """Typed-only bounded knowledge tool loop; ordinary voice stays text-only."""
+        from alden_knowledge_turn import generate
+        return generate(self, self.state_root, ticket, text, token,
+                        history=history, check_context=check_context)
 
     def _sample_engine_metrics(self, token: AbortToken) -> dict[str, Any]:
         sample: dict[str, Any] = {

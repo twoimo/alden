@@ -44,6 +44,11 @@ _ERROR_CODES = frozenset({
     "local_llm_stream_incomplete", "local_llm_reply_truncated",
     "local_llm_reply_incomplete", "local_llm_tool_call_unsupported",
     "local_llm_reply_empty", "local_llm_model_not_ready",
+    "local_llm_tool_protocol_invalid", "local_llm_incomplete_response",
+    "local_llm_prompt_budget", "local_knowledge_deadline_exceeded",
+    "local_knowledge_input_changed", "local_knowledge_not_requested",
+    "local_knowledge_source_changed", "local_knowledge_source_unavailable",
+    "local_knowledge_result_too_large",
 })
 _USAGE_FIELDS = frozenset({
     "input_tokens", "output_tokens", "total_tokens",
@@ -125,6 +130,40 @@ def _usage(raw: object) -> dict:
                 details[key] = value
         if details:
             result[group] = details
+    return result
+
+
+def _tool_loop(raw):
+    if not isinstance(raw, Mapping) or raw.get('state') not in {'no_call', 'read_completed', 'failed'}:
+        raise _invalid()
+    hops, reads = raw.get('hops'), raw.get('read_count')
+    if not isinstance(hops, list) or len(hops) > 2 or type(reads) is not int or reads not in (0, 1):
+        raise _invalid()
+    safe = []
+    for row in hops:
+        if not isinstance(row, Mapping): raise _invalid()
+        identifier, model, kind = _safe_response_id(row.get('id')), _safe_model(row.get('model')), row.get('kind')
+        if identifier is None or model is None or kind not in {'tool', 'final'}: raise _invalid()
+        safe.append({'id': identifier, 'model_id': model, 'kind': kind, 'usage': _usage(row.get('usage'))})
+    if len({r['id'] for r in safe}) != len(safe): raise _invalid()
+    kinds = [r['kind'] for r in safe]
+    if reads and (not kinds or kinds[0] != 'tool'): raise _invalid()
+    if 'read' in raw and reads != 1: raise _invalid()
+    if raw['state'] == 'no_call' and (kinds != ['final'] or reads): raise _invalid()
+    if raw['state'] == 'read_completed' and (kinds != ['tool', 'final'] or reads != 1): raise _invalid()
+    if len(kinds) == 2 and (kinds != ['tool', 'final'] or reads != 1): raise _invalid()
+    result = {'state': raw['state'], 'hop_count': len(safe), 'read_count': reads, 'hops': safe}
+    elapsed = _ms(raw.get('elapsed_ms'))
+    if elapsed is not None:
+        result.update(elapsed_ms=elapsed, elapsed_scope='whole_local_knowledge_loop')
+    if 'read' in raw:
+        row = raw['read']
+        if not isinstance(row, Mapping) or row.get('state') not in {'found','empty','ambiguous_room','not_requested','budget_exceeded'}:
+            raise _invalid()
+        mode, sources = row.get('mode'), _count(row.get('sources'))
+        if not isinstance(mode, str) or not re.fullmatch('[a-z0-9_]{1,32}', mode) or sources is None:
+            raise _invalid()
+        result['read'] = {'state': row['state'], 'mode': mode, 'sources': sources}
     return result
 
 
@@ -242,6 +281,8 @@ def sanitize_generation(selection: object, metrics: object, ticket: object) -> d
         timing.update(first_output_ms=first, first_output_scope=scope)
     if timing:
         result["timing"] = timing
+    if 'tool_loop' in metrics:
+        result['tool_loop'] = _tool_loop(metrics['tool_loop'])
 
     error_code = generation_error_code(metrics.get("error_code"))
     if error_code is not None:

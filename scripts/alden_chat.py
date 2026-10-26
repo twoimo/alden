@@ -171,7 +171,7 @@ def persist_images(root, decoded, token):
 
 
 def generate_input(state_root, ticket, text, token, paths, selection):
-    from alden_voice import LocalMlxLlm, _voice_knowledge_reference
+    from alden_voice import LocalMlxLlm, _voice_knowledge_reference, _knowledge_request
     from alden_routed_llm import OpenCodexLlm
     from types import SimpleNamespace
     from alden_chat_files import document_prompt, verify_file_bytes
@@ -184,7 +184,7 @@ def generate_input(state_root, ticket, text, token, paths, selection):
     documents = document_prompt(ticket) + link_prompt(ticket)
     turn = SimpleNamespace(**{k: ticket[k] for k in ('conversation_id', 'turn_id', 'context_version')}, source='text')
     if selection.get('transport') == 'opencodex':
-        reference, retrieval = _voice_knowledge_reference(text, ticket['history'], state_root, token)
+        reference, retrieval = _voice_knowledge_reference(text, ticket['history'], state_root, token, voice_style=False)
         from alden_chat_turns import verify_history_image_sources
         verify_history_image_sources(state_root, ticket)
         verify_history_file_sources(state_root, ticket)
@@ -207,7 +207,20 @@ def generate_input(state_root, ticket, text, token, paths, selection):
                              catalog_selected=selection.get('transport') == 'local', reasoning_effort=selection.get('reasoning_effort'),
                              system_prompt=CHAT_PERSONA + documents, max_tokens=1024)
         try:
-            reply = adapter.generate_for_turn(text, token, history=ticket['history'], turn=turn)
+            if _knowledge_request(text, ticket['history']) is not None:
+                def check_context():
+                    from alden_chat_turns import require_current_turn, verify_history_image_sources
+                    token.raise_if_cancelled()
+                    require_current_turn(state_root, ticket)
+                    verify_history_image_sources(state_root, ticket)
+                    verify_history_file_sources(state_root, ticket)
+                    verify_history_link_sources(state_root, ticket)
+                    verify_file_bytes(state_root, ticket)
+                    verify_link_bytes(state_root, ticket)
+                reply = adapter.generate_knowledge_for_turn(text, token, history=ticket['history'],
+                    ticket=ticket, check_context=check_context)
+            else:
+                reply = adapter.generate_for_turn(text, token, history=ticket['history'], turn=turn)
         finally:
             ticket['adapter_metrics'] = adapter.last_metrics
     return reply, adapter.last_metrics
@@ -246,6 +259,10 @@ def generation_evidence(selection, metrics, ticket, terminal_state):
         if submitted!=expected:
             raise ValueError('generation_metadata_invalid')
         result['transport_images']=submitted
+    from alden_chat_metrics import MAX_GENERATION_JSON_BYTES
+    if len(json.dumps(result, ensure_ascii=True, allow_nan=False,
+                      sort_keys=True, separators=(',', ':')).encode('utf-8')) > MAX_GENERATION_JSON_BYTES:
+        raise ValueError('generation_metadata_invalid')
     return result
 
 
@@ -437,6 +454,9 @@ def _process_owned_input(state_root, value, decoded, token, *, generate, select_
         verify_link_bytes(state_root,ticket)
         retrieval = metrics.get('retrieval', {}) if isinstance(metrics, dict) else {}
         proof = retrieval.get('graph_provenance') if isinstance(retrieval, dict) else None
+        verify_knowledge = ticket.get('_knowledge_authority_check')
+        if verify_knowledge is not None:
+            verify_knowledge()
         with token.commit_guard():
             bind_context()
             receipt = complete_turn(state_root, ticket, reply, provenance=proof,

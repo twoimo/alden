@@ -208,6 +208,7 @@ class AldenToolRuntime:
         _browser_runner_factory: BrowserRunnerFactory | None = None,
         _ax_adapter_factory: ExactAxAdapterFactory | None = None,
     ) -> None:
+        self._state_root = Path(state_root)
         self._abort = AbortController(Path(state_root))
         self._event_sink = event_sink
         self._clock = clock
@@ -215,6 +216,37 @@ class AldenToolRuntime:
             lambda token: self._owned_browser_runner(token, state_root=Path(state_root))
         )
         self._ax_adapter_factory = _ax_adapter_factory or SystemEventsBackgroundAxAdapter
+
+    def run_requested_knowledge(self, text, history, *, token):
+        """Read the original host request using its original cancellation token.
+
+        No model-provided query, path, project or consent reaches this method.
+        The opaque source receipt remains local to this one typed turn.
+        """
+        from alden_voice import _knowledge_request, _voice_knowledge_reference
+        from alden_knowledge_authority import capture_authority
+        token.raise_if_cancelled()
+        if _knowledge_request(text, history) is None:
+            raise RuntimeError('local_knowledge_not_requested')
+        receipt = None
+        def observe(context):
+            nonlocal receipt
+            token.raise_if_cancelled()
+            receipt = capture_authority(self._state_root, context, token)
+        try:
+            reference, metrics = _voice_knowledge_reference(
+                text, history, self._state_root, token, authority_observer=observe, voice_style=False)
+        except Exception as exc:
+            token.raise_if_cancelled()
+            if str(exc) in {'local_knowledge_source_changed', 'local_knowledge_source_unavailable'}:
+                raise
+            raise RuntimeError('local_knowledge_source_unavailable') from exc
+        token.raise_if_cancelled()
+        if metrics.get('state') == 'unavailable':
+            raise RuntimeError('local_knowledge_source_unavailable')
+        if metrics.get('state') == 'found' and receipt is None:
+            raise RuntimeError('local_knowledge_source_unavailable')
+        return reference, metrics, receipt
 
     @staticmethod
     def _owned_browser_runner(
