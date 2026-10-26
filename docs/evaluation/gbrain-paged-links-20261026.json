@@ -3,15 +3,15 @@
   "previous_head": "3fd7f0d503775be2d4a77451e86190c038232dce",
   "publisher_source_commit": "33d73cb54c14e2e988272764ddff59a5ead10915",
   "tests": {
-    "related": 468,
-    "new_paged": 23,
+    "related": 469,
+    "new_paged": 24,
     "messenger_relation": 342,
     "fresh_consumer_processes": 16,
-    "isolated_mutants_detected": 10
+    "isolated_mutants_detected": 11
   },
   "source_modules_sha256": {
     "alden_gbrain_client.py": "5300d0acf697fe6aa3d10becb38571cafb7ab9e8e4d2f456532a03882f150f45",
-    "alden_gbrain_import.py": "3b7335c80ad46624859df306bf6547e701305ad318997d9a5d620f5932e7620d"
+    "alden_gbrain_import.py": "414bf68dcf8657b3315dbaf0a195f7f6f6739517ceb1ec51ec665fa0786c92f2"
   },
   "actual_engine_5000_import": {
     "ok": true,
@@ -50,5 +50,14 @@
   "installation": false,
   "external_audit": "NOT_RUN",
   "required_web_astra_worker": "unavailable; not substituted",
-  "full_goal": "active"
+  "full_goal": "active",
+  "fresh_engine_rebuild": {
+    "baseline_actual_pages": 6,
+    "baseline_committed": 0,
+    "baseline_error": "revision_conflict",
+    "fixed_actual_pages": 6,
+    "fixed_committed": 6,
+    "fingerprint_unchanged": true,
+    "delta_revision_preconditions_retained": true
+  }
 }

@@ -467,7 +467,9 @@ class FullGbrainCache(ManagedGbrainCache):
                 home=generation/'home',check=check,lease_fd=fd,timeout=60) as client:
             batch=[];pages_written=0;links_written=0
             for page in projection.pages():
-                batch.append(page)
+                # This engine is empty even when the index reused stable rows.
+                # Prior opaque revisions belong only to a copied delta engine.
+                batch.append(dict(page,revision=None))
                 if len(batch)==50:self._put_batch(client,projection,batch,request);pages_written+=len(batch);batch=[]
             if batch:self._put_batch(client,projection,batch,request);pages_written+=len(batch)
             for row in projection.links():

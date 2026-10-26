@@ -177,6 +177,20 @@ class FullPagedVerificationTests(unittest.TestCase):
         self.assertEqual(result['paged_outgoing_pages'],2);self.assertEqual(result['paged_outgoing_links'],4)
         self.assertEqual(result['verified_queries'],4)
 
+    def test_fresh_rebuild_does_not_send_prior_engine_revision_preconditions(self):
+        original=PagedEngine.put
+        def revision_bound(engine,pages,request):
+            for page in pages:
+                if page.get('revision') is not None and engine.pages.get(page['slug'],{}).get('revision')!=page['revision']:
+                    raise GbrainError('fresh_engine_revision_conflict')
+            return original(engine,pages,request)
+        with patch.object(full,'TRAVERSE_ROW_LIMIT',2),patch.object(PagedEngine,'put',revision_bound):
+            first=self.f.cache.refresh(incremental=True)
+            result=self.f.cache.refresh(incremental=True,rebuild=True)
+        self.assertEqual(first['fingerprint'],result['fingerprint'])
+        self.assertEqual(result['update_mode'],'full_rebuild')
+        self.assertEqual(result['paged_outgoing_links'],4)
+
     def test_missing_extra_duplicate_proof_and_provenance_never_publish(self):
         for failure in ('paged-missing','paged-duplicate','paged-extra','paged-context','paged-provenance'):
             self.f.failure=failure

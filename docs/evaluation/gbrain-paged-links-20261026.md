@@ -25,6 +25,15 @@ Source advancement or permission withdrawal during paged verification prevents
 publication and retires the owned generations. Bounded user graph/path queries
 retain their previous limits.
 
+The actual large matrix also exposed a fresh-rebuild revision error. A reused
+stable index retained opaque revisions from the prior engine, but a new empty
+engine cannot satisfy those old revision preconditions. A six-page actual
+baseline returned six terminal `revision_conflict` results and committed none.
+Only the fresh `_build` path now clears the copied page's revision precondition;
+the copied-engine delta path keeps its expected revisions. The corrected small
+actual rebuild commits all six pages and retains the same logical fingerprint.
+The strict batch acknowledgment and complete revision/proof readback remain.
+
 The publisher's link listing truncates context to 2,000 characters. Before any
 engine is created, high-degree pages whose contexts exceed a conservative
 2,000 UTF-16-unit budget are rejected explicitly. Small-degree pages retain
