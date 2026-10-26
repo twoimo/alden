@@ -196,6 +196,7 @@ jobs:
           tests.test_alden_retained_blob_reader
           tests.test_alden_quality_menu
           tests.test_alden_model_routes
+          tests.test_alden_observed_local_routes
           tests.test_alden_routed_llm
           tests.test_alden_route_http
           tests.test_alden_route_cancellation

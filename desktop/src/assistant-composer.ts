@@ -91,6 +91,7 @@ const ERROR_DETAILS: Readonly<Record<string, string>> = {
   model_unavailable: '대화 모델에 연결할 수 없습니다. 설정을 확인해 주세요.',
   voice_model_configuration_invalid: '대화 모델 설정이 올바르지 않습니다. 모델 설정을 확인해 주세요.',
   local_llm_model_not_ready: '선택한 로컬 모델이 준비되지 않았습니다. 준비 상태를 확인해 주세요.',
+  local_model_not_ready: '선택한 로컬 모델을 현재 사용할 수 없습니다. 연결과 준비 상태를 확인해 주세요.',
   local_llm_stream_incomplete: '모델 답변이 완결되지 않았습니다. 작성한 내용은 남아 있습니다.',
   local_llm_reply_incomplete: '모델 답변이 완결되지 않았습니다. 작성한 내용은 남아 있습니다.',
   local_llm_reply_truncated: '답변이 길이 한도로 중단됐습니다. 요청을 나눠 다시 보내 주세요.',

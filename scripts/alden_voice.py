@@ -330,7 +330,15 @@ def _local_urlopen(request: urllib.request.Request, *, timeout: float):
     return opener.open(request, timeout=timeout)
 
 
-def _validate_local_llm_base_url(value: str, model: str = QWEN38_27B_MODEL_ID) -> str:
+def _validate_local_llm_base_url(value: str, model: str = QWEN38_27B_MODEL_ID, *, catalog_selected=False) -> str:
+    if type(catalog_selected) is not bool:
+        raise ValueError('local_llm_endpoint_invalid')
+    if catalog_selected:
+        # Only host discovery may supply a catalog route. The same exact model
+        # still has to be ready on this endpoint before any inference POST.
+        if value not in ('http://127.0.0.1:11234/v1', 'http://127.0.0.1:11235/v1'):
+            raise ValueError('local_llm_endpoint_invalid')
+        return value
     raw = str(value or "").strip().rstrip("/")
     try:
         parsed = urllib.parse.urlsplit(raw)
@@ -1720,7 +1728,8 @@ class LocalMlxLlm:
         fixed = canonical_fixed_local_mlx_model_id(model)
         self.model = "mlx/" + fixed if fixed else model
         expected = LOCAL_LLM_IQ_BASE_URL if self.model == FLASH_NEXT_IQ_MODEL_ID else LOCAL_LLM_BASE_URL
-        self.base_url = _validate_local_llm_base_url(base_url or expected, self.model)
+        self.base_url = _validate_local_llm_base_url(base_url if catalog_selected else base_url or expected,
+                                                     self.model, catalog_selected=catalog_selected)
         self.state_root = state_root
         self.last_metrics: dict[str, Any] = {}
         self._turn_context: ContextVar[dict[str, Any] | None] = ContextVar("alden_llm_turn", default=None)

@@ -44,6 +44,7 @@ _ERROR_CODES = frozenset({
     "local_llm_stream_incomplete", "local_llm_reply_truncated",
     "local_llm_reply_incomplete", "local_llm_tool_call_unsupported",
     "local_llm_reply_empty", "local_llm_model_not_ready",
+    "local_model_not_ready",
     "local_llm_tool_protocol_invalid", "local_llm_incomplete_response",
     "local_llm_prompt_budget", "local_knowledge_deadline_exceeded",
     "local_knowledge_input_changed", "local_knowledge_not_requested",

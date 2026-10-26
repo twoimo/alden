@@ -492,6 +492,7 @@ describe('assistant composer native ownership', () => {
     ['assistant_input_superseded', '종료'],
     ['voice_model_configuration_invalid', '설정'],
     ['local_llm_model_not_ready', '로컬 모델'],
+    ['local_model_not_ready', '로컬 모델'],
     ['local_llm_stream_incomplete', '완결'],
     ['local_llm_reply_incomplete', '완결'],
     ['local_llm_reply_truncated', '길이 한도'],

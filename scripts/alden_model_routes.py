@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 
 ROUTER = "http://127.0.0.1:10101/v1"
+LOCAL_BASE_URLS = ("http://127.0.0.1:11234/v1", "http://127.0.0.1:11235/v1")
 DEFAULT_MODEL = "google-antigravity/gemini-3.8-flash"
 DEFAULT_EFFORT = "high"
 EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
@@ -120,14 +121,24 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
     if not isinstance(rows, list) or len(rows) > 256:
         raise RuntimeError("model_catalog_invalid")
     health, seen, models = _health(root), set(), []
-    local_rows = []
-    for port in [11234, 11235]:
+    # Discovery owns endpoints. Payload fields and model-name families never
+    # provide a transport URL. Keep every matching row for ambiguity checks.
+    local_rows = {}
+    for base_url in LOCAL_BASE_URLS:
         try:
-            values = fetcher(f"http://127.0.0.1:{port}/v1/models").get("data", [])
-            local_rows.extend(row for row in values if isinstance(row, dict) and row.get("loaded") is True and row.get("state") == "ready")
+            values = fetcher(base_url + "/models").get("data", [])
+            if (not isinstance(values, list) or len(values) > 256
+                    or any(not isinstance(row, dict) or not isinstance(row.get('id'), str)
+                           or not MODEL_ID.fullmatch(row['id']) for row in values)):
+                continue
+            for item in values:
+                identity = item['id'].removeprefix('mlx/')
+                local_rows.setdefault(identity, []).append((base_url, item))
         except Exception:
             pass
-    workspace = memory_reader() if local_rows else "memory_unknown"
+    any_ready = any(item.get('loaded') is True and item.get('state') == 'ready'
+                    for observations in local_rows.values() for _base, item in observations)
+    workspace = memory_reader() if any_ready else "memory_unknown"
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -156,7 +167,13 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
         error = observation.get("error")
         if not isinstance(error, str) or error not in {"quota", "authentication", "memory", "unavailable", "cancelled"}:
             error = "unavailable"
-        ready = any(str(item.get("id", "")).removeprefix("mlx/") == model.removeprefix("mlx/") for item in local_rows)
+        observations = local_rows.get(model.removeprefix('mlx/'), []) if local else []
+        ready_bases = {base for base, item in observations
+                       if item.get('loaded') is True and item.get('state') == 'ready'}
+        observed_base = next(iter(ready_bases)) if len(ready_bases) == 1 else None
+        # The adapter also requires exactly one matching row on its endpoint.
+        ready = observed_base is not None and sum(base == observed_base for base, _item in observations) == 1
+        ambiguous = bool(ready_bases) and not ready
         status = ("running" if workspace == "ready" else workspace) if local and ready else "not_loaded" if local else "connected"
         # Contradictory success/error telemetry is not verified availability.
         if (fresh and observation.get("success") is True and observation.get("error") is None
@@ -164,11 +181,14 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
             status = "available"
         elif fresh and observation.get("success") is False and error != "cancelled":
             status = error
+        if local and ambiguous:
+            status = "unavailable"
         default = row.get("default_reasoning_level", row.get("reasoning_effort"))
         if "tts" in model.lower():
             status = "not_chat"
         models.append({"id": model, "label": str(label)[:160], "provider": model.split("/")[0] if "/" in model else "openai",
                        "local": local, "efforts": efforts, "default_effort": default if default in efforts else "medium" if "medium" in efforts else next(iter(efforts), None),
+                       "local_base_url": observed_base if ready else None,
                        "status": status, "selectable": (not local or ready and workspace == "ready") and "tts" not in model.lower(),
                        "automatic_candidate": status == "available" and model != "gpt-6-astra" and "tts" not in model.lower()})
     state = _state(root)
@@ -197,6 +217,9 @@ def save(root, options, *, fetcher=_read):
         raise ValueError("model_effort_not_supported")
     if not chosen["selectable"]:
         raise RuntimeError("local_model_not_ready")
+    base_url = chosen.get('local_base_url') if chosen['local'] else ROUTER
+    if chosen['local'] and base_url not in LOCAL_BASE_URLS:
+        raise RuntimeError('local_model_not_ready')
     state = {"schema_version": 1, "model": chosen["id"], "reasoning_effort": effort,
              "mode": options.get("mode", "manual"), "transport": "local" if chosen["local"] else "opencodex",
              "updated_at": int(time.time())}
@@ -231,6 +254,9 @@ def selection(root):
         if state.get("mode") != "automatic":
             raise RuntimeError("model_effort_not_supported")
         effort = chosen["default_effort"]
+    base_url = chosen.get('local_base_url') if chosen['local'] else ROUTER
+    if chosen['local'] and base_url not in LOCAL_BASE_URLS:
+        raise RuntimeError('local_model_not_ready')
     return {"model": chosen["id"], "reasoning_effort": effort, "transport": "local" if chosen["local"] else "opencodex",
-            "base_url": ("http://127.0.0.1:11235/v1" if "Flash-Next-MLX-Serve-iQ" in chosen["id"] else "http://127.0.0.1:11234/v1") if chosen["local"] else ROUTER, "mode": state.get("mode", "manual"), "source": "saved_configuration",
+            "base_url": base_url, "mode": state.get("mode", "manual"), "source": "saved_configuration",
             "configuration_sha256": configuration_sha}

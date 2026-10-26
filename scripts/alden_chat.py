@@ -36,6 +36,7 @@ KNOWN_INPUT_ERRORS = frozenset({
     'assistant_image_store_unavailable','assistant_image_model_unsupported',
     'assistant_response_invalid','voice_model_configuration_invalid',
     'voice_model_selection_unavailable','local_llm_model_not_ready','routed_model_not_ready',
+    'local_model_not_ready',
     'model_effort_not_supported','routed_llm_request_failed','routed_llm_generation_failed',
     'routed_llm_incomplete_response','routed_llm_reply_truncated','image_input_unavailable','image_input_budget',
     'image_input_provenance_changed','routed_llm_prompt_budget','conversation_not_found',
