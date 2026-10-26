@@ -187,8 +187,10 @@ class CatchupTests(unittest.TestCase):
 
     def test_incomplete_new_export_retains_only_previously_closed_base(self):
         old=self.pending()
-        # Model the real exporter discarding its partial archive on advancement.
-        with patch.object(source_delta,'export_incremental',side_effect=ExportError('collection_export_source_changed')):
+        # Neither a rejected incremental export nor a rejected complete fallback
+        # can create a checkpoint. Only the previously closed proof may survive.
+        with patch.object(source_delta,'export_incremental',side_effect=ExportError('collection_export_source_changed')), \
+                patch.object(full,'export_graph',side_effect=ExportError('collection_export_source_changed')):
             result=self.cache.refresh(incremental=True,catch_up=True)
         self.assert_private(result,'pending');self.assertEqual(result['generation'],old.root.name)
         self.assertEqual(list(self.cache.generations.iterdir()),[old.root])

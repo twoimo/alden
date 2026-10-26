@@ -636,8 +636,29 @@ class FullGbrainCache(ManagedGbrainCache):
                 _write(generation/'generation.json',{'kind':self.KIND,'owner':self.owner['owner'],'generation':name})
                 if incremental and old is not None:
                     from alden_collection_delta import export_incremental
-                    source_receipt=export_incremental(self.collection_root,self.owner['projects'],generation/'source-archive',
-                        previous=old.archive,store_factory=store_factory,cancelled=cancelled)
+                    try:
+                        source_receipt=export_incremental(self.collection_root,self.owner['projects'],generation/'source-archive',
+                            previous=old.archive,store_factory=store_factory,cancelled=cancelled)
+                    except ExportError as error:
+                        if not catch_up or str(error) not in self.ADVANCES:raise
+                        # The incremental exporter rejects a moving checkpoint
+                        # and terminally removes its candidate before returning.
+                        # Only confirmed content advance under fresh authority
+                        # permits a complete canonical as-of export here. This
+                        # branch precedes all engine operations; it never replays
+                        # an uncertain import or adopts an unfinished archive.
+                        self._content_advanced(old,store_factory=store_factory,check=check)
+                        validate_binary(self.root/'runtime-receipt.json',self.root,check)
+                        if (generation/'source-archive').exists() or (generation/'source-archive').is_symlink():
+                            raise GbrainError('gbrain_full_export_unreconciled')
+                        source_receipt=export_graph(self.collection_root,self.owner['projects'],generation/'source-archive',
+                            store_factory=store_factory,cancelled=cancelled)
+                        self._source_binding(old,store_factory=store_factory,check=check)
+                        validate_binary(self.root/'runtime-receipt.json',self.root,check)
+                        source_receipt['source_update']={'mode':'full_export','reason':'catch_up_source_advanced'}
+                        _write(generation/'source-archive/receipt.json',source_receipt)
+                        if _read(generation/'source-archive/receipt.json')!=source_receipt:
+                            raise GbrainError('gbrain_full_export_record_invalid')
                 else:
                     source_receipt=export_graph(self.collection_root,self.owner['projects'],generation/'source-archive',
                         store_factory=store_factory,cancelled=cancelled)
