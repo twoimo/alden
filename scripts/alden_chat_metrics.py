@@ -42,6 +42,7 @@ _ERROR_CODES = frozenset({
     "local_llm_request_failed", "local_llm_model_mismatch",
     "local_llm_response_invalid", "local_llm_response_too_large",
     "local_llm_stream_incomplete", "local_llm_reply_truncated",
+    "local_llm_reply_incomplete", "local_llm_tool_call_unsupported",
     "local_llm_reply_empty", "local_llm_model_not_ready",
 })
 _USAGE_FIELDS = frozenset({

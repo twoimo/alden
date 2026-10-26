@@ -1757,6 +1757,24 @@ class LocalMlxLlm:
         sample["observed_at_unix"] = time.time()
         return sample
 
+    @staticmethod
+    def _single_response_choice(choices: Any) -> dict[str, Any]:
+        if (not isinstance(choices, list) or len(choices) != 1
+                or not isinstance(choices[0], dict)):
+            raise RuntimeError("local_llm_response_invalid")
+        choice = choices[0]
+        if "index" in choice and (type(choice["index"]) is not int or choice["index"] != 0):
+            raise RuntimeError("local_llm_response_invalid")
+        return choice
+
+    @staticmethod
+    def _require_text_only_message(message: dict[str, Any]) -> None:
+        # This adapter has no tool dispatcher. A visible preface to a tool
+        # request is not the completed answer to the user's question.
+        if (message.get("tool_calls") not in (None, [])
+                or message.get("function_call") is not None):
+            raise RuntimeError("local_llm_tool_call_unsupported")
+
     def _read_stream(self, response, token: AbortToken, started: float) -> dict[str, Any]:
         total = 0
         parts: list[str] = []
@@ -1796,10 +1814,13 @@ class LocalMlxLlm:
                 raise RuntimeError("local_llm_response_invalid")
             if not choices:
                 continue
-            choice = choices[0]
-            if not isinstance(choice, dict) or not isinstance(choice.get("delta"), dict):
+            choice = self._single_response_choice(choices)
+            if not isinstance(choice.get("delta"), dict):
+                raise RuntimeError("local_llm_response_invalid")
+            if finish_reason is not None:
                 raise RuntimeError("local_llm_response_invalid")
             delta = choice["delta"]
+            self._require_text_only_message(delta)
             content = delta.get("content")
             if content or delta.get("reasoning_content"):
                 self.last_metrics.setdefault("first_model_token_seconds", time.perf_counter() - started)
@@ -1813,7 +1834,10 @@ class LocalMlxLlm:
                 finish_reason = choice["finish_reason"]
         elapsed = time.perf_counter() - started
         self.last_metrics.update({"elapsed_seconds": elapsed, "usage": usage, "finish_reason": finish_reason})
-        return {"id": self.last_metrics.get("backend_request_id"), "model": model, "usage": usage, "choices": [{"finish_reason": finish_reason, "message": {"content": "".join(parts)}}]}
+        content = "".join(parts)
+        if content.strip() and finish_reason is None:
+            raise RuntimeError("local_llm_stream_incomplete")
+        return {"id": self.last_metrics.get("backend_request_id"), "model": model, "usage": usage, "choices": [{"finish_reason": finish_reason, "message": {"content": content}}]}
 
     def _require_selected_model_ready(self, token: AbortToken) -> None:
         request = urllib.request.Request(
@@ -1948,10 +1972,12 @@ class LocalMlxLlm:
             raise RuntimeError("local_llm_response_too_large")
         try:
             body = json.loads(raw.decode("utf-8", "replace"))
-            message = body["choices"][0]["message"]
-            content = message.get("content")
+            message = self._single_response_choice(body["choices"])["message"]
         except (KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise RuntimeError("local_llm_response_invalid") from exc
+        if not isinstance(message, dict):
+            raise RuntimeError("local_llm_response_invalid")
+        content = message.get("content")
         observed_model = body.get('model')
         if isinstance(observed_model, str) and len(observed_model) <= 128:
             self.last_metrics['response_model_id'] = observed_model
@@ -1967,6 +1993,11 @@ class LocalMlxLlm:
             # A transport-complete stream can still contain an unfinished
             # answer. Do not speak or commit that partial answer as completion.
             raise RuntimeError("local_llm_reply_truncated")
+        self._require_text_only_message(message)
+        if finish_reason in ("tool_calls", "function_call"):
+            raise RuntimeError("local_llm_tool_call_unsupported")
+        if finish_reason not in (None, "stop"):
+            raise RuntimeError("local_llm_reply_incomplete")
         if not isinstance(content, str) or not content.strip():
             # Never speak a model's private reasoning channel as if it were a
             # user-facing answer. A reasoning-only response ends this turn.

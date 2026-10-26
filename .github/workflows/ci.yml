@@ -179,6 +179,7 @@ jobs:
           tests.test_alden_voice_retrieval
           tests.test_alden_voice_turns
           tests.test_alden_voice_metrics
+          tests.test_alden_local_completion
           tests.test_alden_chat
           tests.test_alden_chat_files
           tests.test_alden_chat_links
