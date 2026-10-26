@@ -19,6 +19,56 @@ function mount(fail=false){
   controller=new RoutedModels(load);return load;
 }
 describe('live model choices and distinct availability',()=>{
+  it('discloses a partial catalog, withdraws stale remote health and preserves the saved choice and effort',async()=>{
+    const native={id:'mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit',label:'Native Qwen',provider:'mlx',
+      local:true,efforts:[],default_effort:null,status:'running',selectable:true};
+    const load=vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce(payload)
+      .mockResolvedValueOnce({...payload,partial:true,catalog_error:'routed_llm_authentication',models:[native]})
+      .mockResolvedValueOnce(payload);
+    controller=new RoutedModels(load);await controller.refresh();
+    const search=document.getElementById('routed-model-search') as HTMLInputElement;
+    search.value='Native';
+    await controller.refresh();
+    expect(document.getElementById('routed-model-name')!.textContent).toBe(gemini);
+    const effort=document.getElementById('routed-model-effort') as HTMLSelectElement;
+    expect(effort.value).toBe('high');expect(effort.disabled).toBe(true);
+    expect(search.value).toBe('Native');
+    expect(document.getElementById('routed-model-indicator')!.getAttribute('data-state')).toBe('unavailable');
+    expect(document.getElementById('routed-local-status')!.textContent).toBe('로컬 · 1개 실행 중');
+    expect(document.getElementById('routed-model-status')!.textContent).toContain('확인된 로컬 모델만 표시');
+    expect(document.getElementById('routed-model-status')!.textContent).toContain('현재 선택은 유지');
+    expect(document.querySelectorAll('button[data-route-model]')).toHaveLength(1);
+    expect(document.querySelector<HTMLButtonElement>('[data-route-model="'+native.id+'"]')!.disabled).toBe(false);
+    expect(document.querySelector('#routed-model-list .model-availability')!.getAttribute('data-state')).toBe('running');
+    await controller.refresh();
+    expect(effort.value).toBe('high');expect(effort.disabled).toBe(false);
+    expect(document.getElementById('routed-model-indicator')!.getAttribute('data-state')).toBe('available');
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+  });
+  it('labels unsupported chat capability without assuming the model is an audio model',async()=>{
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValue({...payload,models:[
+      {...payload.models[2],status:'not_chat'},
+    ]});
+    controller=new RoutedModels(load);await controller.refresh();
+    expect(document.querySelector('#routed-model-list .model-availability')!.textContent).toBe('대화 지원 안 함');
+    expect(document.querySelector<HTMLButtonElement>('button[data-route-model]')!.disabled).toBe(true);
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+  });
+  it('keeps automatic mode visibly unconfirmed in a partial catalog despite an available local candidate',async()=>{
+    const load=vi.fn<typeof fetchSettingsAction>().mockResolvedValue({...payload,mode:'automatic',
+      partial:true,automatic_model:null,catalog_error:'routed_llm_unavailable',models:[
+        {...payload.models[2],id:'mlx/Qwen3.8-27B',status:'available',selectable:true},
+      ]});
+    controller=new RoutedModels(load);await controller.refresh();
+    expect(document.getElementById('routed-model-name')!.textContent).toBe('자동 · '+gemini);
+    expect(document.getElementById('routed-model-auto')!.getAttribute('aria-pressed')).toBe('true');
+    expect(document.getElementById('routed-model-indicator')!.getAttribute('data-state')).toBe('unavailable');
+    expect(document.getElementById('routed-local-status')!.textContent).toBe('로컬 · 1개 실행 중');
+    expect(document.getElementById('routed-model-status')!.textContent).toContain('확인된 로컬 모델만 표시');
+    expect((document.getElementById('routed-model-effort') as HTMLSelectElement).value).toBe('high');
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+  });
   it('ends the initial loading labels on catalog failure without changing a saved model',async()=>{
     const load=vi.fn<typeof fetchSettingsAction>(async()=>({ok:false}));
     controller=new RoutedModels(load);await controller.refresh();

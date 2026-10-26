@@ -367,6 +367,21 @@ class ObservedLocalRoutesTests(unittest.TestCase):
                         adapter.generate("fixture prompt", self.token)
                 self.assert_requests(calls, BASE34, post=False)
 
+    def test_latest_readiness_rejects_changed_chat_capability_and_padded_id_before_post(self):
+        rows = [ready(IQ47, capabilities=caps) for caps in
+                (["audio"], "chat", [], None, ["chat", 1], ["chat", {}])]
+        rows += [ready(IQ47, id=padding + IQ47.removeprefix("mlx/") + padding)
+                 for padding in (" ", "\t", "\n")]
+        for row in rows:
+            with self.subTest(row=row):
+                adapter = voice.LocalMlxLlm(base_url=BASE34, model=IQ47,
+                                            catalog_selected=True, state_root=self.root)
+                calls = []
+                with patch.object(voice, "_local_urlopen", side_effect=self.transport({"data": [row]}, calls)):
+                    with self.assertRaisesRegex(RuntimeError, "^local_llm_model_not_ready$"):
+                        adapter.generate("fixture prompt", self.token)
+                self.assert_requests(calls, BASE34, post=False)
+
     def test_readiness_port_change_does_not_fallback_to_other_ready_endpoint(self):
         for selected, moved in ((BASE34, BASE35), (BASE35, BASE34)):
             with self.subTest(selected=selected):
@@ -409,6 +424,415 @@ class ObservedLocalRoutesTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "^local_llm_request_failed$"):
                 voice.ConfiguredLocalMlxLlm(self.root).generate("fixture prompt", self.token)
         self.assert_requests(calls, BASE35, post=True)
+        self.assertEqual(self.path.read_bytes(), before)
+
+
+class NativeInventoryV2Tests(unittest.TestCase):
+    """Native metadata is an independent inventory, never a guessed alias."""
+
+    FLAT = "mlx/ddalcu-Qwen3.8-Flash-Next-MLX-Serve-iQ-MLX-4.7bpw"
+    TTS = "mlx/mlx-community/Qwen3-TTS-12Hz-1.7B-Base-bf16"
+    CAPS = ["chat", "tool_use", "streaming", "json_schema", "vision"]
+    observe = ObservedLocalRoutesTests.observe
+    row = ObservedLocalRoutesTests.row
+    transport = ObservedLocalRoutesTests.transport
+    assert_requests = ObservedLocalRoutesTests.assert_requests
+
+    def setUp(self):
+        self.router_failure = None
+        self.router_payload = None
+        ObservedLocalRoutesTests.setUp(self)
+        self.router_rows = []
+
+    def fetch(self, url):
+        if url == routes.ROUTER + "/models":
+            if self.router_failure is not None:
+                self.discovery_calls.append(url)
+                raise self.router_failure
+            if self.router_payload is not None:
+                self.discovery_calls.append(url)
+                return self.router_payload
+        return ObservedLocalRoutesTests.fetch(self, url)
+
+    def native(self, model=IQ47, **overrides):
+        return ready(model, capabilities=list(self.CAPS), **overrides)
+
+    def configure(self, model=IQ47, *, effort=None, mode="manual"):
+        self.path.write_text(json.dumps({"schema_version": 1, "model": model,
+                                        "reasoning_effort": effort, "transport": "local",
+                                        "mode": mode}))
+        return self.path.read_bytes()
+
+    @staticmethod
+    def router_row(model, **extra):
+        return {"slug": model, "supported_reasoning_levels": ["low", "medium", "high"],
+                "default_reasoning_level": "medium", **extra}
+
+    def failures(self):
+        import urllib.error
+        url = routes.ROUTER + "/models"
+        return ((urllib.error.HTTPError(url, 401, "fixture secret detail", None, None),
+                 "routed_llm_authentication"),
+                (urllib.error.HTTPError(url, 403, "fixture secret detail", None, None),
+                 "routed_llm_authentication"),
+                (urllib.error.HTTPError(url, 429, "fixture secret detail", None, None),
+                 "routed_llm_quota"),
+                (urllib.error.HTTPError(url, 503, "fixture secret detail", None, None),
+                 "routed_llm_unavailable"),
+                (urllib.error.URLError("fixture secret detail"), "routed_llm_unavailable"),
+                (OSError("fixture secret detail"), "routed_llm_unavailable"))
+
+    def typed(self):
+        import uuid
+        import alden_chat as chat
+        from alden_chat_turns import get_request
+        value = {"request_id": uuid.uuid4().hex, "conversation_id": None,
+                 "text": "fixture prompt", "images": []}
+        token = chat.InputToken(self.root, str(uuid.uuid4()))
+        result = chat.process_input(self.root, value, token, select_model=routes.selection)
+        return result, get_request(self.root, value["request_id"])
+
+    def native_http(self, calls, model=IQ47):
+        transport = self.transport({"data": [self.native(model)]}, calls, response_model=model)
+
+        def open_response(request, **kwargs):
+            if request.full_url.endswith("/metrics"):
+                calls.append(request)
+                return Response(b"")
+            return transport(request, **kwargs)
+        return open_response
+
+    def assert_native_requests(self, calls, base, model=IQ47):
+        inference = [r for r in calls if not r.full_url.endswith("/metrics")]
+        self.assert_requests(inference, base, post=True)
+        body = json.loads(inference[1].data)
+        self.assertEqual(body["model"], model.removeprefix("mlx/"))
+        self.assertNotIn("reasoning_effort", body)
+        self.assertTrue(all(r.full_url.startswith(base + "/") or
+                            r.full_url == base.removesuffix("/v1") + "/metrics" for r in calls))
+
+    def test_real_unloaded_native_metadata_keeps_flattened_router_alias_distinct(self):
+        self.router_rows = [self.router_row(self.FLAT)]
+        self.observe(BASE34, self.native(loaded=False, state="unloaded"),
+                     ready(self.TTS, loaded=False, state="unloaded", capabilities=["audio"]))
+        before = self.configure()
+        payload = routes.catalog(self.root)
+        native = routes.find_model(payload, IQ47)
+        flat = routes.find_model(payload, self.FLAT)
+        self.assertNotEqual(native["id"], flat["id"])
+        self.assertEqual(native["id"], IQ47)
+        self.assertEqual(native["efforts"], [])
+        self.assertIsNone(native["default_effort"])
+        self.assertEqual(native["status"], "not_loaded")
+        for row in (native, flat):
+            self.assertFalse(row["selectable"])
+            self.assertFalse(row["automatic_candidate"])
+            self.assertIsNone(row["local_base_url"])
+        self.assertNotIn(self.TTS, [r["id"] for r in payload["models"]])
+        with self.assertRaisesRegex(RuntimeError, "^local_model_not_ready$"):
+            routes.selection(self.root)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_direct_native_discovery_accepts_only_one_optional_prefix_and_no_router_row(self):
+        for raw_id in (IQ47.removeprefix("mlx/"), IQ47):
+            with self.subTest(raw_id=raw_id):
+                self.observe(BASE35, self.native(id=raw_id))
+                payload = routes.catalog(self.root)
+                self.assertEqual([r["id"] for r in payload["models"]], [IQ47])
+                row = routes.find_model(payload, IQ47)
+                self.assertEqual(row["local_base_url"], BASE35)
+                self.assertTrue(row["selectable"])
+                self.assertEqual(row["efforts"], [])
+                self.assertIsNone(row["default_effort"])
+
+    def test_native_ready_id_saves_selects_and_runs_configured_and_typed_callers_exactly(self):
+        self.router_rows = [self.router_row(self.FLAT, provider_url=BASE35,
+                                           upstream_model_id=IQ33, local_base_url=BASE35)]
+        for base in (BASE34, BASE35):
+            with self.subTest(base=base):
+                self.observations = {BASE34: {"data": []}, BASE35: {"data": []}}
+                self.observe(base, self.native())
+                routes.save(self.root, {"model": IQ47}, fetcher=self.fetch)
+                before = self.path.read_bytes()
+                stored = json.loads(before)
+                self.assertEqual(stored["model"], IQ47)
+                self.assertIsNone(stored["reasoning_effort"])
+                selected = routes.selection(self.root)
+                self.assertEqual((selected["model"], selected["base_url"], selected["transport"]),
+                                 (IQ47, base, "local"))
+                self.assertIsNone(selected["reasoning_effort"])
+                self.assertFalse(self.row(self.FLAT)["selectable"])
+                calls = []
+                with patch.object(voice, "_local_urlopen", side_effect=self.native_http(calls)):
+                    self.assertEqual(voice.ConfiguredLocalMlxLlm(self.root).generate(
+                        "fixture prompt", self.token), "synthetic answer")
+                self.assert_native_requests(calls, base)
+                calls = []
+                with patch.object(voice, "_local_urlopen", side_effect=self.native_http(calls)):
+                    result, saved = self.typed()
+                self.assertTrue(result["ok"], result)
+                self.assertEqual(saved["reply"], "synthetic answer")
+                self.assertEqual(saved["generation"]["selection"]["model_id"], IQ47)
+                self.assertIsNone(saved["generation"]["selection"]["reasoning_effort"])
+                self.assert_native_requests(calls, base)
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_native_discovery_requires_valid_list_with_literal_chat_capability(self):
+        invalid = (None, "chat", {"chat": True}, [], ["audio"], ["Chat"], [" chat"],
+                   ["chat", 1], ["chat", None], ["chat", {"tool": "use"}])
+        before = self.configure(OTHER)
+        for caps in invalid:
+            with self.subTest(caps=caps):
+                row = self.native()
+                row["capabilities"] = caps
+                self.observe(BASE34, row)
+                payload = routes.catalog(self.root)
+                self.assertNotIn(IQ47, [r["id"] for r in payload["models"]])
+        row = self.native()
+        row.pop("capabilities")
+        self.observe(BASE34, row)
+        self.assertNotIn(IQ47, [r["id"] for r in routes.catalog(self.root)["models"]])
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_explicit_native_nonchat_or_malformed_capabilities_veto_exact_router_row(self):
+        self.router_rows = [self.router_row(IQ47, capabilities=["chat"])]
+        before = self.configure(effort="medium")
+        for caps in (None, "chat", [], ["audio"], ["Chat"], ["chat", 1], ["chat", {}]):
+            with self.subTest(caps=caps):
+                row = self.native()
+                row["capabilities"] = caps
+                self.observe(BASE34, row)
+                found = self.row()
+                self.assertFalse(found["selectable"])
+                self.assertFalse(found["automatic_candidate"])
+                with self.assertRaisesRegex(RuntimeError, "^local_model_not_ready$"):
+                    routes.selection(self.root)
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_native_and_flattened_metadata_cannot_invent_native_reasoning_levels(self):
+        self.router_rows = [self.router_row(self.FLAT)]
+        self.observe(BASE34, self.native(reasoning_efforts=["high"],
+                                        supported_reasoning_levels=["medium"],
+                                        default_reasoning_level="medium"))
+        self.assertEqual(self.row()["efforts"], [])
+        self.assertIsNone(self.row()["default_effort"])
+        routes.save(self.root, {"model": IQ47}, fetcher=self.fetch)
+        before = self.path.read_bytes()
+        self.assertIsNone(routes.selection(self.root)["reasoning_effort"])
+        with self.assertRaisesRegex(ValueError, "^model_effort_not_supported$"):
+            routes.save(self.root, {"model": IQ47, "reasoning_effort": "high"}, fetcher=self.fetch)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_only_exact_router_id_supplies_declared_reasoning_levels_and_deduplicates(self):
+        self.router_rows = [self.router_row(self.FLAT), self.router_row(IQ47)]
+        self.observe(BASE34, self.native())
+        payload = routes.catalog(self.root)
+        self.assertEqual([r["id"] for r in payload["models"]].count(IQ47), 1)
+        self.assertEqual(routes.find_model(payload, IQ47)["efforts"], ["low", "medium", "high"])
+        self.assertEqual(routes.find_model(payload, IQ47)["default_effort"], "medium")
+        routes.save(self.root, {"model": IQ47, "reasoning_effort": "high"}, fetcher=self.fetch)
+        selected = routes.selection(self.root)
+        self.assertEqual(selected["model"], IQ47)
+        self.assertEqual(selected["reasoning_effort"], "high")
+        self.assertEqual(selected["base_url"], BASE34)
+
+    def test_native_duplicates_within_or_across_ports_keep_single_disabled_exact_id(self):
+        before = self.configure()
+        routes.record_result(self.root, IQ47, success=True)
+        arrangements = (([self.native(), self.native(id=IQ47)], []),
+                        ([self.native()], [self.native(id=IQ47)]))
+        for first, second in arrangements:
+            with self.subTest(first=first, second=second):
+                self.observe(BASE34, *first)
+                self.observe(BASE35, *second)
+                payload = routes.catalog(self.root)
+                self.assertEqual([r["id"] for r in payload["models"]], [IQ47])
+                row = routes.find_model(payload, IQ47)
+                self.assertEqual(row["status"], "unavailable")
+                self.assertFalse(row["selectable"])
+                self.assertFalse(row["automatic_candidate"])
+                self.assertIsNone(row["local_base_url"])
+                with self.assertRaisesRegex(RuntimeError, "^local_model_not_ready$"):
+                    routes.selection(self.root)
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_selected_port_duplicate_capability_conflict_cannot_be_hidden_by_router(self):
+        self.router_rows = [self.router_row(IQ47)]
+        before = self.configure(effort="medium")
+        for caps in (["audio"], "chat", ["chat", None]):
+            with self.subTest(caps=caps):
+                conflict = self.native()
+                conflict["capabilities"] = caps
+                self.observe(BASE35, self.native(), conflict)
+                row = self.row()
+                self.assertFalse(row["selectable"])
+                self.assertFalse(row["automatic_candidate"])
+                self.assertIsNone(row["local_base_url"])
+                with self.assertRaisesRegex(RuntimeError, "^local_model_not_ready$"):
+                    routes.selection(self.root)
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_partial_router_errors_keep_native_inventory_and_omit_stale_remote_health(self):
+        self.observe(BASE34, self.native())
+        before = self.configure()
+        routes.record_result(self.root, routes.DEFAULT_MODEL, success=True)
+        routes.record_result(self.root, self.FLAT, success=True)
+        health_before = (self.root / "model-route-health.json").read_bytes()
+        for error, code in self.failures():
+            with self.subTest(code=code, error=type(error).__name__):
+                self.router_failure = error
+                payload = routes.catalog(self.root)
+                self.assertIs(payload["partial"], True)
+                self.assertEqual(payload["catalog_error"], code)
+                self.assertEqual([r["id"] for r in payload["models"]], [IQ47])
+                self.assertEqual(payload["local_running"], 1)
+                self.assertTrue(routes.find_model(payload, IQ47)["selectable"])
+                self.assertIsNone(payload["automatic_model"])
+                self.assertNotIn("fixture secret detail", json.dumps(payload))
+                self.assertEqual(routes.selection(self.root)["model"], IQ47)
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertEqual((self.root / "model-route-health.json").read_bytes(), health_before)
+
+    def test_malformed_router_catalog_is_partial_only_with_independent_native_chat(self):
+        self.observe(BASE34, self.native())
+        before = self.configure()
+        for invalid in ({"models": None}, {"models": {}}, {"models": "bad"},
+                        {"models": [self.router_row("remote/model-" + str(n)) for n in range(257)]}):
+            with self.subTest(invalid_type=type(invalid["models"]).__name__):
+                self.router_payload = invalid
+                payload = routes.catalog(self.root)
+                self.assertIs(payload["partial"], True)
+                self.assertEqual(payload["catalog_error"], "model_catalog_invalid")
+                self.assertEqual([r["id"] for r in payload["models"]], [IQ47])
+                with self.assertRaisesRegex(RuntimeError, "^model_catalog_invalid$"):
+                    routes.find_model(payload, routes.DEFAULT_MODEL)
+                self.assertEqual(routes.selection(self.root)["model"], IQ47)
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_partial_inventory_retains_declared_but_unloaded_native_as_disabled(self):
+        self.observe(BASE34, self.native(loaded=False, state="unloaded"))
+        self.router_failure, code = self.failures()[0]
+        before = self.configure()
+        payload = routes.catalog(self.root)
+        self.assertIs(payload["partial"], True)
+        self.assertEqual(payload["catalog_error"], code)
+        row = routes.find_model(payload, IQ47)
+        self.assertEqual(row["status"], "not_loaded")
+        self.assertFalse(row["selectable"])
+        self.assertFalse(row["automatic_candidate"])
+        with self.assertRaisesRegex(RuntimeError, "^local_model_not_ready$"):
+            routes.selection(self.root)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_router_failure_without_independently_declared_native_chat_retains_old_error(self):
+        before = self.configure(OTHER)
+        missing = ready(IQ47)
+        for observation in ([], [missing], [ready(IQ47, capabilities=["audio"])],
+                            [ready(IQ47, capabilities="chat")],
+                            [ready(IQ47, capabilities=["chat", None])]):
+            self.observe(BASE34, *observation)
+            for error, code in self.failures():
+                with self.subTest(observation=observation, code=code):
+                    self.router_failure = error
+                    with self.assertRaisesRegex(RuntimeError, "^" + code + "$"):
+                        routes.catalog(self.root)
+                    self.assertEqual(self.path.read_bytes(), before)
+
+    def test_partial_find_save_and_manual_remote_selection_rethrow_original_safe_error(self):
+        self.observe(BASE35, self.native())
+        for error, code in self.failures():
+            with self.subTest(code=code):
+                self.router_failure = error
+                before = self.configure(routes.DEFAULT_MODEL, effort="high")
+                payload = routes.catalog(self.root)
+                for requested in (routes.DEFAULT_MODEL, self.FLAT, "remote/not-in-current-inventory"):
+                    with self.assertRaisesRegex(RuntimeError, "^" + code + "$"):
+                        routes.find_model(payload, requested)
+                    with self.assertRaisesRegex(RuntimeError, "^" + code + "$"):
+                        routes.save(self.root, {"model": requested}, fetcher=self.fetch)
+                with self.assertRaisesRegex(RuntimeError, "^" + code + "$"):
+                    routes.selection(self.root)
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_partial_native_manual_save_and_configured_caller_work_with_none_effort(self):
+        self.observe(BASE35, self.native())
+        self.router_failure, _code = self.failures()[2]
+        routes.save(self.root, {"model": IQ47}, fetcher=self.fetch)
+        before = self.path.read_bytes()
+        calls = []
+        with patch.object(voice, "_local_urlopen", side_effect=self.native_http(calls)):
+            self.assertEqual(voice.ConfiguredLocalMlxLlm(self.root).generate(
+                "fixture prompt", self.token), "synthetic answer")
+        self.assert_native_requests(calls, BASE35)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_partial_typed_native_succeeds_and_missing_remote_preserves_safe_failure_receipt(self):
+        self.observe(BASE34, self.native())
+        self.router_failure, _code = self.failures()[0]
+        routes.save(self.root, {"model": IQ47}, fetcher=self.fetch)
+        before = self.path.read_bytes()
+        calls = []
+        with patch.object(voice, "_local_urlopen", side_effect=self.native_http(calls)):
+            result, saved = self.typed()
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(saved["generation"]["selection"]["model_id"], IQ47)
+        self.assert_native_requests(calls, BASE34)
+        self.assertEqual(self.path.read_bytes(), before)
+        for error, code in self.failures():
+            with self.subTest(code=code):
+                self.router_failure = error
+                before = self.configure(routes.DEFAULT_MODEL, effort="high")
+                with patch.object(voice, "_local_urlopen") as http:
+                    result, saved = self.typed()
+                self.assertFalse(result["ok"])
+                self.assertEqual(result["error_code"], code)
+                self.assertEqual(saved["generation"]["error_code"], code)
+                self.assertFalse(saved.get("reply"))
+                http.assert_not_called()
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_partial_automatic_mode_cannot_fallback_even_to_a_verified_local_candidate(self):
+        model = voice.QWEN38_27B_MODEL_ID
+        self.observe(BASE34, self.native(model))
+        routes.record_result(self.root, model, success=True)
+        self.router_failure, code = self.failures()[0]
+        before = self.configure(model, mode="automatic")
+        payload = routes.catalog(self.root)
+        self.assertIsNone(payload["automatic_model"])
+        with patch.object(voice, "_local_urlopen") as http:
+            with self.assertRaises(RuntimeError) as failure:
+                voice.ConfiguredLocalMlxLlm(self.root).generate("fixture prompt", self.token)
+            self.assertIn(str(failure.exception), {code, "automatic_model_unavailable"})
+            http.assert_not_called()
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_combined_inventory_bound_counts_exact_deduplicated_ids_and_accepts_256(self):
+        self.router_rows = [self.router_row("remote/model-" + str(n)) for n in range(254)]
+        self.router_rows.append(self.router_row(IQ47))
+        self.observe(BASE34, self.native(), self.native(OTHER))
+        payload = routes.catalog(self.root)
+        ids = [r["id"] for r in payload["models"]]
+        self.assertEqual(len(ids), 256)
+        self.assertEqual(len(set(ids)), 256)
+        self.assertEqual(ids.count(IQ47), 1)
+        self.assertIn(OTHER, ids)
+
+    def test_router_native_union_over_256_fails_closed_without_truncation_or_config_change(self):
+        self.router_rows = [self.router_row("remote/model-" + str(n)) for n in range(256)]
+        self.observe(BASE34, self.native())
+        before = self.configure()
+        for action in (lambda: routes.catalog(self.root), lambda: routes.selection(self.root),
+                       lambda: routes.save(self.root, {"model": IQ47}, fetcher=self.fetch)):
+            with self.assertRaisesRegex(RuntimeError, "^model_catalog_invalid$"):
+                action()
+            self.assertEqual(self.path.read_bytes(), before)
+
+    def test_two_native_endpoints_union_over_256_fails_closed_without_truncation(self):
+        self.observe(BASE34, *(self.native("mlx/fixture/port34-" + str(n)) for n in range(129)))
+        self.observe(BASE35, *(self.native("mlx/fixture/port35-" + str(n)) for n in range(128)))
+        before = self.configure()
+        with self.assertRaisesRegex(RuntimeError, "^model_catalog_invalid$"):
+            routes.catalog(self.root)
         self.assertEqual(self.path.read_bytes(), before)
 
 

@@ -4,7 +4,7 @@ type Model = { id: string; label: string; provider: string; local: boolean; effo
   default_effort: string | null; status: string; selectable: boolean };
 const FLASH = 'google-antigravity/gemini-3.8-flash';
 const states: Record<string, string> = { available:'사용 가능', running:'실행 중', connected:'연결됨', not_loaded:'준비되지 않음',
-  memory:'메모리 부족', memory_unknown:'메모리 확인 필요', quota:'쿼터 제한', authentication:'로그인 필요', unavailable:'연결 확인 필요', not_chat:'음성 모델' };
+  memory:'메모리 부족', memory_unknown:'메모리 확인 필요', quota:'쿼터 제한', authentication:'로그인 필요', unavailable:'연결 확인 필요', not_chat:'대화 지원 안 함' };
 
 /** Catalog/health reads only on opening or resuming this control. No timer or
  * per-model background generation; selecting is an explicit preference write. */
@@ -83,7 +83,9 @@ export class RoutedModels {
       this.automaticModel = typeof payload.automatic_model === 'string' ? payload.automatic_model : null;
       this.catalogConfirmed = true;
       this.render();
-      this.text('routed-model-status', '다음 응답부터 선택한 모델을 사용합니다.');
+      this.text('routed-model-status', payload.partial === true
+        ? 'OpenCodex 모델 목록을 확인하지 못했습니다. 확인된 로컬 모델만 표시합니다. 현재 선택은 유지됩니다.'
+        : '다음 응답부터 선택한 모델을 사용합니다.');
     } catch {
       if (!this.disposed && epoch === this.epoch) {
         this.catalogConfirmed = false;
@@ -133,7 +135,10 @@ export class RoutedModels {
     this.root.getElementById('routed-local-status')?.setAttribute('data-state', !this.catalogConfirmed ? 'unavailable' : local.length ? 'running' : 'not_loaded');
     const select = this.root.getElementById('routed-model-effort') as HTMLSelectElement;
     const fallback = this.root.createElement('option'); fallback.value = ''; fallback.textContent = '기본';
-    select.replaceChildren(fallback, ...(chosen?.efforts ?? []).map(effort => {
+    // A partial catalog cannot disprove a saved remote effort. Keep it visible
+    // and disabled until the remote model's capabilities can be read again.
+    const efforts = chosen?.efforts ?? (this.effort ? [this.effort] : []);
+    select.replaceChildren(fallback, ...efforts.map(effort => {
       const option = this.root.createElement('option'); option.value = effort; option.textContent = effort; return option;
     }));
     select.disabled = !chosen?.efforts.length;

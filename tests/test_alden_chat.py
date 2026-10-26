@@ -65,10 +65,14 @@ class AssistantInputTests(unittest.TestCase):
                 generate=unittest.mock.Mock(side_effect=AssertionError('generation must not start'))
                 first=chat.process_input(self.root,request(number),self.token,select_model=select,generate=generate)
                 self.assertEqual(first['error_code'],code)
+                discovery_calls = [unittest.mock.call(base + '/models') for base in
+                                   (routes.ROUTER, *routes.LOCAL_BASE_URLS)]
+                self.assertEqual(fetch.call_args_list, discovery_calls)
                 replay=chat.process_input(self.root,request(number),self.token,select_model=select,generate=generate)
                 self.assertEqual(replay.get('error_code'),code)
                 self.assertNotIn('private',json.dumps(first)+json.dumps(replay))
-                fetch.assert_called_once();generate.assert_not_called()
+                self.assertEqual(fetch.call_args_list, discovery_calls)
+                generate.assert_not_called()
 
     def test_adapter_catalog_rejection_keeps_its_reason_without_response_or_provider_health_write(self):
         import alden_model_routes as routes

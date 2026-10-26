@@ -1900,7 +1900,7 @@ class LocalMlxLlm:
             raw_id = row.get("id")
             if not isinstance(raw_id, str) or not raw_id.strip():
                 raise RuntimeError("local_llm_model_not_ready")
-            if raw_id.strip().removeprefix("mlx/") == selected:
+            if raw_id.removeprefix("mlx/") == selected:
                 matches.append(row)
 
         if len(matches) != 1:
@@ -1909,6 +1909,10 @@ class LocalMlxLlm:
         loaded = match.get("loaded")
         if type(loaded) is not bool or not loaded or match.get("state") != "ready":
             raise RuntimeError("local_llm_model_not_ready")
+        if 'capabilities' in match:
+            from alden_model_routes import _declares_chat
+            if not _declares_chat(match):
+                raise RuntimeError("local_llm_model_not_ready")
 
     def generate(
         self,

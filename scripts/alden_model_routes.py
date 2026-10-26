@@ -107,19 +107,35 @@ def host_workspace():
     except Exception:
         return "memory_unknown"
 
+def _declares_chat(row):
+    capabilities = row.get('capabilities')
+    return (isinstance(capabilities, list) and 0 < len(capabilities) <= 32
+            and all(isinstance(value, str) and 0 < len(value) <= 64 for value in capabilities)
+            and 'chat' in capabilities)
+
+def _raise_catalog_error(code):
+    if code == 'model_catalog_invalid':
+        raise RuntimeError(code)
+    raise ModelCatalogError(code)
+
 def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
     stamp = time.time() if now is None else now
+    catalog_error = None
+    rows = []
     try:
         raw = fetcher(ROUTER + "/models")
+        rows = raw.get('models', raw.get('data')) if isinstance(raw, dict) else None
+        if not isinstance(rows, list) or len(rows) > 256:
+            raise ValueError('model_catalog_invalid')
     except urllib.error.HTTPError as error:
-        code = ('routed_llm_authentication' if error.code in {401,403}
-                else 'routed_llm_quota' if error.code == 429 else 'routed_llm_unavailable')
-        raise ModelCatalogError(code) from error
-    except (OSError, urllib.error.URLError) as error:
-        raise ModelCatalogError('routed_llm_unavailable') from error
-    rows = raw.get("models", raw.get("data", [])) if isinstance(raw, dict) else []
-    if not isinstance(rows, list) or len(rows) > 256:
-        raise RuntimeError("model_catalog_invalid")
+        catalog_error = ('routed_llm_authentication' if error.code in {401,403}
+                         else 'routed_llm_quota' if error.code == 429 else 'routed_llm_unavailable')
+    except (OSError, urllib.error.URLError):
+        catalog_error = 'routed_llm_unavailable'
+    except (ValueError, RuntimeError, RecursionError):
+        catalog_error = 'model_catalog_invalid'
+    if catalog_error:
+        rows = []
     health, seen, models = _health(root), set(), []
     # Discovery owns endpoints. Payload fields and model-name families never
     # provide a transport URL. Keep every matching row for ambiguity checks.
@@ -136,6 +152,16 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
                 local_rows.setdefault(identity, []).append((base_url, item))
         except Exception:
             pass
+    # Canonical native IDs come only from independently declared chat inventory.
+    # A router's flattened folder alias is never evidence of the native ID.
+    native_models = []
+    for identity, observations in local_rows.items():
+        model = 'mlx/' + identity
+        if MODEL_ID.fullmatch(model) and any(_declares_chat(item) for _base, item in observations):
+            native_models.append({'id': model, '_native_inventory': True})
+    if catalog_error and not native_models:
+        _raise_catalog_error(catalog_error)
+    rows = rows + native_models
     any_ready = any(item.get('loaded') is True and item.get('state') == 'ready'
                     for observations in local_rows.values() for _base, item in observations)
     workspace = memory_reader() if any_ready else "memory_unknown"
@@ -146,6 +172,8 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
         if not isinstance(model, str) or not MODEL_ID.fullmatch(model) or model in seen:
             continue
         seen.add(model)
+        if len(seen) > 256:
+            raise RuntimeError('model_catalog_invalid')
         local = model.startswith("mlx/")
         label = row.get("display_name") or row.get("label") or model
         levels = row.get("supported_reasoning_levels") or row.get("reasoning_efforts") or []
@@ -174,6 +202,12 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
         # The adapter also requires exactly one matching row on its endpoint.
         ready = observed_base is not None and sum(base == observed_base for base, _item in observations) == 1
         ambiguous = bool(ready_bases) and not ready
+        selected_row = next((item for base, item in observations if base == observed_base), None) if ready else None
+        # Missing capabilities on legacy router-backed rows remains compatible;
+        # an explicit non-chat or malformed declaration always vetoes readiness.
+        not_chat = ('tts' in model.lower() or selected_row is not None
+                    and ('capabilities' in selected_row or row.get('_native_inventory') is True)
+                    and not _declares_chat(selected_row))
         status = ("running" if workspace == "ready" else workspace) if local and ready else "not_loaded" if local else "connected"
         # Contradictory success/error telemetry is not verified availability.
         if (fresh and observation.get("success") is True and observation.get("error") is None
@@ -181,19 +215,20 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
             status = "available"
         elif fresh and observation.get("success") is False and error != "cancelled":
             status = error
-        if local and ambiguous:
+        if local and (ambiguous or not observations):
             status = "unavailable"
         default = row.get("default_reasoning_level", row.get("reasoning_effort"))
-        if "tts" in model.lower():
+        if not_chat:
             status = "not_chat"
         models.append({"id": model, "label": str(label)[:160], "provider": model.split("/")[0] if "/" in model else "openai",
                        "local": local, "efforts": efforts, "default_effort": default if default in efforts else "medium" if "medium" in efforts else next(iter(efforts), None),
-                       "local_base_url": observed_base if ready else None,
-                       "status": status, "selectable": (not local or ready and workspace == "ready") and "tts" not in model.lower(),
-                       "automatic_candidate": status == "available" and model != "gpt-6-astra" and "tts" not in model.lower()})
+                       "local_base_url": observed_base if ready and not not_chat else None,
+                       "status": status, "selectable": (not local or ready and workspace == "ready") and not not_chat,
+                       "automatic_candidate": status == "available" and model != "gpt-6-astra" and not not_chat})
     state = _state(root)
-    preview = automatic_choice(models)
-    return {"ok": True, "automatic_model": preview["id"] if preview else None, "models": models, "model": state.get("model", DEFAULT_MODEL),
+    preview = None if catalog_error is not None else automatic_choice(models)
+    return {"ok": True, "partial": catalog_error is not None, "catalog_error": catalog_error,
+            "automatic_model": preview["id"] if preview else None, "models": models, "model": state.get("model", DEFAULT_MODEL),
             "reasoning_effort": state.get("reasoning_effort", DEFAULT_EFFORT if state.get("model", DEFAULT_MODEL) == DEFAULT_MODEL else None), "mode": state.get("mode", "manual"),
             "observed_at": stamp, "local_running": sum(item["status"] in {"running", "available"} and item["local"] for item in models)}
 
@@ -201,6 +236,8 @@ def find_model(payload, requested):
     alias = "google-antigravity/" + requested[4:] if requested.startswith("agy/") else requested
     matches = [row for row in payload["models"] if row["id"] == alias]
     if len(matches) != 1:
+        if payload.get('partial') is True:
+            _raise_catalog_error(payload.get('catalog_error'))
         raise RuntimeError("model_not_in_current_catalog")
     return matches[0]
 
@@ -238,6 +275,8 @@ def automatic_choice(models):
 def selection(root):
     state, configuration_sha = _state(root, True)
     payload = catalog(root)
+    if state.get('mode') == 'automatic' and payload.get('partial') is True:
+        _raise_catalog_error(payload.get('catalog_error'))
     chosen = find_model(payload, state.get("model", DEFAULT_MODEL))
     if state.get("mode") == "automatic":
         # Explicitly conservative: never escalate into Astra/Pro/Opus or load
