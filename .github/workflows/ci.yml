@@ -205,6 +205,10 @@ jobs:
           tests.test_alden_gbrain
           tests.test_alden_gbrain_bootstrap_contract
           tests.test_alden_gbrain_actual_metadata
+          tests.test_alden_gbrain_reader_reaping
+          tests.test_alden_gbrain_catchup
+          tests.test_alden_gbrain_catchup_adversarial
+          tests.test_alden_gbrain_checkpoint_commit
           tests.test_alden_gbrain_cache
           tests.test_alden_gbrain_import
           tests.test_alden_gbrain_paged_links

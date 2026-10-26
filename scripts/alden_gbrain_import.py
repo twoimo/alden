@@ -15,10 +15,10 @@ import uuid
 
 from alden_collection import CollectionStore,encoded
 from alden_collection_export import (export_graph,verify_export,verify_current_export,
-    ExportError,_sha_file,_file_token,_stamp)
+    ExportError,_sha_file,_file_token,_stamp,_open,_records)
 from alden_gbrain_bridge import GbrainGraphReader
 from alden_gbrain_cache import (ManagedGbrainCache,_UnreapedWorker,_write,_read,
-    _projects,_sha)
+    _projects,_sha,_sync)
 from alden_gbrain_client import (GbrainError,GbrainReadClient,PROTOCOL,VERSION,
     _Stdio,_json,_path,validate_binary,validate_runtime,TRAVERSE_ROW_LIMIT,LINK_CONTEXT_LIMIT)
 from alden_gbrain_projection import GbrainProjection,_text
@@ -368,16 +368,9 @@ class GbrainImportClient(GbrainReadClient):
                 raise GbrainError('gbrain_full_import_surface_invalid')
             self._read_tools={t['name'] for t in listing}
         except BaseException:
-            self.transport.close()
-            if self.transport.proc.poll() is None:raise _UnreapedWorker('gbrain_cache_worker_not_reaped')
+            self._close_transport()
             raise
         return self
-
-    def __exit__(self,kind,value,traceback):
-        transport=self.transport
-        code=transport.close();self.transport=None
-        if transport.proc.poll() is None:raise _UnreapedWorker('gbrain_cache_worker_not_reaped')
-        if kind is None and code!=0:raise GbrainError('gbrain_unclean_shutdown')
 
     def _call(self,name,arguments):
         if name not in self.WRITE_TOOLS:raise GbrainError('gbrain_full_operation_invalid')
@@ -417,23 +410,230 @@ class GbrainImportClient(GbrainReadClient):
 
 class FullGbrainCache(ManagedGbrainCache):
     KIND='alden-gbrain-full-cache-v1'
+    CLOSED_KIND='alden-gbrain-closed-verified-v1'
+    ADVANCES=frozenset(('collection_export_stale','collection_export_source_changed'))
 
     def __init__(self,root,*,collection_root,projects):
         super().__init__(root,collection_root=collection_root,projects=projects)
         self.collection_root=_path(collection_root)
 
-    def refresh(self,*,store_factory=None,check=lambda:None,rebuild=False,incremental=False):
-        if type(incremental) is not bool:raise GbrainError('gbrain_full_options_invalid')
+    def _retire(self,active,*,preserve=None):
+        self._retire_pending(preserve=preserve)
+        return super()._retire(active,preserve=preserve)
+
+    def _remove(self,name):
+        self._retire_pending(removing=name)
+        return super()._remove(name)
+
+    def _retire_after_error(self,error):
+        try:self._retire(None)
+        except _UnreapedWorker:raise
+        except BaseException as cleanup:
+            recovery=GbrainError('gbrain_cache_cleanup_required')
+            recovery.add_note('cleanup_error='+type(cleanup).__name__)
+            raise recovery from error
+
+    def _retire_pending(self,*,preserve=None,removing=None):
+        path=_path(self.root/'pending.json')
+        if not path.exists():return
+        try:value=_read(path)
+        except GbrainError:value=None
+        keep=(isinstance(value,dict) and value.get('owner')==self.owner['owner']
+              and isinstance(value.get('generation'),str)
+              and (value['generation']!=removing if removing is not None else value['generation']==preserve))
+        if not keep:path.unlink();_sync(self.root)
+
+    def _source_binding(self,projection,*,store_factory,check):
+        """Fresh authority and complete visibility, allowing only content advance.
+
+        A stale error alone is never authorization. New read-only connections
+        force source callbacks again; _records also checks per-record withholding.
+        No old receipt or cached watcher observation grants access here.
+        """
+        from alden_collection_delta import _compatible
+        receipt=projection.receipt
+        if (receipt['projects']!=self.owner['projects']
+                or receipt['source_root_sha256']!=self.owner['collection_root_sha256']):
+            raise GbrainError('gbrain_full_source_binding_changed')
+        def cancelled():check();return False
+        previous=receipt['as_of']
+        for _ in range(2):
+            check();store=_open(self.collection_root,store_factory)
+            with store.database(cancelled=cancelled) as db:
+                observed=_stamp(db,store,self.owner['projects'])
+                if not _compatible(previous,observed):
+                    raise GbrainError('gbrain_full_source_binding_changed')
+                _,rows=_records(db,store,self.owner['projects'],check)
+                for _ in rows:check()
+            previous=observed
+        check()
+        return previous
+
+    def _content_advanced(self,projection,*,store_factory,check):
+        observed=self._source_binding(projection,store_factory=store_factory,check=check)
+        if observed['checkpoint']==projection.receipt['as_of']['checkpoint']:
+            raise GbrainError('gbrain_full_source_advance_unconfirmed')
+
+    def _verify_source_index(self,projection,check):
+        """Reconstruct all canonical rows; a caller-supplied manifest is no proof.
+
+        Opaque revisions are verified against the engine separately. The scratch
+        index stays inside this owned generation and never opens a source writer.
+        """
+        temporary=projection.root/('.stage-index-'+uuid.uuid4().hex+'.sqlite3')
+        class CanonicalProjection(FullProjection):
+            def __init__(self,generation,check,*,policy):
+                super().__init__(generation,check,policy=policy)
+                self.path=temporary
+        try:
+            canonical=CanonicalProjection.prepare(projection.root,check=check,policy=projection.policy)
+            if canonical.fingerprint!=projection.fingerprint:
+                raise GbrainError('gbrain_full_projection_changed')
+            with closing(_db(projection.path)) as db:
+                db.set_progress_handler(lambda:check() or 0,256)
+                db.execute('ATTACH DATABASE ? AS canonical',(temporary.as_uri()+'?mode=ro',))
+                for table,columns in (('pages','slug,id,kind,payload,content'),('links','a,b,verb,kind,payload,context')):
+                    for a,b in (('main','canonical'),('canonical','main')):
+                        check()
+                        if db.execute('SELECT '+columns+' FROM '+a+'.'+table+' EXCEPT SELECT '+columns+
+                                ' FROM '+b+'.'+table+' LIMIT 1').fetchone() is not None:
+                            raise GbrainError('gbrain_full_source_index_mismatch')
+            if _file_token(projection.path)!=projection.index_token:
+                raise GbrainError('gbrain_full_projection_changed')
+        except sqlite3.Error:
+            check();raise
+        finally:
+            _path(temporary).unlink(missing_ok=True)
+            _path(Path(str(temporary)+'-journal')).unlink(missing_ok=True)
+            _sync(projection.root)
+
+    def _closed_binding(self,projection,check):
+        generation=self._generation(projection.root.name)
+        if (generation!=projection.root or projection.policy!=STABLE_POLICY
+                or generation.name in self._retirement_record()['generations']
+                or projection.projects!=self.owner['projects']
+                or projection.receipt['source_root_sha256']!=self.owner['collection_root_sha256']):
+            raise GbrainError('gbrain_full_checkpoint_invalid')
+        validate_runtime(self.root/'runtime-receipt.json',self.root,generation/'home',check)
+        if _read(generation/'home/.gbrain/config.json').get('database_path')!=str(generation/'brain.pglite'):
+            raise GbrainError('gbrain_full_checkpoint_invalid')
+        for page in projection.pages():_text(page['revision'])
+        if _file_token(projection.path)!=projection.index_token:
+            raise GbrainError('gbrain_full_projection_changed')
+        return {'kind':self.CLOSED_KIND,'owner':self.owner['owner'],'generation':generation.name,
+            'cache_root_sha256':_sha(str(self.root).encode()),
+            'source_root_sha256':self.owner['collection_root_sha256'],'projects':self.owner['projects'],
+            'fingerprint':projection.fingerprint,'policy':STABLE_POLICY,
+            'manifest_sha256':_sha_file(generation/'projection.json',check),
+            'runtime_receipt_sha256':_sha_file(self.root/'runtime-receipt.json',check)}
+
+    def _complete_acceptance(self,projection,acceptance):
+        counts=projection.counts()
+        required={**counts,'verified_queries':counts['pages'],'enumerated_pages':counts['pages'],
+            'provenance_verified_pages':counts['pages']}
+        with closing(_db(projection.path)) as db:
+            hubs=list(db.execute('SELECT count(*) FROM links GROUP BY a HAVING count(*)>=?',(TRAVERSE_ROW_LIMIT,)))
+        if hubs:required.update(paged_outgoing_pages=len(hubs),paged_outgoing_links=sum(row[0] for row in hubs))
+        if (not isinstance(acceptance,dict) or acceptance.get('verified_direction')!='out'
+                or any(type(acceptance.get(k)) is not int or acceptance[k]!=v for k,v in required.items())):
+            raise GbrainError('gbrain_full_checkpoint_incomplete')
+        return {**required,'verified_direction':'out'}
+
+    def _pending(self,check):
+        path=_path(self.root/'pending.json')
+        if not path.exists():return None
+        value=_read(path)
+        if not isinstance(value,dict):raise GbrainError('gbrain_full_checkpoint_invalid')
+        generation=self._generation(value.get('generation'))
+        if (generation/'ready.json').exists():raise GbrainError('gbrain_full_checkpoint_invalid')
+        projection=FullProjection.open(generation,check)
+        marker=_read(generation/'closed-verified.json')
+        if not isinstance(marker,dict):raise GbrainError('gbrain_full_checkpoint_invalid')
+        expected={**self._closed_binding(projection,check),
+            'acceptance':self._complete_acceptance(projection,marker.get('acceptance'))}
+        if (marker!=expected or value!={**expected,
+                'marker_sha256':_sha_file(generation/'closed-verified.json',check)}):
+            raise GbrainError('gbrain_full_checkpoint_invalid')
+        return projection
+
+    def _save_pending(self,projection,acceptance,*,store_factory,check):
+        # Reopen the saved manifest/archive after the engine closed and reaped.
+        closed=FullProjection.open(projection.root,check)
+        if closed.fingerprint!=projection.fingerprint or _file_token(projection.path)!=projection.index_token:
+            raise GbrainError('gbrain_full_projection_changed')
+        binding=self._closed_binding(closed,check)
+        proof=self._complete_acceptance(closed,acceptance)
+        self._source_binding(closed,store_factory=store_factory,check=check)
+        if self._closed_binding(closed,check)!=binding or _file_token(projection.path)!=projection.index_token:
+            raise GbrainError('gbrain_full_projection_changed')
+        check()
+        _path(self.root/'active.json').unlink(missing_ok=True);_sync(self.root)
+        _path(closed.root/'ready.json').unlink(missing_ok=True);_sync(closed.root)
+        removed=self._retire(None,preserve=closed.root.name)
+        marker={**binding,'acceptance':proof}
+        _write(closed.root/'closed-verified.json',marker)
+        _write(self.root/'pending.json',{**marker,
+            'marker_sha256':_sha_file(closed.root/'closed-verified.json',check)})
+        self._pending(check)
+        # Persistence is also an authority boundary: withdrawal can happen
+        # after the last source probe but before this pointer is committed.
+        self._source_binding(closed,store_factory=store_factory,check=check)
+        if self._closed_binding(closed,check)!=binding or _file_token(projection.path)!=projection.index_token:
+            raise GbrainError('gbrain_full_projection_changed')
+        check()
+        return removed
+
+    def _pending_result(self,projection,acceptance,*,state='pending',removed=0):
+        return {'ok':True,'state':state,'published':False,'current_source_verified':False,
+            'generation':projection.root.name,'fingerprint':projection.fingerprint,
+            'removed_generations':removed,**acceptance}
+
+    def stage_existing(self,generation,*,store_factory=None,check=lambda:None):
+        # Acquire before the first cancellation check so an already cancelled
+        # operation can retire owned state safely. A busy/inherited lease still
+        # prevents cleanup; never purge around an unreaped worker.
+        with self.lease(exclusive=True) as fd:
+            if self.active() is not None:raise GbrainError('gbrain_full_stage_active')
+            path=self._generation(generation)
+            if (path/'ready.json').exists():raise GbrainError('gbrain_full_stage_published')
+            try:
+                check();projection=FullProjection.open(path,check)
+                binding=self._closed_binding(projection,check)
+                self._source_binding(projection,store_factory=store_factory,check=check)
+                self._verify_source_index(projection,check)
+                projection.paged_readback_supported()
+                with GbrainImportClient(self.root/'runtime-receipt.json',owned_root=self.root,
+                        home=path/'home',check=check,lease_fd=fd,timeout=60) as client:
+                    acceptance=self._verify(client,projection)
+                if self._closed_binding(projection,check)!=binding:
+                    raise GbrainError('gbrain_full_checkpoint_invalid')
+                removed=self._save_pending(projection,acceptance,store_factory=store_factory,check=check)
+                return self._pending_result(projection,acceptance,state='staged',removed=removed)
+            except _UnreapedWorker:raise
+            except BaseException as error:
+                self._retire_after_error(error);raise
+
+    def refresh(self,*,store_factory=None,check=lambda:None,rebuild=False,incremental=False,catch_up=False):
+        if type(incremental) is not bool or type(catch_up) is not bool or catch_up and not incremental:
+            raise GbrainError('gbrain_full_options_invalid')
         def cancelled():check();return False
         def current(projection):
-            return verify_current_export(self.collection_root,self.owner['projects'],projection.archive,
+            if catch_up:validate_binary(self.root/'runtime-receipt.json',self.root,check)
+            result=verify_current_export(self.collection_root,self.owner['projects'],projection.archive,
                 store_factory=store_factory,cancelled=cancelled)
-        with self.lease(exclusive=True,check=check) as fd:
-            active=self.active();name='g'+uuid.uuid4().hex;generation=self.generations/name
-            generation.mkdir(mode=0o700)
-            _write(generation/'generation.json',{'kind':self.KIND,'owner':self.owner['owner'],'generation':name})
+            if catch_up:validate_binary(self.root/'runtime-receipt.json',self.root,check)
+            return result
+        with self.lease(exclusive=True,check=(lambda:None) if catch_up else check) as fd:
+            pending_base=None;completed=None;acceptance=None
             try:
-                old=FullProjection.open(self._generation(active['generation']),check) if active else None
+                check();active=self.active()
+                if catch_up:pending_base=self._pending(check)
+                old=pending_base or (FullProjection.open(self._generation(active['generation']),check) if active else None)
+                if catch_up and old is not None:
+                    self._source_binding(old,store_factory=store_factory,check=check)
+                name='g'+uuid.uuid4().hex;generation=self.generations/name
+                generation.mkdir(mode=0o700)
+                _write(generation/'generation.json',{'kind':self.KIND,'owner':self.owner['owner'],'generation':name})
                 if incremental and old is not None:
                     from alden_collection_delta import export_incremental
                     source_receipt=export_incremental(self.collection_root,self.owner['projects'],generation/'source-archive',
@@ -446,7 +646,11 @@ class FullGbrainCache(ManagedGbrainCache):
                 if incremental and old is not None and old.policy==policy:
                     from alden_collection_delta import _compatible
                     if _compatible(old.receipt['as_of'],source_receipt['as_of']):reuse_index=old
-                projection=FullProjection.prepare(generation,check=check,policy=policy,previous=reuse_index);current(projection)
+                projection=FullProjection.prepare(generation,check=check,policy=policy,previous=reuse_index)
+                try:current(projection)
+                except ExportError as error:
+                    if not catch_up or str(error) not in self.ADVANCES:raise
+                    self._content_advanced(projection,store_factory=store_factory,check=check)
                 projection.paged_readback_supported()
                 if active and active['fingerprint']==projection.fingerprint and not rebuild:
                     old=FullProjection.open(self._generation(active['generation']),check)
@@ -468,6 +672,11 @@ class FullGbrainCache(ManagedGbrainCache):
                 if incremental:
                     acceptance['source_update']=source_receipt.get('source_update',{'mode':'full_export','reason':'new_baseline'})
                     acceptance['index_updates']=projection.index_updates
+                if catch_up:
+                    self._complete_acceptance(projection,acceptance)
+                    _write(generation/'projection.json',projection.manifest())
+                    completed=FullProjection.open(generation,check)
+                    self._closed_binding(completed,check)
                 current(projection);check()
                 manifest=projection.manifest();_write(generation/'projection.json',manifest)
                 _write(generation/'ready.json',{'fingerprint':projection.fingerprint,
@@ -476,11 +685,31 @@ class FullGbrainCache(ManagedGbrainCache):
                 _write(self.root/'active.json',{'owner':self.owner['owner'],'generation':name,'fingerprint':projection.fingerprint})
                 if self.active()['generation']!=name:raise GbrainError('gbrain_cache_publish_invalid')
                 current(projection)
+                self._retire_pending()
                 return {'ok':True,'state':'published','fingerprint':projection.fingerprint,
                     'removed_generations':removed,**acceptance}
             except _UnreapedWorker:raise
-            except BaseException:
-                self._retire(None);raise
+            except ExportError as error:
+                try:
+                    if not catch_up or str(error) not in self.ADVANCES:raise
+                    if completed is not None:
+                        self._content_advanced(completed,store_factory=store_factory,check=check)
+                        removed+=self._save_pending(completed,acceptance,store_factory=store_factory,check=check)
+                        return self._pending_result(completed,acceptance,removed=removed)
+                    # An export that did not finish cannot create a checkpoint.
+                    # build_delta may already have retired the old base; never
+                    # resurrect it or promise a rollback to it.
+                    retained=self._pending(check) if pending_base is not None else None
+                    if retained is None:raise
+                    self._content_advanced(retained,store_factory=store_factory,check=check)
+                    proof=_read(retained.root/'closed-verified.json')['acceptance']
+                    removed=self._save_pending(retained,proof,store_factory=store_factory,check=check)
+                    return self._pending_result(retained,proof,removed=removed)
+                except _UnreapedWorker:raise
+                except BaseException as failure:
+                    self._retire_after_error(failure);raise
+            except BaseException as error:
+                self._retire_after_error(error);raise
 
     def _build(self,generation,projection,*,fd,check):
         validate_binary(self.root/'runtime-receipt.json',self.root,check)
@@ -539,6 +768,7 @@ class FullGbrainCache(ManagedGbrainCache):
         projection.record_revisions(batch,revisions)
 
     def _verify(self,client,projection):
+        token=_file_token(projection.path)
         counts=projection.counts();expected_pages=iter(projection.pages());enumerated=0;verified=0
         with closing(_db(projection.path)) as db:
             degrees=dict(db.execute('SELECT a,count(*) FROM links GROUP BY a'))
@@ -575,6 +805,7 @@ class FullGbrainCache(ManagedGbrainCache):
                 paged_pages+=1
             verified+=1
         if verified!=counts['pages']:raise GbrainError('gbrain_full_import_incomplete')
+        if _file_token(projection.path)!=token:raise GbrainError('gbrain_full_projection_changed')
         return {**counts,'verified_queries':verified,'verified_direction':'out','enumerated_pages':enumerated,
             'provenance_verified_pages':verified,
             **({'paged_outgoing_pages':paged_pages,'paged_outgoing_links':paged_links} if paged_pages else {})}
@@ -624,7 +855,7 @@ def main():
     from alden_abort import ABORT_STATE_NAME,AbortToken,AldenCancelled
     from alden_knowledge_mcp import KnowledgeServer
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action',choices=('create','refresh','withdraw','query'))
+    parser.add_argument('action',choices=('create','refresh','stage','withdraw','query'))
     parser.add_argument('--root',type=Path,required=True);parser.add_argument('--state-root',type=Path,required=True)
     parser.add_argument('--project',action='append',required=True)
     parser.add_argument('--runtime-root',type=Path);parser.add_argument('--runtime-home',type=Path);parser.add_argument('--runtime-receipt',type=Path)
@@ -632,11 +863,15 @@ def main():
     parser.add_argument('--depth',type=int,default=1);parser.add_argument('--direction',choices=('in','out','both'),default='both')
     parser.add_argument('--timeout-seconds',type=int,default=1800)
     parser.add_argument('--incremental',action='store_true',help='refresh: mutate only changed engine rows; full source/readback scans remain')
+    parser.add_argument('--catch-up',action='store_true',help='refresh with --incremental: retain verified private checkpoints, never reader admission')
+    parser.add_argument('--generation',help='stage: reverify this owned unpublished generation; does not publish it')
     args=parser.parse_args();runtime=(args.runtime_root,args.runtime_home,args.runtime_receipt)
     if (args.action=='create' and not all(runtime) or args.action!='create' and any(runtime)
             or args.incremental and args.action!='refresh'
+            or args.catch_up and (args.action!='refresh' or not args.incremental)
+            or (args.action=='stage')!=(args.generation is not None)
             or (args.action=='query')!=(args.focus is not None) or not 1<=args.depth<=3 or not 30<=args.timeout_seconds<=3600):
-        parser.error('runtime paths only/together for create; focus only for query; depth1–3 and deadline30–3600')
+        parser.error('runtime paths only/together for create; generation only/required for stage; catch-up requires refresh --incremental; focus only for query; depth1–3 and deadline30–3600')
     token=AbortToken(args.state_root/ABORT_STATE_NAME);until=time.monotonic()+args.timeout_seconds
     def check():
         token.raise_if_cancelled()
@@ -660,7 +895,10 @@ def main():
                 result={'ok':True,'state':'created'}
             elif args.action=='refresh':
                 result=FullGbrainCache(args.root,collection_root=args.state_root,projects=args.project).refresh(
-                    store_factory=factory,check=check,incremental=args.incremental)
+                    store_factory=factory,check=check,incremental=args.incremental,catch_up=args.catch_up)
+            elif args.action=='stage':
+                result=FullGbrainCache(args.root,collection_root=args.state_root,projects=args.project).stage_existing(
+                    args.generation,store_factory=factory,check=check)
             else:
                 result=FullGbrainReader(args.root,collection_root=args.state_root,projects=args.project).query(
                     projects=args.project,focus=args.focus,store_factory=factory,check=check,depth=args.depth,direction=args.direction)

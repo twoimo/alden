@@ -22,7 +22,8 @@ import uuid
 
 from alden_gbrain_bridge import GbrainGraphReader
 from alden_gbrain_client import (ASSET_SHA256, GbrainError, GbrainReadClient, _json, _path,
-                                 validate_binary, validate_runtime)
+                                 validate_binary, validate_runtime,
+                                 GbrainWorkerUnreaped as _UnreapedWorker)
 from alden_gbrain_projection import GbrainProjection
 
 KIND = 'alden-gbrain-cache-v1'
@@ -80,10 +81,6 @@ def _projects(projects):
             or len(set(projects)) != len(projects)):
         raise GbrainError('gbrain_project_scope_invalid')
     return sorted(projects)
-
-
-class _UnreapedWorker(GbrainError):
-    pass
 
 
 class ManagedGbrainCache:

@@ -36,6 +36,10 @@ class GbrainError(RuntimeError):
     pass
 
 
+class GbrainWorkerUnreaped(GbrainError):
+    """A child still owns its inherited lease; its store must not be retired."""
+
+
 def _pairs(items):
     result = {}
     for key, value in items:
@@ -268,9 +272,24 @@ class GbrainReadClient:
                     or names & {'put_page', 'put_pages', 'add_link', 'delete_page'}):
                 raise GbrainError('gbrain_read_surface_invalid')
         except BaseException:
-            self.transport.close()
+            self._close_transport()
             raise
         return self
+
+    def _close_transport(self):
+        transport = self.transport
+        if transport is None:
+            return 0
+        try:
+            return transport.close()
+        finally:
+            try:
+                exited = transport.proc.poll() is not None
+            except BaseException:
+                raise GbrainWorkerUnreaped('gbrain_cache_worker_not_reaped') from None
+            if not exited:
+                raise GbrainWorkerUnreaped('gbrain_cache_worker_not_reaped') from None
+            self.transport = None
 
     def graph(self, slug, *, depth=2, direction='both', link_type=None):
         if (not isinstance(slug, str) or not _SLUG.fullmatch(slug)
@@ -376,7 +395,6 @@ class GbrainReadClient:
         self.check()
 
     def __exit__(self, kind, value, traceback):
-        code = self.transport.close()
-        self.transport = None
+        code = self._close_transport()
         if kind is None and code != 0:
             raise GbrainError('gbrain_unclean_shutdown')
