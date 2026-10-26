@@ -1,0 +1,54 @@
+{
+  "basis": "reversible candidate; externally unvalidated",
+  "previous_head": "3fd7f0d503775be2d4a77451e86190c038232dce",
+  "publisher_source_commit": "33d73cb54c14e2e988272764ddff59a5ead10915",
+  "tests": {
+    "related": 468,
+    "new_paged": 23,
+    "messenger_relation": 342,
+    "fresh_consumer_processes": 16,
+    "isolated_mutants_detected": 10
+  },
+  "source_modules_sha256": {
+    "alden_gbrain_client.py": "5300d0acf697fe6aa3d10becb38571cafb7ab9e8e4d2f456532a03882f150f45",
+    "alden_gbrain_import.py": "3b7335c80ad46624859df306bf6547e701305ad318997d9a5d620f5932e7620d"
+  },
+  "actual_engine_5000_import": {
+    "ok": true,
+    "state": "published",
+    "fingerprint": "58b06226e582dfe9edd66814987c848a6da0e359e707127674205e1ca2969a28",
+    "removed_generations": 0,
+    "source_nodes": 5000,
+    "origins": 1,
+    "observed_groups": 4999,
+    "membership_links": 5000,
+    "pages": 5001,
+    "links": 9999,
+    "verified_queries": 5001,
+    "verified_direction": "out",
+    "enumerated_pages": 5001,
+    "paged_outgoing_pages": 1,
+    "paged_outgoing_links": 5000,
+    "update_mode": "full_rebuild",
+    "source_update": {
+      "mode": "full_export",
+      "reason": "new_baseline"
+    },
+    "index_updates": {
+      "mode": "full_index",
+      "pages_put": 5001,
+      "pages_deleted": 0,
+      "links_put": 9999,
+      "links_deleted": 0
+    }
+  },
+  "actual_9436_matrix": "pending; not acceptance",
+  "reproduction": "gbrain-paged-links/replay.py",
+  "long_context_high_degree": "explicit rejection above2000UTF16units; unbounded contexts unsupported",
+  "unknown_notices": "rejected; exact reviewed backup_coverage/coaching is inert",
+  "gui_launches": 0,
+  "installation": false,
+  "external_audit": "NOT_RUN",
+  "required_web_astra_worker": "unavailable; not substituted",
+  "full_goal": "active"
+}

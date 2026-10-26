@@ -25,6 +25,9 @@ ASSET_BYTES = 187472354
 ASSET_SHA256 = '7e5ea749d4fbd7c45abd96b40fc893a0b9dcba3ee8202f7f68e68ae8949277a2'
 PROTOCOL = '2025-06-18'
 MAX_FRAME = 8 * 1024 * 1024
+TRAVERSE_ROW_LIMIT = 5000
+LINK_CONTEXT_LIMIT = 2000
+LINK_PAGE_LIMIT = 500
 _SLUG = re.compile(r'[a-z0-9][a-z0-9/_-]{0,255}\Z')
 _NAME = re.compile(r'[a-z0-9][a-z0-9_-]{0,127}\Z')
 
@@ -260,6 +263,7 @@ class GbrainReadClient:
                     or any(not isinstance(tool, dict) or not isinstance(tool.get('name'), str) for tool in listing)):
                 raise GbrainError('gbrain_read_surface_invalid')
             names = {tool['name'] for tool in listing}
+            self._read_tools = names
             if (tools.get('nextCursor') or 'traverse_graph' not in names
                     or names & {'put_page', 'put_pages', 'add_link', 'delete_page'}):
                 raise GbrainError('gbrain_read_surface_invalid')
@@ -295,7 +299,7 @@ class GbrainReadClient:
         # notices. The pinned publisher's features_auto_fix is coaching, not
         # degraded graph data. Record it, never execute its suggested fixes
         # (which can include paid/provider operations). Unknown notices fail.
-        reviewed_notices = {'first_run_decisions': 'ask', 'features_auto_fix': 'coaching'}
+        reviewed_notices = {'first_run_decisions': 'ask', 'features_auto_fix': 'coaching', 'backup_coverage': 'coaching'}
         for notice, block in zip(notices, text[1:]):
             if not isinstance(notice, dict):
                 raise GbrainError('gbrain_graph_notice_unreviewed')
@@ -307,10 +311,69 @@ class GbrainReadClient:
         data = _json(text[0])
         if not isinstance(data, list) or len(data) > 8192:
             raise GbrainError('gbrain_graph_shape_invalid')
-        if self.transport.graph_truncated or len(data) >= 5000:
+        if self.transport.graph_truncated or len(data) >= TRAVERSE_ROW_LIMIT:
             raise GbrainError('gbrain_graph_truncated')
         self.check()
         return data
+
+    def outgoing_links(self, slug, *, max_rows=4_000_000, page_limit=LINK_PAGE_LIMIT):
+        """Complete fixed-source listing; opaque cursors never change filters."""
+        if (not isinstance(slug,str) or not _SLUG.fullmatch(slug)
+                or type(max_rows) is not int or not 0<=max_rows<=4_000_000
+                or type(page_limit) is not int or not 1<=page_limit<=LINK_PAGE_LIMIT):
+            raise GbrainError('gbrain_link_options_invalid')
+        if self.transport is None or 'get_links' not in getattr(self,'_read_tools',set()):
+            raise GbrainError('gbrain_paged_links_unavailable')
+        cursor=None;seen_cursors=set();total=0
+        while True:
+            self.check()
+            args={'slug':slug,'source_id':self.source_id,'status':'all','limit':page_limit}
+            if cursor is not None:args['cursor']=cursor
+            result=self.transport.request('tools/call',{'name':'get_links','arguments':args})
+            if not isinstance(result,dict):raise GbrainError('gbrain_link_page_invalid')
+            content=result.get('content');meta=result.get('_meta')
+            notices=meta.get('gbrain_notices',[]) if isinstance(meta,dict) else None
+            if (result.get('isError') or not isinstance(content,list) or not isinstance(notices,list)
+                    or len(notices)>16 or len(content)!=1+len(notices)
+                    or any(not isinstance(p,dict) or p.get('type')!='text' or not isinstance(p.get('text'),str) for p in content)):
+                raise GbrainError('gbrain_link_page_invalid')
+            reviewed={'first_run_decisions':'ask','features_auto_fix':'coaching','backup_coverage':'coaching','listing_truncated':'info'}
+            for notice,block in zip(notices,content[1:]):
+                if not isinstance(notice,dict):raise GbrainError('gbrain_graph_notice_unreviewed')
+                code,kind=notice.get('code'),notice.get('kind')
+                if (not isinstance(code,str) or code not in reviewed or reviewed[code]!=kind
+                        or not block['text'].startswith('[gbrain notice '+code+' kind='+kind+']\n')):
+                    raise GbrainError('gbrain_graph_notice_unreviewed')
+                self.notice_codes.add(code)
+            rows=_json(content[0]['text']);page=meta.get('pagination')
+            if (not isinstance(rows,list) or len(rows)>page_limit or not isinstance(page,dict)
+                    or not {'limit','returned','truncated'}<=set(page)<= {'limit','returned','truncated','next_cursor'}
+                    or type(page['limit']) is not int or page['limit']!=page_limit
+                    or type(page['returned']) is not int or page['returned']!=len(rows)
+                    or type(page['truncated']) is not bool):
+                raise GbrainError('gbrain_link_page_invalid')
+            more=page['truncated'];next_cursor=page.get('next_cursor')
+            if ((more and (not rows or not isinstance(next_cursor,str) or not 1<=len(next_cursor)<=4096
+                           or next_cursor in seen_cursors)) or not more and next_cursor is not None):
+                raise GbrainError('gbrain_link_cursor_invalid')
+            for i,row in enumerate(rows):
+                if (not isinstance(row,dict) or row.get('from_slug')!=slug
+                        or row.get('from_source_id')!=self.source_id or row.get('to_source_id')!=self.source_id
+                        or not isinstance(row.get('to_slug'),str) or not _SLUG.fullmatch(row['to_slug'])
+                        or not isinstance(row.get('link_type'),str) or not _NAME.fullmatch(row['link_type'])
+                        or not isinstance(row.get('context'),str) or len(row['context'])>LINK_CONTEXT_LIMIT):
+                    raise GbrainError('gbrain_link_row_invalid')
+                final=more and i==len(rows)-1
+                if (final and (row.get('truncated') is not True or row.get('next_cursor')!=next_cursor)
+                        or not final and ('truncated' in row or 'next_cursor' in row)):
+                    raise GbrainError('gbrain_link_cursor_invalid')
+            if total+len(rows)>max_rows:raise GbrainError('gbrain_link_row_budget')
+            for row in rows:
+                self.check();yield {k:v for k,v in row.items() if k not in ('truncated','next_cursor')}
+            total+=len(rows)
+            if not more:break
+            seen_cursors.add(next_cursor);cursor=next_cursor
+        self.check()
 
     def __exit__(self, kind, value, traceback):
         code = self.transport.close()

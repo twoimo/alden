@@ -205,6 +205,7 @@ jobs:
           tests.test_alden_gbrain
           tests.test_alden_gbrain_cache
           tests.test_alden_gbrain_import
+          tests.test_alden_gbrain_paged_links
           tests.test_alden_gbrain_watch
           tests.test_alden_gbrain_delta
           tests.test_alden_collection_context_duplicates

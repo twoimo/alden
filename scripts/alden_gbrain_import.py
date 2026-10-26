@@ -20,7 +20,7 @@ from alden_gbrain_bridge import GbrainGraphReader
 from alden_gbrain_cache import (ManagedGbrainCache,_UnreapedWorker,_write,_read,
     _projects,_sha)
 from alden_gbrain_client import (GbrainError,GbrainReadClient,PROTOCOL,VERSION,
-    _Stdio,_json,_path,validate_binary,validate_runtime)
+    _Stdio,_json,_path,validate_binary,validate_runtime,TRAVERSE_ROW_LIMIT,LINK_CONTEXT_LIMIT)
 from alden_gbrain_projection import GbrainProjection,_text
 
 POLICY='alden-gbrain-full-source-v1'
@@ -197,6 +197,39 @@ class FullProjection:
                 db.execute('UPDATE pages SET revision=? WHERE slug=?',(revision,page['slug']))
             db.commit()
 
+    def paged_readback_supported(self):
+        """Never accept the publisher's 2,000-character context projection."""
+        with closing(_db(self.path)) as db:
+            hubs=[r[0] for r in db.execute('SELECT a FROM links GROUP BY a HAVING count(*)>=?',(TRAVERSE_ROW_LIMIT,))]
+            for slug in hubs:
+                for row in db.execute('SELECT context FROM links WHERE a=?',(slug,)):
+                    self.check()
+                    # Conservative for either UTF-16 or SQL character counting.
+                    if len(row[0].encode('utf-16-le'))//2>LINK_CONTEXT_LIMIT:
+                        raise GbrainError('gbrain_full_paged_context_budget')
+
+    def verify_outgoing(self,slug,rows):
+        """Stream every engine link against the complete immutable index."""
+        token=_file_token(self.path);seen=set()
+        with closing(_db(self.path)) as db:
+            expected=db.execute('SELECT count(*) FROM links WHERE a=?',(slug,)).fetchone()[0]
+            for row in rows:
+                self.check()
+                if (not isinstance(row,dict) or row.get('from_slug')!=slug
+                        or row.get('from_source_id')!='default' or row.get('to_source_id')!='default'
+                        or any(not isinstance(row.get(k),str) for k in ('to_slug','link_type','context'))
+                        or row.get('link_source')!='alden-full-source'
+                        or any(row.get(k) is not None for k in ('origin_slug','origin_source_id','origin_field'))):
+                    raise GbrainError('gbrain_full_result_unbound')
+                key=(slug,row['to_slug'],row['link_type'])
+                bound=db.execute('SELECT context FROM links WHERE a=? AND b=? AND verb=?',key).fetchone()
+                if key in seen or bound is None or row['context']!=bound[0]:
+                    raise GbrainError('gbrain_full_result_unbound')
+                seen.add(key)
+            if len(seen)!=expected:raise GbrainError('gbrain_full_result_incomplete')
+        if _file_token(self.path)!=token:raise GbrainError('gbrain_full_projection_changed')
+        return len(seen)
+
     def schema_pack(self):
         with closing(_db(self.path)) as db:verbs=[r[0] for r in db.execute("SELECT DISTINCT verb FROM links WHERE verb!='sourced_from' ORDER BY verb")]
         return {'api_version':'gbrain-schema-pack-v1','name':'alden-scoped-graph','version':'2.0.0',
@@ -293,6 +326,7 @@ class GbrainImportClient(GbrainReadClient):
                     or any(not isinstance(t,dict) or not isinstance(t.get('name'),str) for t in listing)
                     or not self.REQUIRED_TOOLS<={t['name'] for t in listing}):
                 raise GbrainError('gbrain_full_import_surface_invalid')
+            self._read_tools={t['name'] for t in listing}
         except BaseException:
             self.transport.close()
             if self.transport.proc.poll() is None:raise _UnreapedWorker('gbrain_cache_worker_not_reaped')
@@ -312,7 +346,7 @@ class GbrainImportClient(GbrainReadClient):
         if (result.get('isError') or not isinstance(content,list) or not isinstance(notices,list) or len(notices)>16
                 or len(content)!=1+len(notices) or any(not isinstance(p,dict) or p.get('type')!='text' or not isinstance(p.get('text'),str) for p in content)):
             raise GbrainError('gbrain_full_operation_failed')
-        reviewed={'first_run_decisions':'ask'}
+        reviewed={'first_run_decisions':'ask','backup_coverage':'coaching'}
         if name=='list_pages':reviewed['listing_truncated']='info'
         for notice,block in zip(notices,content[1:]):
             if not isinstance(notice,dict):raise GbrainError('gbrain_graph_notice_unreviewed')
@@ -373,6 +407,7 @@ class FullGbrainCache(ManagedGbrainCache):
                     from alden_collection_delta import _compatible
                     if _compatible(old.receipt['as_of'],source_receipt['as_of']):reuse_index=old
                 projection=FullProjection.prepare(generation,check=check,policy=policy,previous=reuse_index);current(projection)
+                projection.paged_readback_supported()
                 if active and active['fingerprint']==projection.fingerprint and not rebuild:
                     old=FullProjection.open(self._generation(active['generation']),check)
                     if old.fingerprint!=projection.fingerprint:raise GbrainError('gbrain_full_projection_changed')
@@ -463,6 +498,9 @@ class FullGbrainCache(ManagedGbrainCache):
 
     def _verify(self,client,projection):
         counts=projection.counts();expected_pages=iter(projection.pages());enumerated=0;verified=0
+        with closing(_db(projection.path)) as db:
+            degrees=dict(db.execute('SELECT a,count(*) FROM links GROUP BY a'))
+        paged_pages=paged_links=0
         for offset in range(0,counts['pages']+101,100):
             listed=client.list(offset)
             if not isinstance(listed,list) or len(listed)>100:raise GbrainError('gbrain_full_page_enumeration_invalid')
@@ -489,10 +527,17 @@ class FullGbrainCache(ManagedGbrainCache):
             # Every page's outgoing set covers every stored link once.
             # A source origin with many incoming memberships need not fit
             # into one traverse_graph reply to prove complete import.
-            rows=client.graph(page['slug'],depth=1,direction='out')
-            projection.bind(rows,focus=node['id'],direction='out');verified+=1
+            degree=degrees.get(page['slug'],0)
+            if degree>=TRAVERSE_ROW_LIMIT:
+                paged_links+=projection.verify_outgoing(page['slug'],client.outgoing_links(page['slug'],max_rows=degree+1))
+                paged_pages+=1
+            else:
+                rows=client.graph(page['slug'],depth=1,direction='out')
+                projection.bind(rows,focus=node['id'],direction='out')
+            verified+=1
         if verified!=counts['pages']:raise GbrainError('gbrain_full_import_incomplete')
-        return {**counts,'verified_queries':verified,'verified_direction':'out','enumerated_pages':enumerated}
+        return {**counts,'verified_queries':verified,'verified_direction':'out','enumerated_pages':enumerated,
+            **({'paged_outgoing_pages':paged_pages,'paged_outgoing_links':paged_links} if paged_pages else {})}
 
 
 
