@@ -246,27 +246,35 @@ class FullProjection:
         return self._verify_outgoing(slug,rows,bounded_context=True)
 
     def _verify_outgoing(self,slug,rows,*,bounded_context):
-        token=_file_token(self.path);seen=set()
+        token=_file_token(self.path)
         with closing(_db(self.path)) as db:
-            expected=db.execute('SELECT count(*) FROM links WHERE a=?',(slug,)).fetchone()[0]
-            for row in rows:
-                self.check()
-                if (not isinstance(row,dict) or row.get('from_slug')!=slug
-                        or row.get('from_source_id')!='default' or row.get('to_source_id')!='default'
-                        or any(not isinstance(row.get(k),str) for k in ('to_slug','link_type','context'))
-                        or row.get('link_source')!='alden-full-source'
-                        or any(k not in row or row[k] is not None for k in ('origin_slug','origin_source_id','origin_field'))):
-                    raise GbrainError('gbrain_full_result_unbound')
-                key=(slug,row['to_slug'],row['link_type'])
-                bound=db.execute('SELECT context FROM links WHERE a=? AND b=? AND verb=?',key).fetchone()
-                context=bound[0] if bound is not None else None
-                if bounded_context and context is not None and len(context)>LINK_CONTEXT_LIMIT:
-                    # Pinned engine-sql/links.ts: SQL char_length/left + ellipsis.
-                    context=context[:LINK_CONTEXT_LIMIT-1]+'…'
-                if key in seen or bound is None or row['context']!=context:
-                    raise GbrainError('gbrain_full_result_unbound')
-                seen.add(key)
-            if len(seen)!=expected:raise GbrainError('gbrain_full_result_incomplete')
+            return self._verify_outgoing_from(db,token,slug,rows,bounded_context=bounded_context)
+
+    def _verify_outgoing_from(self,db,token,slug,rows,*,bounded_context):
+        """Borrow an internally opened index; never repin an already-open fd."""
+        if _file_token(self.path)!=token:raise GbrainError('gbrain_full_projection_changed')
+        seen=set()
+        with closing(db.execute('SELECT count(*) FROM links WHERE a=?',(slug,))) as cursor:
+            expected=cursor.fetchone()[0]
+        for row in rows:
+            self.check()
+            if (not isinstance(row,dict) or row.get('from_slug')!=slug
+                    or row.get('from_source_id')!='default' or row.get('to_source_id')!='default'
+                    or any(not isinstance(row.get(k),str) for k in ('to_slug','link_type','context'))
+                    or row.get('link_source')!='alden-full-source'
+                    or any(k not in row or row[k] is not None for k in ('origin_slug','origin_source_id','origin_field'))):
+                raise GbrainError('gbrain_full_result_unbound')
+            key=(slug,row['to_slug'],row['link_type'])
+            with closing(db.execute('SELECT context FROM links WHERE a=? AND b=? AND verb=?',key)) as cursor:
+                bound=cursor.fetchone()
+            context=bound[0] if bound is not None else None
+            if bounded_context and context is not None and len(context)>LINK_CONTEXT_LIMIT:
+                # Pinned engine-sql/links.ts: SQL char_length/left + ellipsis.
+                context=context[:LINK_CONTEXT_LIMIT-1]+'…'
+            if key in seen or bound is None or row['context']!=context:
+                raise GbrainError('gbrain_full_result_unbound')
+            seen.add(key)
+        if len(seen)!=expected:raise GbrainError('gbrain_full_result_incomplete')
         if _file_token(self.path)!=token:raise GbrainError('gbrain_full_projection_changed')
         return len(seen)
 
@@ -793,42 +801,42 @@ class FullGbrainCache(ManagedGbrainCache):
     def _verify(self,client,projection):
         token=_file_token(projection.path)
         counts=projection.counts();expected_pages=iter(projection.pages());enumerated=0;verified=0
-        with closing(_db(projection.path)) as db:
-            degrees=dict(db.execute('SELECT a,count(*) FROM links GROUP BY a'))
-            long_contexts={r[0] for r in db.execute('SELECT DISTINCT a FROM links WHERE length(context)>?',(LINK_CONTEXT_LIMIT,))}
         paged_pages=paged_links=0
-        for offset in range(0,counts['pages']+101,100):
-            listed=client.list(offset)
-            if not isinstance(listed,list) or len(listed)>100:raise GbrainError('gbrain_full_page_enumeration_invalid')
-            for listed_page in listed:
-                expected_page=next(expected_pages,None)
-                if (expected_page is None or not isinstance(listed_page,dict)
-                        or listed_page.get('source_id')!='default' or listed_page.get('slug')!=expected_page['slug']):
-                    raise GbrainError('gbrain_full_page_enumeration_invalid')
-                enumerated+=1
-            if len(listed)<100:break
-        if enumerated!=counts['pages'] or next(expected_pages,None) is not None:
-            raise GbrainError('gbrain_full_page_enumeration_invalid')
-        for page in projection.pages():
-            node=projection.verify_page(page,client.get(page['slug']))
-            # Every page's outgoing set covers every stored link once.
-            # A source origin with many incoming memberships need not fit
-            # into one traverse_graph reply to prove complete import.
-            degree=degrees.get(page['slug'],0)
-            rows=client.outgoing_links(page['slug'],max_rows=degree+1)
-            if page['slug'] in long_contexts:
-                # The list proves provenance with its exact publisher projection;
-                # the uncapped small traversal separately proves the full context.
-                projection.verify_outgoing_provenance(page['slug'],rows)
-                projection.bind(client.graph(page['slug'],depth=1,direction='out'),focus=node['id'],direction='out')
-            else:
-                projection.verify_outgoing(page['slug'],rows)
-            if degree>=TRAVERSE_ROW_LIMIT:
-                paged_links+=degree
-                paged_pages+=1
-            verified+=1
-        if verified!=counts['pages']:raise GbrainError('gbrain_full_import_incomplete')
-        if _file_token(projection.path)!=token:raise GbrainError('gbrain_full_projection_changed')
+        with closing(_db(projection.path)) as db:
+            if _file_token(projection.path)!=token:raise GbrainError('gbrain_full_projection_changed')
+            with closing(db.execute('SELECT a,count(*) FROM links GROUP BY a')) as cursor:
+                degrees=dict(cursor)
+            with closing(db.execute('SELECT DISTINCT a FROM links WHERE length(context)>?',(LINK_CONTEXT_LIMIT,))) as cursor:
+                long_contexts={r[0] for r in cursor}
+            for offset in range(0,counts['pages']+101,100):
+                listed=client.list(offset)
+                if not isinstance(listed,list) or len(listed)>100:raise GbrainError('gbrain_full_page_enumeration_invalid')
+                for listed_page in listed:
+                    expected_page=next(expected_pages,None)
+                    if (expected_page is None or not isinstance(listed_page,dict)
+                            or listed_page.get('source_id')!='default' or listed_page.get('slug')!=expected_page['slug']):
+                        raise GbrainError('gbrain_full_page_enumeration_invalid')
+                    enumerated+=1
+                if len(listed)<100:break
+            if enumerated!=counts['pages'] or next(expected_pages,None) is not None:
+                raise GbrainError('gbrain_full_page_enumeration_invalid')
+            for page in projection.pages():
+                node=projection.verify_page(page,client.get(page['slug']))
+                # Each outgoing set covers stored links once; incoming hubs
+                # need not fit into one traversal to prove a complete import.
+                degree=degrees.get(page['slug'],0)
+                rows=client.outgoing_links(page['slug'],max_rows=degree+1)
+                bounded=page['slug'] in long_contexts
+                projection._verify_outgoing_from(db,token,page['slug'],rows,bounded_context=bounded)
+                if bounded:
+                    # Projected provenance does not prove the full long context.
+                    projection.bind(client.graph(page['slug'],depth=1,direction='out'),focus=node['id'],direction='out')
+                if degree>=TRAVERSE_ROW_LIMIT:
+                    paged_links+=degree
+                    paged_pages+=1
+                verified+=1
+            if verified!=counts['pages']:raise GbrainError('gbrain_full_import_incomplete')
+            if _file_token(projection.path)!=token:raise GbrainError('gbrain_full_projection_changed')
         return {**counts,'verified_queries':verified,'verified_direction':'out','enumerated_pages':enumerated,
             'provenance_verified_pages':verified,
             **({'reviewed_notice_codes':sorted(client.notice_codes)} if getattr(client,'notice_codes',None) else {}),
