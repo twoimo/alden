@@ -206,6 +206,7 @@ def generate_input(state_root, ticket, text, token, paths, selection):
         if paths: raise InputUnavailable('assistant_image_model_unsupported')
         adapter = LocalMlxLlm(base_url=selection['base_url'], model=selection['model'], state_root=state_root,
                              catalog_selected=selection.get('transport') == 'local', reasoning_effort=selection.get('reasoning_effort'),
+                             requires_declared_chat=selection.get('requires_declared_chat', False),
                              system_prompt=CHAT_PERSONA + documents, max_tokens=1024)
         try:
             if _knowledge_request(text, ticket['history']) is not None:

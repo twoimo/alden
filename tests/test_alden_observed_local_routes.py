@@ -766,6 +766,79 @@ class NativeInventoryV2Tests(unittest.TestCase):
         self.assert_native_requests(calls, BASE35)
         self.assertEqual(self.path.read_bytes(), before)
 
+    def test_native_only_capability_provenance_survives_configured_and_typed_readiness(self):
+        for exact_router in (False, True):
+            for caller in ('configured', 'typed'):
+                with self.subTest(exact_router=exact_router, caller=caller):
+                    self.router_rows = [self.router_row(IQ47)] if exact_router else []
+                    self.observe(BASE34, self.native())
+                    before = self.configure()
+                    selected = routes.selection(self.root)
+                    calls = []
+                    transport = self.transport({'data': [ready(IQ47)]}, calls)
+                    def latest(request, **kwargs):
+                        if request.full_url.endswith('/metrics'):
+                            calls.append(request)
+                            return Response(b'')
+                        return transport(request, **kwargs)
+                    with patch.object(voice, '_local_urlopen', side_effect=latest):
+                        if caller == 'configured':
+                            adapter = voice.ConfiguredLocalMlxLlm(self.root)
+                            if exact_router:
+                                self.assertEqual(adapter.generate('fixture prompt', self.token), 'synthetic answer')
+                            else:
+                                with self.assertRaisesRegex(RuntimeError, '^local_llm_model_not_ready$'):
+                                    adapter.generate('fixture prompt', self.token)
+                        else:
+                            result, saved = self.typed()
+                            self.assertIs(result['ok'], exact_router)
+                            if not exact_router:
+                                self.assertEqual(result['error_code'], 'local_llm_model_not_ready')
+                                self.assertEqual(saved['generation']['error_code'], 'local_llm_model_not_ready')
+                                self.assertFalse(saved.get('reply'))
+                    self.assertIs(selected.get('requires_declared_chat'), not exact_router)
+                    self.assertEqual(sum(r.get_method() == 'POST' for r in calls), int(exact_router))
+                    self.assertEqual(self.path.read_bytes(), before)
+
+    def test_truncated_router_http_body_keeps_native_inventory_and_safe_missing_model_error(self):
+        import http.client
+        class FakeSocket:
+            def makefile(self, *_args, **_kwargs):
+                return io.BytesIO(b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10\r\n{"models":[]')
+        class FakeOpener:
+            def open(self, *_args, **_kwargs):
+                response = http.client.HTTPResponse(FakeSocket())
+                response.begin()
+                return response
+        self.observe(BASE34, self.native())
+        before = self.configure()
+        def fetch(url):
+            if url == routes.ROUTER + '/models':
+                self.discovery_calls.append(url)
+                with patch.object(routes.urllib.request, 'build_opener', return_value=FakeOpener()):
+                    return routes._read(url)
+            return self.fetch(url)
+        payload = routes.catalog(self.root, fetcher=fetch)
+        self.assertIs(payload['partial'], True)
+        self.assertEqual(payload['catalog_error'], 'routed_llm_unavailable')
+        self.assertTrue(routes.find_model(payload, IQ47)['selectable'])
+        with self.assertRaisesRegex(RuntimeError, '^routed_llm_unavailable$'):
+            routes.find_model(payload, routes.DEFAULT_MODEL)
+        self.observe(BASE34)
+        with self.assertRaisesRegex(RuntimeError, '^routed_llm_unavailable$'):
+            routes.catalog(self.root, fetcher=fetch)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_malformed_reasoning_values_do_not_discard_independent_native_models(self):
+        self.router_rows = [self.router_row('remote/malformed', supported_reasoning_levels=[
+            {'effort': []}, {'effort': {}}, {'value': ['high']}, True, ['high'], 'medium'])]
+        self.observe(BASE34, self.native())
+        before = self.configure()
+        payload = routes.catalog(self.root)
+        self.assertEqual(routes.find_model(payload, 'remote/malformed')['efforts'], ['medium'])
+        self.assertTrue(routes.find_model(payload, IQ47)['selectable'])
+        self.assertEqual(self.path.read_bytes(), before)
+
     def test_partial_typed_native_succeeds_and_missing_remote_preserves_safe_failure_receipt(self):
         self.observe(BASE34, self.native())
         self.router_failure, _code = self.failures()[0]

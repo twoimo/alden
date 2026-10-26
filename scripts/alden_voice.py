@@ -1715,6 +1715,7 @@ class LocalMlxLlm:
         *,
         state_root: Path | None = None,
         catalog_selected: bool = False,
+        requires_declared_chat: bool = False,
         reasoning_effort: str | None = None,
         system_prompt: str = VOICE_PERSONA_PROMPT,
         max_tokens: int = 128,
@@ -1724,6 +1725,9 @@ class LocalMlxLlm:
         if type(max_tokens) is not int or not 1 <= max_tokens <= 2048:
             raise ValueError('local_llm_output_budget_invalid')
         self.system_prompt, self.max_tokens = system_prompt, max_tokens
+        if type(requires_declared_chat) is not bool:
+            raise RuntimeError('local_llm_model_not_ready')
+        self.requires_declared_chat = requires_declared_chat
         self.catalog_selected, self.reasoning_effort = catalog_selected, reasoning_effort
         fixed = canonical_fixed_local_mlx_model_id(model)
         self.model = "mlx/" + fixed if fixed else model
@@ -1909,7 +1913,7 @@ class LocalMlxLlm:
         loaded = match.get("loaded")
         if type(loaded) is not bool or not loaded or match.get("state") != "ready":
             raise RuntimeError("local_llm_model_not_ready")
-        if 'capabilities' in match:
+        if self.requires_declared_chat or 'capabilities' in match:
             from alden_model_routes import _declares_chat
             if not _declares_chat(match):
                 raise RuntimeError("local_llm_model_not_ready")
@@ -2043,7 +2047,7 @@ class LocalMlxLlm:
         return content.strip()
 
 
-def configured_voice_model(state_root: Path) -> dict[str, str | None]:
+def configured_voice_model(state_root: Path) -> dict[str, str | bool | None]:
     """Snapshot the saved route or explicit default; never repair/write settings."""
     path = Path(state_root) / "reply-model.json"
     try:
@@ -2108,7 +2112,10 @@ class ConfiguredLocalMlxLlm:
             from alden_routed_llm import OpenCodexLlm
             adapter = OpenCodexLlm(selection["model"], selection.get("reasoning_effort"), self.state_root)
         else:
-            adapter = LocalMlxLlm(base_url=selection["base_url"], model=selection["model"], state_root=self.state_root, catalog_selected=selection.get("transport")=="local", reasoning_effort=selection.get("reasoning_effort"))
+            adapter = LocalMlxLlm(base_url=selection["base_url"], model=selection["model"], state_root=self.state_root,
+                                  catalog_selected=selection.get("transport")=="local",
+                                  requires_declared_chat=selection.get('requires_declared_chat', False),
+                                  reasoning_effort=selection.get("reasoning_effort"))
         try:
             return adapter.generate(text, token, history=history) if turn is None else adapter.generate_for_turn(text, token, history=history, turn=turn)
         finally:

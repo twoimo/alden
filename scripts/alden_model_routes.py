@@ -6,6 +6,7 @@ before a turn; a failed generation never retries with a different model.
 """
 from __future__ import annotations
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -130,7 +131,7 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
     except urllib.error.HTTPError as error:
         catalog_error = ('routed_llm_authentication' if error.code in {401,403}
                          else 'routed_llm_quota' if error.code == 429 else 'routed_llm_unavailable')
-    except (OSError, urllib.error.URLError):
+    except (OSError, urllib.error.URLError, http.client.HTTPException):
         catalog_error = 'routed_llm_unavailable'
     except (ValueError, RuntimeError, RecursionError):
         catalog_error = 'model_catalog_invalid'
@@ -180,7 +181,7 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
         efforts = []
         for item in levels if isinstance(levels, list) else []:
             value = item if isinstance(item, str) else item.get("effort", item.get("value")) if isinstance(item, dict) else None
-            if value in EFFORTS and value not in efforts:
+            if isinstance(value, str) and value in EFFORTS and value not in efforts:
                 efforts.append(value)
         observation = health.get(model, {})
         # Health is optional persisted telemetry. A damaged row must not hide
@@ -222,6 +223,7 @@ def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):
             status = "not_chat"
         models.append({"id": model, "label": str(label)[:160], "provider": model.split("/")[0] if "/" in model else "openai",
                        "local": local, "efforts": efforts, "default_effort": default if default in efforts else "medium" if "medium" in efforts else next(iter(efforts), None),
+                       "requires_declared_chat": local and row.get('_native_inventory') is True,
                        "local_base_url": observed_base if ready and not not_chat else None,
                        "status": status, "selectable": (not local or ready and workspace == "ready") and not not_chat,
                        "automatic_candidate": status == "available" and model != "gpt-6-astra" and not not_chat})
@@ -297,5 +299,6 @@ def selection(root):
     if chosen['local'] and base_url not in LOCAL_BASE_URLS:
         raise RuntimeError('local_model_not_ready')
     return {"model": chosen["id"], "reasoning_effort": effort, "transport": "local" if chosen["local"] else "opencodex",
+            "requires_declared_chat": chosen.get('requires_declared_chat', False),
             "base_url": base_url, "mode": state.get("mode", "manual"), "source": "saved_configuration",
             "configuration_sha256": configuration_sha}
