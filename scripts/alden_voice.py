@@ -1561,7 +1561,10 @@ def _voice_collection_projects(root: Path, query: str) -> list[str]:
     compact = lambda value: ''.join(unicodedata.normalize('NFC', value).casefold().split())
     wanted = compact(query)
     with store.database() as db:
-        rows = db.execute("SELECT DISTINCT p.project,t.label FROM target_projects p JOIN targets t ON t.id=p.target_id WHERE p.permission!='denied'")
+        # Resolve the requested scope before applying source permissions.
+        # Dropping denied projects here could turn an explicit scope into an
+        # unscoped lookup of a different store. Retrieval owns visibility.
+        rows = db.execute("SELECT DISTINCT p.project,t.label FROM target_projects p JOIN targets t ON t.id=p.target_id")
         matches = {project for project, label in rows if any(
             compact(alias) and compact(alias) in wanted
             for alias in (project, label, unicodedata.normalize('NFC', label).removesuffix(' 지식 그래프')))}
