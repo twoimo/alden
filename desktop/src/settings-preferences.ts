@@ -22,6 +22,7 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
   const events = new AbortController();
   let dead = false, busy = false, reading = false, visible = true, page: SettingsPage = 'memory';
   let catalog: Row[] = [];
+  let catalogKnown = false, roomsKnown = false;
   let roomOptions: Array<{id:string;label:string}> = [], matches: Array<{id:string;label:string}> = [], cursor = 0;
   const normalize = (text:string) => text.normalize('NFKC').toLocaleLowerCase('ko-KR').replace(/\s+/g,'');
   const closePicker = () => { options.hidden = true; search.setAttribute('aria-expanded','false'); search.removeAttribute('aria-activedescendant'); };
@@ -32,7 +33,7 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
     const query = normalize(search.value); matches = roomOptions.filter(room=>normalize(room.label).includes(query)||room.id.includes(query)).slice(0,60); cursor = Math.min(cursor,Math.max(0,matches.length-1));
     options.replaceChildren();
     matches.forEach((room,index)=>{ const button=root.createElement('button'); button.type='button'; button.id='automation-room-option-'+index; button.setAttribute('role','option'); button.setAttribute('aria-selected',String(index===cursor)); button.textContent=room.label; button.title=room.label+' · '+room.id; button.onpointerdown=event=>event.preventDefault(); button.onclick=()=>pick(room); options.append(button); });
-    if (!matches.length) { const empty=root.createElement('p'); empty.textContent='검색 결과 없음'; options.append(empty); }
+    if (!matches.length) { const empty=root.createElement('p'); empty.textContent=roomsKnown?'검색 결과 없음':'채팅방 목록 확인 필요'; options.append(empty); }
     options.hidden=false;search.setAttribute('aria-expanded','true');
     if(matches[cursor])search.setAttribute('aria-activedescendant','automation-room-option-'+cursor);else search.removeAttribute('aria-activedescendant');
   };
@@ -64,12 +65,13 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
   };
   function render(): void {
     list.replaceChildren();
-    get<HTMLElement>('automation-count').textContent = `${catalog.length}개 등록`;
+    get<HTMLElement>('automation-count').textContent = catalogKnown ? `${catalog.length}개 등록` : '등록 상태 확인 필요';
     if (!catalog.length) {
       const empty = root.createElement('p');
       empty.className = 'automation-empty';
       const heading = root.createElement('strong'), detail = root.createElement('span');
-      heading.textContent = '대화 공간을 추가하세요'; detail.textContent = '새 등록을 눌러 첫 채팅방 자동화를 만들어 보세요.';
+      heading.textContent = catalogKnown ? '대화 공간을 추가하세요' : '등록 상태를 확인해 주세요';
+      detail.textContent = catalogKnown ? '새 등록을 눌러 첫 채팅방 자동화를 만들어 보세요.' : '연결 상태를 확인한 뒤 설정을 다시 열어 주세요.';
       empty.append(heading, detail); list.append(empty);
     }
     for (const row of catalog) {
@@ -98,8 +100,10 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
       const [rooms, registered] = await Promise.all([load('history-rooms'), load('room-catalog')]);
       if (dead) return false;
       if (registered?.ok !== true || !Array.isArray(registered.rooms)) {
+        catalogKnown = false; roomsKnown = false; render();
         message('자동화 등록 정보를 불러오지 못했습니다.'); return false;
       }
+      catalogKnown = true; roomsKnown = rooms?.ok === true && Array.isArray(rooms.rooms);
       catalog = registered.rooms as Row[]; render();
       if (!catalog.length) showEditor(true);
       if (rooms?.ok === true && Array.isArray(rooms.rooms)) {
@@ -115,7 +119,7 @@ export function wireSettingsPreferences(load = fetchSettingsAction, root: Docume
         if (!search.value || select.value) syncPicker();
       }
       return true;
-    } catch { message('자동화 등록 정보를 불러오지 못했습니다.'); return false; }
+    } catch { if (dead) return false; catalogKnown = false; roomsKnown = false; render(); message('자동화 등록 정보를 불러오지 못했습니다.'); return false; }
     finally { reading = false; }
   }
   async function drop(row: Row): Promise<void> {

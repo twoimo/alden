@@ -15,6 +15,33 @@ function setup(load: typeof fetchSettingsAction) {
 beforeEach(() => { document.body.innerHTML = '<button id="knowledge-terminal-toggle" aria-expanded="true"></button>' + observationMarkup() + terminalMarkup(); });
 afterEach(() => terminal?.dispose());
 describe('knowledge terminal lifecycle and evidence', () => {
+  it.each(['resolve','reject'])('ends a stopped initial history request without accepting its late %s result', async outcome => {
+    let finish!: (value:Record<string,unknown>)=>void, fail!: (reason:Error)=>void;
+    const load=vi.fn<typeof fetchSettingsAction>(()=>new Promise((resolve,reject)=>{finish=resolve;fail=reject;}));
+    setup(load);const pending=terminal.refreshHistory({},true);
+    expect(document.getElementById('terminal-ingest')!.textContent).toContain('불러옵니다');
+    terminal.visible(false);
+    expect(document.getElementById('terminal-ingest')!.textContent).toContain('중지되어 있습니다');
+    if(outcome==='resolve')finish({ok:true,items:[event(1,'늦은 자료')]});else fail(new Error('late'));
+    await pending;
+    expect(document.getElementById('terminal-ingest')!.textContent).not.toContain('불러옵니다');
+    expect(document.getElementById('terminal-tail')!.textContent).not.toContain('늦은 자료');
+    load.mockResolvedValueOnce({ok:true,items:[event(2,'재개 후 자료')]});
+    terminal.visible(true);await terminal.refreshHistory({},true);
+    expect(document.getElementById('terminal-ingest')!.textContent).toContain('재개 후 자료');
+  });
+
+  it('only claims loading while a history request is actually in flight', async () => {
+    let resolve!: (value: Record<string, unknown>) => void;
+    setup(vi.fn<typeof fetchSettingsAction>(() => new Promise(r => { resolve = r; })));
+    expect(document.getElementById('terminal-ingest')!.textContent).toContain('아직 확인하지 않았습니다');
+    const pending = terminal.refreshHistory({}, true);
+    expect(document.getElementById('terminal-ingest')!.textContent).toContain('불러옵니다');
+    resolve({ ok:false }); await pending;
+    expect(document.getElementById('terminal-ingest')!.textContent).toContain('확인할 수 없습니다');
+    expect(document.getElementById('terminal-tail')!.textContent).not.toContain('불러옵니다');
+  });
+
   it('labels a readiness receipt without calling it another stored document', async () => {
     const load = vi.fn<typeof fetchSettingsAction>(async () => ({ ok: true, items: [{ ...event(1), stage: 'published' }] }));
     setup(load); await terminal.refreshHistory({}, true);

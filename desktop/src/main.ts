@@ -2,6 +2,7 @@ import { RoutedModels } from './routed-models';
 let routedModels: RoutedModels | null = null;
 import { CollectionGraphController, type GraphAction } from './knowledge/collection-graph';
 import { KnowledgeRefresh } from './knowledge/refresh';
+import { knowledgeMapStatus, renderKnowledgeMapStatus } from './knowledge/map-status';
 import { knowledgeSignature } from './knowledge/changes';
 import { OrbSurfaces } from './orbs/surfaces';
 import { renderNodeDetails, setNodeDetailsVisible } from './knowledge/node-details';
@@ -109,7 +110,7 @@ function showPanelUnavailable(message: string): void {
     status.id = "panel-status";
     status.setAttribute("role", "status");
     status.setAttribute("aria-live", "polite");
-    status.style.cssText = "position:absolute;left:12px;right:12px;bottom:9px;margin:0;text-align:center;font-size:10px;line-height:1.35;color:var(--muted);pointer-events:none";
+    status.className = "mini-graph-status";
     panel.append(status);
   }
   status.textContent = message;
@@ -312,6 +313,7 @@ function renderSettingsUnavailable(): void {
   setText("settings-sync-source", "대화 준비 상태를 확인할 수 없습니다.");
   setText("knowledge-summary", "대화에서 찾은 연결 정보를 확인할 수 없습니다.");
   setText("knowledge-mode", "확인 필요");
+  renderKnowledgeMapStatus(document, null, 0);
   document.querySelectorAll<HTMLButtonElement>("button:not([data-settings-view])").forEach((button) => {
     button.disabled = true;
   });
@@ -457,6 +459,7 @@ export async function setupKnowledgeGraph(
   hooks?: KnowledgeGraphHooks,
 ): Promise<KnowledgeHologram | null> {
   const graph = parseKnowledgeGraph(payload);
+  renderKnowledgeMapStatus(document, payload, graph.nodes.length);
   renderKnowledgeSync(payload);
   const canvas = document.querySelector<HTMLCanvasElement>("#knowledge-graph-canvas");
   const expand = document.querySelector<HTMLButtonElement>("#knowledge-expand-hop");
@@ -467,9 +470,13 @@ export async function setupKnowledgeGraph(
   if (graph.nodes.length === 0) {
     setNodeDetailsVisible(false);
     document.getElementById('settings-knowledge-card')?.setAttribute('data-note-open','false');
-    const empty = payload?.ok !== false && Array.isArray(payload?.nodes) && payload.nodes.length === 0;
-    setText("knowledge-summary", empty ? "아직 연결된 대화가 없습니다." : "대화의 연결 정보를 확인할 수 없습니다.");
-    setText("knowledge-mode", empty ? "준비 중" : "확인 필요");
+    const state = knowledgeMapStatus(payload, 0);
+    const summary = state === 'empty' ? '이 범위에 표시할 지식이 없습니다.'
+      : state === 'partial' ? '일부 출처를 확인하지 못했습니다.'
+        : state === 'stale' ? '현재 원본과의 일치를 확인하지 못했습니다.'
+          : '대화의 연결 정보를 확인할 수 없습니다.';
+    setText("knowledge-summary", summary);
+    setText("knowledge-mode", state === 'empty' ? '빈 결과' : state === 'partial' ? '일부 출처 누락' : '확인 필요');
     const shell = document.querySelector<HTMLElement>(".knowledge-hologram-shell");
     const detail = document.querySelector<HTMLElement>(".knowledge-focus-card");
     if (shell) shell.hidden = false;
@@ -482,7 +489,8 @@ export async function setupKnowledgeGraph(
     "knowledge-summary",
     `${graph.nodes.filter(node=>!node.isHub).length||graph.nodes.length}개`,
   );
-  setText("knowledge-mode", payload?.stale === true ? "자료 확인 필요" : "연결된 주제");
+  const state = knowledgeMapStatus(payload, graph.nodes.length);
+  setText("knowledge-mode", state === 'partial' ? "일부 출처 누락" : state === 'stale' ? "자료 확인 필요" : state === 'ready' ? "연결된 주제" : "확인 필요");
   renderKnowledgeSync(payload);
 
   }
@@ -707,6 +715,7 @@ export async function bootSettings(
       });
     } catch {
       setText("knowledge-summary", "지식 그래프 화면을 준비하지 못했습니다.");
+      renderKnowledgeMapStatus(document, null, 0);
       // A graphics failure must not disable the other already-confirmed settings.
     }
     app.dataset.state = degraded ? "unavailable" : "ready";

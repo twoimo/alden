@@ -19,6 +19,104 @@ function mount(fail=false){
   controller=new RoutedModels(load);return load;
 }
 describe('live model choices and distinct availability',()=>{
+  it('ends the initial loading labels on catalog failure without changing a saved model',async()=>{
+    const load=vi.fn<typeof fetchSettingsAction>(async()=>({ok:false}));
+    controller=new RoutedModels(load);await controller.refresh();
+    expect(document.getElementById('routed-model-name')!.textContent).toBe('모델 확인 불가');
+    expect(document.getElementById('routed-model-indicator')!.textContent).toBe('연결 확인 필요');
+    expect(document.getElementById('routed-local-status')!.textContent).toBe('로컬 · 상태 확인 불가');
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+  });
+  it.each(['response','rejection'] as const)('withdraws open and searched menu health after refresh failure and restores it only on fresh success (%s)',async failure=>{
+    let available=true;
+    const catalog={...payload,models:[...payload.models,
+      {id:'mlx/Ready',label:'Ready local',provider:'mlx',local:true,efforts:['high'],default_effort:'high',status:'running',selectable:true},
+    ]};
+    const load=vi.fn<typeof fetchSettingsAction>(async()=>{
+      if(available)return catalog;
+      if(failure==='rejection')throw Error('offline');
+      return {ok:false};
+    });
+    controller=new RoutedModels(load);
+    const picker=document.getElementById('routed-model-picker') as HTMLDetailsElement;
+    picker.open=true;picker.dispatchEvent(new Event('toggle'));
+    const buttons=()=>Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-route-model]'));
+    const statuses=()=>Array.from(document.querySelectorAll<HTMLElement>('#routed-model-list .model-availability'));
+    const choices=()=>buttons().map(button=>({id:button.dataset.routeModel,disabled:button.disabled,pressed:button.getAttribute('aria-pressed')}));
+    await vi.waitFor(()=>expect(buttons()).toHaveLength(4));
+    const name=document.getElementById('routed-model-name')!.textContent;
+    const effort=(document.getElementById('routed-model-effort') as HTMLSelectElement).value;
+    const beforeChoices=choices();
+    const beforeHealth=statuses().map(status=>({state:status.dataset.state,text:status.textContent,title:status.title}));
+    expect(beforeHealth.map(status=>status.state)).toEqual(['available','connected','memory','running']);
+    expect(beforeHealth[0].title).toBe('최근 5분 안에 실제 응답을 확인했습니다.');
+    expect(document.getElementById('routed-local-status')!.textContent).toBe('로컬 · 1개 실행 중');
+    available=false;await controller.refresh();
+    const expectUnconfirmed=()=>{
+      expect(picker.open).toBe(true);
+      expect(document.getElementById('routed-model-name')!.textContent).toBe(name);
+      expect((document.getElementById('routed-model-effort') as HTMLSelectElement).value).toBe(effort);
+      expect(document.getElementById('routed-model-indicator')!.getAttribute('data-state')).toBe('unavailable');
+      expect(document.getElementById('routed-local-status')!.getAttribute('data-state')).toBe('unavailable');
+      for(const status of statuses()){
+        expect(status.dataset.state).toBe('unavailable');
+        expect(status.textContent).toBe('현재 상태 확인 불가');
+        expect(status.title).toBe('현재 상태 확인 불가');
+      }
+    };
+    expect(buttons()).toHaveLength(4);expectUnconfirmed();expect(choices()).toEqual(beforeChoices);
+    const reads=load.mock.calls.length;
+    const search=document.getElementById('routed-model-search') as HTMLInputElement;
+    search.value='Astra';search.dispatchEvent(new Event('input'));
+    expect(buttons()).toHaveLength(1);expectUnconfirmed();
+    expect(choices()).toEqual([beforeChoices[1]]);
+    search.value='';search.dispatchEvent(new Event('input'));
+    expect(buttons()).toHaveLength(4);expectUnconfirmed();expect(choices()).toEqual(beforeChoices);
+    expect(load.mock.calls).toHaveLength(reads);
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+    available=true;await controller.refresh();
+    expect(document.getElementById('routed-model-indicator')!.textContent).toBe('사용 가능');
+    expect(document.getElementById('routed-local-status')!.textContent).toBe('로컬 · 1개 실행 중');
+    expect(statuses().map(status=>({state:status.dataset.state,text:status.textContent,title:status.title}))).toEqual(beforeHealth);
+    expect(choices()).toEqual(beforeChoices);
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+  });
+
+  it('keeps explicit selection working after catalog failure without reconfirming cached health',async()=>{
+    let available=true;
+    const load=vi.fn<typeof fetchSettingsAction>(async(action,input)=>action==='routed-models'?
+      available?payload:{ok:false}:{ok:true,stored:true,...JSON.parse(input!.query!)});
+    controller=new RoutedModels(load);await controller.refresh();
+    available=false;await controller.refresh();
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+    document.querySelector<HTMLButtonElement>('[data-route-model="gpt-6-astra"]')!.click();
+    await vi.waitFor(()=>expect(document.getElementById('routed-model-name')!.textContent).toBe('GPT-6 Astra'));
+    expect(load.mock.calls.filter(([action])=>action==='routed-model-set')).toEqual([
+      ['routed-model-set',{query:JSON.stringify({model:'gpt-6-astra',reasoning_effort:'high',mode:'manual'})}],
+    ]);
+    expect((document.getElementById('routed-model-effort') as HTMLSelectElement).value).toBe('high');
+    expect(document.getElementById('routed-model-indicator')!.getAttribute('data-state')).toBe('unavailable');
+    expect(document.getElementById('routed-local-status')!.getAttribute('data-state')).toBe('unavailable');
+    for(const status of document.querySelectorAll<HTMLElement>('#routed-model-list .model-availability')){
+      expect(status.dataset.state).toBe('unavailable');
+      expect(status.textContent).toBe('현재 상태 확인 불가');
+      expect(status.title).toBe('현재 상태 확인 불가');
+    }
+  });
+  it.each(['disposal','newer refresh'] as const)('ignores a pending refresh rejection after %s',async next=>{
+    let rejectRead!:(reason:Error)=>void;
+    const load=vi.fn<typeof fetchSettingsAction>()
+      .mockResolvedValueOnce(payload)
+      .mockImplementationOnce(()=>new Promise((_,reject)=>{rejectRead=reject;}))
+      .mockResolvedValueOnce({...payload,model:'gpt-6-astra'});
+    controller=new RoutedModels(load);await controller.refresh();
+    const pending=controller.refresh();
+    if(next==='disposal')controller.dispose();else await controller.refresh();
+    const before=document.getElementById('routed-model-picker')!.outerHTML;
+    rejectRead(Error('offline'));await pending;
+    expect(document.getElementById('routed-model-picker')!.outerHTML).toBe(before);
+    expect(load.mock.calls.every(([action])=>action==='routed-models')).toBe(true);
+  });
   it('lists the actual catalog, supports advertised effort and disables unavailable local weights',async()=>{
     mount();await controller.refresh();
     expect(document.querySelectorAll('button[data-route-model]')).toHaveLength(3);

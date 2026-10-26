@@ -39,6 +39,7 @@ export function unifiedGraph(collection: Record<string, unknown> | null, memory:
     // A fresh saved collection is not unverified just because the side memory
     // index is old. Memory-only and failed collection reads still surface stale.
     stale: collection?.ok === true ? collection.stale === true : collection?.stale === true || memory?.stale === true,
-    partial: (collection !== null && collection.ok !== true) || (memory !== null && memory.ok !== true),
+    partial: collection?.partial === true || (!collectionOnly && memory?.partial === true)
+      || (collection !== null && collection.ok !== true) || (memory !== null && memory.ok !== true),
     facets: collection?.facets, next: collection?.next ?? null };
 }

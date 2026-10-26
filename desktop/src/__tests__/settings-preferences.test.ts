@@ -7,6 +7,33 @@ beforeEach(() => { document.body.innerHTML = settingsMarkup(); });
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe('settings menu catalog', () => {
+  it('does not let a disposed rejected read overwrite a successor registry', async () => {
+    let reject!: (reason:Error)=>void;
+    const pending=new Promise<null>((_resolve,r)=>{reject=r;});
+    const old=wireSettingsPreferences(vi.fn<typeof fetchSettingsAction>(()=>pending));
+    old.select('settings');old.dispose();
+    const successor=wireSettingsPreferences(vi.fn<typeof fetchSettingsAction>(async()=>({ok:true,rooms:[]})));
+    successor.select('settings');await settle();
+    const count=document.getElementById('automation-count')!.textContent;
+    const child=document.getElementById('automation-list')!.firstChild;
+    reject(new Error('late'));await settle();
+    expect(document.getElementById('automation-count')!.textContent).toBe(count);
+    expect(document.getElementById('automation-list')!.firstChild).toBe(child);
+    successor.dispose();
+  });
+
+  it('keeps an unread registry distinct from zero registrations when opening the editor', async () => {
+    const load=vi.fn<typeof fetchSettingsAction>(async()=>({ok:false}));
+    const preferences=wireSettingsPreferences(load); preferences.select('settings');
+    await vi.waitFor(()=>expect(document.getElementById('automation-status')!.textContent).toContain('불러오지 못했습니다'));
+    document.getElementById('automation-new')!.click();
+    expect(document.getElementById('automation-count')!.textContent).toBe('등록 상태 확인 필요');
+    expect(document.getElementById('automation-list')!.textContent).not.toContain('첫 채팅방');
+    expect(document.getElementById('automation-room-options')!.textContent).toContain('채팅방 목록 확인 필요');
+    expect(load.mock.calls.every(([action])=>['history-rooms','room-catalog'].includes(action))).toBe(true);
+    preferences.dispose();
+  });
+
   it('searches normalized room names, disambiguates them and submits only a picked exact ID', async () => {
     const load = vi.fn<typeof fetchSettingsAction>(async action => action === 'history-rooms'
       ? {ok:true, rooms:[{chat_id:'9007199254740997',chat_name:'ＡＢＣ 방'},{chat_id:'9007199254740998',chat_name:'ABC 방'}]}

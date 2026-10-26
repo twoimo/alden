@@ -7,6 +7,12 @@ const memory = { ok: true, nodes: [{ id: 'same', label: '기억', category: 'top
   edges: [{ source: 'same', target: 'other', relation: 'linked', evidence_message_id: 'original' }] };
 const collection = { ok: true, nodes: [{ id: 'same', label: '원문', source_version: 'v1' }], edges: [], total_nodes: 42, total_edges: 7 };
 describe('one permission-preserving graph view', () => {
+  it('preserves an upstream partial-source warning instead of promoting an empty union to complete', () => {
+    expect(unifiedGraph({ok:true,nodes:[],partial:true},{ok:true,nodes:[]},{})).toMatchObject({ok:true,nodes:[],partial:true});
+    expect(unifiedGraph({ok:true,nodes:[]},{ok:true,nodes:[],partial:true},{})).toMatchObject({partial:true});
+    expect(unifiedGraph({ok:true,nodes:[]},{ok:true,nodes:[],partial:true},{projects:['one']})).toMatchObject({partial:false});
+  });
+
   it('keeps colliding source identities, canonical detail keys and original relation evidence separate', () => {
     const payload = unifiedGraph(collection, memory, {}), graph = parseKnowledgeGraph(payload);
     expect(graph.nodes.map(node => node.id)).toEqual(['same', 'memory:same', 'memory:other']);

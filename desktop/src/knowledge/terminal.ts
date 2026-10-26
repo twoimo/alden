@@ -39,7 +39,7 @@ export class KnowledgeTerminal {
   private history: Row[] = [];
   private historyStream: string | null = null;
   private pending: Row[] | null = null;
-  private historyState = '수집 이력을 불러옵니다.';
+  private historyState = '수집 이력을 아직 확인하지 않았습니다.';
 
   constructor(private readonly root: Document, private readonly load: typeof fetchSettingsAction,
     private readonly select: (id: string) => void) {
@@ -69,10 +69,16 @@ export class KnowledgeTerminal {
     }
     this.render(); this.renderHistory();
   }
-  visible(active: boolean): void { this.active = active; this.epoch++; if (active) this.drawMaps(); }
+  visible(active: boolean): void {
+    const wasActive = this.active; this.active = active; this.epoch++;
+    if (wasActive && !active && !this.history.length && this.historyState === '수집 이력을 불러옵니다.') {
+      this.historyState = '수집 이력 갱신이 중지되어 있습니다.'; this.renderHistory();
+    }
+    if (active) this.drawMaps();
+  }
   reset(): void {
     this.epoch++; this.scope = ''; this.history = []; this.pending = null; this.historyStream = null;
-    this.historyState = '수집 이력을 불러옵니다.'; this.renderHistory(); this.followLabel();
+    this.historyState = '수집 이력을 아직 확인하지 않았습니다.'; this.renderHistory(); this.followLabel();
   }
   dispose(): void { this.visible(false); this.controls.abort(); this.resize?.disconnect(); }
   update(graph: KnowledgeGraph, focus: string | null, points: MapPoint[] = []): void {
@@ -89,6 +95,7 @@ export class KnowledgeTerminal {
     if (!collection) { this.history = []; this.historyState = '대화 기억에는 수집 처리 이력이 없습니다.'; this.renderHistory(); return; }
     if (this.busy) return;
     this.busy = true; const epoch = this.epoch;
+    if (!this.history.length) { this.historyState = '수집 이력을 불러옵니다.'; this.renderHistory(); }
     try {
       const result = await this.load('collection-history', { query: JSON.stringify(options) });
       if (!this.active || epoch !== this.epoch) return;

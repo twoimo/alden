@@ -11,6 +11,7 @@ const states: Record<string, string> = { available:'사용 가능', running:'실
 export class RoutedModels {
   private readonly events = new AbortController();
   private models: Model[] = [];
+  private catalogConfirmed = false;
   private model = '';
   private effort: string | null = null;
   private mode = 'manual';
@@ -80,10 +81,20 @@ export class RoutedModels {
       this.effort = typeof payload.reasoning_effort === 'string' ? payload.reasoning_effort : null;
       this.mode = payload.mode === 'automatic' ? 'automatic' : 'manual';
       this.automaticModel = typeof payload.automatic_model === 'string' ? payload.automatic_model : null;
+      this.catalogConfirmed = true;
       this.render();
       this.text('routed-model-status', '다음 응답부터 선택한 모델을 사용합니다.');
     } catch {
-      if (!this.disposed && epoch === this.epoch) this.text('routed-model-status', 'OpenCodex 연결을 확인해 주세요. 현재 선택은 유지됩니다.');
+      if (!this.disposed && epoch === this.epoch) {
+        this.catalogConfirmed = false;
+        if (!this.models.length) this.text('routed-model-name', '모델 확인 불가');
+        const indicator = this.root.getElementById('routed-model-indicator');
+        if (indicator) { indicator.dataset.state = 'unavailable'; indicator.textContent = '연결 확인 필요'; }
+        this.text('routed-local-status', '로컬 · 상태 확인 불가');
+        this.root.getElementById('routed-local-status')?.setAttribute('data-state', 'unavailable');
+        this.renderList();
+        this.text('routed-model-status', 'OpenCodex 연결을 확인해 주세요. 현재 선택은 유지됩니다.');
+      }
     }
   }
 
@@ -114,11 +125,12 @@ export class RoutedModels {
     const chosen = this.models.find(row => row.id === (this.mode === 'automatic' && this.automaticModel ? this.automaticModel : this.model));
     this.text('routed-model-name', this.mode === 'automatic' ? '자동 · ' + (chosen?.label ?? this.model) : chosen?.label ?? this.model);
     const indicator = this.root.getElementById('routed-model-indicator');
-    if (indicator) { indicator.dataset.state = chosen?.status ?? 'unavailable'; indicator.textContent = states[chosen?.status ?? 'unavailable'] ?? '확인 필요'; }
+    const chosenStatus = this.catalogConfirmed ? chosen?.status ?? 'unavailable' : 'unavailable';
+    if (indicator) { indicator.dataset.state = chosenStatus; indicator.textContent = states[chosenStatus] ?? '확인 필요'; }
     const local = this.models.filter(row => row.local && ['available','running'].includes(row.status));
     const shortage = this.models.some(row => row.local && row.status === 'memory');
-    this.text('routed-local-status', local.length ? `로컬 · ${local.length}개 실행 중` : shortage ? '로컬 · 메모리 부족' : '로컬 · 준비된 모델 없음');
-    this.root.getElementById('routed-local-status')?.setAttribute('data-state', local.length ? 'running' : 'not_loaded');
+    this.text('routed-local-status', !this.catalogConfirmed ? '로컬 · 상태 확인 불가' : local.length ? `로컬 · ${local.length}개 실행 중` : shortage ? '로컬 · 메모리 부족' : '로컬 · 준비된 모델 없음');
+    this.root.getElementById('routed-local-status')?.setAttribute('data-state', !this.catalogConfirmed ? 'unavailable' : local.length ? 'running' : 'not_loaded');
     const select = this.root.getElementById('routed-model-effort') as HTMLSelectElement;
     const fallback = this.root.createElement('option'); fallback.value = ''; fallback.textContent = '기본';
     select.replaceChildren(fallback, ...(chosen?.efforts ?? []).map(effort => {
@@ -142,9 +154,10 @@ export class RoutedModels {
       const button = this.root.createElement('button'); button.type = 'button'; button.dataset.routeModel = row.id;
       button.className = 'routed-model-row'; button.disabled = !row.selectable; button.setAttribute('aria-pressed', String(row.id === this.model && this.mode === 'manual'));
       const label = this.root.createElement('span'); label.textContent = row.label;
-      const status = this.root.createElement('span'); status.className = 'model-availability'; status.dataset.state = row.status;
-      status.textContent = states[row.status] ?? '확인 필요';
-      status.title = row.status === 'connected' ? '라우터와 모델 목록을 확인했습니다. 실제 응답은 요청할 때 확인합니다.' : row.status === 'available' ? '최근 5분 안에 실제 응답을 확인했습니다.' : row.status === 'running' ? '가중치가 준비된 실행 상태를 확인했습니다.' : status.textContent;
+      const state = this.catalogConfirmed ? row.status : 'unavailable';
+      const status = this.root.createElement('span'); status.className = 'model-availability'; status.dataset.state = state;
+      status.textContent = this.catalogConfirmed ? states[state] ?? '확인 필요' : '현재 상태 확인 불가';
+      status.title = state === 'connected' ? '라우터와 모델 목록을 확인했습니다. 실제 응답은 요청할 때 확인합니다.' : state === 'available' ? '최근 5분 안에 실제 응답을 확인했습니다.' : state === 'running' ? '가중치가 준비된 실행 상태를 확인했습니다.' : status.textContent;
       button.append(label, status); list.append(button);
     }
     this.placeMenu();

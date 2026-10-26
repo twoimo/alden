@@ -100,7 +100,7 @@ describe("knowledge availability states",()=>{
     expect(document.querySelector<HTMLElement>(".knowledge-hologram-shell")!.hidden).toBe(false);
     expect(document.querySelector<HTMLCanvasElement>("#knowledge-graph-canvas")!.hidden).toBe(true);
     document.body.innerHTML=settingsMarkup();
-    expect(await setup({nodes:[],edges:[]},unavailableSnapshot(),vi.fn())).toBeNull();
-    expect(document.getElementById("knowledge-summary")!.textContent).toBe("아직 연결된 대화가 없습니다.");
+    expect(await setup({ok:true,nodes:[],edges:[]},unavailableSnapshot(),vi.fn())).toBeNull();
+    expect(document.getElementById("knowledge-summary")!.textContent).toBe("이 범위에 표시할 지식이 없습니다.");
   });
 });

@@ -50,6 +50,43 @@ beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = settingsMarkup(
 afterEach(() => { for (const c of owned) c.dispose(); owned.length = 0; vi.useRealTimers(); });
 
 describe('permitted collection graph navigation', () => {
+  it.each([
+    ['ready', page(['a']), {ok:true,nodes:[],edges:[]}],
+    ['empty', page([]), {ok:true,nodes:[],edges:[]}],
+    ['partial', page([], {partial:true}), {ok:true,nodes:[],edges:[]}],
+    ['unavailable', {ok:false}, {ok:false}],
+  ] as const)('invalidates %s when changing scope, then claims loading only during the new read', async (prior, payload, memory) => {
+    const next=deferred<Record<string,unknown>>();
+    const {port}=controller(async options=>options.projects?next.promise:payload, memory);
+    await settle();
+    expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe(prior);
+    if (prior === 'unavailable') expect(document.getElementById('knowledge-mode')!.textContent).toBe('확인 필요');
+    select('knowledge-project','project:two');
+    expect(port.currentView.nodes).toHaveLength(0);
+    expect(document.getElementById('knowledge-map-status')!.hidden).toBe(false);
+    expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe('unverified');
+    expect(document.getElementById('knowledge-summary')!.textContent).not.toBe('불러오는 중');
+    await settle();
+    expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe('loading');
+    next.resolve(page(['b']));await settle();
+    expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe('ready');
+    expect(document.getElementById('knowledge-map-status')!.hidden).toBe(true);
+  });
+  it('keeps a paused scope unverified without starting a request or accepting a late response', async () => {
+    const next=deferred<Record<string,unknown>>();
+    const {load}=controller(async options=>options.projects?next.promise:page(['a']));
+    await settle();select('knowledge-project','project:two');await settle();
+    document.getElementById('knowledge-live-toggle')!.click();
+    expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe('paused');
+    next.resolve(page(['late']));await settle();
+    expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe('paused');
+    const reads=load.mock.calls.filter(([action])=>action==='collection-graph').length;
+    select('knowledge-project','project:one');await settle(500);
+    expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe('paused');
+    expect(document.getElementById('knowledge-summary')!.textContent).toBe('갱신 중지');
+    expect(load.mock.calls.filter(([action])=>action==='collection-graph')).toHaveLength(reads);
+  });
+
   it('fences A-to-B-to-A replies even when node/version/target repeat', async () => {
     const oldA = deferred<Record<string, unknown>>(), oldB = deferred<Record<string, unknown>>(), currentA = deferred<Record<string, unknown>>();
     const pending = [oldA, oldB, currentA];

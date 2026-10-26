@@ -1,54 +1,218 @@
-/* Knowledge command: one live map and bounded views of real saved records. */
-.knowledge-graph-pane { grid-template-rows:auto minmax(160px,1fr) auto auto; }
-.knowledge-command-stage { display:grid; grid-template-columns:minmax(0,1fr) 168px; position:relative; min-width:0; min-height:0; overflow:hidden; }
-.knowledge-map-caption { position:absolute; left:16px; bottom:12px; z-index:2; pointer-events:none; font:10px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.12em; color:#c3d9e7; }
-.knowledge-map-caption span { color:#8da5bc; font-size:9px; letter-spacing:.06em; }
-.knowledge-observations { min-width:0; min-height:0; display:grid; grid-template-rows:minmax(0,1fr) minmax(0,1fr) auto; gap:1px; padding:8px; border-left:1px solid #7aa8c735; background:#09182a; }
-.knowledge-observations figure { display:flex; flex-direction:column; min-height:0; margin:0 0 7px; border:1px solid #7599b42d; background:#0b1d32; overflow:hidden; }
-.knowledge-observations figcaption { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:7px; font:8px ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap; }
-.knowledge-observations figcaption strong { font-weight:600; letter-spacing:.05em; color:#9ad8ed; }
-.knowledge-observations figcaption span { color:#a0b0c1; }
-.knowledge-observations canvas { display:block; width:100%; height:100%; min-height:0; flex:1; background:radial-gradient(ellipse at center,#15435b55,transparent 72%); }
-.terminal-map-readout { padding:8px 5px 4px; color:#9eb4c8; font-size:10px; overflow:hidden; }
-.terminal-map-readout>span { font-size:9px; }
-.terminal-map-readout strong { display:block; color:#d5e7f2; font:11px ui-monospace,SFMono-Regular,Menlo,monospace; margin:7px 0; }
-.terminal-map-readout p { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin:7px 0; }
-.terminal-map-readout small { display:block; line-height:1.6; color:#8ca5bc; font-size:9px; }
+/* Hallmark: Alden's real-data observatory; six working panels, existing wiring.
+   critique: readable controls, quiet hierarchy and immediate keyboard focus.
+   scope: terminal skin only; locked panel names use the system mono face. */
+:root {
+  --terminal-chart-low: #4b8da9;
+  --terminal-chart-high: #a1dbea;
+  --terminal-stage-ready: #a9dccc;
+  --terminal-stage-ready-surface: #76c6ab18;
+  --terminal-stage-failed: #f1b0ac;
+  --terminal-stage-failed-surface: #c276761f;
+  --terminal-stage-pending: #e2ce99;
+  --terminal-stage-pending-surface: #ddbb771a;
+  --terminal-stage-parsed: #c4c0ef;
+  --terminal-stage-parsed-surface: #a6a2d81a;
+}
+/* Rebind aliases where the graph palette is declared: inherited root aliases
+   have already resolved their var() references before reaching these scopes. */
+:root,
+.settings-shell[data-settings-page="memory"] .settings-main,
+body.panel-view {
+  --terminal-font-ui: var(--font-ui);
+  --terminal-font-mono: var(--font-mono);
+  --terminal-font-label: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --terminal-canvas: var(--graph-canvas);
+  --terminal-surface: var(--graph-surface);
+  --terminal-text: var(--graph-text);
+  --terminal-muted: var(--graph-muted);
+  --terminal-border: var(--graph-border);
+  --terminal-accent: var(--graph-accent);
+  --terminal-accent-ink: var(--graph-accent-ink);
+  --terminal-warning: var(--graph-warning);
+  --terminal-selection: var(--graph-selection);
+  --terminal-focus: var(--graph-accent-ink);
+  --terminal-clear: transparent;
+  --terminal-header: color-mix(in srgb, var(--graph-surface) 90%, var(--graph-accent) 10%);
+  --terminal-label-surface: color-mix(in srgb, var(--graph-accent) 10%, var(--graph-canvas));
+  --terminal-warning-surface: color-mix(in srgb, var(--graph-warning) 10%, var(--graph-canvas));
+  --terminal-scrollbar: color-mix(in srgb, var(--graph-accent) 42%, var(--graph-canvas));
+  --terminal-chart-grid: color-mix(in srgb, var(--graph-accent) 12%, var(--graph-canvas));
 
-.settings-view .knowledge-hologram-toolbar { gap:6px; padding:8px 12px; border-top:1px solid #7aa8c72b; }
-.settings-view .knowledge-hologram-toolbar button { min-height:29px; padding:5px 10px; font-size:10px; }
-.settings-view #knowledge-live-toggle { margin-left:auto; color:#9ad8ed; border-color:#84c8db55; }
-.settings-view #knowledge-live-toggle[aria-pressed="false"] { color:#e6c489; border-color:#e6c48966; }
-.knowledge-terminal { display:grid; grid-template-columns:minmax(164px,1.4fr) minmax(152px,1.15fr) minmax(144px,.9fr) minmax(144px,.95fr) minmax(152px,1fr) minmax(182px,1.5fr); grid-template-rows:minmax(0,1fr); column-gap:1px; height:208px; max-height:30vh; min-height:142px; overflow:auto; overscroll-behavior:contain; border-top:1px solid #41627d; background:#355570; scrollbar-width:thin; scrollbar-color:#54718c44 transparent; }
-.knowledge-terminal[hidden] { display:none; }
-.terminal-panel { display:flex; flex-direction:column; align-self:stretch; min-width:0; min-height:0; overflow:hidden; background:#081624; }
-.terminal-panel>header { display:flex; align-items:center; min-height:31px; flex:none; gap:7px; padding:0 9px; border-bottom:1px solid #7aa8c72b; background:#102239; }
-.terminal-panel h2 { margin:0; padding:3px 5px; color:#a8deef; background:#73bed21c; font:600 10px ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.06em; white-space:nowrap; }
-.terminal-panel>header>span { font-size:9px; color:#a4b8ca; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.terminal-panel #terminal-follow { margin-left:auto; padding:2px 3px; min-height:22px; border:0; background:none; color:#a4d4de; white-space:nowrap; font-size:9px; }
-.terminal-panel #terminal-follow[aria-pressed="false"] { color:#edc88e; }
-.terminal-content { flex:1; min-height:0; padding:5px 8px 7px; overflow-y:auto; overflow-x:hidden; scrollbar-width:thin; scrollbar-color:#54718c44 transparent; }
-.terminal-row { display:flex; align-items:center; gap:7px; width:100%; min-width:0; min-height:24px; padding:3px 0; color:#ccdce9; font-size:10px; line-height:1.5; background:none; border:0; border-radius:0; text-align:left; }
-.terminal-row>span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
-.terminal-row>small { flex:none; color:#9ab3ca; font:9px ui-monospace,SFMono-Regular,Menlo,monospace; max-width:46%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-button.terminal-row:hover, button.terminal-row:focus-visible { background:#8bd4ea14; color:#e1f2ff; }
-button.terminal-row:focus-visible, #terminal-follow:focus-visible { outline:1px solid #8ddcf2; outline-offset:1px; }
-.terminal-empty { padding:14px 2px; margin:0; color:#a0b5c8; font-size:11px; line-height:1.7; }
-.terminal-selection { font-size:11px; color:#e4cfab; margin:5px 0 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.terminal-footnote { color:#91a9bf; font-size:9px; line-height:1.6; margin:3px 0 6px; }
-.terminal-sector { position:relative; isolation:isolate; border-bottom:1px solid #a9c7df0b; }
-.terminal-sector:before { content:""; position:absolute; left:0; bottom:2px; height:2px; width:var(--sector-share); background:var(--sector-color); opacity:.58; z-index:-1; }
-.terminal-bars { height:96px; display:flex; align-items:flex-end; gap:4px; padding:12px 3px 0; border-bottom:1px solid #789ab655; background:repeating-linear-gradient(to top,transparent 0 23px,#89b4d015 23px 24px); }
-.terminal-bars>span { display:block; flex:1; max-width:22px; min-height:2px; background:linear-gradient(to top,#4b8da9,#a1dbea); border-radius:1px 1px 0 0; }
-.terminal-chord-chart { display:block; width:100%; height:88px; }
-.terminal-stage { flex:none; min-width:25px; font-size:8px; font-weight:550; line-height:15px; padding:0 3px; color:#a9dccc; background:#76c6ab18; }
-.terminal-stage[data-stage="failed"] { color:#f1b0ac; background:#c276761f; }
-.terminal-stage[data-stage="paused"],.terminal-stage[data-stage="discovered"] { color:#e2ce99; background:#ddbb771a; }
-.terminal-stage[data-stage="parsed"],.terminal-stage[data-stage="validated"] { color:#c4c0ef; background:#a6a2d81a; }
-.terminal-ingest .terminal-row>small { display:none; }
-@media(max-width:1340px) { .knowledge-command-stage { grid-template-columns:minmax(0,1fr); } .knowledge-observations { display:none; } }
-@media(max-height:650px) { .knowledge-terminal { height:148px; } .terminal-bars { height:62px; } .terminal-chord-chart { height:62px; } }
-@media(max-width:720px) { .knowledge-terminal { height:156px; } .knowledge-map-caption { left:10px; font-size:9px; } .settings-view .knowledge-hologram-toolbar { justify-content:flex-start; } .knowledge-toolbar-spacer { display:none; } }
+}
 
-.settings-shell[data-settings-page="memory"] .knowledge-command-stage .knowledge-hologram-shell { background:radial-gradient(ellipse at 58% 44%,#17365188,transparent 60%),radial-gradient(ellipse at 18% 88%,#16264255,transparent 48%),linear-gradient(145deg,#0b1528,#0f223b 52%,#0a1b31); }
-.knowledge-map-caption time { margin-left:16px; color:#9cb7ca; letter-spacing:0; font-size:9px; }
+/* One map, bounded observations and the original collapsible terminal dock. */
+.knowledge-graph-pane { grid-template-rows: auto minmax(160px, 1fr) auto auto; }
+.knowledge-command-stage {
+  display: grid; grid-template-columns: minmax(0, 1fr) 192px;
+  position: relative; min-width: 0; min-height: 0; overflow: hidden;
+}
+.knowledge-map-caption {
+  position: absolute; left: 16px; bottom: 12px; z-index: 2; pointer-events: none;
+  font: 11px/1.5 var(--terminal-font-mono); color: var(--terminal-text);
+}
+.knowledge-map-caption span { color: var(--terminal-muted); font-size: 11px; }
+.knowledge-map-caption time { margin-left: 16px; color: var(--terminal-muted); font-size: 11px; }
+.knowledge-observations {
+  min-width: 0; min-height: 0; display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 8px; padding: 10px; border-left: 1px solid var(--terminal-border);
+  background: var(--terminal-canvas); font-family: var(--terminal-font-ui);
+}
+.knowledge-observations figure {
+  display: flex; flex-direction: column; min-height: 0; margin: 0;
+  border: 1px solid var(--terminal-border); background: var(--terminal-surface); overflow: hidden;
+}
+.knowledge-observations figcaption {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 8px; font: 11px/1.4 var(--terminal-font-mono); white-space: nowrap;
+}
+.knowledge-observations figcaption strong { font-weight: 600; color: var(--terminal-accent-ink); }
+.knowledge-observations figcaption span { color: var(--terminal-muted); }
+.knowledge-observations canvas { display: block; width: 100%; height: 100%; min-height: 0; flex: 1; }
+.terminal-map-readout { padding: 2px 0 4px; color: var(--terminal-muted); font-size: 11px; overflow: hidden; }
+.terminal-map-readout strong { display: block; color: var(--terminal-text); font: 12px/1.5 var(--terminal-font-mono); margin: 8px 0; }
+.terminal-map-readout p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 8px 0; }
+.terminal-map-readout small { display: block; line-height: 1.6; color: var(--terminal-muted); font-size: 11px; }
+
+.settings-view .knowledge-hologram-toolbar {
+  gap: 8px; padding: 10px 12px; flex-wrap: wrap;
+  border-top: 1px solid var(--terminal-border); overflow: visible;
+}
+.settings-view .knowledge-hologram-toolbar button,
+.settings-shell[data-settings-page="memory"] .knowledge-hologram-toolbar button {
+  box-sizing: border-box; flex: none; min-height: 36px; min-width: 72px; padding: 8px 12px;
+  border: 1px solid var(--terminal-border); border-radius: 6px;
+  background: var(--terminal-surface); color: var(--terminal-text);
+  font: 600 12px/1.3 var(--terminal-font-ui); letter-spacing: 0; white-space: nowrap;
+}
+.settings-view .knowledge-hologram-toolbar button:not(:disabled) { cursor: pointer; }
+.settings-view .knowledge-hologram-toolbar button:disabled { cursor: not-allowed; opacity: .55; }
+.settings-view .knowledge-hologram-toolbar button:not(:disabled):hover,
+.settings-shell[data-settings-page="memory"] .knowledge-hologram-toolbar button:not(:disabled):hover {
+  background: var(--terminal-selection); border-color: var(--terminal-accent);
+}
+.settings-view #knowledge-live-toggle { margin-left: auto; color: var(--terminal-accent-ink); border-color: var(--terminal-accent); }
+.settings-view #knowledge-live-toggle[aria-pressed="false"] {
+  color: var(--terminal-warning); border-color: var(--terminal-warning); background: var(--terminal-warning-surface);
+}
+#knowledge-terminal-toggle[aria-expanded="false"] { color: var(--terminal-muted); background: var(--terminal-canvas); }
+
+/* Minimum tracks stay intact: narrow windows scroll this dock, never the page. */
+.knowledge-terminal {
+  box-sizing: border-box; display: grid; min-width: 0; max-width: 100%;
+  grid-template-columns: minmax(200px, 1.4fr) minmax(192px, 1.15fr) minmax(176px, .9fr) minmax(184px, .95fr) minmax(184px, 1fr) minmax(272px, 1.5fr);
+  grid-template-rows: minmax(0, 1fr); column-gap: 1px;
+  height: 224px; max-height: 30vh; min-height: 164px;
+  overflow: auto; overscroll-behavior: contain; scroll-padding: 8px;
+  border-top: 1px solid var(--terminal-border); background: var(--terminal-border);
+  font-family: var(--terminal-font-ui); color: var(--terminal-text);
+  scrollbar-width: thin; scrollbar-color: var(--terminal-scrollbar) var(--terminal-clear);
+}
+.knowledge-terminal[hidden] { display: none; }
+.terminal-panel {
+  display: flex; flex-direction: column; align-self: stretch;
+  min-width: 0; min-height: 0; overflow: hidden; background: var(--terminal-canvas);
+}
+.terminal-panel > header {
+  box-sizing: border-box; display: flex; align-items: center; min-height: 48px; flex: none;
+  gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--terminal-border); background: var(--terminal-header);
+}
+.terminal-panel h2 {
+  flex: none; margin: 0; padding: 4px 5px; border-radius: 3px;
+  color: var(--terminal-accent-ink); background: var(--terminal-label-surface);
+  font: 600 11.5px/1.4 var(--terminal-font-label); letter-spacing: 0; white-space: nowrap;
+}
+.terminal-panel > header > span {
+  flex: 1; min-width: 0; font-size: 11px; line-height: 1.4; color: var(--terminal-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.terminal-panel #terminal-follow {
+  box-sizing: border-box; flex: none; margin-left: auto; padding: 7px 8px;
+  min-height: 36px; min-width: 84px; border: 1px solid var(--terminal-border); border-radius: 5px;
+  background: var(--terminal-surface); color: var(--terminal-accent-ink);
+  font: 600 12px/1.3 var(--terminal-font-ui); white-space: nowrap; cursor: pointer;
+}
+.terminal-panel #terminal-follow[aria-pressed="false"] {
+  color: var(--terminal-warning); border-color: var(--terminal-warning); background: var(--terminal-warning-surface);
+}
+.terminal-panel #terminal-follow:hover { background: var(--terminal-selection); }
+.terminal-content {
+  flex: 1; min-height: 0; padding: 8px 10px 10px;
+  overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scroll-padding: 8px;
+  scrollbar-width: thin; scrollbar-color: var(--terminal-scrollbar) var(--terminal-clear);
+}
+.terminal-row {
+  box-sizing: border-box; display: flex; align-items: center; gap: 8px;
+  width: 100%; min-width: 0; min-height: 36px; padding: 6px 5px;
+  color: var(--terminal-text); font: 12px/1.5 var(--terminal-font-ui);
+  background: var(--terminal-clear); border: 0; border-radius: 4px; text-align: left;
+}
+.terminal-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.terminal-row > small {
+  flex: none; color: var(--terminal-muted); font: 11px/1.5 var(--terminal-font-mono);
+  font-variant-numeric: tabular-nums; max-width: 46%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+button.terminal-row { cursor: pointer; }
+button.terminal-row:hover, button.terminal-row:focus-visible { background: var(--terminal-selection); color: var(--terminal-text); }
+/* Inset rings remain inside the scrolling/clipped panels, including edge rows. */
+button.terminal-row:focus-visible,
+.terminal-panel #terminal-follow:focus-visible,
+.settings-view .knowledge-hologram-toolbar button:focus-visible,
+.settings-shell[data-settings-page="memory"] .knowledge-hologram-toolbar button:focus-visible {
+  outline: 2px solid var(--terminal-focus); outline-offset: -3px;
+  transition: none; animation: none;
+}
+.terminal-empty { padding: 12px 5px; margin: 0; color: var(--terminal-muted); font-size: 12px; line-height: 1.7; }
+.terminal-selection { font-size: 12px; color: var(--terminal-warning); margin: 4px 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.terminal-footnote { color: var(--terminal-muted); font-size: 11px; line-height: 1.6; margin: 3px 5px 8px; }
+.terminal-sector { position: relative; isolation: isolate; border-bottom: 1px solid var(--terminal-chart-grid); }
+/* --sector-share and --sector-color are supplied by the existing real-data renderer. */
+.terminal-sector::before {
+  content: ""; position: absolute; left: 0; bottom: 2px; height: 2px;
+  width: var(--sector-share); background: var(--sector-color); opacity: .58; z-index: -1;
+}
+.terminal-bars {
+  height: 96px; display: flex; align-items: flex-end; gap: 4px; padding: 12px 3px 0;
+  border-bottom: 1px solid var(--terminal-border);
+  background: repeating-linear-gradient(to top, var(--terminal-clear) 0 23px, var(--terminal-chart-grid) 23px 24px);
+}
+.terminal-bars > span {
+  display: block; flex: 1; max-width: 22px; min-height: 2px;
+  background: linear-gradient(to top, var(--terminal-chart-low), var(--terminal-chart-high)); border-radius: 1px 1px 0 0;
+}
+.terminal-chord-chart { display: block; width: 100%; height: 88px; }
+.terminal-stage {
+  flex: none; min-width: 28px; font-size: 11px; font-weight: 600; line-height: 1.5;
+  padding: 2px 4px; border-radius: 3px; color: var(--terminal-stage-ready); background: var(--terminal-stage-ready-surface);
+}
+.terminal-stage[data-stage="failed"] { color: var(--terminal-stage-failed); background: var(--terminal-stage-failed-surface); }
+.terminal-stage[data-stage="paused"], .terminal-stage[data-stage="discovered"] { color: var(--terminal-stage-pending); background: var(--terminal-stage-pending-surface); }
+.terminal-stage[data-stage="parsed"], .terminal-stage[data-stage="validated"] { color: var(--terminal-stage-parsed); background: var(--terminal-stage-parsed-surface); }
+/* The ingest badge already carries this same stage label; keep the existing deduplication. */
+.terminal-ingest .terminal-row > small { display: none; }
+
+@media (max-width: 1340px) {
+  .knowledge-command-stage { grid-template-columns: minmax(0, 1fr); }
+  /* Existing auxiliary-map breakpoint; all six terminal panels remain scrollable. */
+  .knowledge-observations { display: none; }
+}
+@media (max-height: 650px) {
+  .knowledge-terminal { height: 168px; }
+  .terminal-bars { height: 62px; }
+  .terminal-chord-chart { height: 62px; }
+}
+@media (max-width: 720px) {
+  .knowledge-terminal { height: 176px; }
+  .knowledge-map-caption { left: 10px; }
+  .settings-view .knowledge-hologram-toolbar { justify-content: flex-start; }
+  .knowledge-toolbar-spacer { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .knowledge-terminal, .knowledge-terminal *, .knowledge-terminal *::before, .knowledge-terminal *::after,
+  .knowledge-hologram-toolbar, .knowledge-hologram-toolbar *,
+  .knowledge-observations, .knowledge-observations * {
+    animation: none !important; transition: none !important; scroll-behavior: auto !important;
+  }
+}
+
+.settings-shell[data-settings-page="memory"] .knowledge-command-stage .knowledge-hologram-shell { background: var(--terminal-canvas); }

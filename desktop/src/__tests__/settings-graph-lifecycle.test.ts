@@ -24,10 +24,11 @@ vi.mock('../knowledge/hologram',()=>({KnowledgeHologram:class {
 }}));
 
 let bootSettings:typeof import('../main').bootSettings;
+let setupKnowledgeGraph:typeof import('../main').setupKnowledgeGraph;
 beforeAll(async()=>{
   document.body.innerHTML='<div id="app"></div>';
   window.history.replaceState({},'', '/?view=settings');
-  const main=await import('../main');bootSettings=main.bootSettings;
+  const main=await import('../main');bootSettings=main.bootSettings;setupKnowledgeGraph=main.setupKnowledgeGraph;
   await vi.waitFor(()=>expect(document.querySelector<HTMLElement>('#app')?.dataset.state).not.toBe('loading'));
   window.dispatchEvent(new Event('pagehide'));
 });
@@ -66,4 +67,18 @@ it('keeps a shown graph updating after late blur, while native hide, inactive pa
     if(original)Object.defineProperty(document,'visibilityState',original);
     else delete (document as any).visibilityState;
   }
+});
+
+it.each([
+  [{ok:true,nodes:[]},'empty','이 범위에 표시할 지식이 없습니다.'],
+  [{ok:true,nodes:[],partial:true},'partial','일부 출처를 확인하지 못했습니다.'],
+  [{ok:true,nodes:[],stale:true},'stale','현재 원본과의 일치를 확인하지 못했습니다.'],
+  [{nodes:[]},'unavailable','대화의 연결 정보를 확인할 수 없습니다.'],
+] as const)('keeps initial header classification consistent with the map: %j',async(payload,state,summary)=>{
+  const {settingsMarkup}=await import('../ui');document.body.innerHTML=settingsMarkup();
+  const snapshot=parseRuntimeSnapshot({available:false,rooms:[],jobs:[]});
+  expect(await setupKnowledgeGraph(payload,snapshot)).toBeNull();
+  expect(document.getElementById('knowledge-map-status')!.dataset.state).toBe(state);
+  expect(document.getElementById('knowledge-summary')!.textContent).toBe(summary);
+  expect(document.getElementById('knowledge-mode')!.textContent).not.toBe('준비 중');
 });

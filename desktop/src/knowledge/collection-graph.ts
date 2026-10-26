@@ -9,6 +9,7 @@ import { CollectionActivity } from './collection-activity';
 import { affinityInput, affinityMatches, parseLayoutAffinity, type LayoutAffinity } from './layout-affinity';
 import { KnowledgeQualityPanel } from './quality-panel';
 import { KnowledgeTerminal, type MapPoint } from './terminal';
+import { renderKnowledgeMapStatus, renderKnowledgeMapRequestState } from './map-status';
 
 type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode' | 'showNodeActivity' | 'clearNodeActivity'>
   & { setLayoutAffinity?: (value: LayoutAffinity | null) => void; readonly mapProjectionPoints?: MapPoint[] };
@@ -79,6 +80,7 @@ export class CollectionGraphController {
       button?.setAttribute('aria-pressed', String(!this.paused));
       if (button) button.textContent = this.paused ? '갱신 재개' : '갱신 중지';
       this.terminal.visible(this.active && !this.paused);
+      if (!this.graph.currentView.nodes.length) this.pendingScopeStatus();
       if (this.active && !this.paused) { if (this.collection) this.journal.start(); this.refresh.start(); }
       this.setText('knowledge-sync', this.paused ? '자동 갱신 중지' : '갱신 확인 중');
     }, { signal });
@@ -101,6 +103,7 @@ export class CollectionGraphController {
       if (this.debounce !== null) clearTimeout(this.debounce);
       // Fence the old query immediately, before the bounded debounce elapses.
       this.epoch++; this.refresh.stop(); this.journal.reset(); this.terminal.reset();
+      this.pendingScopeStatus();
       this.debounce = setTimeout(() => { this.debounce = null; this.changeScope(); }, 250);
     }, { signal });
     root.getElementById('knowledge-result-list')?.addEventListener('click', event => {
@@ -128,6 +131,7 @@ export class CollectionGraphController {
   }
 
   stop(): void {
+    if (this.active && this.root.getElementById('knowledge-map-status')?.dataset.state === 'loading') this.pendingScopeStatus();
     this.affinityPending = null;
     this.active = false; this.epoch++; this.refresh.stop(); this.journal.stop();
     this.quality.stop(); this.terminal.visible(false);
@@ -172,6 +176,13 @@ export class CollectionGraphController {
     return options;
   }
 
+  private pendingScopeStatus(): void {
+    renderKnowledgeMapRequestState(this.root, this.paused ? 'paused' : 'unverified', this.graph.currentView.nodes.length);
+    this.setText('knowledge-summary', this.paused ? '갱신 중지' : '현재 범위 확인 전');
+    this.setText('knowledge-mode', this.paused ? '갱신 중지' : '확인 전');
+    this.setText('knowledge-sync', this.paused ? '갱신을 재개하면 확인합니다.' : '자료를 아직 확인하지 않았습니다.');
+  }
+
   private changeScope(): void {
     if (this.disposed) return;
     this.quality.syncSelection(); this.terminal.reset();
@@ -184,7 +195,7 @@ export class CollectionGraphController {
     this.graph.replaceGraph({ nodes: [], edges: [] }, this.state);
     this.applying = false;
     this.setFilterAvailability(); this.updateTools(); this.renderList(); this.updateTerminal();
-    this.setText('knowledge-summary', '불러오는 중'); this.setText('knowledge-scope', '');
+    this.pendingScopeStatus(); this.setText('knowledge-scope', '');
     if (this.active && !this.paused) { if (this.collection) this.journal.start(); this.refresh.start(); }
   }
 
@@ -199,6 +210,14 @@ export class CollectionGraphController {
   private async read(): Promise<Record<string, unknown> | null> {
     const epoch = this.epoch;
     if (!this.active || this.disposed || this.paused) return null;
+    const count = this.graph.currentView.nodes.length;
+    const state = this.root.getElementById('knowledge-map-status')?.dataset.state;
+    if (!count || state === 'unverified' || state === 'paused') {
+      renderKnowledgeMapRequestState(this.root, 'loading', count);
+      if (!count) this.setText('knowledge-summary', '불러오는 중');
+      this.setText('knowledge-sync', '현재 범위 확인 중');
+      this.setText('knowledge-mode', '확인 중');
+    }
     const form = this.root.getElementById('knowledge-filter-form'); form?.setAttribute('aria-busy', 'true');
     try {
       const query = this.query();
@@ -282,8 +301,10 @@ export class CollectionGraphController {
   private apply(payload: Record<string, unknown>): void {
     if (!this.active || this.disposed || this.paused) return;
     if (payload.ok !== true) {
+      this.setText('knowledge-mode', '확인 필요');
       this.setText('knowledge-sync', '자료를 불러오지 못했습니다.');
-      if (!this.graph.currentView.nodes.length) this.setText('knowledge-summary', '자료를 불러오지 못했습니다.');
+      if (!this.graph.currentView.nodes.length) this.setText('knowledge-summary', '출처 연결 확인 필요');
+      renderKnowledgeMapStatus(this.root, payload, this.graph.currentView.nodes.length);
       return;
     }
     const next = parseKnowledgeGraph(payload), signature = knowledgeSignature(next);
@@ -296,6 +317,7 @@ export class CollectionGraphController {
       this.state.focusId = this.graph.currentView.focusId; this.state.hops = this.graph.currentView.hops;
     }
     this.applying = false; this.navigationChanged = false; this.pendingCamera = undefined;
+    renderKnowledgeMapStatus(this.root, payload, this.graph.currentView.nodes.length);
     this.next = typeof payload.next === 'number' ? payload.next : null;
     this.totals = { nodes: typeof payload.total_nodes === 'number' ? payload.total_nodes : next.nodes.length,
       edges: typeof payload.total_edges === 'number' ? payload.total_edges : next.edges.length };
