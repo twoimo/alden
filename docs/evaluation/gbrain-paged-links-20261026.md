@@ -51,6 +51,17 @@ code/kind is accepted as inert metadata across graph, page and paged-link reads;
 it grants no permission to execute the accompanying command.
 
 Verification receipts and remaining limits are recorded in the adjacent JSON.
+Final checks pass469 related tests, including24 new regressions,342 consumer
+checks in16 fresh processes,11 isolated guard-removal mutants and7 Rust resource
+tests. The reviewed actual binary accepts full5,000, delta9,436 and forced
+full9,436 outgoing sets. The large explicit synthetic fixture has9,437pages and
+18,871links. Every trial verifies every page/revision/outgoing proof and repeats
+its high-degree read with independent page limits317 and499. Packaged scripts
+repeat the complete full9,436 trial with the same module hashes. Both source and
+package runs withdraw their generations; bounded graph requests still reject.
+These tests do not establish current actual26k engine publication, private/native
+semantic gold, or a new performance improvement.
+
 This is a reversible candidate under the inherited external-review and worker
 holds. There is no installation, GUI launch, original-source write, SDK repair,
 global MCP change, account/model/permission substitution, send or release.
