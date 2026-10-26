@@ -1,0 +1,347 @@
+{
+  "kind": "bounded actual-code coverage ledger; not formal or refinement proof",
+  "property": "After project-scope/lifecycle epoch boundaries an earlier async graph reply cannot replace the current graph or claim current source state; returning to the same query must still fence it.",
+  "production_alignment_commit": "d89738332a9f3370d4209c2976c90fa2189dc9d8",
+  "sources": {
+    "desktop/src/knowledge/collection-graph.ts": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+    "desktop/src/knowledge/refresh.ts": "fb4629526cc8330844e8564d560f07824fb14b2187e3c7171d6e723308ebd7c6",
+    "desktop/src/knowledge/map-status.ts": "e3ea1c86b8a5214591c3850bc372a7acb500c4ff821f3261ca0182f34bb24c76",
+    "desktop/src/knowledge/unified-graph.ts": "f5edd3e440d4ade96907938fa8b0287d3cfc4f4ea16f297613a50383caf8121a",
+    "desktop/src/ui.ts": "5a05bb22b48738ca64e2db769c9ff6e251b4612a3cc56ce24795218c301885a8",
+    "desktop/src/knowledge/terminal.ts": "fbd09eab1e5b6ca6e9b443d7b286493943aa04930dae7974611970d3ff6d9cd2",
+    "desktop/src/main.ts": "6f0c0fa8dc11197a47f560cbfc36cbb597eab1bd6a6972c545b7bf8a1f1d1c89",
+    "desktop/src/knowledge/collection-activity.ts": "b63b6cb9aca52bb7b09d5a96a4d0b09a54f5a6ecee7b64d20fb2bdc38705889d",
+    "desktop/src/knowledge/quality-panel.ts": "92b44d13dc6bea62309eb897d732669064260c811136a09c8468cf1a25490cc4",
+    "desktop/src/knowledge/graph-model.ts": "c1aa61eb052b9ceaad56faf67c3b954308b44f00e2c270c9e6911b44e1c0da28",
+    "desktop/src/knowledge/layout-affinity.ts": "cb4565c39036e7e73e609883149aeccdf784f5a163b1e57488bf32847219da9d",
+    "desktop/src/__tests__/fixtures/affinity-payload.ts": "f8d72b7ee76be60155efa5888fa7dbe9b9ae35c0c8cf50caac5700b5c57eca51",
+    "desktop/src/__tests__/collection-graph.test.ts": "4d7791ab076f7eb47f5f2d46a0b54988620a1704c44e9d74f048aa7a4a084c8f",
+    "desktop/vite.config.ts": "44d57da8d134d247a24b4e3406617b20ae20f5579111f806a44db466bf5c3d5d",
+    "desktop/package.json": "6da2cfa6b1871e715413fb56f3599092269c6a34325f6be5f6794c747f015ce5"
+  },
+  "source_actions": [
+    {
+      "action": "project/filter/form scope change",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        92,
+        108,
+        186,
+        200
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "search input schedules a 250ms callback; scope change itself synchronous",
+      "guards": "changeScope returns if disposed; restart only active and unpaused",
+      "writers": "userSelected; query controls; controller epoch; graph emptied; navigation/signature/affinity resets; journal/terminal reset; request DOM state",
+      "coverage": "project all->two->all; explicit selection during initialize; search ABA; same-query form submit"
+    },
+    {
+      "action": "pause/resume",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        77,
+        85
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "no await; restarts independent timers",
+      "guards": "refresh restart only active and unpaused",
+      "writers": "paused and epoch; refresh/journal/terminal lifecycle; button and sync DOM; pending state if empty",
+      "coverage": "old detail and history across pause/resume"
+    },
+    {
+      "action": "entity resolution changed",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        87,
+        90
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "no await; refresh starts future tick",
+      "guards": "active, not disposed, unpaused, collection",
+      "writers": "epoch; affinity cache; refresh stop/start",
+      "coverage": "old rejected graph request, same selected source"
+    },
+    {
+      "action": "start and initialize continuation",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        123,
+        131,
+        145,
+        155
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "collection-projects promise fulfillment; separate start().then continuation",
+      "guards": "start ignores active/disposed; initialization fulfillment only checks disposed; userSelected gates reset to all; continuation checks active/not disposed/unpaused, no captured epoch",
+      "writers": "active/epoch; options; selected source; changeScope graph reset and status; refresh startup",
+      "coverage": "disposed initialization after replacement; explicit selection before fulfillment; memoized initialization during restart"
+    },
+    {
+      "action": "stop/dispose",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        133,
+        143
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "synchronous cancellation; outstanding promises remain",
+      "guards": "stop conditionally updates loading status; dispose aborts control listeners after stop",
+      "writers": "active/epoch; clear timers/debounce/pending affinity; quality/terminal lifecycle; aria-busy",
+      "coverage": "same-scope stop/start; disposed owner replacement; old affinity; temporal replay cancellation"
+    },
+    {
+      "action": "combined source read",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        210,
+        239
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "Promise.allSettled(collection-graph, knowledge-graph, collection-scheduler-status); parse/union then guard",
+      "guards": "entry active/not disposed/not paused; post-await active/not disposed/same epoch; finally removes aria-busy only same epoch",
+      "writers": "loading/status/aria-busy before await; collectorStatus and lastRead only after guard; result returned to refresh",
+      "coverage": "both sibling barriers; all five old response classes; old rejection; disposed owner aria-busy; search and navigation epochs"
+    },
+    {
+      "action": "focus detail",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        241,
+        263
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "await collection detail or legacy callback",
+      "guards": "active/not disposed at entry; after await active/same epoch/current focusGeneration/not disposed; source reference match",
+      "writers": "returned detail; showNodeActivity; readSequence",
+      "coverage": "old identical-node detail discarded across pause/resume, current detail accepted; legacy transport not exercised"
+    },
+    {
+      "action": "selection/navigation",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        265,
+        294
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "selected is synchronous; navigate starts future refresh",
+      "guards": "selected ignores applying and legacy; navigation active/not disposed/unpaused; meaningful state change required",
+      "writers": "state/history/navigationChanged/pendingCamera/epoch; refresh restart; tools/aria-busy",
+      "coverage": "real fixture click->selected->navigate expand->reset, then old expansion resolves"
+    },
+    {
+      "action": "apply and downstream synchronous graph/status writers",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        300,
+        341
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "no await in apply; kicks off terminal history and affinity promises",
+      "guards": "active/not disposed/not paused; payload.ok controls error path; signature/navigationChanged controls replaceGraph; no payload epoch check inside apply",
+      "writers": "graph/signature/navigation/next/totals; map-status; summary/mode/sync/collector badge; facets/list/tools/terminal/journal snapshot",
+      "coverage": "all tests use real apply only through refresh; graph replacement history and DOM state transitions observed"
+    },
+    {
+      "action": "affinity queue/fulfillment/catch/finally",
+      "file": "desktop/src/knowledge/collection-graph.ts",
+      "lines": [
+        347,
+        399
+      ],
+      "sha256": "9a66a30691f18a5d926fd276c2120cacd37a48b453184b516350120d33808393",
+      "async_boundary": "await collection-affinity; finally can begin pending request",
+      "guards": "active/not disposed; request epoch and current query+node-reference key checked on success/catch; busy and TTL gate queue",
+      "writers": "graph layout affinity; cached affinity; diagnostic; summary coverage; pending/busy scheduling",
+      "coverage": "success and rejection after same-input stop/start; fresh affinity accepted afterward; TTL expiry not exercised"
+    },
+    {
+      "action": "refresh lifecycle/invalidate",
+      "file": "desktop/src/knowledge/refresh.ts",
+      "lines": [
+        15,
+        40
+      ],
+      "sha256": "fb4629526cc8330844e8564d560f07824fb14b2187e3c7171d6e723308ebd7c6",
+      "async_boundary": "timer scheduling, no await in lifecycle",
+      "guards": "start idempotent; schedule requires active and no existing timer",
+      "writers": "refresh epoch/active; needsRead/retryAfter/readRequest; timer and boundary cancellation",
+      "coverage": "stop/start idempotence and boundaries exercised; activity-triggered invalidate source-inspected only"
+    },
+    {
+      "action": "refresh tick revision and graph split",
+      "file": "desktop/src/knowledge/refresh.ts",
+      "lines": [
+        65,
+        73,
+        74,
+        81,
+        82,
+        90,
+        91
+      ],
+      "sha256": "fb4629526cc8330844e8564d560f07824fb14b2187e3c7171d6e723308ebd7c6",
+      "async_boundary": "await optional revision; later await controller read; separate guards required at each split",
+      "guards": "active/same epoch after revision; busy serialization; cadence/retry checks; payload/active/same epoch after graph read",
+      "writers": "apply; confirmedRevision/lastRead/needsRead/retryAfter; confirmedPayload; boundary schedule; finally releases busy and schedules next",
+      "coverage": "obsolete legacy revision cannot launch old read; obsolete graph results cannot apply; same-scope revalidation failure"
+    },
+    {
+      "action": "temporal boundary replay",
+      "file": "desktop/src/knowledge/refresh.ts",
+      "lines": [
+        41,
+        64
+      ],
+      "sha256": "fb4629526cc8330844e8564d560f07824fb14b2187e3c7171d6e723308ebd7c6",
+      "async_boundary": "setTimeout callback over confirmedPayload; synchronous apply then rescheduling",
+      "guards": "active and payload identity; stop cancels boundary timer; no captured refresh epoch inside callback",
+      "writers": "reapply confirmed payload; needsRead/retryAfter; schedule fresh tick and next boundary",
+      "coverage": "positive next_transition_at replay/read reachability; old-project cancellation; restart failure cannot become ready at old boundary; edge valid_from/to not covered"
+    },
+    {
+      "action": "status classifier and DOM renderer",
+      "file": "desktop/src/knowledge/map-status.ts",
+      "lines": [
+        4,
+        12,
+        26,
+        46
+      ],
+      "sha256": "e3ea1c86b8a5214591c3850bc372a7acb500c4ff821f3261ca0182f34bb24c76",
+      "async_boundary": "none",
+      "guards": "payload/shape/count validation; partial before stale; panel existence",
+      "writers": "data-state/data-presentation/hidden/title/message",
+      "coverage": "actual map-status executed; intermediate data-state and selected DOM readback; classifier not mocked"
+    },
+    {
+      "action": "source union",
+      "file": "desktop/src/knowledge/unified-graph.ts",
+      "lines": [
+        5,
+        45
+      ],
+      "sha256": "f5edd3e440d4ade96907938fa8b0287d3cfc4f4ea16f297613a50383caf8121a",
+      "async_boundary": "none; called after allSettled before controller epoch guard",
+      "guards": "collection-only query prevents memory union; success/partial/stale calculations",
+      "writers": "new payload object only, no graph/DOM mutation",
+      "coverage": "collection+memory sibling ordering and all five old response forms; semantic filtering not exhaustively checked"
+    },
+    {
+      "action": "terminal history",
+      "file": "desktop/src/knowledge/terminal.ts",
+      "lines": [
+        72,
+        133
+      ],
+      "sha256": "fbd09eab1e5b6ca6e9b443d7b286493943aa04930dae7974611970d3ff6d9cd2",
+      "async_boundary": "await collection-history; guarded failure path; finally releases busy",
+      "guards": "active and terminal epoch; scope change resets; visible and reset increment epoch",
+      "writers": "history/historyState/pending/stream plus terminal DOM; synced time in separate synchronous helper",
+      "coverage": "old same-scope history after pause/resume rejected; new form-submit scope request accepts current history"
+    },
+    {
+      "action": "activity journal",
+      "file": "desktop/src/knowledge/collection-activity.ts",
+      "lines": [
+        60,
+        87,
+        107,
+        145
+      ],
+      "sha256": "b63b6cb9aca52bb7b09d5a96a4d0b09a54f5a6ecee7b64d20fb2bdc38705889d",
+      "async_boundary": "await activity page; may request refresh.invalidate",
+      "guards": "own active/epoch/checkpoint and item validation; lifecycle reset stops and fences",
+      "writers": "cursor/seen/pending; graph activity pulses/clear; refresh invalidation",
+      "coverage": "source inspected only; test pages omit activity_checkpoint so journal page/retry paths unmodeled"
+    },
+    {
+      "action": "quality report and candidate page",
+      "file": "desktop/src/knowledge/quality-panel.ts",
+      "lines": [
+        621,
+        651,
+        677,
+        770
+      ],
+      "sha256": "92b44d13dc6bea62309eb897d732669064260c811136a09c8468cf1a25490cc4",
+      "async_boundary": "await quality report or candidate page; catch/finally guard pending owner",
+      "guards": "own active/not disposed/open/epoch/selection/visible page and pendingEpoch checks",
+      "writers": "quality report DOM/status/lastReport/pending controls; no graph replace or map-status writer",
+      "coverage": "source inspected only; quality UI stays closed and no quality transport is invoked"
+    },
+    {
+      "action": "real application wiring",
+      "file": "desktop/src/main.ts",
+      "lines": [
+        711,
+        715,
+        739,
+        745
+      ],
+      "sha256": "6f0c0fa8dc11197a47f560cbfc36cbb597eab1bd6a6972c545b7bf8a1f1d1c89",
+      "async_boundary": "await setupKnowledgeGraph precedes controller creation",
+      "guards": "lifecycle delegates controller stop/start; pagehide calls dispose",
+      "writers": "renderer setup and public-control wiring",
+      "coverage": "source inspected only; entire native startup, setupKnowledgeGraph/GPU and detail consumer outside controller are not executed"
+    }
+  ],
+  "generated": {
+    "kind": "bounded generated schedules against actual code; not a theorem or refinement proof",
+    "bounds": {
+      "depth": 5,
+      "projects": 2,
+      "switches": 2,
+      "pauseToggles": 2,
+      "visibilityChanges": 2,
+      "replies": 2,
+      "ticks": 1,
+      "tickMs": 1000
+    },
+    "words": 4735,
+    "completedSchedules": 2839,
+    "prunedCompletionsBeforeIssuance": 1896,
+    "observations": 41183,
+    "issued": 6179,
+    "currentCompletions": 2094,
+    "currentSuccessfulCompletions": 1047,
+    "staleCompletions": 2840,
+    "acceptedGraphs": 1047,
+    "maxIssuedPerSchedule": 3,
+    "acceptedProjects": [
+      "A",
+      "B"
+    ],
+    "status": "pass"
+  },
+  "positive_checks": {
+    "generated_tests": 1,
+    "independent_adversarial_cases": 21,
+    "total": 22
+  },
+  "sampling_limits": [
+    "generated completions are FIFO",
+    "at most three issued requests per generated schedule",
+    "generated siblings settle before the graph reply",
+    "12 microtask drains are a harness bound",
+    "fixed cases explore selected sibling and revision await orderings only"
+  ],
+  "unexecuted": [
+    "native startup and GPU",
+    "source authorization and semantic truth",
+    "original data and installed UI",
+    "activity journal page/retry/cursor",
+    "quality report and pagination",
+    "edge valid_from/valid_to time boundaries",
+    "unbounded fairness/liveness",
+    "external formal and release stages"
+  ],
+  "mutation_fences": {
+    "scope_clear_removed": "changeScope synchronous graph clearing",
+    "obsolete_epoch_reply_allowed": [
+      "controller read epoch guard",
+      "refresh apply epoch guard"
+    ],
+    "scope_result_invalidation_removed": "changeScope pending result invalidation"
+  },
+  "maintenance": "Review source writers and await splits after covered changes, update this ledger and statechart, require positive/broken/restored replays; never weaken the promise to pass."
+}
