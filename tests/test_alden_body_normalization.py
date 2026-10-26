@@ -138,6 +138,46 @@ class BodyNormalizationTests(unittest.TestCase):
         self.assertEqual(item['first']['canonical_value'], '10000')
         self.assertEqual(item['last']['canonical_value'], '2000')
 
+    def test_fraction_and_ratio_denominators_are_not_independent_quantities(self):
+        for operator in ('/', '⁄', '∕', '÷', '／', ':', '∶', '：'):
+            for left in ('1', '-1', '1.5', '1e2', '1만'):
+                for space in ('', ' ', '\t', '\u00a0', '\u2009', '\u202f'):
+                    for right in ('2kg', '-2kg', '2만원', '2만'):
+                        body = '😀 가\r\n분수 ' + left + space + operator + space + right
+                        with self.subTest(operator=operator, left=left, space=repr(space), right=right):
+                            items = self.candidates(body)
+                            self.assertFalse(any(item['status'] == 'normalized' and item['raw'] == right for item in items))
+                            self.assertFalse(any(item['status'] == 'normalized' and item['raw'] == right.lstrip('-') for item in items))
+
+    def test_quantity_labels_rates_and_separate_lines_are_preserved(self):
+        cases = {
+            '무게: 2kg': ['2000'],
+            '무게： 2kg': ['2000'],
+            '선택 항목 / 2kg': ['2000'],
+            '가격 5만원 / 2명': ['50000', '2'],
+            '이동 거리 10km / 2시간': ['10000', '7200'],
+            '앞 문장 1 /\n무게 2kg': ['2000'],
+            '첫 항목 1 /\r\n2kg': ['2000'],
+            '보통 질량 0.5kg': ['500'],
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body):
+                self.assertEqual([item['canonical_value'] for item in self.candidates(body)], expected)
+
+    def test_unsupported_horizontal_spacing_cannot_drop_a_numeric_sign(self):
+        for space in ('\u2002', '\u2009', '\u202f', '\u3000'):
+            for sign in ('-', '−', '－', '﹣', '+', '＋', '﹢'):
+                with self.subTest(space=repr(space), sign=sign):
+                    self.assertEqual(self.candidates('😀 질량 ' + sign + space + '5kg'), [])
+
+    def test_numbered_labels_do_not_become_bare_fraction_numerators(self):
+        for label in ('품목1', 'SKU1', 'ID_A1', 'Cafe\u03011', 'E1'):
+            for operator in ('/', '⁄', '∕', '÷', '／', ':', '∶', '：'):
+                for space in (' ', '\t', '\u00a0'):
+                    with self.subTest(label=label, operator=operator, space=repr(space)):
+                        items = self.candidates('😀 ' + label + operator + space + '2kg')
+                        self.assertEqual([(item['raw'], item['canonical_value']) for item in items], [('2kg', '2000')])
+
     def test_compound_magnitudes_have_independent_integer_sum_oracle(self):
         for a in [1, 2, 9]:
             for b in [1, 35, 9999]:

@@ -58,6 +58,24 @@ class BodyDetailTests(unittest.TestCase):
         for item in note['analysis']['candidates']:
             self.assertEqual(detail['body'][item['start']:item['end']],item['raw'])
 
+    def test_fraction_tail_is_not_exposed_as_a_normalized_detail_quantity(self):
+        body = '😀 가\r\n자료의 질량은 1 / 2kg 표기입니다. 확인한 일반 질량은 0.5kg이며 무게: 2kg도 별도 표기입니다.'
+        self.ingest(body)
+        self.node = self.store.graph_page(projects=['project'])['nodes'][0]
+        detail = self.details()['details']
+        self.assertEqual(detail['body'], body)
+        note = detail['body_notation']
+        self.assertEqual(note['binding']['version'], self.node['source_version'])
+        self.assertEqual(note['binding']['raw_sha256'], detail['raw_sha256'])
+        self.assertEqual(note['binding']['body_sha256'], hashlib.sha256(body.encode()).hexdigest())
+        self.assertEqual(note['analysis']['semantic_validity'], 'not_assessed')
+        items = note['analysis']['candidates']
+        self.assertEqual([item['raw'] for item in items], ['0.5kg', '2kg'])
+        self.assertEqual([item['canonical_value'] for item in items], ['500', '2000'])
+        for item in items:
+            self.assertEqual(body[item['start']:item['end']], item['raw'])
+            self.assertEqual(body.encode('utf-16-le')[item['utf16_start'] * 2:item['utf16_end'] * 2].decode('utf-16-le'), item['raw'])
+
     def test_annotations_cover_the_returned_excerpt_not_hidden_source_tail(self):
         self.ingest('가' * 12000 + '\n수량 8명')
         self.node = self.store.graph_page(projects=['project'])['nodes'][0]

@@ -26,6 +26,9 @@ def main():
         'guessed_century': ("year = match['ky'] or match['iy']", "year = match['ky'] or match['iy']\n        if len(year) == 2: year = '20' + year"),
         'url_numbers_admitted': ("if url_index < len(urls) and urls[url_index][0] < candidate['end'] and candidate['start'] < urls[url_index][1]:", 'if False:'),
         'joined_time_suffix_ignored': ('if unparsed_clock or unparsed_suffix:', 'if unparsed_clock:'),
+        'fraction_ratio_prefix_ignored': ("if previous >= 0 and body[previous] in '/⁄∕÷／:∶：':", 'if False:'),
+        'unicode_horizontal_prefix_ignored': ("body[index] == '\\t' or unicodedata.category(body[index]) == 'Zs'", "body[index] in ' \\t\\u00a0'"),
+        'numbered_label_boundary_ignored': ("return end < 0 or not (body[end].isalnum() or body[end] == '_'\n                          or unicodedata.category(body[end]).startswith('M'))", 'return True'),
     }
     variants = {'current': source}
     for name, (before, after) in replacements.items():
@@ -58,13 +61,17 @@ def main():
                     handle.write(run.stdout + run.stderr)
             assert (run.returncode == 0) == expected, name + ': mutation sensitivity or current parser check failed'
     assert SOURCE.read_bytes() == original
-    report = {'scope': 'Real parser source and seven isolated mutations; bounded unit/generated-input checks, not a theorem or semantic gold.',
+    report = {'scope': 'Real parser source and ten isolated mutations; bounded unit/generated-input checks, not a theorem or semantic gold.',
               'source_sha256': hashlib.sha256(original).hexdigest(),
               'covered': ['exact source/codepoint/UTF16 span equality', 'signs', 'Korean magnitudes',
-                          'grouping syntax', 'no century guess', 'URL exclusion', 'no normalized joined timestamp prefix'],
+                          'grouping syntax', 'no century guess', 'URL exclusion', 'no normalized joined timestamp prefix',
+                          'no independent numeric fraction/ratio denominator', 'horizontal Unicode spacing preserves numeric-prefix fences',
+                          'numeric word/identity label suffixes remain separate from bare operands'],
               'bounds': {'body_characters': 131072, 'candidates_per_body': 64, 'token_characters': 128,
                          'integer_oracle_generated_cases': 112, 'compound_integer_oracle_cases': 10,
-                         'joined_timestamp_suffix_cases': 39, 'timestamp_boundary_controls': 24},
+                         'joined_timestamp_suffix_cases': 39, 'timestamp_boundary_controls': 24,
+                         'fraction_ratio_tail_cases': 960, 'quantity_label_rate_line_controls': 8,
+                         'unsupported_sign_spacing_cases': 28, 'numbered_label_controls': 120},
               'results': results, 'python_version': sys.version, 'production_source_modified': False,
               'limits': ['No fact extraction/authorization/current-version integration, physical UI, liveness, full Unicode grammar or independent precision/recall proof.',
                          'Range/subtraction, relative dates, implicit timezone/currency and unsupported notation stay unresolved.']}

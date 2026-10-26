@@ -176,10 +176,36 @@ def _dates(body):
         yield {'kind': 'time', 'start': match.start(), 'end': match.end(), 'raw': match[0], **result}
 
 
+def _before_horizontal_space(body, index):
+    while index >= 0 and (body[index] == '\t' or unicodedata.category(body[index]) == 'Zs'):
+        index -= 1
+    return index
+
+
+def _bare_numeric_operand(body, end):
+    start, digit = end + 1, False
+    while end >= 0:
+        character = body[end]
+        if character.isdecimal() or character in '.,eE+−－﹣＋﹢-~～–—조억만천백십':
+            digit |= character.isdecimal()
+            start, end = end, end - 1
+        elif not digit and (character == '\t' or unicodedata.category(character) == 'Zs'):
+            end -= 1
+        else:
+            break
+    if not digit or not (body[start].isdecimal() or body[start] in '.,+−－﹣＋﹢-'):
+        return False
+    # A numeric suffix inside a word/identity is a label, including NFD marks.
+    return end < 0 or not (body[end].isalnum() or body[end] == '_'
+                          or unicodedata.category(body[end]).startswith('M'))
+
+
 def _numeric_prefix(body, start):
-    previous = start - 1
-    while previous >= 0 and body[previous] in ' \t\u00a0':
-        previous -= 1
+    previous = _before_horizontal_space(body, start - 1)
+    if previous >= 0 and body[previous] in '/⁄∕÷／:∶：':
+        # Unsupported fractions/ratios must not expose their denominator as
+        # a separate value. Labels and explicitly typed rate numerators stay.
+        return _bare_numeric_operand(body, _before_horizontal_space(body, previous - 1))
     return previous >= 0 and (body[previous] in '0123456789+−－﹣＋﹢-~～–—조억만천백십'
             or unicodedata.category(body[previous]) == 'Pd'
             or body[previous] in '.,' and previous > 0 and body[previous - 1].isdigit())
