@@ -88,6 +88,55 @@ dependencies = [
 ]
 
 [[package]]
+name = "alden-cli"
+version = "1.8.6"
+dependencies = [
+ "accessibility",
+ "accessibility-sys",
+ "aes-gcm",
+ "anyhow",
+ "assert_cmd",
+ "base64",
+ "bson",
+ "byteorder",
+ "chrono",
+ "clap",
+ "clap_complete",
+ "core-foundation",
+ "core-graphics 0.25.0",
+ "csv",
+ "dirs",
+ "hex",
+ "hmac",
+ "image",
+ "libc",
+ "owo-colors",
+ "plist",
+ "predicates",
+ "proptest",
+ "rand 0.8.5",
+ "reqwest",
+ "rpassword",
+ "rsa",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "toml",
+ "urlencoding",
+ "webpki-roots 0.26.11",
+ "zeroize",
+ "zune-core",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "alloc-no-stdlib"
 version = "2.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1562,55 +1611,6 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
-
-[[package]]
-name = "alden-cli"
-version = "1.8.6"
-dependencies = [
- "accessibility",
- "accessibility-sys",
- "aes-gcm",
- "anyhow",
- "assert_cmd",
- "base64",
- "bson",
- "byteorder",
- "chrono",
- "clap",
- "clap_complete",
- "core-foundation",
- "core-graphics 0.25.0",
- "csv",
- "dirs",
- "hex",
- "hmac",
- "image",
- "libc",
- "owo-colors",
- "plist",
- "predicates",
- "proptest",
- "rand 0.8.5",
- "reqwest",
- "rpassword",
- "rsa",
- "rusqlite",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-rustls",
- "toml",
- "urlencoding",
- "webpki-roots 0.26.11",
- "zeroize",
- "zune-core",
- "zune-jpeg",
-]
 
 [[package]]
 name = "option-ext"
