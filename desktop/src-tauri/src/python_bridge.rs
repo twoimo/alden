@@ -1065,11 +1065,7 @@ impl PythonBridge {
             self.config.state_root.to_string_lossy().into_owned(),
             "--sync".into(),
             "--bin".into(),
-            resources
-                .root
-                .join("bin/openkakao-cli")
-                .to_string_lossy()
-                .into_owned(),
+            resources.bin.to_string_lossy().into_owned(),
         ];
         let result = run_process_with_recovery_env(
             &runtime.executable,

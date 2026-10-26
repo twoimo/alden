@@ -787,7 +787,7 @@ class AutoReplyMenubarTests(unittest.TestCase):
             )
             self.assertEqual(model["available_chats"][0]["chat_id"], 42)
             self.assertEqual(model["available_chats"][0]["title"], "id:42")
-            fake = Path(temporary) / "fake-openkakao-cli"
+            fake = Path(temporary) / "fake-alden-cli"
             fake.write_text(
                 "#!/bin/sh\n"
                 "cat <<'JSON'\n"
@@ -813,7 +813,7 @@ class AutoReplyMenubarTests(unittest.TestCase):
             helper, module, state, _room, _queue, now, _model = self._model(
                 Path(temporary)
             )
-            fake = Path(temporary) / "fake-openkakao-cli"
+            fake = Path(temporary) / "fake-alden-cli"
             fake.write_text(
                 "#!/bin/sh\n"
                 "cat <<'JSON'\n"

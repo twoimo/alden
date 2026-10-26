@@ -17,9 +17,10 @@ import tempfile
 
 DEPENDENCY_CACHE_NAMES = {'.cache', '.vite', '.vite-temp', '__pycache__'}
 CANONICAL_TARGETS = (
-    ('target/release', 'openkakao-cli', 'src/main.rs', '.'),
+    ('target/release', 'alden-cli', 'src/main.rs', '.'),
     ('desktop/src-tauri/target/release', 'openkakao-alden-desktop',
      'desktop/src-tauri/src/main.rs', 'desktop/src-tauri'),
+    ('target/release', 'openkakao-cli', 'src/legacy_main.rs', '.'),
 )
 # tauri-build emits this watch path even when no capabilities are declared.
 # Record absence as an input; never extend this to arbitrary missing resources.
@@ -189,7 +190,7 @@ def dependencies(root):
     seen = set()
     canonical = canonical_dependencies(root)
     # Cargo documents the adjacent .d as the rebuild inputs for that artifact.
-    # Replace only our two root binaries' hashed variants with those records.
+    # Replace only our declared root binaries' hashed variants with those records.
     # Library records remain a conservative superset, including copied-cache
     # generated files. No registry resolution, network access or mtime selection.
     for (directory, name, _, base), (_, _, current) in zip(CANONICAL_TARGETS, canonical):
@@ -265,7 +266,7 @@ def output_manifest(app):
 
 def stage_release_cli(root):
     """Refresh the shared Tauri stage after any debug/source-check build."""
-    source = checked_dependency(root/'target/release/openkakao-cli')
+    source = checked_dependency(root/'target/release/alden-cli')
     if not stat.S_ISREG(source.stat().st_mode) or not os.access(source, os.X_OK):
         raise RuntimeError('release_cli_not_executable')
     parent = root
@@ -276,7 +277,12 @@ def stage_release_cli(root):
         checked_dependency(parent, directory=True)
         if not parent.is_dir():
             raise RuntimeError('release_cli_stage_directory_invalid')
-    destination = parent/'openkakao-cli'
+    for name in ('alden-cli', 'openkakao-cli'):
+        _stage_cli_copy(source, parent/name)
+
+
+def _stage_cli_copy(source, destination):
+    parent = destination.parent
     if destination.exists() or destination.is_symlink():
         checked_dependency(destination)
     fd, temporary = tempfile.mkstemp(prefix='.release-cli-', dir=parent)
@@ -297,12 +303,13 @@ def stage_release_cli(root):
 
 def verified(root, receipt):
     app=root/'desktop/src-tauri/target/release/bundle/macos/Alden.app'
-    cli=root/'target/release/openkakao-cli'
+    cli=root/'target/release/alden-cli'
     if not app.is_dir() or not cli.is_file() or app.is_symlink() or cli.is_symlink() or not os.access(cli,os.X_OK):return False
     key,_=inputs(root)
     if key!=receipt.get('input_digest') or sha(cli)!=receipt.get('cli_sha256'):return False
-    bundled_cli=app/'Contents/Resources/bin/openkakao-cli'
-    if not bundled_cli.is_file() or sha(checked_dependency(bundled_cli))!=sha(cli):return False
+    for name in ('alden-cli', 'openkakao-cli'):
+        bundled_cli=app/'Contents/Resources/bin'/name
+        if not bundled_cli.is_file() or not os.access(bundled_cli,os.X_OK) or sha(checked_dependency(bundled_cli))!=sha(cli):return False
     if output_manifest(app)!=receipt.get('output_manifest'):return False
     if artifact_evidence(root)!=receipt.get('artifact_evidence'):return False
     return subprocess.run(['codesign','--verify','--deep','--strict',str(app)],capture_output=True).returncode==0
@@ -340,7 +347,7 @@ def main():
     if not args.expected_key:return  # A clean build has no prior dep-info yet.
     key,evidence=inputs(root)
     if not args.expected_key or key!=args.expected_key:raise RuntimeError('build_inputs_changed_during_build')
-    app=root/'desktop/src-tauri/target/release/bundle/macos/Alden.app';cli=root/'target/release/openkakao-cli'
+    app=root/'desktop/src-tauri/target/release/bundle/macos/Alden.app';cli=root/'target/release/alden-cli'
     receipt={'input_digest':key,'inputs':evidence,'cli_sha256':sha(cli),
              'output_manifest':output_manifest(app),'artifact_evidence':artifact_evidence(root)}
     if not verified(root,receipt):

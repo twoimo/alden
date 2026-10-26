@@ -1524,7 +1524,7 @@ func parseConfig(_ args: [String]) -> Config {
         // KakaoTalk rooms, so 단체 채팅방 fell back to the catalog room alone with an
         // `id:<chat_id>` title. Default to the CLI shipped inside this bundle.
         let bundled = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Resources/bin/openkakao-cli")
+            .appendingPathComponent("Contents/Resources/bin/alden-cli")
             .path
         if FileManager.default.isExecutableFile(atPath: bundled) {
             config.bin = bundled

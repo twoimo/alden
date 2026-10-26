@@ -183,7 +183,7 @@ class CatalogSelectorTests(unittest.TestCase):
             module, "_preflight_cli", return_value=(True, {"valid": True}, "")
         ) as preflight:
             accepted = module._preflight_catalog_selectors(
-                Path("/tmp/openkakao-cli"),
+                Path("/tmp/alden-cli"),
                 Path("/tmp/config.toml"),
                 Path("/tmp/runtime/scripts/auto-reply-service.py"),
                 candidates,
@@ -218,7 +218,7 @@ class CatalogSelectorTests(unittest.TestCase):
                     module._perform_preflight(
                         Path("/tmp/python"),
                         Path("/tmp/entry.py"),
-                        Path("/tmp/openkakao-cli"),
+                        Path("/tmp/alden-cli"),
                         Path("/tmp/config.toml"),
                         None,
                         state_root,
@@ -249,7 +249,7 @@ class CatalogSelectorTests(unittest.TestCase):
             module, "_preflight_cli", side_effect=full_set_only
         ) as preflight:
             accepted = module._preflight_catalog_selectors(
-                Path("/tmp/openkakao-cli"),
+                Path("/tmp/alden-cli"),
                 Path("/tmp/config.toml"),
                 Path("/tmp/runtime/scripts/auto-reply-service.py"),
                 candidates,
@@ -273,7 +273,7 @@ class CatalogSelectorTests(unittest.TestCase):
             module, "_preflight_cli", side_effect=transient_then_ok
         ):
             accepted = module._preflight_catalog_selectors(
-                Path("/tmp/openkakao-cli"),
+                Path("/tmp/alden-cli"),
                 Path("/tmp/config.toml"),
                 Path("/tmp/runtime/scripts/auto-reply-service.py"),
                 candidates,
@@ -337,7 +337,7 @@ class AutoReplyServiceEntryTests(unittest.TestCase):
         argv_log = root / "preflight-argv.json"
         control.write_text("{}\n", encoding="utf-8")
         control.chmod(0o600)
-        binary = root / "openkakao-cli"
+        binary = root / "alden-cli"
         binary.write_text(
             f"""#!{_test_python()}
 import json
@@ -1999,7 +1999,7 @@ print(json.dumps({
             module = fixture["module"]
             ready = Path(temporary) / "fake-auto-reply-ready.json"
             cleaned = Path(temporary) / "fake-auto-reply-cleaned"
-            fake_binary = Path(temporary) / "fake-openkakao-cli"
+            fake_binary = Path(temporary) / "fake-alden-cli"
             fake_binary.write_text(
                 f"""#!{_test_python()}
 import fcntl

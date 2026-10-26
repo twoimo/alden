@@ -8193,8 +8193,8 @@ print(json.dumps({
             return Result()
 
         previous = os.environ.get("OPENKAKAO_BINARY")
-        os.environ["OPENKAKAO_BINARY"] = "/tmp/openkakao-cli-probe"
-        supervisor.BINARY = Path("/tmp/openkakao-cli-probe")
+        os.environ["OPENKAKAO_BINARY"] = "/tmp/alden-cli-probe"
+        supervisor.BINARY = Path("/tmp/alden-cli-probe")
         try:
             with mock.patch.object(supervisor.subprocess, "run", side_effect=fake_run):
                 self.assertTrue(supervisor.db_ready())
@@ -19070,7 +19070,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     "--geeknews",
                     "--send",
                     "--bin",
-                    "/fake/openkakao-cli",
+                    "/fake/alden-cli",
                     "--chat",
                     "NIMDA room",
                     "--queue",
@@ -19082,7 +19082,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         send.assert_called_once()
         self.assertEqual(send.call_args.args[0][1], "local-send")
         self.assertEqual(readback.call_args.args[0], [
-            "/fake/openkakao-cli",
+            "/fake/alden-cli",
             "local-read",
             "325472527151234",
             "--count",
@@ -19128,7 +19128,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     "--geeknews",
                     "--send",
                     "--bin",
-                    "/fake/openkakao-cli",
+                    "/fake/alden-cli",
                     "--chat",
                     "NIMDA room",
                     "--queue",
@@ -19157,7 +19157,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     "--geeknews",
                     "--send",
                     "--bin",
-                    "/fake/openkakao-cli",
+                    "/fake/alden-cli",
                     "--chat",
                     "NIMDA room",
                     "--queue",

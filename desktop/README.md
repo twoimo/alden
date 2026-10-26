@@ -1,8 +1,9 @@
 # macOS Python/Rust resource contract
 
 **Alden** is the project and menu-bar product name. The GitHub repository is
-`twoimo/alden`; `openkakao-cli` and the existing runtime identifiers remain
-compatible with installed scripts, state, and permissions.
+`twoimo/alden`; the canonical executable is `alden-cli`. The `openkakao-cli`
+compatibility executable and existing runtime identifiers preserve installed
+scripts, state, and permissions.
 
 The running executable selects the layout, independently of the current directory:
 
@@ -14,14 +15,15 @@ Alden.app/Contents/
     scripts/alden_voice.py
     scripts/<fixed support modules and CPython 3.11 bytecode>
     scripts/auto-reply-operator-prompts.json
-    bin/openkakao-cli
+    bin/alden-cli
+    bin/openkakao-cli  # regular compatibility copy, never a symlink
 ```
 
 Wake-word candidates live under `voice/models/experimental/` and are excluded
 from the app bundle until held-out human-speech evaluation clears the release
 false-accept gate. The desktop voice-start command remains disabled meanwhile.
 
-`src-tauri/src/resource_layout.rs::DATA_FILES` is the allowlist; `tauri.conf.json`
+`src-tauri/src/resource_layout.rs::{DATA_FILES, CLI_FILES}` is the allowlist; `tauri.conf.json`
 maps every staged file to its exact destination. `build.rs` copies only these
 files and the CLI from the checkout's `target/debug` or `target/release`, according
 to the desktop build profile. It never traverses/copies `.venv*`, the home
@@ -174,3 +176,12 @@ TCC, signing, installation, or send success.
 ## 0.3.72 — 본문 근거가 없는 기록 구분
 
 수동 품질 정보에서 본문 텍스트 후보와 메타데이터 이름·미열람 안내의 일치를 구분한다. 선언된 제외 수량과 확인 범위를 표시하며 이전 모호한 보고서는 미확인으로 둔다. 의미 배치는 검증된 현재 투영·보관 기록의 미열람 선언도 확인하고 원래 노드·구조 관계를 보존한다. 한 줄 상단과 정보 창 내부 스크롤을 유지한다. [근거·실제 표본·설치와 미결](../docs/architecture/alden-source-content-evidence-20261012.md).
+
+CLI naming compatibility: Cargo package/bin `alden-cli` is canonical. Cargo also
+builds the `openkakao-cli` compatibility entry point from the same implementation;
+the Rust library namespace `openkakao_cli` remains unchanged. Bundles stage both
+exact filenames as independently validated regular executable copies, and signed
+releases sign and strictly verify both with the existing `com.openkakao.cli`
+identity. The fixed `Application Support/openkakao/bin/openkakao-cli` path and
+`OPENKAKAO_*` environment variables preserve existing TCC/session contracts.
+Historical evidence and upstream source URLs retain their original names.

@@ -49,7 +49,7 @@ class SessionRuntimePackagerTests(unittest.TestCase):
                 # directly executable; the packager normalizes every staged
                 # Python asset to owner-only read/execute mode.
                 path.chmod(0o600)
-        binary = root / "openkakao-cli"
+        binary = root / "alden-cli"
         binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         binary.chmod(0o700)
         config = root / "config.toml"
@@ -156,7 +156,7 @@ class SessionRuntimePackagerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             module = load(f"session_packager_repository_{id(root)}")
-            binary = root / "openkakao-cli"
+            binary = root / "alden-cli"
             binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             binary.chmod(0o700)
             config = root / "config.toml"
@@ -181,7 +181,7 @@ class SessionRuntimePackagerTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(manifest["assets"]),
-                {"openkakao-cli", "config.toml", *module.RUNTIME_SCRIPT_NAMES,
+                {"alden-cli", "openkakao-cli", "config.toml", *module.RUNTIME_SCRIPT_NAMES,
                  *module.RUNTIME_DATA_NAMES},
             )
             alden_source = ROOT / "scripts" / "alden_abort.py"

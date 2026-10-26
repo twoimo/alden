@@ -75,7 +75,7 @@ jobs:
         run: cargo clippy --manifest-path $MANIFEST --all-targets -- -D warnings
 
       - name: Smoke CLI
-        run: cargo build --manifest-path $MANIFEST && ./target/debug/openkakao-cli --version
+        run: cargo build --manifest-path $MANIFEST && ./target/debug/alden-cli --version
 
       # Keep the retired Swift Extra build covered while the primary menu-bar
       # bundle is built by the separate Tauri job below. The explicit backend
@@ -100,7 +100,7 @@ jobs:
             --python "$(command -v python3)" \
             --script "$PWD/scripts/auto-reply-menubar.py" \
             --state-root /tmp/layout-audit-state \
-            --bin "$PWD/target/debug/openkakao-cli"
+            --bin "$PWD/target/debug/alden-cli"
           python3 scripts/audit-menubar-layout.py /tmp/layout-audit > /tmp/layout-audit/report.txt
           python3 scripts/check-menubar-layout.py /tmp/layout-audit
 
@@ -203,6 +203,8 @@ jobs:
           tests.test_alden_focus_projection
           tests.test_alden_collection_retrieval
           tests.test_alden_gbrain
+          tests.test_alden_gbrain_bootstrap_contract
+          tests.test_alden_gbrain_actual_metadata
           tests.test_alden_gbrain_cache
           tests.test_alden_gbrain_import
           tests.test_alden_gbrain_paged_links
@@ -470,12 +472,16 @@ jobs:
           set -euo pipefail
           app="desktop/src-tauri/target/release/bundle/macos/Alden.app"
           main="$app/Contents/MacOS/openkakao-alden-desktop"
-          embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
+          embedded_cli="$app/Contents/Resources/bin/alden-cli"
+          legacy_cli="$app/Contents/Resources/bin/openkakao-cli"
           embedded_audio="$app/Contents/Resources/scripts/libalden_audio.dylib"
-          release_cli="target/release/openkakao-cli"
+          release_cli="target/release/alden-cli"
 
           test -x "$main"
           test -x "$embedded_cli"
+          test -x "$legacy_cli"
+          test ! -L "$legacy_cli"
+          /usr/bin/cmp -s "$embedded_cli" "$legacy_cli"
           test -x "$release_cli"
           test ! -e "$app/Contents/_CodeSignature"
           test "$(/usr/bin/lipo -archs "$main")" = "arm64"

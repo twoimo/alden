@@ -26,6 +26,18 @@ from alden_gbrain_projection import GbrainProjection,_text
 POLICY='alden-gbrain-full-source-v1'
 STABLE_POLICY='alden-gbrain-record-content-v2'
 MAX_QUERY_EDGES=8192
+# The pinned publisher parses frontmatter titles with ECMAScript String.trim.
+# Preserve the original label in the source/index and compare its rendered title.
+_TITLE_WHITESPACE='\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff'
+_PAGE_BODY='Alden source graph metadata; not original body or claim validity.'
+
+
+def _gbrain_title(label):
+    title=label.strip(_TITLE_WHITESPACE)
+    if not title:raise GbrainError('gbrain_full_title_empty')
+    return title
+
+
 INDEX_SCHEMA='''PRAGMA foreign_keys=ON; PRAGMA journal_mode=DELETE;
 CREATE TABLE pages(slug TEXT PRIMARY KEY,id TEXT UNIQUE NOT NULL,kind TEXT NOT NULL,
  payload TEXT NOT NULL,content TEXT NOT NULL,revision TEXT);
@@ -62,13 +74,14 @@ class FullProjection:
     def origin_slug(self,target):return 'sources/alden-origin-'+_digest([self.prefix,target])
 
     def _page(self,slug,node,kind):
+        _gbrain_title(node['label'])
         fields={'type':'source','title':node['label'],'alden_policy':self.policy}
         if self.policy==POLICY:fields['alden_snapshot']=self.fingerprint
         fields.update(alden_node_id=node['id'],alden_source_target=node['source_target'],alden_record_sha256=_digest(node))
         if kind=='record':fields['alden_source_version']=node['source_version']
         content='---\n'+'\n'.join(k+': '+json.dumps(v,ensure_ascii=False) for k,v in fields.items())
         return (slug,node['id'],kind,encoded(node).decode(),
-                content+'\n---\nAlden source graph metadata; not original body or claim validity.\n')
+                content+'\n---\n'+_PAGE_BODY+'\n')
 
     @classmethod
     def prepare(cls,generation,*,check=lambda:None,max_index_records=4_000_000,max_index_bytes=2*1024**3,policy=POLICY,previous=None):
@@ -197,6 +210,22 @@ class FullProjection:
                 db.execute('UPDATE pages SET revision=? WHERE slug=?',(revision,page['slug']))
             db.commit()
 
+    def verify_page(self,page,result):
+        """Check the publisher's canonical page without rewriting source data."""
+        self.check();node=_json(page['payload'])
+        expected={'alden_policy':self.policy,'alden_node_id':node['id'],
+            'alden_source_target':node['source_target'],'alden_record_sha256':_digest(node)}
+        if self.policy==POLICY:expected['alden_snapshot']=self.fingerprint
+        if page['kind']=='record':expected['alden_source_version']=node['source_version']
+        if (not isinstance(result,dict) or result.get('slug')!=page['slug'] or result.get('source_id')!='default'
+                or result.get('title')!=_gbrain_title(node['label']) or result.get('revision')!=page['revision']
+                or result.get('type')!='source' or result.get('compiled_truth')!=_PAGE_BODY
+                or result.get('timeline')!='' or result.get('tags')!=[]
+                or not isinstance(page['revision'],str) or not isinstance(result.get('frontmatter'),dict)
+                or any(result['frontmatter'].get(k)!=v for k,v in expected.items())):
+            raise GbrainError('gbrain_cache_readback_invalid')
+        self.check();return node
+
     def paged_readback_supported(self):
         """Never accept the publisher's 2,000-character context projection."""
         with closing(_db(self.path)) as db:
@@ -210,6 +239,13 @@ class FullProjection:
 
     def verify_outgoing(self,slug,rows):
         """Stream every engine link against the complete immutable index."""
+        return self._verify_outgoing(slug,rows,bounded_context=False)
+
+    def verify_outgoing_provenance(self,slug,rows):
+        """Only provenance: long contexts still need a full traversal proof."""
+        return self._verify_outgoing(slug,rows,bounded_context=True)
+
+    def _verify_outgoing(self,slug,rows,*,bounded_context):
         token=_file_token(self.path);seen=set()
         with closing(_db(self.path)) as db:
             expected=db.execute('SELECT count(*) FROM links WHERE a=?',(slug,)).fetchone()[0]
@@ -219,11 +255,15 @@ class FullProjection:
                         or row.get('from_source_id')!='default' or row.get('to_source_id')!='default'
                         or any(not isinstance(row.get(k),str) for k in ('to_slug','link_type','context'))
                         or row.get('link_source')!='alden-full-source'
-                        or any(row.get(k) is not None for k in ('origin_slug','origin_source_id','origin_field'))):
+                        or any(k not in row or row[k] is not None for k in ('origin_slug','origin_source_id','origin_field'))):
                     raise GbrainError('gbrain_full_result_unbound')
                 key=(slug,row['to_slug'],row['link_type'])
                 bound=db.execute('SELECT context FROM links WHERE a=? AND b=? AND verb=?',key).fetchone()
-                if key in seen or bound is None or row['context']!=bound[0]:
+                context=bound[0] if bound is not None else None
+                if bounded_context and context is not None and len(context)>LINK_CONTEXT_LIMIT:
+                    # Pinned engine-sql/links.ts: SQL char_length/left + ellipsis.
+                    context=context[:LINK_CONTEXT_LIMIT-1]+'…'
+                if key in seen or bound is None or row['context']!=context:
                     raise GbrainError('gbrain_full_result_unbound')
                 seen.add(key)
             if len(seen)!=expected:raise GbrainError('gbrain_full_result_incomplete')
@@ -291,7 +331,7 @@ class FullProjection:
                 if any(not isinstance(v,str) for v in key) or key not in expected or key in actual:
                     raise GbrainError('gbrain_full_result_unbound')
                 layer,bound=expected[key]
-                if type(row.get('depth')) is not int or row['depth']!=layer or _json(row.get('context',''))!=_json(bound['context']):
+                if type(row.get('depth')) is not int or row['depth']!=layer or row.get('context')!=bound['context']:
                     raise GbrainError('gbrain_full_result_unbound')
                 actual[key]=layer;wanted.update(key[:2]);edges.append({**_json(bound['payload']),'gbrain_depth':layer})
             if set(actual)!=set(expected):raise GbrainError('gbrain_full_result_incomplete')
@@ -306,7 +346,7 @@ class FullProjection:
 class GbrainImportClient(GbrainReadClient):
     """Only a generation writer uses this private full-access engine session."""
     WRITE_TOOLS=('put_pages','add_link','get_page','list_pages')
-    REQUIRED_TOOLS=frozenset(WRITE_TOOLS)|{'traverse_graph'}
+    REQUIRED_TOOLS=frozenset(WRITE_TOOLS)|{'traverse_graph','get_links'}
     def __enter__(self):
         self.check()
         env={k:os.environ[k] for k in ('PATH','LANG','LC_ALL','TZ','HOME','TMPDIR') if k in os.environ}
@@ -502,6 +542,7 @@ class FullGbrainCache(ManagedGbrainCache):
         counts=projection.counts();expected_pages=iter(projection.pages());enumerated=0;verified=0
         with closing(_db(projection.path)) as db:
             degrees=dict(db.execute('SELECT a,count(*) FROM links GROUP BY a'))
+            long_contexts={r[0] for r in db.execute('SELECT DISTINCT a FROM links WHERE length(context)>?',(LINK_CONTEXT_LIMIT,))}
         paged_pages=paged_links=0
         for offset in range(0,counts['pages']+101,100):
             listed=client.list(offset)
@@ -516,29 +557,26 @@ class FullGbrainCache(ManagedGbrainCache):
         if enumerated!=counts['pages'] or next(expected_pages,None) is not None:
             raise GbrainError('gbrain_full_page_enumeration_invalid')
         for page in projection.pages():
-            result=client.get(page['slug']);node=_json(page['payload'])
-            expected={'alden_policy':projection.policy,'alden_node_id':node['id'],
-                'alden_source_target':node['source_target'],'alden_record_sha256':_digest(node)}
-            if projection.policy==POLICY:expected['alden_snapshot']=projection.fingerprint
-            if page['kind']=='record':expected['alden_source_version']=node['source_version']
-            if (result.get('slug')!=page['slug'] or result.get('source_id')!='default'
-                    or result.get('title')!=node['label'] or result.get('revision')!=page['revision']
-                    or not isinstance(page['revision'],str) or not isinstance(result.get('frontmatter'),dict)
-                    or any(result['frontmatter'].get(k)!=v for k,v in expected.items())):
-                raise GbrainError('gbrain_cache_readback_invalid')
+            node=projection.verify_page(page,client.get(page['slug']))
             # Every page's outgoing set covers every stored link once.
             # A source origin with many incoming memberships need not fit
             # into one traverse_graph reply to prove complete import.
             degree=degrees.get(page['slug'],0)
-            if degree>=TRAVERSE_ROW_LIMIT:
-                paged_links+=projection.verify_outgoing(page['slug'],client.outgoing_links(page['slug'],max_rows=degree+1))
-                paged_pages+=1
+            rows=client.outgoing_links(page['slug'],max_rows=degree+1)
+            if page['slug'] in long_contexts:
+                # The list proves provenance with its exact publisher projection;
+                # the uncapped small traversal separately proves the full context.
+                projection.verify_outgoing_provenance(page['slug'],rows)
+                projection.bind(client.graph(page['slug'],depth=1,direction='out'),focus=node['id'],direction='out')
             else:
-                rows=client.graph(page['slug'],depth=1,direction='out')
-                projection.bind(rows,focus=node['id'],direction='out')
+                projection.verify_outgoing(page['slug'],rows)
+            if degree>=TRAVERSE_ROW_LIMIT:
+                paged_links+=degree
+                paged_pages+=1
             verified+=1
         if verified!=counts['pages']:raise GbrainError('gbrain_full_import_incomplete')
         return {**counts,'verified_queries':verified,'verified_direction':'out','enumerated_pages':enumerated,
+            'provenance_verified_pages':verified,
             **({'paged_outgoing_pages':paged_pages,'paged_outgoing_links':paged_links} if paged_pages else {})}
 
 

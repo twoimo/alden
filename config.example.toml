@@ -70,7 +70,7 @@
 # provider = "mlx-serve"
 
 [auto_reply]
-# Exact selectors used by `openkakao-cli auto-reply` when --chat is omitted.
+# Exact selectors used by `alden-cli auto-reply` when --chat is omitted.
 # CLI selectors replace this list. Repeat --chat or use escaped commas.
 # Managed multi-room service mode should declare the complete exact set here
 # and omit service-entry --chat flags, keeping room names out of child argv.

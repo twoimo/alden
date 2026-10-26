@@ -1,13 +1,19 @@
 [package]
-name = "openkakao-cli"
+name = "alden-cli"
 version = "1.8.6"
 edition = "2021"
 description = "KakaoTalk macOS auto-reply agent — local DB, Accessibility send, and menubar operations"
 license = "MIT"
 
 [[bin]]
-name = "openkakao-cli"
+name = "alden-cli"
 path = "src/main.rs"
+
+# Compatibility executable for existing scripts; the implementation is shared.
+[[bin]]
+name = "openkakao-cli"
+path = "src/legacy_main.rs"
+test = false
 
 [lib]
 name = "openkakao_cli"

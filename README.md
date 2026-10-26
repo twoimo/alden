@@ -716,8 +716,8 @@ reply_model = "ddalcu/Qwen3.8-27B-MLX-Serve-4bit"
 
 ```bash
 # Verify environment and discover chat rooms
-./target/release/openkakao-cli doctor
-./target/release/openkakao-cli local-chats
+./target/release/alden-cli doctor
+./target/release/alden-cli local-chats
 
 # Build and install the primary Tauri menu-bar UI
 sh scripts/build-alden-desktop.sh

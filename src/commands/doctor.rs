@@ -245,7 +245,7 @@ pub fn cmd_doctor(json: bool, test_loco: bool, config: &OpenKakaoConfig) -> Resu
                     name: "Saved credentials".into(),
                     status: CheckStatus::Warn,
                     detail: format!(
-                        "Not found. Run 'openkakao-cli login --save'. ({})",
+                        "Not found. Run 'alden-cli login --save'. ({})",
                         path.display()
                     ),
                 });
@@ -494,7 +494,7 @@ pub fn cmd_doctor(json: bool, test_loco: bool, config: &OpenKakaoConfig) -> Resu
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("openkakao-cli doctor (v{})", VERSION);
+        println!("alden-cli doctor (v{})", VERSION);
         println!();
         for c in &checks {
             let (icon, color_fn): (&str, fn(&str) -> String) = match c.status {
@@ -528,7 +528,7 @@ pub fn cmd_doctor(json: bool, test_loco: bool, config: &OpenKakaoConfig) -> Resu
             println!("  Tip: run with --loco to also test LOCO booking connectivity.");
         }
         println!(
-            "  Tip: run 'openkakao-cli auth-status --json' for the raw persisted recovery state."
+            "  Tip: run 'alden-cli auth-status --json' for the raw persisted recovery state."
         );
     }
 
@@ -871,7 +871,7 @@ pub fn cmd_doctor_self_check(json: bool, config: &OpenKakaoConfig) -> Result<()>
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
-        println!("openkakao-cli 자가 진단 (v{})", VERSION);
+        println!("alden-cli 자가 진단 (v{})", VERSION);
         println!();
         for item in &report.items {
             let icon = match item.status {

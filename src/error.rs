@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-/// Primary error type for openkakao-cli operations.
+/// Primary error type for alden-cli operations.
 #[derive(Error, Debug)]
 pub enum OpenKakaoError {
     #[error("LOCO command {command} failed (status={status})")]

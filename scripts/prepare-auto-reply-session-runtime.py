@@ -387,7 +387,7 @@ def _stage_stable_binary(
     except OSError as exc:
         raise PackagingError("cannot create the stable binary directory") from exc
     stable = stable_dir / "openkakao-cli"
-    source = runtime / "openkakao-cli"
+    source = runtime / "alden-cli"
     if not source.is_file():
         raise PackagingError("packaged CLI copy is missing before staging")
     stable_metadata = _stable_binary_metadata(stable)
@@ -441,7 +441,7 @@ def _copy_exclusive(source: Path, destination: Path, mode: int) -> dict[str, Any
             os.fsync(output_stream.fileno())
         os.chmod(destination, mode)
         _clear_quarantine(destination)
-        if destination.name == "openkakao-cli":
+        if destination.name in {"alden-cli", "openkakao-cli"}:
             _sign_binary(destination)
     finally:
         os.close(descriptor)
@@ -631,7 +631,8 @@ def stage_runtime(
     if not runtime_parent.is_relative_to(state_root):
         raise PackagingError("runtime parent must stay inside the private state root")
     sources: dict[str, tuple[Path, int]] = {
-        "openkakao-cli": (binary, 0o500),
+        "alden-cli": (binary, 0o500),
+        "openkakao-cli": (binary, 0o500),  # Existing digest-pinned runtime consumers.
         "config.toml": (config, 0o400),
     }
     for name in RUNTIME_SCRIPT_NAMES:
@@ -664,10 +665,10 @@ def stage_runtime(
         for name, (source, mode) in sources.items():
             destination = (
                 runtime / name
-                if name in {"openkakao-cli", "config.toml"}
+                if name in {"alden-cli", "openkakao-cli", "config.toml"}
                 else scripts_runtime / name
             )
-            if destination.parent != scripts_runtime and name not in {"openkakao-cli", "config.toml"}:
+            if destination.parent != scripts_runtime and name not in {"alden-cli", "openkakao-cli", "config.toml"}:
                 fresh_directory = not destination.parent.exists()
                 _private_directory(destination.parent, create=True)
                 if fresh_directory:

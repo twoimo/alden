@@ -91,13 +91,13 @@ fn repo_root_from_exe(exe: &Path) -> Result<PathBuf> {
         cursor = dir.parent();
     }
     bail!(
-        "could not find the openkakao-cli source checkout required for auto-reply-host bake/disable from {}",
+        "could not find the alden-cli source checkout required for auto-reply-host bake/disable from {}",
         exe.display()
     );
 }
 
 fn repo_root() -> Result<PathBuf> {
-    let exe = std::env::current_exe().context("resolve openkakao-cli path")?;
+    let exe = std::env::current_exe().context("resolve alden-cli path")?;
     repo_root_from_exe(&exe)
 }
 
@@ -632,7 +632,7 @@ pub fn cmd_auto_reply_host(opts: AutoReplyHostOptions) -> Result<()> {
             let python = configured_python(&config)?;
             let chats = configured_chats(&config, &opts.chats)?;
             let packager = script_path("prepare-auto-reply-session-runtime.py")?;
-            let bin = std::env::current_exe().context("resolve openkakao-cli path")?;
+            let bin = std::env::current_exe().context("resolve alden-cli path")?;
             let config_path = config::config_path()?;
             let mut args = vec![
                 packager.to_string_lossy().into_owned(),
@@ -701,7 +701,7 @@ mod tests {
             &root.join("scripts/uninstall-auto-reply-session-monitor.sh"),
             "#!/bin/sh\nexit 0\n",
         );
-        let exe = root.join("target/debug/openkakao-cli");
+        let exe = root.join("target/debug/alden-cli");
         write_file(&exe, "fixture\n");
         exe
     }
@@ -820,7 +820,7 @@ printf '%s' "$2" > "$capture"
     #[test]
     fn installed_prefix_without_source_checkout_fails_closed_for_bake_disable() {
         let temp = tempdir().unwrap();
-        let exe = temp.path().join("prefix/bin/openkakao-cli");
+        let exe = temp.path().join("prefix/bin/alden-cli");
         write_file(&exe, "fixture\n");
 
         let error = repo_root_from_exe(&exe).unwrap_err();
@@ -840,7 +840,7 @@ printf '%s' "$2" > "$capture"
             root.join("scripts/prepare-auto-reply-session-runtime.py"),
         )
         .unwrap();
-        let exe = root.join("target/debug/openkakao-cli");
+        let exe = root.join("target/debug/alden-cli");
         write_file(&exe, "fixture\n");
         assert!(repo_root_from_exe(&exe).is_err());
 

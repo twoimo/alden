@@ -221,13 +221,15 @@ class VersionEvaluationTests(unittest.TestCase):
             'import json,os,sys\nfrom pathlib import Path\n'
             'with Path(os.environ["CALLS"]).open("a") as f: f.write(json.dumps(sys.argv[1:])+"\\n")\n'
             'raise SystemExit(int(os.environ.get("EVAL_STATUS","0")))\n')
-        binary = repo/'target/release/openkakao-cli'; binary.parent.mkdir(parents=True)
+        binary = repo/'target/release/alden-cli'; binary.parent.mkdir(parents=True)
         app = desktop/'src-tauri/target/release/bundle/macos/Alden.app/Contents/MacOS/openkakao-alden-desktop'
         app.parent.mkdir(parents=True)
         for path in (binary, app): path.write_text('#!/bin/sh\nexit 0\n'); path.chmod(0o755)
-        bundled_cli = app.parent.parent/'Resources/bin/openkakao-cli'
+        bundled_cli = app.parent.parent/'Resources/bin/alden-cli'
         bundled_cli.parent.mkdir(parents=True)
         shutil.copyfile(binary, bundled_cli); bundled_cli.chmod(0o755)
+        legacy_cli = bundled_cli.with_name("openkakao-cli")
+        shutil.copyfile(binary, legacy_cli); legacy_cli.chmod(0o755)
         bin_dir = repo/'bin'; bin_dir.mkdir()
         for name in ('cargo','npm'):
             path = bin_dir/name; path.write_text('#!/bin/sh\nprintf "%s\\n" "$0" >> "$BUILD_CALLS"\n')

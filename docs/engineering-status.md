@@ -2,6 +2,10 @@
 
 This appendix preserves the repository's detailed implementation notes and point-in-time checks. A recorded check is historical evidence, not a claim about the current runtime.
 
+## 2026-10-26 CLI naming candidate
+
+The current source uses `alden-cli` as the canonical package, executable and internal invocation name. `openkakao-cli` remains an explicit compatibility executable/resource for existing callers and fixed runtime consumers. App, signing, TCC, LaunchAgent and data identities remain unchanged. This candidate has not been installed or launched; historical command names below retain their original observation dates.
+
 ## Actual encrypted snapshots and GraphRAG catch-up — 2026-09-30
 
 The installed 0.1.6 CLI completed eight bounded incremental sync commands across three enrolled rooms into a private mirror. A production-source inspection of an 835 MiB encrypted DB plus WAL passed SQLCipher 4.6.1 `quick_check`, read-only and query-only checks, then removed its private replica. Four naturally arriving events were imported in 0.535 s; the following call added zero duplicates. An independent private-copy readback found the same four event digests and context rows in the existing production mirror. Its sent_at-to-receipt age was 33.271–40.806 s (median 37.625 s, n=4); this is not SQLite insertion latency or an improvement comparison.

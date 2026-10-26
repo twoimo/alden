@@ -8,7 +8,7 @@ macOS 카카오톡에서 **지정한 채팅방만** 읽고, 내 말투에 가깝
 내 카카오톡 대화, 로컬 DB, 벡터 DB, 로그인 정보는 **절대 올리지 않습니다.**
 그런 데이터는 모두 **내 Mac 안의 원래 위치**에 그대로 둡니다.
 
-> 실행 파일 이름은 기존과 같이 `openkakao-cli` 입니다.
+> 표준 실행 파일 이름은 `alden-cli`입니다. `openkakao-cli`는 기존 호출자용 호환 실행 파일로 유지합니다.
 > 프로젝트 이름은 **Alden(올든)**, GitHub 저장소 이름은 `alden` 입니다.
 > 메뉴바 앱 이름은 **Alden(올든)** 입니다.
 
@@ -29,7 +29,7 @@ macOS 카카오톡에서 **지정한 채팅방만** 읽고, 내 말투에 가깝
 카카오톡 맥 앱
     │  (대화가 로컬 DB에 저장됨)
     ▼ 임시 복사 후 mode=ro + query_only
-openkakao-cli
+alden-cli
     ├─► 벡터 기억 (context.sqlite3, 내 Mac에만 생성)
     └─► 지식 그래프 (knowledge-graph.sqlite3, GraphRAG k-hop 2/3/10)
     │
@@ -48,7 +48,7 @@ openkakao-cli
 |------|-------------|
 | macOS | 카카오톡 맥 앱과 손쉬운 사용 API를 씁니다 |
 | 카카오톡 맥 앱에 로그인 | 대화가 로컬 DB에 쌓여야 합니다 |
-| Rust (`cargo`) | `openkakao-cli` 를 빌드합니다 |
+| Rust (`cargo`) | `alden-cli` 를 빌드합니다 |
 | Python 3.11 ~ 3.13 | 자동 답장 스크립트를 실행합니다 |
 | 전체 디스크 접근 권한 | 카카오톡 컨테이너 안의 DB를 읽습니다 |
 | 손쉬운 사용(Accessibility) | 카카오톡 창에 답을 입력합니다 |
@@ -105,9 +105,9 @@ openkakao-cli
 4. 아래 명령으로 방이 보이는지 확인합니다.
 
 ```bash
-./target/release/openkakao-cli doctor
-./target/release/openkakao-cli local-chats
-./target/release/openkakao-cli local-read <채팅방ID>
+./target/release/alden-cli doctor
+./target/release/alden-cli local-chats
+./target/release/alden-cli local-read <채팅방ID>
 ```
 
 `local-chats`에 원하는 방이 안 보이면, 카카오톡에서 그 방을 연 다음 다시 시도하세요.
@@ -170,7 +170,7 @@ openkakao-cli
 ```bash
 cd alden
 cargo build --release
-./target/release/openkakao-cli --help
+./target/release/alden-cli --help
 ```
 
 ### 2. 권한
@@ -185,8 +185,8 @@ macOS **시스템 설정 → 개인정보 보호 및 보안**에서:
 ### 3. 로컬 DB가 보이는지 확인
 
 ```bash
-./target/release/openkakao-cli doctor
-./target/release/openkakao-cli local-chats
+./target/release/alden-cli doctor
+./target/release/alden-cli local-chats
 ```
 
 방이 보이면 `chat_id`를 적어 둡니다. 설정 파일에서 이 번호로 방을 지정합니다.
@@ -321,7 +321,7 @@ Tauri 메뉴바 창은 골드 홀로그램 코어만 두며 인터랙티브 요�
 ```bash
 cargo test
 cargo build --release
-./target/release/openkakao-cli doctor --json
+./target/release/alden-cli doctor --json
 ```
 
 운영 메모는 `docs/auto-reply-launchd-supervision.md`를 참고하세요.

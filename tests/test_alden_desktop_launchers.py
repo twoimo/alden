@@ -2113,7 +2113,7 @@ printf '4242\n'
 
     def test_rebake_restart_rejects_stale_release_binary_after_source_change(self) -> None:
         source = read_repo_file("scripts/rebake-and-restart.sh")
-        self.assertIn("cargo build --release --bin openkakao-cli", source)
+        self.assertIn("cargo build --release --bin alden-cli --bin openkakao-cli", source)
         self.assertIn(
             'echo "source is newer than release binary: $source_file"',
             source,
@@ -2124,7 +2124,7 @@ printf '4242\n'
             root = Path(raw_tmp)
             fake_repo = root / "repo"
             (fake_repo / "src").mkdir(parents=True)
-            binary = fake_repo / "target" / "release" / "openkakao-cli"
+            binary = fake_repo / "target" / "release" / "alden-cli"
             binary.parent.mkdir(parents=True)
             binary.write_text("binary", encoding="utf-8")
             source_file = fake_repo / "src" / "main.rs"
@@ -2135,7 +2135,7 @@ printf '4242\n'
             result = subprocess.run(
                 ["sh", "-c", """
 source_file=src/main.rs
-BINARY="$PWD/target/release/openkakao-cli"
+BINARY="$PWD/target/release/alden-cli"
 if [ "$PWD/$source_file" -nt "$BINARY" ]; then
   echo "source is newer than release binary: $source_file"
   exit 1

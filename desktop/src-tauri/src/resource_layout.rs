@@ -13,7 +13,10 @@ pub const AX_UI_SCRIPT: &str = "scripts/auto_reply_ax_ui.py";
 pub const BROWSER_USE_SCRIPT: &str = "scripts/alden_browser_use.py";
 pub const METRICS_SCRIPT: &str = "scripts/auto_reply_metrics.py";
 pub const LOCAL_EMBEDDING_SCRIPT: &str = "scripts/alden_local_embedding_server.py";
-pub const CLI: &str = "bin/openkakao-cli";
+pub const CLI: &str = "bin/alden-cli";
+// A regular executable resource for existing callers, with the same validation.
+pub const LEGACY_CLI: &str = "bin/openkakao-cli";
+pub const CLI_FILES: &[&str] = &[CLI, LEGACY_CLI];
 pub const DATA_FILES: &[&str] = &[
     MENUBAR_SCRIPT,
     LOCAL_MLX_READINESS_SCRIPT,
@@ -206,7 +209,7 @@ impl ResourceLayout {
                     .unwrap_or_else(|| root.join(MENUBAR_SCRIPT)),
                 bin: overrides
                     .bin
-                    .unwrap_or_else(|| root.join("target/debug/openkakao-cli")),
+                    .unwrap_or_else(|| root.join("target/debug/alden-cli")),
                 root,
                 installed: false,
             }
@@ -221,6 +224,11 @@ impl ResourceLayout {
         validate_path(&self.root, Kind::Directory)?;
         for relative in DATA_FILES {
             validate_path(&self.root.join(relative), Kind::Data)?;
+        }
+        if self.installed {
+            for relative in CLI_FILES {
+                validate_path(&self.root.join(relative), Kind::Executable)?;
+            }
         }
         // Dev overrides remain inside the explicitly selected safe root.
         if !self.script.starts_with(&self.root) || !self.bin.starts_with(&self.root) {
@@ -263,11 +271,14 @@ mod tests {
             for relative in DATA_FILES {
                 self.file(&root.join(relative), false);
             }
+            if installed {
+                self.file(&root.join(LEGACY_CLI), true);
+            }
             self.file(
                 &root.join(if installed {
                     CLI
                 } else {
-                    "target/debug/openkakao-cli"
+                    "target/debug/alden-cli"
                 }),
                 true,
             );
@@ -317,7 +328,7 @@ mod tests {
         let (exe, root) = f.app();
         let checkout = f.0.join("checkout");
         f.payload(&checkout, false);
-        for relative in DATA_FILES.iter().copied().chain(std::iter::once(CLI)) {
+        for relative in DATA_FILES.iter().copied().chain(CLI_FILES.iter().copied()) {
             let path = root.join(relative);
             fs::remove_file(&path).unwrap();
             assert_eq!(
@@ -325,7 +336,7 @@ mod tests {
                     .unwrap_err(),
                 ResourceError::Missing
             );
-            f.file(&path, relative == CLI);
+            f.file(&path, CLI_FILES.contains(&relative));
         }
         fs::remove_dir_all(root).unwrap();
         assert!(ResourceLayout::discover(&exe, &checkout, true, DevOverrides::default()).is_err());
@@ -334,7 +345,7 @@ mod tests {
     #[test]
     fn symlinked_files_parents_roots_and_dangling_links_fail_closed() {
         let f = Fixture::new();
-        for target in [MENUBAR_SCRIPT, VOICE_SCRIPT, CLI, "scripts", ""] {
+        for target in [MENUBAR_SCRIPT, VOICE_SCRIPT, CLI, LEGACY_CLI, "scripts", ""] {
             let (exe, root) = f.app();
             let path = if target.is_empty() {
                 root.clone()
@@ -365,18 +376,18 @@ mod tests {
     fn rejects_wrong_types_and_missing_execution_or_read_permissions() {
         let f = Fixture::new();
         let (exe, root) = f.app();
-        for relative in [MENUBAR_SCRIPT, CLI] {
+        for relative in [MENUBAR_SCRIPT, CLI, LEGACY_CLI] {
             let path = root.join(relative);
             fs::remove_file(&path).unwrap();
             fs::create_dir(&path).unwrap();
             assert!(ResourceLayout::discover(&exe, &f.0, true, DevOverrides::default()).is_err());
             fs::remove_dir(&path).unwrap();
-            f.file(&path, relative == CLI);
+            f.file(&path, CLI_FILES.contains(&relative));
             fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
             assert!(ResourceLayout::discover(&exe, &f.0, true, DevOverrides::default()).is_err());
             fs::set_permissions(
                 &path,
-                fs::Permissions::from_mode(if relative == CLI { 0o755 } else { 0o644 }),
+                fs::Permissions::from_mode(if CLI_FILES.contains(&relative) { 0o755 } else { 0o644 }),
             )
             .unwrap();
         }
@@ -393,7 +404,7 @@ mod tests {
         let layout =
             ResourceLayout::discover(&exe, &checkout, true, DevOverrides::default()).unwrap();
         assert!(!layout.installed);
-        assert_eq!(layout.bin, checkout.join("target/debug/openkakao-cli"));
+        assert_eq!(layout.bin, checkout.join("target/debug/alden-cli"));
         assert_eq!(
             ResourceLayout::discover(&exe, &checkout, false, DevOverrides::default()).unwrap_err(),
             ResourceError::DevelopmentDisabled
@@ -430,8 +441,8 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let resources = config["bundle"]["resources"].as_object().unwrap();
-        assert_eq!(resources.len(), DATA_FILES.len() + 1);
-        for relative in DATA_FILES.iter().copied().chain(std::iter::once(CLI)) {
+        assert_eq!(resources.len(), DATA_FILES.len() + CLI_FILES.len());
+        for relative in DATA_FILES.iter().copied().chain(CLI_FILES.iter().copied()) {
             assert_eq!(resources[&format!("bundle-resources/{relative}")], relative);
         }
     }

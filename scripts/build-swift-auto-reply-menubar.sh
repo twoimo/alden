@@ -29,8 +29,10 @@ for pattern in '*.py' '*.pyc' '*.sh' '*.command' '*.json'; do
     [ -e "$f" ] && cp "$f" "$RES/scripts/"
   done
 done
-if [ -x "$ROOT/target/release/openkakao-cli" ]; then
-  cp "$ROOT/target/release/openkakao-cli" "$RES/bin/openkakao-cli"
+if [ -x "$ROOT/target/release/alden-cli" ]; then
+  for name in alden-cli openkakao-cli; do
+    cp "$ROOT/target/release/alden-cli" "$RES/bin/$name"
+  done
 fi
 # Toolchain: prefer the selected Xcode, but an unagreed Xcode license makes
 # `xcrun` fail and the menu extra then cannot be rebuilt at all. Fall back to
@@ -79,9 +81,12 @@ if [ -x /usr/bin/codesign ]; then
   # container, so it needs its own stable identity as well; cargo's linker
   # signature is ad-hoc and derives an identifier from the code hash, which
   # changed on every rebuild (2026-09-15).
-  if [ -f "$RES/bin/openkakao-cli" ]; then
-    /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --identifier com.openkakao.cli "$RES/bin/openkakao-cli"
-  fi
+  for name in alden-cli openkakao-cli; do
+    if [ -f "$RES/bin/$name" ] && [ ! -L "$RES/bin/$name" ]; then
+      /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --identifier com.openkakao.cli "$RES/bin/$name"
+      /usr/bin/codesign --verify --strict "$RES/bin/$name"
+    fi
+  done
   /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --identifier "$APP_IDENTIFIER" "$BIN"
   /usr/bin/codesign --force --sign "$SIGN_IDENTITY" --identifier "$APP_IDENTIFIER" "$APP"
 fi

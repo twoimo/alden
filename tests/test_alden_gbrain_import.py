@@ -33,7 +33,9 @@ class FakeEngine:
                 key,value=line.split(': ',1);fields[key]=json.loads(value)
             revision='opaque-'+hashlib.sha256(page['content'].encode()).hexdigest()
             self.pages[page['slug']]={'slug':page['slug'],'source_id':'default','title':fields['title'],
-                'frontmatter':fields,'revision':revision}
+                'frontmatter':fields,'revision':revision,'type':fields['type'],
+                'compiled_truth':page['content'].split('---\n',2)[2].strip(),'timeline':'','tags':[]}
+            self.pages[page['slug']]['title']=fields['title'].strip(full._TITLE_WHITESPACE)
             saved.append({'index':index,'slug':page['slug'],'state':'committed',
                 'embedding_state':'disabled','revision':revision})
         result={'state':'committed','terminal':True,'source_id':'default','pages':saved,
@@ -56,6 +58,14 @@ class FakeEngine:
         if self.fail=='extra-page':rows.append({'slug':'zzzz-injected','source_id':'default'})
         if self.fail=='missing-page':rows=rows[1:]
         return rows[offset:offset+100]
+    def outgoing_links(self,slug,*,max_rows):
+        self.on_graph()
+        for a,b,verb in sorted(self.outgoing.get(slug,())):
+            value=self.links[a,b,verb];context=value['context']
+            if len(context)>2000:context=context[:1999]+'…'
+            yield dict(value,from_slug=a,to_slug=b,link_type=verb,context=context,
+                from_source_id='default',to_source_id='default',link_source=value.get('link_source','alden-full-source'),
+                origin_slug=value.get('origin_slug'),origin_source_id=value.get('origin_source_id'),origin_field=value.get('origin_field'))
     def graph(self,slug,*,depth=1,direction='both'):
         frontier={slug};seen={slug};result={}
         for layer in range(1,depth+1):

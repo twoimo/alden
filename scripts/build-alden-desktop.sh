@@ -62,10 +62,10 @@ ALDEN_BUILD_INPUT_KEY=$(python3 "$ROOT/scripts/alden_build_receipt.py" key --roo
 
 (
   cd "$ROOT"
-  cargo build --release --bin openkakao-cli
+  cargo build --release --bin alden-cli --bin openkakao-cli
 )
 
-if [ ! -x "$ROOT/target/release/openkakao-cli" ]; then
+if [ ! -x "$ROOT/target/release/alden-cli" ]; then
   echo "build-alden-desktop: release CLI was not produced" >&2
   exit 2
 fi
@@ -97,10 +97,14 @@ if [ ! -x "$APP_BIN" ]; then
 fi
 
 # Fail closed if a concurrent debug check overwrote the stage during bundling.
-if ! /usr/bin/cmp -s "$ROOT/target/release/openkakao-cli" "$APP/Contents/Resources/bin/openkakao-cli"; then
-  echo "build-alden-desktop: bundled CLI does not match the release CLI" >&2
-  exit 2
-fi
+for name in alden-cli openkakao-cli; do
+  bundled_cli="$APP/Contents/Resources/bin/$name"
+  if [ -L "$bundled_cli" ] || [ ! -f "$bundled_cli" ] || [ ! -x "$bundled_cli" ] ||
+     ! /usr/bin/cmp -s "$ROOT/target/release/alden-cli" "$bundled_cli"; then
+    echo "build-alden-desktop: unsafe or mismatched bundled CLI: $name" >&2
+    exit 2
+  fi
+done
 
 python3 "$ROOT/scripts/alden_build_receipt.py" record --root "$ROOT" --expected-key "$ALDEN_BUILD_INPUT_KEY"
 printf '%s\n' "$APP"

@@ -185,7 +185,7 @@ class AldenWorkerAbortTests(unittest.TestCase):
             base = Path(temporary)
             root = self._abort_root(base)
             token = module.AbortController(root).token()
-            binary = base / "openkakao-cli"
+            binary = base / "alden-cli"
             binary.write_text("fake", encoding="utf-8")
             queue = base / "state" / "queue.json"
             queue.parent.mkdir(mode=0o700)
@@ -263,7 +263,7 @@ class AldenWorkerAbortTests(unittest.TestCase):
             token = controller.token()
             controller.abort("race_test")
             controller.resume_after_human_action()
-            binary = base / "openkakao-cli"
+            binary = base / "alden-cli"
             binary.write_text("fake", encoding="utf-8")
             queue = base / "state" / "queue.json"
             queue.parent.mkdir(mode=0o700)
@@ -311,7 +311,7 @@ class AldenWorkerAbortTests(unittest.TestCase):
         module = self.worker
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
-            binary = base / "openkakao-cli"
+            binary = base / "alden-cli"
             binary.write_text("fake", encoding="utf-8")
             queue = base / "state" / "queue.json"
             queue.parent.mkdir(mode=0o700)
@@ -418,7 +418,7 @@ class AldenWorkerAbortTests(unittest.TestCase):
             base = Path(temporary)
             root = self._abort_root(base)
             token = module.AbortController(root).token()
-            binary = base / "openkakao-cli"
+            binary = base / "alden-cli"
             binary.write_text("fake", encoding="utf-8")
             queue = base / "state" / "queue.json"
             queue.parent.mkdir(mode=0o700)
@@ -490,7 +490,7 @@ class AldenWorkerAbortTests(unittest.TestCase):
             root = self._abort_root(base)
             controller = module.AbortController(root)
             token = controller.token()
-            binary = base / "openkakao-cli"
+            binary = base / "alden-cli"
             binary.write_text("fake", encoding="utf-8")
             queue = base / "state" / "queue.json"
             queue.parent.mkdir(mode=0o700)

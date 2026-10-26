@@ -54,11 +54,13 @@ class BuildReceiptTests(unittest.TestCase):
         self.app = self.root/'desktop/src-tauri/target/release/bundle/macos/Alden.app'
         self.binary = self.app/'Contents/MacOS/Alden'
         self.binary.parent.mkdir(parents=True); self.binary.write_bytes(b'validated binary')
-        self.cli = self.root/'target/release/openkakao-cli'
+        self.cli = self.root/'target/release/alden-cli'
         self.cli.parent.mkdir(parents=True); self.cli.write_bytes(b'validated cli'); self.cli.chmod(0o755)
-        self.bundled_cli = self.app/'Contents/Resources/bin/openkakao-cli'
+        self.bundled_cli = self.app/'Contents/Resources/bin/alden-cli'
         self.bundled_cli.parent.mkdir(parents=True)
         self.bundled_cli.write_bytes(self.cli.read_bytes()); self.bundled_cli.chmod(0o755)
+        self.legacy_cli = self.bundled_cli.with_name("openkakao-cli")
+        self.legacy_cli.write_bytes(self.cli.read_bytes()); self.legacy_cli.chmod(0o755)
         self.source = self.root/'scripts/runtime.py'
         self.source.parent.mkdir(); self.source.write_text('runtime = 1')
         self.npm = self.root/'desktop/node_modules'
@@ -85,13 +87,43 @@ class BuildReceiptTests(unittest.TestCase):
         self.assertTrue(build.verified(self.root, self.receipt))
         self.assertEqual(self.binary.stat().st_mtime_ns, before)
 
+    def test_legacy_resource_is_required_regular_executable_and_release_matching(self):
+        for mutation in ('missing', 'symlink', 'different', 'nonexecutable'):
+            with self.subTest(mutation=mutation):
+                if self.legacy_cli.exists() or self.legacy_cli.is_symlink():
+                    self.legacy_cli.unlink()
+                if mutation == 'symlink':
+                    self.legacy_cli.symlink_to(self.cli)
+                elif mutation != 'missing':
+                    self.legacy_cli.write_bytes(b'wrong' if mutation == 'different' else self.cli.read_bytes())
+                    self.legacy_cli.chmod(0o644 if mutation == 'nonexecutable' else 0o755)
+                try:
+                    accepted = build.verified(self.root, self.receipt)
+                except RuntimeError:
+                    accepted = False
+                self.assertFalse(accepted)
+
+    def test_stage_produces_two_independent_regular_executable_copies(self):
+        build.stage_release_cli(self.root)
+        parent = self.root/'desktop/src-tauri/bundle-resources/bin'
+        canonical, legacy = (parent/name for name in ('alden-cli', 'openkakao-cli'))
+        for path in (canonical, legacy):
+            self.assertFalse(path.is_symlink())
+            self.assertEqual(path.stat().st_nlink, 1)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(path.read_bytes(), self.cli.read_bytes())
+        self.assertNotEqual(canonical.stat().st_ino, legacy.stat().st_ino)
+        legacy.unlink(); legacy.symlink_to(self.cli)
+        with self.assertRaisesRegex(RuntimeError, 'symlink'):
+            build.stage_release_cli(self.root)
+
     def test_receipt_cannot_approve_debug_cli_in_release_bundle(self):
         self.bundled_cli.write_bytes(b'debug cli from concurrent Rust test staging')
         self.receipt['output_manifest'] = build.output_manifest(self.app)
         self.assertFalse(build.verified(self.root, self.receipt))
 
     def test_release_staging_replaces_debug_inode_without_truncating_hardlinks(self):
-        stage = self.root/'desktop/src-tauri/bundle-resources/bin/openkakao-cli'
+        stage = self.root/'desktop/src-tauri/bundle-resources/bin/alden-cli'
         stage.parent.mkdir(parents=True)
         saved = self.root/'preserved-debug-cli'; saved.write_bytes(b'debug cli')
         os.link(saved, stage)
@@ -101,7 +133,7 @@ class BuildReceiptTests(unittest.TestCase):
         self.assertEqual(saved.read_bytes(), b'debug cli')
 
     def test_release_staging_rejects_symlinked_destination_and_missing_release(self):
-        stage = self.root/'desktop/src-tauri/bundle-resources/bin/openkakao-cli'
+        stage = self.root/'desktop/src-tauri/bundle-resources/bin/alden-cli'
         stage.parent.mkdir(parents=True)
         stage.symlink_to(self.cli)
         with self.assertRaisesRegex(RuntimeError, 'symlink'):
@@ -195,13 +227,14 @@ class BuildDependencyTests(unittest.TestCase):
         npm.mkdir(parents=True)
         (npm / 'dependency.js').write_text('dependency = 1')
         self.targets = [
-            ('target/release', 'openkakao-cli', 'src/main.rs'),
+            ('target/release', 'alden-cli', 'src/main.rs'),
             ('desktop/src-tauri/target/release', 'openkakao-alden-desktop',
              'desktop/src-tauri/src/main.rs'),
+            ('target/release', 'openkakao-cli', 'src/legacy_main.rs'),
         ]
         for directory, name, source in self.targets:
             release = self.root / directory
-            (release / 'deps').mkdir(parents=True)
+            (release / 'deps').mkdir(parents=True, exist_ok=True)
             (release / name).write_bytes(b'current executable')
             source_path = self.write(self.root / source, 'fn main() {}')
             self.dep_info(release / (name + '.d'), release / name, [source_path])

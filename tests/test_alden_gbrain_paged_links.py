@@ -153,7 +153,9 @@ class PagedEngine(fixture.FakeEngine):
         if self.fail=='paged-extra' and rows:rows[0]['to_slug']='sources/unexpected'
         if self.fail=='paged-context' and rows:rows[0]['context']='{}'
         if self.fail=='paged-provenance' and rows:rows[0]['link_source']='unexpected'
-        for row in rows:yield row
+        for row in rows:
+            if len(row['context'])>2000:row['context']=row['context'][:1999]+'…'
+            yield row
 
 
 class FullPagedVerificationTests(unittest.TestCase):
@@ -166,10 +168,11 @@ class FullPagedVerificationTests(unittest.TestCase):
         # the conservative UTF-16 budget, rather than only Python code points.
         self.f.store.ingest(self.f.target,[{'original_id':'a','label':'😀'*1024,'text':'PRIVATE_BODY_a'}])
 
-    def test_small_source_preserves_existing_traversal_and_format(self):
+    def test_small_source_preserves_format_and_verifies_every_link_provenance(self):
         result=self.f.cache.refresh(incremental=True)
         self.assertNotIn('paged_outgoing_pages',result)
-        self.assertEqual(self.f.engines[self.f.projection().root].paged_calls,[])
+        self.assertEqual(len(self.f.engines[self.f.projection().root].paged_calls),4)
+        self.assertEqual(result['provenance_verified_pages'],4)
         self.assertEqual(self.f.projection().policy,full.STABLE_POLICY)
 
     def test_paged_full_source_outgoing_sets_are_complete(self):
@@ -197,6 +200,44 @@ class FullPagedVerificationTests(unittest.TestCase):
             with self.subTest(failure=failure),patch.object(full,'TRAVERSE_ROW_LIMIT',2),self.assertRaises(GbrainError):
                 self.f.cache.refresh(incremental=True)
             self.assertIsNone(self.f.cache.active());self.assertEqual(list(self.f.cache.generations.iterdir()),[])
+
+    def test_small_degree_also_requires_importer_provenance(self):
+        self.f.failure='paged-provenance'
+        with self.assertRaisesRegex(GbrainError,'result_unbound'):
+            self.f.cache.refresh(incremental=True)
+        self.assertIsNone(self.f.cache.active());self.assertEqual(list(self.f.cache.generations.iterdir()),[])
+
+    def test_wrong_body_type_timeline_or_tags_never_publish(self):
+        original=PagedEngine.get
+        for field,value in (('compiled_truth',None),('compiled_truth','Injected content'),
+                            ('type','person'),('timeline','Invented event'),('tags',['unbound'])):
+            def changed(engine,slug,key=field,bad=value):
+                page=original(engine,slug);page[key]=bad;return page
+            with self.subTest(field=field,value=value),patch.object(PagedEngine,'get',changed),self.assertRaisesRegex(GbrainError,'readback_invalid'):
+                self.f.cache.refresh(incremental=True)
+            self.assertIsNone(self.f.cache.active());self.assertEqual(list(self.f.cache.generations.iterdir()),[])
+
+    def test_long_small_context_requires_full_traversal_and_bounded_provenance(self):
+        self.f.store.register(platform='graph',original_id='a',kind='source',label='Publisher',projects=['one','two'])
+        self.f.store.ingest(self.f.target,[{'original_id':'a','label':'x'*1024,'text':'PRIVATE_BODY_a'}])
+        runtime=self.f.base/'runtime'
+        self.f.cache=full.FullGbrainCache.create(self.f.base/'multi-project-cache',collection_root=self.f.root,
+            projects=['one','two'],runtime_root=runtime,runtime_home=runtime/'home',runtime_receipt=runtime/'receipt.json')
+        self.enterContext(patch.object(self.f.cache,'_command',side_effect=self.f.command))
+        result=self.f.cache.refresh(incremental=True)
+        self.assertEqual(result['provenance_verified_pages'],4)
+        self.assertGreater(max(len(row['context']) for row in self.f.projection().links()),2000)
+        self.assertNotIn('paged_outgoing_pages',result)
+        original=PagedEngine.graph
+        def clipped(engine,*args,**kwargs):
+            rows=original(engine,*args,**kwargs)
+            for row in rows:
+                if len(row['context'])>2000:row['context']=row['context'][:1999]+'…'
+            return rows
+        self.f.store.ingest(self.f.target,[{'original_id':'a','label':'y'*1024,'text':'PRIVATE_BODY_a'}])
+        with patch.object(PagedEngine,'graph',clipped),self.assertRaisesRegex(GbrainError,'result_unbound'):
+            self.f.cache.refresh(incremental=True,rebuild=True)
+        self.assertIsNone(self.f.cache.active());self.assertEqual(list(self.f.cache.generations.iterdir()),[])
 
     def test_large_context_budget_fails_before_engine_creation(self):
         self.long_reference_context()

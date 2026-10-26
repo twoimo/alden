@@ -783,9 +783,8 @@ def _resolve_openkakao_bin(bin_path: Path | None = None) -> Path | None:
         index = argv.index("--bin")
         if index + 1 < len(argv):
             candidates.append(Path(argv[index + 1]))
-    candidates.append(
-        Path(__file__).resolve().parents[1] / "target" / "release" / "openkakao-cli"
-    )
+    for name in ("alden-cli", "openkakao-cli"):
+        candidates.append(Path(__file__).resolve().parents[1] / "target" / "release" / name)
     seen: set[str] = set()
     for candidate in candidates:
         marker = str(candidate)

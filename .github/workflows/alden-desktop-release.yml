@@ -178,15 +178,17 @@ jobs:
           set -euo pipefail
           rustup target add "$TARGET"
           shasum -a 256 -c scripts/menubar-bytecode.sha256
-          cargo build --release --locked --target "$TARGET" --bin openkakao-cli
-          test "$(lipo -archs target/$TARGET/release/openkakao-cli)" = "arm64"
+          cargo build --release --locked --target "$TARGET" --bin alden-cli --bin openkakao-cli
+          test "$(lipo -archs target/$TARGET/release/alden-cli)" = "arm64"
 
           # desktop/src-tauri/build.rs intentionally stages the release CLI from
           # target/release. Give it the arm64 binary while preserving its exact
           # resource allowlist and fail-closed validation.
           mkdir -p target/release
-          cp "target/$TARGET/release/openkakao-cli" target/release/openkakao-cli
-          chmod 755 target/release/openkakao-cli
+          for name in alden-cli openkakao-cli; do
+            cp "target/$TARGET/release/$name" "target/release/$name"
+            chmod 755 "target/release/$name"
+          done
           /bin/sh scripts/build-alden-voice-audio.sh
 
           (
@@ -201,10 +203,14 @@ jobs:
           set -euo pipefail
           app="desktop/src-tauri/target/$TARGET/release/bundle/macos/Alden.app"
           main="$app/Contents/MacOS/openkakao-alden-desktop"
-          embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
+          embedded_cli="$app/Contents/Resources/bin/alden-cli"
+          legacy_cli="$app/Contents/Resources/bin/openkakao-cli"
           embedded_audio="$app/Contents/Resources/scripts/libalden_audio.dylib"
           test -x "$main"
           test -x "$embedded_cli"
+          test -x "$legacy_cli"
+          test ! -L "$legacy_cli"
+          cmp -s "$embedded_cli" "$legacy_cli"
           test "$(lipo -archs "$main")" = "arm64"
           test "$(lipo -archs "$embedded_cli")" = "arm64"
           test "$(lipo -archs "$embedded_audio")" = "arm64"
@@ -242,11 +248,15 @@ jobs:
         run: |
           set -euo pipefail
           app="desktop/src-tauri/target/$TARGET/release/bundle/macos/Alden.app"
-          embedded_cli="$app/Contents/Resources/bin/openkakao-cli"
+          embedded_cli="$app/Contents/Resources/bin/alden-cli"
+          legacy_cli="$app/Contents/Resources/bin/openkakao-cli"
           submission_zip="$RUNNER_TEMP/alden-notary-submission.zip"
           embedded_audio="$app/Contents/Resources/scripts/libalden_audio.dylib"
 
-          codesign --force --options runtime --timestamp --keychain "$KEYCHAIN_PATH" --sign "$ALDEN_APPLE_SIGNING_IDENTITY" "$embedded_cli"
+          for executable in "$embedded_cli" "$legacy_cli"; do
+            codesign --force --options runtime --timestamp --keychain "$KEYCHAIN_PATH" --sign "$ALDEN_APPLE_SIGNING_IDENTITY" --identifier com.openkakao.cli "$executable"
+            codesign --verify --strict --verbose=2 "$executable"
+          done
           codesign --force --options runtime --timestamp --keychain "$KEYCHAIN_PATH" --sign "$ALDEN_APPLE_SIGNING_IDENTITY" "$embedded_audio"
           codesign --force --options runtime --timestamp --keychain "$KEYCHAIN_PATH" --sign "$ALDEN_APPLE_SIGNING_IDENTITY" "$app"
           codesign --verify --strict --verbose=2 "$embedded_cli"
