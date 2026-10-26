@@ -68,6 +68,12 @@ def variants():
         'scope_result_invalidation_removed': [('src/knowledge/collection-graph.ts',
             "    this.pendingScopeStatus(); this.setText('knowledge-scope', '');",
             "    this.setText('knowledge-scope', '');")],
+        'current_success_erased': [('src/knowledge/collection-graph.ts',
+            '    this.queueAffinity();\n  }\n\n  private updateTerminal',
+            '    this.queueAffinity();\n'
+            '    this.graph.replaceGraph({ nodes: [], edges: [] }, this.state);\n'
+            '    renderKnowledgeMapStatus(this.root, { ok: true, nodes: [], edges: [] }, 0);\n'
+            '  }\n\n  private updateTerminal')],
     }
 
 

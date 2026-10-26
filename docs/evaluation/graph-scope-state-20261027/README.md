@@ -22,7 +22,10 @@ current replies must visibly apply, so rejecting every reply cannot pass.
 The generated oracle independently records scope, lifecycle epoch and request
 identity. It checks nonempty renderer writes and the visible graph, plus DOM
 result/loading states after event handlers return and after drained microtasks
-and timer callbacks. Renderer violations are recorded and asserted outside the
+and timer callbacks. Each processed current reply must leave its own expected
+visible node identity and ready/unavailable outcome. Aggregate replacement
+counts are coverage evidence, not proof of the final visible outcome.
+Renderer violations are recorded and asserted outside the
 product's catch boundary. Otherwise the product could catch an assertion and
 make a test appear to pass. Scope changes clear the previous graph and invalidate
 the result state synchronously. A previously confirmed graph may remain visible
@@ -45,7 +48,8 @@ Checks on those prefixes are still counted as observations, but the prefixes
 are not advertised as full traces. One positive run records 41183 observations,
 6179 issued requests, 2840 stale completions and 1047 current successful replies
 applied, covering both projects. There are at most three issued requests in a
-schedule. Counts describe this finite domain, not all possible interleavings.
+schedule; 2094 current reply outcomes are checked individually. Counts describe
+this finite domain, not all possible interleavings.
 
 The independent Astra-authored suite adds 21 fixed adversarial cases. It varies
 joined memory/scheduler readiness, same-scope stop/start with five result forms,
@@ -81,7 +85,7 @@ python3 -B scripts/verify_alden_graph_scope_state.py
 ```
 
 The stdlib runner uses existing Node/Vitest dependencies and new temporary
-source copies. It runs 22 positive checks, three actual-source broken variants,
+source copies. It runs 22 positive checks, four actual-source broken variants,
 then the 22 checks on a fresh unchanged copy after removing the broken copies.
 Its own child process groups, logs and temporary caches are bounded and owned.
 The shared dependency target and main source are read-only inputs.
@@ -91,6 +95,7 @@ The shared dependency target and main source are read-only inputs.
 | `scope_clear_removed` | Omit synchronous old-graph clearing in `changeScope()` | Previous-project nodes survive a later switch |
 | `obsolete_epoch_reply_allowed` | Remove controller return epoch guard and refresh apply epoch guard | Earlier A reply accepted after A → B → A/lifecycle boundaries |
 | `scope_result_invalidation_removed` | Omit `pendingScopeStatus()` in `changeScope()` | Prior terminal result remains after a new scope has no confirmed result |
+| `current_success_erased` | Apply the nonempty reply, then clear it and publish empty | The individual successful reply no longer has its expected visible graph/result |
 
 The epoch variant removes two independent fences. No claim is made that removing
 either fence alone defeats the other. Mutation anchors must match exactly once;
@@ -99,10 +104,19 @@ a compilation, setup or collection failure alone earns no mutation credit.
 The original broken patches, test JSON and failing action words remain in the
 local receipt. The runner validates the exact 22-case denominator and no skips.
 
-Require `status=pass_bounded_checks`, all five trial acceptances, unchanged main
+Require `status=pass_bounded_checks`, all six trial acceptances, unchanged main
 input hashes/dependency link and scratch cleanup. CI runs the two positive
 Vitest files with the normal desktop suite; the local single command adds the
-three bad variants and restored positive replay.
+four bad variants and restored positive replay.
+
+Native Astra review found that the initial generated oracle checked application
+counts without comparing each reply's final visible outcome. A temporary
+actual-source variant confirmed that the old generated test could pass after
+every successful graph was erased and marked empty. This finding concerns the
+test oracle, not a reproduced defect in the current product; the companion
+21-case suite was not claimed to accept that variant. The corrected generated
+oracle checks exact visible request identity and result state, and the fourth
+bad variant keeps that distinction executable.
 
 ## Limits and maintenance
 

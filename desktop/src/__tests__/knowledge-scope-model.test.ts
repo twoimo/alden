@@ -34,13 +34,13 @@ function schedules(): Action[][] {
 }
 
 type Request = { id: string; scope: string; epoch: number; delivered: boolean; processed: boolean; resolve: (value: Record<string, unknown>) => void };
-type Oracle = { scope: string; epoch: number; active: boolean; paused: boolean; disposed: boolean; result: 'ready' | 'unavailable' | null };
+type Oracle = { scope: string; epoch: number; active: boolean; paused: boolean; disposed: boolean; result: 'ready' | 'unavailable' | null; visibleId: string | null };
 
 it('checks bounded actual-code schedules against graph scope ownership', async () => {
   vi.useFakeTimers();
   const report = { kind: 'bounded generated schedules against actual code; not a theorem or refinement proof', bounds,
     words: 0, completedSchedules: 0, prunedCompletionsBeforeIssuance: 0, observations: 0, issued: 0,
-    currentCompletions: 0, currentSuccessfulCompletions: 0, staleCompletions: 0, acceptedGraphs: 0, maxIssuedPerSchedule: 0, acceptedProjects: [] as string[],
+    currentCompletions: 0, currentSuccessfulCompletions: 0, checkedReplyOutcomes: 0, staleCompletions: 0, acceptedGraphs: 0, maxIssuedPerSchedule: 0, acceptedProjects: [] as string[],
     status: 'running', failureTrace: [] as Action[], failures: [] as string[] };
   const projects = new Set<string>();
   const all = schedules(); report.words = all.length;
@@ -49,7 +49,7 @@ it('checks bounded actual-code schedules against graph scope ownership', async (
     for (const trace of all) {
       currentTrace = trace; vi.clearAllTimers(); vi.setSystemTime(0);
       document.body.innerHTML = settingsMarkup();
-      const oracle: Oracle = { scope: 'A', epoch: 0, active: true, paused: false, disposed: false, result: null };
+      const oracle: Oracle = { scope: 'A', epoch: 0, active: true, paused: false, disposed: false, result: null, visibleId: null };
       const requests: Request[] = [], failures: string[] = [];
       let graph: KnowledgeGraph = { nodes: [], edges: [] };
       const drilldown = new KnowledgeDrilldown(graph);
@@ -93,6 +93,8 @@ it('checks bounded actual-code schedules against graph scope ownership', async (
         for (const node of port.currentView.nodes) {
           if (requests.find(item => item.id === node.id)?.scope !== oracle.scope) failures.push('scope ownership violated by visible node');
         }
+        expect(port.currentView.nodes.map(node => node.id), 'scope ownership violated by the final visible graph')
+          .toEqual(oracle.visibleId ? [oracle.visibleId] : []);
         const state = document.getElementById('knowledge-map-status')!.dataset.state;
         const terminal = ['ready', 'empty', 'partial', 'stale', 'unavailable'].includes(state ?? '');
         if (terminal && oracle.result === null) failures.push('scope ownership violated by an unconfirmed result state');
@@ -108,8 +110,9 @@ it('checks bounded actual-code schedules against graph scope ownership', async (
         check();
         for (const action of trace) {
           let delivered: Request | undefined;
+          let deliveredCurrent = false;
           if (action === 'switch') {
-            oracle.scope = oracle.scope === 'A' ? 'B' : 'A'; oracle.epoch++; oracle.result = null; select();
+            oracle.scope = oracle.scope === 'A' ? 'B' : 'A'; oracle.epoch++; oracle.result = null; oracle.visibleId = null; select();
           } else if (action === 'pause') {
             oracle.paused = !oracle.paused; oracle.epoch++; document.getElementById('knowledge-live-toggle')!.click();
           } else if (action === 'hide') {
@@ -122,16 +125,25 @@ it('checks bounded actual-code schedules against graph scope ownership', async (
             delivered = requests.find(item => !item.delivered);
             if (!delivered) { report.prunedCompletionsBeforeIssuance++; complete = false; break; }
             delivered.delivered = true;
-            const current = delivered.epoch === oracle.epoch && delivered.scope === oracle.scope
+            deliveredCurrent = delivered.epoch === oracle.epoch && delivered.scope === oracle.scope
               && oracle.active && !oracle.paused && !oracle.disposed;
-            if (current) { report.currentCompletions++; if (action === 'ok') report.currentSuccessfulCompletions++; oracle.result = action === 'ok' ? 'ready' : 'unavailable'; }
+            if (deliveredCurrent) { report.currentCompletions++; if (action === 'ok') report.currentSuccessfulCompletions++; }
             else report.staleCompletions++;
             delivered.resolve(action === 'error' ? { ok: false } : { ok: true,
               nodes: [{ id: delivered.id, label: delivered.id, source_version: 'v-' + delivered.id, source_target: 'target-' + delivered.scope }], edges: [] });
           }
           check(); // Event-handler return, before scheduled reads/microtasks.
           await pump(action === 'tick' ? bounds.tickMs : 0);
-          if (delivered) delivered.processed = true;
+          if (delivered) {
+            delivered.processed = true;
+            if (deliveredCurrent) {
+              oracle.result = action === 'ok' ? 'ready' : 'unavailable';
+              if (action === 'ok') oracle.visibleId = delivered.id;
+              report.checkedReplyOutcomes++;
+              expect(document.getElementById('knowledge-map-status')!.dataset.state,
+                'scope ownership violated by the current reply result').toBe(oracle.result);
+            }
+          }
           check();
         }
         if (complete) report.completedSchedules++;
@@ -142,6 +154,7 @@ it('checks bounded actual-code schedules against graph scope ownership', async (
     expect(report.currentCompletions).toBeGreaterThan(0);
     expect(report.staleCompletions).toBeGreaterThan(0);
     expect(report.acceptedGraphs, 'non-vacuity: current successful replies must be visibly applied').toBe(report.currentSuccessfulCompletions);
+    expect(report.checkedReplyOutcomes).toBe(report.currentCompletions);
     expect([...projects].sort()).toEqual(['A', 'B']);
     report.status = 'pass';
   } catch (error) {

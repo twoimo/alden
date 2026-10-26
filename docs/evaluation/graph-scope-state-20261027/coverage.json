@@ -304,6 +304,7 @@
     "issued": 6179,
     "currentCompletions": 2094,
     "currentSuccessfulCompletions": 1047,
+    "checkedReplyOutcomes": 2094,
     "staleCompletions": 2840,
     "acceptedGraphs": 1047,
     "maxIssuedPerSchedule": 3,
@@ -341,7 +342,14 @@
       "controller read epoch guard",
       "refresh apply epoch guard"
     ],
-    "scope_result_invalidation_removed": "changeScope pending result invalidation"
+    "scope_result_invalidation_removed": "changeScope pending result invalidation",
+    "current_success_erased": "normal nonempty success followed by graph clearing and empty state; require per-reply final identity and result"
   },
-  "maintenance": "Review source writers and await splits after covered changes, update this ledger and statechart, require positive/broken/restored replays; never weaken the promise to pass."
+  "maintenance": "Review source writers and await splits after covered changes, update this ledger and statechart, require positive/broken/restored replays; never weaken the promise to pass.",
+  "native_review_correction": {
+    "finding": "P2 aggregate replacement counts do not establish final per-reply graph/result",
+    "old_generated_oracle_false_pass": "reproduced with an actual-source success-erasure variant; companion suite not claimed to pass",
+    "correction": "check exact visible identity at each observation and result after every current reply; fourth source mutant rejected",
+    "production_bug_claimed": false
+  }
 }

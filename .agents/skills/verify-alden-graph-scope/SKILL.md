@@ -37,10 +37,13 @@ prefixes request a completion before any pending read exists and are counted
 separately. The independent cases cover sibling awaits, revision probes, search,
 detail, affinity, navigation, terminal history and selected time boundaries.
 
-Require current code to pass all 22 checks, three deliberately broken variants
+Require current code to pass all 22 checks, four deliberately broken variants
 to fail with the intended scope-oracle message, and a fresh positive replay
 after broken-copy removal. The epoch variant removes both independent reply
-fences. Compile/setup errors alone do not count as a rejected bad variant.
+fences. The fourth variant erases a current successful graph after applying it;
+the oracle must check each reply's final visible identity and result state,
+not merely count replacement calls. Compile/setup errors alone do not count as
+a rejected bad variant.
 Require unchanged main source bytes and dependency symlink and removed scratch
 copies in `verification.json`. Inspect the JSON fields and failure traces, not
 only the process exit code.
