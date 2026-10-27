@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KnowledgeTerminal, terminalMarkup, observationMarkup } from '../knowledge/terminal';
 import { parseKnowledgeGraph } from '../knowledge/graph-model';
 import type { fetchSettingsAction } from '../runtime';
+import { trendWindow } from '../knowledge/terminal-trend';
 
 let terminal: KnowledgeTerminal;
 const event = (sequence: number, label = '원문 자료') => ({ sequence, document_id: 'a', document_label: label, stage: 'stored', at: 1792450800, details: { change: 'added' } });
@@ -155,5 +156,120 @@ describe('knowledge terminal lifecycle and evidence', () => {
       expect(host.textContent).toContain('대화 기억에는 수집 처리 이력이 없습니다.');
       expect(host.querySelectorAll('.terminal-row')).toHaveLength(0);
     }
+  });
+});
+
+// ST03: graph timestamps do not attest intake/change events.
+describe('f(x) authoritative history contract', () => {
+  it('never fabricates an intake graph from the displayed node timestamp', () => {
+    setup(vi.fn());
+    terminal.update(parseKnowledgeGraph({ nodes: [{ id: 'a', label: 'Visible slice', updated_at: Date.now() / 1000 }], edges: [] }), null);
+    expect(document.querySelector('#terminal-trend .terminal-bars')).toBeNull();
+    expect(document.getElementById('terminal-trend')!.textContent).toContain('미집계');
+  });
+});
+
+function aggregate(count: number, range = trendWindow({})!, stream = 's1', extra: Record<string, unknown> = {}) {
+  const days = [];
+  for (let at = Math.floor(range.since / 86400) * 86400; at < range.until; at += 86400) {
+    days.push({ day: new Date(at * 1000).toISOString().slice(0, 10), added: days.length ? 0 : count, revised: 0, removed: 0 });
+  }
+  return { ok: true, stream_id: stream, cursor: 1000, snapshot_checkpoint: { stream_id: stream, cursor: 1000 }, items: [event(count + 1)], trend: {
+    schema: 1, basis: 'stored_receipt_utc', window: range, stream_id: stream, cursor: 1000,
+    scan: 'complete', coverage: 'retained_only', source_coverage: 'unknown', backfill_live: 'unknown',
+    relations: null, unclassified: 0, observed_at: Date.now() / 1000, days,
+  }, ...extra };
+}
+const trendText = () => document.getElementById('terminal-trend')!.textContent!;
+describe('f(x) scope, follow and lifecycle', () => {
+  it('renders full receipt-window counts independently of 80-row tail and visible graph updates', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>(async () => aggregate(101));
+    setup(load); await terminal.refreshHistory({ projects: ['one'], since: trendWindow({})!.since }, true);
+    expect(trendText()).toContain('저장 영수증 101건');
+    expect(document.querySelectorAll('#terminal-trend .terminal-bars > span')).toHaveLength(14);
+    expect(load.mock.calls).toHaveLength(1);
+    const query = JSON.parse(load.mock.calls[0][1]!.query!);
+    expect(query.limit).toBe(80); expect(query.projects).toEqual(['one']); expect(query.trend).toEqual(trendWindow({}));
+    terminal.update(parseKnowledgeGraph({ nodes: [], edges: [] }), null);
+    expect(trendText()).toContain('저장 영수증 101건');
+    expect(trendText()).toContain('보존된 이력만'); expect(trendText()).toContain('과거 일괄 수집/실시간 구분 미지원');
+    expect(trendText()).toContain('확인 시각 이후 미집계');
+  });
+  it('shows missing/empty history as unaggregated without a fabricated zero chart', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(aggregate(0)).mockResolvedValueOnce({ ok: true, items: [] });
+    setup(load); await terminal.refreshHistory({}, true);
+    expect(trendText()).toContain('실제 유입·변경량 미집계');
+    expect(document.querySelector('#terminal-trend .terminal-bars')).toBeNull();
+    await terminal.refreshHistory({}, true);
+    expect(trendText()).toContain('미집계'); expect(trendText()).not.toContain('저장 영수증 0건');
+  });
+  it.each(['reject', 'denied', 'malformed', 'partial'])('clears previous and pending totals on %s', async outcome => {
+    let next = aggregate(7);
+    const load = vi.fn<typeof fetchSettingsAction>(async () => next);
+    setup(load); await terminal.refreshHistory({}, true);
+    document.getElementById('terminal-follow')!.click(); next = aggregate(9); await terminal.refreshHistory({}, true);
+    if (outcome === 'reject') load.mockRejectedValueOnce(new Error('offline'));
+    else if (outcome === 'denied') load.mockResolvedValueOnce({ ok: false });
+    else if (outcome === 'malformed') load.mockResolvedValueOnce({ ...next, trend: { ...next.trend, days: [] } });
+    else load.mockResolvedValueOnce({ ...next, trend: { ...next.trend, scan: 'partial' } });
+    await terminal.refreshHistory({}, true); document.getElementById('terminal-follow')!.click();
+    expect(trendText()).toContain('미집계'); expect(trendText()).not.toMatch(/저장 영수증 (7|9)건/);
+  });
+  it('preserves follow freeze, replaces snapshots on reconnect, and clears reset totals', async () => {
+    let next = aggregate(7);
+    const load = vi.fn<typeof fetchSettingsAction>(async () => next);
+    setup(load); await terminal.refreshHistory({}, true);
+    document.getElementById('terminal-follow')!.click(); next = aggregate(9); await terminal.refreshHistory({}, true);
+    expect(trendText()).toContain('추적 중지'); expect(trendText()).toContain('저장 영수증 7건');
+    document.getElementById('terminal-follow')!.click(); expect(trendText()).toContain('저장 영수증 9건');
+    await terminal.refreshHistory({}, true); expect(trendText()).toContain('저장 영수증 9건');
+    document.getElementById('terminal-follow')!.click(); next = aggregate(2, trendWindow({})!, 's2', { reset: true });
+    await terminal.refreshHistory({}, true); expect(trendText()).toContain('저장 영수증 2건');
+    expect(trendText()).not.toContain('저장 영수증 9건');
+    terminal.reset(); expect(trendText()).toContain('미집계');
+  });
+  it('dispatches a new scope while old work is unresolved and rejects its late reply', async () => {
+    let old!: (value: Record<string, unknown>) => void;
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(aggregate(7))
+      .mockImplementationOnce(() => new Promise(resolve => { old = resolve; })).mockResolvedValueOnce(aggregate(2));
+    setup(load); await terminal.refreshHistory({ projects: ['one'] }, true);
+    const pending = terminal.refreshHistory({ projects: ['one'] }, true);
+    await terminal.refreshHistory({ projects: ['two'] }, true);
+    expect(trendText()).toContain('저장 영수증 2건'); expect(load).toHaveBeenCalledTimes(3);
+    old(aggregate(99)); await pending;
+    expect(trendText()).toContain('저장 영수증 2건'); expect(trendText()).not.toContain('99건');
+  });
+  it('deduplicates same-scope requests and fences paused and disposed responses', async () => {
+    let finish!: (value: Record<string, unknown>) => void;
+    const load = vi.fn<typeof fetchSettingsAction>().mockResolvedValueOnce(aggregate(7))
+      .mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+    setup(load); await terminal.refreshHistory({}, true);
+    const pending = terminal.refreshHistory({}, true); await terminal.refreshHistory({}, true);
+    expect(load).toHaveBeenCalledTimes(2);
+    terminal.visible(false); expect(trendText()).toContain('갱신 중지'); finish(aggregate(9)); await pending;
+    expect(trendText()).toContain('저장 영수증 7건');
+    terminal.visible(true); const last = terminal.refreshHistory({}, true); terminal.dispose();
+    finish(aggregate(99)); await last; expect(trendText()).not.toContain('99건');
+  });
+  it('clears aggregate scope for conversation memory and unsupported graph-only filters', async () => {
+    const load = vi.fn<typeof fetchSettingsAction>(async () => aggregate(7));
+    setup(load); await terminal.refreshHistory({}, true);
+    await terminal.refreshHistory({}, false); expect(trendText()).toContain('미연결');
+    await terminal.refreshHistory({ node_type: 'topic' }, true); expect(trendText()).toContain('미집계');
+    expect(JSON.parse(load.mock.calls.at(-1)![1]!.query!)).not.toHaveProperty('trend');
+    await terminal.refreshHistory({ relation: 'supports' }, true); expect(trendText()).not.toContain('7건');
+  });
+  it('refreshes the whole UTC window across midnight with no timer or subscription', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime('2026-10-22T23:59:59Z');
+      const load = vi.fn<typeof fetchSettingsAction>(async (_action, options) => aggregate(7, JSON.parse(options!.query!).trend));
+      setup(load); await terminal.refreshHistory({}, true);
+      const first = JSON.parse(load.mock.calls[0][1]!.query!).trend;
+      vi.setSystemTime('2026-10-23T00:00:00Z'); await terminal.refreshHistory({}, true);
+      const second = JSON.parse(load.mock.calls[1][1]!.query!).trend;
+      expect(second.since - first.since).toBe(86400); expect(second.until - first.until).toBe(86400);
+      expect(document.querySelectorAll('#terminal-trend .terminal-bars > span')).toHaveLength(14);
+    } finally { vi.useRealTimers(); }
   });
 });

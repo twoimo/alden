@@ -4,9 +4,7 @@ export interface TerminalLink { node: KnowledgeNode; edge: KnowledgeEdge; direct
 export interface TerminalSummary {
   nodes: KnowledgeNode[]; edges: KnowledgeEdge[]; recent: KnowledgeNode[]; links: TerminalLink[];
   sectors: Array<{ name: string; count: number }>;
-  days: Array<{ day: string; count: number }>;
   routes: Array<{ source: string; target: string; count: number }>;
-  undated: number;
 }
 
 /** A projection of the supplied, permitted display slice. Never an identity merge. */
@@ -24,15 +22,11 @@ export function terminalSummary(graph: KnowledgeGraph, focus: string | null, now
     if (seen.has(key)) return false;
     seen.add(key); return true;
   });
-  const sectors = new Map<string, number>(), days = new Map<string, number>(), routes = new Map<string, { source: string; target: string; count: number }>();
-  let undated = 0;
+  const sectors = new Map<string, number>(), routes = new Map<string, { source: string; target: string; count: number }>();
   for (const node of nodes) {
     const sector = node.category.trim() || '분류 미정';
     sectors.set(sector, (sectors.get(sector) ?? 0) + 1);
-    const at = node.updatedAt * 1000;
-    if (!Number.isFinite(at) || at <= 0 || at > now || at > 8640000000000000) { undated++; continue; }
-    const day = new Date(at).toISOString().slice(0, 10);
-    days.set(day, (days.get(day) ?? 0) + 1);
+
   }
   for (const edge of edges) {
     const source = known.get(edge.source)!.category.trim() || '분류 미정';
@@ -48,6 +42,5 @@ export function terminalSummary(graph: KnowledgeGraph, focus: string | null, now
       ? [{ node: known.get(edge.target)!, edge, direction: 'out' }]
       : edge.target === focus ? [{ node: known.get(edge.source)!, edge, direction: 'in' }] : []).slice(0, 12),
     sectors: [...sectors].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)),
-    days: [...days].sort(([a], [b]) => a.localeCompare(b)).map(([day, count]) => ({ day, count })),
-    routes: [...routes.values()].sort((a, b) => b.count - a.count || a.source.localeCompare(b.source) || a.target.localeCompare(b.target)), undated };
+    routes: [...routes.values()].sort((a, b) => b.count - a.count || a.source.localeCompare(b.source) || a.target.localeCompare(b.target)) };
 }

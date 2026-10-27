@@ -9,6 +9,7 @@ from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from alden_abort import AldenCancelled
 import fcntl
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -1915,7 +1916,7 @@ class CollectionStore:
                 "byte_scope": manifest["byte_scope"]}
 
     def recent_events(self, *, before=None, after=None, stream_id=None, limit=50, projects=None,
-                      target_id=None, platform=None, stage=None, query="", since=None, until=None) -> dict:
+                      target_id=None, platform=None, stage=None, query="", since=None, until=None, trend=None) -> dict:
         if (type(limit) is not int or not 1 <= limit <= 200
             or (before is not None and (type(before) is not int or before <= 0))
             or (after is not None and (type(after) is not int or after < 0))
@@ -1932,6 +1933,16 @@ class CollectionStore:
                 raise ValueError("collection_event_time_invalid")
         if since is not None and until is not None and since >= until:
             raise ValueError("collection_event_time_invalid")
+        if trend is not None:
+            if stage not in (None, 'stored'):
+                raise ValueError('collection_trend_stage_invalid')
+            if (not isinstance(trend, dict) or set(trend) != {'since', 'until'}
+                or any(type(trend[k]) not in {int, float} or not math.isfinite(trend[k])
+                       or not 0 <= trend[k] <= 253402214400 for k in ('since', 'until'))
+                or not 0 < trend['until'] - trend['since'] <= 31 * 86400
+                or since is not None and trend['since'] < since
+                or until is not None and trend['until'] > until):
+                raise ValueError('collection_trend_window_invalid')
         if projects is None:
             projects = [p["project"] for p in self.projects()]
         # Shared scope/checkpoint and page/summary are one read transaction.
@@ -1961,6 +1972,15 @@ class CollectionStore:
             where = " AND ".join([scope, *clauses])
             if guarded:
                 where += " AND alden_source_allowed(e.target_id,e.document_id,e.version)=1"
+            trend_where = scope
+            trend_args = list(scope_args)
+            if query:
+                trend_where += " AND (t.label LIKE ? OR v.label LIKE ?)"
+                trend_args += ["%" + query + "%"] * 2
+            if guarded:
+                trend_where += " AND alden_source_allowed(e.target_id,e.document_id,e.version)=1"
+            if stage:
+                trend_where += " AND e.stage=?"; trend_args.append(stage)
             args = [*scope_args, *args]
             # Preserve keyset order on the integer primary key. A target IN
             # index otherwise makes SQLite join/sort the entire journal for
@@ -1999,7 +2019,58 @@ class CollectionStore:
                 items.append(item)
             return {"ok": True, "items": items, "next": items[-1]["sequence"] if len(rows)>limit else None,
                     "cursor": items[-1]["sequence"] if after is not None and len(rows)>limit else checkpoint['cursor'],
-                    "stream_id": checkpoint['stream_id'], "reset": reset, "summary": summary}
+                    "stream_id": checkpoint['stream_id'], "reset": reset, "summary": summary,
+                    **({'snapshot_checkpoint': checkpoint,
+                        'trend': self._event_trend(db, trend_where, trend_args, checkpoint, trend)} if trend is not None else {})}
+
+    @staticmethod
+    def _event_trend(db, where, args, checkpoint, window):
+        """Complete calendar-window aggregation, never the paginated tail.
+
+        Counts document transitions at storage time, not source occurrence time.
+        The journal has no source coverage/backfill watermark. A missing receipt
+        therefore cannot attest zero actual intake, even after a complete scan.
+        Canonicalization scans retained scoped receipts before the date predicate;
+        the 31-day output limit is not a bound on SQL work. Existing read
+        cancellation/authority checks apply; no performance claim is implied.
+        """
+        start, end = window['since'], window['until']
+        days = {datetime.fromtimestamp(at, timezone.utc).date().isoformat():
+                {'added': 0, 'revised': 0, 'removed': 0}
+                for at in range(int(start // 86400) * 86400, math.ceil(end), 86400)}
+        # Deduplicate the persisted semantic receipt identity (including run).
+        # A later real transition back to an old version remains a separate run.
+        # Canonicalize before the time predicate: a replay with a later timestamp
+        # must not move a transition into a second calendar window.
+        rows = db.execute("""SELECT MIN(e.at) AS at,e.run_id,e.target_id,e.document_id,e.version,
+            json_extract(e.details,'$.change') AS change,r.state AS run_state,
+            MIN(CASE WHEN json_extract(e.details,'$.activity_deferred')=1 AND NOT EXISTS(
+                SELECT 1 FROM events p WHERE p.run_id=e.run_id AND p.target_id=e.target_id
+                AND p.stage='published' AND p.sequence<=?
+                AND json_extract(p.details,'$.stored_event_id')=e.event_id) THEN 1 ELSE 0 END) AS deferred
+            FROM events e JOIN targets t ON t.id=e.target_id
+            LEFT JOIN versions v ON v.id=e.version LEFT JOIN runs r ON r.id=e.run_id
+            WHERE """ + where + """ AND e.sequence<=? AND e.stage='stored'
+            GROUP BY e.run_id,e.target_id,e.document_id,e.version,json_extract(e.details,'$.change')
+            HAVING MIN(e.at)>=? AND MIN(e.at)<?""",
+            (checkpoint['cursor'], *args, checkpoint['cursor'], start, end))
+        unclassified = 0
+        for row in rows:
+            change = row['change']
+            if change == 'unchanged':
+                continue
+            if (change not in ('added', 'revised', 'removed') or not row['document_id']
+                or not row['version'] or row['run_state'] != 'complete' or row['deferred']):
+                unclassified += 1
+                continue
+            day = datetime.fromtimestamp(row['at'], timezone.utc).date().isoformat()
+            days[day][change] += 1
+        return {'schema': 1, 'basis': 'stored_receipt_utc', 'window': window,
+                'stream_id': checkpoint['stream_id'], 'cursor': checkpoint['cursor'],
+                'scan': 'complete', 'coverage': 'retained_only', 'source_coverage': 'unknown',
+                'backfill_live': 'unknown', 'relations': None, 'unclassified': unclassified,
+                'observed_at': time.time(),
+                'days': [{'day': day, **counts} for day, counts in days.items()]}
 
     @staticmethod
     def _activity_scope(db, projects, target_id=None, platform=None):
@@ -2135,7 +2206,7 @@ def _read_action(state_root: Path, action: str, query: str | None = None, *,
                                      limit=options.get("limit",50), projects=projects,
                                      target_id=options.get("target_id"), platform=options.get("platform"),
                                      stage=options.get("stage"), query=str(options.get("search", ""))[:256],
-                                     since=options.get("since"), until=options.get("until"))
+                                     since=options.get("since"), until=options.get("until"), trend=options.get("trend"))
         result["projects"] = store.projects()
         result["targets"] = store.targets(projects)
         return result

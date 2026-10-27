@@ -32,15 +32,15 @@ describe('permitted terminal display-slice aggregates', () => {
     graph.nodes[1].evidence.retracted = true;
     expect(terminalSummary(graph, 'a', now).nodes.map(node => node.id)).toEqual(['a']);
   });
-  it('uses actual UTC update dates and leaves missing/future dates unknown', () => {
+  it('does not derive intake counts from graph update timestamps', () => {
     const graph = parseKnowledgeGraph({ nodes: [
       { id: 'a', label: 'A', category: '자료', updated_at: Date.parse('2026-10-19T23:59:00Z') / 1000 },
       { id: 'b', label: 'B', category: '자료', updated_at: 0 },
       { id: 'c', label: 'C', category: '', updated_at: (now + 1000) / 1000 },
     ], edges: [] }, now);
     const data = terminalSummary(graph, null, now);
-    expect(data.days).toEqual([{ day: '2026-10-19', count: 1 }]);
-    expect(data.undated).toBe(2);
+    expect(data).not.toHaveProperty('days');
+    expect(data).not.toHaveProperty('undated');
     expect(data.sectors).toEqual([{ name: '자료', count: 2 }, { name: '분류 미정', count: 1 }]);
     expect(data.links).toEqual([]);
   });

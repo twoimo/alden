@@ -202,6 +202,7 @@ jobs:
           tests.test_alden_route_cancellation
           tests.test_alden_voice_model_selection
           tests.test_alden_collection
+          tests.test_collection_history_trend
           tests.test_alden_collection_export
           tests.test_alden_collection_delta
           tests.test_alden_relation_projection

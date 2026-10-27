@@ -2,11 +2,12 @@ import type { fetchSettingsAction } from '../runtime';
 import type { KnowledgeGraph } from './graph-model';
 import { matchesSourceReference } from './graph-model';
 import { terminalSummary, type TerminalSummary } from './terminal-model';
+import { trendWindow, readTerminalTrend, type TerminalTrend } from './terminal-trend';
 
 export type MapPoint = { id: string; x: number; y: number; z: number };
 const panels = [
   ['ingest', 'INGEST', '최근 수집'], ['linked', 'LINKED', '선택한 연결'],
-  ['trend', 'f(x)', '수정일 분포 · UTC'], ['sectors', 'SECTORS', '지식 유형'],
+  ['trend', 'f(x)', '저장 변경 이력 · UTC'], ['sectors', 'SECTORS', '지식 유형'],
   ['chord', 'CHORD', '연결 분포'], ['tail', 'TAIL-F', '처리 이력'],
 ] as const;
 export function terminalMarkup(): string {
@@ -34,7 +35,10 @@ export class KnowledgeTerminal {
   private active = false;
   private epoch = 0;
   private scope = '';
-  private busy = false;
+  private busyEpoch: number | null = null;
+  private trend: TerminalTrend | null = null;
+  private pendingTrend: TerminalTrend | null = null;
+  private trendState = '미집계 · 저장 변경 이력을 아직 확인하지 않았습니다.';
   private follow = true;
   private history: Row[] = [];
   private historyStream: string | null = null;
@@ -55,8 +59,8 @@ export class KnowledgeTerminal {
     }, { signal });
     root.getElementById('terminal-follow')?.addEventListener('click', () => {
       this.follow = !this.follow;
-      if (this.follow && this.pending) { this.history = this.pending; this.pending = null; this.renderHistory(); }
-      this.followLabel();
+      if (this.follow && this.pending) { this.history = this.pending; this.pending = null; this.trend = this.pendingTrend; this.pendingTrend = null; this.renderHistory(); this.renderTrend(); }
+      this.followLabel(); this.renderTrend();
     }, { signal });
     root.getElementById('knowledge-terminal-toggle')?.addEventListener('click', () => {
       const dock = root.getElementById('knowledge-terminal'); if (!dock) return;
@@ -74,10 +78,12 @@ export class KnowledgeTerminal {
     if (wasActive && !active && !this.history.length && this.historyState === '수집 이력을 불러옵니다.') {
       this.historyState = '수집 이력 갱신이 중지되어 있습니다.'; this.renderHistory();
     }
+    this.renderTrend();
     if (active) this.drawMaps();
   }
   reset(): void {
     this.epoch++; this.scope = ''; this.history = []; this.pending = null; this.historyStream = null;
+    this.clearTrend('미집계 · 저장 변경 이력을 아직 확인하지 않았습니다.');
     this.historyState = '수집 이력을 아직 확인하지 않았습니다.'; this.renderHistory(); this.followLabel();
   }
   dispose(): void { this.visible(false); this.controls.abort(); this.resize?.disconnect(); }
@@ -89,23 +95,27 @@ export class KnowledgeTerminal {
   async refreshHistory(query: Row, collection: boolean): Promise<void> {
     if (!this.active) return;
     const options: Row = { limit: 80 };
-    for (const key of ['projects', 'target_id', 'platform', 'search', 'since', 'until']) if (query[key]) options[key] = query[key];
+    for (const key of ['projects', 'target_id', 'platform', 'search', 'since', 'until']) if (query[key] !== undefined) options[key] = query[key];
+    const window = query.node_type || query.relation ? null : trendWindow(query);
+    if (window) options.trend = window;
     const key = JSON.stringify([collection, options, query.node_type, query.relation]);
     if (this.scope !== key) { this.reset(); this.scope = key; }
-    if (!collection) { this.history = []; this.historyState = '대화 기억에는 수집 처리 이력이 없습니다.'; this.renderHistory(); return; }
-    if (this.busy) return;
-    this.busy = true; const epoch = this.epoch;
+    if (!collection) { this.history = []; this.historyState = '대화 기억에는 수집 처리 이력이 없습니다.'; this.clearTrend('미연결 · 대화 기억의 변경 영수증은 지원하지 않습니다.'); this.renderHistory(); return; }
+    if (!window) this.clearTrend('미집계 · 유형·관계 필터 또는 31일을 넘는 기간은 지원하지 않습니다.');
+    if (this.busyEpoch === this.epoch) return;
+    const epoch = this.epoch; this.busyEpoch = epoch;
+    if (this.historyStream) options.stream_id = this.historyStream;
     if (!this.history.length) { this.historyState = '수집 이력을 불러옵니다.'; this.renderHistory(); }
     try {
       const result = await this.load('collection-history', { query: JSON.stringify(options) });
       if (!this.active || epoch !== this.epoch) return;
       if (result?.ok !== true || !Array.isArray(result.items)) {
         this.historyState = '수집 이력을 확인할 수 없습니다.';
-        this.history = []; this.pending = null; this.historyStream = null; this.renderHistory(); this.followLabel(); return;
+        this.history = []; this.pending = null; this.historyStream = null; this.clearTrend('미집계 · 저장 변경 이력을 확인할 수 없습니다.'); this.renderHistory(); this.followLabel(); return;
       }
       const stream = typeof result.stream_id === 'string' ? result.stream_id : null;
       if (result.reset === true || stream !== null && this.historyStream !== null && stream !== this.historyStream) {
-        this.history = []; this.pending = null;
+        this.history = []; this.pending = null; this.clearTrend('미집계 · 이력 범위가 재설정되었습니다.');
       }
       this.historyStream = stream;
       const known = new Set<string>();
@@ -117,16 +127,18 @@ export class KnowledgeTerminal {
           if ((query.node_type || query.relation) && !ids.has(String(row.document_id))) return false;
           known.add(String(row.sequence)); return true;
         }).sort((a, b) => Number(b.sequence) - Number(a.sequence)).slice(0, 32);
+      const trend = window ? readTerminalTrend(result, window) : null;
+      if (window && !trend) this.clearTrend('미집계 · 완전한 기간별 저장 영수증 집계를 확인할 수 없습니다.');
       this.historyState = '수집 범위 · 최근 기록';
-      if (this.follow || !this.history.length) { this.history = items; this.pending = null; this.renderHistory(); }
-      else { this.pending = items; }
+      if (this.follow || !this.history.length) { this.history = items; this.pending = null; this.trend = trend; this.pendingTrend = null; this.renderHistory(); this.renderTrend(); }
+      else { this.pending = items; this.pendingTrend = trend; }
       this.followLabel();
     } catch {
       if (this.active && epoch === this.epoch) {
         this.historyState = '수집 이력을 확인할 수 없습니다.';
-        this.history = []; this.pending = null; this.historyStream = null; this.renderHistory(); this.followLabel();
+        this.history = []; this.pending = null; this.historyStream = null; this.clearTrend('미집계 · 저장 변경 이력을 확인할 수 없습니다.'); this.renderHistory(); this.followLabel();
       }
-    } finally { this.busy = false; }
+    } finally { if (this.busyEpoch === epoch) this.busyEpoch = null; }
   }
   synced(): void {
     const time = this.root.getElementById('terminal-synced');
@@ -154,23 +166,36 @@ export class KnowledgeTerminal {
       const row = this.row(typeName(sector.name), number(sector.count)); row.style.setProperty('--sector-color', colors[i % colors.length]);
       row.style.setProperty('--sector-share', `${sector.count / data.nodes.length * 100}%`); row.classList.add('terminal-sector'); return row;
     }) : [this.empty('표시할 지식이 없습니다.')]);
-    this.renderTrend(data); this.renderRoutes(data);
+    this.renderTrend(); this.renderRoutes(data);
     const count = this.root.getElementById('terminal-map-count');
     if (count) count.textContent = `${number(data.nodes.length)} 지식 / ${number(data.edges.length)} 연결`;
     const selection = this.root.getElementById('terminal-map-selection');
     if (selection) selection.textContent = selected ? selected.label : '지식을 선택해 연결을 확인하세요.';
     if (this.active) this.drawMaps();
   }
-  private renderTrend(data: TerminalSummary): void {
-    const days = data.days.slice(-14), peak = Math.max(1, ...days.map(day => day.count));
-    const chart = this.make('div', '', 'terminal-bars'); chart.setAttribute('role', 'img'); chart.setAttribute('aria-label', '표시한 지식의 최근 14개 수정 날짜별 개수. 빈 날짜는 포함하지 않습니다.');
-    for (const day of days) {
-      const bar = this.make('span'); bar.style.height = `${Math.max(2, day.count / peak * 100)}%`;
-      bar.title = `${day.day} UTC · ${number(day.count)}개`; chart.append(bar);
+  private clearTrend(state: string): void {
+    this.trend = null; this.pendingTrend = null; this.trendState = state; this.renderTrend();
+  }
+  private renderTrend(): void {
+    const trend = this.trend;
+    if (!trend) { this.set('trend', [this.empty(this.trendState)]); return; }
+    const countDay = (day: TerminalTrend['days'][number]) => day.added + day.revised + day.removed;
+    const peak = Math.max(1, ...trend.days.map(countDay));
+    const total = trend.days.reduce((sum, day) => sum + countDay(day), 0);
+    const chart = this.make('div', '', 'terminal-bars');
+    chart.setAttribute('role', 'img'); chart.setAttribute('aria-label', 'UTC 날짜별 확인된 저장 변경 영수증. 빈 날짜와 원본 전체 유입량은 미집계.');
+    for (const day of trend.days) {
+      const value = countDay(day), bar = this.make('span');
+      bar.dataset.day = day.day; bar.dataset.confirmed = String(value);
+      bar.style.height = value ? `${Math.max(2, value / peak * 100)}%` : '0%';
+      bar.title = `${day.day} UTC · ` + (value ? `추가 ${number(day.added)} · 개정 ${number(day.revised)} · 제거 ${number(day.removed)} 확인` : '확인된 영수증 없음 · 실제량 미집계');
+      chart.append(bar);
     }
-    this.set('trend', days.length ? [chart, this.row(days[0].day.slice(5), days.at(-1)!.day.slice(5)),
-      this.make('p', `표시 범위 · 날짜 미상 ${number(data.undated)}개`, 'terminal-footnote')]
-      : [this.empty('확인된 수정 날짜가 없습니다.')]);
+    const stamp = (at: number) => new Date(at * 1000).toISOString().replace('T', ' ').replace(/:00\.000Z$/, 'Z');
+    this.set('trend', [total ? chart : this.empty('확인된 변경 영수증 없음 · 실제 유입·변경량 미집계'),
+      this.make('p', `${stamp(trend.window.since)} ≤ 저장시각 < ${stamp(trend.window.until)}`, 'terminal-footnote'),
+      this.make('p', `${this.active ? this.follow ? '확인' : '추적 중지 · 확인' : '갱신 중지 · 확인'} ${stamp(trend.observedAt)} · 저장 영수증 ${number(total)}건`, 'terminal-footnote'),
+      this.make('p', `보존된 이력만 집계 · 원본 전체·빈 날짜 미집계${trend.window.until > trend.observedAt ? ' · 확인 시각 이후 미집계' : ''} · 과거 일괄 수집/실시간 구분 미지원 · 관계량 미집계${trend.unclassified ? ` · 분류 제외 ${number(trend.unclassified)}건` : ''}`, 'terminal-footnote')]);
   }
   private renderRoutes(data: TerminalSummary): void {
     const list = data.routes.slice(0, 6);
