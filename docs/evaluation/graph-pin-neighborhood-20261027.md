@@ -22,18 +22,18 @@ Node v26.12.0, macOS arm64, shared local host. Times are pure first-pin solver i
 
 | Actual nodes | Relationship groups | Baseline median, ms | Candidate median, ms | Reduction in medians | Paired-block mean reduction range |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 128 | 514 | 11.572 | 4.938 | 57.3% | 50.1–73.7% |
-| 512 | 1967 | 39.451 | 21.222 | 46.2% | 26.3–51.8% |
-| 1984 | 2693 | 113.130 | 53.222 | 53.0% | 29.9–63.8% |
+| 128 | 514 | 11.547 | 4.928 | 57.3% | 50.1–73.7% |
+| 512 | 1967 | 39.242 | 20.804 | 47.0% | 26.3–51.8% |
+| 1984 | 2693 | 113.022 | 52.340 | 53.7% | 29.9–63.8% |
 
-All eight blocks favor the candidate at each size. Balanced order reduces but does not remove JIT, GC and shared-host variation. Empirical p95 from 16 samples is not a population estimate. The process resource snapshot covers both implementations and is not a per-implementation memory saving. These results do not establish faster initial layout, other graphs or pin positions, Worker transport, UI input latency, GPU, battery, whole-app speed or an asymptotic improvement.
+For each even sample count of 16, the median is the arithmetic mean of the two middle observations. All eight blocks favor the candidate at each size. Balanced order reduces but does not remove JIT, GC and shared-host variation. Empirical p95 from 16 samples is not a population estimate. The process resource snapshot covers both implementations and is not a per-implementation memory saving. These results do not establish faster initial layout, other graphs or pin positions, Worker transport, UI input latency, GPU, battery, whole-app speed or an asymptotic improvement.
 
 ## Independent and native checks
 
 - Native Codex `gpt-6-astra` / `ultra`: 103 new helper tests pass against an independent coordinate-string oracle, including bounds/halos, non-numbers, fractions/extremes, alias/carry rejection, negative zero, duplicate coordinates, unchanged objects and reused-buffer cleanup. Eight defective controlled variants are rejected; loosening occupied bounds to [-16,15] produces seven failures. The original solver never exported this helper; the fallback-only adapter is explicitly a control, not a historical API claim.
 - The same independent worker's 13 engine checks include 12 state traces and 56 complete result/checkpoint comparisons: cached/reflow/restore, first/moved/released/multiple pins, signed extreme magnitudes, 1024 coincident nodes and fallback transitions. Observations saw 1016 indexed dispatches and eight original-path fallbacks, so both branches are exercised. All diagnostics/budgets match. These are controlled fixtures, not real UI gestures.
 - The existing ten layout, worker, driver, contact, center and small-weight test files pass 154 tests. Full desktop TypeScript `--noEmit` and Vite build pass, with build/cache outputs isolated from the primary dist. The new 103 tests and fixture traces are separate denominators; no full-repository test claim follows from their sum.
-- Supplemental OpenCodex `google-antigravity/gemini-4-argon`, high, request `ocx-e836124bae23d0d82cc2a52a9cb574a9`: one canonical upstream send, no recovery. It substantively read the supplied helper, caller and test code, found no concrete P1/P2 defect and accepted the stated arithmetic and qualified reduction calculation. It did not execute the harness or inspect the private graph. This is not the held formal web-Astra/Gemini/reverse audit.
+- Supplemental OpenCodex `google-antigravity/gemini-4-argon`, high, request `ocx-e836124bae23d0d82cc2a52a9cb574a9`: one canonical upstream send, no recovery. It substantively read the supplied helper, caller and test code, found no concrete P1/P2 defect and accepted the stated arithmetic and qualified reduction calculation. It did not execute the harness or inspect the private graph. A later local statistics review corrected the original summary’s upper-middle p50 to conventional medians from the unchanged observations. The raw report and review are retained; the table above uses the corrected definition, independently checked against Python statistics.median. This is not the held formal web-Astra/Gemini/reverse audit.
 
 Task artifacts, raw measurements and preserved controls are in `outputs/graph-pin-neighborhood-20261027` outside the repository. The worker's original ignored evidence directory remains in the writer and is independently copied there; checksums include the applicable public source files. Source/test review and component execution are not installed/native/rendered acceptance.
 
