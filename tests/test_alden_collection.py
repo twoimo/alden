@@ -134,6 +134,36 @@ class CollectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.graph_page(projects=["one"], limit=1984, overview=True, focus=result["nodes"][0]["id"])
 
+    def test_dense_graph_page_edge_budgets_preserve_source_counts_and_checkpoint(self):
+        target = self.target()
+        records = [{**self.record(str(i)), "label": f"Synthetic node {i}", "kind": "document"}
+                   for i in range(40)]
+        relations = [{"source_platform": "youtube", "source_id": str(i),
+                      "target_platform": "youtube", "target_id": str(j), "type": "refers-to"}
+                     for i in range(40) for j in range(40) if i != j]
+        self.store.ingest(target, records, relations=relations)
+        baseline = self.store.activity_page(projects=["one"])
+        checkpoint = {key: baseline[key] for key in ("stream_id", "cursor")}
+        query = {"projects": ["one"], "limit": 40, "offset": 0, "hops": 0, "details": False}
+        pages = [read_action(self.store.root.parent.parent, "collection-graph",
+                             json.dumps({**query, "overview": overview})) for overview in (False, True)]
+        ordinary, overview = pages
+        expected_ids = {identity("youtube", str(i)) for i in range(40)}
+        for page in pages:
+            self.assertTrue(page["ok"])
+            self.assertEqual({node["id"] for node in page["nodes"]}, expected_ids)
+            self.assertEqual(page["total_nodes"], len(records))
+            self.assertEqual(page["total_edges"], len(relations))
+            self.assertEqual(page["activity_checkpoint"], checkpoint)
+            self.assertEqual(page["revision"], checkpoint["cursor"])
+            self.assertIsNone(page["next"])
+        self.assertEqual(len(ordinary["edges"]), 512)
+        self.assertEqual(len(overview["edges"]), len(relations))
+        self.assertGreater(len(overview["edges"]), 512)
+        self.assertLessEqual(len(overview["edges"]), 4096)
+        self.assertLessEqual({edge["id"] for edge in ordinary["edges"]},
+                             {edge["id"] for edge in overview["edges"]})
+
     def test_overview_keeps_blank_and_asset_labels_but_does_not_give_them_the_first_slot(self):
         self.assertEqual([overview_label_tier(value) for value in ['채용공고 지원시기', 'theme.liquid', 'snippets', '', '12']], [0, 1, 1, 2, 2])
         target = self.target()

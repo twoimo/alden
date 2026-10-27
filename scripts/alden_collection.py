@@ -1605,8 +1605,8 @@ class CollectionStore:
                     # token/body candidate just to discard the supplement.
                     selections.insert(0, (cte, token_picking, [fts, limit+1, offset, limit]))
                 for selection_cte, selection, selection_args in selections:
-                    overview = selection_cte + ",picked AS MATERIALIZED (" + selection + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
-                    nodes_json, edges_json, total, total_edges, more, kinds, types, invalid_relations = db.execute(overview + """SELECT
+                    overview_sql = selection_cte + ",picked AS MATERIALIZED (" + selection + " LIMIT ? OFFSET ?),selected AS MATERIALIZED (SELECT id FROM picked LIMIT ?) "
+                    nodes_json, edges_json, total, total_edges, more, kinds, types, invalid_relations = db.execute(overview_sql + """SELECT
                       (SELECT json_group_array(json(item)) FROM (SELECT """ + json_node + """ AS item
                         FROM selected p JOIN shown s ON s.id=p.id JOIN versions v ON v.id=s.visible_version
                         LEFT JOIN degrees d ON d.id=s.id ORDER BY s.id)),
