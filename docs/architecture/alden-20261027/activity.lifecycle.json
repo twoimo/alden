@@ -1,0 +1,249 @@
+{
+  "schema_version": 3,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "그래프 · Worker 생명주기",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "activity.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "mainPath": [
+    "request",
+    "pending",
+    "verify",
+    "ready"
+  ],
+  "states": [
+    {
+      "id": "request",
+      "type": "start",
+      "label": "새 스냅샷",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 300,
+          "end_line": 305
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 66,
+          "end_line": 96
+        }
+      ],
+      "sublabel": "현재 권한·핀"
+    },
+    {
+      "id": "pending",
+      "type": "active",
+      "label": "Worker 계산",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 101,
+          "end_line": 109
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 130,
+          "end_line": 149
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-worker.ts",
+          "line": 6,
+          "end_line": 16
+        }
+      ],
+      "sublabel": "세대 번호 고정"
+    },
+    {
+      "id": "verify",
+      "type": "decision",
+      "label": "응답 재검사",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 110,
+          "end_line": 120
+        }
+      ],
+      "sublabel": "세대·핀·현재성"
+    },
+    {
+      "id": "ready",
+      "type": "success",
+      "label": "결과 적용",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 121,
+          "end_line": 125
+        }
+      ],
+      "sublabel": "완료 캐시 보관"
+    },
+    {
+      "id": "cached",
+      "type": "success",
+      "label": "완료 캐시 재사용",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 97,
+          "end_line": 100
+        }
+      ],
+      "sublabel": "동일 입력만"
+    },
+    {
+      "id": "stopped",
+      "type": "neutral",
+      "label": "작업 중단",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 160,
+          "end_line": 165
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 543,
+          "end_line": 550
+        }
+      ],
+      "sublabel": "숨김·교체·해제"
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "계산 실패",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 86,
+          "end_line": 87
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 118,
+          "end_line": 120
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 152,
+          "end_line": 158
+        }
+      ],
+      "sublabel": "성공 대체 없음"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "request-pending",
+      "from": "request",
+      "to": "pending",
+      "variant": "default",
+      "label": "새 계산"
+    },
+    {
+      "id": "pending-verify",
+      "from": "pending",
+      "to": "verify",
+      "variant": "default",
+      "label": "결과"
+    },
+    {
+      "id": "verify-ready",
+      "from": "verify",
+      "to": "ready",
+      "variant": "default",
+      "label": "현재 일치"
+    },
+    {
+      "id": "request-cached",
+      "from": "request",
+      "to": "cached",
+      "variant": "default",
+      "label": "동일 입력"
+    },
+    {
+      "id": "pending-stopped",
+      "from": "pending",
+      "to": "stopped",
+      "variant": "default",
+      "label": "교체·숨김"
+    },
+    {
+      "id": "pending-failed",
+      "from": "pending",
+      "to": "failed",
+      "variant": "default",
+      "label": "전송 오류"
+    },
+    {
+      "id": "verify-failed",
+      "from": "verify",
+      "to": "failed",
+      "variant": "default",
+      "label": "응답 불완전"
+    },
+    {
+      "id": "verify-request",
+      "from": "verify",
+      "to": "request",
+      "variant": "default",
+      "label": "현재성 변경"
+    },
+    {
+      "id": "ready-request",
+      "from": "ready",
+      "to": "request",
+      "variant": "default",
+      "label": "새 입력"
+    },
+    {
+      "id": "failed-request",
+      "from": "failed",
+      "to": "request",
+      "variant": "default",
+      "label": "후속 요청"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "캐시와 핀",
+      "items": [
+        "Worker는 하나를 소유한다. 이전 세대 응답은 적용하지 않는다. 권한 변화는 캐시·소속 정보를 지운다.",
+        "명시 핀과 완료된 solver 좌표만 prior로 사용한다. 실패 시 UI 스레드 solver로 바꾸지 않는다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "활동 표시",
+      "items": [
+        "성공 영수증·현재 문서 버전·대상·TTL이 맞는 노드만 활동을 표시한다. layout 계산 완료와 별도다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "f(x) 저장 영수증",
+      "items": [
+        "완료 run의 added/revised/removed 문서 전이만 UTC 저장일로 집계한다. 원본 전체 유입량이 아니다.",
+        "snapshot_checkpoint는 페이지 cursor와 다르다. 미분류·partial·stale·범위 불일치를 숨기지 않는다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "f(x) 지원 한계",
+      "items": [
+        "source coverage·backfill/live는 unknown, relations는 null. 31일은 출력 기간 한도이며 SQL 작업량 상한이 아니다.",
+        "trend와 stage는 None 또는 stored만 함께 허용한다. 빈 날짜는 원본 변화가 없었다는 증거가 아니다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,246 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "복구 · 체크포인트와 부분 상태",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "recovery.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "resume",
+      "label": "재개와 검사"
+    },
+    {
+      "id": "run",
+      "label": "대상 처리"
+    },
+    {
+      "id": "state",
+      "label": "보존되는 상태"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "reopen",
+      "type": "backend",
+      "label": "재개 진입",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 356,
+          "end_line": 385
+        }
+      ],
+      "lane": "resume",
+      "col": 0,
+      "sublabel": "중단 실행 정리"
+    },
+    {
+      "id": "checkpoint",
+      "type": "database",
+      "label": "취득 체크포인트",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 449,
+          "end_line": 464
+        }
+      ],
+      "lane": "resume",
+      "col": 1,
+      "sublabel": "정책·해시 일치"
+    },
+    {
+      "id": "transaction",
+      "type": "database",
+      "label": "저장 트랜잭션",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 809
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1223,
+          "end_line": 1240
+        }
+      ],
+      "lane": "run",
+      "col": 1,
+      "sublabel": "취소 시 rollback"
+    },
+    {
+      "id": "index",
+      "type": "backend",
+      "label": "보존·색인",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 468,
+          "end_line": 483
+        }
+      ],
+      "lane": "run",
+      "col": 2,
+      "sublabel": "준비 상태 확인"
+    },
+    {
+      "id": "complete",
+      "type": "messagebus",
+      "label": "대상 완료",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 479,
+          "end_line": 504
+        }
+      ],
+      "lane": "run",
+      "col": 3,
+      "sublabel": "필수 단계 통과"
+    },
+    {
+      "id": "retry",
+      "type": "messagebus",
+      "label": "대기·재시도",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 484,
+          "end_line": 500
+        }
+      ],
+      "lane": "state",
+      "col": 1,
+      "sublabel": "지연·paused·busy"
+    },
+    {
+      "id": "blocked",
+      "type": "security",
+      "label": "권한·버전 차단",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 486,
+          "end_line": 500
+        }
+      ],
+      "lane": "state",
+      "col": 2,
+      "sublabel": "자동 통과 없음"
+    },
+    {
+      "id": "partial",
+      "type": "messagebus",
+      "label": "부분 완료",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 501,
+          "end_line": 504
+        }
+      ],
+      "lane": "state",
+      "col": 3,
+      "sublabel": "대상별 상태 유지"
+    }
+  ],
+  "edges": [
+    {
+      "id": "reopen-checkpoint",
+      "from": "reopen",
+      "to": "checkpoint",
+      "variant": "default",
+      "label": "이전 영수증"
+    },
+    {
+      "id": "checkpoint-transaction",
+      "from": "checkpoint",
+      "to": "transaction",
+      "variant": "default",
+      "label": "재검사 통과"
+    },
+    {
+      "id": "transaction-index",
+      "from": "transaction",
+      "to": "index",
+      "variant": "default",
+      "label": "저장 후"
+    },
+    {
+      "id": "index-complete",
+      "from": "index",
+      "to": "complete",
+      "variant": "default",
+      "label": "ready / empty"
+    },
+    {
+      "id": "transaction-retry",
+      "from": "transaction",
+      "to": "retry",
+      "variant": "default",
+      "label": "취소·실패"
+    },
+    {
+      "id": "index-retry",
+      "from": "index",
+      "to": "retry",
+      "variant": "default",
+      "label": "색인 대기"
+    },
+    {
+      "id": "transaction-blocked",
+      "from": "transaction",
+      "to": "blocked",
+      "variant": "security",
+      "label": "권한·충돌"
+    },
+    {
+      "id": "retry-reopen",
+      "from": "retry",
+      "to": "reopen",
+      "variant": "default",
+      "label": "지연 후"
+    },
+    {
+      "id": "retry-partial",
+      "from": "retry",
+      "to": "partial",
+      "variant": "default",
+      "label": "미완료 대상"
+    },
+    {
+      "id": "blocked-partial",
+      "from": "blocked",
+      "to": "partial",
+      "variant": "default",
+      "label": "차단 대상"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "재개 조건",
+      "items": [
+        "취득 단계는 동일 정책 revision과 입력 SHA가 맞을 때만 재사용한다. 자동으로 불확실한 취득을 재실행했다고 간주하지 않는다.",
+        "취소·기한·정책 변화는 publish guard에서 다시 검사한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "상태의 의미",
+      "items": [
+        "저장 완료와 색인 완료는 별도다. blocked는 권한·버전 충돌이며 partial은 하나 이상의 대상이 미완료인 cycle이다.",
+        "retry_at 지수 지연은 재시도 정책이며 처리 성공이나 복구 완료의 증거가 아니다."
+      ]
+    }
+  ]
+}

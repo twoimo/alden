@@ -1,0 +1,286 @@
+{
+  "family": "recovery",
+  "scope": "복구 · 체크포인트와 부분 상태",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "reopen": {
+      "claim": "재개 진입 — 중단 실행 정리",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 356,
+          "end_line": 385,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "e4b3e8a3007c0081d57b57f3aff96008cf2a4bb15c5b3a09c32abdc40d818ba9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "checkpoint": {
+      "claim": "취득 체크포인트 — 정책·해시 일치",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 449,
+          "end_line": 464,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "e327a8cc879173c64b0b3b263bdfab7ecdc7477bb9e265e7f5769f6a07c6f515",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "transaction": {
+      "claim": "저장 트랜잭션 — 취소 시 rollback",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 809,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "e377561738ad090119d6dd4bb8badf299ae1a3e0fa8bae3e3c5fc6d216c33674",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1223,
+          "end_line": 1240,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "13a0d98c506a7f808a5cf0afc5b741ec71a7a8df772b0f990b6cf56f973bbc2a",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "index": {
+      "claim": "보존·색인 — 준비 상태 확인",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 468,
+          "end_line": 483,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "f090d2fd515580ca7d5975e355f97f9270190d2b4652d0424da18fa856c888c9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "complete": {
+      "claim": "대상 완료 — 필수 단계 통과",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 479,
+          "end_line": 504,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "5263121707f434f104ca1101b794b92934d4893f0852fcb73afdcb5feec95a99",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "retry": {
+      "claim": "대기·재시도 — 지연·paused·busy",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 484,
+          "end_line": 500,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "1efdbde9067dec5b98b92747a1292a74a849c91441663f7470bf914ac949754e",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "blocked": {
+      "claim": "권한·버전 차단 — 자동 통과 없음",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 486,
+          "end_line": 500,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "530a85c3f4c4784b9fe0557efb83fa014856c55adb7002b7a680809e2bbb33e5",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "partial": {
+      "claim": "부분 완료 — 대상별 상태 유지",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 501,
+          "end_line": 504,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "130007ebf1a242976a3a16ea6f519a555820fe1ea60a3e2023630cd8a890cad3",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "reopen-checkpoint",
+      "claim": "이전 영수증",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 356,
+          "end_line": 385,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "e4b3e8a3007c0081d57b57f3aff96008cf2a4bb15c5b3a09c32abdc40d818ba9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "checkpoint-transaction",
+      "claim": "재검사 통과",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 449,
+          "end_line": 464,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "e327a8cc879173c64b0b3b263bdfab7ecdc7477bb9e265e7f5769f6a07c6f515",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "transaction-index",
+      "claim": "저장 후",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 809,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "e377561738ad090119d6dd4bb8badf299ae1a3e0fa8bae3e3c5fc6d216c33674",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1223,
+          "end_line": 1240,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "13a0d98c506a7f808a5cf0afc5b741ec71a7a8df772b0f990b6cf56f973bbc2a",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "index-complete",
+      "claim": "ready / empty",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 468,
+          "end_line": 483,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "f090d2fd515580ca7d5975e355f97f9270190d2b4652d0424da18fa856c888c9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "transaction-retry",
+      "claim": "취소·실패",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 809,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "e377561738ad090119d6dd4bb8badf299ae1a3e0fa8bae3e3c5fc6d216c33674",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1223,
+          "end_line": 1240,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "13a0d98c506a7f808a5cf0afc5b741ec71a7a8df772b0f990b6cf56f973bbc2a",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "index-retry",
+      "claim": "색인 대기",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 468,
+          "end_line": 483,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "f090d2fd515580ca7d5975e355f97f9270190d2b4652d0424da18fa856c888c9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "transaction-blocked",
+      "claim": "권한·충돌",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 809,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "e377561738ad090119d6dd4bb8badf299ae1a3e0fa8bae3e3c5fc6d216c33674",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1223,
+          "end_line": 1240,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "13a0d98c506a7f808a5cf0afc5b741ec71a7a8df772b0f990b6cf56f973bbc2a",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "retry-reopen",
+      "claim": "지연 후",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 484,
+          "end_line": 500,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "1efdbde9067dec5b98b92747a1292a74a849c91441663f7470bf914ac949754e",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "retry-partial",
+      "claim": "미완료 대상",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 484,
+          "end_line": 500,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "1efdbde9067dec5b98b92747a1292a74a849c91441663f7470bf914ac949754e",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "blocked-partial",
+      "claim": "차단 대상",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 486,
+          "end_line": 500,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "530a85c3f4c4784b9fe0557efb83fa014856c55adb7002b7a680809e2bbb33e5",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": []
+}

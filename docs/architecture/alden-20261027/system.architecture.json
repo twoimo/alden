@@ -1,0 +1,289 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Alden · 실행 경계",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "system.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "components": [
+    {
+      "id": "surface",
+      "type": "frontend",
+      "label": "사용자 입력",
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 223,
+          "end_line": 255
+        }
+      ],
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "sublabel": "텍스트 · 음성"
+    },
+    {
+      "id": "bridge",
+      "type": "backend",
+      "label": "Tauri 브리지",
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 160,
+          "end_line": 184
+        },
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs",
+          "line": 1248,
+          "end_line": 1275
+        }
+      ],
+      "pos": [
+        320,
+        40
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sublabel": "허용된 명령"
+    },
+    {
+      "id": "python",
+      "type": "backend",
+      "label": "Python 실행",
+      "sources": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "line": 2767,
+          "end_line": 2782
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 205,
+          "end_line": 228
+        }
+      ],
+      "pos": [
+        600,
+        40
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sublabel": "명령별 소유"
+    },
+    {
+      "id": "collection",
+      "type": "database",
+      "label": "수집 저장소",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 423,
+          "end_line": 449
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 809
+        }
+      ],
+      "pos": [
+        880,
+        40
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sublabel": "원본 · 파생 분리"
+    },
+    {
+      "id": "routing",
+      "type": "backend",
+      "label": "모델 선택",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2050,
+          "end_line": 2083
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2098,
+          "end_line": 2122
+        }
+      ],
+      "pos": [
+        600,
+        220
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sublabel": "턴마다 선택 고정"
+    },
+    {
+      "id": "router",
+      "type": "cloud",
+      "label": "라우터 경로",
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py",
+          "line": 20,
+          "end_line": 24
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2111,
+          "end_line": 2114
+        }
+      ],
+      "pos": [
+        320,
+        220
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sublabel": "Flash / high 기본"
+    },
+    {
+      "id": "local",
+      "type": "backend",
+      "label": "선택된 로컬",
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py",
+          "line": 140,
+          "end_line": 162
+        },
+        {
+          "path": "scripts/alden_model_routes.py",
+          "line": 199,
+          "end_line": 235
+        }
+      ],
+      "pos": [
+        880,
+        220
+      ],
+      "size": [
+        160,
+        62
+      ],
+      "sublabel": "정확한 ID · 준비"
+    },
+    {
+      "id": "cli",
+      "type": "backend",
+      "label": "alden-cli",
+      "sources": [
+        {
+          "path": "Cargo.toml",
+          "line": 1,
+          "end_line": 15
+        },
+        {
+          "path": "src/main.rs",
+          "line": 340,
+          "end_line": 342
+        }
+      ],
+      "pos": [
+        40,
+        220
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "sublabel": "호환 실행명 유지"
+    }
+  ],
+  "connections": [
+    {
+      "id": "surface-bridge",
+      "from": "surface",
+      "to": "bridge",
+      "variant": "default",
+      "label": "호출"
+    },
+    {
+      "id": "bridge-python",
+      "from": "bridge",
+      "to": "python",
+      "variant": "default",
+      "label": "실행"
+    },
+    {
+      "id": "python-collection",
+      "from": "python",
+      "to": "collection",
+      "variant": "default",
+      "label": "범위 읽기"
+    },
+    {
+      "id": "python-routing",
+      "from": "python",
+      "to": "routing",
+      "variant": "default",
+      "label": "선택"
+    },
+    {
+      "id": "routing-router",
+      "from": "routing",
+      "to": "router",
+      "variant": "default",
+      "label": "기본 경로"
+    },
+    {
+      "id": "routing-local",
+      "from": "routing",
+      "to": "local",
+      "variant": "default",
+      "label": "명시 선택"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "기본 경로",
+      "items": [
+        "설정이 없으면 Gemini 3.8 Flash/high. 고정 MLX 27B 기본값이 아니다.",
+        "네이티브 inventory의 정확한 ID·chat 선언·단일 ready 엔드포인트를 확인한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "호환 및 범위",
+      "items": [
+        "alden-cli가 정식 이름이며 openkakao-cli는 별도 호환 실행명이다.",
+        "CLI는 별도 진입점이다. 이 그림은 UI가 항상 CLI를 호출한다고 주장하지 않는다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "검증 경계",
+      "items": [
+        "커밋 소스의 정적 구조. Alden·모델·서비스 실행 여부를 증명하지 않는다."
+      ]
+    }
+  ]
+}

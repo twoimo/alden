@@ -1,0 +1,266 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MCP · 읽기 권한과 로컬 도구",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "mcp.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "mcp",
+      "label": "읽기 전용 MCP"
+    },
+    {
+      "id": "authority",
+      "label": "출처 권한"
+    },
+    {
+      "id": "local",
+      "label": "로컬 텍스트 턴"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "request",
+      "type": "external",
+      "label": "MCP 호출",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 149,
+          "end_line": 178
+        }
+      ],
+      "lane": "mcp",
+      "col": 0,
+      "sublabel": "도구·인자 검사"
+    },
+    {
+      "id": "allow",
+      "type": "security",
+      "label": "프로젝트 허용",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 35,
+          "end_line": 65
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 149,
+          "end_line": 178
+        }
+      ],
+      "lane": "mcp",
+      "col": 1,
+      "sublabel": "시작 범위 고정"
+    },
+    {
+      "id": "guard",
+      "type": "security",
+      "label": "현재 출처 검사",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 81,
+          "end_line": 99
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 180,
+          "end_line": 191
+        }
+      ],
+      "lane": "authority",
+      "col": 1,
+      "sublabel": "취소·기한 포함"
+    },
+    {
+      "id": "read",
+      "type": "backend",
+      "label": "범위 읽기",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 193,
+          "end_line": 238
+        }
+      ],
+      "lane": "authority",
+      "col": 2,
+      "sublabel": "상세 버전 필수"
+    },
+    {
+      "id": "result",
+      "type": "messagebus",
+      "label": "결과 반환",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 228,
+          "end_line": 248
+        }
+      ],
+      "lane": "mcp",
+      "col": 3,
+      "sublabel": "마지막 검사"
+    },
+    {
+      "id": "text",
+      "type": "frontend",
+      "label": "지식 요청",
+      "sources": [
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 205,
+          "end_line": 228
+        }
+      ],
+      "lane": "local",
+      "col": 0,
+      "sublabel": "명시된 입력"
+    },
+    {
+      "id": "strict",
+      "type": "backend",
+      "label": "엄격 도구 루프",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_turn.py",
+          "line": 126,
+          "end_line": 161
+        },
+        {
+          "path": "scripts/alden_knowledge_turn.py",
+          "line": 173,
+          "end_line": 210
+        }
+      ],
+      "lane": "local",
+      "col": 1,
+      "sublabel": "최대 2홉·1읽기"
+    },
+    {
+      "id": "commit",
+      "type": "database",
+      "label": "텍스트 CAS",
+      "sources": [
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 448,
+          "end_line": 475
+        },
+        {
+          "path": "scripts/alden_chat_turns.py",
+          "line": 584,
+          "end_line": 615
+        }
+      ],
+      "lane": "local",
+      "col": 3,
+      "sublabel": "현재 턴만 확정"
+    },
+    {
+      "id": "rejected",
+      "type": "security",
+      "label": "거부·취소",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 228,
+          "end_line": 246
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 467,
+          "end_line": 477
+        }
+      ],
+      "lane": "authority",
+      "col": 4,
+      "sublabel": "권한 확대 없음"
+    }
+  ],
+  "edges": [
+    {
+      "id": "request-allow",
+      "from": "request",
+      "to": "allow",
+      "variant": "default",
+      "label": "검사"
+    },
+    {
+      "id": "allow-guard",
+      "from": "allow",
+      "to": "guard",
+      "variant": "security",
+      "label": "허용 범위"
+    },
+    {
+      "id": "guard-read",
+      "from": "guard",
+      "to": "read",
+      "variant": "security",
+      "label": "현재 권한"
+    },
+    {
+      "id": "read-result",
+      "from": "read",
+      "to": "result",
+      "variant": "default",
+      "label": "검증 결과"
+    },
+    {
+      "id": "text-strict",
+      "from": "text",
+      "to": "strict",
+      "variant": "default",
+      "label": "입력 고정"
+    },
+    {
+      "id": "strict-read",
+      "from": "strict",
+      "to": "read",
+      "variant": "default",
+      "label": "1회 한정"
+    },
+    {
+      "id": "strict-commit",
+      "from": "strict",
+      "to": "commit",
+      "variant": "security",
+      "label": "출처 재검사"
+    },
+    {
+      "id": "read-rejected",
+      "from": "read",
+      "to": "rejected",
+      "variant": "security",
+      "label": "버전 불일치"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "두 경로의 구분",
+      "items": [
+        "MCP stdio와 로컬 도구 루프는 별도 진입점이다. 공통 역할인 출처 검사를 한 행으로 묶었다.",
+        "로컬 입력·route·token binding과 현재 문맥을 검사한다. 최종 저장은 pending/owner/turn/context CAS를 통과해야 한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "확대 금지",
+      "items": [
+        "도구 결과는 인용 근거이다. 프로젝트 범위·쓰기 권한·추가 모델 호출의 허가가 아니다."
+      ]
+    }
+  ]
+}

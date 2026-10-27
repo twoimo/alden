@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "출처 · 원본에서 파생까지",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "lineage.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "stages": [
+    {
+      "label": "원본"
+    },
+    {
+      "label": "현재 권한"
+    },
+    {
+      "label": "파생"
+    },
+    {
+      "label": "조회"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "raw",
+      "type": "database",
+      "label": "원본 바이트",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 883,
+          "end_line": 906
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1801
+        }
+      ],
+      "stage": 0,
+      "row": 0,
+      "sublabel": "해시 검증"
+    },
+    {
+      "id": "scope",
+      "type": "security",
+      "label": "권한·버전",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 649,
+          "end_line": 675
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 802
+        }
+      ],
+      "stage": 1,
+      "row": 0,
+      "sublabel": "읽기 전후 확인"
+    },
+    {
+      "id": "records",
+      "type": "database",
+      "label": "문서·관계 버전",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1124,
+          "end_line": 1151
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1183,
+          "end_line": 1218
+        }
+      ],
+      "stage": 2,
+      "row": 0,
+      "sublabel": "이전 버전 보존"
+    },
+    {
+      "id": "detail",
+      "type": "backend",
+      "label": "원문 상세",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1843
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 214,
+          "end_line": 238
+        }
+      ],
+      "stage": 3,
+      "row": 0,
+      "sublabel": "expected_version"
+    },
+    {
+      "id": "export",
+      "type": "backend",
+      "label": "범위 내보내기",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_export.py",
+          "line": 119,
+          "end_line": 152
+        }
+      ],
+      "stage": 1,
+      "row": 2,
+      "sublabel": "권한·체크포인트"
+    },
+    {
+      "id": "gbrain",
+      "type": "database",
+      "label": "GBrain 파생",
+      "sources": [
+        {
+          "path": "scripts/alden_gbrain_import.py",
+          "line": 847,
+          "end_line": 882
+        }
+      ],
+      "stage": 2,
+      "row": 2,
+      "sublabel": "세대·투영 해시"
+    },
+    {
+      "id": "paths",
+      "type": "backend",
+      "label": "경로 조회",
+      "sources": [
+        {
+          "path": "scripts/alden_gbrain_import.py",
+          "line": 851,
+          "end_line": 882
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 199,
+          "end_line": 212
+        }
+      ],
+      "stage": 3,
+      "row": 2,
+      "sublabel": "현재 원본 재검사"
+    }
+  ],
+  "flows": [
+    {
+      "id": "raw-scope",
+      "from": "raw",
+      "to": "scope",
+      "variant": "security",
+      "label": "원본 증거"
+    },
+    {
+      "id": "scope-records",
+      "from": "scope",
+      "to": "records",
+      "variant": "security",
+      "label": "허용 버전"
+    },
+    {
+      "id": "records-detail",
+      "from": "records",
+      "to": "detail",
+      "variant": "default",
+      "label": "상세 근거"
+    },
+    {
+      "id": "records-export",
+      "from": "records",
+      "to": "export",
+      "variant": "default",
+      "label": "범위 레코드"
+    },
+    {
+      "id": "export-gbrain",
+      "from": "export",
+      "to": "gbrain",
+      "variant": "default",
+      "label": "파생 투영"
+    },
+    {
+      "id": "gbrain-paths",
+      "from": "gbrain",
+      "to": "paths",
+      "variant": "default",
+      "label": "경로 후보"
+    },
+    {
+      "id": "scope-paths",
+      "from": "scope",
+      "to": "paths",
+      "variant": "security",
+      "label": "현재 권한"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "권위의 위치",
+      "items": [
+        "GBrain은 파생 캐시이며 원본 권한을 대신하지 않는다. 조회 전후 current export·generation 토큰을 확인한다.",
+        "출처와 투영이 달라지면 stale로 거부한다. 원본 보존과 파생 노드 표시를 구분한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "버전 근거",
+      "items": [
+        "문서 버전은 raw hash·처리 버전·투영 hash에 묶인다. 관계는 출처·근거 digest를 별도로 가진다.",
+        "삭제·누락 표시는 현재 membership을 바꾸며 이전 원문·버전 보존과 구분된다."
+      ]
+    }
+  ]
+}

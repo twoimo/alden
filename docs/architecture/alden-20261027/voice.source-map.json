@@ -1,0 +1,288 @@
+{
+  "family": "voice",
+  "scope": "음성 · 턴과 취소",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "turn": {
+      "claim": "새 턴 — 이전 턴 취소",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1256,
+          "end_line": 1282,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "ecfcc728585c0511ebd237a6c08e4f019935a4a15f23d3dd28becb7f7317ac51",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 223,
+          "end_line": 239,
+          "file_sha256": "8a70fadc3fd10d929cc2987bc5951d7cf3388882740f5e2e5bb1e64b44e9890e",
+          "range_sha256": "3bd6b386a93f2056d278b77019a91669ec02b09b023827dd08b19f4826ffb159",
+          "local_source": "../../../desktop/src-tauri/src/main.rs"
+        }
+      ]
+    },
+    "stt": {
+      "claim": "음성 인식 — 텍스트는 생략",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1432,
+          "end_line": 1451,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "f7a70337ea5561cf2dd9d16876ae54a0d5bf60da0d20292adae7a34312d766a6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "select": {
+      "claim": "모델 고정 — 저장 설정·기본",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2050,
+          "end_line": 2083,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "e26bed60be1a42cd6bfd48346ae3ff34c6d28c3b779a662ba7145768c02ffd4e",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2098,
+          "end_line": 2122,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "9a883b19a34b19153e08ca5e64b31571a64bc016b982ed42649c10d33d5e48b6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "generate": {
+      "claim": "응답 생성 — 턴 토큰 검사",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1453,
+          "end_line": 1490,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "af6457da8605bbc74df7cc89ffaac2f60565f5149c7024b3884720d4a137041c",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "speak": {
+      "claim": "음성 출력 — 취소 가능",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1492,
+          "end_line": 1501,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "77d21950a92c868187b4dde23fc7844fa8a510ce679cf52d6f09fb4efd4be3ef",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "commit": {
+      "claim": "응답 확정 — 현재 턴만 저장",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1503,
+          "end_line": 1525,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "11d7c66584705c362ea637818f71b720a7931c3e81394593ece4927e0624523c",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "abort": {
+      "claim": "턴 취소 — 전역 상태 보존",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1284,
+          "end_line": 1298,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "4f4f22073a7ec075176b106ad23d7c5840c14b361c346c05001ad308537569f8",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1446,
+          "end_line": 1451,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "bd054a230b71efc573bb6a09a3f5a69a330ca114a989522e789816b50bbf8be6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "failure": {
+      "claim": "단계 오류 — 완료로 처리 안 함",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1482,
+          "end_line": 1501,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "0b5870615c3546d6061de02b9b00e37fe12b2f668536151fedbb1f5842b46574",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "turn-stt",
+      "claim": "PCM",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1256,
+          "end_line": 1282,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "ecfcc728585c0511ebd237a6c08e4f019935a4a15f23d3dd28becb7f7317ac51",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 223,
+          "end_line": 239,
+          "file_sha256": "8a70fadc3fd10d929cc2987bc5951d7cf3388882740f5e2e5bb1e64b44e9890e",
+          "range_sha256": "3bd6b386a93f2056d278b77019a91669ec02b09b023827dd08b19f4826ffb159",
+          "local_source": "../../../desktop/src-tauri/src/main.rs"
+        }
+      ]
+    },
+    {
+      "id": "stt-select",
+      "claim": "확인 입력",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1432,
+          "end_line": 1451,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "f7a70337ea5561cf2dd9d16876ae54a0d5bf60da0d20292adae7a34312d766a6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    {
+      "id": "select-generate",
+      "claim": "선택 고정",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2050,
+          "end_line": 2083,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "e26bed60be1a42cd6bfd48346ae3ff34c6d28c3b779a662ba7145768c02ffd4e",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2098,
+          "end_line": 2122,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "9a883b19a34b19153e08ca5e64b31571a64bc016b982ed42649c10d33d5e48b6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    {
+      "id": "generate-speak",
+      "claim": "응답",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1453,
+          "end_line": 1490,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "af6457da8605bbc74df7cc89ffaac2f60565f5149c7024b3884720d4a137041c",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    {
+      "id": "speak-commit",
+      "claim": "출력 완료",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1492,
+          "end_line": 1501,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "77d21950a92c868187b4dde23fc7844fa8a510ce679cf52d6f09fb4efd4be3ef",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    {
+      "id": "turn-abort",
+      "claim": "중단",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1256,
+          "end_line": 1282,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "ecfcc728585c0511ebd237a6c08e4f019935a4a15f23d3dd28becb7f7317ac51",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 223,
+          "end_line": 239,
+          "file_sha256": "8a70fadc3fd10d929cc2987bc5951d7cf3388882740f5e2e5bb1e64b44e9890e",
+          "range_sha256": "3bd6b386a93f2056d278b77019a91669ec02b09b023827dd08b19f4826ffb159",
+          "local_source": "../../../desktop/src-tauri/src/main.rs"
+        }
+      ]
+    },
+    {
+      "id": "generate-failure",
+      "claim": "오류",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1453,
+          "end_line": 1490,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "af6457da8605bbc74df7cc89ffaac2f60565f5149c7024b3884720d4a137041c",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    {
+      "id": "speak-failure",
+      "claim": "출력 오류",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1492,
+          "end_line": 1501,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "77d21950a92c868187b4dde23fc7844fa8a510ce679cf52d6f09fb4efd4be3ef",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "claim": "음성 시작·종료 버튼은 요청 접수와 결과를 구분한다.",
+      "sources": [
+        {
+          "path": "desktop/src/voice-controls.ts",
+          "line": 18,
+          "end_line": 36,
+          "file_sha256": "3fca4ca53cad85a812ab4cd34deb63904894fba02b3cfe62fba6be87ead1c4a3",
+          "range_sha256": "fbcf64090ef8dd4244760778a19421576f0123ecc0852fceba39730b1a5cfd41",
+          "local_source": "../../../desktop/src/voice-controls.ts"
+        }
+      ]
+    }
+  ]
+}
