@@ -19,7 +19,7 @@ class CollectionHistoryTrendTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory(dir=os.environ.get('ALDEN_TEST_TMPDIR'))
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.store = CollectionStore(self.root)
         self.target = self.store.register(platform='youtube', original_id='channel', kind='channel',
                                           label='Allowed channel', projects=['one'])
