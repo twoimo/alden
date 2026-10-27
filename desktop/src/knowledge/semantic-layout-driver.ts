@@ -101,8 +101,11 @@ export class SemanticLayoutDriver {
     if(this.busy&&inputs===this.requestedInputs)return;
     // Cancel obsolete work immediately; restore only the last completed cache.
     if (this.busy) this.stop();
-    const worker = this.worker ?? this.create(); this.worker = worker;
-    const id = ++this.generation; this.busy = true; this.pendingReflow = reflow; this.requestedPins = pinKey;
+    const id = ++this.generation;
+    let worker: LayoutWorkerPort;
+    try { worker = this.worker ?? this.create(); }
+    catch { this.failWorker(null, id, 'create'); return; }
+    this.worker = worker; this.busy = true; this.pendingReflow = reflow; this.requestedPins = pinKey;
     this.requestedKey = key; this.requestedInputs=inputs; this.state = { state: 'pending', generation: id };
     worker.onmessage = event => {
       if (this.worker !== worker || event.data.id !== id || id !== this.generation) return;
@@ -122,8 +125,7 @@ export class SemanticLayoutDriver {
       this.apply(event.data);
     };
     worker.onerror = () => {
-      if (this.worker !== worker || id !== this.generation) return;
-      this.busy = false; this.pendingReflow = false; this.state = { state: 'failed', reason: 'semantic_layout_worker_failed' };
+      this.failWorker(worker, id, 'runtime');
     };
     // A new identity's ID seed is provisional even after another page solved.
     // Retain completed identities and explicit pins; unrelated cached IDs do
@@ -141,10 +143,24 @@ export class SemanticLayoutDriver {
       explicitPinPriorNodes:retained.filter(([key])=>pinned.has(key)).length,
       restoredProvisionalNodes:[...visibleIds].filter(key=>provisional.has(key)&&solved.has(key)&&!pinned.has(key)).length};
     this.state={...this.state,...priorBasis};
-    worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
-      pairs, changed: [...changed], pinned: [...pinned], nowMs, reflow, checkpoint: this.checkpoint });
+    try {
+      worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
+        pairs, changed: [...changed], pinned: [...pinned], nowMs, reflow, checkpoint: this.checkpoint });
+    } catch { this.failWorker(worker, id, 'post'); }
   }
 
-  stop(): void { this.generation++; this.worker?.terminate(); this.worker = null; this.busy = false; this.pendingReflow = false; this.requestedPins = ''; this.requestedKey = ''; this.requestedInputs=''; }
+  private failWorker(worker: LayoutWorkerPort | null, id: number, failureStage: 'create' | 'post' | 'runtime'): void {
+    if (id !== this.generation || (worker !== null && this.worker !== worker)) return;
+    // Keep the last completed checkpoint, but never reuse a failed transport
+    // or let its queued callbacks publish a completion after failure.
+    this.stop();
+    this.state = { state: 'failed', reason: 'semantic_layout_worker_failed', failureStage };
+  }
+
+  stop(): void {
+    this.generation++; const worker = this.worker; this.worker = null;
+    this.busy = false; this.pendingReflow = false; this.requestedPins = ''; this.requestedKey = ''; this.requestedInputs='';
+    if (worker) { worker.onmessage = null; worker.onerror = null; worker.terminate(); }
+  }
   clear(): void { this.stop(); this.checkpoint = undefined; this.completedPositions=undefined; this.affinityAuthority=undefined; this.appliedKey = ''; this.appliedPins=''; this.state = { state: 'idle' };this.completedState={state:'idle'}; }
 }
