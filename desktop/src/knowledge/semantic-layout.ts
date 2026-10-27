@@ -3,6 +3,7 @@ import type { LayoutAffinityPair } from './layout-affinity';
 import type { Point3 } from './plasticity';
 import { overviewRoutingStar } from './overview-labels';
 import { centerCandidates } from './center-candidates';
+import { boundedCollisionCellSlots } from './collision-cell-slots';
 
 /** Snapshot budgets, not a larger per-frame physics capacity. */
 export const SEMANTIC_LAYOUT_LIMITS = Object.freeze({
@@ -963,6 +964,7 @@ export class SemanticLayoutEngine {
     const denseGrid = pinned.size === 0;
     const sampleSlots: Array<CollisionCell | undefined> = movableCount && denseGrid ? new Array(32768) : [];
     const neighborSlots: Array<CollisionNeighborhood | undefined> = movableCount && denseGrid ? new Array(32768) : [];
+    const sparseCellSlots: Array<CollisionCell | undefined> = [];
     const neighborhoodCrowdThreshold = 24;
     if (movable.some(Boolean)) for (let iteration = 0; iteration < limits.solverIterations; iteration++) {
       d.solverIterations++; forces.fill(0); corrections?.fill(0);
@@ -1094,6 +1096,7 @@ export class SemanticLayoutEngine {
           cell.sample = sample;
           if (denseGrid) sampleSlots[key as number] = cell;
         }
+        const boundedSlots = boundedCollisionCellSlots(cells, sparseCellSlots);
         for (const [key, cell] of cells) {
           // Keep at most 27 sample references and cumulative lengths. Copying
           // all sampled IDs into every neighboring cell dominated snapshot CPU;
@@ -1102,8 +1105,13 @@ export class SemanticLayoutEngine {
           let total = 0;
           let count = 0, sumX = 0, sumY = 0, sumZ = 0;
           for (let x = -1; x <= 1; x++) for (let y = -1; y <= 1; y++) for (let z = -1; z <= 1; z++) {
-            const neighborKey = cellKey(cell.x + x, cell.y + y, cell.z + z);
-            const neighbor = denseGrid ? sampleSlots[neighborKey as number] : cells.get(neighborKey);
+            // Occupied axes in [-15,14] make every +/-1 neighbor a unique
+            // [-16,15] slot. Keep this sparse frame, iteration and sample order;
+            // out-of-domain cells retain the original string-key lookup.
+            const neighbor = boundedSlots
+              ? boundedSlots[((cell.x + x + 16) * 32 + cell.y + y + 16) * 32 + cell.z + z + 16]
+              : denseGrid ? sampleSlots[cellKey(cell.x + x, cell.y + y, cell.z + z) as number]
+                : cells.get(cellKey(cell.x + x, cell.y + y, cell.z + z));
             if (neighbor) {
               samples.push(neighbor.sample); total += neighbor.sample.length; ends.push(total);
               count += neighbor.members.length;
