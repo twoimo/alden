@@ -2042,20 +2042,67 @@ class CollectionStore:
         # A later real transition back to an old version remains a separate run.
         # Canonicalize before the time predicate: a replay with a later timestamp
         # must not move a transition into a second calendar window.
-        rows = db.execute("""SELECT MIN(e.at) AS at,e.run_id,e.target_id,e.document_id,e.version,
-            json_extract(e.details,'$.change') AS change,r.state AS run_state,
-            MIN(CASE WHEN json_extract(e.details,'$.activity_deferred')=1 AND NOT EXISTS(
-                SELECT 1 FROM events p WHERE p.run_id=e.run_id AND p.target_id=e.target_id
-                AND p.stage='published' AND p.sequence<=?
-                AND json_extract(p.details,'$.stored_event_id')=e.event_id) THEN 1 ELSE 0 END) AS deferred
+        # Resolve publication evidence once for the scoped deferred runs; the
+        # correlated lookup rescanned a target's journal per receipt. The
+        # first matching valid proof and the first malformed row per scope
+        # reproduce the journal index scan: valid proof before a corrupt row
+        # still succeeds, while a corrupt row before any proof fails closed.
+        reverse = db.execute('PRAGMA reverse_unordered_selects').fetchone()[0]
+        first_sequence, precedes = ('MAX', '>') if reverse else ('MIN', '<')
+        # SQLite 3.42 added JSON5 extraction and this matching validity probe.
+        # Older libraries accept strict JSON only and lack json_error_position.
+        valid_json = ('json_error_position(p.details)=0'
+                      if sqlite3.sqlite_version_info >= (3, 42, 0) else 'json_valid(p.details)')
+        ctes = """WITH stored AS MATERIALIZED (
+            SELECT e.at,e.run_id,e.target_id,e.document_id,e.version,e.event_id,
+                json_extract(e.details,'$.change') AS change,
+                json_extract(e.details,'$.activity_deferred')=1 AS activity_deferred,
+                r.state AS run_state
             FROM events e JOIN targets t ON t.id=e.target_id
             LEFT JOIN versions v ON v.id=e.version LEFT JOIN runs r ON r.id=e.run_id
-            WHERE """ + where + """ AND e.sequence<=? AND e.stage='stored'
-            GROUP BY e.run_id,e.target_id,e.document_id,e.version,json_extract(e.details,'$.change')
-            HAVING MIN(e.at)>=? AND MIN(e.at)<?""",
-            (checkpoint['cursor'], *args, checkpoint['cursor'], start, end))
+            WHERE """ + where + f""" AND e.sequence<=? AND e.stage='stored'
+        ), scopes AS MATERIALIZED (
+            SELECT DISTINCT run_id,target_id FROM stored WHERE activity_deferred
+        ), pub AS MATERIALIZED (
+            SELECT p.run_id,p.target_id,p.sequence,
+                CASE WHEN {valid_json}
+                    THEN CAST(json_extract(p.details,'$.stored_event_id') AS TEXT) END AS stored_event_id,
+                {valid_json} AS valid
+            FROM events p CROSS JOIN scopes s
+            WHERE p.run_id=s.run_id AND p.target_id=s.target_id
+                AND p.target_id IN (SELECT target_id FROM scopes)
+                AND p.stage='published' AND p.sequence<=?
+        ), bad AS MATERIALIZED (
+            SELECT run_id,target_id,{first_sequence}(sequence) AS bad_at FROM pub WHERE NOT valid
+            GROUP BY run_id,target_id
+        ), proof AS MATERIALIZED (
+            SELECT e.event_id,{first_sequence}(p.sequence) AS proof_at
+            FROM stored e JOIN pub p ON p.run_id=e.run_id AND p.target_id=e.target_id
+                AND p.stored_event_id=e.event_id
+            WHERE e.activity_deferred GROUP BY e.event_id
+        ), corrupt AS MATERIALIZED (
+            SELECT 1 AS flagged FROM stored e
+            JOIN bad b ON b.run_id=e.run_id AND b.target_id=e.target_id
+            LEFT JOIN proof pr ON pr.event_id=e.event_id
+            WHERE e.activity_deferred AND (pr.proof_at IS NULL OR b.bad_at{precedes}pr.proof_at) LIMIT 1
+        )"""
+        # Every retained group is evaluated, including one whose canonical day falls
+        # outside the window, because the original scan raised on a corrupt needed
+        # publication regardless of the date predicate. The window is applied here.
+        rows = db.execute(ctes + """
+        SELECT MIN(e.at) AS at,e.run_id,e.target_id,e.document_id,e.version,e.change,e.run_state,
+            (MIN(e.at)>=? AND MIN(e.at)<?) AS in_window,
+            MIN(CASE WHEN e.activity_deferred AND proof.proof_at IS NULL THEN 1 ELSE 0 END) AS deferred,
+            MAX(CASE WHEN (SELECT COUNT(*) FROM corrupt) THEN 1 ELSE 0 END) AS corrupt_proof
+        FROM stored e LEFT JOIN proof ON proof.event_id=e.event_id
+        GROUP BY e.run_id,e.target_id,e.document_id,e.version,e.change""",
+            (*args, checkpoint['cursor'], checkpoint['cursor'], start, end))
         unclassified = 0
         for row in rows:
+            if row['corrupt_proof']:
+                raise sqlite3.OperationalError('malformed JSON')
+            if not row['in_window']:
+                continue
             change = row['change']
             if change == 'unchanged':
                 continue
