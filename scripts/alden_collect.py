@@ -7,6 +7,7 @@ consumes its provenance-preserving snapshot without borrowing cookies or sending
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import math
@@ -428,7 +429,24 @@ def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: 
         raise ValueError('collection_source_scope_denied')
     config = target["config"]
     path = Path(config["path"])
-    if config["adapter"] == "spark-index":
+    processor = 'declared-source-snapshot-v3'
+    if config['adapter'] == 'file-set':
+        if not target['enabled']:
+            raise RuntimeError('collection_target_paused')
+        from alden_file_set import file_set_snapshot, PROCESSING_VERSION
+        records, relations, source, _, check_current = file_set_snapshot(target, path, cancelled=cancelled)
+        binding = encoded({k: target[k] for k in ('config', 'projects', 'enabled', 'platform', 'original_id')})
+        outer_guard = publication_guard
+        @contextmanager
+        def file_guard():
+            with outer_guard() if outer_guard is not None else nullcontext():
+                current = store.target(target_id)
+                if encoded({k: current[k] for k in ('config', 'projects', 'enabled', 'platform', 'original_id')}) != binding:
+                    raise RuntimeError('collection_files_target_changed')
+                check_current()
+                yield
+        publication_guard, processor = file_guard, PROCESSING_VERSION
+    elif config["adapter"] == "spark-index":
         records, relations, source = spark_snapshot(target, path)
     else:
         data, source = json_snapshot(path)
@@ -446,7 +464,7 @@ def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: 
                                   "source_observation":{"source_revision":source_revision,"observed_at":source['observed_at']}},
                           origin="alden-collector", cancelled=cancelled, complete_snapshot=True,
                           source_revision=source_revision, source_order=order,
-                          processing_version='declared-source-snapshot-v3', publication_guard=publication_guard)
+                          processing_version=processor, publication_guard=publication_guard)
     return {"target_id": target_id, "records": len(records), "relations": len(relations),
             "source": source, "batches": [result], "coverage": "declared source snapshot, not a wider account survey"}
 
@@ -464,7 +482,15 @@ def capture_source(store: CollectionStore, target_id: str, *, cancelled=lambda: 
     if not isinstance(cursor, dict) or cursor.get("complete") is not True:
         raise RuntimeError("collection_source_projection_incomplete")
     config = target["config"]; path = Path(config["path"]); adapter = config["adapter"]
-    if adapter == "spark-index":
+    if adapter == 'file-set':
+        from alden_file_set import file_set_snapshot
+        records, relations, source, raw, check_current = file_set_snapshot(target, path, cancelled=cancelled)
+        if source['sha256'] != cursor.get('source_revision'):
+            raise RuntimeError('collection_source_revision_changed')
+        pointers = ['/files/' + str(i) + '/record' for i in range(len(records))]
+        scope = 'exact declared original file bytes in SHA256-keyed base64 blobs, with structural parse locations'
+        check_current()
+    elif adapter == "spark-index":
         records, relations, source = spark_snapshot(target, path)
         data = {"nodes": [r["raw"] for r in records], "relations": relations}
         raw = encoded(data)
@@ -495,6 +521,12 @@ def capture_source(store: CollectionStore, target_id: str, *, cancelled=lambda: 
                      "json_pointer": pointer, "record_sha256": raw_hash})
     manifest = {"schema": 1, "target_id": target_id, "adapter": adapter, "origin": str(path),
                 "byte_scope": scope, "processing_version": "alden-source-capture-1", "records": refs}
+    if adapter == 'file-set':
+        from alden_file_set import body_complete
+        manifest['relations'] = {}
+        manifest['original_files'] = [{'file_id': record['source_file_id'],
+            'sha256': record['source_file_sha256'], 'json_pointer': '/blobs_base64/' + record['source_file_sha256'],
+            'encoding': 'base64', 'body_complete': body_complete(record['raw']['parsed'])} for record in records]
     if adapter == "spark-index":
         manifest["current_origin_snapshot_sha256"] = source["snapshot_sha256"]
         manifest["prior_projection_origin_revision"] = cursor.get("source_revision")

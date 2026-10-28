@@ -17,7 +17,7 @@ from alden_collection import safe_directory
 POLL_SECONDS = 5
 SETTLE_SECONDS = 2
 REMOTE_SECONDS = 60
-ADAPTERS = {'source-graph', 'spark-index', 'youtube-graph', 'threads-snapshot', 'youtube-video', 'threads-post'}
+ADAPTERS = {'source-graph', 'spark-index', 'youtube-graph', 'threads-snapshot', 'youtube-video', 'threads-post', 'file-set'}
 
 
 class RealtimeCollection:
@@ -85,6 +85,12 @@ class RealtimeCollection:
     def signature(target):
         config = target['config']
         if config.get('adapter') not in ADAPTERS: raise ValueError('collection_realtime_input_unsupported')
+        if config['adapter'] == 'file-set':
+            from alden_file_set import file_set_signature
+            try:
+                return file_set_signature(target)
+            except RuntimeError as error:
+                raise ValueError('collection_realtime_input_changed') from error
         path = Path(config['path'])
         if not path.is_absolute() or any(p.is_symlink() for p in [path, *path.parents]):
             raise ValueError('collection_realtime_input_unsafe')

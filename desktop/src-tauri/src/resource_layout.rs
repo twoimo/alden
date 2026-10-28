@@ -69,6 +69,8 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/alden_model_routes.py",
     "scripts/alden_routed_llm.py",
     "scripts/alden_file_content.py",
+    "scripts/alden_document_segments.py",
+    "scripts/alden_file_set.py",
     "scripts/alden_link_content.py",
     "scripts/alden_osk.py",
     "scripts/alden_status_mcp.py",
