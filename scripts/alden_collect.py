@@ -535,7 +535,21 @@ def capture_source(store: CollectionStore, target_id: str, *, cancelled=lambda: 
             a = identity(r["source_platform"], r["source_id"]); b = identity(r["target_platform"], r["target_id"])
             identifier = identity("relation", encoded([target_id, a, r["type"], b, r.get("original_id", "")]).decode())
             manifest["relations"][identifier] = hashlib.sha256(encoded(r["evidence"])).hexdigest()
-    return store.retain_source_capture(target_id, raw, manifest, expected_cursor=target["cursor"], cancelled=cancelled)
+    result = store.retain_source_capture(target_id, raw, manifest, expected_cursor=target["cursor"], cancelled=cancelled)
+    if adapter == 'file-set':
+        # Capture is already committed. An index failure cannot undo it or
+        # misreport the original retention operation as rejected.
+        try:
+            from alden_collection_retrieval import index_original_text
+            projects = [p['project'] for p in target['projects'] if p['permission'] != 'denied']
+            result['original_text_index'] = index_original_text(store, projects, cancelled=cancelled)
+        except Exception as error:
+            allowed = {'collection_original_index_invalid', 'collection_original_index_stale',
+                'collection_original_index_budget', 'collection_cancelled', 'alden_source_body_integrity',
+                'alden_source_body_unavailable', 'collection_graph_version_changed'}
+            code = str(error) if str(error) in allowed else 'collection_original_index_invalid'
+            result['original_text_index'] = {'state': 'failed', 'error': code, 'capture_committed': True}
+    return result
 
 
 def main():

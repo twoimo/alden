@@ -291,7 +291,7 @@ def _retrieval_relations(db, store, projects, chosen, relation_ids=()):
         ' ORDER BY ' + priority + ',r.id', (*chosen, *projects, *relation_ids, *chosen))
 
 
-def _verify_retrieval_result(store, projects, authority, eligible, ranked, proofs, relations):
+def _verify_retrieval_result(store, projects, authority, eligible, ranked, proofs, relations, original_contexts=()):
     # A fresh read transaction binds the assembled response, including candidate
     # IDs and compacted source proofs, to one final collection snapshot. It does
     # not promise authority remains unchanged after this read/response interval.
@@ -328,6 +328,8 @@ def _verify_retrieval_result(store, projects, authority, eligible, ranked, proof
                     raise RuntimeError('collection_relation_changed')
                 require_relation_binding(db, current[row['id']])
                 verify(row['source']); verify(row['target'])
+    for context in original_contexts:
+        store._verify_original_text_context(context, projects)
 
 
 def _rows(store, projects, cancelled, time_from=None, time_to=None, *, text_db=None, resolve_source=False, cache_guard=None, candidate_ids=None):
@@ -567,6 +569,18 @@ def index_dense(root, projects, *, cancelled=lambda: False, embed=None, progress
                             source_access=source_access, source_revision=source_revision)
 
 
+def index_original_text(store, projects, *, cancelled=lambda: False):
+    """Refresh only the reversible original cache after a committed capture."""
+    from alden_original_text_index import refresh_original_index
+    projects = _scope(projects)
+    with store.target_lock('collection-dense-retrieval'):
+        _check(cancelled)
+        safe_directory(store.root)
+        with closing(sqlite3.connect(_path(store), timeout=.15)) as db:
+            db.execute('PRAGMA journal_mode=WAL')
+            return refresh_original_index(store, projects, db, cancelled=cancelled)
+
+
 def index_text(root, projects, *, cancelled=lambda: False, source_access=None, source_revision=None):
     """Explicit reversible text-cache refresh; no model loading or embedding."""
     store = CollectionStore.open_existing(Path(root), source_access=source_access, source_revision=source_revision)
@@ -590,9 +604,12 @@ def index_text(root, projects, *, cancelled=lambda: False, source_access=None, s
             latest = _index_rows(store, projects, cancelled, text_db=db)
             with guard((r['id'], r['version']) for r in latest):
                 _check(cancelled)
+            from alden_original_text_index import refresh_original_index
+            original_index = refresh_original_index(store, projects, db, cancelled=cancelled)
             signature = lambda values: [(r['id'], r['version'], r['text_hash']) for r in values]
             return {'state': 'ready' if signature(rows) == signature(latest) else 'pending',
                     'documents': len(rows), 'projects': projects,
+                    'original_text_index': original_index,
                     'text_version': TEXT_VERSION, 'embeddings_generated': 0}
 
 
@@ -708,6 +725,7 @@ def _index_dense(root, projects, *, cancelled, embed, progress, source_access=No
 
 def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
              candidate_limit=40, max_context_chars=8000, rrf_k=60, rrf_weights=None,
+             max_original_excerpt_chars=1200,
              cancelled=lambda: False, query_embed=None, time_from=None, time_to=None, also=None,
              source_access=None, source_revision=None, source_context=None, source_relation_access=None, search_strategy='complete'):
     import auto_reply_knowledge_graph as kg
@@ -715,6 +733,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                                  source_relation_access=source_relation_access)
     source_access, source_revision, source_context = (callbacks[key] for key in ('source_access', 'source_revision', 'source_context'))
     projects = _scope(projects)
+    _check(cancelled)
     if search_strategy not in ('complete','indexed-lexical'):
         raise ValueError('collection_search_strategy_invalid')
     if source_context is not None and not all(callable(value) for value in (source_context, source_access, source_revision)):
@@ -726,6 +745,13 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         raise ValueError('collection_context_budget')
     if type(candidate_limit) is not int or not 1 <= candidate_limit <= 100:
         raise ValueError('collection_candidate_budget')
+    if type(max_original_excerpt_chars) is not int or not 1 <= max_original_excerpt_chars <= 1200:
+        raise ValueError('collection_context_budget')
+    for value in (time_from, time_to):
+        if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+            raise ValueError('collection_time_filter_invalid')
+    if time_from is not None and time_to is not None and time_from > time_to:
+        raise ValueError('collection_time_filter_invalid')
     if also is not None and (not isinstance(also,(list,tuple)) or len(also)>40 or any(not isinstance(i,str) for i in also)):
         raise ValueError('collection_explicit_ids_invalid')
     source_relation_access = callbacks['source_relation_access']
@@ -737,17 +763,24 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
     with store.database() as db:
         authority = store._source_authority_snapshot(db, projects)
     terms = kg._fts_query_terms([query])
+    from alden_original_text_index import scoped_original_candidates, resolve_original_excerpt, ORIGINAL_TEXT_POLICY, merge_original_ranks
+    original_candidates = scoped_original_candidates(store, projects, query,
+        limit=candidate_limit, cancelled=cancelled, time_from=time_from, time_to=time_to)
+    original_by_id = {row['document_id']: row for row in original_candidates}
     integer_term = _integer_digit_query(query)
     indexed = None
     if search_strategy=='indexed-lexical':
         indexed=_indexed_lexical_candidates(store,terms,projects,candidate_limit,cancelled,time_from,time_to,
                                             integer_term=integer_term)
-    candidate_ids=None if indexed is None else list(dict.fromkeys([r[0] for r in indexed]+list(also or [])))
+    candidate_ids=None if indexed is None else list(dict.fromkeys([identity for identity, _ in merge_original_ranks(
+        [(r[0], r[2]) for r in indexed], [(r['document_id'], r['rank']) for r in original_candidates],
+        limit=candidate_limit)] + list(also or [])))
     source_rows = _rows(store, projects, cancelled, time_from, time_to, candidate_ids=candidate_ids)
     rows = [r for r in source_rows if (r['label'] + '\n' + r['body']).strip()]
     eligible = {row['id']: row for row in rows}
     lexical = ([(r['id'], float(r['rank'])) for r in store.search(terms, projects=projects,
-                limit=candidate_limit, time_from=time_from, time_to=time_to, expand_korean=False)] if terms else []) if indexed is None else [
+                limit=candidate_limit, time_from=time_from, time_to=time_to, expand_korean=False,
+                _include_original=False)] if terms else []) if indexed is None else [
                     (document,score) for document,version,score,_literal in indexed
                     if document in eligible and eligible[document]['version']==version]
     dense, mode = [], 'bm25_only'
@@ -767,6 +800,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 else:
                     seen = {i for i, _ in lexical}
                     lexical = (lexical + [(i, s) for i, s in projected_lexical if i not in seen])[:candidate_limit]
+    lexical = merge_original_ranks(lexical, [(r['document_id'], r['rank']) for r in original_candidates
+        if r['document_id'] in eligible and eligible[r['document_id']]['version'] == r['version']], limit=candidate_limit)
     token_ids = {document_id for document_id, _ in lexical}
     literal_ids = set() if indexed is None else {r[0] for r in indexed if r[3] and r[0] in eligible}
     plan = korean_literal_plan(terms)
@@ -870,6 +905,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
         ranked = [(i, 0.) for i in pinned] + [(i, s) for i, s in ranked if i not in pinned]
     facts, provenance, used = [], [], 0
     relation_checks = []
+    original_contexts = []
+    original_session = store._original_text_session()
     context_windows, context_checks, context_withheld, context_budget_omitted = [], 0, 0, 0
     context_unavailable = set()
     context_unverified_relations = 0
@@ -913,6 +950,24 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                      'provenance_valid': True, 'retracted': False}
             if 'original_body_coverage' in row:
                 proof['original_body_coverage'] = dict(row['original_body_coverage'])
+            original_excerpt = None
+            if document_id in original_by_id:
+                candidate = original_by_id[document_id]
+                if candidate['version'] != row['version']:
+                    raise RuntimeError('collection_graph_version_changed')
+                label_prefix = row['label'][:160] + ': ' if row['label'] else ''
+                remaining = max_context_chars - used - len(label_prefix)
+                if temporal_selection['mode'] == 'latest_observation':
+                    remaining -= len(observation_note(metadata.get('published_at'), 'source_published_at'))
+                if remaining <= 0:
+                    continue
+                original_excerpt = resolve_original_excerpt(store, projects, candidate, query,
+                    cancelled=cancelled, _session=original_session,
+                    max_characters=min(max_original_excerpt_chars, remaining))
+                proof['body_source'] = 'verified_retained_original_projection'
+                proof['original_text_excerpt'] = original_excerpt['proof']
+                proof['lexical_match'] = 'original_' + original_excerpt['proof']['selection']['method']
+                original_contexts.append(original_excerpt['_context'])
             if source_context is not None and isinstance(derived, dict) and derived.get('kind') == 'messenger-exact-content-provenance':
                 if context_checks >= MAX_CONTEXT_ANCHORS:
                     context_withheld += 1
@@ -935,7 +990,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 proof['derived_from'] = {**derived, 'current_source_targets':[window['target_id']]}
                 proof['scope_basis'] = 'current_canonical_excerpt_at_selected_version'
                 context_windows.append(window)
-            evidence_class = content_evidence_class(metadata, row['body'], source=record,
+            evidence_body = original_excerpt['text'] if original_excerpt is not None else row['body']
+            evidence_class = content_evidence_class(metadata, evidence_body, source=record,
                                                    body_source=row['body_source'])
             proof['content_evidence'] = {'policy': CONTENT_POLICY, 'classification': evidence_class}
             if row.get('text_projection') is not None:
@@ -957,6 +1013,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             except ValueError as error:
                 raise RuntimeError('collection_version_integrity') from error
             text=(row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
+            if original_excerpt is not None:
+                text = label_prefix + original_excerpt['text']
             if evidence_class == 'reference_only':
                 text='[링크 참조 · 연결된 페이지 본문 미확인] '+text
             elif evidence_class == 'empty_body':
@@ -966,6 +1024,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             if temporal_selection['mode']=='latest_observation':
                 proof['observation_time']=metadata.get('published_at');proof['observation_basis']='source_published_at'
                 text=observation_note(metadata.get('published_at'),'source_published_at')+text
+            if original_excerpt is not None and len(text) > max_context_chars - used:
+                continue  # Never attach a full-excerpt digest to a trimmed fact.
             match = _context_text_key(text, proof, record, metadata) if compact_text else None
             if match is not None and match in matching_text:
                 representative = provenance[matching_text[match]]
@@ -1043,8 +1103,15 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
             used += characters
             excerpts.append(window)
     _check(cancelled)
-    _verify_retrieval_result(store, projects, authority, eligible, ranked, provenance, relation_checks)
+    from alden_collection import _read_cancellation
+    with _read_cancellation(cancelled):
+        _verify_retrieval_result(store, projects, authority, eligible, ranked, provenance, relation_checks, original_contexts)
+    _check(cancelled)
     return {'facts': facts, 'fact_provenance': provenance,
+            'original_text_index': {'policy': ORIGINAL_TEXT_POLICY, 'matched_candidates': len(original_candidates),
+                'scope': 'current permitted retained originals; derived index coverage may be partial',
+                'ranking': 'full-original ranks replace parser ranks per file; source ranks interleave within one candidate budget',
+                'embeddings_scope': 'initial parser projection; full original vectors not generated'},
             **({'integer_query_policy':'additive digit-lexeme recall; existing token/dense matching retained; no value or unit conversion'} if integer_term else {}),
             **({'retrieval_scope':'bounded_stored_version_index','eligible_documents_scope':'admitted_candidates',
                 'coverage':'bounded candidates; not an exhaustive corpus or archived-only-text search'} if indexed is not None else {}),
@@ -1055,7 +1122,7 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                 'scope':'bounded source transcripts, not facts/replies/agreements; source message times are separate from anchor collection-time filtering'}}
                if source_context is not None else {}),
             'search_mode': 'bm25_with_literals' if mode == 'bm25_only' and literal_ids else mode,
-            'lexical_policy': 'token_then_korean_literal_substring_v1',
+            'lexical_policy': 'verified_original_and_stored_rank_interleave_v1' if original_candidates else 'token_then_korean_literal_substring_v1',
             'projects': projects, 'eligible_documents': len(rows), 'context_chars': used,
             'unsearchable_documents': len(source_rows) - len(rows),
             'pending_text_versions': sum(not r['text_ready'] for r in source_rows),

@@ -165,10 +165,51 @@ clear the prior displayed original. The stored parser excerpt remains separate.
 | Parser child / native command deadline | 12 seconds / 8 seconds |
 | Snapshot cooperative deadline | 120 seconds |
 
-Larger documents require a future versioned pagination path to index the entire
-body. Retaining their complete original bytes does not close that requirement.
-No OCR is performed. Source MCP detail also has its own disclosed text projection
-and excerpt bound; it is not an original-file download API.
+For retained UTF-8 TXT and Markdown, capture now refreshes a separate, reversible
+full-original lexical index in `retrieval.sqlite3`. An explicit `--index-text`
+also refreshes it for previously captured sources. Each document has one complete
+NFC/LF projection, so a match crossing the parser's 16,000-byte cut is searchable.
+General text/vector cache policies remain unchanged. No full-original embedding
+is generated, and no original path is reopened during lookup.
+
+Capture storage commits before this derived refresh. Its `original_text_index`
+receipt distinguishes ready, partial and failed indexing from successful byte
+retention. Unsupported formats or missing captures remain partial; a lookup
+never silently builds the index. No OCR is performed, and full-body indexing for
+other formats remains incomplete.
+
+Both collection retrieval strategies and graph query pages admit current
+project/target/version/raw/config/capture bindings before applying their candidate
+or page limit. A selected original match is resolved from retained source bytes,
+with a fresh final authority check. Cached text or rank alone cannot authorize a
+fact. Graph descriptions show the bounded matching excerpt; no new relationship
+is inferred. Empty-query overview sampling stays unchanged.
+
+Full-original ranks replace parser-only ranks for the same file. Original and
+legacy-only source ranks interleave within one lexical candidate budget;
+independent BM25 scores are not treated as comparable. A selected file's strongest
+indexed term contribution centers multi-term excerpts, while fresh verified
+material determines their actual text and coordinates. Final revalidation
+inherits cancellation and checks again before returning. Complete retrieval
+retains its separate full-scope vector admission; its eligible-document scan
+count is not the lexical candidate limit. Matching uses SQLite unicode61 and
+the existing checked literals, rather than universal casefold or semantic
+equivalence.
+
+`original_text_excerpt` distinguishes the whole verified normalized projection
+from the actual query-centered excerpt. Its digest and Unicode scalar offsets
+bind the excerpt to that projection. Its original UTF-8 byte range is exact when
+endpoint normalization is unchanged; otherwise `covering_original_lines`
+explicitly covers the affected original lines. Original input/capture hashes
+remain separate. Initial `original_body_coverage` does not change or become
+complete as a result of indexing. A delivered excerpt is not evidence that the
+user or model read the whole document. Original-index coverage may be partial;
+an empty result does not establish that no original source exists.
+
+Source MCP detail retains its own disclosed projection/excerpt bound; it is not
+an original-file download API. Typed knowledge turns reverify the selected
+original projection, excerpt and raw range before further model input and turn
+completion. These source checks do not confer installed-app or decoder proof.
 
 ## Verification scope
 

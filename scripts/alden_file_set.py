@@ -268,17 +268,16 @@ class SourceBodyError(ValueError):
         super().__init__(code)
 
 
-def original_utf8_window(packet, *, record, record_pointer, original_files,
-                         offset_bytes=0, max_bytes=16000, cancelled=lambda: False):
-    """Verify a retained declaration and return seven exact UTF-8 range fields.
+def original_utf8_material(packet, *, record, record_pointer, original_files,
+                           cancelled=lambda: False):
+    """Return fresh {data: bytes, text: str} after full original verification.
 
     No IO, parser, or authority lookup occurs here. The caller verifies the
     capture archive, current membership/version and actual stored-body match.
-    Parser coverage is validated without promoting it to complete coverage.
+    Bytes and decoded text retain their exact original Unicode and line endings;
+    parser coverage is validated without promoting it to complete coverage.
     """
-    if (type(offset_bytes) is not int or not 0 <= offset_bytes <= MAX_FILE_BYTES
-            or type(max_bytes) is not int or not 4 <= max_bytes <= MAX_TEXT_BYTES
-            or not callable(cancelled)):
+    if not callable(cancelled):
         raise ValueError('collection_source_body_request_invalid')
 
     def fail(code='alden_source_body_integrity'):
@@ -412,9 +411,22 @@ def original_utf8_window(packet, *, record, record_pointer, original_files,
         if unicodedata.category(character) == 'Cc' and character not in '\n\r\t':
             fail('alden_source_body_encoding_unsupported')
     _check(cancelled)
+    return {'data': data, 'text': text}
+
+
+def original_utf8_window(packet, *, record, record_pointer, original_files,
+                         offset_bytes=0, max_bytes=16000, cancelled=lambda: False):
+    """Return seven byte-range fields from the same verified original material."""
+    if (type(offset_bytes) is not int or not 0 <= offset_bytes <= MAX_FILE_BYTES
+            or type(max_bytes) is not int or not 4 <= max_bytes <= MAX_TEXT_BYTES
+            or not callable(cancelled)):
+        raise ValueError('collection_source_body_request_invalid')
+    material = original_utf8_material(packet, record=record, record_pointer=record_pointer,
+        original_files=original_files, cancelled=cancelled)
+    data = material['data']
     total = len(data)
     if offset_bytes > total or offset_bytes < total and data[offset_bytes] & 0xc0 == 0x80:
-        fail('alden_source_body_cursor_invalid')
+        raise SourceBodyError('alden_source_body_cursor_invalid') from None
     end = min(offset_bytes + max_bytes, total)
     while end < total and data[end] & 0xc0 == 0x80:
         end -= 1

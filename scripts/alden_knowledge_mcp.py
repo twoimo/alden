@@ -107,7 +107,9 @@ class KnowledgeServer(StdioServer):
         for name, extras, description in [
             ('alden_knowledge_search', {'query': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
              'Retrieve retained versions and explicit relations with exact provenance. Read-only; explicitly supplied source authority is rechecked. '
-             'original_body_coverage describes original-file extraction separately from fact_truncated; absent coverage is unknown.'),
+             'original_body_coverage describes initial extraction separately from fact_truncated. '
+             'original_text_excerpt binds a query-selected excerpt to the verified retained original and normalized projection; '
+             'it does not mean the caller read the whole original. Original-index coverage may be partial; no automatic build or embedding.'),
             ('alden_knowledge_graph', {'focus': {'type': 'string', 'maxLength': 256}},
              'Read bounded stored graph nodes and explicit relationships in the allowed project scope.'),
             ('alden_knowledge_history', {'after': {'type': 'integer', 'minimum': 0}},
@@ -285,6 +287,9 @@ class KnowledgeServer(StdioServer):
 
     def tool_failure_code(self, error):
         from alden_file_set import SourceBodyError
+        from alden_original_text_index import OriginalTextIndexError
+        if isinstance(error, OriginalTextIndexError):
+            return error.code
         if isinstance(error, SourceBodyError):
             return error.code
         if isinstance(error, AldenCancelled):

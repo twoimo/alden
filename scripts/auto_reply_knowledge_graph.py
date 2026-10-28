@@ -3863,7 +3863,20 @@ def _fts_query_terms(haystacks: list[str]) -> str:
     seen: set[str] = set()
     particles = ("으로", "부터", "까지", "처럼", "보다", "은", "는", "이", "가", "을", "를", "도", "에", "과", "와", "의", "로", "만")
     for haystack in haystacks:
-        for raw in re.findall(r"[0-9a-z가-힣]+", unicodedata.normalize("NFC", haystack).casefold()):
+        words: list[str] = []
+        word: list[str] = []
+        # Casefold can introduce combining marks (e.g. Turkish dotted I).
+        normalized = unicodedata.normalize("NFC", unicodedata.normalize("NFC", haystack).casefold())
+        for char in normalized:
+            category = unicodedata.category(char)[0]
+            if category in ("L", "N") or (category == "M" and word):
+                word.append(char)
+            elif word:
+                words.append("".join(word))
+                word = []
+        if word:
+            words.append("".join(word))
+        for raw in words:
             candidates = [raw]
             for particle in particles:
                 if len(raw) > len(particle) + 1 and raw.endswith(particle):
@@ -4203,6 +4216,7 @@ def retrieve_knowledge_bundle(
     rrf_k: int = RRF_K,
     candidate_limit: int = RETRIEVAL_CANDIDATE_LIMIT,
     max_context_chars: int = RETRIEVAL_CONTEXT_CHARS,
+    max_original_excerpt_chars: int = 1200,
     projects: "list[str] | tuple[str, ...] | None" = None,
 ) -> dict[str, Any]:
     """GraphRAG + BM25/Dense RRF 검색 번들 반환.
@@ -4220,7 +4234,7 @@ def retrieve_knowledge_bundle(
         from alden_collection_retrieval import retrieve
         return retrieve(root, query_text, projects=projects, max_entities=max_entities,
                         max_relations=max_relations, candidate_limit=candidate_limit,
-                        max_context_chars=max_context_chars, rrf_k=rrf_k,
+                        max_context_chars=max_context_chars, max_original_excerpt_chars=max_original_excerpt_chars, rrf_k=rrf_k,
                         rrf_weights=rrf_weights, cancelled=_embedding_cancelled,
                         time_from=time_from, time_to=time_to, also=also)
     if (root / 'knowledge/osk/sync.json').is_file():

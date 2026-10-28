@@ -164,6 +164,11 @@ jobs:
           tests.test_alden_file_set
           tests.test_alden_source_extraction
           tests.test_alden_original_utf8_window
+          tests.test_alden_original_utf8_material
+          tests.test_alden_original_text_index
+          tests.test_alden_unicode_search_terms
+          tests.test_alden_original_search_integration
+          tests.test_alden_original_search_regressions
           tests.test_alden_source_body_integration
           tests.test_alden_link_content
           tests.test_auto_reply_cli_runtime.AutoReplyCliRuntimeTests.test_link_fetch_requires_separate_opt_in_and_never_ignores_overflow

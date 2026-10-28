@@ -165,6 +165,58 @@ def _fact(fact, text, proof):
         _fail(CHANGED)
 
 
+def _original_excerpt(store, projects, proof, token, session):
+    """Rebuild the selected original excerpt without querying or trusting a cache."""
+    from alden_collection import BODY_NORMALIZATION_VERSION, normalized_body
+    from alden_original_text_index import _original_range
+    value = proof.get('original_text_excerpt')
+    fields = {'schema', 'kind', 'binding', 'capture', 'input_bytes', 'projection',
+        'excerpt', 'original_range', 'selection'}
+    if (type(value) is not dict or set(value) != fields
+            or type(value['schema']) is not int or value['schema'] != 1
+            or value['kind'] != 'verified-original-search-excerpt'):
+        _fail()
+    binding = value['binding']
+    if (type(binding) is not dict or set(binding) != {'document_id', 'target_id', 'version', 'raw_sha256', 'input_sha256'}
+            or binding.get('document_id') != proof['entity_id'] or binding.get('version') != proof['source_version']
+            or not any(m.get('target_id') == binding.get('target_id') for m in proof['source_memberships'])):
+        _fail()
+    material = store._original_text_material(projects=projects, node_id=binding['document_id'],
+        target_id=binding['target_id'], expected_version=binding['version'], _session=session)
+    body = normalized_body(material['text'])
+    projection = {'policy': BODY_NORMALIZATION_VERSION,
+        'sha256': hashlib.sha256(body.encode()).hexdigest(), 'characters': len(body)}
+    excerpt, selection = value['excerpt'], value['selection']
+    if (type(excerpt) is not dict or set(excerpt) != {'start_character', 'end_character', 'sha256', 'truncated'}
+            or any(type(excerpt[k]) is not int for k in ('start_character', 'end_character'))
+            or not 0 <= excerpt['start_character'] < excerpt['end_character'] <= len(body)
+            or excerpt['end_character'] - excerpt['start_character'] > 1200
+            or type(excerpt['truncated']) is not bool
+            or type(selection) is not dict or set(selection) != {'method', 'query_sha256'}
+            or selection.get('method') not in ('fts5-snippet', 'korean-literal', 'integer-literal')
+            or not isinstance(selection.get('query_sha256'), str)
+            or re.fullmatch('[0-9a-f]{64}', selection['query_sha256']) is None):
+        _fail()
+    original_range = value['original_range']
+    if (type(value['projection']) is not dict or set(value['projection']) != {'policy', 'sha256', 'characters'}
+            or type(value['projection'].get('characters')) is not int
+            or type(original_range) is not dict or set(original_range) != {'start_bytes', 'end_bytes', 'sha256', 'mapping'}
+            or any(type(original_range[k]) is not int for k in ('start_bytes', 'end_bytes'))):
+        _fail()
+    start, end = excerpt['start_character'], excerpt['end_character']
+    text = body[start:end]
+    expected_excerpt = {'start_character': start, 'end_character': end,
+        'sha256': hashlib.sha256(text.encode()).hexdigest(), 'truncated': start > 0 or end < len(body)}
+    expected_range = _original_range(material['text'], material['data'], start, end, text, token.is_cancelled)
+    if (value['binding'] != material['binding'] or value['capture'] != material['capture']
+            or type(value['input_bytes']) is not int or value['input_bytes'] != material['input_bytes']
+            or value['projection'] != projection or excerpt != expected_excerpt
+            or value['original_range'] != expected_range):
+        _fail(CHANGED)
+    return text, material['_context'], (material['binding'], material['capture'],
+        material['config_sha256'], projection, expected_excerpt, expected_range)
+
+
 def _collection(root, selected, token):
     from alden_collection import (CollectionStore, _read_cancellation,
                                   require_relation_binding, MAX_RECORD_BYTES)
@@ -172,7 +224,7 @@ def _collection(root, selected, token):
         _strict_json, _scope, CONTENT_POLICY, content_evidence_class,
         declared_source_annotations, project_source_text)
     from alden_retrieval_time import collection_time_evidence, observation_note
-    states = []
+    states, original_contexts = [], []
     with _read_cancellation(token.is_cancelled):
         store = CollectionStore.open_existing(root)
         if store is None or store.schema < 3:
@@ -189,6 +241,7 @@ def _collection(root, selected, token):
                 _fail(CHANGED)
             return result
         store._verified_source_blob = blob
+        original_session = store._original_text_session()
         with store.database(cancelled=token.is_cancelled) as db:
             def document(identity, version, projects, body_source='stored_body'):
                 _check(token)
@@ -238,11 +291,14 @@ def _collection(root, selected, token):
                     if proof.get('scope_basis') not in ('current_permitted_version_memberships_at_selected_snapshot',
                                                         'current_canonical_excerpt_at_selected_version'):
                         _fail()
+                    original_body = proof['body_source'] == 'verified_retained_original_projection'
+                    if original_body != ('original_text_excerpt' in proof):
+                        _fail()
                     row, record, metadata, current = document(proof['entity_id'], proof['source_version'],
-                                                             projects, proof['body_source'])
+                        projects, 'stored_body' if original_body else proof['body_source'])
                     expected = {'note_id': row['id'], 'note_hash': row['raw_sha256'],
                         'original_id': row['original_id'], 'platform': row['platform'],
-                        'updated_at': row['collected_at'], 'body_source': row['body_source'],
+                        'updated_at': row['collected_at'], 'body_source': proof['body_source'] if original_body else row['body_source'],
                         'projects': list(dict.fromkeys(m['project'] for m in members))}
                     if any(proof.get(k) != v for k, v in expected.items()) or any(m not in current for m in members):
                         _fail(CHANGED)
@@ -259,7 +315,15 @@ def _collection(root, selected, token):
                         _fail(CHANGED)
                     author = {k: record[k] for k in ('author','handle','date','url','localTextOrigin')
                               if isinstance(record, dict) and isinstance(record.get(k), str)}
-                    classification = content_evidence_class(metadata, row['body'], source=record,
+                    original_text = None
+                    if original_body:
+                        if row['platform'] != 'files' or proof.get('original_body_coverage') != row.get('original_body_coverage'):
+                            _fail(CHANGED)
+                        original_text, original_context, original_state = _original_excerpt(
+                            store, projects, proof, token, original_session)
+                        original_contexts.append((original_context, projects))
+                        states.append(('verified-original', original_state))
+                    classification = content_evidence_class(metadata, original_text if original_body else row['body'], source=record,
                                                             body_source=row['body_source'])
                     if (proof.get('source_author', {}) != author
                             or proof.get('time_evidence') != collection_time_evidence(row['collected_at'], author.get('date'))
@@ -269,6 +333,8 @@ def _collection(root, selected, token):
                         if proof.get('source_annotations') != declared_source_annotations(record, max_field_bytes=900):
                             _fail(CHANGED)
                     text = (row['label'] + ': ' if row['label'] and row['body'] else row['label']) + row['body']
+                    if original_body:
+                        text = (row['label'][:160] + ': ' if row['label'] else '') + original_text
                     if classification != 'content_candidate':
                         text = {'reference_only': '[링크 참조 · 연결된 페이지 본문 미확인] ',
                                 'empty_body': '[제목·이름 참조 · 본문 없음] '}.get(
@@ -302,6 +368,8 @@ def _collection(root, selected, token):
                     right = document(edge['target'], edge['target_version'], projects)
                     _fact(fact, left[0]['label'] + ' — ' + edge['type'] + ' → ' + right[0]['label'], proof)
                     states.append((edge, left[0], right[0], current, scopes(current)))
+        for context, projects in original_contexts:
+            store._verify_original_text_context(context, projects)
     return states
 
 

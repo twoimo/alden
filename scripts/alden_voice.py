@@ -1623,7 +1623,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         entity_budget, relation_budget = (4, 3) if relation_requested else (2, 1)
         with embedding_abort_scope(token):
             ranked=retrieve_knowledge_bundle(query,state_root=root,chat_id=scope['chat_id'] or None,max_entities=entity_budget,max_relations=relation_budget,
-                                             **({'projects': projects} if projects else {}))
+                                             **({'projects': projects, 'max_original_excerpt_chars': 400} if projects else {}))
         token.raise_if_cancelled()
         fact_budget = entity_budget + relation_budget
         from alden_retrieval_time import query_time_reference
@@ -1639,7 +1639,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                 row['fact_truncated']=True
                 for source in row.get('matching_sources',{}).get('sources',[]):
                     source['fact_truncated']=True
-        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated','original_body_coverage','source_version','target_version','relation_id','original_id','platform','projects','requested_projects','source_memberships','scope_basis','evidence_version','content_evidence','source_evidence','truth_status','body_source','source_author','matching_sources','lexical_match','selection_basis','text_projection','observation_time','observation_basis','source_annotations','time_evidence')} for row in context['graph_provenance'] if isinstance(row,dict)]
+        full_provenance=[{key:value for key,value in row.items() if key in ('fact_type','entity_id','source_id','target_id','relation','source_note_id','target_note_id','target_note_hash','source_kind','source_account','room_id','retracted','provenance_valid','source_event_ids','confirmed_at','updated_at','valid_from','valid_to','note_id','note_hash','space','derived_from','conflicts','retrieval_role','fact_truncated','original_body_coverage','original_text_excerpt','source_version','target_version','relation_id','original_id','platform','projects','requested_projects','source_memberships','scope_basis','evidence_version','content_evidence','source_evidence','truth_status','body_source','source_author','matching_sources','lexical_match','selection_basis','text_projection','observation_time','observation_basis','source_annotations','time_evidence')} for row in context['graph_provenance'] if isinstance(row,dict)]
         # Hashes and raw coordinates are checked by the adapter, rather than by
         # the language model. Keep the full proof in metrics and retain stable
         # identities, edge direction, source kind, time and truncation in input.
@@ -1681,7 +1681,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
                    'OSK 노트에는 검증되지 않은 설계 가설도 있다. 저장된 내용을 승인된 사실로 승격하지 마라. '
                    + ('음성 답변은 서론과 목록 없이 짧은 완결 문장 두 개 이내로 핵심과 한계만 말한다. ' if voice_style else '')
                    + 'fact_truncated가 참인 자료는 일부만 읽었다고 취급한다. '
-                   'original_body_coverage는 원본 파일의 추출 범위다. status가 partial이면 원본 일부만 수집됐고, unverified이거나 범위 정보가 없으면 원본 전체를 읽었다고 말하지 마라. fact_truncated가 거짓이어도 원본 전체가 수집됐다는 뜻은 아니다. '
+                   'original_body_coverage는 초기 파서의 원본 파일 추출 범위다. status가 partial이면 초기 추출은 일부다. original_text_excerpt가 있으면 보관 원본 전체의 해시를 검증해 검색한 구간이며, 모델이 읽은 것은 전달된 발췌뿐이다. 범위 정보가 없거나 unverified이면 원본 전체를 읽었다고 말하지 마라. fact_truncated가 거짓이어도 원본 전체를 읽었다는 뜻은 아니다. '
                    'matching_sources는 같은 보존 본문의 개별 출처이며 서로 독립적인 확인 근거라는 뜻은 아니다. '
                    'source_annotations는 원문별 미검증 태그 표기다. annotation_differences가 비어 있지 않으면 같은 본문의 주제·기관 표기도 다르며, 태그를 사실이나 동일인으로 단정하지 마라. '
                    '검색 결과가 없다는 사실을 사용자 발화를 이해하지 못했다는 뜻으로 바꾸지 마라.\n'

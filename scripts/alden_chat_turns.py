@@ -43,7 +43,7 @@ _PROOF_KEYS = frozenset({
     'source_account', 'room_id', 'retracted', 'provenance_valid',
     'source_event_ids', 'confirmed_at', 'updated_at', 'valid_from', 'valid_to',
     'note_id', 'note_hash', 'space', 'derived_from', 'conflicts',
-    'retrieval_role', 'fact_truncated',
+    'retrieval_role', 'fact_truncated', 'original_body_coverage', 'original_text_excerpt',
     'source_version', 'target_version', 'relation_id', 'original_id', 'platform',
     'projects', 'requested_projects', 'source_memberships', 'scope_basis',
     'evidence_version', 'content_evidence', 'source_evidence', 'truth_status',

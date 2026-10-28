@@ -819,7 +819,7 @@ class CollectionStore:
             cancelled = inherited if explicit is None else explicit if inherited is None or inherited is explicit else lambda: inherited() or explicit()
         require_collection_source_root(self.path.parents[2], self.source_access, self.source_revision, getattr(self, 'source_stream', None))
         require_collection_source_root(self.path.parents[2], getattr(self, 'source_relation_access', None))
-        db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, timeout=.15)
+        db = sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True, timeout=.15) if self.read_only else sqlite3.connect(self.path, uri=True, timeout=.15)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         verify_source_access = self._install_source_access(db, cancelled=cancelled)
@@ -1362,7 +1362,8 @@ class CollectionStore:
                                   "source_evidence": json.loads(row["evidence"])})
             return {"nodes": nodes, "edges": edges, "scope": projects, "canonical": "independent original sources; this is a derived projection"}
 
-    def search(self, query: str, *, projects: list[str], limit=10, time_from=None, time_to=None, expand_korean=True) -> list[dict]:
+    def search(self, query: str, *, projects: list[str], limit=10, time_from=None, time_to=None,
+               expand_korean=True, _include_original=True) -> list[dict]:
         if type(expand_korean) is not bool:
             raise ValueError('collection_graph_filter_invalid')
         if not projects:
@@ -1426,7 +1427,35 @@ class CollectionStore:
                     metadata['source'] = {'kind': source['kind'], 'content_hash': source.get('content_hash'),
                         'scope': 'content_identity_only; consult current scoped provenance for source memberships'}
                 results.append({**dict(row), 'metadata': metadata})
-            return results
+        if _include_original and query and limit > 0:
+            from alden_original_text_index import scoped_original_candidates, resolve_original_excerpt, merge_original_ranks
+            original = scoped_original_candidates(self, projects, query, limit=min(limit, 140),
+                time_from=time_from, time_to=time_to)
+            by_id = {row['id']: row for row in results}
+            originals = {row['document_id']: row for row in original}
+            ranked = merge_original_ranks([(r['id'], r['rank']) for r in results],
+                [(r['document_id'], r['rank']) for r in original], limit=min(limit, 140))
+            contexts = []
+            session = self._original_text_session()
+            selected_results = []
+            for document, _rank in ranked:
+                if document not in originals:
+                    selected_results.append(by_id[document])
+                    continue
+                candidate = originals[document]
+                material = resolve_original_excerpt(self, projects, candidate, query, _session=session)
+                with self.database() as current:
+                    row = self._source_body_row(current, projects, candidate['document_id'],
+                        candidate['target_id'], candidate['version'])
+                result = {'id': candidate['document_id'], 'label': row['label'], 'body': material['text'],
+                    'metadata': json.loads(row['metadata']), 'rank': candidate['rank'],
+                    'original_text_excerpt': material['proof']}
+                selected_results.append(result)
+                contexts.append(material['_context'])
+            results = selected_results
+            for context in contexts:
+                self._verify_original_text_context(context, projects)
+        return results
 
     def _scope_versions(self, projects: list[str], *, candidates=False) -> str:
         marks = ",".join("?" for _ in projects)
@@ -1598,6 +1627,8 @@ class CollectionStore:
               'source_url',COALESCE(json_extract(v.metadata,'$.source_url'),CASE WHEN json_type(v.metadata,'$.url')='text' THEN json_extract(v.metadata,'$.url') END),'degree',COALESCE(d.degree,0))"""
             if overview:
                 json_node = json_node.replace("substr(v.body,1,2400)", "substr(v.body,1,0)")
+            original_query = None
+            original_contexts = []
             if not focus:
                 # All overview outputs share one materialized permitted scope.
                 # LIMIT+1 remains inside SQL, including FTS pages.
@@ -1643,8 +1674,28 @@ class CollectionStore:
                     pick_args = [fts, *params, *strict_params, limit+1, offset, limit]
                 else:
                     pick_args = [fts, limit+1, offset, limit] if fts else [limit+1, offset, limit]
+                if fts and self.schema >= 3:
+                    from alden_original_text_index import attach_original_index, candidate_sql
+                    alias = attach_original_index(self, db)
+                    if alias is not None:
+                        original_sql, original_params = candidate_sql(alias, fts, query=query)
+                        original_join = ''' JOIN shown s ON s.id=c.document_id
+                            AND s.target_id=c.target_id AND s.visible_version=c.version
+                            JOIN versions v ON v.id=s.visible_version AND v.raw_sha256=c.raw_sha256
+                            JOIN targets t ON t.id=s.target_id
+                            WHERE alden_original_config_sha(t.config)=c.config_sha256
+                            AND alden_original_capture_manifest(t.cursor)=c.capture_manifest_sha256
+                            AND alden_original_capture_source(t.cursor)=c.capture_source_sha256'''
+                        original_query = (original_sql, original_params, original_join)
+                        search_cte += (',legacy_picks AS MATERIALIZED (' + picking + '),original_advisory AS MATERIALIZED (' + original_sql +
+                            '),original_matches AS MATERIALIZED (SELECT s.id,c.rank FROM original_advisory c' + original_join + ')')
+                        picking = '''SELECT id FROM (
+                            SELECT id,ROW_NUMBER() OVER(ORDER BY rank,id)*2-1 AS ordering FROM original_matches
+                            UNION ALL SELECT id,ROW_NUMBER() OVER()*2 FROM legacy_picks
+                            WHERE id NOT IN (SELECT id FROM original_matches)) ORDER BY ordering,id'''
+                        pick_args = [*pick_args[:-3], *original_params, limit+1, offset, limit]
                 selections = [(search_cte, picking, pick_args)]
-                if integer_term:
+                if integer_term and original_query is None:
                     # A full token page plus lookahead is already final. Keep
                     # its ordinary SQL path rather than materializing every
                     # token/body candidate just to discard the supplement.
@@ -1749,6 +1800,21 @@ class CollectionStore:
                     "SELECT id,collected_at FROM versions WHERE id IN (" + clock_slots + ")", versions)}
                 for row in rows:
                     row["collected_at"] = clocks[row["visible_version"]]
+            if original_query is not None and rows:
+                from alden_original_text_index import resolve_original_excerpt
+                original_sql, original_params, original_join = original_query
+                original_rows = db.execute(cte + ',original_advisory AS MATERIALIZED (' + original_sql +
+                    ') SELECT c.* FROM original_advisory c' + original_join + ' AND s.id IN (' + selected + ')',
+                    (*args, *original_params, *ids)).fetchall()
+                candidates = {row['document_id']: dict(row) for row in original_rows}
+                session = self._original_text_session()
+                for row in rows:
+                    if row['id'] not in candidates:
+                        continue
+                    original = resolve_original_excerpt(self, projects, candidates[row['id']], query, _session=session)
+                    row['body'] = original['text']
+                    row['original_text_excerpt'] = original['proof']
+                    original_contexts.append(original['_context'])
             target_spaces = {}
             for association in db.execute("SELECT target_id,project FROM target_projects WHERE permission!='denied' AND project IN (" + marks + ") ORDER BY project", projects):
                 target_spaces.setdefault(association["target_id"], []).append(association["project"])
@@ -1793,7 +1859,9 @@ class CollectionStore:
                               "source_url": row["source_url"], "source_target": row["target_id"], "source_platform": row["platform"],
                               "source_contexts": source_contexts.get(row["id"], []),
                               "degree": row["degree"], "degree_scope": "permitted filtered graph",
-                              "source_metadata": {"kind": kind, "content_evidence": evidence_class}, "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
+                              "source_metadata": {"kind": kind, "content_evidence": evidence_class,
+                                  **({'original_text_excerpt': row['original_text_excerpt']} if 'original_text_excerpt' in row else {})},
+                              "evidence": {"kind": "snapshot", "source_event_ids": [row["original_id"]], "chat_id": "", "confirmed_at": None, "retracted": False}})
             edges = [{"id": row['id'],
                       "display_id": identity('view-relation', encoded([row['source'], row['type'], row['target']]).decode()),
                       "source": row["source"], "target": row["target"], "relation": row["type"],
@@ -1815,6 +1883,8 @@ class CollectionStore:
             result['edge_projection'] = {'kind': 'directed-relation-group-v1', 'groups': len(edges),
                 'selected_claim_records': sum(edge['reference_group']['count'] for edge in edges),
                 'evidence_id_limit': 16, 'count_scope': 'stored relation records; not independent corroboration'}
+            for context in original_contexts:
+                self._verify_original_text_context(context, projects)
             if _references_only:
                 return {key: result[key] for key in ('ok', 'nodes', 'total_nodes', 'total_edges', 'next', 'revision')} | {
                     'projection': 'current_graph_references'}
@@ -2013,7 +2083,87 @@ class CollectionStore:
     def source_body_window(self, *, projects, node_id, target_id, expected_version,
                            offset_bytes=0, max_bytes=16000):
         """Read one exact retained UTF-8 range; never reopen a declared original."""
-        from alden_file_set import SourceBodyError, _absolute, file_extraction_coverage, original_utf8_window
+        return self._retained_original(projects=projects, node_id=node_id, target_id=target_id,
+            expected_version=expected_version, offset_bytes=offset_bytes, max_bytes=max_bytes)
+
+    def _original_text_material(self, *, projects, node_id, target_id, expected_version, _session=None):
+        """Private verified full material for derived search; never a wire flag."""
+        if _session is None:
+            _session = self._original_text_session()
+        return self._retained_original(projects=projects, node_id=node_id, target_id=target_id,
+            expected_version=expected_version, _material=True, _session=_session)
+
+    def _original_text_session(self):
+        # One owner, one current capture. This caches content, never authority.
+        return {'owner': self, 'key': None, 'archives': {}}
+
+    def _original_text_archive(self, folder, name, budget, session):
+        from alden_file_set import SourceBodyError, _file_stamp
+        if not isinstance(name, str) or not re.fullmatch(r'[0-9a-f]{64}\.json', name):
+            raise SourceBodyError('alden_source_body_integrity')
+        path = folder / name
+        try:
+            before = _file_stamp(path)
+        except FileNotFoundError as error:
+            raise SourceBodyError('alden_source_body_capture_unavailable') from error
+        except (OSError, ValueError) as error:
+            raise SourceBodyError('alden_source_body_integrity') from error
+        cached = session['archives'].get(name)
+        if cached is not None and cached[3] == before:
+            return cached
+        raw = self._source_body_archive(folder, name, budget)
+        if _file_stamp(path) != before:
+            raise SourceBodyError('alden_source_body_integrity')
+        value = (_source_body_json(raw), len(raw), digest(raw), before)
+        session['archives'][name] = value
+        return value
+
+    def _original_text_inputs(self, projects):
+        validate_source_body_request(projects=projects, node_id='index', target_id='index', expected_version='index')
+        _source_body_check()
+        if self.schema < 3:
+            return []
+        marks = ','.join('?' for _ in projects)
+        with self.database() as db:
+            rows = db.execute("""SELECT m.document_id,m.target_id,m.current_version AS version
+                FROM memberships m JOIN versions v ON v.id=m.current_version
+                JOIN documents d ON d.id=m.document_id JOIN targets t ON t.id=m.target_id
+                WHERE m.availability='available' AND d.availability='available'
+                AND d.platform='files' AND t.platform='files' AND v.processing_version='declared-original-files-v1'
+                AND alden_source_allowed(m.target_id,m.document_id,m.current_version)=1
+                AND EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+                    AND p.permission!='denied' AND p.project IN (""" + marks + """))
+                ORDER BY m.target_id,m.document_id LIMIT 100001""", projects).fetchall()
+        if len(rows) > 100000:
+            raise ValueError('collection_original_index_budget')
+        return [dict(row) for row in rows]
+
+    def _verify_original_text_context(self, context, projects):
+        """Recheck current source/version/config/capture after all text work."""
+        from alden_file_set import SourceBodyError, _file_stamp
+        _source_body_check()
+        binding, row, capture = context['binding'], context['row'], context['capture']
+        self._verify_current_detail(dict(binding), projects)
+        with self.database() as current:
+            fresh = self._source_body_row(current, projects, binding['node_id'],
+                binding['target_id'], binding['version'])
+            if any(fresh[key] != row[key] for key in ('platform', 'original_id', 'raw_sha256', 'raw_path',
+                    'body', 'label', 'metadata', 'processing_version', 'projection_sha256',
+                    'target_platform', 'target_original_id', 'target_config')):
+                raise SourceBodyError('alden_source_body_unavailable')
+            cursor = _source_body_json(fresh['cursor'] or '{}')
+            if not isinstance(cursor, dict) or cursor.get('source_capture') != capture:
+                raise SourceBodyError('alden_source_body_unavailable')
+        for name, stamp in context['archives']:
+            if _file_stamp(self.root / 'source-captures' / name) != stamp:
+                raise SourceBodyError('alden_source_body_integrity')
+        _source_body_check()
+
+    def _retained_original(self, *, projects, node_id, target_id, expected_version,
+                           offset_bytes=0, max_bytes=16000, _material=False, _session=None):
+        """Read one exact retained UTF-8 range; never reopen a declared original."""
+        from alden_file_set import (SourceBodyError, _absolute, file_extraction_coverage,
+                                    original_utf8_window, original_utf8_material)
         validate_source_body_request(projects=projects, node_id=node_id, target_id=target_id,
             expected_version=expected_version, offset_bytes=offset_bytes, max_bytes=max_bytes)
         _source_body_check()
@@ -2052,8 +2202,21 @@ class CollectionStore:
                     or encoded([row['target_original_id'], record['file_id']]).decode() != row['original_id']):
                 raise SourceBodyError('alden_source_body_integrity')
             folder = self.root / 'source-captures'
-            manifest_raw = self._source_body_archive(folder, capture['manifest'], 16 * 1024 * 1024)
-            manifest = _source_body_json(manifest_raw)
+            archives = []
+            if _session is not None:
+                if not isinstance(_session, dict) or _session.get('owner') is not self:
+                    raise ValueError('collection_original_index_invalid')
+                key = (target_id, row['target_config'], capture['manifest'], capture['sha256'])
+                if _session.get('key') != key:
+                    _session.clear()
+                    _session.update(owner=self, key=key, archives={})
+                manifest, manifest_size, manifest_sha, stamp = self._original_text_archive(
+                    folder, capture['manifest'], 16 * 1024 * 1024, _session)
+                archives.append((capture['manifest'], stamp))
+            else:
+                manifest_raw = self._source_body_archive(folder, capture['manifest'], 16 * 1024 * 1024)
+                manifest = _source_body_json(manifest_raw)
+                manifest_sha = digest(manifest_raw)
             required = {'schema', 'target_id', 'adapter', 'origin', 'byte_scope', 'processing_version',
                         'records', 'relations', 'original_files', 'source_sha256', 'source_bytes', 'source_file'}
             if (not isinstance(manifest, dict) or set(manifest) != required
@@ -2074,31 +2237,34 @@ class CollectionStore:
                 raise SourceBodyError('alden_source_body_capture_unavailable')
             if len(selected) != 1 or selected[0]['record_sha256'] != row['raw_sha256']:
                 raise SourceBodyError('alden_source_body_integrity')
-            packet_raw = self._source_body_archive(folder, manifest['source_file'], 32 * 1024 * 1024)
-            if len(packet_raw) != manifest['source_bytes']:
+            if _session is not None:
+                packet, packet_size, _, stamp = self._original_text_archive(
+                    folder, manifest['source_file'], 32 * 1024 * 1024, _session)
+                archives.append((manifest['source_file'], stamp))
+            else:
+                packet_raw = self._source_body_archive(folder, manifest['source_file'], 32 * 1024 * 1024)
+                packet_size = len(packet_raw)
+                packet = _source_body_json(packet_raw)
+            if packet_size != manifest['source_bytes']:
                 raise SourceBodyError('alden_source_body_integrity')
             _source_body_check()
-            packet = _source_body_json(packet_raw)
-            window = original_utf8_window(packet, record=record, record_pointer=selected[0]['json_pointer'],
-                original_files=manifest['original_files'], offset_bytes=offset_bytes, max_bytes=max_bytes,
-                cancelled=_source_body_check)
-            _source_body_check()
-            result = {'ok': True, 'body_window': {'schema': 1, 'kind': 'declared-original-utf8-window',
-                'binding': {'document_id': node_id, 'target_id': target_id, 'version': expected_version,
-                    'raw_sha256': row['raw_sha256'], 'input_sha256': record['input_sha256']},
-                'capture': {'manifest_sha256': digest(manifest_raw), 'source_sha256': capture['sha256']}, **window}}
-            # Verify after the whole packet/UTF-8 work, using fresh connections.
-            # A paused target remains readable; config/capture swaps do not.
-            self._verify_current_detail(binding, projects)
-            with self.database() as current:
-                fresh = self._source_body_row(current, projects, node_id, target_id, expected_version)
-                if any(fresh[key] != row[key] for key in ('platform', 'original_id', 'raw_sha256', 'raw_path',
-                        'body', 'label', 'metadata', 'processing_version', 'projection_sha256',
-                        'target_platform', 'target_original_id', 'target_config')):
-                    raise SourceBodyError('alden_source_body_unavailable')
-                cursor = _source_body_json(fresh['cursor'] or '{}')
-                if not isinstance(cursor, dict) or cursor.get('source_capture') != capture:
-                    raise SourceBodyError('alden_source_body_unavailable')
+            public_binding = {'document_id': node_id, 'target_id': target_id, 'version': expected_version,
+                'raw_sha256': row['raw_sha256'], 'input_sha256': record['input_sha256']}
+            public_capture = {'manifest_sha256': manifest_sha, 'source_sha256': capture['sha256']}
+            context = {'binding': binding, 'row': row, 'capture': capture, 'archives': archives}
+            if _material:
+                material = original_utf8_material(packet, record=record, record_pointer=selected[0]['json_pointer'],
+                    original_files=manifest['original_files'], cancelled=_source_body_check)
+                result = {'binding': public_binding, 'capture': public_capture,
+                    'input_bytes': len(material['data']), **material, 'label': row['label'],
+                    'config_sha256': digest(encoded(config)), '_context': context}
+            else:
+                window = original_utf8_window(packet, record=record, record_pointer=selected[0]['json_pointer'],
+                    original_files=manifest['original_files'], offset_bytes=offset_bytes, max_bytes=max_bytes,
+                    cancelled=_source_body_check)
+                result = {'ok': True, 'body_window': {'schema': 1, 'kind': 'declared-original-utf8-window',
+                    'binding': public_binding, 'capture': public_capture, **window}}
+            self._verify_original_text_context(context, projects)
             _source_body_check()
             return result
         except RuntimeError as error:
