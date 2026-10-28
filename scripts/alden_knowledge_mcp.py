@@ -105,7 +105,8 @@ class KnowledgeServer(StdioServer):
         result = []
         for name, extras, description in [
             ('alden_knowledge_search', {'query': {'type': 'string', 'minLength': 1, 'maxLength': 256}},
-             'Retrieve retained versions and explicit relations with exact provenance. Read-only; explicitly supplied source authority is rechecked.'),
+             'Retrieve retained versions and explicit relations with exact provenance. Read-only; explicitly supplied source authority is rechecked. '
+             'original_body_coverage describes original-file extraction separately from fact_truncated; absent coverage is unknown.'),
             ('alden_knowledge_graph', {'focus': {'type': 'string', 'maxLength': 256}},
              'Read bounded stored graph nodes and explicit relationships in the allowed project scope.'),
             ('alden_knowledge_history', {'after': {'type': 'integer', 'minimum': 0}},
@@ -124,7 +125,9 @@ class KnowledgeServer(StdioServer):
                        'description': 'Read version-bound retained source detail in an allowed project. '
                                       'Use id and source_version from graph, or entity_id and source_version from search provenance. '
                                       'Rejects stale versions. Body text follows the disclosed text_projection; '
-                                      'the first 12,000 characters carry an explicit truncated flag and archive hash. Read-only.',
+                                      'the first 12,000 characters carry an explicit truncated flag and archive hash. '
+                                      'For declared original files, source_extraction separately states retained parser coverage; '
+                                      'truncated only describes the response excerpt. Read-only.',
                        'inputSchema': {'type': 'object', 'properties': {
                            'projects': common['projects'],
                            'node_id': {'type': 'string', 'minLength': 1, 'maxLength': 256},

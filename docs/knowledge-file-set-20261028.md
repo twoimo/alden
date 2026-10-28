@@ -114,6 +114,21 @@ coverage, including when no extraction budget was reached. PPTX linked speaker
 notes are read in presentation order and retain their real XML part and slide;
 unlinked notes, charts, diagrams and other unparsed parts remain disclosed.
 
+Version-bound source details expose `source_extraction` for this adapter's stored
+processing version. It independently states `body_complete`, `parser_truncated`
+and `status` (`complete`, `partial` or `unverified`), with original input and
+extracted-text digests/counts. The bounded packet binds the document, target,
+stored version, archive hash and exact displayed-body digest. It does not reread
+the original file or assert that a separate capture stage succeeded.
+
+The existing detail `truncated` flag describes only its 12,000-character response
+excerpt. A partially parsed original may fit that excerpt and therefore have
+`truncated=false`; a complete parser result can also have a shortened response.
+The reader shows extraction coverage separately. Missing or malformed file
+coverage stays unknown. Its async hash result cannot replace a later selection.
+Search fact provenance carries the shared `original_body_coverage` under its
+existing source-version/archive binding, separately from `fact_truncated`.
+
 | Boundary | Limit |
 | --- | --- |
 | Manifest | 1 MiB, 64 files |

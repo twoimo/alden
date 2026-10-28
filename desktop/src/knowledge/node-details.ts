@@ -1,6 +1,7 @@
 import type { KnowledgeGraph, KnowledgeNode } from './graph-model';
 import { matchesSourceReference } from './graph-model';
 import { renderBodyNotation } from './body-notation';
+import { renderSourceExtraction } from './source-extraction';
 
 const STRIPPED_TEXT_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g;
 function text(value: unknown, limit = 1200): string {
@@ -79,6 +80,9 @@ function bindNotePane(root: Document, pane: HTMLDialogElement): void {
       close();
     });
     pane.addEventListener('cancel', event => { event.preventDefault(); if (!composing) close(); });
+    pane.addEventListener('close', () => {
+      if (!pane.open) root.querySelectorAll('.knowledge-source-extraction').forEach(item => item.remove());
+    });
     pane.addEventListener('pointerdown', event => { backdropPressed = outside(event); });
     pane.addEventListener('click', event => {
       if (backdropPressed && outside(event)) close();
@@ -102,7 +106,7 @@ export function setNodeDetailsVisible(visible: boolean, root: Document = documen
     pane.hidden = false;
     if (!pane.open) pane.showModal();
   } else {
-    root.querySelectorAll('.knowledge-body-notation').forEach(item => item.remove());
+    root.querySelectorAll('.knowledge-body-notation, .knowledge-source-extraction').forEach(item => item.remove());
     if (pane.open) pane.close();
     pane.hidden = true;
     delete pane.dataset.nodeId;
@@ -186,10 +190,11 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
   const reading = candidate?.reading ?? copy;
   if (body) { renderBody(body, reading, graph, selected?.basis !== 'source_record'); body.hidden = !reading; }
   if (body) renderBodyNotation(body, node, selected);
+  if (body) renderSourceExtraction(body, node, selected);
   root.querySelectorAll('.knowledge-body-limit').forEach(note => note.remove());
   if (body && reading && (clipped || selected?.truncated === true)) {
     const note = root.createElement('p'); note.className = 'knowledge-body-limit';
-    note.textContent = '일부 발췌 · 현재 화면에는 본문의 앞부분만 표시합니다.'; body.after(note);
+    note.textContent = '일부 발췌 · 현재 화면에는 본문의 앞부분만 표시합니다.'; body.before(note);
   }
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
   if (body && candidate) {

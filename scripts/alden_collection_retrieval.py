@@ -190,6 +190,12 @@ def _verified_source(db, store, row, projects):
             or row['body_source'] == 'stored_body' and current['body'] != row['body']):
         raise RuntimeError('collection_source_integrity')
     original = record.get('localOriginalText') if isinstance(record, dict) else None
+    if current['platform'] == 'files' and current['processing_version'] == 'declared-original-files-v1':
+        from alden_file_set import file_extraction_coverage
+        try:
+            row['original_body_coverage'] = file_extraction_coverage(record, stored_body=current['body'])
+        except ValueError as error:
+            raise RuntimeError('collection_file_extraction_invalid') from error
     if row['platform'] == 'graph' and isinstance(original, str) and original.strip():
         projected = project_source_text(original, record)
         # Legacy fallback is admitted only after its original version binding.
@@ -905,6 +911,8 @@ def retrieve(root, query, *, projects, max_entities=3, max_relations=3,
                                        'bm25_token' if document_id in token_ids else None),
                      'derived_from': derived, 'truth_status': 'source_record; not independently verified',
                      'provenance_valid': True, 'retracted': False}
+            if 'original_body_coverage' in row:
+                proof['original_body_coverage'] = dict(row['original_body_coverage'])
             if source_context is not None and isinstance(derived, dict) and derived.get('kind') == 'messenger-exact-content-provenance':
                 if context_checks >= MAX_CONTEXT_ANCHORS:
                     context_withheld += 1

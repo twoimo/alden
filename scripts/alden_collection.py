@@ -1841,6 +1841,19 @@ class CollectionStore:
                                          "body_sha256": analysis['body_sha256'],
                                          "body_scope": "detail_body_excerpt" if len(body) > 12000 else "detail_body"},
                                          "analysis": analysis} if analysis is not None else None}}
+        if row['platform'] == 'files' and self.schema >= 3:
+            processor = db.execute('SELECT processing_version FROM versions WHERE id=?',
+                                   (row['visible_version'],)).fetchone()
+            if processor is not None and processor[0] == 'declared-original-files-v1':
+                from alden_file_set import source_extraction_packet
+                try:
+                    result['details']['source_extraction'] = source_extraction_packet(record,
+                        binding={'document_id': row['id'], 'target_id': row['target_id'],
+                            'version': row['visible_version'], 'raw_sha256': row['raw_sha256'],
+                            'detail_body_sha256': digest(visible_body.encode())},
+                        stored_body=row['body'], detail_body=visible_body)
+                except ValueError as error:
+                    raise RuntimeError('collection_file_extraction_invalid') from error
         self._verify_current_detail(result['details'], projects)
         return result
 

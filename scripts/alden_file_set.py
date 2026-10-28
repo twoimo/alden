@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 
-from alden_collection import encoded
+from alden_collection import encoded, normalized_body
 from alden_chat_files import run_owned_json
 from alden_file_content import MAX_FILE_BYTES, MAX_TEXT_BYTES, FileContentUnavailable
 
@@ -29,6 +29,7 @@ MAX_FILES = 64
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024
 MAX_CAPTURE_BYTES = 32 * 1024 * 1024
+MAX_EXTRACTION_BYTES = 4096
 PROCESSING_VERSION = 'declared-original-files-v1'
 
 
@@ -195,6 +196,60 @@ def _validate_parsed(value):
 def body_complete(parsed):
     """Untruncated extraction alone does not establish original-body coverage."""
     return parsed['scope'].get('body_complete') is True and not parsed['truncated']
+
+
+def file_extraction_coverage(record, *, stored_body):
+    """Validated retained coverage; caller binds its source/version authority."""
+    invalid = 'collection_file_extraction_invalid'
+    if (not isinstance(record, dict) or type(record.get('schema')) is not int or record['schema'] != 1
+            or type(record.get('input_bytes')) is not int or not 1 <= record['input_bytes'] <= MAX_FILE_BYTES
+            or any(not isinstance(record.get(key), str) or not re.fullmatch(r'[0-9a-f]{64}', record[key])
+                   for key in ('input_sha256', 'parser_code_sha256'))
+            or not isinstance(stored_body, str)):
+        raise ValueError(invalid)
+    try:
+        parsed = _validate_parsed(record.get('parsed'))
+        scope_kind = parsed['scope'].get('kind')
+        if (not re.fullmatch(r'[a-z][a-z0-9_.:-]{0,127}', parsed['parser'])
+                or not isinstance(scope_kind, str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,63}', scope_kind)
+                or parsed['truncated'] and parsed['scope']['body_complete']
+                or normalized_body(parsed['text']) != stored_body):
+            raise ValueError(invalid)
+        complete, partial = body_complete(parsed), parsed['truncated']
+        return {'parser': parsed['parser'], 'processing_version': parsed['processing_version'], 'scope_kind': scope_kind,
+            'input_sha256': record['input_sha256'], 'input_bytes': record['input_bytes'],
+            'extracted_text_sha256': parsed['text_sha256'], 'extracted_text_bytes': len(parsed['text'].encode()),
+            'segment_count': len(parsed['segments']), 'body_complete': complete, 'parser_truncated': partial,
+            'status': 'partial' if partial else 'complete' if complete else 'unverified'}
+    except (TypeError, ValueError) as error:
+        raise ValueError(invalid) from error
+
+
+def source_extraction_packet(record, *, binding, stored_body, detail_body):
+    """Bind retained original coverage to this exact detail, without original IO.
+
+    The caller verifies source authority, archive and stored processing version.
+    Original-byte retention remains a separate capture assertion.
+    """
+    invalid = 'collection_file_extraction_invalid'
+    if (not isinstance(binding, dict) or set(binding) != {'document_id', 'target_id', 'version', 'raw_sha256', 'detail_body_sha256'}
+            or any(not isinstance(binding[key], str) or not re.fullmatch(r'[\x21-\x7e]{1,256}', binding[key])
+                   for key in ('document_id', 'target_id', 'version'))
+            or any(not isinstance(binding[key], str) or not re.fullmatch(r'[0-9a-f]{64}', binding[key])
+                   for key in ('raw_sha256', 'detail_body_sha256'))
+            or not isinstance(stored_body, str) or not isinstance(detail_body, str)
+            or stored_body[:12000] != detail_body):
+        raise ValueError(invalid)
+    try:
+        if hashlib.sha256(detail_body.encode()).hexdigest() != binding['detail_body_sha256']:
+            raise ValueError(invalid)
+        packet = {'schema': 1, 'kind': 'declared-original-file-extraction', 'binding': dict(binding),
+                  **file_extraction_coverage(record, stored_body=stored_body)}
+        if len(encoded(packet)) > MAX_EXTRACTION_BYTES:
+            raise ValueError(invalid)
+        return packet
+    except (TypeError, ValueError) as error:
+        raise ValueError(invalid) from error
 
 
 def parse_file(data, filename, *, cancelled=lambda: False):
