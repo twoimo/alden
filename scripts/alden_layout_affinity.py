@@ -14,7 +14,7 @@ import sqlite3
 import threading
 import time
 
-from alden_collection import CollectionStore, digest, encoded
+from alden_collection import CollectionStore, digest, encoded, _read_cancellation
 import alden_semantic_affinity as semantic
 
 MAX_QUERY_BYTES = 4096
@@ -56,13 +56,84 @@ def _sidecars(folder):
 
 class _BorrowedCollection(CollectionStore):
     @contextmanager
-    def database(self, *, publication_guard=None):
+    def database(self, *, publication_guard=None, cancelled=None):
         if publication_guard is not None:
             raise ValueError("layout_read_publication_guard_forbidden")
         self._owner.validate()
         # Nested graph_page/projects/targets calls reuse the owner's snapshot.
         # They never commit/rollback/close or replace the shared connection.
-        yield self._owner.collection
+        with _read_cancellation(lambda: self._original_check(cancelled)):
+            yield self._owner.collection
+
+    def _original_check(self, cancelled=None):
+        try:
+            if cancelled is not None and cancelled():
+                raise RuntimeError('affinity_cancelled')
+            self._owner.guard.check()
+            return False
+        except RuntimeError as error:
+            self._owner.original_stop = error
+            raise
+
+    def _original_charge(self, key, size):
+        try:
+            self._owner.guard.charge(key, size)
+        except RuntimeError as error:
+            self._owner.original_stop = error
+            raise
+
+    def _source_body_archive(self, folder, name, budget):
+        self._original_check()
+        return CollectionStore._source_body_archive(folder, name, budget,
+            _admit=lambda size: self._original_charge('source_bytes', size))
+
+    def _verified_source_blob(self, folder, name, budget):
+        from alden_file_set import SourceBodyError
+        try:
+            return self._source_body_archive(folder, name, budget)
+        except SourceBodyError as error:
+            raise RuntimeError('collection_source_integrity') from error
+
+    def _original_text_material(self, **options):
+        material = super()._original_text_material(**options)
+        self._original_charge('text_bytes', len(material['text'].encode()))
+        return material
+
+    def _fresh_original_reader(self):
+        self._owner.validate()
+        fresh = CollectionStore.open_existing(self._owner.root,
+            source_access=self.source_access, source_revision=self.source_revision,
+            source_stream=getattr(self, 'source_stream', None),
+            source_relation_access=getattr(self, 'source_relation_access', None))
+        if fresh is None:
+            raise RuntimeError('collection_graph_source_unavailable')
+        fresh._verified_source_blob = self._verified_source_blob
+        return fresh
+
+    def _verify_current_detail(self, details, projects):
+        # The normal verifier establishes its own query-only transaction. Never
+        # change PRAGMAs or transaction state on the borrowed strict connection.
+        fresh = self._fresh_original_reader()
+        with _read_cancellation(self._original_check):
+            fresh._verify_current_detail(details, projects)
+
+    def _verify_original_text_context(self, context, projects):
+        # Borrowed graph selection stays in its snapshot. Publication of new
+        # original text additionally checks current authority in a fresh RO read.
+        fresh = self._fresh_original_reader()
+        with _read_cancellation(self._original_check):
+            fresh._verify_original_text_context(context, projects)
+
+    def graph_page(self, **options):
+        self._owner.original_stop = None
+        try:
+            with _read_cancellation(self._original_check):
+                return super().graph_page(**options)
+        except Exception:
+            if self._owner.original_stop is not None:
+                raise self._owner.original_stop
+            self._owner.guard.check()
+            raise
 
 
 class ReadTransactions:
@@ -73,6 +144,7 @@ class ReadTransactions:
         self.guard, self.thread = guard, threading.get_ident()
         self.collection = self.cache = self.store = None
         self.active, self._attestation = False, _ATTESTATION
+        self.original_stop = None
         self.metadata = {"policy": "derived SQLite normal WAL/SHM read metadata allowed; record/index writes forbidden",
                          "before": _sidecars(self.folder), "after": None, "denied_write_attempts": 0,
                          "shm_byte_identity_measured": False, "main_content_identity_measured": False}
@@ -88,7 +160,7 @@ class ReadTransactions:
             return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
 
-    def _connect(self, path, *, rows=False):
+    def _connect(self, path, *, rows=False, original_store=None):
         self.guard.check()
         semantic._regular_path(path)
         # No immutable/nolock, no copy, no journal_mode or checkpoint operation.
@@ -98,6 +170,9 @@ class ReadTransactions:
                 db.row_factory = sqlite3.Row
             db.execute("PRAGMA query_only=ON")
             db.execute("PRAGMA cache_size=-2048")
+            if original_store is not None:
+                from alden_original_text_index import _bind_original_index
+                _bind_original_index(original_store, db)
             db.execute("BEGIN")
             db.set_authorizer(self._authorize)
             db.set_progress_handler(self.guard.progress, 1000)
@@ -112,11 +187,6 @@ class ReadTransactions:
     def open(self):
         if self.active or self.collection is not None:
             raise ValueError("layout_read_owner_already_open")
-        self.collection = self._connect(self.folder / "collection.sqlite3", rows=True)
-        schema = self.collection.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
-        if schema is None or schema[0] != "3":
-            raise ValueError("layout_existing_v3_store_required")
-        self.active = True
         store = _BorrowedCollection.__new__(_BorrowedCollection)
         store.read_only, store.schema, store.root = True, 3, self.folder
         store.path = self.folder / "collection.sqlite3"
@@ -124,6 +194,11 @@ class ReadTransactions:
         store._owner = self
         store.source_access = None
         store.source_revision = None
+        self.collection = self._connect(self.folder / "collection.sqlite3", rows=True, original_store=store)
+        schema = self.collection.execute("SELECT value FROM meta WHERE key='schema'").fetchone()
+        if schema is None or schema[0] != "3":
+            raise ValueError("layout_existing_v3_store_required")
+        self.active = True
         self.verify_source_access = store._install_source_access(self.collection)
         self.store = store
         cache_path = self.folder / "retrieval.sqlite3"
@@ -145,8 +220,13 @@ class ReadTransactions:
                 raise ValueError("layout_verified_read_owner_required")
             databases = db.execute("PRAGMA database_list").fetchall()
             main = [r for r in databases if r[1] == "main"]
+            from alden_original_text_index import _bound_original_path
+            bound = _bound_original_path(self.store, db) if db is self.collection else None
+            allowed_extra = lambda row: (row[1] == 'temp' and not row[2]
+                or db is self.collection and row[1] == 'original_search' and bound is not None
+                and Path(row[2]).absolute() == bound)
             if (len(main) != 1 or Path(main[0][2]).absolute() != path
-                    or any(r[1] != "main" and (r[1] != "temp" or r[2]) for r in databases)):
+                    or any(r[1] != "main" and not allowed_extra(r) for r in databases)):
                 raise ValueError("layout_read_owner_path_mismatch")
 
     def close(self):
@@ -266,7 +346,7 @@ def _on_reads(owner, options):
             raise ValueError("layout_existing_retrieval_required")
         if refs:
             raw = semantic._affinity_on_reads(store, owner.collection, owner.cache, projects, refs,
-                                              budgets=guard.budgets, guard=guard)
+                                              budgets=guard.budgets, guard=guard, _owner=owner)
             # Older evaluators never measured these statistics. Preserve that
             # absence as null rather than manufacturing full/balanced coverage.
             coverage = {**dict.fromkeys(_SAMPLING_FIELDS), **raw["coverage"]}

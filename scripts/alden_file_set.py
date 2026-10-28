@@ -74,13 +74,13 @@ def _file_stamp(path):
         return _stamp(info)
 
 
-def _read(path, maximum, cancelled):
+def _read(path, maximum, cancelled, *, admit=None):
     path = _absolute(path)
     with _directory(path.parent) as directory:
-        return _read_at(directory, path.name, maximum, cancelled)
+        return _read_at(directory, path.name, maximum, cancelled, admit=admit)
 
 
-def _read_at(directory, name, maximum, cancelled):
+def _read_at(directory, name, maximum, cancelled, *, admit=None):
     _check(cancelled)
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     with os.fdopen(fd, 'rb') as source:
@@ -89,7 +89,10 @@ def _read_at(directory, name, maximum, cancelled):
             raise ValueError('collection_files_nonregular_source')
         if not 0 <= before.st_size <= maximum:
             raise ValueError('collection_files_byte_budget')
-        raw = source.read(maximum + 1)
+        if admit is not None:
+            admit(before.st_size)
+            _check(cancelled)
+        raw = source.read(before.st_size + 1)
         after = os.fstat(source.fileno())
     current = os.stat(name, dir_fd=directory, follow_symlinks=False)
     _check(cancelled)

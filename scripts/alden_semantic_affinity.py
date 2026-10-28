@@ -540,7 +540,7 @@ def affinity(root, projects, nodes, *, profile=E5Profile(), budgets=Budgets(),
                                   budgets=budgets, min_cosine=min_cosine, guard=guard)
 
 
-def _validate_reads(store, db, cache):
+def _validate_reads(store, db, cache, *, owner=None):
     """Verify the borrowed transaction boundary without changing caller state.
 
     The product adapter attests mode=ro when opening these exact derived files.
@@ -549,18 +549,27 @@ def _validate_reads(store, db, cache):
     """
     if not store.read_only or store.schema != 3 or db.row_factory is not sqlite3.Row:
         raise ValueError("affinity_verified_read_transactions_required")
+    if owner is not None:
+        from alden_layout_affinity import ReadTransactions
+        if (type(owner) is not ReadTransactions or owner.store is not store
+                or owner.collection is not db or owner.cache is not cache):
+            raise ValueError('affinity_verified_read_transactions_required')
+        owner.validate()
     for connection, path in ((db, store.path), (cache, store.root / "retrieval.sqlite3")):
         if not connection.in_transaction or connection.execute("PRAGMA query_only").fetchone()[0] != 1:
             raise ValueError("affinity_verified_read_transactions_required")
         databases = connection.execute("PRAGMA database_list").fetchall()
         main = [r for r in databases if r[1] == "main"]
+        allowed_extra = lambda row: (row[1] == 'temp' and not row[2]
+            or owner is not None and connection is db and row[1] == 'original_search'
+            and Path(row[2]).absolute() == store.root / 'retrieval.sqlite3')
         if (len(main) != 1 or Path(main[0][2]).absolute() != path
-                or any(r[1] != "main" and (r[1] != "temp" or r[2]) for r in databases)):
+                or any(r[1] != "main" and not allowed_extra(r) for r in databases)):
             raise ValueError("affinity_read_transaction_path_mismatch")
 
 
 def _affinity_on_reads(store, db, cache, projects, nodes, *, profile=E5Profile(),
-                       budgets=Budgets(), min_cosine=.65, guard=None):
+                       budgets=Budgets(), min_cosine=.65, guard=None, _owner=None):
     """Shared evaluator for the strict CLI and attested product-owned readers.
 
     No connection open/close, transaction begin/commit, checkpoint or write is
@@ -575,7 +584,7 @@ def _affinity_on_reads(store, db, cache, projects, nodes, *, profile=E5Profile()
     if guard.budgets != budgets:
         raise ValueError("affinity_guard_budget_mismatch")
     guard.check()
-    _validate_reads(store, db, cache)
+    _validate_reads(store, db, cache, owner=_owner)
     tables = {r[0] for r in cache.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {"vectors", "texts"} <= tables:
         raise ValueError("affinity_existing_vector_text_tables_required")

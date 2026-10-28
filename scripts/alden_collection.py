@@ -2062,12 +2062,12 @@ class CollectionStore:
         return dict(row)
 
     @staticmethod
-    def _source_body_archive(folder, name, budget):
+    def _source_body_archive(folder, name, budget, *, _admit=None):
         from alden_file_set import SourceBodyError, _read
         if not isinstance(name, str) or not re.fullmatch(r'[0-9a-f]{64}\.json', name):
             raise SourceBodyError('alden_source_body_integrity')
         try:
-            data, _ = _read(folder / name, budget, _source_body_check)
+            data, _ = _read(folder / name, budget, _source_body_check, admit=_admit)
         except FileNotFoundError as error:
             raise SourceBodyError('alden_source_body_capture_unavailable') from error
         except (OSError, ValueError) as error:

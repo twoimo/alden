@@ -196,6 +196,14 @@ count is not the lexical candidate limit. Matching uses SQLite unicode61 and
 the existing checked literals, rather than universal casefold or semantic
 equivalence.
 
+The affinity adapter prepares its exact read-only original-cache binding before
+installing its permanent SQL write/ATTACH denial. Reuse requires the same owner,
+connection, path and inode. Legacy caches keep their existing main/temp-only
+transactions and semantic API. Original material reads admit archive bytes before
+reading, retain source/text/cancellation/resource budgets, and recheck current
+authority through fresh read-only connections. Borrowed transactions stay open;
+the strict standalone semantic path keeps its existing alias restrictions.
+
 `original_text_excerpt` distinguishes the whole verified normalized projection
 from the actual query-centered excerpt. Its digest and Unicode scalar offsets
 bind the excerpt to that projection. Its original UTF-8 byte range is exact when

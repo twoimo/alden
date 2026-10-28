@@ -47,6 +47,7 @@ MAX_DOCUMENTS = 100000
 MAX_TEXT_BYTES = 32 * 1024 * 1024
 MAX_INPUT_BYTES = 5 * 1024 * 1024
 _ALIAS = 'original_search'
+_ATTACHMENT_SEAL = object()
 _ERRORS = frozenset({'collection_original_index_invalid',
     'collection_original_index_stale', 'collection_original_index_budget'})
 _BINDING = ('document_id', 'target_id', 'version', 'raw_sha256', 'input_sha256')
@@ -225,6 +226,45 @@ def _register_metadata_functions(db):
     db.create_function('alden_original_korean_literal', 2, korean_match, deterministic=True)
 
 
+def _attested_original_path(store, db, attribute):
+    """Recognize only the readonly alias prepared by this owner initialization."""
+    receipt = getattr(store, attribute, None)
+    if (not isinstance(receipt, tuple) or len(receipt) != 5
+            or receipt[0] is not db or receipt[4] is not _ATTACHMENT_SEAL):
+        return None
+    path = _index_path(store)
+    info = path.stat()
+    if path != receipt[1] or (info.st_dev, info.st_ino) != receipt[2:4]:
+        _stale()
+    return path
+
+
+def _bound_original_path(store, db):
+    return _attested_original_path(store, db, '_original_index_attachment')
+
+
+def _bind_original_index(store, db):
+    """Owner initialization only, before its permanent ATTACH/write denial."""
+    if db.in_transaction:
+        _invalid()
+    alias = attach_original_index(store, db)
+    rows = [row for row in db.execute('PRAGMA database_list') if row[1] == _ALIAS]
+    if rows:
+        path = _index_path(store)
+        if len(rows) != 1 or Path(rows[0][2]).absolute() != path:
+            _invalid()
+        info = path.stat()
+        receipt = (db, path, info.st_dev, info.st_ino, _ATTACHMENT_SEAL)
+        if alias is None:
+            # Keep legacy owners main/temp-only. The checked absence receipt
+            # prevents a later graph query attempting forbidden ATTACH.
+            db.execute(f'DETACH DATABASE {_ALIAS}')
+            store._original_index_absence = receipt
+        else:
+            store._original_index_attachment = receipt
+    return alias
+
+
 def attach_original_index(store, db):
     """Attach the existing cache with mode=ro; return its alias or None.
 
@@ -236,8 +276,17 @@ def attach_original_index(store, db):
         path = _index_path(store)
         if not path.exists():
             return None
-        if any(row[1] == _ALIAS for row in db.execute('PRAGMA database_list')):
-            _invalid()
+        existing = [row for row in db.execute('PRAGMA database_list') if row[1] == _ALIAS]
+        if existing:
+            if (len(existing) != 1 or _bound_original_path(store, db) != path
+                    or Path(existing[0][2]).absolute() != path):
+                _invalid()
+            if not _validate_schema(db, _ALIAS):
+                return None
+            _register_metadata_functions(db)
+            return _ALIAS
+        if _attested_original_path(store, db, '_original_index_absence') == path:
+            return None
         db.execute(f'ATTACH DATABASE ? AS {_ALIAS}', (path.as_uri() + '?mode=ro',))
         attached = True
         if not _validate_schema(db, _ALIAS):
