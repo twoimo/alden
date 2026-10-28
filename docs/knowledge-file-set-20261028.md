@@ -219,6 +219,18 @@ an original-file download API. Typed knowledge turns reverify the selected
 original projection, excerpt and raw range before further model input and turn
 completion. These source checks do not confer installed-app or decoder proof.
 
+For an explicit project lookup such as `PROJECT 저장된 자료에서 needle 원본
+SHA256을 확인해줘`, the host searches `needle` within the already selected
+project. A closed Korean lookup wrapper is removed only when its literal
+project prefix, source carrier and terminal lookup verb all match. Unknown
+phrasing and messenger lookups retain their existing query. Intent, permissions,
+the original user/model messages and the zero-argument knowledge tool remain
+unchanged. The reference and retrieval metrics include a hash-only `query_trace`;
+durable generation metadata records its validated copy as `knowledge_query`.
+The original excerpt proof binds the actual retrieval query, while the trace
+keeps its relation to the original request. This avoids promoting common
+project and output-format words above a specific requested source term.
+
 ## Verification scope
 
 Evidence for this phase lives in the task's `outputs/spark-original-files-20261028`

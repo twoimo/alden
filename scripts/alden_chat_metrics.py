@@ -284,6 +284,19 @@ def sanitize_generation(selection: object, metrics: object, ticket: object) -> d
         result["timing"] = timing
     if 'tool_loop' in metrics:
         result['tool_loop'] = _tool_loop(metrics['tool_loop'])
+    retrieval = metrics.get('retrieval')
+    if isinstance(retrieval, Mapping) and 'query_trace' in retrieval:
+        from alden_scoped_knowledge_query import POLICY
+        trace = retrieval['query_trace']
+        fields = {'policy', 'derived', 'request_sha256', 'retrieval_sha256'}
+        if (not isinstance(trace, Mapping) or set(trace) != fields
+                or trace.get('policy') != POLICY or type(trace.get('derived')) is not bool
+                or any(not isinstance(trace.get(key), str)
+                       or re.fullmatch('[0-9a-f]{64}', trace[key]) is None
+                       for key in ('request_sha256', 'retrieval_sha256'))
+                or trace['derived'] != (trace['request_sha256'] != trace['retrieval_sha256'])):
+            raise _invalid()
+        result['knowledge_query'] = {key: trace[key] for key in sorted(fields)}
 
     error_code = generation_error_code(metrics.get("error_code"))
     if error_code is not None:

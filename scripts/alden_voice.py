@@ -1614,6 +1614,9 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         from auto_reply_knowledge_graph import retrieve_knowledge_bundle,embedding_abort_scope
         chat_requested = any(word in query for word in ('카카오톡','카톡','채팅방','대화방','메시지'))
         projects = _voice_collection_projects(root, query) if not chat_requested else []
+        from alden_scoped_knowledge_query import scoped_collection_query
+        prepared_query = scoped_collection_query(query, projects=projects)
+        retrieval_query, query_trace = prepared_query['query'], prepared_query['trace']
         scope=resolve_room(root,query) if chat_requested and (root/'knowledge/corpus/current.json').is_file() else {'state':'none','chat_id':''}
         if scope['state']=='ambiguous':
             return '현재 요청에 나온 이름을 가진 대화방이 여러 개다. 방을 임의로 선택하지 말고 어느 대화방인지 구분할 수 있는 정보 한 가지만 질문한다.',{'state':'ambiguous_room','mode':'none','sources':0,'seconds':time.perf_counter()-started}
@@ -1622,16 +1625,16 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         relation_requested = any(word in query.casefold() for word in ('전제','연결','관계','의존','연관','premise','relationship','dependency'))
         entity_budget, relation_budget = (4, 3) if relation_requested else (2, 1)
         with embedding_abort_scope(token):
-            ranked=retrieve_knowledge_bundle(query,state_root=root,chat_id=scope['chat_id'] or None,max_entities=entity_budget,max_relations=relation_budget,
+            ranked=retrieve_knowledge_bundle(retrieval_query,state_root=root,chat_id=scope['chat_id'] or None,max_entities=entity_budget,max_relations=relation_budget,
                                              **({'projects': projects, 'max_original_excerpt_chars': 400} if projects else {}))
         token.raise_if_cancelled()
         fact_budget = entity_budget + relation_budget
         from alden_retrieval_time import query_time_reference
         query_clock = query_time_reference()
-        context={'query_clock':query_clock,'graph_facts':ranked.get('facts',[])[:fact_budget],'graph_provenance':ranked.get('fact_provenance',[])[:fact_budget],
+        context={'query_clock':query_clock,'query_trace':query_trace,'graph_facts':ranked.get('facts',[])[:fact_budget],'graph_provenance':ranked.get('fact_provenance',[])[:fact_budget],
                  'quoted_history':raw.get('items',[])}
         if not context['graph_facts'] and not context['quoted_history']:
-            return '',{'state':'empty','mode':ranked.get('search_mode','bm25_only'),'sources':0,'seconds':time.perf_counter()-started}
+            return '',{'state':'empty','query_trace':query_trace,'mode':ranked.get('search_mode','bm25_only'),'sources':0,'seconds':time.perf_counter()-started}
         original_facts = [str(fact) for fact in context['graph_facts']]
         context['graph_facts']=[fact[:600] for fact in original_facts]
         for fact, row in zip(original_facts, context['graph_provenance']):
@@ -1695,7 +1698,7 @@ def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], r
         note_sources=len({source['note_id'] for row in full_provenance
                           for source in [row,*row.get('matching_sources',{}).get('sources',[])]
                           if source.get('note_id')})
-        return reference,{'state':'found','query_clock':query_clock,'reference_coverage':'partial' if partial_reference else 'selected_bounded_context',
+        return reference,{'state':'found','query_clock':query_clock,'query_trace':query_trace,'reference_coverage':'partial' if partial_reference else 'selected_bounded_context',
                           'budget_dropped':dropped_counts,'mode':ranked.get('search_mode','bm25_only'),'sources':len(context['quoted_history'])+note_sources,
                           'note_sources':note_sources,'history_sources':len(context['quoted_history']),
                           'graph_provenance':full_provenance,'model_provenance_compact':not proof_requested,
