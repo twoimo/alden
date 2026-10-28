@@ -235,7 +235,7 @@ describe('actual detail reader controls', () => {
     const read = vi.fn(async (r: { offset_bytes: number; max_bytes: number }) => response(original, r.offset_bytes, r.max_bytes));
     const { selected } = render(details(), { read, isCurrent: () => true });
     expect(read).not.toHaveBeenCalled(); expect(textArea().hidden).toBe(true);
-    buttons()[0].click(); expect(section().dataset.state).toBe('loading'); expect(buttons()[0].disabled).toBe(true);
+    buttons()[0].click(); expect(section().dataset.state).toBe('loading'); expect(buttons()[0].disabled).toBe(false); expect(buttons()[0].getAttribute('aria-disabled')).toBe('true');
     await waitState('part'); const first = textArea().textContent!;
     expect(Buffer.byteLength(first)).toBeLessThanOrEqual(16000); expect(first).toBe(response().body_window.text);
     buttons()[0].click(); await waitState('last');
@@ -493,5 +493,124 @@ describe('desktop main callback wiring', () => {
     if (action === 'read') { await waitState('part'); expect(textArea().textContent).toBe(response().body_window.text); }
     else { for (let i = 0; i < 12; i++) await Promise.resolve(); expect(old.querySelector('pre')?.textContent).toBe(''); }
     hologram!.dispose();
+  });
+});
+
+describe('original reader keyboard focus contract', () => {
+  it.each(['next', 'reset'] as const)('keeps pending %s focusable, blocks repeated activation and preserves focus on a non-EOF result', async action => {
+    const copy = original.repeat(2), pending = deferred<unknown>();
+    let armed = false;
+    const read = vi.fn(async (request: { offset_bytes: number; max_bytes: number }) =>
+      armed ? pending.promise : response(copy, request.offset_bytes, request.max_bytes));
+    render(details(copy), { read, isCurrent: () => true });
+    buttons()[0].click(); await waitState('part');
+    if (action === 'reset') {
+      buttons()[0].click(); await waitState('part');
+      buttons()[0].click(); await waitState('last');
+    }
+    const [next, reset] = buttons(), target = action === 'next' ? next : reset;
+    const offset = action === 'next' ? Buffer.byteLength(textArea().textContent!) : 0;
+    const readsBeforePending = read.mock.calls.length;
+    target.focus(); expect(document.activeElement).toBe(target);
+    const focus = vi.spyOn(target, 'focus');
+    armed = true; target.click();
+    expect(section().dataset.state).toBe('loading');
+    expect(next.disabled).toBe(action === 'reset'); // EOF next stays natively disabled while reset loads.
+    expect(reset.disabled).toBe(false);
+    for (const button of [next, reset]) expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(document.activeElement).toBe(target);
+    target.click(); next.click(); reset.click();
+    expect(read).toHaveBeenCalledTimes(readsBeforePending + 1);
+    expect(read.mock.calls.at(-1)![0]).toEqual({ offset_bytes: offset, max_bytes: 16000 });
+    pending.resolve(response(copy, offset)); await waitState('part');
+    expect(document.activeElement).toBe(target); expect(focus).not.toHaveBeenCalled();
+    for (const button of [next, reset]) {
+      expect(button.disabled).toBe(false);
+      expect(button.getAttribute('aria-disabled')).toBeNull();
+    }
+    expect(section().hasAttribute('aria-busy')).toBe(false);
+    expect(textArea().textContent).toBe(response(copy, offset).body_window.text);
+    expect(read).toHaveBeenCalledTimes(readsBeforePending + 1);
+  });
+
+  it('moves focused next to visible reset once before disabling next at EOF', async () => {
+    const pending = deferred<unknown>(); let armed = false;
+    render(details(), { read: async request => armed ? pending.promise : response(original, request.offset_bytes),
+      isCurrent: () => true });
+    buttons()[0].click(); await waitState('part');
+    const offset = Buffer.byteLength(textArea().textContent!), [next, reset] = buttons();
+    next.focus(); expect(document.activeElement).toBe(next);
+    const nativeFocus = reset.focus.bind(reset);
+    const focus = vi.spyOn(reset, 'focus').mockImplementation(options => {
+      expect(reset.hidden).toBe(false); expect(reset.disabled).toBe(false);
+      expect(next.disabled).toBe(false); nativeFocus(options);
+    });
+    armed = true; next.click();
+    pending.resolve(response(original, offset)); await waitState('last');
+    expect(focus).toHaveBeenCalledOnce();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(reset);
+    expect(next.disabled).toBe(true); expect(reset.disabled).toBe(false);
+    expect(next.getAttribute('aria-disabled')).toBeNull(); expect(reset.getAttribute('aria-disabled')).toBeNull();
+    expect(textArea().textContent).toBe(response(original, offset).body_window.text);
+  });
+
+  it.each(['next', 'reset'] as const)('retains %s focus after failure and retries the same cursor without stealing focus', async action => {
+    const copy = original.repeat(2), pending = deferred<unknown>(); let calls = 0;
+    const read = vi.fn(async (request: { offset_bytes: number; max_bytes: number }) =>
+      ++calls === 2 ? pending.promise : response(copy, request.offset_bytes, request.max_bytes));
+    render(details(copy), { read, isCurrent: () => true });
+    buttons()[0].click(); await waitState('part');
+    const [next, reset] = buttons(), target = action === 'next' ? next : reset;
+    const offset = action === 'next' ? Buffer.byteLength(textArea().textContent!) : 0;
+    target.focus(); expect(document.activeElement).toBe(target);
+    const focus = vi.spyOn(target, 'focus');
+    target.click(); pending.resolve({ ok: false }); await waitState('failure');
+    expect(document.activeElement).toBe(target); expect(focus).not.toHaveBeenCalled();
+    expect(target.disabled).toBe(false); expect(target.getAttribute('aria-disabled')).toBeNull();
+    expect(textArea().hidden).toBe(true); expect(textArea().textContent).toBe('');
+    target.click(); await waitState('part');
+    expect(document.activeElement).toBe(target); expect(focus).not.toHaveBeenCalled();
+    expect(read.mock.calls.map(([request]) => request.offset_bytes)).toEqual([0, offset, offset]);
+    expect(textArea().textContent).toBe(response(copy, offset).body_window.text);
+  });
+
+  it.each(['close', 'another control'] as const)('does not steal focus moved to %s while an EOF read is pending', async destination => {
+    const pending = deferred<unknown>(); let armed = false;
+    render(details(), { read: async request => armed ? pending.promise : response(original, request.offset_bytes),
+      isCurrent: () => true });
+    buttons()[0].click(); await waitState('part');
+    const offset = Buffer.byteLength(textArea().textContent!), [next, reset] = buttons();
+    const elsewhere = destination === 'close' ? document.getElementById('knowledge-focus-close')!
+      : document.body.appendChild(document.createElement('button'));
+    if (destination === 'another control') elsewhere.textContent = 'generated unrelated control';
+    next.focus(); armed = true; next.click();
+    elsewhere.focus(); expect(document.activeElement).toBe(elsewhere);
+    const focusReset = vi.spyOn(reset, 'focus'), focusNext = vi.spyOn(next, 'focus');
+    pending.resolve(response(original, offset)); await waitState('last');
+    expect(document.activeElement).toBe(elsewhere);
+    expect(focusReset).not.toHaveBeenCalled(); expect(focusNext).not.toHaveBeenCalled();
+    expect(next.disabled).toBe(true); expect(reset.hidden).toBe(false);
+    expect(textArea().textContent).toBe(response(original, offset).body_window.text);
+  });
+
+  it.each(['closed', 'stale'] as const)('does not focus or commit an EOF reply after the reader becomes %s', async ownership => {
+    const pending = deferred<unknown>(); let armed = false, active = true;
+    render(details(), { read: async request => armed ? pending.promise : response(original, request.offset_bytes),
+      isCurrent: () => active });
+    buttons()[0].click(); await waitState('part');
+    const offset = Buffer.byteLength(textArea().textContent!), old = section(), content = textArea();
+    const [next, reset] = buttons();
+    next.focus(); armed = true; next.click();
+    if (ownership === 'closed') setNodeDetailsVisible(false);
+    else active = false;
+    const activeAfterInvalidation = document.activeElement;
+    const focusReset = vi.spyOn(reset, 'focus'), focusNext = vi.spyOn(next, 'focus');
+    pending.resolve(response(original, offset));
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(old.dataset.state).toBe('loading');
+    expect(content.textContent).toBe(''); expect(content.hidden).toBe(true);
+    expect(document.activeElement).toBe(activeAfterInvalidation);
+    expect(focusReset).not.toHaveBeenCalled(); expect(focusNext).not.toHaveBeenCalled();
   });
 });

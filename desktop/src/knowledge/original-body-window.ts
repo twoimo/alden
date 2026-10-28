@@ -157,7 +157,10 @@ export function renderOriginalBodyWindow(bodyElement: HTMLElement, node: Knowled
     // Clear while this selection still owns the UI, before any asynchronous
     // invalidation can prevent a later failure/status commit.
     clearContent();
-    busy = true; next.disabled = true; reset.disabled = true; section.setAttribute('aria-busy', 'true');
+    // Native disabling drops keyboard focus while the request is pending.
+    // Keep its focus target; the busy guard still rejects repeat activation.
+    busy = true; next.setAttribute('aria-disabled', 'true'); reset.setAttribute('aria-disabled', 'true');
+    section.setAttribute('aria-busy', 'true');
     section.dataset.state = 'loading'; status.textContent = '원문을 불러오는 중입니다…';
     const request = Object.freeze({ offset_bytes: offset, max_bytes: 16000 });
     try {
@@ -177,7 +180,13 @@ export function renderOriginalBodyWindow(bodyElement: HTMLElement, node: Knowled
       if (current()) { clearContent(); section.dataset.state = 'failure'; status.textContent = '원문을 불러오지 못했습니다. 다시 시도해 주세요.'; }
     } finally {
       busy = false;
-      if (current()) { section.removeAttribute('aria-busy'); next.disabled = page?.next_offset_bytes === null; reset.disabled = false; }
+      if (current()) {
+        section.removeAttribute('aria-busy');
+        next.removeAttribute('aria-disabled'); reset.removeAttribute('aria-disabled'); reset.disabled = false;
+        const atEnd = page?.next_offset_bytes === null;
+        if (atEnd && root.activeElement === next) reset.focus({ preventScroll: true });
+        if (current()) next.disabled = atEnd;
+      }
     }
   };
   next.addEventListener('click', () => { if (!page || page.next_offset_bytes !== null) void load(page?.next_offset_bytes ?? 0); });

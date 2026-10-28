@@ -618,6 +618,7 @@ body.settings-view { color:var(--text); background:var(--canvas); }
 .knowledge-original-body-window p { margin:8px 0; color:var(--muted); font-size:12px; line-height:1.65; }
 .knowledge-original-body-text { max-height:45vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:14px; line-height:1.8; }
 .knowledge-original-body-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.knowledge-original-body-actions button[aria-disabled="true"] { opacity:.6; cursor:progress; }
 .knowledge-note-link { display:inline; padding:0; border:0; background:none; color:inherit; text-decoration:underline; text-underline-offset:3px; cursor:pointer; font:inherit; }
 .knowledge-node-body a { color:inherit; text-underline-offset:3px; }
 .knowledge-separated-tail { margin:12px 0 18px; color:var(--muted); font-size:12px; line-height:1.65; }
