@@ -2,6 +2,7 @@ import type { KnowledgeGraph, KnowledgeNode } from './graph-model';
 import { matchesSourceReference } from './graph-model';
 import { renderBodyNotation } from './body-notation';
 import { renderSourceExtraction } from './source-extraction';
+import { renderOriginalBodyWindow, type OriginalBodyReader } from './original-body-window';
 
 const STRIPPED_TEXT_CONTROLS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g;
 function text(value: unknown, limit = 1200): string {
@@ -81,7 +82,7 @@ function bindNotePane(root: Document, pane: HTMLDialogElement): void {
     });
     pane.addEventListener('cancel', event => { event.preventDefault(); if (!composing) close(); });
     pane.addEventListener('close', () => {
-      if (!pane.open) root.querySelectorAll('.knowledge-source-extraction').forEach(item => item.remove());
+      if (!pane.open) root.querySelectorAll('.knowledge-source-extraction, .knowledge-original-body-window').forEach(item => item.remove());
     });
     pane.addEventListener('pointerdown', event => { backdropPressed = outside(event); });
     pane.addEventListener('click', event => {
@@ -106,7 +107,7 @@ export function setNodeDetailsVisible(visible: boolean, root: Document = documen
     pane.hidden = false;
     if (!pane.open) pane.showModal();
   } else {
-    root.querySelectorAll('.knowledge-body-notation, .knowledge-source-extraction').forEach(item => item.remove());
+    root.querySelectorAll('.knowledge-body-notation, .knowledge-source-extraction, .knowledge-original-body-window').forEach(item => item.remove());
     if (pane.open) pane.close();
     pane.hidden = true;
     delete pane.dataset.nodeId;
@@ -171,7 +172,8 @@ function renderBody(container: HTMLElement, body: string, graph: KnowledgeGraph,
   container.append(document.createTextNode(body.slice(offset)));
 }
 
-export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, payload: Record<string, unknown> | null = null, root: Document = document): void {
+export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, payload: Record<string, unknown> | null = null,
+  root: Document = document, bodyReader?: OriginalBodyReader): void {
   const details = record(payload?.details);
   const sourceExpected = Boolean(node.sourceVersion || node.sourceTarget || details?.basis === 'source_record');
   const selected = payload?.ok !== false && payload?.discarded !== true && details && details.node_id === node.id
@@ -196,6 +198,7 @@ export function renderNodeDetails(graph: KnowledgeGraph, node: KnowledgeNode, pa
     const note = root.createElement('p'); note.className = 'knowledge-body-limit';
     note.textContent = '일부 발췌 · 현재 화면에는 본문의 앞부분만 표시합니다.'; body.before(note);
   }
+  if (body) renderOriginalBodyWindow(body, node, selected, bodyReader);
   root.querySelectorAll('.knowledge-separated-tail').forEach(item => item.remove());
   if (body && candidate) {
     const note = root.createElement('details'); note.className = 'knowledge-separated-tail knowledge-reading-tail';

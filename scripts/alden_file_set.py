@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 
 from alden_collection import encoded, normalized_body
 from alden_chat_files import run_owned_json
@@ -250,6 +251,179 @@ def source_extraction_packet(record, *, binding, stored_body, detail_body):
         return packet
     except (TypeError, ValueError) as error:
         raise ValueError(invalid) from error
+
+
+class SourceBodyError(ValueError):
+    """Fixed, non-secret failures shared by retained-original body readers."""
+    CODES = frozenset({
+        'alden_source_body_unavailable', 'alden_source_body_capture_unavailable',
+        'alden_source_body_integrity', 'alden_source_body_format_unsupported',
+        'alden_source_body_encoding_unsupported', 'alden_source_body_cursor_invalid',
+    })
+
+    def __init__(self, code):
+        if not isinstance(code, str) or code not in self.CODES:
+            raise ValueError('collection_source_body_error_code_invalid')
+        self.code = code
+        super().__init__(code)
+
+
+def original_utf8_window(packet, *, record, record_pointer, original_files,
+                         offset_bytes=0, max_bytes=16000, cancelled=lambda: False):
+    """Verify a retained declaration and return seven exact UTF-8 range fields.
+
+    No IO, parser, or authority lookup occurs here. The caller verifies the
+    capture archive, current membership/version and actual stored-body match.
+    Parser coverage is validated without promoting it to complete coverage.
+    """
+    if (type(offset_bytes) is not int or not 0 <= offset_bytes <= MAX_FILE_BYTES
+            or type(max_bytes) is not int or not 4 <= max_bytes <= MAX_TEXT_BYTES
+            or not callable(cancelled)):
+        raise ValueError('collection_source_body_request_invalid')
+
+    def fail(code='alden_source_body_integrity'):
+        raise SourceBodyError(code) from None
+
+    def sha(value):
+        return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+    def canonical(value):
+        try:
+            return encoded(value)
+        except (TypeError, ValueError, UnicodeError, RecursionError):
+            fail()
+
+    def unbase64(value, maximum):
+        _check(cancelled)
+        if not isinstance(value, str) or len(value) > 4 * ((maximum + 2) // 3):
+            fail()
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except (ValueError, UnicodeError):
+            fail()
+        if len(raw) > maximum or base64.b64encode(raw).decode('ascii') != value:
+            fail()
+        _check(cancelled)
+        return raw
+
+    _check(cancelled)
+    if (not isinstance(packet, dict) or type(packet.get('schema')) is not int or packet['schema'] != 1
+            or packet.get('kind') != 'declared-original-file-set-v1'
+            or not isinstance(record, dict)):
+        fail()
+    root = record.get('source_root')
+    if (not isinstance(root, str) or not 1 <= len(root) <= 4096 or '\x00' in root
+            or not PurePosixPath(root).is_absolute() or '..' in PurePosixPath(root).parts
+            or str(PurePosixPath(root)) != root or packet.get('root') != root):
+        fail()
+    files, blobs = packet.get('files'), packet.get('blobs_base64')
+    if (not isinstance(files, list) or not 1 <= len(files) <= MAX_FILES
+            or not isinstance(blobs, dict) or not 1 <= len(blobs) <= MAX_FILES
+            or any(not sha(key) for key in blobs)
+            or not isinstance(record_pointer, str)
+            or re.fullmatch(r'/files/(0|[1-9][0-9]?)/record', record_pointer) is None):
+        fail()
+    index = int(record_pointer.split('/')[2])
+    if index >= len(files):
+        fail()
+    selected = files[index]
+    if (not isinstance(selected, dict) or set(selected) != {'entry', 'record', 'blob_sha256'}
+            or canonical(selected['record']) != canonical(record)):
+        fail()
+
+    manifest_raw = unbase64(packet.get('manifest_base64'), MAX_MANIFEST_BYTES)
+    if not sha(packet.get('manifest_sha256')) or hashlib.sha256(manifest_raw).hexdigest() != packet['manifest_sha256']:
+        fail()
+    try:
+        manifest = json.loads(manifest_raw, object_pairs_hook=_object, parse_constant=_invalid_constant)
+    except (ValueError, UnicodeError, RecursionError):
+        fail()
+    if (not isinstance(manifest, dict) or set(manifest) != {'schema', 'files'}
+            or type(manifest['schema']) is not int or manifest['schema'] != 1
+            or not isinstance(manifest['files'], list) or len(manifest['files']) != len(files)):
+        fail()
+    ids, paths = set(), set()
+    for declaration, item in zip(manifest['files'], files):
+        _check(cancelled)
+        if (not isinstance(declaration, dict) or not {'id', 'path'} <= set(declaration)
+                or set(declaration) - {'id', 'path', 'label'}):
+            fail()
+        file_id, path = declaration['id'], declaration['path']
+        if (not isinstance(file_id, str) or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}', file_id) is None
+                or not isinstance(path, str) or not 1 <= len(path) <= 4096
+                or '\\' in path or any(ord(c) < 32 for c in path)):
+            fail()
+        relative = PurePosixPath(path)
+        if (relative.is_absolute() or '..' in relative.parts or str(relative) != path
+                or relative.name in {'', '.'} or file_id in ids or path in paths
+                or 'label' in declaration and (not isinstance(declaration['label'], str)
+                    or not declaration['label'].strip() or len(declaration['label']) > 1024)):
+            fail()
+        if (not isinstance(item, dict) or set(item) != {'entry', 'record', 'blob_sha256'}
+                or not isinstance(item['record'], dict) or not sha(item['blob_sha256'])
+                or canonical(item['entry']) != canonical(declaration)):
+            fail()
+        ids.add(file_id); paths.add(path)
+    declaration = manifest['files'][index]
+    if record.get('file_id') != declaration['id'] or record.get('path') != declaration['path']:
+        fail()
+    suffix, parsed = record.get('format'), record.get('parsed')
+    if not isinstance(suffix, str) or not isinstance(parsed, dict):
+        fail()
+    if suffix not in {'.txt', '.md'}:
+        fail('alden_source_body_format_unsupported')
+    if PurePosixPath(record['path']).suffix.lower() != suffix:
+        fail()
+    if (not isinstance(parsed.get('processing_version'), str) or not isinstance(parsed.get('parser'), str)
+            or not isinstance(parsed.get('scope'), dict) or not isinstance(parsed['scope'].get('kind'), str)
+            or not isinstance(parsed.get('text'), str)):
+        fail()
+    if (parsed['processing_version'] != 'document-segments-v1' or parsed['parser'] != 'text-' + suffix[1:]
+            or parsed['scope']['kind'] != 'original-lines'):
+        fail('alden_source_body_format_unsupported')
+    try:
+        coverage = file_extraction_coverage(record, stored_body=normalized_body(parsed['text']))
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        fail()
+    _check(cancelled)
+    if not isinstance(original_files, list) or len(original_files) != len(files):
+        fail()
+    originals = [item for item in original_files if isinstance(item, dict) and item.get('file_id') == record['file_id']]
+    if len(originals) != 1:
+        fail()
+    original, digest = originals[0], record['input_sha256']
+    if (set(original) != {'file_id', 'sha256', 'json_pointer', 'encoding', 'body_complete'}
+            or original['sha256'] != digest or selected['blob_sha256'] != digest
+            or original['json_pointer'] != '/blobs_base64/' + digest or original['encoding'] != 'base64'
+            or type(original['body_complete']) is not bool
+            or original['body_complete'] != coverage['body_complete'] or digest not in blobs):
+        fail()
+    data = unbase64(blobs[digest], MAX_FILE_BYTES)
+    if len(data) != record['input_bytes'] or hashlib.sha256(data).hexdigest() != digest:
+        fail()
+    _check(cancelled)
+    try:
+        text = data.decode('utf-8')
+    except UnicodeError:
+        fail('alden_source_body_encoding_unsupported')
+    for position, character in enumerate(text):
+        if position % 4096 == 0:
+            _check(cancelled)
+        if unicodedata.category(character) == 'Cc' and character not in '\n\r\t':
+            fail('alden_source_body_encoding_unsupported')
+    _check(cancelled)
+    total = len(data)
+    if offset_bytes > total or offset_bytes < total and data[offset_bytes] & 0xc0 == 0x80:
+        fail('alden_source_body_cursor_invalid')
+    end = min(offset_bytes + max_bytes, total)
+    while end < total and data[end] & 0xc0 == 0x80:
+        end -= 1
+    window = data[offset_bytes:end]
+    result = {'encoding': 'utf-8', 'offset_bytes': offset_bytes, 'end_bytes': end,
+              'next_offset_bytes': end if end < total else None, 'total_bytes': total,
+              'text': window.decode('utf-8'), 'text_sha256': hashlib.sha256(window).hexdigest()}
+    _check(cancelled)
+    return result
 
 
 def parse_file(data, filename, *, cancelled=lambda: False):

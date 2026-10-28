@@ -129,6 +129,28 @@ coverage stays unknown. Its async hash result cannot replace a later selection.
 Search fact provenance carries the shared `original_body_coverage` under its
 existing source-version/archive binding, separately from `fact_truncated`.
 
+`alden_knowledge_source_body` reads a bounded window of a retained UTF-8 TXT or
+Markdown original. Each call requires explicit projects, document ID, target ID
+and current stored version. It verifies the record archive, capture receipt,
+whole capture packet, selected original length and SHA before returning text.
+It never reopens the original path or falls back to the parser excerpt. Current
+project permission, membership/version, target configuration and capture
+reference are rechecked after decoding. A paused collector does not revoke
+archived reads; reflected denial, removal or replacement does.
+
+Offsets count original UTF-8 bytes. Each response contains at most 16,000 bytes,
+ends at a Unicode scalar boundary and supplies the next offset or null at EOF.
+UTF-8 BOM, NFD, CRLF and whitespace remain exact; sequential windows reconstruct
+the original digest. UTF-16, binary controls and other formats are unsupported.
+The initial `source_extraction` receipt and existing detail excerpt do not change
+when further original windows are read. Receiving a final window alone does not
+establish that every earlier window was delivered or read.
+
+The desktop reader is available after selecting an explicit project filter.
+The all-project view does not silently expand a body-read request into every
+known project. First/next/reset replaces one bounded text window; failed reads
+clear the prior displayed original. The stored parser excerpt remains separate.
+
 | Boundary | Limit |
 | --- | --- |
 | Manifest | 1 MiB, 64 files |

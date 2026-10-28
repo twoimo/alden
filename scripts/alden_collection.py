@@ -70,6 +70,50 @@ STAGES = {"discovered", "parsed", "validated", "stored", "published", "indexed",
 _READ_CANCELLATION = ContextVar('alden_collection_read_cancellation', default=None)
 
 
+def validate_source_body_request(*, projects, node_id, target_id, expected_version,
+                                 offset_bytes=0, max_bytes=16000):
+    if (not isinstance(projects, list) or not 1 <= len(projects) <= 16
+            or any(not isinstance(p, str) or not p or len(p) > 256 for p in projects)
+            or len(set(projects)) != len(projects)
+            or any(not isinstance(value, str) or not re.fullmatch(r'[\x21-\x7e]{1,256}', value)
+                   for value in (node_id, target_id, expected_version))
+            or type(offset_bytes) is not int or not 0 <= offset_bytes <= 5242880
+            or type(max_bytes) is not int or not 4 <= max_bytes <= 16000):
+        raise ValueError('collection_source_body_request_invalid')
+
+
+def _source_body_check():
+    callback = _READ_CANCELLATION.get()
+    if callback is not None and callback():
+        raise AldenCancelled('collection_cancelled')
+    return False
+
+
+def _source_body_json(raw):
+    from alden_file_set import SourceBodyError
+    def pairs(items):
+        value = {}
+        for key, item in items:
+            if key in value:
+                raise SourceBodyError('alden_source_body_integrity')
+            value[key] = item
+        return value
+    def invalid(_):
+        raise SourceBodyError('alden_source_body_integrity')
+    def finite_float(token):
+        value = float(token)
+        if not math.isfinite(value):
+            invalid(token)
+        return value
+    try:
+        return json.loads(raw.decode('utf-8') if isinstance(raw, bytes) else raw,
+                          object_pairs_hook=pairs, parse_constant=invalid, parse_float=finite_float)
+    except SourceBodyError:
+        raise
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise SourceBodyError('alden_source_body_integrity') from error
+
+
 @contextmanager
 def _read_cancellation(cancelled):
     """Keep one request's cancellation on its nested read-only connections."""
@@ -1928,6 +1972,148 @@ class CollectionStore:
                 "source_sha256": manifest["source_sha256"], "source_bytes": manifest["source_bytes"],
                 "byte_scope": manifest["byte_scope"]}
 
+    def _source_body_row(self, db, projects, node_id, target_id, expected_version):
+        from alden_file_set import SourceBodyError
+        marks = ','.join('?' for _ in projects)
+        row = db.execute('''SELECT d.id,d.platform,d.original_id,d.availability AS document_availability,
+            m.current_version AS visible_version,m.availability AS membership_availability,v.*,
+            t.platform AS target_platform,t.original_id AS target_original_id,t.config AS target_config,t.cursor,
+            EXISTS(SELECT 1 FROM target_projects p WHERE p.target_id=m.target_id
+                AND p.permission!='denied' AND p.project IN (''' + marks + ''')) AS permitted,
+            alden_source_allowed(m.target_id,m.document_id,m.current_version) AS source_allowed
+            FROM memberships m JOIN documents d ON d.id=m.document_id JOIN versions v ON v.id=m.current_version
+            JOIN targets t ON t.id=m.target_id WHERE m.document_id=? AND m.target_id=?''',
+            (*projects, node_id, target_id)).fetchone()
+        if (row is None or row['document_availability'] != 'available'
+                or row['membership_availability'] != 'available' or not row['permitted'] or not row['source_allowed']):
+            raise SourceBodyError('alden_source_body_unavailable')
+        if row['visible_version'] != expected_version:
+            raise RuntimeError('collection_graph_version_changed')
+        return dict(row)
+
+    @staticmethod
+    def _source_body_archive(folder, name, budget):
+        from alden_file_set import SourceBodyError, _read
+        if not isinstance(name, str) or not re.fullmatch(r'[0-9a-f]{64}\.json', name):
+            raise SourceBodyError('alden_source_body_integrity')
+        try:
+            data, _ = _read(folder / name, budget, _source_body_check)
+        except FileNotFoundError as error:
+            raise SourceBodyError('alden_source_body_capture_unavailable') from error
+        except (OSError, ValueError) as error:
+            raise SourceBodyError('alden_source_body_integrity') from error
+        except RuntimeError as error:
+            if str(error) != 'collection_files_source_changed':
+                raise
+            raise SourceBodyError('alden_source_body_integrity') from error
+        if digest(data) + '.json' != name:
+            raise SourceBodyError('alden_source_body_integrity')
+        return data
+
+    def source_body_window(self, *, projects, node_id, target_id, expected_version,
+                           offset_bytes=0, max_bytes=16000):
+        """Read one exact retained UTF-8 range; never reopen a declared original."""
+        from alden_file_set import SourceBodyError, _absolute, file_extraction_coverage, original_utf8_window
+        validate_source_body_request(projects=projects, node_id=node_id, target_id=target_id,
+            expected_version=expected_version, offset_bytes=offset_bytes, max_bytes=max_bytes)
+        _source_body_check()
+        if self.schema < 3:
+            raise SourceBodyError('alden_source_body_format_unsupported')
+        with self.database() as db:
+            row = self._source_body_row(db, projects, node_id, target_id, expected_version)
+        if (row['platform'] != 'files' or row['target_platform'] != 'files'
+                or row['processing_version'] != 'declared-original-files-v1'):
+            raise SourceBodyError('alden_source_body_format_unsupported')
+        config = _source_body_json(row['target_config'])
+        checkpoint = _source_body_json(row['cursor'] or '{}')
+        if (not isinstance(config, dict) or config.get('adapter') != 'file-set'
+                or not isinstance(config.get('root'), str) or not isinstance(config.get('path'), str)):
+            raise SourceBodyError('alden_source_body_format_unsupported')
+        capture = checkpoint.get('source_capture') if isinstance(checkpoint, dict) else None
+        if capture is None:
+            raise SourceBodyError('alden_source_body_capture_unavailable')
+        if (not isinstance(capture, dict) or set(capture) != {'schema', 'manifest', 'sha256', 'byte_scope'}
+                or type(capture['schema']) is not int or capture['schema'] != 1
+                or not isinstance(capture['sha256'], str) or not re.fullmatch(r'[0-9a-f]{64}', capture['sha256'])
+                or capture['byte_scope'] != 'exact declared original file bytes in SHA256-keyed base64 blobs, with structural parse locations'):
+            raise SourceBodyError('alden_source_body_integrity')
+        binding = {'node_id': node_id, 'target_id': target_id, 'version': expected_version,
+                   'raw_sha256': row['raw_sha256']}
+        try:
+            _absolute(config['root']); _absolute(config['path'])
+            self._verify_current_detail(binding, projects)
+            raw = self._source_body_archive(self.blobs, row['raw_path'], MAX_RECORD_BYTES)
+            if digest(raw) != row['raw_sha256']:
+                raise SourceBodyError('alden_source_body_integrity')
+            record = _source_body_json(raw)
+            file_extraction_coverage(record, stored_body=row['body'])
+            if (record['source_root'] != config['root']
+                    or identity('files', encoded([row['target_original_id'], record['file_id']]).decode()) != node_id
+                    or encoded([row['target_original_id'], record['file_id']]).decode() != row['original_id']):
+                raise SourceBodyError('alden_source_body_integrity')
+            folder = self.root / 'source-captures'
+            manifest_raw = self._source_body_archive(folder, capture['manifest'], 16 * 1024 * 1024)
+            manifest = _source_body_json(manifest_raw)
+            required = {'schema', 'target_id', 'adapter', 'origin', 'byte_scope', 'processing_version',
+                        'records', 'relations', 'original_files', 'source_sha256', 'source_bytes', 'source_file'}
+            if (not isinstance(manifest, dict) or set(manifest) != required
+                    or type(manifest['schema']) is not int or manifest['schema'] != 1
+                    or manifest['target_id'] != target_id or manifest['adapter'] != 'file-set'
+                    or manifest['origin'] != config['path'] or manifest['byte_scope'] != capture['byte_scope']
+                    or manifest['processing_version'] != 'alden-source-capture-1' or manifest['relations'] != {}
+                    or manifest['source_sha256'] != capture['sha256']
+                    or manifest['source_file'] != capture['sha256'] + '.json'
+                    or type(manifest['source_bytes']) is not int or not 1 <= manifest['source_bytes'] <= 32 * 1024 * 1024
+                    or not isinstance(manifest['records'], list) or not 1 <= len(manifest['records']) <= 64):
+                raise SourceBodyError('alden_source_body_integrity')
+            refs = manifest['records']
+            if any(not isinstance(ref, dict) or set(ref) != {'document_id', 'version', 'json_pointer', 'record_sha256'} for ref in refs):
+                raise SourceBodyError('alden_source_body_integrity')
+            selected = [ref for ref in refs if ref['document_id'] == node_id and ref['version'] == expected_version]
+            if not selected:
+                raise SourceBodyError('alden_source_body_capture_unavailable')
+            if len(selected) != 1 or selected[0]['record_sha256'] != row['raw_sha256']:
+                raise SourceBodyError('alden_source_body_integrity')
+            packet_raw = self._source_body_archive(folder, manifest['source_file'], 32 * 1024 * 1024)
+            if len(packet_raw) != manifest['source_bytes']:
+                raise SourceBodyError('alden_source_body_integrity')
+            _source_body_check()
+            packet = _source_body_json(packet_raw)
+            window = original_utf8_window(packet, record=record, record_pointer=selected[0]['json_pointer'],
+                original_files=manifest['original_files'], offset_bytes=offset_bytes, max_bytes=max_bytes,
+                cancelled=_source_body_check)
+            _source_body_check()
+            result = {'ok': True, 'body_window': {'schema': 1, 'kind': 'declared-original-utf8-window',
+                'binding': {'document_id': node_id, 'target_id': target_id, 'version': expected_version,
+                    'raw_sha256': row['raw_sha256'], 'input_sha256': record['input_sha256']},
+                'capture': {'manifest_sha256': digest(manifest_raw), 'source_sha256': capture['sha256']}, **window}}
+            # Verify after the whole packet/UTF-8 work, using fresh connections.
+            # A paused target remains readable; config/capture swaps do not.
+            self._verify_current_detail(binding, projects)
+            with self.database() as current:
+                fresh = self._source_body_row(current, projects, node_id, target_id, expected_version)
+                if any(fresh[key] != row[key] for key in ('platform', 'original_id', 'raw_sha256', 'raw_path',
+                        'body', 'label', 'metadata', 'processing_version', 'projection_sha256',
+                        'target_platform', 'target_original_id', 'target_config')):
+                    raise SourceBodyError('alden_source_body_unavailable')
+                cursor = _source_body_json(fresh['cursor'] or '{}')
+                if not isinstance(cursor, dict) or cursor.get('source_capture') != capture:
+                    raise SourceBodyError('alden_source_body_unavailable')
+            _source_body_check()
+            return result
+        except RuntimeError as error:
+            if str(error) in ('collection_graph_source_unavailable', 'collection_source_authorization_changed'):
+                raise SourceBodyError('alden_source_body_unavailable') from error
+            if str(error) == 'collection_source_integrity':
+                raise SourceBodyError('alden_source_body_integrity') from error
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            if isinstance(error, SourceBodyError):
+                raise
+            raise SourceBodyError('alden_source_body_integrity') from error
+        except OSError as error:
+            raise SourceBodyError('alden_source_body_integrity') from error
+
     def recent_events(self, *, before=None, after=None, stream_id=None, limit=50, projects=None,
                       target_id=None, platform=None, stage=None, query="", since=None, until=None, trend=None) -> dict:
         if (type(limit) is not int or not 1 <= limit <= 200
@@ -2234,6 +2420,21 @@ class CollectionStore:
                     "refresh_required": refresh_required}
 
 
+def read_source_body(state_root: Path, *, projects, node_id, target_id, expected_version,
+                     offset_bytes=0, max_bytes=16000, source_access=None, source_revision=None,
+                     source_relation_access=None, cancelled=None):
+    validate_source_body_request(projects=projects, node_id=node_id, target_id=target_id,
+        expected_version=expected_version, offset_bytes=offset_bytes, max_bytes=max_bytes)
+    with _read_cancellation(cancelled):
+        from alden_file_set import SourceBodyError
+        store = CollectionStore.open_existing(state_root, source_access=source_access,
+            source_revision=source_revision, source_relation_access=source_relation_access)
+        if store is None:
+            raise SourceBodyError('alden_source_body_unavailable')
+        return store.source_body_window(projects=projects, node_id=node_id, target_id=target_id,
+            expected_version=expected_version, offset_bytes=offset_bytes, max_bytes=max_bytes)
+
+
 def read_action(state_root: Path, action: str, query: str | None = None, *,
                 source_access=None, source_revision=None, source_relation_access=None, cancelled=None) -> dict:
     """Own cancellation across every nested read, including SQLite progress."""
@@ -2250,6 +2451,17 @@ def _read_action(state_root: Path, action: str, query: str | None = None, *,
     options = json.loads(query) if query else {}
     if not isinstance(options, dict):
         raise ValueError("collection_query_invalid")
+    if action == 'collection-graph' and 'body_window' in options:
+        options = _source_body_json(query)
+        window = options.get('body_window')
+        if (set(options) != {'projects', 'focus', 'target_id', 'expected_version', 'body_window'}
+                or not isinstance(window, dict) or set(window) - {'offset_bytes', 'max_bytes'}):
+            raise ValueError('collection_source_body_request_invalid')
+        return read_source_body(state_root, projects=options['projects'], node_id=options['focus'],
+            target_id=options['target_id'], expected_version=options['expected_version'],
+            offset_bytes=window.get('offset_bytes', 0), max_bytes=window.get('max_bytes', 16000),
+            source_access=source_access, source_revision=source_revision,
+            source_relation_access=source_relation_access)
     store = CollectionStore.open_existing(state_root, source_access=source_access, source_revision=source_revision,
                                          source_relation_access=source_relation_access)
     if store is None:

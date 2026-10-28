@@ -6,7 +6,8 @@ import sys
 import time
 
 from alden_abort import ABORT_STATE_NAME, AbortToken, AldenCancelled
-from alden_collection import CollectionStore, read_action, require_collection_source_root
+from alden_collection import (CollectionStore, read_action, read_source_body,
+                              require_collection_source_root, validate_source_body_request)
 from alden_collection_retrieval import retrieve, verify_source_detail_context, SourceContextUnavailable
 from alden_status_mcp import StdioServer, _check
 from alden_gbrain_bridge import GbrainGraphReader
@@ -135,6 +136,18 @@ class KnowledgeServer(StdioServer):
                            'required': ['projects', 'node_id', 'expected_version'], 'additionalProperties': False},
                        'annotations': {'readOnlyHint': True, 'destructiveHint': False,
                                        'idempotentHint': True, 'openWorldHint': False}})
+        result.append({'name': 'alden_knowledge_source_body',
+            'description': 'Read one bounded exact UTF-8 range from verified retained original TXT/Markdown bytes. '
+                           'Requires the exact permitted target and current version. Byte offsets preserve BOM, whitespace and Unicode; '
+                           'a last window does not change the initial parser coverage or establish that all prior windows were read.',
+            'inputSchema': {'type': 'object', 'properties': {
+                'projects': common['projects'],
+                **{key: {'type': 'string', 'minLength': 1, 'maxLength': 256, 'pattern': r'^[\x21-\x7e]{1,256}$'}
+                   for key in ('node_id', 'target_id', 'expected_version')},
+                'offset_bytes': {'type': 'integer', 'minimum': 0, 'maximum': 5242880, 'default': 0},
+                'max_bytes': {'type': 'integer', 'minimum': 4, 'maximum': 16000, 'default': 16000}},
+                'required': ['projects', 'node_id', 'target_id', 'expected_version'], 'additionalProperties': False},
+            'annotations': {'readOnlyHint': True, 'destructiveHint': False, 'idempotentHint': True, 'openWorldHint': False}})
         if self.gbrain is not None:
             result.append({'name': 'alden_knowledge_paths',
                 'description': 'Read GBrain paths bound to current Alden IDs, versions and source permissions. '
@@ -153,10 +166,11 @@ class KnowledgeServer(StdioServer):
         name, args = params.get('name'), params.get('arguments')
         options = {'alden_knowledge_search': {'query'}, 'alden_knowledge_graph': {'focus'},
                    'alden_knowledge_history': {'after'},
-                   'alden_knowledge_source': {'node_id', 'expected_version'}}
+                   'alden_knowledge_source': {'node_id', 'expected_version'},
+                   'alden_knowledge_source_body': {'node_id', 'target_id', 'expected_version', 'offset_bytes', 'max_bytes'}}
         if self.gbrain is not None:
             options['alden_knowledge_paths'] = {'focus', 'depth', 'direction'}
-        common = {'projects'} if name in ('alden_knowledge_source', 'alden_knowledge_paths') else {'projects', 'limit'}
+        common = {'projects'} if name in ('alden_knowledge_source', 'alden_knowledge_source_body', 'alden_knowledge_paths') else {'projects', 'limit'}
         if not isinstance(name, str) or name not in options or not isinstance(args, dict) or set(args) - (common | options[name]):
             return False
         projects = args.get('projects')
@@ -164,6 +178,14 @@ class KnowledgeServer(StdioServer):
             return False
         if len(set(projects)) != len(projects):
             return False
+        if name == 'alden_knowledge_source_body':
+            try:
+                validate_source_body_request(projects=projects, node_id=args.get('node_id'),
+                    target_id=args.get('target_id'), expected_version=args.get('expected_version'),
+                    offset_bytes=args.get('offset_bytes', 0), max_bytes=args.get('max_bytes', 16000))
+                return True
+            except ValueError:
+                return False
         if name == 'alden_knowledge_source':
             return all(isinstance(value, str) and value.strip() and len(value) <= 256
                        for value in (args.get('node_id'), args.get('expected_version')))
@@ -199,6 +221,17 @@ class KnowledgeServer(StdioServer):
                     result = retrieve(self.root, args['query'], projects=args['projects'],
                                       max_entities=args.get('limit', 6), cancelled=cancelled,
                                       **guards, search_strategy=self.search_strategy)
+            elif name == 'alden_knowledge_source_body':
+                try:
+                    result = read_source_body(self.root, projects=args['projects'], node_id=args['node_id'],
+                        target_id=args['target_id'], expected_version=args['expected_version'],
+                        offset_bytes=args.get('offset_bytes', 0), max_bytes=args.get('max_bytes', 16000),
+                        cancelled=cancelled, source_access=guards['source_access'], source_revision=guards['source_revision'],
+                        source_relation_access=guards['source_relation_access'])
+                except RuntimeError as error:
+                    if str(error) == 'collection_graph_version_changed':
+                        raise SourceVersionChanged() from error
+                    raise
             elif name == 'alden_knowledge_paths':
                 def current_store():
                     check()
@@ -251,6 +284,9 @@ class KnowledgeServer(StdioServer):
         return result
 
     def tool_failure_code(self, error):
+        from alden_file_set import SourceBodyError
+        if isinstance(error, SourceBodyError):
+            return error.code
         if isinstance(error, AldenCancelled):
             return 'alden_global_abort'
         if isinstance(error, SourceVersionChanged):

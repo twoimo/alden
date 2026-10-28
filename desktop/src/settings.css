@@ -613,6 +613,11 @@ body.settings-view { color:var(--text); background:var(--canvas); }
 .knowledge-node-summary { font-size:14px; line-height:1.85; margin:0 0 18px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .knowledge-node-body { font-size:14px; line-height:1.8; margin:0 0 14px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .knowledge-body-limit, .knowledge-source-extraction { margin:8px 0 14px; color:var(--muted); font-size:12px; line-height:1.65; }
+.knowledge-original-body-window { margin:16px 0; padding:14px; border:1px solid var(--border); border-radius:12px; }
+.knowledge-original-body-window h3 { margin:0 0 8px; font-size:14px; }
+.knowledge-original-body-window p { margin:8px 0; color:var(--muted); font-size:12px; line-height:1.65; }
+.knowledge-original-body-text { max-height:45vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:14px; line-height:1.8; }
+.knowledge-original-body-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .knowledge-note-link { display:inline; padding:0; border:0; background:none; color:inherit; text-decoration:underline; text-underline-offset:3px; cursor:pointer; font:inherit; }
 .knowledge-node-body a { color:inherit; text-underline-offset:3px; }
 .knowledge-separated-tail { margin:12px 0 18px; color:var(--muted); font-size:12px; line-height:1.65; }

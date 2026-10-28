@@ -6,6 +6,7 @@ import { knowledgeMapStatus, renderKnowledgeMapStatus } from './knowledge/map-st
 import { knowledgeSignature } from './knowledge/changes';
 import { OrbSurfaces } from './orbs/surfaces';
 import { renderNodeDetails, setNodeDetailsVisible } from './knowledge/node-details';
+import type { OriginalBodyReader } from './knowledge/original-body-window';
 import type { VoiceStatus } from './contracts';
 import { wireConversationViews } from './conversations';
 import { wireAssistantComposer } from './assistant-composer';
@@ -448,6 +449,7 @@ interface KnowledgeGraphHooks {
   selected(event: KnowledgeFocusEvent): void;
   navigate(action: GraphAction): boolean;
   focus(node: KnowledgeNode, legacy: () => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown> | null>;
+  originalBodyReader?(node: KnowledgeNode): OriginalBodyReader | undefined;
 }
 
 export async function setupKnowledgeGraph(
@@ -548,7 +550,11 @@ export async function setupKnowledgeGraph(
       if (detail?.node_id === node.id && typeof detail.display_label === 'string' && detail.display_label.trim()) {
         setText('knowledge-focus-title', detail.display_label);
       }
-      renderNodeDetails(currentGraph, node, focus);
+      const bodyReader = hooks?.originalBodyReader?.(node);
+      renderNodeDetails(currentGraph, node, focus, document, bodyReader && {
+        read: request => bodyReader.read(request),
+        isCurrent: () => !disposed && selectionEpoch === epoch && bodyReader.isCurrent(),
+      });
       if (detailPanel) detailPanel.dataset.focusState = 'ready';
       const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
       const firstFact = facts[0]?.slice(0, 180);
@@ -712,6 +718,7 @@ export async function bootSettings(
         selected: event => collectionGraph?.selected(event),
         navigate: action => collectionGraph?.navigate(action) ?? false,
         focus: (node, legacy) => collectionGraph ? collectionGraph.focus(node, legacy) : legacy(),
+        originalBodyReader: node => collectionGraph?.originalBodyReader(node),
       });
     } catch {
       setText("knowledge-summary", "지식 그래프 화면을 준비하지 못했습니다.");

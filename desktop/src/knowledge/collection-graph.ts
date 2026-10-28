@@ -10,6 +10,7 @@ import { affinityInput, affinityMatches, parseLayoutAffinity, type LayoutAffinit
 import { KnowledgeQualityPanel } from './quality-panel';
 import { KnowledgeTerminal, type MapPoint } from './terminal';
 import { renderKnowledgeMapStatus, renderKnowledgeMapRequestState } from './map-status';
+import type { OriginalBodyReader } from './original-body-window';
 
 type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode' | 'showNodeActivity' | 'clearNodeActivity'>
   & { setLayoutAffinity?: (value: LayoutAffinity | null) => void; readonly mapProjectionPoints?: MapPoint[] };
@@ -262,6 +263,34 @@ export class CollectionGraphController {
         at: Date.now() / 1000, kind: 'read', success: true });
     }
     return result;
+  }
+
+  originalBodyReader(node: KnowledgeNode): OriginalBodyReader | undefined {
+    const epoch = this.epoch, generation = this.focusGeneration;
+    const keys = ['id', 'canonicalId', 'sourceVersion', 'sourceTarget', 'sourcePlatform'] as const;
+    const own = (value: KnowledgeNode, key: typeof keys[number]): unknown => Object.getOwnPropertyDescriptor(value, key)?.value;
+    const binding = keys.map(key => own(node, key));
+    const [id, canonical, version, target, platform] = binding;
+    const validId = (value: unknown): value is string => typeof value === 'string' && /^[\x21-\x7e]{1,256}$/.test(value);
+    const validProject = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && Array.from(value).length <= 128;
+    const query = this.query(), signature = JSON.stringify(query);
+    const projects = query.projects;
+    if (!this.collection || platform !== 'files' || !validId(canonical || id) || !validId(version) || !validId(target)
+      || !Array.isArray(projects) || projects.length < 1 || projects.length > 16
+      || !projects.every(validProject) || new Set(projects).size !== projects.length) return;
+    const isCurrent = () => this.active && !this.paused && !this.disposed && epoch === this.epoch
+      && generation === this.focusGeneration && signature === JSON.stringify(this.query())
+      && this.graph.currentView.focusId === id && keys.every((key, index) => Object.is(own(node, key), binding[index]))
+      && this.graph.currentGraph.nodes.some(current => keys.every((key, index) => Object.is(own(current, key), binding[index])));
+    if (!isCurrent()) return;
+    return { isCurrent, read: async request => {
+      if (!isCurrent() || !Number.isSafeInteger(request.offset_bytes) || request.offset_bytes < 0 || request.offset_bytes > 5242880
+        || !Number.isSafeInteger(request.max_bytes) || request.max_bytes < 4 || request.max_bytes > 16000) return null;
+      const result = await this.load('collection-graph', { query: JSON.stringify({ projects: [...projects],
+        focus: canonical || id, target_id: target, expected_version: version,
+        body_window: { offset_bytes: request.offset_bytes, max_bytes: request.max_bytes } }) });
+      return isCurrent() ? result : null;
+    } };
   }
 
   selected(event: KnowledgeFocusEvent): void {
