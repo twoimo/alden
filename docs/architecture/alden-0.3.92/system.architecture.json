@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Alden 0.3.92 · 프로세스와 추론 경계",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/twoimo/alden",
+      "provider": "github",
+      "revision": "546ca7eb0758b4b0e8a88302ce9a58c28b150b9d"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      35,
+      50
+    ],
+    "cols": 4,
+    "cellW": 210,
+    "cellH": 78,
+    "gapX": 60,
+    "gapY": 100
+  },
+  "components": [
+    {
+      "id": "desk92",
+      "type": "frontend",
+      "label": "Alden 화면",
+      "sublabel": "확정 입력·기억·3D 탐색",
+      "row": 0,
+      "col": 0,
+      "sources": [
+        {
+          "path": "desktop/src/main.ts"
+        },
+        {
+          "path": "desktop/src/assistant-composer.ts"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "shell92",
+      "type": "backend",
+      "label": "Tauri 쉘",
+      "sublabel": "IPC·취소·가시성",
+      "row": 0,
+      "col": 1,
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "python92",
+      "type": "backend",
+      "label": "Python 작업",
+      "sublabel": "턴·사진·음성 작업",
+      "row": 0,
+      "col": 2,
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs"
+        },
+        {
+          "path": "scripts/alden_chat.py"
+        },
+        {
+          "path": "scripts/alden_voice.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "choice92",
+      "type": "security",
+      "label": "모델 선택·가용성",
+      "sublabel": "수동 기본·명시 자동·RAM",
+      "row": 0,
+      "col": 3,
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "local92",
+      "type": "backend",
+      "label": "로컬 MLX",
+      "sublabel": "사용 가능한 모델만",
+      "row": 1,
+      "col": 2,
+      "sources": [
+        {
+          "path": "scripts/local_mlx_model_readiness.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "embed92",
+      "type": "backend",
+      "label": "임베딩·검색",
+      "sublabel": "로컬 경로·본문 근거 우선",
+      "row": 1,
+      "col": 1,
+      "sources": [
+        {
+          "path": "scripts/alden_collection_retrieval.py"
+        },
+        {
+          "path": "scripts/auto_reply_knowledge_graph.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "remote92",
+      "type": "external",
+      "label": "OpenCodex 라우트",
+      "sublabel": "Gemini 3.8 Flash high 기본",
+      "row": 1,
+      "col": 3,
+      "sources": [
+        {
+          "path": "scripts/alden_routed_llm.py"
+        },
+        {
+          "path": "scripts/alden_model_routes.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "sources92",
+      "type": "backend",
+      "label": "원문 수집·예약",
+      "sublabel": "대상별 버전·재시도",
+      "row": 2,
+      "col": 0,
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py"
+        },
+        {
+          "path": "scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_source_acquisition.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "store92",
+      "type": "database",
+      "label": "수집 저장소",
+      "sublabel": "버전·권한·관계·저널",
+      "row": 2,
+      "col": 1,
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    },
+    {
+      "id": "osk92",
+      "type": "database",
+      "label": "OSK 정본·MCP",
+      "sublabel": "별도 정본·scoped 조회",
+      "row": 2,
+      "col": 2,
+      "sources": [
+        {
+          "path": "scripts/alden_osk_retrieval.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py"
+        }
+      ],
+      "size": [
+        200,
+        78
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "screen_shell92",
+      "from": "desk92",
+      "to": "shell92",
+      "label": "명시 입력",
+      "variant": "emphasis"
+    },
+    {
+      "id": "shell_python92",
+      "from": "shell92",
+      "to": "python92",
+      "label": "검증된 IPC",
+      "variant": "emphasis"
+    },
+    {
+      "id": "python_choice92",
+      "from": "python92",
+      "to": "choice92",
+      "label": "선택 확인"
+    },
+    {
+      "id": "choice_remote92",
+      "from": "choice92",
+      "to": "remote92",
+      "label": "저장된 선택",
+      "labelAt": [
+        905,
+        142
+      ]
+    },
+    {
+      "id": "source_store92",
+      "from": "sources92",
+      "to": "store92",
+      "label": "버전 수집"
+    },
+    {
+      "id": "store_embed92",
+      "from": "store92",
+      "to": "embed92",
+      "label": "권한별 본문"
+    },
+    {
+      "id": "osk_lookup92",
+      "from": "osk92",
+      "to": "embed92",
+      "label": "정본 조회"
+    },
+    {
+      "id": "choice_local92",
+      "from": "choice92",
+      "to": "local92",
+      "label": "준비된 로컬만"
+    },
+    {
+      "id": "python_lookup92",
+      "from": "python92",
+      "to": "embed92",
+      "label": "검색 요청"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "실행 경계",
+      "items": [
+        "저장된 설정·기본 모델에 따른 OpenCodex 선택과 RAM 허용 로컬 모델을 구분한다.",
+        "자료는 출처가 있는 검색 후보이며 역할·턴·취소 상태를 검증한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "아직 필요한 검증",
+      "items": [
+        "모델 목록과 표시 상태만으로 모든 모델의 실제 추론을 확정하지 않는다.",
+        "물리 음성·여러 호스트·원문 의미 gold·정식 배포는 미완료다."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,3597 @@
+//! One-shot capture of owned WKWebViews. Both modes admit only fixed
+//! read-only persisted graph commands; no inference or production writes.
+//! No tray, shortcut, caller-selected script, selector or output filename.
+use block2::RcBlock;
+use objc2::runtime::AnyObject;
+use objc2::{AnyThread, MainThreadMarker};
+use objc2_app_kit::{
+    NSApplication, NSBitmapImageFileType, NSBitmapImageRep, NSFloatingWindowLevel, NSImage, NSWindow,
+};
+use objc2_foundation::{NSDictionary, NSError, NSSize, NSString};
+use objc2_web_kit::{WKSnapshotConfiguration, WKWebView};
+use serde_json::{json, Value};
+use std::ffi::{CString, OsString};
+use std::fs::File;
+use std::io::Write;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering},
+    mpsc, Arc,
+};
+use std::time::{Duration, Instant};
+use tauri::Manager;
+
+const FLAG: &str = "--audit-own-webview";
+const SETTINGS_FLAG: &str = "--audit-own-settings";
+const WORKSPACES_FLAG: &str = "--audit-own-workspaces";
+const ASSISTANT_FLAG: &str = "--audit-own-assistant-input";
+const ASSISTANT_INVALID_FLAG: &str = "--audit-own-assistant-invalid-input";
+const ASSISTANT_FILES_FLAG: &str = "--audit-own-assistant-files";
+const ASSISTANT_LINKS_FLAG: &str = "--audit-own-assistant-links";
+const ENTITY_FLAG: &str = "--audit-own-entity-review";
+pub struct Request {
+    pub directory: PathBuf,
+    pub settings: bool,
+    pub workspaces: bool,
+    pub assistant: bool,
+    pub assistant_invalid: bool,
+    pub assistant_files: bool,
+    pub assistant_links: bool,
+    pub entity: bool,
+    pub focus_node: Option<String>,
+    pub graph_scope: Option<u8>,
+}
+struct AuditPolicy {
+    workspaces: bool,
+    entity: bool,
+    focus_node: Option<String>,
+}
+struct AssistantPageReady { ready: Arc<AtomicBool>, phase: Arc<AtomicU8> }
+
+#[tauri::command]
+fn audit_assistant_ready(window: tauri::WebviewWindow, ready: tauri::State<'_, AssistantPageReady>, phase: String) {
+    if window.label() == "settings" {
+        let code = match phase.as_str() {"injected"=>1, "dom"=>2, "composer"=>3, _=>return};
+        ready.phase.store(code, Ordering::Release);
+        if code == 3 {ready.ready.store(true, Ordering::Release);}
+        eprintln!("Alden assistant readiness phase {code}");
+    }
+}
+
+const ASSISTANT_READY_SCRIPT: &str = r#"
+;(() => {
+  const start = () => {
+  const signal = phase => window.__TAURI_INTERNALS__.invoke('audit_assistant_ready', {phase}).catch(() => {});
+  let sent = false;
+  const ready = () => {
+    const state = document.getElementById('app')?.dataset.state;
+    if (!sent && (state === 'ready' || state === 'unavailable') && document.getElementById('assistant-composer-text')) {
+      sent = true; observer.disconnect(); signal('composer');
+    }
+  };
+  const observer = new MutationObserver(ready);
+  observer.observe(document, {childList:true, subtree:true, attributes:true, attributeFilter:['data-state']});
+  signal('dom'); ready();
+  };
+  // append_invoke_initialization_script runs before Tauri's metadata/core
+  // scripts. The public invoke function is available after DOMContentLoaded.
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, {once:true});
+  else queueMicrotask(start);
+})();
+"#;
+const MAX_BYTES: usize = 2 * 1024 * 1024;
+const COLLECT: &str = r#"JSON.stringify((() => {
+  const c = document.querySelector('canvas.alden-core');
+  const r = c?.getBoundingClientRect();
+  const p = window.__aldenRenderPause;
+  const d = window.__aldenRenderDiagnostics;
+  const ready = document.getElementById('app')?.dataset.state === 'ready';
+  const g = ready ? c?.getContext('webgl2') : null;
+  return {ready,
+    width: innerWidth, height: innerHeight, dpr: devicePixelRatio,
+    scrollWidth: document.documentElement.scrollWidth,
+    scrollHeight: document.documentElement.scrollHeight,
+    canvas: c && r ? {width:c.width, height:c.height, x:r.x, y:r.y,
+      cssWidth:r.width, cssHeight:r.height, contextLost:g?.isContextLost() ?? null} : null,
+    renderCount: window.__aldenRenderCount ?? 0,
+    loop: d ? {running:d.running, pendingFrame:d.pendingFrame} : null,
+    pause: p ? {state:p.state, eventAtMs:p.eventAtMs, observedAtMs:p.observedAtMs,
+      rendersAfterEvent:p.rendersAfterEvent, lastRenderAtMs:p.lastRenderAtMs,
+      eventToLastFrameMs:p.eventToLastFrameMs, running:p.running,
+      pendingFrame:p.pendingFrame} : null};
+})())"#;
+
+pub fn parse_args(args: impl Iterator<Item = OsString>) -> Result<Option<Request>, String> {
+    let args: Vec<_> = args.collect();
+    if !args.iter().any(|arg| {
+        [FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ASSISTANT_FILES_FLAG, ASSISTANT_LINKS_FLAG, ENTITY_FLAG]
+            .iter()
+            .any(|flag| arg.to_string_lossy().starts_with(flag))
+    }) {
+        return Ok(None);
+    }
+    let focus_node = if args.len() == 4 && args[0] == WORKSPACES_FLAG && args[2] == "--focus-node" {
+        let value = args[3].to_str().ok_or("focus node must be UTF-8")?;
+        let parts: Vec<_> = value
+            .strip_prefix("osk:")
+            .unwrap_or("")
+            .split('-')
+            .collect();
+        let alnum = |s: &str| {
+            s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        };
+        let osk = parts.len() == 3
+            && parts[0].len() == 6
+            && parts[0].bytes().all(|b| b.is_ascii_digit())
+            && parts[1].len() == 4
+            && alnum(parts[1])
+            && [4, 8].contains(&parts[2].len())
+            && alnum(parts[2]);
+        let collection = value.split_once(':').is_some_and(|(prefix, hash)| {
+            ["graph", "youtube", "threads", "files"].contains(&prefix)
+                && hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+        if !osk && !collection {
+            return Err("focus node must be one canonical OSK or collection ID".into());
+        }
+        Some(value.to_string())
+    } else {
+        None
+    };
+    let graph_scope = if args.len() == 4 && args[0] == WORKSPACES_FLAG && args[2] == "--graph-scope" {
+        let raw = args[3].to_str().ok_or("graph scope must be UTF-8")?;
+        if !(raw == "10" || raw.len() == 1 && raw.bytes().all(|b| b.is_ascii_digit())) {
+            return Err("graph scope must be one fixed case 0..10".into());
+        }
+        Some(raw.parse::<u8>().map_err(|_| "graph scope invalid")?)
+    } else { None };
+    if (args.len() != 2 && focus_node.is_none() && graph_scope.is_none())
+        || args[0] == ENTITY_FLAG && focus_node.is_some()
+        || ![FLAG, SETTINGS_FLAG, WORKSPACES_FLAG, ASSISTANT_FLAG, ASSISTANT_INVALID_FLAG, ASSISTANT_FILES_FLAG, ASSISTANT_LINKS_FLAG, ENTITY_FLAG]
+            .iter()
+            .any(|flag| args[0] == *flag)
+    {
+        return Err("expected --audit-own-webview /absolute/private/directory".into());
+    }
+    Ok(Some(Request {
+        directory: PathBuf::from(&args[1]),
+        settings: args[0] != FLAG,
+        workspaces: args[0] == WORKSPACES_FLAG || args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG || args[0] == ASSISTANT_FILES_FLAG || args[0] == ASSISTANT_LINKS_FLAG || args[0] == ENTITY_FLAG,
+        assistant: args[0] == ASSISTANT_FLAG || args[0] == ASSISTANT_INVALID_FLAG || args[0] == ASSISTANT_FILES_FLAG || args[0] == ASSISTANT_LINKS_FLAG,
+        assistant_invalid: args[0] == ASSISTANT_INVALID_FLAG,
+        assistant_files: args[0] == ASSISTANT_FILES_FLAG,
+        assistant_links: args[0] == ASSISTANT_LINKS_FLAG,
+        entity: args[0] == ENTITY_FLAG,
+        focus_node,
+        graph_scope,
+    }))
+}
+
+/// Hold the actual directory inode. Each path component is opened relative to
+/// its parent with NOFOLLOW; output is exclusive and never overwrites a file.
+struct Output(File);
+impl Output {
+    fn open(path: &Path) -> Result<Self, String> {
+        let path_bytes = path.as_os_str().as_bytes();
+        if !path.is_absolute() {
+            return Err("output directory must be absolute".into());
+        }
+        if path_bytes
+            .split(|byte| *byte == b'/')
+            .any(|part| part == b"." || part == b"..")
+        {
+            return Err("output directory contains a dot component".into());
+        }
+        let fd = unsafe {
+            libc::open(
+                c"/".as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err("root directory unavailable".into());
+        }
+        let mut dir = unsafe { File::from_raw_fd(fd) };
+        for component in path.components().skip(1) {
+            let Component::Normal(name) = component else {
+                return Err("output directory contains a dot component".into());
+            };
+            let name = CString::new(name.as_bytes()).map_err(|_| "invalid directory name")?;
+            let fd = unsafe {
+                libc::openat(
+                    dir.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                )
+            };
+            if fd < 0 {
+                return Err("output directory unavailable or symlinked".into());
+            }
+            dir = unsafe { File::from_raw_fd(fd) };
+        }
+        let meta = dir.metadata().map_err(|_| "output metadata unavailable")?;
+        if meta.uid() != unsafe { libc::geteuid() } || meta.mode() & 0o077 != 0 {
+            return Err("output directory must be owned by this user and private".into());
+        }
+        Ok(Self(dir))
+    }
+
+    fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
+        if !matches!(
+            name,
+            "alden-core-before.png"
+                | "alden-core-restored.png"
+                | "alden-core-retina.png"
+                | "alden-settings-default.png"
+                | "alden-settings-compact.png"
+                | "alden-note-default.png"
+                | "alden-note-compact.png"
+                | "alden-connections-default.png"
+                | "alden-connections-compact.png"
+                | "assistant-turn-1.png"
+                | "assistant-turn-2.png"
+                | "assistant-turn-3.png"
+                | "alden-model-menu-default.png"
+                | "alden-model-menu-compact.png"
+                | "alden-model-menu-default.json"
+                | "alden-model-menu-compact.json"
+                | "workspace-memory-default.png"
+                | "workspace-conversation-default.png"
+                | "workspace-reply-default.png"
+                | "workspace-geeknews-default.png"
+                | "workspace-voice-default.png"
+                | "workspace-history-default.png"
+                | "workspace-settings-default.png"
+                | "workspace-memory-compact.png"
+                | "workspace-conversation-compact.png"
+                | "workspace-reply-compact.png"
+                | "workspace-geeknews-compact.png"
+                | "workspace-voice-compact.png"
+                | "workspace-history-compact.png"
+                | "collection-schedule-default.png"
+                | "collection-schedule-compact.png"
+                | "collection-source-default.png"
+                | "collection-source-compact.png"
+                | "workspace-settings-compact.png"
+                | "settings-layout.json"
+                | "workspace-readback.json"
+                | "graph-layout-default.json"
+                | "graph-layout-compact.json"
+                | "graph-scope-wide.png" | "graph-scope-wide.json"
+                | "graph-zoom-wide.json" | "graph-zoom-wide-distant.png" | "graph-zoom-wide-context.png" | "graph-zoom-wide-detail.png"
+                | "graph-projected-wide.json" | "graph-physics-wide.json"
+                | "graph-scope-default.png"
+                | "graph-scope-compact.png"
+                | "graph-scope-default.json"
+                | "graph-scope-compact.json"
+                | "graph-zoom-default.json" | "graph-zoom-compact.json"
+                | "graph-zoom-default-distant.png" | "graph-zoom-default-context.png" | "graph-zoom-default-detail.png"
+                | "graph-zoom-compact-distant.png" | "graph-zoom-compact-context.png" | "graph-zoom-compact-detail.png"
+                | "graph-projected-default.json"
+                | "graph-projected-compact.json"
+                | "graph-physics-default.json"
+                | "graph-physics-compact.json"
+                | "workspace-observed-default-memory.json"
+                | "workspace-observed-default-conversation.json"
+                | "workspace-observed-default-reply.json"
+                | "workspace-observed-default-geeknews.json"
+                | "workspace-observed-default-voice.json"
+                | "workspace-observed-default-history.json"
+                | "workspace-observed-default-settings.json"
+                | "workspace-observed-compact-memory.json"
+                | "workspace-observed-compact-conversation.json"
+                | "workspace-observed-compact-reply.json"
+                | "workspace-observed-compact-geeknews.json"
+                | "workspace-observed-compact-voice.json"
+                | "workspace-observed-compact-history.json"
+                | "workspace-observed-compact-settings.json"
+                | "knowledge-quality-default.png"
+                | "knowledge-quality-compact.png"
+                | "knowledge-quality-body-default.png"
+                | "knowledge-quality-body-compact.png"
+                | "knowledge-quality-time-default.png"
+                | "knowledge-quality-time-compact.png"
+                | "knowledge-quality-quantity-default.png"
+                | "knowledge-quality-quantity-compact.png"
+                | "knowledge-quality-comparison-default-1.png"
+                | "knowledge-quality-comparison-default-2.png"
+                | "knowledge-quality-comparison-compact-1.png"
+                | "knowledge-quality-comparison-compact-2.png"
+                | "knowledge-quality-annotations-default.png"
+                | "knowledge-quality-annotations-compact.png"
+                | "knowledge-quality-candidates-default.png"
+                | "knowledge-quality-candidates-compact.png"
+                | "knowledge-quality-candidate-record-default.png"
+                | "knowledge-quality-candidate-record-compact.png"
+                | "entity-compare-default.png"
+                | "entity-compare-compact.png"
+                | "entity-applied-default.png"
+                | "entity-applied-compact.png"
+                | "entity-reverted-default.png"
+                | "entity-reverted-compact.png"
+                | "source-read-observation.json"
+                | "activity-ready.json"
+                | "render-audit.json"
+        ) || bytes.len() > MAX_BYTES
+        {
+            return Err("output name or byte budget invalid".into());
+        }
+        let name = CString::new(name).map_err(|_| "invalid output name")?;
+        let fd = unsafe {
+            libc::openat(
+                self.0.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd < 0 {
+            return Err("output exists or cannot be created".into());
+        }
+        let mut file = unsafe { File::from_raw_fd(fd) };
+        file.write_all(bytes)
+            .and_then(|_| file.sync_all())
+            .map_err(|_| "output write failed")?;
+        self.0
+            .sync_all()
+            .map_err(|_| "output directory sync failed".to_string())
+    }
+}
+
+fn receive<T>(rx: mpsc::Receiver<Result<T, String>>, deadline: Instant) -> Result<T, String> {
+    live(deadline)?;
+    let remaining = deadline
+        .saturating_duration_since(Instant::now())
+        .min(Duration::from_secs(4));
+    let result = rx
+        .recv_timeout(remaining)
+        .map_err(|_| "native callback deadline exceeded".to_string())?;
+    live(deadline)?;
+    result
+}
+
+fn live(deadline: Instant) -> Result<(), String> {
+    if Instant::now() >= deadline {
+        Err("native audit deadline exceeded".into())
+    } else {
+        Ok(())
+    }
+}
+fn publish(output: &Output, name: &str, bytes: &[u8], deadline: Instant) -> Result<(), String> {
+    live(deadline)?;
+    output.write(name, bytes)?;
+    live(deadline)
+}
+
+fn collect(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    collect_script(window, COLLECT.to_string(), deadline)
+}
+
+fn collect_script(
+    window: &tauri::WebviewWindow,
+    script: String,
+    deadline: Instant,
+) -> Result<Value, String> {
+    live(deadline)?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    window
+        .with_webview(move |view| unsafe {
+            if live(deadline).is_err() {
+                let _ = tx.try_send(Err("native audit deadline exceeded".into()));
+                return;
+            }
+            // Tauri dispatches this borrowed platform webview on the main thread.
+            let webview = &*view.inner().cast::<WKWebView>();
+            let callback = RcBlock::new(move |result: *mut AnyObject, error: *mut NSError| {
+                let parsed = if !error.is_null() || result.is_null() {
+                    Err("WebKit metric collection failed".into())
+                } else if let Some(value) = (&*result).downcast_ref::<NSString>() {
+                    let value = value.to_string();
+                    if value.len() > 16384 {
+                        Err("metric byte budget exceeded".into())
+                    } else {
+                        serde_json::from_str(&value).map_err(|_| "invalid metric JSON".into())
+                    }
+                } else {
+                    Err("unexpected WebKit metric type".into())
+                };
+                // A timed-out receiver is dropped. Late callbacks cannot publish.
+                let _ = tx.try_send(parsed);
+            });
+            webview.evaluateJavaScript_completionHandler(
+                &NSString::from_str(&script),
+                Some(&callback),
+            );
+        })
+        .map_err(|_| "WebKit dispatch failed")?;
+    receive(rx, deadline)
+}
+
+fn snapshot(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Vec<u8>, String> {
+    live(deadline)?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    window
+        .with_webview(move |view| unsafe {
+            if live(deadline).is_err() {
+                let _ = tx.try_send(Err("native audit deadline exceeded".into()));
+                return;
+            }
+            let webview = &*view.inner().cast::<WKWebView>();
+            let config =
+                WKSnapshotConfiguration::new(MainThreadMarker::new().expect("Tauri main thread"));
+            config.setAfterScreenUpdates(true);
+            let callback = RcBlock::new(move |image: *mut NSImage, error: *mut NSError| {
+                let bytes = (|| {
+                    if !error.is_null() || image.is_null() {
+                        return Err("WebKit snapshot failed".into());
+                    }
+                    let tiff = (&*image)
+                        .TIFFRepresentation()
+                        .ok_or("snapshot TIFF unavailable")?;
+                    if tiff.length() > MAX_BYTES * 4 {
+                        return Err("snapshot TIFF budget exceeded".into());
+                    }
+                    let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)
+                        .ok_or("snapshot bitmap unavailable")?;
+                    if bitmap.pixelsWide() <= 0
+                        || bitmap.pixelsHigh() <= 0
+                        || bitmap.pixelsWide() > 2048
+                        || bitmap.pixelsHigh() > 2048
+                    {
+                        return Err("snapshot pixel budget exceeded".into());
+                    }
+                    let data = bitmap
+                        .representationUsingType_properties(
+                            NSBitmapImageFileType::PNG,
+                            &NSDictionary::new(),
+                        )
+                        .ok_or("snapshot PNG unavailable")?;
+                    if data.length() > MAX_BYTES {
+                        return Err("snapshot PNG budget exceeded".into());
+                    }
+                    Ok(data.to_vec())
+                })();
+                let _ = tx.try_send(bytes);
+            });
+            webview.takeSnapshotWithConfiguration_completionHandler(Some(&config), &callback);
+        })
+        .map_err(|_| "snapshot dispatch failed")?;
+    receive(rx, deadline)
+}
+
+fn visibility(
+    window: &tauri::WebviewWindow,
+    visible: bool,
+    deadline: Instant,
+) -> Result<(), String> {
+    live(deadline)?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            if live(deadline).is_err() {
+                let _ = tx.try_send(Err("native audit deadline exceeded".into()));
+                return;
+            }
+            // Native orderFront preserves the key window; ordinary hide and the
+            // same visibility event still exercise the production pause path.
+            let result = if visible {
+                target.ns_window().map(|native| unsafe {
+                    (&*native.cast::<NSWindow>()).orderFront(None);
+                })
+            } else {
+                target.hide()
+            };
+            let result = result
+                .map_err(|_| "native visibility change failed".to_string())
+                .and_then(|_| {
+                    if target.is_visible().ok() != Some(visible) {
+                        return Err("native visibility readback failed".into());
+                    }
+                    super::announce_visibility(target.app_handle(), target.label(), visible);
+                    Ok(())
+                });
+            let _ = tx.try_send(result);
+        })
+        .map_err(|_| "visibility dispatch failed")?;
+    receive(rx, deadline)
+}
+
+fn count(value: &Value) -> u64 {
+    value["renderCount"].as_u64().unwrap_or(0)
+}
+
+/// A settled view legitimately stops after one frame. A restore must draw
+/// something new, but it must not be forced into a continuous idle loop.
+fn rendered_since(value: &Value, before: u64) -> bool {
+    value["ready"] == true && count(value) > before && value["canvas"]["contextLost"] == false
+}
+
+fn resumed_graph(value: &Value, before: u64) -> bool {
+    rendered_since(value, before)
+        && (value["navigation"]["source"] != "collection"
+            || value["activityJournal"]["active"] == true)
+}
+
+fn fresh_pause(state: &Value, previous: f64) -> bool {
+    state["loop"]["running"] == false
+        && state["loop"]["pendingFrame"] == false
+        && state["pause"]["state"] == "hidden"
+        && state["pause"]["eventAtMs"]
+            .as_f64()
+            .is_some_and(|event| event > previous)
+}
+fn css_extent(value: &Value, expected: f64) -> bool {
+    // WKWebView quantizes CSS layout to 1/64 px, unlike Chromium's integral
+    // rectangle here. Admit one quantum; keep the logical window exact.
+    value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && (number - expected).abs() <= 1.0 / 64.0)
+}
+fn validate_layout(state: &Value) -> Result<(), String> {
+    if state["ready"] != true
+        || state["canvas"]["contextLost"] != false
+        || state["width"] != 560
+        || state["height"] != 420
+        || state["scrollWidth"] != 560
+        || state["scrollHeight"] != 420
+        || !css_extent(&state["canvas"]["cssWidth"], 558.0)
+        || !css_extent(&state["canvas"]["cssHeight"], 418.0)
+        || !css_extent(&state["canvas"]["x"], 1.0)
+        || !css_extent(&state["canvas"]["y"], 1.0)
+    {
+        return Err(format!(
+            "native panel layout or WebGL context invalid: {state}"
+        ));
+    }
+    Ok(())
+}
+fn density_matches(state: &Value) -> bool {
+    let Some(dpr) = state["dpr"]
+        .as_f64()
+        .filter(|dpr| dpr.is_finite() && *dpr > 0.0)
+    else {
+        return false;
+    };
+    let Some(css_width) = state["canvas"]["cssWidth"].as_f64() else {
+        return false;
+    };
+    let Some(css_height) = state["canvas"]["cssHeight"].as_f64() else {
+        return false;
+    };
+    let width = (css_width.floor() * dpr.min(2.0)).floor() as u64;
+    let height = (css_height.floor() * dpr.min(2.0)).floor() as u64;
+    state["canvas"]["width"].as_u64() == Some(width)
+        && state["canvas"]["height"].as_u64() == Some(height)
+}
+
+#[tauri::command]
+async fn fetch_settings_action(
+    bridge: tauri::State<'_, super::PythonBridge>,
+    policy: tauri::State<'_, AuditPolicy>,
+    action: String,
+    query: Option<String>,
+    node_id: Option<String>,
+    chat_id: Option<String>,
+    explicit_opt_in: Option<bool>,
+) -> Result<Value, String> {
+    let workspace = policy.workspaces;
+    let entity_mutation = policy.workspaces && policy.entity && explicit_opt_in == Some(true)
+        && matches!(action.as_str(), "collection-resolution-apply" | "collection-resolution-revert");
+    if !audit_read_action(&action, workspace) && !entity_mutation {
+        return Err("audit admits explicit read actions only".into());
+    }
+    let bridge = bridge.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if workspace {
+            bridge.fetch_settings_action(
+                &action,
+                query.as_deref(),
+                node_id.as_deref(),
+                chat_id.as_deref(),
+                None,
+                if entity_mutation { Some(true) } else { None },
+                None,
+            )
+        } else {
+            bridge.fetch_persisted_graph()
+        }
+    })
+    .await
+    .map_err(|_| "graph read worker failed".to_string())?
+    .map_err(|error| error.to_string())
+}
+fn audit_read_action(action: &str, workspace: bool) -> bool {
+    matches!(action, "knowledge-graph" | "knowledge-graph-status")
+        || workspace
+            && matches!(
+                action,
+                "knowledge-graph-focus"
+                    | "history-rooms"
+                    | "history-messages"
+                    | "voice-history-sessions"
+                    | "voice-history-messages"
+                    | "db-sync-history"
+                    | "collection-history"
+                    | "collection-projects"
+                    | "collection-resolution-preview"
+                    | "collection-resolution-history"
+                    | "collection-scheduler-status"
+                    | "routed-models"
+                    | "collection-graph"
+                    | "collection-affinity"
+                    | "collection-quality"
+                    | "reply-history"
+                    | "geeknews-history"
+                    | "room-catalog"
+            )
+}
+
+fn wait_for_workspace(
+    page: &str,
+    size: &str,
+    deadline: Instant,
+    mut sample: impl FnMut() -> Result<Value, String>,
+    mut paint: impl FnMut() -> Result<(), String>,
+) -> Result<Value, String> {
+    let started = Instant::now();
+    let mut last_state = Value::Null;
+    let mut paint_after_data = false;
+    let result = (|| loop {
+        live(deadline)?;
+        last_state = sample()?;
+        live(deadline)?;
+        if last_state["page"] == page && last_state["settled"] == true {
+            if !paint_after_data {
+                paint()?;
+                live(deadline)?;
+                paint_after_data = true;
+                continue;
+            }
+            return Ok(last_state.clone());
+        }
+        std::thread::sleep(
+            Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    })();
+    result.map_err(|error: String| {
+        format!(
+            "workspace {page}/{size} readiness failed after {:.0}ms: {error}; last observed state={last_state}",
+            started.elapsed().as_secs_f64() * 1000.0
+        )
+    })
+}
+
+// Capture geometry includes every clipping ancestor, not only the browser viewport.
+// This is audit-only: normal navigation keeps its per-page scroll restoration.
+const WORKSPACE_TITLE_LAYOUT: &str = r#"(()=>{
+  const page=document.querySelector('.settings-shell')?.dataset.settingsPage;
+  const panel=document.querySelector(`#settings-page-${page}`);
+  const title=panel?.querySelector('h1');
+  const rect=title?.getBoundingClientRect();
+  const clip={top:0,bottom:innerHeight,left:0,right:innerWidth};
+  const offsets=[];
+  for(let node=panel;node;node=node.parentElement){
+    offsets.push({tag:node.tagName,id:node.id,top:node.scrollTop,left:node.scrollLeft});
+  }
+  for(let node=title?.parentElement;node;node=node.parentElement){
+    const style=getComputedStyle(node),box=node.getBoundingClientRect();
+    if(/^(auto|scroll|hidden|clip)$/.test(style.overflowY)){
+      clip.top=Math.max(clip.top,box.top+node.clientTop);
+      clip.bottom=Math.min(clip.bottom,box.top+node.clientTop+node.clientHeight);
+    }
+    if(/^(auto|scroll|hidden|clip)$/.test(style.overflowX)){
+      clip.left=Math.max(clip.left,box.left+node.clientLeft);
+      clip.right=Math.min(clip.right,box.left+node.clientLeft+node.clientWidth);
+    }
+  }
+  return {title:rect?{top:rect.top,bottom:rect.bottom,left:rect.left,right:rect.right,
+    width:rect.width,height:rect.height}:null,clip,offsets,windowX:scrollX,windowY:scrollY};
+})()"#;
+
+fn validate_workspace_title(state: &Value, size: &str) -> Result<(), String> {
+    let layout = &state["titleLayout"];
+    let number = |value: &Value| value.as_f64().filter(|number| number.is_finite());
+    let at_origin = layout["offsets"].as_array().is_some_and(|offsets| {
+        !offsets.is_empty()
+            && offsets.iter().all(|offset| {
+                ["top", "left"]
+                    .iter()
+                    .all(|key| number(&offset[key]).is_some_and(|value| value.abs() <= 0.5))
+            })
+    }) && ["windowX", "windowY"]
+        .iter()
+        .all(|key| number(&layout[key]).is_some_and(|value| value.abs() <= 0.5));
+    let title = &layout["title"];
+    let clip = &layout["clip"];
+    let visible = ["width", "height"]
+        .iter()
+        .all(|key| number(&title[key]).is_some_and(|value| value > 0.0))
+        && [("top", "bottom"), ("left", "right")]
+            .iter()
+            .all(|(start, end)| {
+                match (
+                    number(&title[start]),
+                    number(&title[end]),
+                    number(&clip[start]),
+                    number(&clip[end]),
+                ) {
+                    (Some(a), Some(b), Some(c), Some(d)) => {
+                        b > a && d > c && a >= c - 0.5 && b <= d + 0.5
+                    }
+                    _ => false,
+                }
+            });
+    if !at_origin || !visible {
+        return Err(format!(
+            "workspace {}/{size} title capture invalid: at_origin={at_origin}, fully_visible={visible}; observed={layout}",
+            state["page"].as_str().unwrap_or("unknown")
+        ));
+    }
+    Ok(())
+}
+
+fn capture_workspaces(
+    window: &tauri::WebviewWindow,
+    output: &Output,
+    size: &str,
+    deadline: Instant,
+) -> Result<Vec<Value>, String> {
+    let mut states = Vec::new();
+    for page in [
+        "memory",
+        "conversation",
+        "reply",
+        "geeknews",
+        "voice",
+        "history",
+        "settings",
+    ] {
+        let phase_started = Instant::now();
+        collect_script(
+            window,
+            format!(
+                r#"JSON.stringify((()=>{{
+          const clickedAtMs=performance.now();document.querySelector('#settings-tab-{page}').click();
+          const before={WORKSPACE_TITLE_LAYOUT};
+          for(let node=document.querySelector('#settings-page-{page}');node;node=node.parentElement){{
+            node.scrollTop=0;node.scrollLeft=0;
+          }}
+          const paint=window.__aldenAuditWorkspacePaint={{page:'{page}',ready:false,clickedAtMs,
+            firstFrameAtMs:null,captureOrigin:{{before,after:{WORKSPACE_TITLE_LAYOUT}}}}};
+          requestAnimationFrame(()=>{{paint.firstFrameAtMs=performance.now();requestAnimationFrame(()=>{{paint.ready=true;}});}});
+          return {{selected:true}};
+        }})())"#
+            ),
+            deadline,
+        )?;
+        let mut state = wait_for_workspace(
+            page,
+            size,
+            deadline,
+            || {
+                collect_script(window,r#"JSON.stringify((()=>{
+              const p=document.querySelector('.settings-shell')?.dataset.settingsPage;
+              const prompt=(p==='voice'||p==='conversation')?document.querySelector(`#${p}-placeholder`):null;
+              const pending=(p==='voice'||p==='conversation')&&prompt&&!prompt.hidden&&prompt.querySelector('strong')?.textContent.includes('불러옵니다');
+              const loadingSettings=p==='settings'&&document.querySelector('#automation-count')?.textContent==='확인 중'&&!document.querySelector('#automation-status')?.textContent;
+              const loadingHistory=p==='history'&&document.querySelector('#db-current-title')?.textContent==='갱신 상태 확인 중';
+              const collection=document.querySelector('.collection-history');
+              const loadingCollection=p==='history'&&collection?.getAttribute('aria-busy')==='true';
+              const schedule=document.querySelector('.collection-schedule');
+              const loadingSchedule=p==='history'&&schedule?.getAttribute('aria-busy')==='true';
+              const loadingGraph=p==='memory'&&(document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중');
+              const loadingAutomation=(p==='reply'||p==='geeknews')&&document.querySelector(`#${p}-status`)?.textContent==='기록을 불러옵니다.';
+              const panel=document.querySelector(`#settings-page-${p}`);
+              const list=panel?.querySelector('.message-scroll');const r=list?.getBoundingClientRect();
+              const rows=[...(list?.querySelectorAll('.message-row')??[])].map(n=>n.getBoundingClientRect());
+              const listPending=!!r&&r.height>0&&rows.length===0&&prompt?.hidden===true;
+              const statusId={memory:'knowledge-summary',conversation:'conversation-history-status',reply:'reply-status',geeknews:'geeknews-status',voice:'voice-history-status',history:'db-current-title',settings:'automation-status'}[p];
+              const status=panel?.querySelector('#'+statusId)?.textContent??'';
+              const paint=window.__aldenAuditWorkspacePaint;
+              const pendingReasons=[pending&&'messages',loadingSettings&&'settings',loadingHistory&&'history',
+                loadingCollection&&'collection',loadingSchedule&&'schedule',loadingGraph&&'graph',
+                loadingAutomation&&'automation',listPending&&'message-layout',
+                (paint?.page!==p||paint?.ready!==true)&&'paint'].filter(Boolean);
+              return {page:p,width:innerWidth,height:innerHeight,scrollWidth:document.documentElement.scrollWidth,
+                settled:pendingReasons.length===0,pendingReasons,
+                graphProject:p==='memory'?document.querySelector('#knowledge-project')?.value:null,
+                graphScope:p==='memory'?document.querySelector('#knowledge-scope')?.textContent:null,
+                graphDisplayedNodes:p==='memory'?window.__knowledgeRenderDiagnostics?.nodeCount:null,
+                graphDisplayedEdges:p==='memory'?window.__knowledgeRenderDiagnostics?.edgeCount:null,
+                collectionState:p==='history'?collection?.dataset.state:null,
+                collectionRenderedRows:p==='history'?collection?.querySelectorAll('.collection-event-row').length:0,
+                collectionSummary:p==='history'?collection?.querySelector('.collection-summary')?.textContent:null,
+                collectionScheduleState:p==='history'?schedule?.dataset.state:null,
+                collectionScheduleTargets:p==='history'?schedule?.dataset.targetCount:null,
+                navigationFirstFrameMs:typeof paint?.firstFrameAtMs==='number'?paint.firstFrameAtMs-paint.clickedAtMs:null,
+                transcriptViewportHeight:r?.height??0,
+                fullyVisibleMessages:r?rows.filter(n=>n.top>=r.top-.5&&n.bottom<=r.bottom+.5).length:0,
+                errorVisible:/불러오지 못|접근 확인 필요|확인하지 못/.test(status),
+                placeholderVisible:!!prompt&&!prompt.hidden,
+                graphRenders:window.__knowledgeRenderCount??0,
+                captureOrigin:paint?.captureOrigin,titleLayout:__AUDIT_TITLE_LAYOUT__};
+            })())"#.replace("__AUDIT_TITLE_LAYOUT__",WORKSPACE_TITLE_LAYOUT),deadline)
+            },
+            || {
+                collect_script(window,"JSON.stringify((()=>{const paint=window.__aldenAuditWorkspacePaint;paint.ready=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{paint.ready=true;}));return {armed:true};})())".into(),deadline).map(|_| ())
+            },
+        )?;
+        if state["scrollWidth"].as_u64().unwrap_or(u64::MAX) > state["width"].as_u64().unwrap_or(0)
+        {
+            return Err(format!("workspace overflow: {page}"));
+        }
+        validate_workspace_title(&state, size)?;
+        if page == "memory" {
+            state["physicsObservation"] = observe_graph_rest(window, deadline)?;
+            let geometry = collect_script(window,
+                "JSON.stringify(window.__knowledgeLayoutAudit ? window.__knowledgeLayoutAudit() : {available:false,reason:'audit_missing'})".into(),deadline)?;
+            publish(output, &format!("graph-layout-{size}.json"),
+                &serde_json::to_vec_pretty(&geometry).map_err(|_| "layout audit JSON failed")?, deadline)?;
+            state["projectedLayoutObservation"] = geometry;
+            state["labelGeometryObservation"] =
+                collect_script(window, LABEL_GEOMETRY_COLLECT.into(), deadline)?;
+        }
+        publish(
+            output,
+            &format!("workspace-{page}-{size}.png"),
+            &snapshot(window, deadline)?,
+            deadline,
+        )?;
+        if page == "memory" {
+            collect_script(window,r#"JSON.stringify((()=>{
+                document.querySelector('#knowledge-info').open=true;
+                const button=document.querySelector('#knowledge-quality-run');
+                if(!button||button.disabled)throw new Error('quality control unavailable');
+                button.click();return {requested:true};})())"#.into(),deadline)?;
+            let mut quality=loop {
+                let state=collect_script(window,r#"JSON.stringify((()=>{
+                    const panel=document.querySelector('#knowledge-quality-report');
+                    return {state:panel.dataset.state,status:document.querySelector('#knowledge-quality-status').textContent,
+                        hidden:panel.hidden,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
+                if state["state"]=="complete" {break state;}
+                if state["state"]=="unavailable" {return Err(format!("quality inspection unavailable: {state}"));}
+                live(deadline)?;std::thread::sleep(Duration::from_millis(100));
+            };
+            if quality["hidden"]!=false || quality["width"]!=quality["scrollWidth"] {
+                return Err("quality report hidden or horizontal overflow".into());
+            }
+            collect_script(window,r#"JSON.stringify((()=>{
+                const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                box.scrollTop=document.querySelector('#knowledge-quality').offsetTop-box.offsetTop;
+                window.__aldenQualityPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenQualityPaint=true;}));
+                return {scrolled:true};})())"#.into(),deadline)?;
+            loop {
+                let state=collect_script(window,"JSON.stringify({ready:window.__aldenQualityPaint===true})".into(),deadline)?;
+                if state["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+            }
+            publish(output,&format!("knowledge-quality-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+            collect_script(window,r#"JSON.stringify((()=>{
+                const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                const heading=document.querySelector('#knowledge-quality-body');
+                if(!box||!heading)throw new Error('body quality section unavailable');
+                box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+                window.__aldenQualityPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenQualityPaint=true;}));
+                return {scrolled:true};})())"#.into(),deadline)?;
+            loop {
+                let ready=collect_script(window,"JSON.stringify({ready:window.__aldenQualityPaint===true})".into(),deadline)?;
+                if ready["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+            }
+            let body=collect_script(window,r#"JSON.stringify((()=>{
+                const heading=document.querySelector('#knowledge-quality-body');
+                const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                const rect=box.getBoundingClientRect();
+                const list=heading.nextElementSibling;
+                const rows=Array.from(list.querySelectorAll('dt')).map(dt=>{
+                    const dd=dt.nextElementSibling,r=dd.getBoundingClientRect();
+                    return {label:dt.textContent,value:dd.textContent,visible:r.top>=rect.top&&r.bottom<=rect.bottom};
+                });
+                return {rows,horizontalOverflow:document.documentElement.scrollWidth>innerWidth};})())"#.into(),deadline)?;
+            if body["horizontalOverflow"]!=false || body["rows"].as_array().is_none_or(|rows|rows.len()!=6||rows.iter().any(|r|r["visible"]!=true)) {
+                return Err(format!("body quality metrics clipped: {body}"));
+            }
+            publish(output,&format!("knowledge-quality-body-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+            quality["bodyObservation"]=body;
+            for (section, expected_rows) in [("time",11),("quantity",7)] {
+                let selector=serde_json::to_string(&format!("#knowledge-quality-{section}")).map_err(|_|"quality section encoding")?;
+                collect_script(window,format!(r#"JSON.stringify((()=>{{
+                    const box=document.querySelector('.knowledge-info .knowledge-scope-block');
+                    const heading=document.querySelector({selector});
+                    if(!box||!heading)throw new Error('declared normalization section unavailable');
+                    box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+                    window.__aldenQualityPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{{window.__aldenQualityPaint=true;}}));
+                    return {{scrolled:true}};}})())"#),deadline)?;
+                loop {
+                    let ready=collect_script(window,"JSON.stringify({ready:window.__aldenQualityPaint===true})".into(),deadline)?;
+                    if ready["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+                }
+                let observed=collect_script(window,format!(r#"JSON.stringify((()=>{{
+                    const heading=document.querySelector({selector});
+                    const box=document.querySelector('.knowledge-info .knowledge-scope-block'),bounds=box.getBoundingClientRect();
+                    return {{rows:[...heading.nextElementSibling.querySelectorAll('dt')].map(dt=>{{
+                        const dd=dt.nextElementSibling,rect=dd.getBoundingClientRect();
+                        return {{label:dt.textContent,value:dd.textContent,visible:rect.top>=bounds.top&&rect.bottom<=bounds.bottom}};
+                    }}),horizontalOverflow:document.documentElement.scrollWidth>innerWidth}};}})())"#),deadline)?;
+                if observed["horizontalOverflow"]!=false || observed["rows"].as_array().is_none_or(|rows|rows.len()!=expected_rows||rows.iter().any(|row|row["visible"]!=true)) {
+                    return Err(format!("declared normalization metrics clipped: {section}: {observed}"));
+                }
+                publish(output,&format!("knowledge-quality-{section}-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+                quality[format!("{section}Observation")]=observed;
+            }
+            collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-info').open=false;return {closed:true};})())".into(),deadline)?;
+            state["qualityObservation"]=quality;
+        }
+        if page == "history" {
+            collect_script(window, r#"JSON.stringify((()=>{
+              const schedule=document.querySelector('.collection-schedule');
+              const editor=schedule?.querySelector('.collection-interval');if(editor)editor.open=true;
+              schedule?.scrollIntoView({block:'start'});return {ready:!!schedule};
+            })())"#.into(), deadline)?;
+            std::thread::sleep(Duration::from_millis(100));
+            publish(
+                output,
+                &format!("collection-schedule-{size}.png"),
+                &snapshot(window, deadline)?,
+                deadline,
+            )?;
+            let source_control = collect_script(
+                window,
+                r#"JSON.stringify((()=>{
+              const source=document.querySelector('.collection-source-toggle:not([hidden])');
+              const editor=source?.closest('details');if(editor)editor.open=true;
+              source?.closest('li')?.scrollIntoView({block:'center'});return {ready:!!source};
+            })())"#
+                    .into(),
+                deadline,
+            )?;
+            if source_control["ready"].as_bool().unwrap_or(false) {
+                std::thread::sleep(Duration::from_millis(100));
+                publish(
+                    output,
+                    &format!("collection-source-{size}.png"),
+                    &snapshot(window, deadline)?,
+                    deadline,
+                )?;
+            }
+            collect_script(window, r#"JSON.stringify((()=>{
+              for(const editor of document.querySelectorAll('.collection-schedule .collection-interval'))editor.open=false;
+              document.querySelector('#settings-page-history .settings-page-heading')?.scrollIntoView({block:'start'});
+              return {restored:true};
+            })())"#.into(), deadline)?;
+        }
+        if page == "settings" {
+            collect_script(window,"JSON.stringify((()=>{const p=document.querySelector('#routed-model-picker');p?.scrollIntoView({block:'center'});if(p)p.open=true;return {opened:!!p};})())".into(),deadline)?;
+            let ready_by = Instant::now() + Duration::from_secs(5);
+            loop {
+                let models = collect_script(window,r#"JSON.stringify((()=>{
+                  const picker=document.querySelector('#routed-model-picker');
+                  const menu=document.querySelector('.routed-model-menu')?.getBoundingClientRect();
+                  const search=document.querySelector('#routed-model-search')?.getBoundingClientRect();
+                  const contained=r=>!!r&&r.width>0&&r.height>0&&r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight;
+                  const rect=r=>r?{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height}:null;
+                  return {count:document.querySelectorAll('#routed-model-list [data-route-model]').length,
+                    open:!!picker?.open,contained:!!picker?.open&&contained(menu)&&contained(search),
+                    menu:rect(menu),search:rect(search),viewport:{width:innerWidth,height:innerHeight}};
+                })())"#.into(),deadline)?;
+                if models["count"].as_u64().unwrap_or(0) > 0 && models["contained"].as_bool()==Some(true) {
+                    publish(output,&format!("alden-model-menu-{size}.json"),
+                        &serde_json::to_vec_pretty(&models).map_err(|_|"model menu geometry JSON failed")?,deadline)?;
+                    break;
+                }
+                if Instant::now() >= ready_by {
+                    return Err("native model catalog/menu bounds did not settle".into());
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            publish(
+                output,
+                &format!("alden-model-menu-{size}.png"),
+                &snapshot(window, deadline)?,
+                deadline,
+            )?;
+            collect_script(window,"JSON.stringify((()=>{const p=document.querySelector('#routed-model-picker');if(p)p.open=false;return {closed:true};})())".into(),deadline)?;
+        }
+        publish(output, &format!("workspace-observed-{size}-{page}.json"),
+            &serde_json::to_vec_pretty(&json!({
+                "scope":"completed owned read-only workspace phase; not full audit success",
+                "size":size,"page":page,"phaseElapsedMs":phase_started.elapsed().as_millis(),"state":state
+            })).map_err(|_| "workspace phase observation JSON failed")?,deadline)?;
+        states.push(state);
+    }
+    graph_step(window, "memory-page", deadline)?;
+    Ok(states)
+}
+
+// Audit-only DOM measurements. Never emit label text, record IDs or bodies, and
+// never run this from a frame loop. Element boxes are not font-ink geometry.
+const LABEL_GEOMETRY_COLLECT: &str = r#"JSON.stringify((()=>{
+  const canvas=document.querySelector('#knowledge-graph-canvas');
+  const area=canvas?.getBoundingClientRect();
+  const all=[...document.querySelectorAll('.knowledge-node-label')];
+  const boxes=all.slice(0,24).map((el,index)=>{
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return {index,positioned:!!el.style.transform,visible:!el.hidden&&s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0,
+      focused:el.dataset.focused==='true',view:el.dataset.view??null,level:el.dataset.level??null,role:el.dataset.role??null,
+      left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height,
+      fontSize:s.fontSize,lineHeight:s.lineHeight,fontWeight:s.fontWeight};
+  });
+  const visible=boxes.filter(b=>b.visible);let overlapPairs=0,clipped=0;
+  for(let a=0;a<visible.length;a++){
+    const r=visible[a];
+    if(area&&(r.left<area.left-.5||r.top<area.top-.5||r.right>area.right+.5||r.bottom>area.bottom+.5))clipped++;
+    for(let b=a+1;b<visible.length;b++){
+      const q=visible[b];
+      if(Math.min(r.right,q.right)-Math.max(r.left,q.left)>.5&&Math.min(r.bottom,q.bottom)-Math.max(r.top,q.top)>.5)overlapPairs++;
+    }
+  }
+  const hud=document.querySelector('.knowledge-map-caption'),hs=hud?getComputedStyle(hud):null,hr=hud?.getBoundingClientRect();
+  const hudVisible=!!hud&&!hud.hidden&&hs.display!=='none'&&hs.visibility!=='hidden'&&hr.width>0&&hr.height>0;
+  const hudOverlapPairs=hudVisible?visible.filter(r=>Math.min(r.right,hr.right)-Math.max(r.left,hr.left)>.5&&Math.min(r.bottom,hr.bottom)-Math.max(r.top,hr.top)>.5).length:0;
+  return {scope:'audit-only bounded element rectangles; no label text/IDs or physical/font-ink proof',
+    hudSampled:hudVisible?1:0,hudOverlapPairs,hudBounds:hudVisible?{left:hr.left,top:hr.top,right:hr.right,bottom:hr.bottom}:null,
+    totalLabels:all.length,sampledLabels:boxes.length,truncated:all.length>24,visibleLabels:visible.length,
+    unpositionedLabels:boxes.filter(b=>!b.positioned).length,
+    visibleUnpositionedLabels:visible.filter(b=>!b.positioned).length,
+    framePending:window.__knowledgeRenderDiagnostics?.pendingFrame??null,
+    overlapPairs,clippedLabels:clipped,boxes,devicePixelRatio};
+})())"#;
+
+const GRAPH_COLLECT: &str = r#"JSON.stringify((() => {
+  const d=window.__knowledgeRenderDiagnostics, p=window.__knowledgeRenderPause;
+  const c=document.querySelector('#knowledge-graph-canvas'), r=c?.getBoundingClientRect();
+  return {ready:!!d, width:innerWidth,height:innerHeight,dpr:devicePixelRatio,
+    documentVisibility:document.visibilityState,documentFocused:document.hasFocus(),
+    scrollWidth:document.documentElement.scrollWidth,scrollHeight:document.documentElement.scrollHeight,
+    settingsState:document.getElementById('app')?.dataset.state,settingsPage:document.querySelector('.settings-shell')?.dataset.settingsPage,
+    graphPending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중',
+    renderCount:d?.renderCount??0,loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
+    graphRead:d?d.graphRead:null, navigation:d?{focused:d.focused,focusId:d.focusId,source:d.source,focusedSourceVersion:d.focusedSourceVersion,focusSlot:d.focusSlot,hops:d.hops,canGoBack:d.canGoBack,targets:d.targets,nodeCount:d.nodeCount,edgeCount:d.edgeCount,overviewLimit:d.overviewLimit,overviewOffset:d.overviewOffset,hasMoreContexts:d.hasMoreContexts}:null,
+    regions:d?.regions??null,synapses:d?.synapses??null,
+    motion:d?.motion??null,geometry:d?{detailMode:d.detailMode,neuronGlyphs:d.neuronGlyphs,orbGlyphs:d.orbCount,geometries:d.geometries,drawCalls:d.drawCalls}:null,
+    depthLegend:(()=>{const e=document.querySelector('.knowledge-depth-legend');const r=e?.getBoundingClientRect();return e?{hidden:e.hidden,entries:e.children.length,left:r.left,top:r.top,width:r.width,height:r.height,scrollWidth:e.scrollWidth}:null;})(),
+    nodeActivity:d?.nodeActivity??null,activityJournal:d?.activityJournal??null,
+    canvas:r?{width:r.width,height:r.height,contextLost:c.getContext('webgl2')?.isContextLost()??null}:null,
+    notePane:(()=>{const n=document.querySelector('#knowledge-note-pane');const b=n?.getBoundingClientRect();const t=n?.querySelector('.knowledge-reading-tail');return n&&b?{hidden:n.hidden,x:b.x,y:b.y,width:b.width,height:b.height,scrollWidth:n.scrollWidth,focusState:n.dataset.focusState,nodeId:n.dataset.nodeId,bodyChars:document.querySelector('#knowledge-node-body')?.textContent?.length??0,readingTail:t?{open:t.open,characters:t.querySelector('pre')?.textContent?.length??0}:null}:null;})(),
+    backDisabled:document.querySelector('#knowledge-back')?.disabled,
+    overviewDisabled:document.querySelector('#knowledge-overview')?.disabled,
+    expandDisabled:document.querySelector('#knowledge-expand-hop')?.disabled,
+    clearedDetail:document.querySelector('#knowledge-relations')?.children.length===0
+      &&document.querySelector('#knowledge-focus-title')?.textContent==='항목을 선택하면 관련 정보를 보여드립니다.',
+    accessibleNodes:document.querySelectorAll('.knowledge-a11y-node').length,
+    labelGeometryObservation:JSON.parse(__AUDIT_LABEL_GEOMETRY__),
+    pause:p?{state:p.state,eventAtMs:p.eventAtMs,rendersAfterEvent:p.rendersAfterEvent}:null};
+})())"#;
+
+fn graph_collect_script() -> String {
+    GRAPH_COLLECT.replace("__AUDIT_LABEL_GEOMETRY__", LABEL_GEOMETRY_COLLECT)
+}
+
+fn observe_connections(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    let bound = deadline.min(Instant::now() + Duration::from_secs(3));
+    loop {
+        let state = collect_script(window, graph_collect_script(), deadline)?;
+        if state["motion"]["camera"] == false || Instant::now() >= bound {
+            return Ok(state);
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_audit_state(
+    phase: &str,
+    deadline: Instant,
+    mut sample: impl FnMut() -> Result<Value, String>,
+    ready: impl Fn(&Value) -> bool,
+) -> Result<Value, String> {
+    let started = Instant::now();
+    let mut last_state = Value::Null;
+    let result = (|| loop {
+        live(deadline)?;
+        last_state = sample()?;
+        live(deadline)?;
+        if ready(&last_state) {
+            return Ok(last_state.clone());
+        }
+        std::thread::sleep(
+            Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    })();
+    result.map_err(|error: String| format!(
+        "audit {phase} failed after {:.0}ms: {error}; last observed state={last_state}",
+        started.elapsed().as_secs_f64() * 1000.0
+    ))
+}
+
+fn applied_affinity_observed(state: &Value) -> bool {
+    let controller = &state["affinity"];
+    let graph = &state["semantic"]["affinity"];
+    matches!(controller["state"].as_str(), Some("bounded_ready" | "bounded_partial"))
+        && graph["state"] == controller["state"]
+        && ["requested", "usable", "pairs"].iter().all(|key| {
+            controller[key].as_u64().is_some()
+                && graph[key].as_u64() == controller[key].as_u64()
+        })
+}
+
+fn observe_graph_rest(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    observe_graph_rest_with_budget(window,deadline,Duration::from_secs(15))
+}
+
+fn focused_graph_settled(state: &Value, expected: &str) -> bool {
+    state["focused"] == true && state["focusId"] == expected
+        && matches!(state["worker"].as_str(), Some("ready" | "cached"))
+        && state["pendingTargets"] == 0
+        && ["camera", "physics", "transition"].iter().all(|key| state["motion"][key] == false)
+}
+
+fn observe_focused_graph(window: &tauri::WebviewWindow, deadline: Instant, expected: &str) -> Result<Value, String> {
+    let bounded = deadline.min(Instant::now() + Duration::from_secs(30));
+    wait_for_audit_state("focused graph final placement", bounded, || collect_script(window,
+        r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;return {
+          focused:d?.focused??null,focusId:d?.focusId??null,
+          worker:d?.semanticLayout?.worker?.state??null,
+          pendingTargets:d?.semanticLayout?.pendingTargets??null,
+          motion:d?.motion??null,renderCount:d?.renderCount??null};})())"#.into(),bounded),
+        |state| focused_graph_settled(state, expected))
+}
+
+fn observe_graph_rest_with_budget(window: &tauri::WebviewWindow, deadline: Instant, observation_budget: Duration) -> Result<Value, String> {
+    let script = r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
+      return {observedAtMs:performance.now(),renderCount:d?.renderCount??0,
+        displayedNodes:d?.nodeCount??0,physics:d?.physics??null,
+        loop:d?{running:d.running,pendingFrame:d.pendingFrame}:null,
+        motion:d?.motion??null,regions:d?.regions??null,synapses:d?.synapses??null,
+        semantic:d?.semanticLayout??null,
+        affinity:d?.graphRead?.affinity??null};})())"#;
+    let before = collect_script(window, script.into(), deadline)?;
+    let mut stable_since=None;
+    let rested = loop {
+        let state = collect_script(window, script.into(), deadline)?;
+        let worker_ready = matches!(
+            state["semantic"]["worker"]["state"].as_str(),
+            Some("ready" | "cached")
+        );
+        let affinity_ready = state["affinity"]["state"] == "unavailable"
+            || applied_affinity_observed(&state);
+        if worker_ready && affinity_ready && state["semantic"]["pendingTargets"]==0 {
+            stable_since.get_or_insert(Instant::now());
+        } else { stable_since=None; }
+        if (state["physics"]["moving"] == false
+            && state["semantic"]["pendingTargets"] == 0
+            && worker_ready
+            && affinity_ready
+            && state["loop"]["running"] == false
+            && state["loop"]["pendingFrame"] == false)
+            || stable_since.is_some_and(|since:Instant|since.elapsed()>=observation_budget)
+            || Instant::now() >= deadline
+        {
+            break state;
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    live(deadline)?;
+    std::thread::sleep(Duration::from_secs(2));
+    let after = collect_script(window, script.into(), deadline)?;
+    Ok(
+        json!({"scope":"owned visible graph; observational only, not primary/GPU/battery or semantic proof",
+        "before":before,"restWindowBasis":"after current layout and affinity are ready; observation bound remains inside original global deadline",
+        "restObservationBudgetMs":observation_budget.as_millis(),
+        "restObserved":rested["physics"]["moving"] == false,
+        "layoutObserved":matches!(rested["semantic"]["worker"]["state"].as_str(),Some("ready" | "cached")) && rested["semantic"]["pendingTargets"] == 0,
+        "affinityObserved":applied_affinity_observed(&rested) && applied_affinity_observed(&after),
+        "renderIdleObserved":rested["loop"]["running"] == false
+            && rested["loop"]["pendingFrame"] == false
+            && after["loop"]["running"] == false
+            && after["loop"]["pendingFrame"] == false
+            && rested["renderCount"] == after["renderCount"],
+        "rested":rested,"afterTwoSeconds":after}),
+    )
+}
+
+// Clone the observed navigation before the fixed click in the same JS task.
+// A screenshot can flush layout between an earlier readiness sample and that
+// click; Back must restore the origin saved at the action, not that old sample.
+const GRAPH_ACTION_ORIGIN: &str = r#"JSON.stringify((()=>{
+  const before=JSON.parse(__AUDIT_GRAPH_COLLECT__).navigation;
+  __AUDIT_GRAPH_ACTION__;
+  return {before,after:JSON.parse(__AUDIT_GRAPH_COLLECT__).navigation};
+})())"#;
+
+fn navigation_context_matches(origin: &Value, earlier: &Value) -> bool {
+    let (Some(origin), Some(earlier)) = (origin.as_object(), earlier.as_object()) else {
+        return false;
+    };
+    let valid_pose = |navigation: &serde_json::Map<String, Value>| {
+        let Some(targets) = navigation.get("targets").and_then(Value::as_object) else {
+            return false;
+        };
+        targets.len() == 2 && ["camera", "lookAt"].iter().all(|key| {
+            targets.get(*key).and_then(Value::as_array).is_some_and(|values| {
+                values.len() == 3 && values.iter().all(|v| v.as_f64().is_some_and(f64::is_finite))
+            })
+        })
+    };
+    ["focused", "focusId", "source", "focusedSourceVersion", "focusSlot", "hops",
+        "canGoBack", "nodeCount", "edgeCount", "overviewLimit", "overviewOffset", "hasMoreContexts"]
+        .iter().all(|key| origin.contains_key(*key) && earlier.contains_key(*key))
+        && valid_pose(origin) && valid_pose(earlier) && origin.len() == earlier.len()
+        && origin.iter().all(|(key, value)| key == "targets" || earlier.get(key) == Some(value))
+}
+
+fn graph_step(
+    window: &tauri::WebviewWindow,
+    action: &str,
+    deadline: Instant,
+) -> Result<Value, String> {
+    // Internal fixed actions only; no caller-selected script or selector.
+    let focus = window.state::<AuditPolicy>().focus_node.clone();
+    let targeted = focus
+        .as_deref()
+        .map(|id| serde_json::to_string(id).expect("string serializes"));
+    let script = match (action, targeted) {
+        ("first", Some(id)) => format!("(()=>{{const b=[...document.querySelectorAll('.knowledge-a11y-node')].find(n=>n.dataset.nodeId==={id});if(!b)throw Error('requested canonical note is not visible');b.click();}})()"),
+        ("second", Some(id)) => format!("[...document.querySelectorAll('.knowledge-a11y-node')].find(n=>n.dataset.nodeId!=={id})?.click()"),
+        (action, _) => match action {
+        "memory-page" if focus.as_deref().is_some_and(|id| id.starts_with("osk:")) => "(()=>{document.querySelector('#settings-tab-memory')?.click();const source=document.querySelector('#knowledge-project');if(source){source.value='legacy';source.dispatchEvent(new Event('change'));}})()",
+        "memory-page" => "document.querySelector('#settings-tab-memory')?.click()",
+        "first" => "(()=>{const id=window.__knowledgeRenderDiagnostics?.firstCollectedId;const buttons=[...document.querySelectorAll('.knowledge-a11y-node')];(buttons.find(b=>id&&b.dataset.nodeId===id)??buttons[0])?.click();})()",
+        "second" => "document.querySelectorAll('.knowledge-a11y-node')[1]?.click()",
+        "expand" => "document.querySelector('#knowledge-expand-hop')?.click()",
+        "back" => "document.querySelector('#knowledge-back')?.click()",
+        "overview" => "document.querySelector('#knowledge-overview')?.click()",
+        "scroll" => {
+            "document.querySelector('#settings-knowledge-card')?.scrollIntoView({block:'center'})"
+        }
+        _ => return Err("unknown internal graph action".into()),
+        }.to_string(),
+    };
+    let origin = collect_script(
+        window,
+        GRAPH_ACTION_ORIGIN
+            .replace("__AUDIT_GRAPH_COLLECT__", &graph_collect_script())
+            .replace("__AUDIT_GRAPH_ACTION__", &script),
+        deadline,
+    )?;
+    std::thread::sleep(Duration::from_millis(250));
+    // Match bounded source-read budgets; readiness is observed, never forced.
+    let settle = deadline.min(Instant::now() + Duration::from_secs(25));
+    loop {
+        let mut state = collect_script(window, graph_collect_script(), deadline)?;
+        let graph_pending = collect_script(window,"JSON.stringify({pending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중'})".into(),deadline)?;
+        if graph_pending["pending"] != true
+            && state["graphRead"]["navigationPending"] != true
+            && (state["notePane"]["hidden"] != false
+                || state["notePane"]["focusState"] != "loading")
+        {
+            state["actionOrigin"] = origin["before"].clone();
+            state["actionImmediateNavigation"] = origin["after"].clone();
+            return Ok(state);
+        }
+        if Instant::now() >= settle {
+            return Err(format!(
+                "graph action {action} did not settle: pending={}, focusState={}, remainingDeadlineMs={}",
+                graph_pending["pending"], state["notePane"]["focusState"], deadline.saturating_duration_since(Instant::now()).as_millis()
+            ));
+        }
+        live(deadline)?;
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn native_settings_size(window: &tauri::WebviewWindow, deadline: Instant) -> Result<Value, String> {
+    live(deadline)?;
+    let (tx, rx) = mpsc::sync_channel(1);
+    let target = window.clone();
+    window
+        .with_webview(move |platform| {
+            let measured = objc2::exception::catch(std::panic::AssertUnwindSafe(|| live(deadline).and_then(|_| {
+                let native = target
+                    .ns_window()
+                    .map_err(|_| "settings native window missing")?;
+                let native = unsafe { &*native.cast::<NSWindow>() };
+                // Measure rectangles without requesting a retained content
+                // view. Repeated contentView reads in this pinned Wry runtime
+                // produced an over-release exception for its parent NSView.
+                let content = native.contentRectForFrameRect(native.frame());
+                let webview = unsafe { &*platform.inner().cast::<WKWebView>() };
+                let bounds = webview.bounds();
+                let layout = native.contentLayoutRect();
+                Ok(
+                    json!({"contentWidth":content.size.width,"contentHeight":content.size.height,
+                "contentBasis":"NSWindow contentRectForFrameRect(frame)",
+                "layoutWidth":layout.size.width,"layoutHeight":layout.size.height,
+                "webviewWidth":bounds.size.width,"webviewHeight":bounds.size.height}),
+                )
+            })));
+            let result = measured.unwrap_or_else(|exception| {
+                Err(format!("settings geometry Objective-C exception: {exception:?}"))
+            });
+            let _ = tx.try_send(result);
+        })
+        .map_err(|_| "settings size dispatch failed")?;
+    receive(rx, deadline)
+}
+
+fn graph_scope_case(case: u8) -> Result<(&'static str, bool, bool), String> {
+    match case {
+        0 | 10 => Ok(("all", false, false)),
+        1 => Ok(("all", true, false)),
+        2 => Ok(("project:alden-model-research", false, false)),
+        3 => Ok(("project:career", false, false)),
+        4 => Ok(("project:jangsin", false, false)),
+        5 => Ok(("project:sparkuniverse", false, false)),
+        6 => Ok(("project:sparkuniverse", true, false)),
+        7 => Ok(("project:youtube-tzuyang", false, false)),
+        8 => Ok(("all", false, true)),
+        9 => Ok(("project:youtube-tzuyang", false, false)),
+        _ => Err("graph scope outside fixed cases".into()),
+    }
+}
+
+fn audit_quality_comparison(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, size: &str) -> Result<Value,String> {
+    collect_script(window,r#"JSON.stringify((()=>{
+      document.querySelector('#knowledge-info').open=true;
+      const button=document.querySelector('#knowledge-quality-run');
+      if(!button||button.disabled)throw Error('quality comparison control unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    let wait=|| wait_for_audit_state("quality source comparison",deadline,||{
+        let state=collect_script(window,r#"JSON.stringify({state:document.querySelector('#knowledge-quality-report').dataset.state,
+          status:document.querySelector('#knowledge-quality-status').textContent})"#.into(),deadline)?;
+        if state["state"]=="unavailable" {return Err(format!("quality source comparison unavailable: {state}"));}
+        Ok(state)
+    },|state|state["state"]=="complete");
+    wait()?;
+    eprintln!("Alden quality comparison {size}: summary ready");
+    collect_script(window,r#"JSON.stringify((()=>{
+      const button=document.querySelector('.knowledge-quality-compare');
+      if(!button||button.disabled)throw Error('source comparison request unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    wait()?;
+    eprintln!("Alden quality comparison {size}: source pairs ready");
+    let state=collect_script(window,r#"JSON.stringify((()=>{
+      const groups=[...document.querySelectorAll('.knowledge-quality-comparison')];
+      const records=groups.map(group=>[...group.querySelectorAll('article')].map(article=>article.dataset.document));
+      const lengths=[...document.querySelectorAll('.knowledge-quality-comparison pre')].map(p=>Array.from(p.textContent).length);
+      const summaryGeometry=groups.map(group=>{const r=group.querySelector('summary').getBoundingClientRect();return {width:r.width,height:r.height};});
+      return {groups:groups.length,records,maximumBodyCharacters:Math.max(0,...lengths),
+        summaryGeometry,
+        width:innerWidth,scrollWidth:document.documentElement.scrollWidth,
+        noCandidates:document.querySelector('#knowledge-quality-report').textContent.includes('현재 비교할 수 있는 일치 후보가 없습니다.'),
+        noMerge:document.querySelector('#knowledge-quality-report').textContent.includes('병합하지 않았습니다.')};})())"#.into(),deadline)?;
+    if state["groups"].as_u64().is_none_or(|n|n>6) || state["maximumBodyCharacters"].as_u64().is_none_or(|n|n>4000)
+        || state["width"]!=state["scrollWidth"] || state["noMerge"]!=true
+        || state["groups"]==0 && state["noCandidates"]!=true
+        || !state["summaryGeometry"].as_array().is_some_and(|groups|groups.iter().all(|r|
+            r["width"].as_f64().is_some_and(|v|v>=100.) && r["height"].as_f64().is_some_and(|v|v>=16.)))
+        || !state["records"].as_array().is_some_and(|groups|groups.iter().all(|group|
+            group.as_array().is_some_and(|rows|rows.len()==2 && rows[0]!=rows[1]))) {
+        return Err(format!("quality comparison scope/geometry invalid: {state}"));
+    }
+    eprintln!("Alden quality comparison {size}: bounded geometry ready");
+    let mut state=state;
+    collect_script(window,r#"JSON.stringify((()=>{
+      const button=document.querySelector('button.knowledge-quality-annotations');
+      if(!button)throw Error('retained annotation control unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    wait()?;
+    let annotations=collect_script(window,r#"JSON.stringify((()=>{
+      const heading=document.querySelector('#knowledge-quality-annotations');
+      const list=heading?.nextElementSibling;
+      return {present:!!heading,rows:list?.querySelectorAll('dt').length??0,
+        content:list?.textContent,
+        separateScope:document.querySelector('#knowledge-quality-report').textContent.includes('일반 품질 집계는 해시 참조'),
+        noSemanticVerdict:document.querySelector('#knowledge-quality-report').textContent.includes('어느 태그가 맞는지')};})())"#.into(),deadline)?;
+    if annotations["present"]!=true || annotations["rows"]!=8
+        || annotations["separateScope"]!=true || annotations["noSemanticVerdict"]!=true {
+        return Err(format!("retained annotation inspection invalid: {annotations}"));
+    }
+    collect_script(window,r#"JSON.stringify((()=>{
+      const heading=document.querySelector('#knowledge-quality-annotations');
+      const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+      box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+      return {positioned:true};})())"#.into(),deadline)?;
+    publish(output,&format!("knowledge-quality-annotations-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+    state["annotationReview"]=annotations;
+    let candidates=collect_script(window,r#"JSON.stringify((()=>{
+      const buttons=[...document.querySelectorAll('button[data-annotation-group]')];
+      return {groups:buttons.length,page:document.querySelector('.knowledge-quality-annotation-page')?.textContent};})())"#.into(),deadline)?;
+    if candidates["groups"].as_u64().is_none_or(|v|v>5) {
+        return Err(format!("annotation candidates page invalid: {candidates}"));
+    }
+    collect_script(window,r#"JSON.stringify((()=>{
+      const heading=document.querySelector('.knowledge-quality-annotation-page');
+      const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+      if(heading)box.scrollTop+=heading.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+      return {positioned:!!heading};})())"#.into(),deadline)?;
+    publish(output,&format!("knowledge-quality-candidates-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+    if candidates["groups"].as_u64().is_some_and(|v|v>0) {
+        collect_script(window,r#"JSON.stringify((()=>{document.querySelector('button[data-annotation-group]').click();return {requested:true};})())"#.into(),deadline)?;
+        wait()?;
+        let records=collect_script(window,r#"JSON.stringify((()=>{
+          const records=[...document.querySelectorAll('.knowledge-quality-candidate-record')];
+          const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+          if(records[0])box.scrollTop+=records[0].getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+          const references=records.filter(r=>r.dataset.contentEvidence==='reference_only');
+          return {records:records.length,notice:records.every(r=>r.textContent.includes('미검증')),
+            references:references.length,referenceNotice:references.every(r=>r.textContent.includes('연결된 페이지의 본문은 확인하지 않았습니다')),
+            bodyMax:Math.max(0,...records.map(r=>Array.from(r.querySelector('pre')?.textContent??'').length))};})())"#.into(),deadline)?;
+        if !records["records"].as_u64().is_some_and(|v|v>0 && v<=5)
+            || records["notice"]!=true || records["referenceNotice"]!=true || records["bodyMax"].as_u64().is_none_or(|v|v>4000) {
+            return Err(format!("annotation source records invalid: {records}"));
+        }
+        publish(output,&format!("knowledge-quality-candidate-record-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+        state["candidateRecords"]=records;
+    } else {
+        publish(output,&format!("knowledge-quality-candidate-record-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+    }
+    state["annotationCandidates"]=candidates;
+    collect_script(window,r#"JSON.stringify((()=>{
+      const button=document.querySelector('.knowledge-quality-compare:not(.knowledge-quality-annotations)');
+      if(!button)throw Error('fresh source comparison request unavailable');
+      button.click();return {requested:true};})())"#.into(),deadline)?;
+    wait()?;
+    for index in 0..2 {
+        collect_script(window,format!(r#"JSON.stringify((()=>{{
+          const group=document.querySelector('.knowledge-quality-comparison');if(group)group.open=true;
+          const article=group?.querySelectorAll('article')[{index}];
+          const box=document.querySelector('#knowledge-info .knowledge-scope-block');
+          if(!box)throw Error('source comparison scroll container missing');
+          if(article)box.scrollTop+=article.getBoundingClientRect().top-box.getBoundingClientRect().top-12;
+          return {{positioned:!!article,noCandidates:!group}};}})())"#),deadline)?;
+        publish(output,&format!("knowledge-quality-comparison-{size}-{}.png",index+1),&snapshot(window,deadline)?,deadline)?;
+    }
+    collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-info').open=false;return {closed:true};})())".into(),deadline)?;
+    Ok(state)
+}
+
+fn audit_graph_scope(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, case: u8) -> Result<Value, String> {
+    let (source, next, youtube) = graph_scope_case(case)?;
+    eprintln!("Alden scope {case}: opening memory page");
+    graph_step(window, "memory-page", deadline)?;
+    eprintln!("Alden scope {case}: memory page ready");
+    wait_for_audit_state("graph scope options", deadline, || collect_script(window,
+        "JSON.stringify({ready:document.querySelector('#knowledge-project')?.querySelectorAll('option').length>2})".into(),deadline),
+        |state| state["ready"] == true)?;
+    eprintln!("Alden scope {case}: project options ready");
+    // Only this owned audit WKWebView, fixed observed scopes and read-only UI.
+    let source_json = serde_json::to_string(source).map_err(|_| "scope source JSON failed")?;
+    collect_script(window, format!(r#"JSON.stringify((()=>{{
+      const input=document.querySelector('#knowledge-project');
+      const value={source_json};if(![...input.options].some(o=>o.value===value))throw Error('registered scope missing');
+      input.value=value;input.dispatchEvent(new Event('change'));
+      return {{source:input.value}};
+    }})())"#),deadline)?;
+    eprintln!("Alden scope {case}: selected {source}");
+    if youtube {
+        wait_for_audit_state("graph platform options",deadline,|| collect_script(window,
+            "JSON.stringify({ready:[...document.querySelector('#knowledge-platform').options].some(o=>o.value==='youtube')})".into(),deadline),
+            |state|state["ready"]==true)?;
+        collect_script(window,"JSON.stringify((()=>{const input=document.querySelector('#knowledge-platform');input.value='youtube';input.dispatchEvent(new Event('change'));return {platform:input.value};})())".into(),deadline)?;
+    }
+    wait_for_audit_state("initial scoped graph", deadline, || collect_script(window,graph_collect_script(),deadline),
+        |state| state["graphPending"]!=true && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0
+            && (case!=10 || state["graphRead"]["collectionAvailable"]==true && state["graphRead"]["partial"]==false))?;
+    eprintln!("Alden scope {case}: scoped graph ready");
+    if case == 9 {
+        collect_script(window,r#"JSON.stringify((()=>{
+          const input=document.querySelector('#knowledge-search');
+          input.value='49년';input.dispatchEvent(new Event('input'));
+          return {search:input.value};})())"#.into(),deadline)?;
+        wait_for_audit_state("Korean scoped search",deadline,|| collect_script(window,graph_collect_script(),deadline),
+            |state|state["graphPending"]!=true && state["graphRead"]["query"]["search"]=="49년"
+                && state["navigation"]["nodeCount"].as_u64().unwrap_or(0)>0)?;
+    }
+    if next {
+        let state=graph_step(window,"expand",deadline)?;
+        if state["navigation"]["overviewOffset"].as_u64().unwrap_or(0)==0 {
+            return Err("fixed next-page scope did not advance".into());
+        }
+    }
+    let mut states=Vec::new();
+    let sizes: &[&str] = if case == 0 { &["default", "wide", "compact"] } else { &["default", "compact"] };
+    for &size in sizes {
+        let mut late_blur=Value::Null;
+        eprintln!("Alden scope {case}: waiting for {size} viewport");
+        if size!="default" {
+            eprintln!("Alden scope {case}: suspend before {size} resize");
+            // Suspend this owned WKWebView before changing AppKit geometry;
+            // resuming uses the existing visibility/reconnection lifecycle.
+            visibility(window,false,deadline)?;
+            eprintln!("Alden scope {case}: suspended");
+            let target=window.clone();let (tx,rx)=mpsc::sync_channel(1);
+            let dimensions = if size == "compact" { (640.0, 680.0) } else { (1600.0, 1000.0) };
+            window.run_on_main_thread(move || {
+                let result=live(deadline).and_then(|_| {
+                    let caught=objc2::exception::catch(std::panic::AssertUnwindSafe(|| {
+                    let native=target.ns_window().map_err(|_| "scope native window missing")?;
+                    live(deadline)?;
+                    unsafe {(&*native.cast::<NSWindow>()).setContentSize(NSSize::new(dimensions.0,dimensions.1));}
+                    Ok(())
+                    }));
+                    match caught {
+                        Ok(value)=>value,
+                        Err(exception)=>Err(format!("scope AppKit resize exception: {exception:?}")),
+                    }
+                });let _=tx.try_send(result);
+            }).map_err(|_| "scope resize dispatch failed")?;receive(rx,deadline)?;
+            eprintln!("Alden scope {case}: compact native geometry set");
+            visibility(window,true,deadline)?;
+            eprintln!("Alden scope {case}: resumed");
+            // Read readiness and dispatch in one JS task. Native/DOM visibility
+            // events can arrive between two independent WebView evaluations.
+            late_blur=wait_for_audit_state("scoped native resume and blur",deadline,|| collect_script(window,r#"JSON.stringify((()=>{
+                const before={...window.__knowledgeRenderDiagnostics?.lifecycle};
+                if(before.animationRequested!==true) return {synthetic:false,before,documentVisibility:document.visibilityState};
+                window.dispatchEvent(new Event('blur'));
+                return {synthetic:true,event:'blur',before,lifecycle:window.__knowledgeRenderDiagnostics?.lifecycle??null,
+                    documentVisibility:document.visibilityState};
+            })())"#.into(),deadline),|state|state["synthetic"]==true)?;
+            if !scoped_blur_preserved(&late_blur) {
+                return Err(format!("visible scoped graph stopped after synthetic late blur: {late_blur}"));
+            }
+        }
+        wait_for_audit_state("scoped graph paint",deadline,|| {
+            let native=native_settings_size(window,deadline)?;
+            let mut state=collect_script(window,r#"JSON.stringify((()=>{const d=window.__knowledgeRenderDiagnostics;
+              const pending=document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true';
+              const canvas=document.querySelector('#knowledge-graph-canvas'),r=canvas?.getBoundingClientRect();
+              const p=window.__knowledgeViewportAudit?.();
+              const resized=!!r&&!!p&&p.width===Math.max(1,Math.floor(r.width)-56)&&p.height===Math.max(1,Math.floor(r.height)-28);
+              return {ready:!pending&&d?.nodeCount>0&&resized&&d.motion?.camera===false,
+                width:innerWidth,height:innerHeight,resized,projectionViewport:p,canvasWidth:r?.width,canvasHeight:r?.height,
+                filterPending:pending,diagnosticsPresent:!!d,nodeCount:d?.nodeCount??0,
+                motion:d?.motion??null,running:d?.running??null,pendingFrame:d?.pendingFrame??null,
+                renderCount:d?.renderCount??null,motionReduced:d?.motionReduced??null,targets:d?.targets??null,
+                lifecycle:d?.lifecycle??null,pause:window.__knowledgeRenderPause??null,
+                documentFocused:document.hasFocus(),documentVisibility:document.visibilityState};
+            })())"#.into(),deadline)?;
+            let matched=state["width"].as_f64()==native["layoutWidth"].as_f64()
+                && state["height"].as_f64()==native["layoutHeight"].as_f64();
+            state["ready"]=json!(state["ready"]==true && matched);
+            state["nativeLayout"]=native;
+            Ok(state)
+        },|state| state["ready"]==true)?;
+        eprintln!("Alden scope {case}: {size} viewport ready");
+        collect_script(window,"JSON.stringify((()=>{window.__aldenScopePaintReady=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenScopePaintReady=true;}));return {armed:true};})())".into(),deadline)?;
+        wait_for_audit_state("scoped final paint",deadline,|| collect_script(window,
+            "JSON.stringify({ready:window.__aldenScopePaintReady===true})".into(),deadline),|state|state["ready"]==true)?;
+        eprintln!("Alden scope {case}: {size} final paint ready");
+        let physics=observe_graph_rest_with_budget(window,deadline,Duration::from_secs(30))?;
+        eprintln!("Alden scope {case}: {size} rest observation returned");
+        collect_script(window,"JSON.stringify((()=>{window.__aldenAuditPhysicsSnapshot=window.__knowledgePhysicsAudit();return {ready:true};})())".into(),deadline)?;
+        let mut integration=json!({});
+        for keys in [
+            "schema,nodeCount,edgeCount,nodeCap,synapseCap,moving,quietSteps,visualRestSpeed,visualRestForce,simulatedSeconds",
+            "coordinates,inverseMass,degree,components", "velocity", "anchors", "edgeA,edgeB", "edgeStrength", "restLength",
+        ] {
+            // One captured state, bounded pieces through the existing metric
+            // byte fence. No wider metric cap and no mixed-frame arrays.
+            let keys_json=serde_json::to_string(&keys.split(',').collect::<Vec<_>>()).map_err(|_|"integration keys failed")?;
+            let piece=collect_script(window,format!("JSON.stringify(Object.fromEntries({keys_json}.map(k=>[k,window.__aldenAuditPhysicsSnapshot[k]])))"),deadline)?;
+            integration.as_object_mut().ok_or("integration object missing")?
+                .extend(piece.as_object().ok_or("integration piece missing")?.clone());
+        }
+        collect_script(window,"delete window.__aldenAuditPhysicsSnapshot;JSON.stringify({cleared:true})".into(),deadline)?;
+        publish(output,&format!("graph-physics-{size}.json"),&serde_json::to_vec_pretty(&integration).map_err(|_|"integration JSON failed")?,deadline)?;
+        let geometry=collect_script(window,"JSON.stringify(window.__knowledgeLayoutAudit())".into(),deadline)?;
+        let projected_header=collect_script(window,r#"JSON.stringify((()=>{
+          const snapshot=window.__knowledgeLayoutAudit(true);
+          window.__aldenAuditCircles=snapshot.circles;
+          return {count:snapshot.circles.length,viewport:snapshot.viewport,camera:snapshot.camera,
+            lookAt:snapshot.lookAt,renderedFrames:snapshot.renderedFrames};})())"#.into(),deadline)?;
+        let projected_count=projected_header["count"].as_u64().ok_or("projected circles missing")? as usize;
+        if projected_count>2048 {return Err("projected circle capture budget exceeded".into());}
+        let mut circles=Vec::with_capacity(projected_count);
+        for start in (0..projected_count).step_by(64) {
+            let chunk=collect_script(window,format!("JSON.stringify(window.__aldenAuditCircles.slice({start},{}))",(start+64).min(projected_count)),deadline)?;
+            circles.extend(chunk.as_array().ok_or("projected circle chunk invalid")?.iter().cloned());
+        }
+        collect_script(window,"delete window.__aldenAuditCircles;JSON.stringify({cleared:true})".into(),deadline)?;
+        publish(output,&format!("graph-projected-{size}.json"),&serde_json::to_vec_pretty(&json!({
+            "header":projected_header,"circles":circles,"scope":"anonymous projected reference core circles only; no identities, bodies, glow or semantic proof"}))
+            .map_err(|_|"projected circle JSON failed")?,deadline)?;
+        let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
+        let navigation=collect_script(window,graph_collect_script(),deadline)?;
+        let query=&navigation["graphRead"]["query"];
+        if (source!="all" && query["projects"]!=json!([source.trim_start_matches("project:")]))
+            || youtube && query["platform"]!="youtube"
+            || case==9 && query["search"]!="49년"
+            || next && query["offset"].as_u64().unwrap_or(0)==0 {
+            return Err(format!("scoped graph read mismatched selected UI: {query}"));
+        }
+        let search_ids=if case==9 {
+            let observed=collect_script(window,r#"JSON.stringify(Array.from(
+              document.querySelectorAll('#knowledge-result-list button[data-graph-node]')).map(b=>b.dataset.graphNode))"#.into(),deadline)?;
+            let expected="graph:5b2647ee6e54888280228c04d308eca554bf910cc7b8ed6103229af967f1eff3";
+            if !observed.as_array().is_some_and(|ids|ids.iter().any(|id|id==expected)) {
+                return Err(format!("Korean expected source missing from graph list: {observed}"));
+            }
+            observed
+        } else {Value::Null};
+        let mut state=json!({"size":size,"case":case,"source":source,"nextPage":next,"youtubeFilter":youtube,"searchResultIds":search_ids,
+            "physics":physics,"geometry":geometry,"labels":labels,"navigation":navigation,"lateBlur":late_blur,
+            "scope":"owned read-only native scoped graph only; no physical input, pixel/GPU/FPS or semantic gold proof"});
+        state["terminal"] = collect_script(window,r#"JSON.stringify((()=>{
+          const dock=document.querySelector('#knowledge-terminal'),rect=dock?.getBoundingClientRect();
+          const map=document.querySelector('#knowledge-graph-canvas')?.getBoundingClientRect();
+          const visible=[...document.querySelectorAll('.knowledge-observations canvas')].filter(c=>c.getBoundingClientRect().width>0);
+          return {panels:document.querySelectorAll('.terminal-panel').length,
+            ingestRows:document.querySelectorAll('#terminal-ingest .terminal-row').length,
+            tailRows:document.querySelectorAll('#terminal-tail .terminal-row').length,
+            linkedRows:document.querySelectorAll('#terminal-linked .terminal-row').length,
+            dockWidth:rect?.width,dockHeight:rect?.height,dockScrollWidth:dock?.scrollWidth,
+            mainWidth:map?.width,mainHeight:map?.height,visibleProjections:visible.length,
+            follow:document.querySelector('#terminal-follow')?.getAttribute('aria-pressed'),
+            live:document.querySelector('#knowledge-live-toggle')?.getAttribute('aria-pressed'),
+            pageOverflow:document.documentElement.scrollWidth>innerWidth};})())"#.into(),deadline)?;
+        publish(output,&format!("graph-scope-{size}.png"),&snapshot(window,deadline)?,deadline)?;
+        if case==10 {state["qualityComparison"]=audit_quality_comparison(window,output,deadline,size)?;}
+        publish(output,&format!("graph-scope-{size}.json"),&serde_json::to_vec_pretty(&state).map_err(|_|"scope JSON failed")?,deadline)?;
+        eprintln!("Alden scope {case}: {size} files delivered");
+        if case==0 || case==3 {audit_graph_zoom(window,output,deadline,size)?;}
+        states.push(state);
+    }
+    Ok(json!({"case":case,"states":states,"scope":"fixed observed projects/filter/next-page, two owned window sizes, read-only"}))
+}
+
+// Fixed synthetic wheel input in this read-only owned WKWebView. This tests
+// actual OrbitControls and the product projection path, not physical gestures.
+fn audit_graph_zoom(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, size: &str) -> Result<(),String> {
+    let mut states=Vec::new();
+    for (name,ratio,expected) in [("distant",0.05_f64,0),("context",1.7,2),("detail",2.5,3),("returned",0.05,0)] {
+        collect_script(window,"JSON.stringify((()=>{document.querySelector('#knowledge-camera-reset').click();return {reset:true};})())".into(),deadline)?;
+        let reset = wait_for_audit_state("zoom reset",deadline,||collect_script(window,graph_collect_script(),deadline),
+            |s|s["motion"]["camera"]==false&&s["motion"]["labelZoomRatio"].as_f64().is_some_and(|r|(r-1.0).abs()<0.02))?;
+        if reset["labelGeometryObservation"]["visibleLabels"] != 0 {
+            return Err(format!("passive labels remained at fitted zoom: {reset}"));
+        }
+        let delta:f64=-ratio.ln()/(-0.95_f64.ln()*0.7*0.01);
+        collect_script(window,format!(r#"JSON.stringify((()=>{{const c=document.querySelector('#knowledge-graph-canvas'),r=c.getBoundingClientRect();c.dispatchEvent(new WheelEvent('wheel',{{deltaY:{delta},deltaMode:0,clientX:r.x+r.width/2,clientY:r.y+r.height/2,bubbles:true,cancelable:true}}));return {{syntheticWheel:true}};}})())"#),deadline)?;
+        let navigation=wait_for_audit_state("zoom labels paint",deadline,||collect_script(window,graph_collect_script(),deadline),
+            |s|s["motion"]["camera"]==false && s["motion"]["labelZoom"]==expected)?;
+        if expected == 0 {
+            let motion = &navigation["motion"];
+            let actual = motion["requestedCameraDistance"].as_f64().ok_or("camera distance missing")?;
+            let maximum = motion["cameraMaxDistance"].as_f64().ok_or("camera maximum missing")?;
+            if !actual.is_finite() || !maximum.is_finite() || (actual-maximum).abs() > 0.001 {
+                return Err("distant zoom did not reach the actual camera maximum".into());
+            }
+        }
+        let labels=collect_script(window,LABEL_GEOMETRY_COLLECT.into(),deadline)?;
+        if labels["overlapPairs"]!=0 || labels["clippedLabels"]!=0 || labels["visibleUnpositionedLabels"]!=0 || labels["truncated"]!=false || labels["hudOverlapPairs"]!=0 || labels["hudSampled"]!=1 {
+            return Err(format!("zoom label geometry failed: {labels}"));
+        }
+        if expected == 0 && (labels["totalLabels"] != 0 || labels["visibleLabels"] != 0)
+            || expected >= 2 && labels["visibleLabels"].as_u64().unwrap_or(0) == 0 {
+            return Err(format!("zoom reveal/clear contract failed at {name}: {labels}"));
+        }
+        let native = minimized_native_state(window, false, deadline)?;
+        if native["applicationActive"] != false || native["key"] != false
+            || native["alpha"] != 0.0 || native["level"] != 0 {
+            return Err(format!("zoom capture violated background constraints: {native}"));
+        }
+        // Keep the existing fixed PNG allowlist. The fourth transition records
+        // actual native/render state without replacing the first distant image.
+        if name != "returned" {
+            publish(output,&format!("graph-zoom-{size}-{name}.png"),&snapshot(window,deadline)?,deadline)?;
+        }
+        states.push(json!({"level":name,"requestedRatio":ratio,"navigation":navigation,"labels":labels,
+            "resetLabels":reset["labelGeometryObservation"],"nativeBackground":native}));
+    }
+    publish(output,&format!("graph-zoom-{size}.json"),&serde_json::to_vec_pretty(&json!({"states":states,
+        "scope":"owned native synthetic wheel input; actual product camera and labels; no physical gesture or FPS proof"})).map_err(|_|"zoom JSON failed")?,deadline)?;
+    Ok(())
+}
+
+fn scoped_blur_preserved(state: &Value) -> bool {
+    state["synthetic"] == true && state["event"] == "blur"
+        && ["before", "lifecycle"].iter().all(|key| {
+            state[key]["animationRequested"] == true
+                && state[key]["disposed"] == false && state[key]["emergencyPaused"] == false
+        })
+}
+
+fn native_background_ready(state: &Value) -> bool {
+    state["applicationActive"] == false && state["key"] == false
+        && state["alpha"] == 0.0 && state["level"] == 0
+}
+
+// Audit-only: minimize the actual owned AppKit window without
+// injecting visibility events or modifying the production renderer lifecycle.
+fn minimized_native_state(
+    window: &tauri::WebviewWindow,
+    minimize: bool,
+    deadline: Instant,
+) -> Result<Value, String> {
+    live(deadline)?;
+    let target = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window.run_on_main_thread(move || {
+        let result = live(deadline).and_then(|_| {
+            let mtm = MainThreadMarker::new().ok_or("native state not on main thread")?;
+            let pointer = target.ns_window().map_err(|_| "native window missing")?;
+            let native = unsafe { &*pointer.cast::<NSWindow>() };
+            if minimize { native.miniaturize(None); }
+            Ok(json!({"visible":native.isVisible(),"minimized":native.isMiniaturized(),
+                "key":native.isKeyWindow(),"alpha":native.alphaValue(),
+                "level":native.level(),"applicationActive":NSApplication::sharedApplication(mtm).isActive()}))
+        });
+        let _ = tx.try_send(result);
+    }).map_err(|_| "native state dispatch failed")?;
+    receive(rx, deadline)
+}
+
+fn audit_settings(
+    app: &tauri::AppHandle,
+    output: &Output,
+    deadline: Instant,
+    workspaces: bool,
+    graph_scope: Option<u8>,
+) -> Result<Value, String> {
+    use super::workspace_visibility::{WorkspaceCounters, WorkspaceNote};
+    let window = app
+        .get_webview_window("settings")
+        .ok_or("settings window missing")?;
+    // Graph QA stays transparent and noninteractive in this owned process.
+    let background_graph = graph_scope.is_some();
+    live(deadline)?;
+    let target = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window
+        .run_on_main_thread(move || {
+            let result = live(deadline).and_then(|_| {
+                let native = target
+                    .ns_window()
+                    .map_err(|_| "settings native window missing")?;
+                live(deadline)?;
+                unsafe {
+                    (&*native.cast::<NSWindow>()).setLevel(if background_graph {0} else {NSFloatingWindowLevel});
+                    if background_graph { (&*native.cast::<NSWindow>()).setAlphaValue(0.0); }
+                    // This audit uses fixed JS actions. Physical mouse input
+                    // must continue to the user's existing app, not rotate our
+                    // floating graph between the saved navigation snapshots.
+                    (&*native.cast::<NSWindow>()).setIgnoresMouseEvents(true);
+                }
+                Ok(())
+            });
+            let _ = tx.try_send(result);
+        })
+        .map_err(|_| "settings level dispatch failed")?;
+    receive(rx, deadline)?;
+    visibility(&window, true, deadline)?;
+    wait_for_audit_state("settings mount", deadline, || {
+        collect_script(
+            &window,
+            "JSON.stringify({mounted:!!document.querySelector('#settings-tab-memory')})".into(),
+            deadline,
+        )
+    }, |state| state["mounted"] == true)?;
+    if let Some(case) = graph_scope {
+        let target = window.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        window.run_on_main_thread(move || {
+            let result = live(deadline).and_then(|_| {
+                let mtm = MainThreadMarker::new().ok_or("audit deactivation not on main thread")?;
+                let app = NSApplication::sharedApplication(mtm);
+                let was_active = app.isActive();
+                app.deactivate();
+                Ok(json!({"wasActive":was_active,"afterDeactivateActive":app.isActive()}))
+            });
+            let _ = tx.try_send(result);
+            drop(target);
+        }).map_err(|_| "audit deactivation dispatch failed")?;
+        let deactivation = receive(rx, deadline)?;
+        // AppKit may complete deactivate() on a later event-loop turn. Observe
+        // the real state before starting QA; never re-activate another app or
+        // weaken the transparency/key-window constraints to get a passing run.
+        let background_deadline = deadline.min(Instant::now() + Duration::from_secs(2));
+        let before = wait_for_audit_state("native background deactivation", background_deadline, || {
+            let state = minimized_native_state(&window, false, background_deadline)?;
+            if state["key"] != false || state["alpha"] != 0.0 || state["level"] != 0 {
+                return Err(format!("audit window violated background constraints: {state}"));
+            }
+            Ok(state)
+        }, native_background_ready).map_err(|error| format!("{error}; deactivation={deactivation}"))?;
+        let mut result = audit_graph_scope(&window, output, deadline, case)?;
+        let immediate = minimized_native_state(&window, true, deadline)?;
+        let mut observations = Vec::new();
+        for _ in 0..8 {
+            live(deadline)?;
+            std::thread::sleep(Duration::from_millis(250));
+            let native = minimized_native_state(&window, false, deadline)?;
+            if !native_background_ready(&native)
+                || native["minimized"] != true || native["visible"] != false {
+                return Err("career zoom diagnostic did not remain minimized in background".into());
+            }
+            observations.push(native);
+        }
+        result["nativeBackgroundBefore"] = before;
+        result["nativeOwnedDeactivation"] = deactivation;
+        result["nativeMinimizeImmediate"] = immediate;
+        result["nativeMinimizedObservations"] = json!(observations);
+        return Ok(result);
+    }
+    graph_step(&window, "memory-page", deadline)?;
+    let initial = wait_for_audit_state("initial graph render", deadline,
+        || collect_script(&window, graph_collect_script(), deadline),
+        |state| rendered_since(state, 0) && state["graphPending"] != true)?;
+    if initial["accessibleNodes"].as_u64().unwrap_or(0) < 2
+        || initial["navigation"]["focused"] != false
+    {
+        return Err("persisted graph has insufficient nodes or invalid overview".into());
+    }
+    // A debug checkout can observe an external test importer in an isolated
+    // state root. The native audit itself remains strictly read-only.
+    if cfg!(debug_assertions) {
+        if let Ok(expected) = std::env::var("ALDEN_AUDIT_EXPECT_RUN") {
+            if expected.is_empty() || expected.len() > 128 {
+                return Err("activity test run ID is invalid".into());
+            }
+            publish(output, "activity-ready.json", b"{\"ready\":true}", deadline)?;
+            let waited_by = deadline.min(Instant::now() + Duration::from_secs(15));
+            loop {
+                let state = collect_script(&window, graph_collect_script(), waited_by)?;
+                if state["nodeActivity"]["last"]["run_id"] == expected
+                    && state["nodeActivity"]["last"]["success"] == true
+                    && state["nodeActivity"]["active"].as_u64().unwrap_or(0) > 0
+                    && state["graphPending"] != true
+                {
+                    break;
+                }
+                live(waited_by)?;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    graph_step(&window, "scroll", deadline)?;
+    publish(
+        output,
+        "alden-settings-default.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    // The native capture flushes layout/ResizeObserver work. Navigation must
+    // restore the pose actually shown at click time, not a pre-layout sample.
+    let initial = collect_script(&window, graph_collect_script(), deadline)?;
+    let overview_more = if initial["expandDisabled"] == false {
+        let more = graph_step(&window, "expand", deadline)?;
+        if more["navigation"]["focused"] != false
+            || more["navigation"]["overviewLimit"]
+                .as_u64()
+                .unwrap_or(u64::MAX)
+                > 2048
+            || more["navigation"]["overviewOffset"].as_u64().unwrap_or(0)
+                <= initial["navigation"]["overviewOffset"]
+                    .as_u64()
+                    .unwrap_or(0)
+            || more["navigation"]["nodeCount"].as_u64().unwrap_or(u64::MAX) > 2048
+        {
+            return Err("native overview expansion did not expose bounded extra contexts".into());
+        }
+        let restored = graph_step(&window, "back", deadline)?;
+        if !navigation_context_matches(&more["actionOrigin"], &initial["navigation"])
+            || restored["navigation"] != more["actionOrigin"] {
+            return Err(format!("native overview expansion did not restore prior context selection: before={}, restored={}",
+                more["actionOrigin"], restored["navigation"]));
+        }
+        more
+    } else {
+        Value::Null
+    };
+    let first = graph_step(&window, "first", deadline)?;
+    if window.state::<AuditPolicy>().focus_node.is_some()
+        && (first["notePane"]["focusState"] != "ready"
+            || first["notePane"]["bodyChars"].as_u64().unwrap_or(0) == 0)
+    {
+        return Err(format!(
+            "requested canonical note did not return its saved body: {}",
+            first["notePane"]
+        ));
+    }
+    if first["notePane"]["hidden"] != false
+        || first["notePane"]["width"].as_f64().unwrap_or(0.0) <= 0.0
+        || first["navigation"]["nodeCount"] != initial["navigation"]["nodeCount"]
+    {
+        return Err("native note reader lost its graph or did not open".into());
+    }
+    if first["navigation"]["focusedSourceVersion"].as_str().is_some()
+        && (first["nodeActivity"]["last"]["kind"] != "read"
+            || first["nodeActivity"]["last"]["document_id"] != first["notePane"]["nodeId"]
+            || first["nodeActivity"]["last"]["success"] != true)
+    {
+        output.write("source-read-observation.json",
+            &serde_json::to_vec_pretty(&first).map_err(|e|e.to_string())?)?;
+        return Err("native source detail did not emit its confirmed read receipt".into());
+    }
+    let first_settled = observe_focused_graph(&window, deadline,
+        first["navigation"]["focusId"].as_str().ok_or("focused note ID missing")?)?;
+    publish(
+        output,
+        "alden-note-default.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    let expanded = graph_step(&window, "expand", deadline)?;
+    let expanded_capture = observe_connections(&window, deadline)?;
+    publish(output, "alden-connections-default.png", &snapshot(&window, deadline)?, deadline)?;
+    let second = graph_step(&window, "second", deadline)?;
+    // A real isolated source has no second node to select. That action is a
+    // no-op and must not invent an extra history entry or an extra Back click.
+    let secondary_required = expanded["navigation"]["nodeCount"]
+        .as_u64()
+        .is_some_and(|count| count > 1);
+    let back_expanded = if secondary_required {
+        Some(graph_step(&window, "back", deadline)?)
+    } else {
+        None
+    };
+    let back_first = graph_step(&window, "back", deadline)?;
+    let back_overview = graph_step(&window, "back", deadline)?;
+    if first["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
+        || !navigation_context_matches(&first["actionOrigin"], &initial["navigation"])
+        || !navigation_context_matches(&expanded["actionOrigin"], &first["navigation"])
+        || !navigation_context_matches(&second["actionOrigin"], &expanded["navigation"])
+        || first["navigation"]["hops"] != 0
+        || expanded["navigation"]["hops"]
+            != if initial["navigation"]["source"] == "collection" {
+                1
+            } else {
+                2
+            }
+        || second["navigation"]["focusSlot"].as_i64().unwrap_or(-1) < 0
+        || (secondary_required && second["navigation"]["focusId"] == first["navigation"]["focusId"])
+        || (!secondary_required && second["navigation"] != expanded["navigation"])
+        || back_expanded
+            .as_ref()
+            .is_some_and(|state| state["navigation"] != second["actionOrigin"])
+        || back_first["navigation"] != expanded["actionOrigin"]
+        || back_overview["navigation"] != first["actionOrigin"]
+        || back_overview["backDisabled"] != true
+        || back_overview["clearedDetail"] != true
+    {
+        return Err(format!(
+            "native graph back navigation did not restore view and targets: {}",
+            json!({
+                "initial":initial["navigation"],"first":first["navigation"],"expanded":expanded["navigation"],
+                "clickOrigins":{"first":first["actionOrigin"],"expand":expanded["actionOrigin"],"second":second["actionOrigin"]},
+                "second":second["navigation"],"backExpanded":back_expanded.as_ref().map(|state| &state["navigation"]),
+                "backFirst":back_first["navigation"],"backOverview":back_overview["navigation"],
+                "backDisabled":back_overview["backDisabled"],"clearedDetail":back_overview["clearedDetail"]
+                ,"read":back_overview["graphRead"],"graphPending":back_overview["graphPending"]
+            })
+        ));
+    }
+    graph_step(&window, "first", deadline)?;
+    let reset = graph_step(&window, "overview", deadline)?;
+    let workspace_default = if workspaces {
+        capture_workspaces(&window, output, "default", deadline)?
+    } else {
+        Vec::new()
+    };
+    if reset["navigation"]["focused"] != false
+        || reset["clearedDetail"] != true
+        || reset["overviewDisabled"] != true
+    {
+        return Err("native graph overview did not clear selection".into());
+    }
+    live(deadline)?;
+    let resize_window = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window
+        .run_on_main_thread(move || {
+            let result = live(deadline).and_then(|_| {
+                let native = resize_window
+                    .ns_window()
+                    .map_err(|_| "settings native window missing")?;
+                // Tao set_size requeues through GCD even on main. Mutate this
+                // owned NSWindow synchronously inside the deadline gate.
+                live(deadline)?;
+                unsafe {
+                    (&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0, 680.0));
+                }
+                Ok(())
+            });
+            let _ = tx.try_send(result);
+        })
+        .map_err(|_| "settings resize dispatch failed")?;
+    receive(rx, deadline)?;
+    let first_layout = native_settings_size(&window, deadline)?;
+    publish(
+        output,
+        "settings-layout.json",
+        &serde_json::to_vec_pretty(&first_layout).map_err(|_| "settings size JSON failed")?,
+        deadline,
+    )?;
+    let native_compact = {
+        let settled_by = deadline.min(Instant::now() + Duration::from_secs(2));
+        loop {
+            let compact = collect_script(&window, graph_collect_script(), settled_by)?;
+            let native = native_settings_size(&window, settled_by)?;
+            if compact["width"].as_f64() == native["layoutWidth"].as_f64()
+                && compact["height"].as_f64() == native["layoutHeight"].as_f64()
+            {
+                live(settled_by)?;
+                break native;
+            }
+            if Instant::now() >= settled_by {
+                return Err(format!(
+                    "settings viewport did not settle: {compact}; native: {native}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    visibility(&window, true, deadline)?;
+    let compact = graph_step(&window, "scroll", deadline)?;
+    if native_compact["contentWidth"].as_f64() != Some(640.0)
+        || native_compact["contentHeight"].as_f64() != Some(680.0)
+        || compact["width"].as_f64() != native_compact["layoutWidth"].as_f64()
+        || compact["height"].as_f64() != native_compact["layoutHeight"].as_f64()
+        || compact["scrollWidth"].as_u64().unwrap_or(u64::MAX) > 640
+        || compact["canvas"]["contextLost"] != false
+    {
+        return Err(format!(
+            "compact native settings overflow or context loss: {compact}; native: {native_compact}"
+        ));
+    }
+    publish(
+        output,
+        "alden-settings-compact.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    let compact_note = graph_step(&window, "first", deadline)?;
+    if compact_note["notePane"]["hidden"] != false
+        || compact_note["scrollWidth"].as_u64().unwrap_or(u64::MAX) > 640
+    {
+        return Err("native compact note reader is hidden or overflows".into());
+    }
+    let compact_note_settled = observe_focused_graph(&window, deadline,
+        compact_note["navigation"]["focusId"].as_str().ok_or("compact focused note ID missing")?)?;
+    publish(
+        output,
+        "alden-note-compact.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    let compact_connections = graph_step(&window, "expand", deadline)?;
+    let compact_connections_capture = observe_connections(&window, deadline)?;
+    publish(output, "alden-connections-compact.png", &snapshot(&window, deadline)?, deadline)?;
+    graph_step(&window, "overview", deadline)?;
+    let workspace_compact = if workspaces {
+        capture_workspaces(&window, output, "compact", deadline)?
+    } else {
+        Vec::new()
+    };
+    publish(output, "workspace-readback.json", &serde_json::to_vec_pretty(&json!({
+        "schema":1,"scope":"owned read-only WKWebView with persisted application data; not the primary process, physical voice, lock or production",
+        "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
+        "navigation":{"initial":initial["navigation"],"expanded":expanded["navigation"],"backOverview":back_overview["navigation"]},
+        "navigationOrigins":{"beforeFirst":first["actionOrigin"],"beforeExpand":expanded["actionOrigin"],"beforeSecond":second["actionOrigin"],
+            "earlyFirst":first["navigation"],"earlyExpanded":expanded["navigation"],
+            "backFirst":back_first["navigation"],"backExpanded":back_expanded.as_ref().map(|state| &state["navigation"]),
+            "backOverview":back_overview["navigation"]},
+        "connectionsDefault":expanded_capture,"connectionsCompact":compact_connections_capture,
+        "compactConnectionsNavigation":compact_connections["navigation"]
+    })).map_err(|_| "workspace readback JSON failed")?,deadline)?;
+    let counters = app.state::<WorkspaceCounters>();
+    let mut hidden_samples = Vec::new();
+    let mut last_hidden_count = count(&compact);
+    visibility(&window, false, deadline)?;
+    for note in WorkspaceNote::ALL {
+        // orderOut's DOM event is asynchronous. Do not measure a resume from
+        // a baseline taken before the renderer acknowledged the previous hide.
+        let hide_by = Instant::now() + Duration::from_secs(2);
+        let hidden_baseline = loop {
+            let state = collect_script(&window, graph_collect_script(), deadline)?;
+            if state["pause"]["state"] == "hidden"
+                && state["loop"]["running"] == false
+                && state["loop"]["pendingFrame"] == false
+                && state["activityJournal"]["active"] != true
+            {
+                break state;
+            }
+            if Instant::now() >= hide_by {
+                return Err("native graph hide was not acknowledged before restore".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let show_baseline = count(&hidden_baseline);
+        visibility(&window, true, deadline)?;
+        let resume_deadline = Instant::now() + Duration::from_secs(2);
+        let mut visible_since = None;
+        let before = loop {
+            let sample = collect_script(&window, graph_collect_script(), deadline)?;
+            // A queued DOM hide can follow the first resumed frame. Observe a
+            // stable active consumer before measuring a new native hide note.
+            if resumed_graph(&sample, show_baseline) && window.is_visible().ok() == Some(true) {
+                let started = visible_since.get_or_insert_with(Instant::now);
+                if started.elapsed() >= Duration::from_millis(100) {
+                    break sample;
+                }
+            } else {
+                visible_since = None;
+            }
+            if Instant::now() >= resume_deadline {
+                break sample;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        if !resumed_graph(&before, show_baseline)
+            || visible_since.is_none_or(|at| at.elapsed() < Duration::from_millis(100))
+            || window.is_visible().ok() != Some(true)
+        {
+            return Err(format!(
+                "settings graph did not draw before notification: {before}"
+            ));
+        }
+        let previous = before["pause"]["eventAtMs"].as_f64().unwrap_or(-1.0);
+        let seen = counters.count(note);
+        let started = Instant::now();
+        let (tx, rx) = mpsc::sync_channel(1);
+        window
+            .run_on_main_thread(move || {
+                let result = live(deadline)
+                    .and_then(|_| super::workspace_visibility::post_process_local_audit_note(note));
+                let _ = tx.try_send(result);
+            })
+            .map_err(|_| "settings note dispatch failed")?;
+        receive(rx, deadline)?;
+        let stopped_by = Instant::now() + Duration::from_secs(2);
+        let stopped = loop {
+            let state = collect_script(&window, graph_collect_script(), deadline)?;
+            if counters.count(note) > seen
+                && fresh_pause(&state, previous)
+                && window.is_visible().ok() == Some(false)
+            {
+                break state;
+            }
+            if Instant::now() >= stopped_by {
+                return Err(format!("settings notification {} did not settle: observedCount={}, previousPause={}, nativeVisible={}, state={}",
+                    note.code(),counters.count(note)-seen,previous,window.is_visible().ok()==Some(true),state));
+            }
+            live(deadline)?;
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let latency = started.elapsed().as_secs_f64() * 1000.0;
+        std::thread::sleep(Duration::from_millis(350));
+        let hidden = collect_script(&window, graph_collect_script(), deadline)?;
+        if count(&hidden) != count(&stopped)
+            || hidden["pause"]["rendersAfterEvent"] != 0
+            || hidden["nodeActivity"]["active"] != 0
+            || hidden["activityJournal"]["active"] != false
+        {
+            return Err("settings graph rendered while hidden".into());
+        }
+        last_hidden_count = count(&hidden);
+        hidden_samples.push(json!({"signal":note.code(),"scope":"process-local synthetic notification; no physical sleep/session/lock test","postToStoppedObservationUpperBoundMs":latency,"hiddenRenderDelta":0,"sampleMs":350}));
+    }
+    visibility(&window, true, deadline)?;
+    std::thread::sleep(Duration::from_millis(250));
+    let reopened = collect_script(&window, graph_collect_script(), deadline)?;
+    if !rendered_since(&reopened, last_hidden_count) {
+        return Err("settings graph did not resume".into());
+    }
+    visibility(&window, false, deadline)?;
+    Ok(
+        json!({"initial":initial,"first":first,"expanded":expanded,"second":second,"backExpanded":back_expanded,
+        "backFirst":back_first,"backOverview":back_overview,"reset":reset,"compact":compact,"nativeCompact":native_compact,"workspaceSignals":hidden_samples,"reopened":reopened,
+        "workspaceDefault":workspace_default,"workspaceCompact":workspace_compact,
+        "overviewMore":overview_more,"compactNote":compact_note,
+        "firstSettled":first_settled,"compactNoteSettled":compact_note_settled,
+        "scope":"real persisted graph and renderer/navigation in owned floating audit window without key-window activation; runtime snapshot/GraphRAG focus lookup intentionally unavailable; captures private"}),
+    )
+}
+
+fn entity_wait(window: &tauri::WebviewWindow, script: &str, deadline: Instant) -> Result<Value, String> {
+    loop {
+        live(deadline)?;
+        let state = collect_script(window, script.into(), deadline)?;
+        if state["ready"] == true {
+            collect_script(window,r#"JSON.stringify((()=>{window.__entityAuditPaint=false;
+              requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__entityAuditPaint=true;}));
+              return {armed:true};})())"#.into(),deadline)?;
+            loop {
+                live(deadline)?;
+                let paint=collect_script(window,"JSON.stringify({ready:window.__entityAuditPaint===true})".into(),deadline)?;
+                if paint["ready"]==true {return Ok(state);}
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+const ENTITY_RENDER_STATE: &str = r#"JSON.stringify((()=>{
+  const d=window.__knowledgeRenderDiagnostics;
+  const c=document.querySelector('#knowledge-graph-canvas'),r=c?.getBoundingClientRect();
+  return {page:document.querySelector('.settings-shell')?.dataset.settingsPage??null,
+    project:document.querySelector('#knowledge-project')?.value??null,
+    source:d?.source??null,graphNodes:d?.graphRead?.nodes??null,
+    navigationPending:d?.graphRead?.navigationPending??null,
+    graphPending:document.querySelector('#knowledge-filter-form')?.getAttribute('aria-busy')==='true'
+      ||document.querySelector('#knowledge-summary')?.textContent==='불러오는 중',
+    viewNodes:d?.nodeCount??null,renderedFrames:d?.renderedFrames??null,
+    renderedNodeCount:d?.renderedNodeCount??null,
+    renderedVisibleNodeCount:d?.renderedVisibleNodeCount??null,
+    motion:{camera:d?.motion?.camera??null,physics:d?.motion?.physics??null,
+      transition:d?.motion?.transition??null},
+    pendingTargets:d?.semanticLayout?.pendingTargets??null,
+    canvasReady:!!c&&!c.hidden&&r?.width>0&&r?.height>0
+      &&getComputedStyle(c).visibility!=='hidden'&&c.getContext('webgl2')?.isContextLost()===false,
+    width:innerWidth,scrollWidth:document.documentElement.scrollWidth};
+})())"#;
+
+fn entity_render_baseline(window: &tauri::WebviewWindow, deadline: Instant) -> Result<u64, String> {
+    let state = collect_script(window, ENTITY_RENDER_STATE.into(), deadline)?;
+    state["renderedFrames"].as_u64().ok_or_else(||
+        format!("entity renderer frame baseline unavailable: {state}"))
+}
+
+fn entity_render_settled(state: &Value, expected: u64, baseline: u64) -> bool {
+    state["page"] == "memory"
+        && state["project"] == "project:audit"
+        && state["source"] == "collection"
+        && state["graphPending"] == false
+        && state["navigationPending"] == false
+        && state["graphNodes"].as_u64() == Some(expected)
+        && state["viewNodes"].as_u64() == Some(expected)
+        && state["renderedNodeCount"].as_u64() == Some(expected)
+        && state["renderedVisibleNodeCount"].as_u64() == Some(expected)
+        && state["renderedFrames"].as_u64().is_some_and(|frames| frames > baseline)
+        && state["motion"]["camera"] == false
+        && state["motion"]["physics"] == false
+        && state["motion"]["transition"] == false
+        && state["pendingTargets"] == 0
+        && state["canvasReady"] == true
+}
+
+fn entity_render_wait(window: &tauri::WebviewWindow, stage: &str, expected: u64,
+    baseline: u64, deadline: Instant) -> Result<Value, String> {
+    let mut last = Value::Null;
+    loop {
+        live(deadline).map_err(|error|
+            format!("entity {stage} render settling failed: {error}; expectedNodes={expected}, baselineFrames={baseline}, last={last}"))?;
+        let state = collect_script(window, ENTITY_RENDER_STATE.into(), deadline)
+            .map_err(|error| format!("entity {stage} render observation failed: {error}; last={last}"))?;
+        if entity_render_settled(&state, expected, baseline) {
+            // Keep the existing real two-rAF paint gate, then check the stage
+            // again so a transition during those frames cannot be captured.
+            entity_wait(window, "JSON.stringify({ready:true})", deadline)
+                .map_err(|error| format!("entity {stage} paint failed: {error}; state={state}"))?;
+            let after = collect_script(window, ENTITY_RENDER_STATE.into(), deadline)
+                .map_err(|error| format!("entity {stage} post-paint observation failed: {error}; state={state}"))?;
+            if entity_render_settled(&after, expected, baseline) { return Ok(after); }
+            last = after;
+        } else {
+            last = state;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn audit_entity(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<Value, String> {
+    if app.get_webview_window("settings").is_some() { return Err("entity audit refuses an existing shared webview".into()); }
+    let window = tauri::WebviewWindowBuilder::new(app, "settings",
+        tauri::WebviewUrl::App("index.html?view=settings".into()))
+        .incognito(true).title("Alden · owned entity review audit")
+        .inner_size(1200.0, 800.0).visible(true).build().map_err(|e| e.to_string())?;
+    entity_wait(&window, r#"JSON.stringify({ready:document.getElementById('app')?.dataset.state==='ready'
+        && !!document.querySelector('#settings-tab-history')})"#, deadline)?;
+    let mut states = Vec::new();
+    for size in ["default", "compact"] {
+        if size == "compact" {
+            let target = window.clone(); let (tx, rx) = mpsc::sync_channel(1);
+            window.run_on_main_thread(move || {
+                let result = (|| { let native=target.ns_window().map_err(|_| "entity audit native window missing")?;
+                    unsafe { (&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0,680.0)); }
+                    Ok::<(),String>(()) })();
+                let _ = tx.try_send(result);
+            }).map_err(|_| "entity resize dispatch failed")?;
+            receive(rx,deadline)?;
+        }
+        collect_script(&window,r#"JSON.stringify((()=>{
+          document.querySelector('#settings-tab-history').click();
+          const s=document.querySelector('.entity-resolution');s.open=true;s.dispatchEvent(new Event('toggle'));
+          return {opened:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:!!s&&[...s.querySelector('select').options].some(o=>o.value==='audit')};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution'),p=s.querySelector('select');
+          p.value='audit';p.dispatchEvent(new Event('change'));return {selected:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution'),
+          b=[...s.querySelectorAll('button')].find(b=>b.textContent==='자료 찾기');
+          return {ready:!!b&&!b.disabled};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          [...s.querySelectorAll('button')].find(b=>b.textContent==='자료 찾기').click();return {requested:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify({ready:document.querySelectorAll('.entity-resolution-list input').length===3})"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          for(const label of s.querySelectorAll('.entity-resolution-list label')){
+            if(['a','b'].includes(label.childNodes[1]?.textContent)){const b=label.querySelector('input');b.click();}}
+          const t=s.querySelector('textarea');t.value='Reviewed two owned synthetic copies';t.dispatchEvent(new Event('input'));
+          [...s.querySelectorAll('button')].find(b=>b.textContent==='선택한 자료 비교').click();return {compared:true};})())"#.into(),deadline)?;
+        let compared = entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:s.querySelectorAll('.entity-resolution-comparison pre').length===2
+            &&!s.querySelector('.entity-resolution-approval input').disabled,
+            records:s.querySelectorAll('.entity-resolution-comparison pre').length,
+            width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('.entity-resolution')
+          .scrollIntoView({block:'start'});return {scrolled:true};})())"#.into(),deadline)?;
+        publish(output,&format!("entity-compare-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
+        let apply_baseline = entity_render_baseline(&window, deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          s.querySelector('.entity-resolution-approval input').click();
+          [...s.querySelectorAll('button')].find(b=>b.textContent==='같은 지식으로 묶기').click();
+          return {applied:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='이 결정 되돌리기')};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();
+          const p=document.querySelector('#knowledge-project');p.value='project:audit';p.dispatchEvent(new Event('change'));
+          return {graph:true};})())"#.into(),deadline)?;
+        let applied = entity_render_wait(&window, &format!("applied/{size}"), 2, apply_baseline, deadline)?;
+        publish(output,&format!("entity-applied-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-history').click();
+          const s=document.querySelector('.entity-resolution');s.open=true;
+          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='이 결정 되돌리기').click();
+          return {revertReview:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:[...s.querySelectorAll('.entity-resolution-history button')].some(b=>b.textContent==='되돌리기 확정')};})())"#,deadline)?;
+        let revert_baseline = entity_render_baseline(&window, deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          [...s.querySelectorAll('.entity-resolution-history button')].find(b=>b.textContent==='되돌리기 확정').click();
+          return {reverted:true};})())"#.into(),deadline)?;
+        entity_wait(&window,r#"JSON.stringify((()=>{const s=document.querySelector('.entity-resolution');
+          return {ready:!s.querySelector('select').disabled&&!s.querySelectorAll('.entity-resolution-history button').length};})())"#,deadline)?;
+        collect_script(&window,r#"JSON.stringify((()=>{document.querySelector('#settings-tab-memory').click();return {graph:true};})())"#.into(),deadline)?;
+        let reverted = entity_render_wait(&window, &format!("reverted/{size}"), 3, revert_baseline, deadline)?;
+        publish(output,&format!("entity-reverted-{size}.png"),&snapshot(&window,deadline)?,deadline)?;
+        if [compared.clone(),applied.clone(),reverted.clone()].iter().any(|s|s["width"]!=s["scrollWidth"]) {
+            return Err("entity workflow horizontal overflow".into());
+        }
+        states.push(json!({"size":size,"compared":compared,"applied":applied,"reverted":reverted}));
+    }
+    let preservation=app.state::<super::PythonBridge>().verify_entity_audit().map_err(|e|e.to_string())?;
+    if preservation["ok"]!=true || preservation["active_groups"]!=0 || preservation["resolution_events"]!=4 {
+        return Err("entity workflow source/revert verification failed".into());
+    }
+    Ok(json!({"states":states,"preservation":preservation,"incognito":true,
+        "scope":"native controls with real CLI/SQLite over owned synthetic sources; human entity truth and production mutation unverified"}))
+}
+
+fn workspace_notification_audit(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    deadline: Instant,
+) -> Result<Vec<Value>, String> {
+    use super::workspace_visibility::{WorkspaceCounters, WorkspaceNote};
+    let settings = app
+        .get_webview_window("settings")
+        .ok_or("settings native window missing")?;
+    let counters = app
+        .try_state::<WorkspaceCounters>()
+        .ok_or("workspace observers not installed")?;
+    let mut results = Vec::new();
+    visibility(window, false, deadline)?;
+    for note in WorkspaceNote::ALL {
+        let show_baseline = count(&collect(window, deadline)?);
+        visibility(window, true, deadline)?;
+        visibility(&settings, true, deadline)?;
+        std::thread::sleep(Duration::from_millis(250));
+        if window.is_visible().ok() != Some(true) || settings.is_visible().ok() != Some(true) {
+            return Err("workspace audit windows not visible before injection".into());
+        }
+        let prior = collect(window, deadline)?;
+        if !rendered_since(&prior, show_baseline) {
+            return Err("workspace audit renderer did not draw before injection".into());
+        }
+        let previous = prior["pause"]["eventAtMs"].as_f64().unwrap_or(-1.0);
+        let seen = counters.count(note);
+        live(deadline)?;
+        let (tx, rx) = mpsc::sync_channel(1);
+        let started = Instant::now();
+        window
+            .run_on_main_thread(move || {
+                let result = live(deadline)
+                    .and_then(|_| super::workspace_visibility::post_process_local_audit_note(note));
+                let _ = tx.try_send(result);
+            })
+            .map_err(|_| "workspace audit dispatch failed")?;
+        receive(rx, deadline)?;
+        let stopped = loop {
+            let state = collect(window, deadline)?;
+            if counters.count(note) > seen
+                && fresh_pause(&state, previous)
+                && window.is_visible().ok() == Some(false)
+                && settings.is_visible().ok() == Some(false)
+            {
+                break state;
+            }
+            live(deadline)?;
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stop_observed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        std::thread::sleep(Duration::from_millis(350));
+        let hidden = collect(window, deadline)?;
+        if count(&hidden) != count(&stopped) || hidden["pause"]["rendersAfterEvent"] != 0 {
+            return Err("workspace notification left rendering active".into());
+        }
+        results.push(json!({"signal":note.code(),"scope":"process-local synthetic NSWorkspace notification; not physical sleep, switch or lock",
+            "notificationCountDelta":counters.count(note)-seen,"bothNativeWindowsHidden":true,
+            "postToStoppedObservationUpperBoundMs":stop_observed_ms,"hiddenSampleMs":350,
+            "hiddenRenderDelta":count(&hidden)-count(&stopped),"pause":hidden["pause"],
+            "settingsRenderScope":"native visibility only; backend-free settings renderer unexercised"}));
+    }
+    let hidden_count = count(&collect(window, deadline)?);
+    visibility(window, true, deadline)?;
+    std::thread::sleep(Duration::from_millis(250));
+    let resumed = collect(window, deadline)?;
+    if !rendered_since(&resumed, hidden_count) {
+        return Err("renderer failed to reopen after workspace signals".into());
+    }
+    Ok(results)
+}
+
+fn audit(app: &tauri::AppHandle, output: &Output, deadline: Instant) -> Result<Value, String> {
+    let window = app
+        .get_webview_window("alden")
+        .ok_or("Alden webview missing")?;
+    let initial_scale = window
+        .scale_factor()
+        .map_err(|_| "native scale unavailable")?;
+    visibility(&window, true, deadline)?;
+    let mut before = collect(&window, deadline)?;
+    while !rendered_since(&before, 0) {
+        if Instant::now() >= deadline {
+            return Err("renderer readiness deadline exceeded".into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        before = collect(&window, deadline)?;
+    }
+    validate_layout(&before)?;
+    if !density_matches(&before) {
+        return Err("initial backing density invalid".into());
+    }
+    publish(
+        output,
+        "alden-core-before.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    let mut cycles = Vec::new();
+    for index in 0..10 {
+        let prior = collect(&window, deadline)?;
+        let previous = prior["pause"]["eventAtMs"].as_f64().unwrap_or(-1.0);
+        let hide_started = Instant::now();
+        visibility(&window, false, deadline)?;
+        let hide_return_ms = hide_started.elapsed().as_secs_f64() * 1000.0;
+        let stopped = loop {
+            let state = collect(&window, deadline)?;
+            if fresh_pause(&state, previous) {
+                break state;
+            }
+            if Instant::now() >= deadline {
+                return Err("render stop deadline exceeded".into());
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        let stop_observed_ms = hide_started.elapsed().as_secs_f64() * 1000.0;
+        std::thread::sleep(Duration::from_millis(350));
+        let hidden = collect(&window, deadline)?;
+        if count(&hidden) != count(&stopped) || hidden["pause"]["rendersAfterEvent"] != 0 {
+            return Err("hidden renderer continued producing frames".into());
+        }
+        visibility(&window, true, deadline)?;
+        std::thread::sleep(Duration::from_millis(250));
+        let restored = collect(&window, deadline)?;
+        if !rendered_since(&restored, count(&hidden)) {
+            return Err("renderer did not resume".into());
+        }
+        cycles.push(
+            json!({"index":index, "hideRequestToNativeReturnMs":hide_return_ms,
+            "hideRequestToStoppedObservationUpperBoundMs":stop_observed_ms,
+            "hiddenSampleMs":350, "hiddenRenderDelta":count(&hidden)-count(&stopped),
+            "pause":hidden["pause"], "resumeRenderDelta":count(&restored)-count(&hidden)}),
+        );
+    }
+    let restored = collect(&window, deadline)?;
+    validate_layout(&restored)?;
+    publish(
+        output,
+        "alden-core-restored.png",
+        &snapshot(&window, deadline)?,
+        deadline,
+    )?;
+    let monitors = window
+        .available_monitors()
+        .map_err(|_| "native monitor readback failed")?;
+    let mut retina = json!({"available":false});
+    if let Some(monitor) = monitors
+        .iter()
+        .find(|monitor| monitor.scale_factor() >= 2.0)
+    {
+        let area = monitor.work_area();
+        live(deadline)?;
+        let position = tauri::PhysicalPosition::new(area.position.x + 100, area.position.y + 100);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let target = window.clone();
+        window
+            .run_on_main_thread(move || {
+                let result = live(deadline).and_then(|_| {
+                    target
+                        .set_position(position)
+                        .map_err(|_| "owned window monitor move failed".into())
+                });
+                let _ = tx.try_send(result);
+            })
+            .map_err(|_| "monitor move dispatch failed")?;
+        receive(rx, deadline)?;
+        let settle_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+        let metrics = loop {
+            let state = collect(&window, settle_deadline)?;
+            if state["dpr"].as_f64() == Some(monitor.scale_factor()) {
+                break state;
+            }
+            if Instant::now() >= settle_deadline {
+                return Err("native Retina scale did not reach webview".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        std::thread::sleep(Duration::from_millis(250));
+        let observed = collect(&window, deadline)?;
+        validate_layout(&observed)?;
+        if count(&observed) <= count(&metrics) {
+            return Err("Retina renderer did not advance after movement".into());
+        }
+        publish(
+            output,
+            "alden-core-retina.png",
+            &snapshot(&window, deadline)?,
+            deadline,
+        )?;
+        retina = json!({"available":true,"nativeScaleFactor":window.scale_factor().map_err(|_| "native scale unavailable")?,
+            "transition":metrics,"observed":observed,"densityMatches":density_matches(&observed)});
+    }
+    let workspace_signals = workspace_notification_audit(app, &window, deadline)?;
+    visibility(&window, false, deadline)?;
+    Ok(json!({"before":before,"restored":restored,"cycles":cycles,
+        "nativeScaleFactor":initial_scale,"retina":retina,
+        "workspaceSignals":workspace_signals,
+        "monitorScaleFactors":monitors.iter().map(|monitor|monitor.scale_factor()).collect::<Vec<_>>()}))
+}
+
+fn audit_settings_page(label: &str, url: &tauri::Url) -> bool {
+    label == "settings" && url.port().is_none() && url.path() == "/index.html"
+        && url.query() == Some("view=settings")
+        && ((url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+            || (matches!(url.scheme(), "http"|"https") && url.host_str() == Some("tauri.localhost")))
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AssistantAuditMode { Images, InvalidImages, Documents, Links }
+
+fn audit_assistant(app: &tauri::AppHandle, output: &Output, deadline: Instant, mode: AssistantAuditMode, loaded: &AtomicBool, asset: &AtomicBool, phase: &AtomicU8) -> Result<Value,String> {
+    let window = app.get_webview_window("settings").ok_or("settings window missing")?;
+    visibility(&window,true,deadline)?;
+    let mount_deadline = deadline.min(Instant::now() + Duration::from_secs(30));
+    // Do not evaluate JavaScript in WKWebView's initial about:blank while the
+    // owned asset navigation is starting. Its callback can be lost on navigation.
+    while !loaded.load(Ordering::Acquire) || !asset.load(Ordering::Acquire) {
+        if Instant::now() >= mount_deadline {return Err(format!("assistant asset modules and composer did not finish loading: phase {}, asset {}",phase.load(Ordering::Acquire),asset.load(Ordering::Acquire)));}
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Reannounce the verified native visibility after the frontend installed
+    // its lifecycle listeners and completed the initial status handshake.
+    visibility(&window,true,deadline)?;
+    let target = window.clone();
+    let (tx, rx) = mpsc::sync_channel(1);
+    window.run_on_main_thread(move || {
+        let result = live(deadline).and_then(|_| {
+            // This explicit input audit uses the production show/focus path on
+            // only its own window. Never fake document visibility to admit input.
+            super::set_window_visible(&target, true);
+            target.set_focus().map_err(|_| "owned assistant window focus failed".into())
+        });
+        let _ = tx.try_send(result);
+    }).map_err(|_| "assistant focus dispatch failed")?;
+    receive(rx,deadline)?;
+    let mut first_probe = true;
+    loop {
+        let s=collect_script(&window,r#"JSON.stringify({mounted:!!document.querySelector('#assistant-composer-text'),
+            documentState:document.readyState,appState:document.querySelector('#app')?.dataset.state,
+            voiceStart:!!document.querySelector('#voice-start'),reader:!!document.querySelector('#settings-page-voice .history-reader'),
+            scriptCount:document.scripts.length})"#.into(),mount_deadline)
+            .map_err(|error|format!("assistant mount check: {error}"))?;
+        if first_probe { eprintln!("Alden assistant bootstrap: {s}"); first_probe = false; }
+        if s["mounted"]==true { break; }
+        if Instant::now() >= mount_deadline {return Err(format!("assistant composer did not mount: {s}"));}
+        live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+    }
+    collect_script(&window,"JSON.stringify((()=>{document.querySelector('#settings-tab-voice').click();return {selected:true};})())".into(),deadline)?;
+    let activation_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+    let selected = loop {
+        let selected = collect_script(&window,r#"JSON.stringify({page:document.querySelector('.settings-shell')?.dataset.settingsPage,
+            hidden:document.querySelector('#assistant-composer').hidden,disabled:document.querySelector('#assistant-composer-images').disabled,
+            documentVisible:document.visibilityState})"#.into(),activation_deadline)?;
+        if selected["page"] == "voice" && selected["hidden"] == false && selected["disabled"] == false {break selected;}
+        if Instant::now() >= activation_deadline {return Err(format!("assistant composer is not active: {selected}"));}
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    eprintln!("Alden assistant selection: {selected}");
+    if selected["page"] != "voice" || selected["hidden"] != false || selected["disabled"] != false {
+        return Err(format!("assistant composer is not active: {selected}"));
+    }
+    if matches!(mode, AssistantAuditMode::Documents | AssistantAuditMode::Links) {
+        return audit_documents(&window, output, deadline, mode == AssistantAuditMode::Links);
+    }
+    if mode == AssistantAuditMode::InvalidImages {
+        let mut receipts = Vec::new();
+        for index in 0..12 {
+            collect_script(&window,format!(r#"JSON.stringify((()=>{{
+                const transfer=new DataTransfer();transfer.items.add(new File([new Uint8Array([1,2,3])],'audit-invalid.png',{{type:'image/png'}}));
+                const picker=document.querySelector('#assistant-composer-images');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
+                const text=document.querySelector('#assistant-composer-text');text.value='검수 '+{index};text.dispatchEvent(new Event('input'));
+                return {{prepared:true}};}})())"#),deadline)?;
+            loop {
+                let s=collect_script(&window,"JSON.stringify({ready:document.querySelector('#assistant-composer-status').textContent.includes('1개 이미지를 첨부')})".into(),deadline)?;
+                if s["ready"]==true {break;} live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+            }
+            collect_script(&window,"JSON.stringify((()=>{document.querySelector('#assistant-composer').requestSubmit();return {submitted:true};})())".into(),deadline)?;
+            let s=loop {
+                let s=collect_script(&window,r#"JSON.stringify({status:document.querySelector('#assistant-composer-status').textContent,
+                    busy:document.querySelector('#assistant-composer').getAttribute('aria-busy')})"#.into(),deadline)?;
+                if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("오류 코드:")||t.contains("못했")||t.contains("취소")) {break s;}
+                live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+            };
+            if !s["status"].as_str().is_some_and(|t|t.contains("오류 코드: assistant_image_invalid")) {
+                return Err(format!("assistant invalid-input admission failed at {index}: {s}"));
+            }
+            receipts.push(s);
+        }
+        visibility(&window,false,deadline)?;
+        return Ok(json!({"receipts":receipts,"scope":"twelve invalid-image WKWebView requests; decoder rejects before model admission; no inference, microphone, TTS or sends"}));
+    }
+    collect_script(&window,r#"JSON.stringify((()=>{
+        const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;
+        const ctx=canvas.getContext('2d');ctx.fillStyle='#ff0000';ctx.fillRect(0,0,128,128);
+        ctx.fillStyle='#ffffff';ctx.beginPath();ctx.arc(64,64,12,0,Math.PI*2);ctx.fill();
+        const data=atob(canvas.toDataURL('image/png').split(',')[1]);const bytes=Uint8Array.from(data,c=>c.charCodeAt(0));
+        const transfer=new DataTransfer();transfer.items.add(new File([bytes],'audit-public.png',{type:'image/png'}));
+        const picker=document.querySelector('#assistant-composer-images');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
+        return {started:true};})())"#.into(),deadline)?;
+    loop {
+        let s=collect_script(&window,"JSON.stringify({ready:document.querySelector('#assistant-composer-status').textContent.includes('1개 이미지를 첨부')})".into(),deadline)?;
+        if s["ready"]==true {break;} live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut receipts=Vec::new();
+    for (index,text) in [(1,"검수 번호는 42입니다. 이 사진의 배경 색상 이름만 한국어로 답해주세요."),
+        (2,"내가 말한 검수 번호는 무엇인가요? 숫자만 답해주세요."),
+        (3,"앞서 첨부한 사진의 작은 도형과 이번 사진의 작은 도형을 그 순서대로 색과 모양만 말해주세요. 답변 형식: 색 모양, 색 모양")] {
+        if index==3 {
+            collect_script(&window,r#"JSON.stringify((()=>{
+                const canvas=document.createElement('canvas');canvas.width=128;canvas.height=128;
+                const ctx=canvas.getContext('2d');ctx.fillStyle='#0000ff';ctx.fillRect(0,0,128,128);
+                ctx.fillStyle='#ffff00';ctx.fillRect(52,52,24,24);
+                const data=atob(canvas.toDataURL('image/png').split(',')[1]);
+                const transfer=new DataTransfer();transfer.items.add(new File([Uint8Array.from(data,c=>c.charCodeAt(0))],'audit-blue.png',{type:'image/png'}));
+                const picker=document.querySelector('#assistant-composer-images');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
+                return {prepared:true};})())"#.into(),deadline)?;
+            loop {
+                let s=collect_script(&window,"JSON.stringify({ready:document.querySelector('#assistant-composer-status').textContent.includes('1개 이미지를 첨부')})".into(),deadline)?;
+                if s["ready"]==true {break;}live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        let text=serde_json::to_string(text).map_err(|_| "audit text encoding")?;
+        collect_script(&window,format!(r#"JSON.stringify((()=>{{
+            const text=document.querySelector('#assistant-composer-text');text.value={text};text.dispatchEvent(new Event('input'));
+            document.querySelector('#assistant-composer').requestSubmit();return {{submitted:true}};}})())"#),deadline)?;
+        let mut s=loop {
+            let s=collect_script(&window,r#"JSON.stringify((()=>{
+                const status=document.querySelector('#assistant-composer-status').textContent;
+                const replies=[...document.querySelectorAll('#voice-message-list .message-row[data-self="false"] .message-text')].map(x=>x.textContent);
+                return {status,reply:replies.at(-1)??'',replies:replies.length,conversationId:document.querySelector('#voice-start').dataset.conversationId,
+                    busy:document.querySelector('#assistant-composer').getAttribute('aria-busy'),width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
+            if s["status"]=="답변이 저장되었습니다." && s["replies"].as_u64()==Some(index) {break s;}
+            if s["busy"]=="false" && s["status"].as_str().is_some_and(|t|t.contains("못했")||t.contains("취소")||t.contains("오류 코드:")) {
+                return Err(format!("assistant input did not complete: {s}"));
+            }
+            live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+        };
+        let reply=s["reply"].as_str().ok_or("missing assistant reply")?;
+        let answer = reply.trim().trim_matches(['*','`']).trim().to_lowercase();
+        if index==1 && !["빨간색","빨강","빨강색","붉은색","red"].contains(&answer.as_str()) { return Err("configured model did not identify the red fixture".into()); }
+        if index==2 && answer!="42" {return Err("followup did not retain confirmed input".into());}
+        if index==3 {
+            let parts:Vec<_>=answer.split(',').map(str::trim).collect();
+            if parts.len()!=2 || !["흰색 원","하얀색 원","흰색 동그라미","하얀색 동그라미"].contains(&parts[0])
+                || !["노란색 사각형","노란 사각형","노란색 정사각형","노란 정사각형"].contains(&parts[1]) {
+                return Err("configured model did not compare the two controlled image shapes".into());
+            }
+        }
+        if s["width"]!=s["scrollWidth"] {return Err("assistant viewport horizontal overflow".into());}
+        collect_script(&window,"JSON.stringify((()=>{window.__aldenAuditAssistantPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenAuditAssistantPaint=true;}));return {armed:true};})())".into(),deadline)?;
+        let paint=loop {
+            let p=collect_script(&window,r#"JSON.stringify((()=>{
+                const host=document.querySelector('#voice-message-list'),h=host.getBoundingClientRect();
+                const last=[...host.querySelectorAll('.message-row[data-self="false"]')].at(-1)?.getBoundingClientRect();
+                return {ready:window.__aldenAuditAssistantPaint===true,scrollTop:host.scrollTop,scrollHeight:host.scrollHeight,
+                    viewportHeight:host.clientHeight,latestTop:last?.top,latestBottom:last?.bottom,
+                    latestVisible:!!last&&last.top>=h.top-1&&last.bottom<=h.bottom+1};})())"#.into(),deadline)?;
+            if p["ready"]==true {break p;}live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+        };
+        if paint["latestVisible"]!=true {return Err(format!("latest assistant answer is outside the transcript viewport: {paint}"));}
+        s["paintObservation"]=paint;
+        publish(output,&format!("assistant-turn-{index}.png"),&snapshot(&window,deadline)?,deadline)?;
+        receipts.push(s);
+    }
+    if receipts.iter().any(|r|r["conversationId"]!=receipts[0]["conversationId"]) {return Err("assistant conversation changed on followup".into());}
+    visibility(&window,false,deadline)?;
+    Ok(json!({"turns":receipts,"scope":"three explicit programmatic WKWebView inputs, controlled red/white-circle and blue/yellow-square PNGs with text and visual followups; isolated history and copied saved model selection; no microphone/TTS/send, original source-store or physical input proof"}))
+}
+
+fn audit_documents(window: &tauri::WebviewWindow, output: &Output, deadline: Instant, links: bool) -> Result<Value,String> {
+    let mut receipts=Vec::new();
+    for (index, question, expected, fixture) in [
+        (1,if links {"다음 링크 자료에서 문서 파서의 시간 한도는 몇 초인가요? 숫자만 답해주세요. https://raw.githubusercontent.com/twoimo/alden/632221d9a078c6a891a608328e66e9127e0c3fd3/docs/architecture/alden-desktop-files-20261013.md"} else {"첨부 문서의 수량을 숫자만 답해주세요."},if links {"8"} else {"53"},if links {None} else {Some(("audit-quantity.txt","text/plain","검수 자료\n수량: 53개\n검수일: 10월 8일"))}),
+        (2,if links {"앞에서 읽은 링크의 문서 파서 시간 한도를 숫자만 다시 답해주세요."} else {"앞에서 첨부한 문서의 수량을 숫자만 다시 답해주세요."},if links {"8"} else {"53"},None),
+        (3,if links {"앞에서 읽은 링크의 파서 시간 한도와 이번 CSV의 수량을 두 숫자만 쉼표로 구분해서 답해주세요."} else {"이번 CSV 파일의 수량을 숫자만 답해주세요."},if links {"8,67"} else {"67"},Some(("audit-current.csv","text/csv","제품,수량\n올든,67")))
+    ] {
+        if index == 3 {
+            let target = window.clone(); let (tx, rx) = mpsc::sync_channel(1);
+            window.run_on_main_thread(move || {
+                let result = (|| {
+                    let native = target.ns_window().map_err(|_| "document audit native window missing")?;
+                    unsafe { (&*native.cast::<NSWindow>()).setContentSize(NSSize::new(640.0, 680.0)); }
+                    Ok::<(), String>(())
+                })();
+                let _ = tx.try_send(result);
+            }).map_err(|_| "document resize dispatch failed")?;
+            receive(rx, deadline)?;
+        }
+        if let Some((filename,mime,content))=fixture {
+            let filename=serde_json::to_string(filename).map_err(|_|"filename encoding")?;
+            let mime=serde_json::to_string(mime).map_err(|_|"mime encoding")?;
+            let content=serde_json::to_string(content).map_err(|_|"document encoding")?;
+            collect_script(window,format!(r#"JSON.stringify((()=>{{
+                const transfer=new DataTransfer();transfer.items.add(new File([new TextEncoder().encode({content})],{filename},{{type:{mime}}}));
+                const picker=document.querySelector('#assistant-composer-files');picker.files=transfer.files;picker.dispatchEvent(new Event('change'));
+                return {{prepared:true}};}})())"#),deadline)?;
+            loop {
+                let s=collect_script(window,"JSON.stringify({ready:document.querySelector('#assistant-composer-status').textContent.includes('1개 문서를 첨부'),busy:document.querySelector('#assistant-composer').getAttribute('aria-busy')})".into(),deadline)?;
+                if s["ready"]==true && s["busy"]=="false" {break;}
+                live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        let question=serde_json::to_string(question).map_err(|_|"question encoding")?;
+        collect_script(window,format!(r#"JSON.stringify((()=>{{
+            const text=document.querySelector('#assistant-composer-text');text.value={question};text.dispatchEvent(new Event('input'));
+            document.querySelector('#assistant-composer').requestSubmit();return {{submitted:true}};}})())"#),deadline)?;
+        let mut state=loop {
+            let state=collect_script(window,r#"JSON.stringify((()=>{
+                const status=document.querySelector('#assistant-composer-status').textContent;
+                const replies=[...document.querySelectorAll('#voice-message-list .message-row[data-self="false"] .message-text')].map(x=>x.textContent);
+                return {status,reply:replies.at(-1)??'',replies:replies.length,conversationId:document.querySelector('#voice-start').dataset.conversationId,
+                    busy:document.querySelector('#assistant-composer').getAttribute('aria-busy'),owned:document.querySelector('#assistant-composer').dataset.ownedRequest,retirement:document.querySelector('#assistant-composer').dataset.lastRetirement??null,formHidden:document.querySelector('#assistant-composer').hidden,documentVisibility:document.visibilityState,width:innerWidth,scrollWidth:document.documentElement.scrollWidth};})())"#.into(),deadline)?;
+            if state["status"]=="답변이 저장되었습니다." && state["replies"].as_u64()==Some(index) {break state;}
+            if state["retirement"].as_str().is_some() {return Err(format!("document input retired before completion: {state}"));}
+            if state["busy"]=="false" && state["status"].as_str().is_some_and(|s|s.contains("오류 코드:")||s.contains("못했")||s.contains("취소")) {
+                return Err(format!("document request did not complete: {state}"));
+            }
+            live(deadline)?;std::thread::sleep(Duration::from_millis(50));
+        };
+        if state["reply"].as_str().is_none_or(|s|s.trim().trim_matches(['*','`']).trim().replace(" ","")!=expected) {
+            return Err(format!("document fixture answer mismatch at {index}: {state}"));
+        }
+        if state["width"]!=state["scrollWidth"] {return Err("document composer horizontal overflow".into());}
+        collect_script(window,"JSON.stringify((()=>{window.__aldenAuditDocumentPaint=false;requestAnimationFrame(()=>requestAnimationFrame(()=>{window.__aldenAuditDocumentPaint=true;}));return {armed:true};})())".into(),deadline)?;
+        let paint_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+        loop {
+            let paint=collect_script(window,r#"JSON.stringify((()=>{
+                const host=document.querySelector('#voice-message-list');
+                const replies=[...host.querySelectorAll('.message-row[data-self="false"] .message-text')];
+                const last=replies.at(-1)?.getBoundingClientRect(),bounds=host.getBoundingClientRect();
+                return {ready:window.__aldenAuditDocumentPaint===true,
+                    latestReplyVisible:!!last&&last.top>=bounds.top-1&&last.bottom<=bounds.bottom+1,
+                    replyTop:last?.top??null,replyBottom:last?.bottom??null,
+                    viewportTop:bounds.top,viewportBottom:bounds.bottom};})())"#.into(),deadline)?;
+            if paint["ready"]==true && paint["latestReplyVisible"]==true {state["paintObservation"]=paint;break;}
+            if Instant::now() >= paint_deadline {return Err(format!("latest document reply not visible at {index}: {paint}"));}
+            live(deadline)?;std::thread::sleep(Duration::from_millis(25));
+        }
+        if index == 3 {
+            visibility(window,false,deadline)?;
+            let hidden_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+            loop {
+                let hidden=collect_script(window,"JSON.stringify({hidden:document.querySelector('#assistant-composer').hidden})".into(),deadline)?;
+                if hidden["hidden"]==true {break;}
+                if Instant::now() >= hidden_deadline {return Err("completed document window did not hide".into());}
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            visibility(window,true,deadline)?;
+            let restore_deadline = deadline.min(Instant::now() + Duration::from_secs(3));
+            loop {
+                let restored=collect_script(window,r#"JSON.stringify((()=>{
+                    const host=document.querySelector('#voice-message-list'),bounds=host.getBoundingClientRect();
+                    const text=[...host.querySelectorAll('.message-row[data-self="false"] .message-text')].at(-1);
+                    const last=text?.getBoundingClientRect();
+                    return {hidden:document.querySelector('#assistant-composer').hidden,
+                        conversationId:document.querySelector('#voice-start').dataset.conversationId,
+                        reply:text?.textContent??'',latestReplyVisible:!!last&&last.top>=bounds.top-1&&last.bottom<=bounds.bottom+1};})())"#.into(),deadline)?;
+                if restored["hidden"]==false && restored["latestReplyVisible"]==true && restored["conversationId"]==state["conversationId"] && restored["reply"]==state["reply"] {
+                    state["restoreObservation"]=restored;break;
+                }
+                if Instant::now() >= restore_deadline {return Err(format!("completed document reply did not survive restore: {restored}"));}
+                std::thread::sleep(Duration::from_millis(25));
+            }
+        }
+        publish(output,&format!("assistant-turn-{index}.png"),&snapshot(window,deadline)?,deadline)?;
+        receipts.push(state);
+    }
+    if receipts.iter().any(|r|r["conversationId"]!=receipts[0]["conversationId"]) {return Err("document followup conversation changed".into());}
+    visibility(window,false,deadline)?;
+    Ok(json!({"links":links,"turns":receipts,"scope":if links {"three owned inputs: pinned public Alden document URL, same-conversation snapshot followup and compact CSV plus previous link; actual saved model inference and guarded network; no cookies/browser login/source stores/physical picker/voice/send proof"} else {"three explicit owned programmatic WKWebView inputs: default-size UTF-8 text and same-conversation followup, compact-size CSV; actual saved selected-model inference; isolated history; no original files, physical picker, microphone, TTS or send proof"}}))
+}
+
+unsafe extern "C" fn audit_uncaught_exception(exception: *mut objc2_foundation::NSException) {
+    if exception.is_null() { return; }
+    // Diagnostic only in this owned process. Logging does not recover an
+    // Objective-C exception or authorize continuing a failed UI operation.
+    let exception=unsafe { &*exception };
+    eprintln!("Alden native uncaught exception: name={:?}, reason={:?}",exception.name(),exception.reason());
+}
+
+pub fn run(request: Request, mut context: tauri::Context<tauri::Wry>) {
+    unsafe { objc2_foundation::NSSetUncaughtExceptionHandler(audit_uncaught_exception as *const () as *mut _); }
+    // This audit creates one incognito view itself; configured persistent
+    // views must never be created or adopted by the fixture workflow.
+    if request.entity { context.config_mut().app.windows.clear(); }
+    if request.graph_scope.is_some() {
+        for window in &mut context.config_mut().app.windows {
+            window.incognito = true;
+            window.visible = false;
+            window.focus = false;
+            window.always_on_top = false;
+        }
+    }
+    let output = Output::open(&request.directory).unwrap_or_else(|error| {
+        eprintln!("Alden render audit: {error}");
+        std::process::exit(2);
+    });
+    let status = Arc::new(AtomicI32::new(1));
+    let worker_status = Arc::clone(&status);
+    let settings_mode = request.settings;
+    let workspaces_mode = request.workspaces;
+    let assistant_mode = request.assistant;
+    let invalid_input_mode = request.assistant_invalid;
+    let files_input_mode = request.assistant_files;
+    let links_input_mode = request.assistant_links;
+    let input_mode = if links_input_mode {AssistantAuditMode::Links} else if files_input_mode {AssistantAuditMode::Documents} else if invalid_input_mode {AssistantAuditMode::InvalidImages} else {AssistantAuditMode::Images};
+    let entity_mode = request.entity;
+    let graph_scope = request.graph_scope;
+    let settings_loaded = Arc::new(AtomicBool::new(false));
+    let asset_loaded = Arc::new(AtomicBool::new(false));
+    let ready_phase = Arc::new(AtomicU8::new(0));
+    let page_loaded = Arc::clone(&asset_loaded);
+    let page_dom = Arc::clone(&settings_loaded);
+    let bridge = if entity_mode { super::PythonBridge::for_entity_audit(request.directory.join("resolution-state"))
+        .unwrap_or_else(|error|{eprintln!("Alden entity audit: {error}");std::process::exit(2);}) }
+        else if assistant_mode { super::PythonBridge::for_assistant_audit(request.directory.join("input-state"))
+        .unwrap_or_else(|error|{eprintln!("Alden assistant audit: {error}");std::process::exit(2);}) } else {super::PythonBridge::new()};
+    let builder = {
+        let builder = tauri::Builder::default()
+            .manage(bridge)
+            .manage(AssistantPageReady {ready:Arc::clone(&settings_loaded),phase:Arc::clone(&ready_phase)})
+            .manage(AuditPolicy {
+                workspaces: workspaces_mode,
+                entity: entity_mode,
+                focus_node: request.focus_node.clone(),
+            });
+        if assistant_mode {
+            builder.append_invoke_initialization_script(ASSISTANT_READY_SCRIPT).invoke_handler(tauri::generate_handler![audit_assistant_ready,super::window_is_visible,super::fetch_runtime_snapshot,
+                super::fetch_voice_status,super::fetch_knowledge_revision,super::fetch_emergency_state,
+                fetch_settings_action,super::submit_assistant_input,super::cancel_assistant_input])
+        } else if workspaces_mode {
+            builder.invoke_handler(tauri::generate_handler![
+                super::window_is_visible,
+                super::fetch_runtime_snapshot,
+                super::fetch_voice_status,
+                super::fetch_knowledge_revision,
+                super::fetch_emergency_state,
+                fetch_settings_action
+            ])
+        } else {
+            builder.invoke_handler(tauri::generate_handler![
+                super::window_is_visible,
+                super::fetch_knowledge_revision,
+                fetch_settings_action
+            ])
+        }
+    };
+    let app = builder
+        .on_page_load(move |view, payload| {
+            if view.label() == "settings" {
+                let finished = payload.event() == tauri::webview::PageLoadEvent::Finished;
+                page_loaded.store(finished && audit_settings_page(view.label(), payload.url()), Ordering::Release);
+                if !finished {page_dom.store(false, Ordering::Release);}
+            }
+        })
+        .on_window_event(super::handle_window_event)
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let started = Instant::now();
+                // The complete workspace audit now takes 34 serial snapshots,
+                // including declared time/quantity pages. Its observation
+                // horizon is separate from production action/cancel deadlines.
+                // Scope 10 adds current tag-group/member pages at two sizes,
+                // including two bounded full source scans and 12 captures.
+                let deadline = started + Duration::from_secs(if entity_mode {160} else if assistant_mode || workspaces_mode && graph_scope.is_none() {180} else if workspaces_mode && matches!(graph_scope,Some(0)|Some(10)) {150} else if workspaces_mode {96}else{40});
+                let result = if entity_mode {audit_entity(&handle,&output,deadline)} else if assistant_mode {audit_assistant(&handle,&output,deadline,input_mode,&settings_loaded,&asset_loaded,&ready_phase)} else if settings_mode { audit_settings(&handle, &output, deadline,workspaces_mode,graph_scope) } else { audit(&handle, &output, deadline) };
+                if let Err(reason) = &result {
+                    // One write keeps the original failure intact even if the
+                    // main run loop subsequently aborts while producing JSON.
+                    let line = format!("Alden audit failure: {reason}\n");
+                    unsafe { libc::write(libc::STDERR_FILENO, line.as_ptr().cast(), line.len()); }
+                }
+                let success = result.as_ref().is_ok_and(|result| result["retina"]["available"] != true || result["retina"]["densityMatches"] == true) && live(deadline).is_ok();
+                let error = result.as_ref().err().cloned().or_else(|| if success { None } else { Some("density validation or final deadline failed".into()) });
+                let report = json!({"schema":1,"pid":std::process::id(),
+                    "mode":if entity_mode {"isolated-entity-review-fixture"}else if files_input_mode {"isolated-assistant-document-generation"}else if invalid_input_mode {"isolated-assistant-invalid-input"}else if assistant_mode {"isolated-assistant-input-generation"}else if workspaces_mode {"isolated-workspaces-authoritative-read-only"}else if settings_mode {"isolated-settings-persisted-graph-read-only"} else {"isolated-popover-persisted-graph-read-only"},
+                    "executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION"),"elapsedMs":started.elapsed().as_millis(),
+                    "result":result.ok(),"success":success,"error":error,
+                    "scope":if graph_scope.is_some() {"owned two-size fixed project/filter/page graph WKWebView; read-only adapters, source/solver/display observations; no primary, physical input, semantic gold or pixel/GPU/FPS attestation"}else if entity_mode {"owned incognito WKWebView; compare/apply/revert only in a newly created private synthetic collection; no original source, production write, model inference, send or physical-input attestation"}else if invalid_input_mode {"owned WKWebView with twelve corrupt-image requests; isolated derived state; decoder rejection before inference; no microphone, TTS, sends or physical input attestation"}else if links_input_mode {"owned WKWebView with pinned public document URL, snapshot followup and mixed CSV; guarded network and saved selected-model inference; isolated history; no original source, login cookies, physical picker, voice or send proof"}else if files_input_mode {"owned WKWebView with three synthetic document and followup requests; actual saved selected-model inference in isolated derived history; no original files, physical picker, microphone, TTS or sends"}else if assistant_mode {"owned WKWebView with explicit image and contextual text requests using the saved selected model; isolated derived history/cache/cancellation writes and actual inference allowed; no primary-process, physical input, microphone, TTS or sending attestation"}else if workspaces_mode {"owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"}else if settings_mode {"owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"} else {"owned native graph WKWebView with fixed persisted graph reads; no existing-process, OS-lock, tray click, shortcut, voice or inference attestation"}});
+                eprintln!("Alden audit: result returned, success={success}, error={:?}, preparing final report",report["error"]);
+                let bytes = serde_json::to_vec_pretty(&report).expect("audit JSON");
+                let written = if success { publish(&output,"render-audit.json", &bytes,deadline) } else { output.write("render-audit.json", &bytes) };
+                let delivered = written.is_ok();
+                eprintln!("Alden audit: final report delivered={delivered}");
+                if let Err(error) = written { eprintln!("Alden render audit: {error}"); }
+                let code = if success && delivered && live(deadline).is_ok() { 0 } else { 1 };
+                worker_status.store(code,Ordering::Release);
+                handle.exit(code);
+            });
+            Ok(())
+        })
+        .build(context)
+        .expect("error while running Alden render audit");
+    let observers = super::workspace_visibility::install(app.handle())
+        .expect("error while observing Alden audit workspace");
+    let exit_code = app.run_return(|_, _| {});
+    drop(observers);
+    let audit_status = status.load(Ordering::Acquire);
+    std::process::exit(if audit_status == 0 {
+        exit_code
+    } else {
+        audit_status
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn focused_capture_rejects_transient_or_stale_selection() {
+        let ready=serde_json::json!({"focused":true,"focusId":"selected","worker":"ready","pendingTargets":0,
+            "motion":{"camera":false,"physics":false,"transition":false}});
+        assert!(super::focused_graph_settled(&ready,"selected"));
+        assert!(!super::focused_graph_settled(&ready,"other"));
+        assert!(!super::focused_graph_settled(&serde_json::Value::Null,"selected"));
+        for field in ["camera","physics","transition"] {
+            let mut moving=ready.clone();moving["motion"][field]=serde_json::json!(true);
+            assert!(!super::focused_graph_settled(&moving,"selected"),"{field}");
+        }
+        for worker in ["pending","failed","idle"] {
+            let mut pending=ready.clone();pending["worker"]=serde_json::json!(worker);
+            assert!(!super::focused_graph_settled(&pending,"selected"),"{worker}");
+        }
+        let mut pending=ready;pending["pendingTargets"]=serde_json::json!(1);
+        assert!(!super::focused_graph_settled(&pending,"selected"));
+    }
+    fn navigation_origin_fixture() -> serde_json::Value {
+        serde_json::json!({"focused":true,"focusId":"anonymous-source","source":"collection",
+            "focusedSourceVersion":"anonymous-version","focusSlot":0,"hops":0,"canGoBack":true,
+            "nodeCount":2048,"edgeCount":3789,"overviewLimit":2048,"overviewOffset":0,"hasMoreContexts":true,
+            "targets":{"camera":[0.006948,0.007377,4.842555],"lookAt":[0.006948,0.007377,0.002936]}})
+    }
+
+    #[test]
+    fn navigation_origin_allows_pose_motion_without_admitting_context_drift() {
+        let early = navigation_origin_fixture();
+        let mut origin = early.clone();
+        origin["targets"] = serde_json::json!({"camera":[0.035840,-0.009356,4.788133],"lookAt":[0.035840,-0.009356,0.050362]});
+        assert!(super::navigation_context_matches(&origin, &early));
+        assert_ne!(origin, early);
+        for (key, value) in [("focusedSourceVersion",serde_json::json!("other-version")),
+            ("focusId",serde_json::json!("other-source")),("hops",serde_json::json!(1)),
+            ("overviewOffset",serde_json::json!(1984)),("nodeCount",serde_json::json!(5)),
+            ("source",serde_json::json!("legacy")),("canGoBack",serde_json::json!(false))] {
+            let mut wrong = origin.clone(); wrong[key] = value;
+            assert!(!super::navigation_context_matches(&wrong, &early), "{key}");
+        }
+    }
+
+    #[test]
+    fn navigation_origin_rejects_incomplete_context_and_malformed_pose() {
+        let early = navigation_origin_fixture();
+        for pose in [serde_json::Value::Null,
+            serde_json::json!({"camera":[0,0],"lookAt":[0,0,0]}),
+            serde_json::json!({"camera":[0,null,3.6],"lookAt":[0,0,0]}),
+            serde_json::json!({"camera":[0,0,3.6],"lookAt":[0,0,0],"unexpected":true})] {
+            let mut origin = early.clone(); origin["targets"] = pose;
+            assert!(!super::navigation_context_matches(&origin, &early));
+        }
+        let mut missing = early.clone();missing.as_object_mut().unwrap().remove("source");
+        assert!(!super::navigation_context_matches(&missing, &missing));
+        let mut extra = early.clone();extra["newScope"] = serde_json::json!("other");
+        assert!(!super::navigation_context_matches(&extra, &early));
+    }
+
+    #[test]
+    fn links_audit_is_explicit_and_uses_isolated_assistant_admission() {
+        let request=super::parse_args(["--audit-own-assistant-links","/private/tmp/alden-links-audit"].map(std::ffi::OsString::from).into_iter()).unwrap().unwrap();
+        assert!(request.assistant && request.assistant_links && request.workspaces);
+        assert!(!request.assistant_files && !request.assistant_invalid);
+    }
+    #[test]
+    fn scoped_blur_requires_observed_ready_state_before_and_after_dispatch() {
+        let lifecycle = serde_json::json!({"animationRequested":true,"disposed":false,"emergencyPaused":false});
+        let mut state = serde_json::json!({"synthetic":true,"event":"blur","before":lifecycle,"lifecycle":lifecycle});
+        assert!(super::scoped_blur_preserved(&state));
+        state["before"]["animationRequested"] = serde_json::json!(false);
+        assert!(!super::scoped_blur_preserved(&state));
+        state["before"]["animationRequested"] = serde_json::json!(true);
+        state["lifecycle"]["animationRequested"] = serde_json::json!(false);
+        assert!(!super::scoped_blur_preserved(&state));
+    }
+
+    #[test]
+    fn scoped_blur_rejects_undispatched_closed_or_emergency_observations() {
+        let lifecycle = serde_json::json!({"animationRequested":true,"disposed":false,"emergencyPaused":false});
+        let state = serde_json::json!({"synthetic":true,"event":"blur","before":lifecycle,"lifecycle":lifecycle});
+        for (key, value) in [("disposed",true),("emergencyPaused",true)] {
+            let mut invalid = state.clone(); invalid["lifecycle"][key] = serde_json::json!(value);
+            assert!(!super::scoped_blur_preserved(&invalid));
+        }
+        let mut invalid = state; invalid["synthetic"] = serde_json::json!(false);
+        assert!(!super::scoped_blur_preserved(&invalid));
+    }
+
+    #[test]
+    fn graph_scope_audit_only_accepts_fixed_case_arguments() {
+        for case in 0..11u8 {
+            let request=super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
+                std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(case.to_string())].into_iter()).unwrap().unwrap();
+            assert!(request.settings && request.workspaces && !request.assistant && !request.entity);
+            assert_eq!(request.graph_scope,Some(case));assert!(request.focus_node.is_none());
+            assert!(super::graph_scope_case(case).is_ok());
+        }
+        for invalid in ["11","00","010","-1","1;alert(1)","project:career"] {
+            assert!(super::parse_args([std::ffi::OsString::from(super::WORKSPACES_FLAG),std::ffi::OsString::from("/private/tmp/test"),
+                std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from(invalid)].into_iter()).is_err());
+        }
+        assert!(super::parse_args([std::ffi::OsString::from(super::SETTINGS_FLAG),std::ffi::OsString::from("/private/tmp/test"),
+            std::ffi::OsString::from("--graph-scope"),std::ffi::OsString::from("0")].into_iter()).is_err());
+        assert!(super::graph_scope_case(11).is_err());
+    }
+
+    #[test]
+    fn entity_fixture_mode_has_an_explicit_owned_scope_without_a_caller_focus() {
+        let request = parse_args([OsString::from(ENTITY_FLAG), OsString::from("/private/tmp/test")].into_iter())
+            .unwrap().unwrap();
+        assert!(request.settings && request.workspaces && request.entity && !request.assistant);
+        assert!(parse_args([OsString::from(ENTITY_FLAG), OsString::from("/private/tmp/test"),
+            OsString::from("--focus-node"), OsString::from(format!("graph:{}", "a".repeat(64)))]
+            .into_iter()).is_err());
+    }
+
+    #[test]
+    fn ordinary_read_audits_never_admit_entity_mutation_or_fixture_seed() {
+        for action in ["collection-resolution-apply","collection-resolution-revert",
+                       "collection-resolution-fixture","collection-resolution-fixture-verify"] {
+            assert!(!audit_read_action(action,true));
+            assert!(!audit_read_action(action,false));
+        }
+    }
+    #[test]
+    fn resumed_collection_requires_its_visible_consumer_not_only_an_old_frame() {
+        let mut state = serde_json::json!({"ready":true,"renderCount":11,"canvas":{"contextLost":false},
+            "navigation":{"source":"collection"},"activityJournal":{"active":false}});
+        assert!(super::rendered_since(&state, 10));
+        assert!(!super::resumed_graph(&state, 10));
+        state["activityJournal"]["active"] = serde_json::json!(true);
+        assert!(super::resumed_graph(&state, 10));
+        assert!(!super::resumed_graph(&state, 11));
+    }
+    use super::*;
+    #[test]
+    fn affinity_observation_requires_enrichment_on_the_current_graph() {
+        let result = json!({"state":"bounded_partial","requested":1984,"usable":1483,"pairs":1024});
+        let valid = json!({"affinity":result,"semantic":{"affinity":result}});
+        assert!(applied_affinity_observed(&valid));
+        let mut absent = valid.clone();
+        absent["semantic"]["affinity"] = Value::Null;
+        assert!(!applied_affinity_observed(&absent));
+        for key in ["requested", "usable", "pairs"] {
+            let mut different = valid.clone();
+            different["semantic"]["affinity"][key] = json!(1);
+            assert!(!applied_affinity_observed(&different));
+        }
+        let mut unavailable = valid;
+        unavailable["affinity"]["state"] = json!("unavailable");
+        assert!(!applied_affinity_observed(&unavailable));
+    }
+
+    #[test]
+    fn audit_wait_preserves_last_pending_state_when_observation_fails() {
+        let mut samples = 0;
+        let error = wait_for_audit_state("initial graph render",
+            Instant::now() + Duration::from_secs(1), || {
+                samples += 1;
+                if samples == 1 { Ok(json!({"ready":false,"pause":"hidden"})) }
+                else { Err("native callback deadline exceeded".into()) }
+            }, |state| state["ready"] == true).unwrap_err();
+        assert_eq!(samples, 2);
+        assert!(error.contains("initial graph render"));
+        assert!(error.contains("native callback deadline exceeded"));
+        assert!(error.contains("\"pause\":\"hidden\""));
+        assert!(error.contains("\"ready\":false"));
+    }
+
+    #[test]
+    fn audit_wait_does_not_sample_or_accept_readiness_after_deadline() {
+        let mut samples = 0;
+        let error = wait_for_audit_state("settings mount", Instant::now(), || {
+            samples += 1; Ok(json!({"mounted":true}))
+        }, |state| state["mounted"] == true).unwrap_err();
+        assert_eq!(samples, 0);
+        assert!(error.contains("settings mount"));
+        assert!(error.contains("native audit deadline exceeded"));
+    }
+
+    #[test]
+    fn audit_deactivation_observes_late_native_state_without_accepting_the_request_as_completion() {
+        let mut samples = 0;
+        let settled = wait_for_audit_state("native background deactivation",
+            Instant::now() + Duration::from_secs(1), || {
+                samples += 1;
+                Ok(json!({"applicationActive":samples < 3,"key":false,"alpha":0.0,"level":0}))
+            }, native_background_ready).unwrap();
+        assert_eq!(samples, 3);
+        assert_eq!(settled["applicationActive"], false);
+    }
+
+    #[test]
+    fn audit_background_contract_rejects_missing_or_unsafe_native_fields() {
+        let valid = json!({"applicationActive":false,"key":false,"alpha":0.0,"level":0});
+        assert!(native_background_ready(&valid));
+        for (key, unsafe_value) in [("applicationActive", json!(true)),
+            ("key", json!(true)), ("alpha", json!(1.0)), ("level", json!(1))] {
+            let mut state = valid.clone(); state[key] = unsafe_value;
+            assert!(!native_background_ready(&state));
+            state.as_object_mut().unwrap().remove(key);
+            assert!(!native_background_ready(&state));
+        }
+    }
+
+    fn entity_stage_state(nodes: u64) -> Value {
+        json!({"page":"memory","project":"project:audit","source":"collection",
+            "graphPending":false,"navigationPending":false,
+            "graphNodes":nodes,"viewNodes":nodes,"renderedNodeCount":nodes,"renderedVisibleNodeCount":nodes,
+            "renderedFrames":11,"motion":{"camera":false,"physics":false,"transition":false},
+            "pendingTargets":0,"canvasReady":true,"loop":{"running":false}})
+    }
+
+    #[test]
+    fn entity_stage_requires_a_new_matching_render_even_when_data_is_ready() {
+        for nodes in [2, 3] {
+            let mut state = entity_stage_state(nodes);
+            assert!(entity_render_settled(&state, nodes, 10)); // A stopped idle loop is valid.
+            assert!(!entity_render_settled(&state, nodes, 11));
+            assert!(!entity_render_settled(&state, if nodes == 2 { 3 } else { 2 }, 10));
+            state["renderedFrames"] = json!(10);
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedFrames"] = Value::Null;
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedFrames"] = json!(11);
+            state["renderedNodeCount"] = json!(if nodes == 2 { 3 } else { 2 });
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedNodeCount"] = json!(nodes);
+            state["renderedVisibleNodeCount"] = json!(0);
+            assert!(!entity_render_settled(&state, nodes, 10));
+            state["renderedVisibleNodeCount"] = json!(nodes);
+            state["viewNodes"] = json!(if nodes == 2 { 3 } else { 2 });
+            assert!(!entity_render_settled(&state, nodes, 10));
+        }
+    }
+
+    #[test]
+    fn entity_stage_rejects_unsettled_motion_pending_reads_and_wrong_surface() {
+        let valid = entity_stage_state(2);
+        for key in ["camera", "physics", "transition"] {
+            let mut state = valid.clone();
+            state["motion"][key] = json!(true);
+            assert!(!entity_render_settled(&state, 2, 10), "moving {key}");
+        }
+        for (key, value) in [("graphPending", json!(true)),
+            ("navigationPending", json!(true)), ("pendingTargets", json!(1)),
+            ("canvasReady", json!(false)), ("graphNodes", json!(3)),
+            ("page", json!("history")), ("project", json!("legacy")),
+            ("source", json!("legacy"))] {
+            let mut state = valid.clone();
+            state[key] = value;
+            assert!(!entity_render_settled(&state, 2, 10), "invalid {key}");
+        }
+    }
+
+    fn title_capture_state() -> Value {
+        json!({"page":"history","width":640,"scrollWidth":640,"titleLayout":{
+            "title":{"top":25,"bottom":55,"left":170,"right":300,"width":130,"height":30},
+            "clip":{"top":0,"bottom":648,"left":155,"right":640},
+            "offsets":[{"tag":"DIV","top":0,"left":0}],"windowX":0,"windowY":0
+        }})
+    }
+
+    #[test]
+    fn workspace_title_accepts_visible_origin_capture() {
+        validate_workspace_title(&title_capture_state(), "compact").unwrap();
+    }
+
+    #[test]
+    fn workspace_title_rejects_vertical_clipping_despite_no_horizontal_overflow() {
+        let mut state = title_capture_state();
+        state["titleLayout"]["title"]["top"] = json!(-5);
+        state["titleLayout"]["title"]["bottom"] = json!(25);
+        let error = validate_workspace_title(&state, "compact").unwrap_err();
+        assert!(error.contains("workspace history/compact title capture invalid"));
+        assert!(error.contains("fully_visible=false"));
+        assert_eq!(state["width"], state["scrollWidth"]);
+    }
+
+    #[test]
+    fn workspace_title_rejects_clipping_ancestor_and_bottom_edge() {
+        let mut state = title_capture_state();
+        state["titleLayout"]["clip"]["top"] = json!(26);
+        assert!(validate_workspace_title(&state, "compact").is_err());
+        state["titleLayout"]["clip"]["top"] = json!(0);
+        state["titleLayout"]["clip"]["bottom"] = json!(54);
+        assert!(validate_workspace_title(&state, "compact").is_err());
+    }
+
+    #[test]
+    fn workspace_title_rejects_restored_scroll_even_when_title_is_visible() {
+        for key in ["top", "left"] {
+            let mut state = title_capture_state();
+            state["titleLayout"]["offsets"][0][key] = json!(5);
+            let error = validate_workspace_title(&state, "compact").unwrap_err();
+            assert!(error.contains("at_origin=false"));
+        }
+        for key in ["windowX", "windowY"] {
+            let mut state = title_capture_state();
+            state["titleLayout"][key] = json!(1);
+            assert!(validate_workspace_title(&state, "compact").is_err());
+        }
+    }
+
+    #[test]
+    fn workspace_title_requires_complete_nonempty_geometry() {
+        for field in ["title", "clip", "offsets", "windowY"] {
+            let mut state = title_capture_state();
+            state["titleLayout"][field] = Value::Null;
+            assert!(validate_workspace_title(&state, "compact").is_err());
+        }
+        let mut state = title_capture_state();
+        state["titleLayout"]["title"]["height"] = json!(0);
+        assert!(validate_workspace_title(&state, "compact").is_err());
+        state["titleLayout"]["title"]["height"] = json!("30");
+        assert!(validate_workspace_title(&state, "compact").is_err());
+    }
+
+    #[test]
+    fn workspace_readiness_requires_a_post_data_paint_and_second_observation() {
+        let mut samples = 0;
+        let mut paints = 0;
+        let state = wait_for_workspace(
+            "conversation",
+            "default",
+            Instant::now() + Duration::from_secs(2),
+            || {
+                samples += 1;
+                Ok(json!({"page":"conversation","settled":true,"pendingReasons":[]}))
+            },
+            || {
+                paints += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(samples, 2);
+        assert_eq!(paints, 1);
+        assert_eq!(state["settled"], true);
+    }
+
+    #[test]
+    fn expired_workspace_does_not_sample_or_arm_a_late_paint() {
+        let error = wait_for_workspace(
+            "voice",
+            "compact",
+            Instant::now() - Duration::from_millis(1),
+            || panic!("expired audit must not query WebKit"),
+            || panic!("expired audit must not arm WebKit"),
+        )
+        .unwrap_err();
+        assert!(error.contains("workspace voice/compact readiness failed"));
+        assert!(error.contains("native audit deadline exceeded"));
+        assert!(error.contains("last observed state=null"));
+    }
+
+    #[test]
+    fn workspace_callback_failure_retains_the_last_pending_conditions() {
+        let mut samples = 0;
+        let error = wait_for_workspace(
+            "conversation",
+            "default",
+            Instant::now() + Duration::from_secs(2),
+            || {
+                samples += 1;
+                if samples == 1 {
+                    Ok(json!({"page":"conversation","settled":false,"pendingReasons":["messages"]}))
+                } else {
+                    Err("native callback deadline exceeded".into())
+                }
+            },
+            || panic!("unsettled data must not arm the final paint"),
+        )
+        .unwrap_err();
+        assert_eq!(samples, 2);
+        assert!(error.contains("native callback deadline exceeded"));
+        assert!(error.contains("\"pendingReasons\":[\"messages\"]"));
+        assert!(error.contains("workspace conversation/default"));
+    }
+
+    #[test]
+    fn workspace_paint_failure_is_not_converted_to_success_or_retried() {
+        let mut samples = 0;
+        let mut paints = 0;
+        let error = wait_for_workspace(
+            "history",
+            "default",
+            Instant::now() + Duration::from_secs(2),
+            || {
+                samples += 1;
+                Ok(json!({"page":"history","settled":true}))
+            },
+            || {
+                paints += 1;
+                Err("WebKit dispatch failed".into())
+            },
+        )
+        .unwrap_err();
+        assert_eq!((samples, paints), (1, 1));
+        assert!(error.contains("WebKit dispatch failed"));
+        assert!(error.contains("\"page\":\"history\""));
+    }
+
+    #[test]
+    fn workspace_capture_admits_reads_but_never_commands() {
+        for action in [
+            "room-upsert",
+            "room-delete",
+            "model-set",
+            "model-swap",
+            "model-prepare",
+            "start_voice_session",
+            "send",
+            "stop",
+            "collection-scheduler-control",
+            "collection-resolution-apply",
+            "collection-resolution-revert",
+        ] {
+            assert!(!audit_read_action(action, true));
+        }
+        assert!(audit_read_action("history-rooms", true));
+        assert!(!audit_read_action("history-rooms", false));
+        for action in [
+            "collection-history",
+            "collection-projects",
+            "collection-graph",
+            "collection-affinity",
+            "collection-quality",
+            "collection-scheduler-status",
+            "collection-resolution-preview",
+            "collection-resolution-history",
+        ] {
+            assert!(audit_read_action(action, true));
+            assert!(!audit_read_action(action, false));
+        }
+        let request = parse_args(
+            [
+                OsString::from(WORKSPACES_FLAG),
+                OsString::from("/private/tmp/test"),
+            ]
+            .into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(request.workspaces && request.settings);
+    }
+    #[test]
+    fn assistant_load_gate_accepts_only_the_owned_settings_asset() {
+        for url in ["tauri://localhost/index.html?view=settings", "http://tauri.localhost/index.html?view=settings", "https://tauri.localhost/index.html?view=settings"] {
+            let url = tauri::Url::parse(url).unwrap();
+            assert!(audit_settings_page("settings", &url));
+            assert!(!audit_settings_page("main", &url));
+        }
+        for url in ["about:blank", "https://example.com/index.html?view=settings", "tauri://localhost/index.html", "tauri://localhost/index.html?view=other", "http://localhost:1420/index.html?view=settings", "tauri://localhost/other.html?view=settings"] {
+            assert!(!audit_settings_page("settings", &tauri::Url::parse(url).unwrap()));
+        }
+    }
+    #[test]
+    fn invalid_assistant_audit_has_an_explicit_separate_mode() {
+        for (flag, invalid) in [(ASSISTANT_FLAG, false), (ASSISTANT_INVALID_FLAG, true)] {
+            let request = parse_args([OsString::from(flag), OsString::from("/private/tmp/test")].into_iter())
+                .unwrap().unwrap();
+            assert!(request.assistant && request.settings && request.workspaces);
+            assert_eq!(request.assistant_invalid, invalid);
+        }
+        assert!(parse_args([OsString::from(format!("{ASSISTANT_INVALID_FLAG}=true")), OsString::from("/private/tmp/test")].into_iter()).is_err());
+        let documents=parse_args([OsString::from(ASSISTANT_FILES_FLAG),OsString::from("/private/tmp/test")].into_iter()).unwrap().unwrap();
+        assert!(documents.assistant && documents.assistant_files && !documents.assistant_invalid);
+    }
+    #[test]
+    fn focused_capture_requires_a_canonical_id_and_workspace_mode() {
+        let args = |mode: &str, id: &str| {
+            [
+                OsString::from(mode),
+                OsString::from("/private/tmp/test"),
+                OsString::from("--focus-node"),
+                OsString::from(id),
+            ]
+            .into_iter()
+        };
+        let request = parse_args(args(WORKSPACES_FLAG, "osk:261005-012a-abcdefgh"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            request.focus_node.as_deref(),
+            Some("osk:261005-012a-abcdefgh")
+        );
+        assert!(parse_args(args(SETTINGS_FLAG, "osk:261005-012a-abcdefgh")).is_err());
+        assert!(parse_args(args(WORKSPACES_FLAG, "osk:261005-012a-a');alert(1)//")).is_err());
+        assert!(parse_args(args(WORKSPACES_FLAG, "../node")).is_err());
+        for prefix in ["graph", "youtube", "threads", "files"] {
+            let id = format!("{}:{}", prefix, "a".repeat(64));
+            assert_eq!(
+                parse_args(args(WORKSPACES_FLAG, &id))
+                    .unwrap()
+                    .unwrap()
+                    .focus_node,
+                Some(id)
+            );
+        }
+        assert!(parse_args(args(WORKSPACES_FLAG, &format!("graph:{}", "g".repeat(64)))).is_err());
+        assert!(parse_args(args(WORKSPACES_FLAG, "graph:short")).is_err());
+    }
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    #[test]
+    fn expired_callbacks_and_stale_pause_records_are_rejected() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send(Ok(42)).unwrap();
+        assert!(receive(rx, Instant::now() - Duration::from_millis(1)).is_err());
+        let mut state = json!({"loop":{"running":false,"pendingFrame":false},"pause":{"state":"hidden","eventAtMs":10}});
+        assert!(!fresh_pause(&state, 10.0));
+        state["pause"]["eventAtMs"] = json!(11);
+        assert!(fresh_pause(&state, 10.0));
+        state["loop"]["running"] = json!(true);
+        assert!(!fresh_pause(&state, 10.0));
+    }
+    #[test]
+    fn webkit_quantization_keeps_real_bounds_and_backing_density() {
+        let mut state = json!({"ready":true,"width":560,"height":420,"scrollWidth":560,"scrollHeight":420,"dpr":1,"canvas":{"contextLost":false,"cssWidth":558,"cssHeight":417.984375,"x":1,"y":1,"width":558,"height":417}});
+        assert!(validate_layout(&state).is_ok());
+        assert!(density_matches(&state));
+        state["canvas"]["cssHeight"] = json!(417.5);
+        assert!(validate_layout(&state).is_err());
+    }
+    #[test]
+    fn layout_rejects_context_loss_overflow_and_wrong_backing_density() {
+        let mut state = json!({"ready":true,"width":560,"height":420,"scrollWidth":560,"scrollHeight":420,"dpr":2,"canvas":{"contextLost":false,"cssWidth":558,"cssHeight":418,"x":1,"y":1,"width":558,"height":418}});
+        assert!(validate_layout(&state).is_ok());
+        assert!(!density_matches(&state));
+        state["canvas"]["width"] = json!(1116);
+        state["canvas"]["height"] = json!(836);
+        assert!(density_matches(&state));
+        state["canvas"]["contextLost"] = json!(true);
+        assert!(validate_layout(&state).is_err());
+        state["canvas"]["contextLost"] = json!(false);
+        state["scrollWidth"] = json!(277);
+        assert!(validate_layout(&state).is_err());
+    }
+    fn root() -> PathBuf {
+        let path = PathBuf::from(format!(
+            "/private/tmp/alden-render-audit-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    #[test]
+    fn static_rendering_is_evidence_without_an_idle_loop() {
+        let mut state = json!({"ready":true,"renderCount":11,"canvas":{"contextLost":false},"loop":{"running":false,"pendingFrame":false}});
+        assert!(rendered_since(&state, 10));
+        assert!(!rendered_since(&state, 11));
+        state["canvas"]["contextLost"] = json!(true);
+        assert!(!rendered_since(&state, 10));
+        state["canvas"]["contextLost"] = json!(false);
+        state["ready"] = json!(false);
+        assert!(!rendered_since(&state, 10));
+    }
+
+    #[test]
+    fn arguments_preserve_normal_startup_and_reject_ambiguous_audits() {
+        assert!(parse_args([OsString::from("-psn_0_123")].into_iter())
+            .unwrap()
+            .is_none());
+        assert!(parse_args([OsString::from(FLAG)].into_iter()).is_err());
+        assert!(parse_args([OsString::from(format!("{FLAG}=x"))].into_iter()).is_err());
+        assert!(
+            parse_args([OsString::from(FLAG), OsString::from("/private/tmp/x")].into_iter())
+                .unwrap()
+                .is_some()
+        );
+    }
+    #[test]
+    fn output_rejects_shared_paths_symlinks_and_overwrites() {
+        let path = root();
+        let output = Output::open(&path).unwrap();
+        assert!(publish(
+            &output,
+            "alden-core-before.png",
+            b"test",
+            Instant::now() - Duration::from_millis(1)
+        )
+        .is_err());
+        assert!(!path.join("alden-core-before.png").exists());
+        output.write("render-audit.json", b"{}").unwrap();
+        assert!(output.write("render-audit.json", b"changed").is_err());
+        assert_eq!(
+            std::fs::read(path.join("render-audit.json")).unwrap(),
+            b"{}"
+        );
+        assert_eq!(
+            std::fs::metadata(path.join("render-audit.json"))
+                .unwrap()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert!(output.write("other", b"{}").is_err());
+        for name in ["alden-model-menu-default.json", "alden-model-menu-compact.json"] {
+            assert!(output.write(name, &vec![0; MAX_BYTES + 1]).is_err());
+            output.write(name, b"{\"contained\":true}").unwrap();
+            assert!(output.write(name, b"changed").is_err());
+            assert_eq!(std::fs::read(path.join(name)).unwrap(), b"{\"contained\":true}");
+            assert_eq!(std::fs::metadata(path.join(name)).unwrap().mode() & 0o777, 0o600);
+        }
+        assert!(output.write("alden-model-menu-other.json", b"{}").is_err());
+        assert!(output
+            .write("alden-core-before.png", &vec![0; MAX_BYTES + 1])
+            .is_err());
+        symlink(&path, path.join("link")).unwrap();
+        assert!(Output::open(&path.join("link")).is_err());
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(Output::open(&path).is_err());
+        assert!(Output::open(Path::new("relative")).is_err());
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}

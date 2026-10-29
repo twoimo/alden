@@ -2,7 +2,7 @@
 set -eu
 
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-BIN="${ROOT}/target/debug/openkakao-cli"
+BIN="${ROOT}/target/debug/alden-cli"
 UID_VALUE="$(id -u)"
 LABEL="com.openkakao.watch-smoke"
 TMP_DIR="$(mktemp -d)"

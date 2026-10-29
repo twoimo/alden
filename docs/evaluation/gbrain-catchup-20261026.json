@@ -1,0 +1,146 @@
+{
+  "evaluation_utc": "2026-10-26T11:08:05.155203+00:00",
+  "product_head": "4e98076a7a14316bcaa5a1e46474b6673b0752e9",
+  "full_goal": "active",
+  "candidate_only": true,
+  "ci": {
+    "url": "https://github.com/twoimo/alden/actions/runs/40298110801",
+    "success_jobs": 4,
+    "total_jobs": 4
+  },
+  "local_tests": {
+    "affected_methods": 803,
+    "modules": 27,
+    "boundary_methods_included": 319,
+    "independent_export_fallback_methods_included": 36,
+    "independent_notice_methods_included": 193
+  },
+  "native_synthetic": {
+    "pages": 4,
+    "links": 5,
+    "children": 15,
+    "all_children_reaped": true,
+    "actual_incremental_export_mutation": true,
+    "complete_canonical_fallback": true,
+    "quiet_source_publication_and_exact_query": true,
+    "actual_original_source_access": false
+  },
+  "copied_engine_notice": {
+    "new_synthetic_pages": 2,
+    "new_synthetic_links": 1,
+    "removed_synthetic_links": 1,
+    "reviewed_notice_codes": [
+      "behavior_changes"
+    ],
+    "native_children": 1,
+    "all_children_reaped": true,
+    "probe_removed": true,
+    "original_collection_sql_reads": 0,
+    "actual_failed_unlink_replayed": false
+  },
+  "actual_original": {
+    "projects": 5,
+    "counts": {
+      "source_nodes": 26651,
+      "origins": 43,
+      "observed_groups": 48355,
+      "membership_links": 26651,
+      "pages": 26694,
+      "links": 75006
+    },
+    "verified_pages": 26694,
+    "provenance_verified_pages": 26694,
+    "paged_outgoing_links": 9436,
+    "update_mode": "engine_delta",
+    "engine_writes": {
+      "pages_put": 10,
+      "pages_purged": 0,
+      "links_added": 10,
+      "links_removed": 10
+    },
+    "source_update": {
+      "mode": "full_export",
+      "reason": "catch_up_source_advanced"
+    },
+    "reviewed_notice_codes": [
+      "behavior_changes",
+      "listing_truncated"
+    ],
+    "index_updates": {
+      "mode": "index_delta",
+      "pages_put": 10,
+      "pages_deleted": 0,
+      "links_put": 10,
+      "links_deleted": 0
+    },
+    "new_generation": true,
+    "base_retired": true,
+    "state": "pending",
+    "markers": {
+      "pending": true,
+      "active": false,
+      "ready": false
+    },
+    "strict_current_readback": "collection_export_stale",
+    "normal_reader": {
+      "available": false,
+      "error": "gbrain_cache_unavailable"
+    },
+    "children": 5,
+    "all_children_reaped": true,
+    "original_operational_writes": 0,
+    "global_registration": false,
+    "source_checkpoint_advanced_from_base": true,
+    "source_advanced_during_verification": true
+  },
+  "candidate": {
+    "source_tree": "b8ae072427fdfb86f7b756bca463c31505550e0d",
+    "source_files": 2033,
+    "files": 96,
+    "python_scripts": 82,
+    "canonical_receipt_targets": [
+      "desktop/src-tauri/target/release/openkakao-alden-desktop.d",
+      "target/release/alden-cli.d",
+      "target/release/openkakao-cli.d"
+    ],
+    "archive_bytes": 22491399,
+    "archive_sha256": "62730eeb2d8ef00284e9fa9c27dad28e732bf0289202e54e2caaf1f536af5039",
+    "app_signature_kind": "Apple Development",
+    "developer_id_application": false,
+    "old_apps_preserved": 22,
+    "prior_output_files_preserved": 244,
+    "config_exact_task_start": 5,
+    "config_denominator": 5,
+    "external_baseline_drift_count": 2,
+    "installation": false,
+    "native_launch": false,
+    "release": false
+  },
+  "pins": {
+    "gbrain_version": "0.60.451.0",
+    "gbrain_commit": "33d73cb54c14e2e988272764ddff59a5ead10915",
+    "ontology_reference_commit": "ef6e781c71aaccaa35c2a1cd06169f0c862d5769",
+    "producer_modules": {
+      "alden_gbrain_client.py": "65c70404bbcc0f45bf7a929fe62109d7066934a16a21f5c9d4e5f1904f3a978e",
+      "alden_gbrain_cache.py": "99c07891e168310ae60470728455fbe2a2e38a240ac3397afd0538007f97adb0",
+      "alden_gbrain_import.py": "7f7ef42558bb72115caa30220f194ea1cf9e2bf596954810381d86f64694b6e3",
+      "alden_gbrain_delta.py": "bd6fa96640c7bdb1e4a2ac75406d2d9b798fef8384f917d55ccbc61118367266",
+      "alden_collection.py": "1983ae346572822537885b834e896e7beba06ed667b2d42b80c059eed1da78f7",
+      "alden_collection_export.py": "3c552cd4625d834559b8e1f8be400d2e623cbed70f05dd134b155a0df21bc56c",
+      "alden_collection_delta.py": "ee3d846b7d09cd2ee473901a4854556aa1140ba421fcfc209f1e83709bbbf751"
+    }
+  },
+  "holds": [
+    "Alden OFF; no install/GUI/service restart",
+    "original source query-only; protected model/collector retained",
+    "no SDK repair/enrollment/global MCP/model/account/permission/send/release changes",
+    "external web-Astra and ChatGPT/Gemini/reverse/formal NOT_RUN; native Astra additional only",
+    "Developer ID Application, installed TCC/native account/UI/3D/GPU/resource/semantic-gold and full release acceptance remain separate"
+  ],
+  "limits": [
+    "complete export/index/copy/readback remain; no O(delta), latency, memory, token or quota benefit claimed",
+    "private staged/pending proof is not current-source reader publication",
+    "quiet-source native witness is not liveness under perpetual writers",
+    "source body/labels/source authority material remain private and are excluded"
+  ]
+}

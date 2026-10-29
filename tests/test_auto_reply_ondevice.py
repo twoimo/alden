@@ -18,6 +18,8 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 from scripts.auto_reply_ondevice import (  # noqa: E402
+    FLASH_NEXT_IQ_MODEL_ID,
+    FLASH_NEXT_IQ_REQUIRED_BYTES,
     FLASH_NEXT_MODEL_ID,
     FLASH_NEXT_REQUIRED_BYTES,
     ManagedModelResidency,
@@ -163,6 +165,26 @@ class TestHardwareDetection(unittest.TestCase):
         ):
             models = detect_mlx_gateway_models()
         self.assertEqual(models, [{"id": FLASH_NEXT_MODEL_ID, "owned_by": "mlx-serve"}])
+
+    def test_gateway_detection_preserves_string_capabilities(self):
+        payload = {
+            "data": [
+                {
+                    "id": FLASH_NEXT_MODEL_ID,
+                    "owned_by": "mlx-serve",
+                    "capabilities": ["json_schema", 7, {"unknown": True}, " vision "],
+                }
+            ]
+        }
+        with patch(
+            "scripts.auto_reply_ondevice._local_only_urlopen",
+            return_value=_HTTPResponse(payload),
+        ):
+            models = detect_mlx_gateway_models()
+        self.assertEqual(
+            models[0]["capabilities"],
+            ["json_schema", "vision"],
+        )
 
     def test_gateway_detection_accepts_prefixless_mlx_serve_id(self):
         payload = {"data": _prefixless_gateway_models()}
@@ -341,6 +363,41 @@ class TestModelResidencySwap(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.reason, "27b_human_opt_in_required")
         self.assertEqual(gateway.calls, [])
+
+    def test_iq_is_allowlisted_with_conservative_threshold_and_unknown_fails_closed(self):
+        gateway = self.FakeGateway()
+        manager = ModelResidencyManager(
+            gateway,
+            current_model=FLASH_NEXT_MODEL_ID,
+            owned_models=[FLASH_NEXT_MODEL_ID],
+            memory_budget=lambda: MemoryBudget(120 * 1024**3),
+        )
+        self.assertEqual(manager.required_bytes[FLASH_NEXT_MODEL_ID], FLASH_NEXT_REQUIRED_BYTES)
+        self.assertEqual(manager.required_bytes[FLASH_NEXT_IQ_MODEL_ID], FLASH_NEXT_IQ_REQUIRED_BYTES)
+        self.assertEqual(FLASH_NEXT_REQUIRED_BYTES, 88 * 1024**3)
+        self.assertEqual(FLASH_NEXT_IQ_REQUIRED_BYTES, 60 * 1024**3)
+
+        result = manager.swap(FLASH_NEXT_IQ_MODEL_ID)
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            gateway.calls,
+            [
+                ("unload", FLASH_NEXT_MODEL_ID),
+                ("load", FLASH_NEXT_IQ_MODEL_ID),
+                ("probe", FLASH_NEXT_IQ_MODEL_ID),
+            ],
+        )
+
+        rejected_gateway = self.FakeGateway()
+        rejected = ModelResidencyManager(
+            rejected_gateway,
+            current_model=FLASH_NEXT_MODEL_ID,
+            owned_models=[FLASH_NEXT_MODEL_ID],
+            memory_budget=lambda: MemoryBudget(120 * 1024**3),
+        ).swap("mlx/ddalcu/not-an-allowed-model")
+        self.assertFalse(rejected.ok)
+        self.assertEqual(rejected.reason, "model_not_allowed")
+        self.assertEqual(rejected_gateway.calls, [])
 
     def test_explicit_swap_drains_then_unloads_loads_and_probes(self):
         gateway = self.FakeGateway()
@@ -688,7 +745,9 @@ class TestHttpSwapContract(unittest.TestCase):
                 getattr(self.gateway, action)(QWEN38_27B_MODEL_ID)
                 requests = [call.args[0] for call in self.http.call_args_list]
                 self.assertEqual([req.get_method() for req in requests], ["POST", "GET"])
-                self.assertTrue(requests[0].full_url.endswith(f"Qwen3.8-27B-MLX-Serve-4bit/{action}"))
+                self.assertEqual(requests[0].full_url, f"http://127.0.0.1:11234/v1/{action}-model")
+                self.assertEqual(json.loads(requests[0].data), {"model": QWEN38_27B_ADVERTISED_ID})
+                self.assertEqual(requests[0].get_header("Content-type"), "application/json")
                 self.assertEqual(requests[1].full_url, "http://127.0.0.1:11234/v1/models")
             duplicate = self.catalog(loaded, state)
             duplicate["data"].append({**duplicate["data"][0], "id": QWEN38_27B_MODEL_ID})
@@ -719,7 +778,7 @@ class TestHttpSwapContract(unittest.TestCase):
                             for model, loaded in resident.items()
                         ]})
                     action = request.full_url.rsplit("/", 1)[-1]
-                    action = "probe" if action == "completions" else action
+                    action = "probe" if action == "completions" else action.removesuffix("-model")
                     actions.append(action)
                     if action == failure:
                         # The server may have committed before its response was lost.

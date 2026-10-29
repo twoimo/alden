@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "status": "source-backed reference cases; author-selected, not independently human-adjudicated representative gold",
+  "verified_at": "2026-10-25T15:24:34.339539+00:00",
+  "records": [
+    {
+      "id": "technology-20250325",
+      "publisher": "technology",
+      "url": "https://mercury.com/blog/series-c-announcement",
+      "date": "2025-03-25",
+      "date_marker": "March 25, 2025",
+      "label": "Mercury financing announcement",
+      "excerpt": "Since our founding in 2017, we’ve been on a remarkable road to reimagine banking",
+      "capture_sha256": "2768eb6cbb1157012a522b1ae788ff12176005e40d94e381040dfacc1538118c"
+    },
+    {
+      "id": "technology-20251219",
+      "publisher": "technology",
+      "url": "https://mercury.com/blog/occ-national-bank-charter-application",
+      "date": "2025-12-19",
+      "date_marker": "December 19, 2025",
+      "label": "Mercury charter application announcement",
+      "excerpt": "The applications mark a milestone in our evolution and a long-term investment",
+      "capture_sha256": "94001560e7ca57c3a251d33fb2438546387657c0049dd666b9a6b03c8ef06d3e"
+    },
+    {
+      "id": "insurance-20261020",
+      "publisher": "insurance",
+      "url": "https://newsroom.mercuryinsurance.com/2026-10-20-First-Rain,-Hidden-Danger-Mercury-Insurance-Warns-Drivers-About-Slippery-Roads-as-El-Nino-Strengthens",
+      "date": "2026-10-20",
+      "date_marker": "Oct. 20, 2026",
+      "label": "Mercury road safety announcement",
+      "excerpt": "The first rain of the season can bring welcome relief after months of dry weather",
+      "capture_sha256": "8601880b80f21ead31f3cb6d0cfb1a935196c549520b24fb3895b7275efaa97c"
+    },
+    {
+      "id": "insurance-20261022",
+      "publisher": "insurance",
+      "url": "https://newsroom.mercuryinsurance.com/2026-10-22-Before-You-Hand-Down-That-Old-Phone,-Make-Sure-Youre-Not-Giving-Away-Your-Personal-Information",
+      "date": "2026-10-22",
+      "date_marker": "Oct. 22, 2026",
+      "label": "Mercury phone privacy announcement",
+      "excerpt": "Mercury Insurance shares five cybersecurity steps families should take before passing along used electronics",
+      "capture_sha256": "83f6886b8e332b2246cdfb2cd23fbb7e553d7831f0140b686210c5cd8af4294f"
+    }
+  ],
+  "date_only_limit": "Dates do not attest a timezone or within-day order; October20 and October22 uncertainty intervals can overlap.",
+  "limits": [
+    "truth of source claims",
+    "current banking or insurance status",
+    "complete semantic content",
+    "independent human gold",
+    "private production representativeness"
+  ]
+}

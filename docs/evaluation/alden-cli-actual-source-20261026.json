@@ -1,0 +1,13 @@
+{
+  "product_head": "10f47c5bddf3e8c80978ceaddb2bcef55644d4e5",
+  "full_goal": "active",
+  "cli": {"canonical": "alden-cli", "legacy_regular_executable": "openkakao-cli", "installed": false},
+  "actual_source": {"projects": 5, "targets": 43, "nodes": 26651, "observed_groups": 48355, "pages": 26694, "links": 75006, "every_page_and_outgoing_verified": true, "independent_max_outgoing": 9436, "full_independent_page_limit": 317, "delta_independent_page_limit": 499, "diagnostic_queries": 5, "query_scope": "combined authorized five-project graph; not project-isolation or semantic gold", "engine_delta": {"pages_put": 6, "pages_purged": 0, "links_added": 6, "links_removed": 6}, "separate_full_index_logical_equality": true, "publication": false, "current_source_readback": "collection_export_stale", "original_writes": 0},
+  "tests": {"related_main": 477, "metadata_additional": 7, "metadata_cases": 44, "cli_worker": 75, "independent_review_existing": 39, "independent_review_adversarial": 8},
+  "native_astra_workers": 3,
+  "public_native_delta_sanity": {"pages": 4, "links": 5, "scope": "synthetic", "child_processes_reaped": 19, "withdrawn": true},
+  "candidate": {"version": "0.3.220", "exact_head_tracked_files": 2024, "app_files": 96, "python_sources": 82, "artifact_receipts": 3, "archive_bytes": 22487282, "archive_sha256": "0e13127d65a8c92b11f42518f36e80e9e8a4c19a99a61fe148e4a0af2f8ac2be", "app_signature": "Apple Development", "cli_signature": "linker ad-hoc", "developer_id_application_gate": false, "installed": false, "notarized": false},
+  "ci": {"run": 40273991193, "head": "10f47c5bddf3e8c80978ceaddb2bcef55644d4e5", "jobs": 4, "conclusion": "success"},
+  "preservation": {"prior_apps": 14, "app_bytes_modes_equal": true, "protected_process_arguments_equal": true, "config_matches_original_baseline": 3, "config_entries": 5, "external_config_drift_reverted": false, "global_config_writes_by_task": 0, "Alden": "off"},
+  "limits": ["as-of structural proof is not current publication", "no private source material uploaded", "no installed UI/native account/semantic-gold proof", "native Astra does not replace required web-Astra or external cross-audit", "no formal all-input correctness or new performance claim", "full original goal and existing release holds remain active"]
+}

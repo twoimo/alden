@@ -1,0 +1,115 @@
+{
+  "kind": "gbrain-engine-delta-local-evidence-v1",
+  "base_head": "a090b0784abca3e7a8113510fe2cd6c1db8a88f2",
+  "source_sha256": {
+    "scripts/alden_gbrain_import.py": "f8d0849d9b0b2f9fe1201ebafb1e9d0fa51037e114e2890dc0eb3b097f345fe5",
+    "scripts/alden_gbrain_delta.py": "40cbf85f8407466cbb2451384e7a63da71ff00d467bd38d348cc8b8982008c40",
+    "scripts/alden_gbrain_watch.py": "e5343252904314aa4e7fef2b02776e86a20350b7b1b51d3c62216638de809338",
+    "tests/test_alden_gbrain_delta.py": "b7c92840d1a22f9091c74a9eb83a5488d9f82ee57d1c8d941dd83b91819e4c9a",
+    ".github/workflows/ci.yml": "02040c5a149651c600bf72e5d22a06e9ce767545fc6b52c06b0c8447dda19c82",
+    "desktop/src-tauri/tauri.conf.json": "06a6c20ea42a9d689efdf5dfdb859ebac257d767bcdf63daf93061b409fc76d3",
+    "desktop/src-tauri/src/resource_layout.rs": "2c453b0fba314e97eb75fb542a9b9862a5052172a7414146bc10c32d48864e6d"
+  },
+  "python_tests": 390,
+  "delta_tests": 30,
+  "test_runtime": "pinned menubar CPython3.11",
+  "isolated_mutants": 10,
+  "full_goal": "active",
+  "installation": false,
+  "native_app_launch": false,
+  "service_or_global_registration": false,
+  "external_review": "NOT_RUN",
+  "worker_contract": {
+    "required_model": "chatgpt-web/gpt-6-astra",
+    "required_effort": "max",
+    "required_model_exposed": false,
+    "dispatched": false,
+    "substitution": false
+  },
+  "current_source_acceptance": {
+    "receipt": "outputs/gbrain-engine-delta-20261025T215737Z/public-delta-delivery/acceptance.json",
+    "sha256": "f562633f79e492d2df15f29e803e98cef584df99b601e66b499daf8480e57ac9",
+    "engine_delta_trials": [
+      {
+        "phase": "version",
+        "engine_writes": {
+          "links_added": 1,
+          "links_removed": 1,
+          "pages_purged": 0,
+          "pages_put": 1
+        },
+        "unchanged_revisions": 5
+      },
+      {
+        "phase": "interrupted-add",
+        "engine_writes": {
+          "links_added": 1,
+          "links_removed": 0,
+          "pages_purged": 0,
+          "pages_put": 1
+        },
+        "crash_exit": 24,
+        "unpublished_generation_discarded": true,
+        "recovered_by": "full current-source rebuild"
+      },
+      {
+        "phase": "add",
+        "engine_writes": {
+          "links_added": 1,
+          "links_removed": 0,
+          "pages_purged": 0,
+          "pages_put": 1
+        }
+      },
+      {
+        "phase": "retract",
+        "engine_writes": {
+          "links_added": 0,
+          "links_removed": 0,
+          "pages_purged": 1,
+          "pages_put": 0
+        }
+      },
+      {
+        "phase": "unlink",
+        "engine_writes": {
+          "links_added": 0,
+          "links_removed": 1,
+          "pages_purged": 0,
+          "pages_put": 0
+        }
+      }
+    ],
+    "mcp_requests": 5,
+    "accepted_mcp_paths": 3,
+    "rejected_mcp_paths": 2,
+    "watcher_exits": [
+      23,
+      0,
+      24,
+      0,
+      1,
+      0
+    ],
+    "original_public_fixture_unchanged": true,
+    "final_generations": 0,
+    "current_modules_exact": true
+  },
+  "negative_controls": {
+    "receipt": "outputs/gbrain-engine-delta-20261025T215737Z/negative-controls.json",
+    "sha256": "ccb43d6d95e735d84a992c4985664ad9a30fab3139c818fe71315ac41087d673"
+  },
+  "system_runtime_diagnostic": {
+    "baseline_head": "a090b0784abca3e7a8113510fe2cd6c1db8a88f2",
+    "system_python": "/opt/homebrew/opt/python@3.15/bin/python3.15",
+    "same_failure_before_delta": true,
+    "classification": "existing collection query incompatible with system Python3.15 SQLite; pinned Python3.11 source checks pass",
+    "product_collection_changed": false
+  },
+  "limits": [
+    "engine mutation only; full source/index scans, engine copy/hash and full verification remain",
+    "closed owned engine copy limited to100000files/8GiB",
+    "copied public source, not native-account event acceptance",
+    "native/service/private/independent/external/formal/installed/release gates open"
+  ]
+}

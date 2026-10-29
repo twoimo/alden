@@ -59,7 +59,7 @@ echo "installed: $TARGET"
 STABLE_BIN="$HOME/Library/Application Support/openkakao/bin/openkakao-cli"
 if [ -f "$PLIST" ] && [ -x "$STABLE_BIN" ]; then
   if /usr/libexec/PlistBuddy -c 'Print :ProgramArguments:8' "$PLIST" 2>/dev/null |
-    grep -q "AutoReplyMenu.app/Contents/Resources/bin/openkakao-cli"; then
+    grep -Eq "AutoReplyMenu.app/Contents/Resources/bin/(alden-cli|openkakao-cli)$"; then
     cp "$PLIST" "$PLIST.bak-$(date +%Y%m%dT%H%M%S)"
     /usr/libexec/PlistBuddy -c "Set :ProgramArguments:8 $STABLE_BIN" "$PLIST" 2>/dev/null &&
       echo "menu LaunchAgent now runs the approved CLI: $STABLE_BIN" ||

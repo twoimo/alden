@@ -1,0 +1,42 @@
+{
+  "phase": "candidate; production schema2 unchanged",
+  "version": "0.3.36",
+  "migration": {
+    "scope": "actual collection data in private Online Backup clone; production unchanged",
+    "migrated_schema": 3,
+    "original_counts_preserved": {
+      "targets": 4,
+      "documents": 26622,
+      "versions": 26622,
+      "memberships": 26622,
+      "relations": 48355,
+      "runs": 34,
+      "events": 133115
+    },
+    "prior_version_fields_digest_unchanged": true,
+    "consistent_recovery_backup": true,
+    "elapsed_seconds": 5.703278666827828,
+    "samples": 1
+  },
+  "actual_private_source": {
+    "records": 12561,
+    "relations": 22388,
+    "first_seconds": 180.24335079197772,
+    "replay_seconds": 0.2602381252218038,
+    "replay_counts_unchanged": true,
+    "source_capture_verified": true,
+    "graph_detail_hash_version_verified": true,
+    "scope": "private copy; no producer exit or host/primary proof substituted"
+  },
+  "tests": {
+    "affected_python": 105,
+    "snapshot_cases": 8,
+    "ui": 386
+  },
+  "limitations": [
+    "local file order is not publisher revision/publication time",
+    "first-run and replay are different procedures, not speedup evidence",
+    "existing production schema2 not migrated yet; install compatible binary first",
+    "scheduler/hosts/OSK/quality/physical/signing/production remain full goal"
+  ]
+}

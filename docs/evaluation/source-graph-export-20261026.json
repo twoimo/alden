@@ -1,0 +1,43 @@
+{
+  "kind": "source-graph-export-local-evidence-v1",
+  "base_head": "fb946935a34e120e6c244c70b8b854c6126e63a8",
+  "source_sha256": {
+    "scripts/alden_collection.py": "faef1ea66156126721504a3c80a3931facdba4bed3d8ca1f9e0381ecd0362d5a",
+    "scripts/alden_collection_export.py": "8336da0c309e14972fa5c5368d36fc6613a50b1e17acacb21d0d3fc592a03d84",
+    "tests/test_alden_collection_export.py": "b16f66cc0b3a953cd0d197253593ee158d5920d55823476dc64e4b603a27eab9",
+    ".github/workflows/ci.yml": "016103ca0200e182ad42faf35f0290ae2184fc65f3b4b70b373db223de60e7e0",
+    "desktop/src-tauri/src/resource_layout.rs": "3a7e6498504095ab60607207f054b32901645a49fd1a323ff97a1b10aeda573e",
+    "desktop/src-tauri/tauri.conf.json": "c1d4a7b422f6031ec6e29ad2a461c3e97147e7dab0813ec6da5fd8c4aea91ea9"
+  },
+  "python_tests": 397,
+  "export_tests": 20,
+  "isolated_mutants_detected": 7,
+  "public_replay": {
+    "ok": true,
+    "completed_utc": "2026-10-25T19:38:41.154975+00:00",
+    "counts": {
+      "claim_records": 3057,
+      "edges": 3057,
+      "nodes": 3048,
+      "targets": 1
+    },
+    "input_binding_sha256": "37ff2ba0c372d7e191a0ccc7de9470cce1e461f66dedf9ee0bebd411c6375f74",
+    "receipt_sha256": "206f5e08ac5f64352f88ae4807e5913163f86963333eb17c98b0f9d183643da0",
+    "database_sha256": "aff1b3986dfdaba8253829a74650897dae53b96365680eb721478da45da4506c",
+    "database_bytes": 6955008,
+    "fixture_unchanged": true,
+    "public_inputs_unchanged": true,
+    "all_expected_ids_and_human_pairs": true,
+    "all_grade_bound_proofs": true,
+    "times_seconds": {
+      "export": 0.956615791990771,
+      "verify": 0.9486855419963831
+    },
+    "limits": "entire registered judged-passage/query pool; not full MIRACL corpus or fact/identity gold"
+  },
+  "full_gbrain_import": "not_connected",
+  "native_app_launch": false,
+  "installation": false,
+  "independent_external_review": "NOT_RUN",
+  "full_goal": "active"
+}

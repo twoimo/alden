@@ -1,0 +1,129 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.49 · 영속 이력과 3D 활동",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "activity_input",
+      "label": "입력·처리 경로"
+    },
+    {
+      "id": "activity_checks",
+      "label": "검증·확정 경로"
+    }
+  ],
+  "mainPath": [
+    "activity_0",
+    "activity_1",
+    "activity_2",
+    "activity_3",
+    "activity_4",
+    "activity_5"
+  ],
+  "nodes": [
+    {
+      "id": "activity_0",
+      "lane": "activity_input",
+      "col": 0,
+      "type": "backend",
+      "label": "실제 저장 변경",
+      "sublabel": "run·event ID·원문 버전",
+      "width": 170
+    },
+    {
+      "id": "activity_1",
+      "lane": "activity_checks",
+      "col": 0,
+      "type": "security",
+      "label": "저널·집계",
+      "sublabel": "동일 commit·rollback·중복 제거",
+      "width": 170
+    },
+    {
+      "id": "activity_2",
+      "lane": "activity_input",
+      "col": 1,
+      "type": "backend",
+      "label": "범위별 페이지",
+      "sublabel": "cursor·stream·단계 필터",
+      "width": 170
+    },
+    {
+      "id": "activity_3",
+      "lane": "activity_checks",
+      "col": 1,
+      "type": "backend",
+      "label": "표시 버전 확인",
+      "sublabel": "현재 node·target·version 일치",
+      "width": 170
+    },
+    {
+      "id": "activity_4",
+      "lane": "activity_input",
+      "col": 2,
+      "type": "security",
+      "label": "3D 활동",
+      "sublabel": "새 저장·확인된 읽기만 표현",
+      "width": 170
+    },
+    {
+      "id": "activity_5",
+      "lane": "activity_checks",
+      "col": 2,
+      "type": "backend",
+      "label": "감쇠·이력 보존",
+      "sublabel": "숨김은 점등 제거·저널 유지",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "id": "activity_e0",
+      "from": "activity_0",
+      "to": "activity_1",
+      "label": "확정 commit",
+      "role": "main"
+    },
+    {
+      "id": "activity_e1",
+      "from": "activity_1",
+      "to": "activity_2",
+      "label": "허용 범위",
+      "role": "main"
+    },
+    {
+      "id": "activity_e2",
+      "from": "activity_2",
+      "to": "activity_3",
+      "label": "새 이벤트",
+      "role": "main"
+    },
+    {
+      "id": "activity_e3",
+      "from": "activity_3",
+      "to": "activity_4",
+      "label": "실제 대상",
+      "role": "main"
+    },
+    {
+      "id": "activity_e4",
+      "from": "activity_4",
+      "to": "activity_5",
+      "label": "시간 기반 감쇠",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "확인된 경로와 남은 검증",
+      "items": [
+        "숨김은 점등 제거·저널 유지",
+        "배치·여러 호스트 전체 검증 미완료"
+      ]
+    }
+  ]
+}

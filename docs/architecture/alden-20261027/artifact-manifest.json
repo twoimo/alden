@@ -1,0 +1,283 @@
+{
+  "schema": 1,
+  "kind": "task-owned-static-artifact-binding",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "source_group_sha256": "949afa7c72a51cd8786642502fcd559dffa3d19f7d9b912e1599bc3cdc525cca",
+  "source_pins": {
+    "path": "source-pins.json",
+    "sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c"
+  },
+  "readme": {
+    "path": "README.md",
+    "sha256": "28edea7f4214e295045b2172a8ee225d6a6c9eefb39eae9dcd04ba93a28a45f9"
+  },
+  "validation": {
+    "path": "validation.json",
+    "sha256": "af8eeabbea7e6437c47596f36943f47e9ec2cec03d02daca866d04f50e62af0a"
+  },
+  "diagrams": [
+    {
+      "family": "system",
+      "type": "architecture",
+      "schema_version": 1,
+      "specification": {
+        "path": "system.architecture.json",
+        "sha256": "c85d4602e58a1a7f01465f1840efb81b17d233d52cbb6d4dc29579b467c84157"
+      },
+      "artifact": {
+        "path": "system.html",
+        "sha256": "3e2bc9f33cebf5697b04e4baaa9b52c12f6b2e95f5f8dc479e4993233c8ed6fc",
+        "bytes": 825605
+      },
+      "source_map": {
+        "path": "system.source-map.json",
+        "sha256": "7f3fde2392e30ec366f6af2db50782a7f335ec0e4543f2d442b750bfb82ad676"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 15
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "voice",
+      "type": "workflow",
+      "schema_version": 2,
+      "specification": {
+        "path": "voice.workflow.json",
+        "sha256": "062344e5364d7fa85ad491daace26fcc7ff58933f1414fccc848d7258b912b02"
+      },
+      "artifact": {
+        "path": "voice.html",
+        "sha256": "5fa992d885e1cae19513a518deb05c3b3690bd82505c38636374297df5419e7a",
+        "bytes": 825955
+      },
+      "source_map": {
+        "path": "voice.source-map.json",
+        "sha256": "e55ce96a230a8703424d95eb449702cac28d6f2e0597d9f21c98be3c410e8018"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 11
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "collection",
+      "type": "workflow",
+      "schema_version": 2,
+      "specification": {
+        "path": "collection.workflow.json",
+        "sha256": "4372142fcf2f2f2a176b4a0291f6da093a6aa92788d2a31e6e079c7fe60647f3"
+      },
+      "artifact": {
+        "path": "collection.html",
+        "sha256": "d909082c4a4b2469cd9c4ca39ec3cb1e46cabda4b8d9225ee04f172ccf16033d",
+        "bytes": 826383
+      },
+      "source_map": {
+        "path": "collection.source-map.json",
+        "sha256": "458df53cd4574adbe1c2a345e6144917ee86ec200b957989a3d6c2f14d995b80"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 12
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "lineage",
+      "type": "dataflow",
+      "schema_version": 1,
+      "specification": {
+        "path": "lineage.dataflow.json",
+        "sha256": "e76748f3b7244011fe99d1f5ff8c5bb2f4243b2e5312a15b43cdd98d2ace007e"
+      },
+      "artifact": {
+        "path": "lineage.html",
+        "sha256": "fc5a6eb27d872b8f214ce2df6b4c9069878d7b775fd46ff76519e8ca1ea558ce",
+        "bytes": 819989
+      },
+      "source_map": {
+        "path": "lineage.source-map.json",
+        "sha256": "05630b2d85d9d4c74a73177f7c58ca5efdf7ada3423581caaac6d1e0998387d4"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 12
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "mcp",
+      "type": "workflow",
+      "schema_version": 2,
+      "specification": {
+        "path": "mcp.workflow.json",
+        "sha256": "9662ea2f38518faf6578a1bfc8922415b8ddd6201ca283bfe96c7b2338a20614"
+      },
+      "artifact": {
+        "path": "mcp.html",
+        "sha256": "ce79bfc1ea007ab4c6d615dc432054d746e3a5d289f39757f8ba7d2cb7475abb",
+        "bytes": 828416
+      },
+      "source_map": {
+        "path": "mcp.source-map.json",
+        "sha256": "69f69fa989c32ab67d9689b90da7a931dfb008be2f759c47ff76b67334f4f574"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 14
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "normalization",
+      "type": "workflow",
+      "schema_version": 2,
+      "specification": {
+        "path": "normalization.workflow.json",
+        "sha256": "fc3441e88f0450069ea36fb74765668d9f5edafbeeeb096875e52afeb294da8f"
+      },
+      "artifact": {
+        "path": "normalization.html",
+        "sha256": "ec5d287ef0facce5e2465e85908279601c9bc531e2636d886c4f626894fbb30d",
+        "bytes": 824648
+      },
+      "source_map": {
+        "path": "normalization.source-map.json",
+        "sha256": "a374c928382c0819d30487280b4736670031a042aafe3d780db400e52ecaf5c1"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 11
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "activity",
+      "type": "lifecycle",
+      "schema_version": 3,
+      "specification": {
+        "path": "activity.lifecycle.json",
+        "sha256": "ebfd74c3762085e2a3fb51ce675837cda8a1a8e65f908bca9d0705ebc984bfd5"
+      },
+      "artifact": {
+        "path": "activity.html",
+        "sha256": "9ad821ca0c15d08dd8d2be2b9b2179cdeb12bb67e7472c7801f3c6644a5afae8",
+        "bytes": 828343
+      },
+      "source_map": {
+        "path": "activity.source-map.json",
+        "sha256": "6ecdeb60a33aeeb8c08d936fbb73e34c477e6676deab66622b7ea7ac3d835aeb"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 13
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "recovery",
+      "type": "workflow",
+      "schema_version": 2,
+      "specification": {
+        "path": "recovery.workflow.json",
+        "sha256": "614ed249b7af1526cc5a77e0cc6c81c76485bb12afaa15968afe1866a070d5b4"
+      },
+      "artifact": {
+        "path": "recovery.html",
+        "sha256": "9bd243a6d017a270a06becd1369aa92a2b8672a1e5fc92b3f47959f33ad64c8b",
+        "bytes": 828467
+      },
+      "source_map": {
+        "path": "recovery.source-map.json",
+        "sha256": "0a90321505247711cb0c2ee78ae14c2188269aa9fe4e7dc2ab177ed1089ed0f6"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 9
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    },
+    {
+      "family": "evaluation",
+      "type": "workflow",
+      "schema_version": 2,
+      "specification": {
+        "path": "evaluation.workflow.json",
+        "sha256": "257fe1711bf25ed2e7cddbb833e119a781774d1aa39389ab0ed9c9fd62b1fa7e"
+      },
+      "artifact": {
+        "path": "evaluation.html",
+        "sha256": "5847d9104138ceba9f4a339461727c7c62c94998fa59af39cea51db1321322ed",
+        "bytes": 826334
+      },
+      "source_map": {
+        "path": "evaluation.source-map.json",
+        "sha256": "256a4ff1f09ce0aa5995991b8c44f419f8ad59095ed6989ac085c8f10aefdc5d"
+      },
+      "source_pins_sha256": "1232192ea04b79af49dadf433d2c904fef3503db6e71626675cb312de83d453c",
+      "embedded_source_evidence": {
+        "verified": true,
+        "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+        "references": 10
+      },
+      "target_viewport": [
+        1440,
+        900
+      ],
+      "rendered": false
+    }
+  ],
+  "browser_export_native_release": "not-run",
+  "formal_audit": "held-incomplete"
+}

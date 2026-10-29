@@ -1,0 +1,244 @@
+"""Explicit read-only opening of existing enrollment; never discover or register."""
+import ast
+import hashlib
+import importlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import threading
+
+from alden_abort import ABORT_STATE_NAME, AbortToken
+from alden_messenger_runtime import Frontier, KakaoReader, MessengerAuthority, SourceBlocked, existing_messenger_root
+
+SDK = Path.home() / '.agents/skills/aside-kakao-local-db/scripts'
+SDK_MODULES = ('sqlcipher_adapter', 'media_context', 'room_participants', 'message_visibility',
+               'emoticon_confirmation', 'message_confirmation', 'room_catalog', 'full_chat_reader')
+MAX_SDK_SOURCE_BYTES = 1024 * 1024
+_loaded = {}
+_import_lock = threading.Lock()
+
+
+def load_kakao_sdk():
+    if not sys.dont_write_bytecode:
+        raise SourceBlocked('kakao_sdk_requires_no_bytecode')
+    with _import_lock:
+        snapshot = _sdk_source_snapshot()
+        _verify_sdk_installation()
+        if _sdk_source_snapshot() != snapshot:
+            raise SourceBlocked('kakao_sdk_loaded_revision_unverified')
+        return _load_verified_sdk(snapshot)
+
+
+def _verify_sdk_installation():
+    try:
+        result = subprocess.run([sys.executable, '-B', str(SDK / 'skill_health.py')],
+            capture_output=True, text=True, timeout=10, check=False)
+        report = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise SourceBlocked('kakao_sdk_integrity_unverified') from error
+    if (result.returncode != 0 or not isinstance(report, dict)
+        or report.get('status') != 'installation_consistent'
+        or not isinstance(report.get('skill_integrity'), dict)
+        or report['skill_integrity'].get('status') != 'verified'
+        or any(type(report.get(key)) is not int or report[key] != 0 for key in
+               ('chat_messages_read', 'identity_cache_reads', 'credential_reads', 'native_actions', 'send_calls', 'writes'))):
+        raise SourceBlocked('kakao_sdk_integrity_unverified')
+
+
+def _sdk_source_snapshot():
+    """Bounded regular source files, never Python's bytecode-cache loader."""
+    try:
+        folder = SDK.resolve(strict=True)
+        sources = {}
+        for name in SDK_MODULES:
+            path = folder / (name + '.py')
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, 'rb') as handle:
+                before = os.fstat(handle.fileno())
+                if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                        or before.st_size > MAX_SDK_SOURCE_BYTES):
+                    raise SourceBlocked('kakao_sdk_module_unavailable')
+                raw = handle.read(MAX_SDK_SOURCE_BYTES + 1)
+                after = os.fstat(handle.fileno())
+            stamp = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            if len(raw) != before.st_size or stamp(before) != stamp(after):
+                raise SourceBlocked('kakao_sdk_loaded_revision_unverified')
+            sources[name] = raw
+        return folder, sources
+    except (OSError, RuntimeError) as error:
+        if isinstance(error, SourceBlocked):
+            raise
+        raise SourceBlocked('kakao_sdk_module_unavailable') from error
+
+
+def _load_verified_sdk(snapshot):
+    folder, sources = snapshot
+    fingerprints, baseline = {}, {}
+    for name in SDK_MODULES:
+        path = folder / (name + '.py')
+        fingerprint = hashlib.sha256(sources[name]).hexdigest()
+        fingerprints[name] = (path, fingerprint)
+        present = sys.modules.get(name)
+        baseline[name] = present
+        if ((present is not None or name in _loaded)
+                and _loaded.get(name) != (present, fingerprint)):
+            raise SourceBlocked('kakao_sdk_loaded_revision_unverified')
+    # Function-local imports participate too. A changed dependency contract
+    # requires review rather than silently adding an untracked lazy module.
+    pending, closure, dependencies = ['full_chat_reader'], set(), {}
+    while pending:
+        name = pending.pop()
+        if name in closure:
+            continue
+        if name not in sources:
+            raise SourceBlocked('kakao_sdk_dependency_contract_changed')
+        closure.add(name)
+        try:
+            tree = ast.parse(sources[name])
+        except (SyntaxError, ValueError) as error:
+            raise SourceBlocked('kakao_sdk_dependency_contract_changed') from error
+        dependencies[name] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.level:
+                raise SourceBlocked('kakao_sdk_dependency_contract_changed')
+            imports = [alias.name.split('.')[0] for alias in node.names] if isinstance(node, ast.Import) else (
+                [node.module.split('.')[0]] if isinstance(node, ast.ImportFrom) and node.module else [])
+            local = {value for value in imports if (folder / (value + '.py')).is_file() or (folder / value).is_dir()}
+            dependencies[name].update(local)
+            pending.extend(local)
+    if closure != set(SDK_MODULES):
+        raise SourceBlocked('kakao_sdk_dependency_contract_changed')
+    # -B prevents writing caches, but Python may still execute an existing pyc.
+    # Compile the exact hash-checked snapshots and load the closed dependency
+    # graph first. Never add the SDK directory to the process-wide import path.
+    try:
+        code = {name: compile(source, str(fingerprints[name][0]), 'exec', dont_inherit=True)
+                for name, source in sources.items()}
+    except (SyntaxError, ValueError) as error:
+        raise SourceBlocked('kakao_sdk_dependency_contract_changed') from error
+    created, visiting = {}, set()
+    def load(name):
+        if name in visiting:
+            raise SourceBlocked('kakao_sdk_dependency_cycle')
+        if name in sys.modules:
+            present = sys.modules[name]
+            if present is not created.get(name, baseline[name]):
+                raise SourceBlocked('kakao_sdk_loaded_revision_unverified')
+            return present
+        visiting.add(name)
+        for dependency in sorted(dependencies[name]):
+            load(dependency)
+        visiting.remove(name)
+        spec = importlib.util.spec_from_loader(name, loader=None, origin=str(fingerprints[name][0]))
+        value = importlib.util.module_from_spec(spec)
+        value.__file__ = str(fingerprints[name][0])
+        value.__cached__ = None
+        sys.modules[name] = value
+        created[name] = value
+        exec(code[name], value.__dict__)
+        return value
+    try:
+        module = load('full_chat_reader')
+        for name, (path, fingerprint) in fingerprints.items():
+            present = sys.modules.get(name)
+            if present is None or present is not created.get(name, baseline[name]) or Path(present.__file__).resolve() != path:
+                raise SourceBlocked('kakao_sdk_module_origin_invalid')
+        if _sdk_source_snapshot() != snapshot:
+            raise SourceBlocked('kakao_sdk_loaded_revision_unverified')
+        if (not callable(getattr(module, 'snapshot', None)) or not callable(getattr(module, 'resolve_identity', None))
+            or getattr(module.snapshot, 'supports_exact_confirmation', False) is not True):
+            raise SourceBlocked('kakao_sdk_contract_unavailable')
+    except BaseException:
+        # Failed initialization never becomes an attestation or poisons a later
+        # request. Keep modules owned before this call exactly as they were.
+        for name, value in created.items():
+            if sys.modules.get(name) is value:
+                del sys.modules[name]
+        raise
+    _loaded.update({name: (sys.modules[name], fingerprint) for name, (_, fingerprint) in fingerprints.items()})
+    return module
+
+
+class _CanonicalRead:
+    def __init__(self, module, check):
+        self.module, self.check = module, check
+
+    def resolve_identity(self, device):
+        self.check(); value = self.module.resolve_identity(device); self.check()
+        return value
+
+    def snapshot(self, **options):
+        self.check(); result = self.module.snapshot(**options); self.check()
+        if (not isinstance(result, dict) or any(type(result.get(k)) is not int or result[k] != 0 for k in
+                   ('server_calls', 'send_calls', 'database_row_writes', 'app_settings_writes'))):
+            raise SourceBlocked('kakao_readonly_receipt_invalid')
+        if result.get('status') == 'ok' and (result.get('db_readonly_verified') is not True or result.get('schema_decryption_verified') is not True):
+            raise SourceBlocked('kakao_readonly_receipt_invalid')
+        return result
+
+
+class ExistingAuthority:
+    def __init__(self, root, registry, cancelled):
+        self.root, self.registry, self.cancelled = root, registry, cancelled
+        self.abort = AbortToken(root / ABORT_STATE_NAME)
+
+    def check(self):
+        if self.cancelled() or self.abort.is_cancelled():
+            raise SourceBlocked('messenger_request_cancelled')
+
+    def collection_source_root(self):
+        if self.registry.collection_source_root() != self.root:
+            raise ValueError('messenger_authority_root_changed')
+        return self.root
+
+    def access(self, *args):
+        self.check(); value = self.registry.access(*args); self.check()
+        return value
+
+    def revision(self, target):
+        self.check(); value = self.registry.revision(target); self.check()
+        return value
+
+    def retrieval_context(self, proof, *, cancelled=lambda: False, **options):
+        self.check()
+        value = self.registry.retrieval_context(proof,
+            cancelled=lambda: self.cancelled() or self.abort.is_cancelled() or cancelled(), **options)
+        self.check()
+        return value
+
+
+def open_existing_kakao(root, cancelled=lambda: False):
+    root = Path(root)
+    if not root.is_absolute() or '..' in root.parts:
+        raise ValueError('messenger_existing_absolute_root_required')
+    existing_messenger_root(root)
+    abort = AbortToken(root / ABORT_STATE_NAME)
+    def check():
+        if cancelled() or abort.is_cancelled():
+            raise SourceBlocked('messenger_request_cancelled')
+    check()
+    canonical = _CanonicalRead(load_kakao_sdk(), check)
+    check()
+    reader = KakaoReader(canonical)
+    source = Frontier.open_existing(root, 'kakaotalk', reader.identity(), reader)
+    check()
+    return ExistingAuthority(root, MessengerAuthority([source]), cancelled)
+
+
+def open_enrolled_messengers(root,cancelled=lambda:False):
+    """Use an existing production binding; never enroll or discover accounts."""
+    from alden_messenger_production import ProductionAuthority,read_enrollment
+    root=Path(root)
+    if not root.is_absolute() or '..' in root.parts:raise ValueError('messenger_existing_absolute_root_required')
+    if cancelled() or AbortToken(root/ABORT_STATE_NAME).is_cancelled():
+        raise SourceBlocked('messenger_request_cancelled')
+    state=read_enrollment(root)
+    if not any(s['state']=='active' for s in state['sources']):
+        raise SourceBlocked('messenger_production_binding_unavailable')
+    # ProductionAuthority opens only a requested enrolled target, lazily. A
+    # graph-only project must not load an unrelated account's SDK/reader.
+    return ProductionAuthority(root,cancelled=cancelled)

@@ -5,13 +5,18 @@ use std::path::{Component, Path, PathBuf};
 
 pub const MENUBAR_SCRIPT: &str = "scripts/auto-reply-menubar.py";
 pub const LOCAL_MLX_READINESS_SCRIPT: &str = "scripts/local_mlx_model_readiness.py";
-pub const VOICE_SCRIPT: &str = "scripts/jarvis_voice.py";
-pub const TOOL_RUNTIME_SCRIPT: &str = "scripts/jarvis_tool_runtime.py";
+pub const VOICE_SCRIPT: &str = "scripts/alden_voice.py";
+pub const ASSISTANT_SCRIPT: &str = "scripts/alden_chat.py";
+pub const VOICE_AUDIO_LIBRARY: &str = "scripts/libalden_audio.dylib";
+pub const TOOL_RUNTIME_SCRIPT: &str = "scripts/alden_tool_runtime.py";
 pub const AX_UI_SCRIPT: &str = "scripts/auto_reply_ax_ui.py";
-pub const BROWSER_USE_SCRIPT: &str = "scripts/jarvis_browser_use.py";
+pub const BROWSER_USE_SCRIPT: &str = "scripts/alden_browser_use.py";
 pub const METRICS_SCRIPT: &str = "scripts/auto_reply_metrics.py";
-pub const CLI: &str = "bin/openkakao-cli";
-pub const WAKE_MODEL: &str = "voice/models/hey_jarvis_ko_ridge.onnx";
+pub const LOCAL_EMBEDDING_SCRIPT: &str = "scripts/alden_local_embedding_server.py";
+pub const CLI: &str = "bin/alden-cli";
+// A regular executable resource for existing callers, with the same validation.
+pub const LEGACY_CLI: &str = "bin/openkakao-cli";
+pub const CLI_FILES: &[&str] = &[CLI, LEGACY_CLI];
 pub const DATA_FILES: &[&str] = &[
     MENUBAR_SCRIPT,
     LOCAL_MLX_READINESS_SCRIPT,
@@ -27,7 +32,11 @@ pub const DATA_FILES: &[&str] = &[
     "scripts/auto_reply_reference_store.py",
     "scripts/auto_reply_reference_search.py",
     "scripts/auto_reply_knowledge_graph.py",
+    LOCAL_EMBEDDING_SCRIPT,
     "scripts/auto_reply_ondevice.py",
+    "scripts/alden_local_vision.py",
+    "scripts/alden-vision-core-manifest.json",
+    "scripts/verify_model_provenance.py",
     "scripts/local_mlx_gateway.py",
     "scripts/mlx_serve_lifecycle.py",
     METRICS_SCRIPT,
@@ -35,8 +44,77 @@ pub const DATA_FILES: &[&str] = &[
     BROWSER_USE_SCRIPT,
     TOOL_RUNTIME_SCRIPT,
     VOICE_SCRIPT,
-    "scripts/jarvis_abort.py",
-    WAKE_MODEL,
+    ASSISTANT_SCRIPT,
+    "scripts/alden_chat_turns.py",
+    "scripts/alden_input_images.py",
+    "scripts/alden_chat_metrics.py",
+    "scripts/alden_knowledge_turn.py",
+    "scripts/alden_knowledge_tool_protocol.py",
+    "scripts/alden_knowledge_authority.py",
+    "scripts/alden_chat_files.py",
+    "scripts/alden_chat_links.py",
+    "scripts/alden_link_fetch.py",
+    "scripts/alden_graph_quality.py",
+    "scripts/alden_normalization_evidence.py",
+    "scripts/alden_body_normalization.py",
+    "scripts/alden_time_normalization.py",
+    "scripts/alden_quantity_normalization.py",
+    "scripts/alden_content_evidence.py",
+    "scripts/alden_source_text.py",
+    "scripts/alden_graph_quality_action.py",
+    "scripts/alden_annotation_candidates.py",
+    VOICE_AUDIO_LIBRARY,
+    "scripts/alden_abort.py",
+    "scripts/alden_local_http.py",
+    "scripts/alden_model_routes.py",
+    "scripts/alden_routed_llm.py",
+    "scripts/alden_file_content.py",
+    "scripts/alden_document_segments.py",
+    "scripts/alden_file_set.py",
+    "scripts/alden_link_content.py",
+    "scripts/alden_osk.py",
+    "scripts/alden_status_mcp.py",
+    "scripts/alden_history.py",
+    "scripts/alden_collection.py",
+    "scripts/alden_collection_export.py",
+    "scripts/alden_collection_delta.py",
+    "scripts/alden_entity_resolution.py",
+    "scripts/alden_entity_fixture.py",
+    "scripts/alden_graph_transport.py",
+    "scripts/alden_entity_projection.py",
+    "scripts/alden_semantic_affinity.py",
+    "scripts/alden_affinity_sampling.py",
+    "scripts/alden_layout_affinity.py",
+    "scripts/alden_collection_retrieval.py",
+    "scripts/alden_original_text_index.py",
+    "scripts/alden_scoped_knowledge_query.py",
+    "scripts/alden_retrieval_time.py",
+    "scripts/alden_gbrain_client.py",
+    "scripts/alden_gbrain_projection.py",
+    "scripts/alden_gbrain_bridge.py",
+    "scripts/alden_gbrain_cache.py",
+    "scripts/alden_gbrain_import.py",
+    "scripts/alden_gbrain_watch.py",
+    "scripts/alden_gbrain_delta.py",
+    "scripts/alden_knowledge_mcp.py",
+    "scripts/alden_messenger_runtime.py",
+    "scripts/alden_messenger_references.py",
+    "scripts/alden_messenger_quality.py",
+    "scripts/alden_messenger_factory.py",
+    "scripts/alden_messenger_production.py",
+    "scripts/alden_platform_identity.py",
+    "scripts/alden_collect.py",
+    "scripts/alden_collection_scheduler.py",
+    "scripts/alden_realtime_collection.py",
+    "scripts/alden_source_acquisition.py",
+    "scripts/alden_automation_history.py",
+    "scripts/alden_osk_sources.py",
+    "scripts/alden_osk_retrieval.py",
+    "scripts/alden_osk_delta.py",
+    "scripts/alden_corpus_topics.py",
+    "scripts/alden_corpus.py",
+    "scripts/vendor/osk-v4.1.2.zip",
+    "scripts/vendor/osk-v4.1.2.json",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,7 +216,7 @@ impl ResourceLayout {
                     .unwrap_or_else(|| root.join(MENUBAR_SCRIPT)),
                 bin: overrides
                     .bin
-                    .unwrap_or_else(|| root.join("target/debug/openkakao-cli")),
+                    .unwrap_or_else(|| root.join("target/debug/alden-cli")),
                 root,
                 installed: false,
             }
@@ -154,16 +232,17 @@ impl ResourceLayout {
         for relative in DATA_FILES {
             validate_path(&self.root.join(relative), Kind::Data)?;
         }
+        if self.installed {
+            for relative in CLI_FILES {
+                validate_path(&self.root.join(relative), Kind::Executable)?;
+            }
+        }
         // Dev overrides remain inside the explicitly selected safe root.
         if !self.script.starts_with(&self.root) || !self.bin.starts_with(&self.root) {
             return Err(ResourceError::Unsafe);
         }
         validate_path(&self.script, Kind::Data)?;
         validate_path(&self.bin, Kind::Executable)?;
-        let model = fs::metadata(self.root.join(WAKE_MODEL)).map_err(|_| ResourceError::Missing)?;
-        if model.len() > 64 * 1024 * 1024 {
-            return Err(ResourceError::Unsafe);
-        }
         Ok(())
     }
 }
@@ -179,7 +258,7 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
-                "jarvis-resources-{}-{}",
+                "alden-resources-{}-{}",
                 std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
@@ -199,18 +278,21 @@ mod tests {
             for relative in DATA_FILES {
                 self.file(&root.join(relative), false);
             }
+            if installed {
+                self.file(&root.join(LEGACY_CLI), true);
+            }
             self.file(
                 &root.join(if installed {
                     CLI
                 } else {
-                    "target/debug/openkakao-cli"
+                    "target/debug/alden-cli"
                 }),
                 true,
             );
         }
         fn app(&self) -> (PathBuf, PathBuf) {
-            let app = self.0.join("Moved Jarvis.app");
-            let executable = app.join("Contents/MacOS/openkakao-jarvis-desktop");
+            let app = self.0.join("Moved Alden.app");
+            let executable = app.join("Contents/MacOS/openkakao-alden-desktop");
             self.file(&executable, true);
             let root = app.join("Contents/Resources");
             self.payload(&root, true);
@@ -253,7 +335,7 @@ mod tests {
         let (exe, root) = f.app();
         let checkout = f.0.join("checkout");
         f.payload(&checkout, false);
-        for relative in DATA_FILES.iter().copied().chain(std::iter::once(CLI)) {
+        for relative in DATA_FILES.iter().copied().chain(CLI_FILES.iter().copied()) {
             let path = root.join(relative);
             fs::remove_file(&path).unwrap();
             assert_eq!(
@@ -261,7 +343,7 @@ mod tests {
                     .unwrap_err(),
                 ResourceError::Missing
             );
-            f.file(&path, relative == CLI);
+            f.file(&path, CLI_FILES.contains(&relative));
         }
         fs::remove_dir_all(root).unwrap();
         assert!(ResourceLayout::discover(&exe, &checkout, true, DevOverrides::default()).is_err());
@@ -270,7 +352,7 @@ mod tests {
     #[test]
     fn symlinked_files_parents_roots_and_dangling_links_fail_closed() {
         let f = Fixture::new();
-        for target in [MENUBAR_SCRIPT, VOICE_SCRIPT, WAKE_MODEL, CLI, "scripts", ""] {
+        for target in [MENUBAR_SCRIPT, VOICE_SCRIPT, CLI, LEGACY_CLI, "scripts", ""] {
             let (exe, root) = f.app();
             let path = if target.is_empty() {
                 root.clone()
@@ -301,18 +383,18 @@ mod tests {
     fn rejects_wrong_types_and_missing_execution_or_read_permissions() {
         let f = Fixture::new();
         let (exe, root) = f.app();
-        for relative in [MENUBAR_SCRIPT, CLI] {
+        for relative in [MENUBAR_SCRIPT, CLI, LEGACY_CLI] {
             let path = root.join(relative);
             fs::remove_file(&path).unwrap();
             fs::create_dir(&path).unwrap();
             assert!(ResourceLayout::discover(&exe, &f.0, true, DevOverrides::default()).is_err());
             fs::remove_dir(&path).unwrap();
-            f.file(&path, relative == CLI);
+            f.file(&path, CLI_FILES.contains(&relative));
             fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
             assert!(ResourceLayout::discover(&exe, &f.0, true, DevOverrides::default()).is_err());
             fs::set_permissions(
                 &path,
-                fs::Permissions::from_mode(if relative == CLI { 0o755 } else { 0o644 }),
+                fs::Permissions::from_mode(if CLI_FILES.contains(&relative) { 0o755 } else { 0o644 }),
             )
             .unwrap();
         }
@@ -325,11 +407,11 @@ mod tests {
         let f = Fixture::new();
         let checkout = f.0.join("checkout");
         f.payload(&checkout, false);
-        let exe = checkout.join("desktop/target/debug/jarvis");
+        let exe = checkout.join("desktop/target/debug/alden");
         let layout =
             ResourceLayout::discover(&exe, &checkout, true, DevOverrides::default()).unwrap();
         assert!(!layout.installed);
-        assert_eq!(layout.bin, checkout.join("target/debug/openkakao-cli"));
+        assert_eq!(layout.bin, checkout.join("target/debug/alden-cli"));
         assert_eq!(
             ResourceLayout::discover(&exe, &checkout, false, DevOverrides::default()).unwrap_err(),
             ResourceError::DevelopmentDisabled
@@ -366,8 +448,8 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let resources = config["bundle"]["resources"].as_object().unwrap();
-        assert_eq!(resources.len(), DATA_FILES.len() + 1);
-        for relative in DATA_FILES.iter().copied().chain(std::iter::once(CLI)) {
+        assert_eq!(resources.len(), DATA_FILES.len() + CLI_FILES.len());
+        for relative in DATA_FILES.iter().copied().chain(CLI_FILES.iter().copied()) {
             assert_eq!(resources[&format!("bundle-resources/{relative}")], relative);
         }
     }

@@ -2,7 +2,7 @@
 #[path = "src/resource_layout.rs"]
 mod resource_layout;
 
-use resource_layout::{validate_path, Kind, CLI, DATA_FILES};
+use resource_layout::{validate_path, Kind, CLI_FILES, DATA_FILES};
 use std::io::{Read, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::{env, fs, path::Path};
@@ -34,22 +34,22 @@ fn main() {
     let checkout = manifest.parent().unwrap().parent().unwrap();
     let stage = manifest.join("bundle-resources");
     let profile = env::var("PROFILE").unwrap();
-    let cli = checkout.join(format!("target/{profile}/openkakao-cli"));
+    let cli = checkout.join(format!("target/{profile}/alden-cli"));
     println!("cargo:rerun-if-changed=src/resource_layout.rs");
-    for relative in DATA_FILES.iter().copied().chain(std::iter::once(CLI)) {
-        let source = if relative == CLI {
+    for relative in DATA_FILES.iter().copied().chain(CLI_FILES.iter().copied()) {
+        let source = if CLI_FILES.contains(&relative) {
             cli.clone()
         } else {
             checkout.join(relative)
         };
-        let kind = if relative == CLI {
+        let kind = if CLI_FILES.contains(&relative) {
             Kind::Executable
         } else {
             Kind::Data
         };
         println!("cargo:rerun-if-changed={}", source.display());
         validate_path(&source, kind).unwrap_or_else(|error| {
-            panic!("unsafe/missing bundle input {}: {error:?}; build the CLI with cargo build {} --bin openkakao-cli first", source.display(), if profile == "release" { "--release" } else { "" })
+            panic!("unsafe/missing bundle input {}: {error:?}; build the CLI with cargo build {} --bin alden-cli first", source.display(), if profile == "release" { "--release" } else { "" })
         });
         let dest = stage.join(relative);
         // Create only fixed directories, validating each before descending.
@@ -78,7 +78,7 @@ fn main() {
         let mut output = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(if relative == CLI { 0o755 } else { 0o644 })
+            .mode(if CLI_FILES.contains(&relative) { 0o755 } else { 0o644 })
             .open(&temporary)
             .unwrap();
         let mut input = fs::OpenOptions::new()
@@ -95,7 +95,7 @@ fn main() {
             output.write_all(&buffer[..count]).unwrap();
         }
         output
-            .set_permissions(fs::Permissions::from_mode(if relative == CLI {
+            .set_permissions(fs::Permissions::from_mode(if CLI_FILES.contains(&relative) {
                 0o755
             } else {
                 0o644

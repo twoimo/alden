@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Alden 0.3.151 · 영속 이력과 별도 활동 소비",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ]
+  },
+  "stages": [
+    {
+      "label": "저장 확정"
+    },
+    {
+      "label": "영속 순서"
+    },
+    {
+      "label": "별도 읽기"
+    },
+    {
+      "label": "화면 반영"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "a151_activity_commit",
+      "type": "database",
+      "label": "저장 트랜잭션",
+      "sublabel": "문서·membership·FTS·events",
+      "stage": 0,
+      "row": 1,
+      "width": 120
+    },
+    {
+      "id": "a151_activity_journal",
+      "type": "database",
+      "label": "영속 저널",
+      "sublabel": "stream·순서·단계·건수",
+      "stage": 1,
+      "row": 1,
+      "width": 120
+    },
+    {
+      "id": "a151_activity_history_read",
+      "type": "backend",
+      "label": "이력 범위 조회",
+      "sublabel": "권한·keyset·읽은 한도",
+      "stage": 2,
+      "row": 0,
+      "width": 120
+    },
+    {
+      "id": "a151_activity_activity_read",
+      "type": "security",
+      "label": "관측 활동 소비",
+      "sublabel": "version·시각·표시 snapshot",
+      "stage": 2,
+      "row": 2,
+      "width": 120
+    },
+    {
+      "id": "a151_activity_history_ui",
+      "type": "frontend",
+      "label": "기억 정리 목록",
+      "sublabel": "대상·시각·상태·원문",
+      "stage": 3,
+      "row": 0,
+      "width": 120
+    },
+    {
+      "id": "a151_activity_graph_ui",
+      "type": "frontend",
+      "label": "3D 실제 활동",
+      "sublabel": "가시성·줌·선택·감쇠",
+      "stage": 3,
+      "row": 2,
+      "width": 120
+    }
+  ],
+  "flows": [
+    {
+      "id": "a151_activity_edge_0",
+      "from": "a151_activity_commit",
+      "to": "a151_activity_journal",
+      "label": "같은 DB commit"
+    },
+    {
+      "id": "a151_activity_edge_1",
+      "from": "a151_activity_journal",
+      "to": "a151_activity_history_read",
+      "label": "현재 범위 이력"
+    },
+    {
+      "id": "a151_activity_edge_2",
+      "from": "a151_activity_journal",
+      "to": "a151_activity_activity_read",
+      "label": "관측 순서"
+    },
+    {
+      "id": "a151_activity_edge_3",
+      "from": "a151_activity_history_read",
+      "to": "a151_activity_history_ui",
+      "label": "행·필터"
+    },
+    {
+      "id": "a151_activity_edge_4",
+      "from": "a151_activity_activity_read",
+      "to": "a151_activity_graph_ui",
+      "label": "검증된 사건만"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "읽기와 활동 분리",
+      "items": [
+        "목록과 활동은 같은 저널의 다른 소비자",
+        "MCP history 조회는 새 활동을 만들지 않음"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "근거와 단계",
+      "items": [
+        "validated는 ID/hash/형식, indexed는 FTS",
+        "검색 후보·맥락·읽기·저장을 서로 구분"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "수명과 재기준",
+      "items": [
+        "stream 교체·누락은 snapshot 재기준",
+        "만료·숨김·과거 기록은 점등에서 제외"
+      ]
+    }
+  ]
+}

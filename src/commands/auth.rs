@@ -51,7 +51,7 @@ pub fn cmd_auth(json: bool) -> Result<()> {
             println!("  Token is invalid or expired.");
         }
         println!(
-            "  Hint: open KakaoTalk, open chat list once, then run 'openkakao-cli login --save'."
+            "  Hint: open KakaoTalk, open chat list once, then run 'alden-cli login --save'."
         );
     }
 
@@ -156,7 +156,7 @@ fn print_login_extraction_hint() {
         println!(
             "  Open the KakaoTalk macOS app, sign in, then click a chat at least once so the app"
         );
-        println!("  populates its HTTP cache. Then retry 'openkakao-cli login --save'.");
+        println!("  populates its HTTP cache. Then retry 'alden-cli login --save'.");
         return;
     }
 
@@ -190,7 +190,7 @@ fn print_login_extraction_hint() {
                     );
                     println!();
                     println!("  Use email + password login instead — it does not need the cache:");
-                    println!("    openkakao-cli login --manual --save");
+                    println!("    alden-cli login --manual --save");
                 }
                 _ => {
                     println!("Could not extract credentials.");
@@ -199,7 +199,7 @@ fn print_login_extraction_hint() {
                     println!(
                         "  Open KakaoTalk, click a chat or refresh the friend list so the app issues a"
                     );
-                    println!("  REST call, then retry 'openkakao-cli login --save'.");
+                    println!("  REST call, then retry 'alden-cli login --save'.");
                     println!(
                         "  (Set OPENKAKAO_CLI_DEBUG=1 to see which candidates the scan inspected.)"
                     );
@@ -382,7 +382,7 @@ fn print_device_not_registered_warning() {
     eprintln!("This Mac is not registered on your KakaoTalk account, and KakaoTalk's");
     eprintln!("current macOS builds no longer expose an endpoint to register it from a");
     eprintln!("third-party client (the passcode/register_device routes return 404).");
-    eprintln!("openkakao-cli cannot complete this login. (#20, #22)");
+    eprintln!("alden-cli cannot complete this login. (#20, #22)");
     eprintln!();
     eprintln!("  🚨 Do NOT keep retrying. Repeated logins from an unregistered device");
     eprintln!("     can get your account's sub-device login blocked or the account");
@@ -404,7 +404,7 @@ fn print_manual_login_failure(status: i64, message: &str) {
         eprintln!("  KakaoTalk reports this client version is too old to log in.");
         eprintln!("  Update KakaoTalk to the latest version, then retry. If you are");
         eprintln!("  already up to date, pass the current app version explicitly:");
-        eprintln!("    openkakao-cli login --manual --save --app-version <X.Y.Z>");
+        eprintln!("    alden-cli login --manual --save --app-version <X.Y.Z>");
         eprintln!("  (find the version in KakaoTalk > About, e.g. 26.5.0)");
         return;
     }

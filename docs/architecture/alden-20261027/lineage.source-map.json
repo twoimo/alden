@@ -1,0 +1,279 @@
+{
+  "family": "lineage",
+  "scope": "출처 · 원본에서 파생까지",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "raw": {
+      "claim": "원본 바이트 — 해시 검증",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 883,
+          "end_line": 906,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "a513201b7466449e78f0f19e816b3146a45bdf2f737c17fa0762718f2a070b15",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1801,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "23c655a0707be048aacf3ebf3347801e21382c6adf2fa19955100c95d4ab17dc",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "scope": {
+      "claim": "권한·버전 — 읽기 전후 확인",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 649,
+          "end_line": 675,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "9804648756cef29cb23b24c973d6f0e2e4b0da98a3e112ccb594541ad2305ea1",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 802,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "21882a8da2d0a26f242ee7b8b582513089fe31a529e3c5474fcf5f260b62b016",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "records": {
+      "claim": "문서·관계 버전 — 이전 버전 보존",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1124,
+          "end_line": 1151,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "4ba65ccf413ed5d6d763fa27613c58c79d5b0176127d075541e926af685bfebb",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1183,
+          "end_line": 1218,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "a22e0962dec68c74503cc053783cc526a501b4334e5b93e48599958fb79d8837",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "detail": {
+      "claim": "원문 상세 — expected_version",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1843,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "f73cf0c6153bc72d7932e2751a74bf1e875614bf812637b65e3ee07d27163c0a",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 214,
+          "end_line": 238,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "bcfee0e7c1ce338ebc6f2914f93fee8e33fa4ea0d82c7ca53ee44515965ca987",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    "export": {
+      "claim": "범위 내보내기 — 권한·체크포인트",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_export.py",
+          "line": 119,
+          "end_line": 152,
+          "file_sha256": "3c552cd4625d834559b8e1f8be400d2e623cbed70f05dd134b155a0df21bc56c",
+          "range_sha256": "8d92ee81d3bae465773bbcba3517f12b759ae134540610a29bebce0b68fa4dde",
+          "local_source": "../../../scripts/alden_collection_export.py"
+        }
+      ]
+    },
+    "gbrain": {
+      "claim": "GBrain 파생 — 세대·투영 해시",
+      "sources": [
+        {
+          "path": "scripts/alden_gbrain_import.py",
+          "line": 847,
+          "end_line": 882,
+          "file_sha256": "39476afd00b43d5ffb3cd513e3835f2c71e29033405e4eb72120b55ed3639ce2",
+          "range_sha256": "be77ec13ad83ef84773d51e1a701a3e218b93bc9adab01619f8b795c605cc49d",
+          "local_source": "../../../scripts/alden_gbrain_import.py"
+        }
+      ]
+    },
+    "paths": {
+      "claim": "경로 조회 — 현재 원본 재검사",
+      "sources": [
+        {
+          "path": "scripts/alden_gbrain_import.py",
+          "line": 851,
+          "end_line": 882,
+          "file_sha256": "39476afd00b43d5ffb3cd513e3835f2c71e29033405e4eb72120b55ed3639ce2",
+          "range_sha256": "ac5c9cf2e432a7c62f8d3a034fef2b6fbdffdc12711e6cbb3b6ca24096a5968a",
+          "local_source": "../../../scripts/alden_gbrain_import.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 199,
+          "end_line": 212,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "4e817677d1a58ad12eca15d3edab37ce1aea26dc69aa18fefa23f8e8da2d94f7",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "raw-scope",
+      "claim": "원본 증거",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 883,
+          "end_line": 906,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "a513201b7466449e78f0f19e816b3146a45bdf2f737c17fa0762718f2a070b15",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1801,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "23c655a0707be048aacf3ebf3347801e21382c6adf2fa19955100c95d4ab17dc",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "scope-records",
+      "claim": "허용 버전",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 649,
+          "end_line": 675,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "9804648756cef29cb23b24c973d6f0e2e4b0da98a3e112ccb594541ad2305ea1",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 802,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "21882a8da2d0a26f242ee7b8b582513089fe31a529e3c5474fcf5f260b62b016",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "records-detail",
+      "claim": "상세 근거",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1124,
+          "end_line": 1151,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "4ba65ccf413ed5d6d763fa27613c58c79d5b0176127d075541e926af685bfebb",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1183,
+          "end_line": 1218,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "a22e0962dec68c74503cc053783cc526a501b4334e5b93e48599958fb79d8837",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "records-export",
+      "claim": "범위 레코드",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1124,
+          "end_line": 1151,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "4ba65ccf413ed5d6d763fa27613c58c79d5b0176127d075541e926af685bfebb",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1183,
+          "end_line": 1218,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "a22e0962dec68c74503cc053783cc526a501b4334e5b93e48599958fb79d8837",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "export-gbrain",
+      "claim": "파생 투영",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_export.py",
+          "line": 119,
+          "end_line": 152,
+          "file_sha256": "3c552cd4625d834559b8e1f8be400d2e623cbed70f05dd134b155a0df21bc56c",
+          "range_sha256": "8d92ee81d3bae465773bbcba3517f12b759ae134540610a29bebce0b68fa4dde",
+          "local_source": "../../../scripts/alden_collection_export.py"
+        }
+      ]
+    },
+    {
+      "id": "gbrain-paths",
+      "claim": "경로 후보",
+      "sources": [
+        {
+          "path": "scripts/alden_gbrain_import.py",
+          "line": 847,
+          "end_line": 882,
+          "file_sha256": "39476afd00b43d5ffb3cd513e3835f2c71e29033405e4eb72120b55ed3639ce2",
+          "range_sha256": "be77ec13ad83ef84773d51e1a701a3e218b93bc9adab01619f8b795c605cc49d",
+          "local_source": "../../../scripts/alden_gbrain_import.py"
+        }
+      ]
+    },
+    {
+      "id": "scope-paths",
+      "claim": "현재 권한",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 649,
+          "end_line": 675,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "9804648756cef29cb23b24c973d6f0e2e4b0da98a3e112ccb594541ad2305ea1",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 802,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "21882a8da2d0a26f242ee7b8b582513089fe31a529e3c5474fcf5f260b62b016",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": []
+}

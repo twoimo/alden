@@ -1,0 +1,125 @@
+{
+  "product_code_head": "11138703b1e408082fe2245f3115338e1726b018",
+  "compiled_candidate_code_head": "5f38c55a0e76cfbb4a9be28b987da9e53992c9f5",
+  "product_code_changed": false,
+  "actual_existing_collection": {
+    "projects": 5,
+    "targets": 43,
+    "source_nodes": 26651,
+    "edges": 48355,
+    "claim_records": 48355,
+    "snapshot_scope": "complete declared authorized ordinary-source scopes at captured as-of; existing source, no new content claimed"
+  },
+  "actual_source_delta": {
+    "events": 462,
+    "candidate_nodes": 10,
+    "candidate_groups": 14,
+    "nodes_put": 5,
+    "nodes_deleted": 0,
+    "edges_put": 0,
+    "edges_deleted": 0,
+    "targets_put": 0,
+    "complete_source_comparison": true,
+    "checkpoint_unchanged_at_completion": true,
+    "elapsed_seconds": 8.251236540992977
+  },
+  "actual_index": {
+    "projected_counts": {
+      "source_nodes": 26651,
+      "origins": 43,
+      "observed_groups": 48355,
+      "membership_links": 26651,
+      "pages": 26694,
+      "links": 75006
+    },
+    "index_updates": {
+      "mode": "index_delta",
+      "pages_put": 5,
+      "pages_deleted": 0,
+      "links_put": 5,
+      "links_deleted": 0
+    },
+    "full_fingerprint_matches_incremental": true,
+    "all_logical_index_rows_match_full": true,
+    "baseline_index_file_token_preserved": true,
+    "engine_built_or_queried": false
+  },
+  "actual_owned_mcp": {
+    "graph_project_reads": 5,
+    "history_reads": 2,
+    "scope_rejections": 1,
+    "clean_exit": true,
+    "tool_count": 4,
+    "global_connection_changed": false,
+    "body_search_or_detail_requests": 0
+  },
+  "existing_registered_host": {
+    "installed_version": "0.3.219",
+    "exposed_alden_tools": [
+      "alden_status"
+    ],
+    "knowledge_connection_configured": false,
+    "embedding_endpoint": "reachable",
+    "generation_endpoint": "unavailable",
+    "voice_or_UI": "not_tested"
+  },
+  "native_sdk_hold": {
+    "code": "kakao_sdk_integrity_unverified",
+    "health_status": "installation_needs_attention",
+    "integrity_status": "manifest_invalid",
+    "manifest_entries": 136,
+    "existing_pin_mismatches": [
+      "kakaotalk-chat-controls/SKILL.md",
+      "kakaotalk-chat-controls/scripts/chat_controls.py"
+    ],
+    "uncovered_runtime_file": "kakaotalk-chat-controls/scripts/test_unstarted_file_resume.py",
+    "identity_body_or_credential_reads": 0,
+    "repair_or_bypass": false
+  },
+  "mcp_maintenance": {
+    "native_status": "observed",
+    "snapshot_stable": true,
+    "incomplete_layers": [
+      "codex:opencode-native-task:unverified",
+      "aside:opencode-free-helper:unverified"
+    ],
+    "scope": "two unrelated OpenCode source freshness gaps do not invalidate this actual status read"
+  },
+  "method_corrections": [
+    "first direct row comparison used wrong newline digest framing and is excluded; corrected8-byte length framing was calibrated against archived receipt",
+    "first scope-rejection harness expected tool isError; server correctly returned JSON-RPC error; corrected final session accepted7/rejected1 and exited0",
+    "standalone index seed captures completed baseline file token; no engine receipt/revision or active pointer invented"
+  ],
+  "privacy": {
+    "published_private_bodies_labels_ids_or_history": false,
+    "private_replies_kept_local": true,
+    "source_operational_writes": 0,
+    "source_enrollment_or_global_registration": false,
+    "native_GUI_or_sends": false
+  },
+  "preservation": {
+    "apps": 13,
+    "config_entries": 5,
+    "model_collector_process_arguments_exact": true,
+    "desktop_processes": 0,
+    "owned_engine_processes": 0
+  },
+  "limits": [
+    "no actual messenger/native account acceptance; loader stopped before identity/DB open",
+    "ordinary-source export/index is complete at snapshots, not a new always-current GBrain service",
+    "no actual26k-record engine build/path readback; no private/native semantic gold or installed3D/GPU acceptance",
+    "current host still has status-only connector; CLI stdio proves this executor only",
+    "external review/required worker/normal release and full original18/follow-up/ST01–16/Cursor scope stay open"
+  ],
+  "evidence_sha256": {
+    "PLAN.json": "16a5b62f8a88f8d40477a28d3287116364c9fe0d3ebb53f3c7a12d031694306e",
+    "actual-five-delta-result.json": "b46605ec8b4099938cccd0a5e24a1b91f6806e623a2eb7d552010eb967eef8d7",
+    "actual-index-acceptance.json": "2fcd8b52f4bdc6afb669046a945b0c9ff68e81ba1595a9fd140afb762b56e6a2",
+    "actual-mcp-acceptance.json": "070ea44c3b9f2988f029923f0d5286e5c88491f8753bb36d2a076e8f7e191d5c",
+    "live-canonical-comparison.json": "2e56ebda492ee468f5d07e77b95a974ae38f5c19166ec61d608362054b4cde5b",
+    "sdk-manifest-coverage.json": "f02834b175361f98af7655128c19a56871a1f159b597046a8043880186c7d629",
+    "sdk-existing-pins.json": "032bf6d4354274cca4c29d2d8199ed4f94775dad07d8a4fd16c174db08520dd4",
+    "preservation-after.json": "d4b4ab42891860c93afc557d05cb8be2d5fcbb64319b42bd8aa33d6f6ad9e846"
+  },
+  "full_goal": "active"
+}

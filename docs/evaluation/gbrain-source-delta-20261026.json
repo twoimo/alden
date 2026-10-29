@@ -1,0 +1,343 @@
+{
+  "kind": "gbrain-source-index-delta-local-evidence-v1",
+  "base_head": "fe3f9fc705121dac38978a6e61957a87393755f9",
+  "source_sha256": {
+    "scripts/alden_collection.py": "1983ae346572822537885b834e896e7beba06ed667b2d42b80c059eed1da78f7",
+    "scripts/alden_collection_export.py": "51045fbb58fee4aa52ce0bc285405557500f1ae62dc2254db3a78c49ce8d9336",
+    "scripts/alden_collection_delta.py": "ee3d846b7d09cd2ee473901a4854556aa1140ba421fcfc209f1e83709bbbf751",
+    "scripts/alden_gbrain_import.py": "b9e9e4ba5d68bec09e53507ff5dd53a4c68561f1765ce370b7a37a0a232880ed",
+    "scripts/alden_gbrain_delta.py": "bd6fa96640c7bdb1e4a2ac75406d2d9b798fef8384f917d55ccbc61118367266",
+    "tests/test_alden_collection_delta.py": "e9983bd5379838609fc63ff7087f36fa38449244529ee8c70833ad9865dcf6d8",
+    "tests/test_alden_gbrain_delta.py": "32016baa94975e3dccf41878119fb82df6a83d40cc757e3fc7761140b30c6bad",
+    ".github/workflows/ci.yml": "33b73bdcb4850a5bd369a42b505eef23d334496e3a6f96f3692a949ac91e4f0a",
+    "desktop/src-tauri/tauri.conf.json": "81a2eb05edc34ca624dedb0d602098eec49bed5fc0db133e12f0d7f899a593b3",
+    "desktop/src-tauri/src/resource_layout.rs": "e5182ae63e1f311027c0b3658cb03270bb58a8c1324dac53e418070281162385"
+  },
+  "python_tests": 425,
+  "source_delta_tests": 33,
+  "engine_delta_tests": 32,
+  "consumer_tests": 342,
+  "consumer_processes": 16,
+  "test_runtime": "pinned menubar CPython3.11",
+  "isolated_mutants": 10,
+  "pre_fix_collection_regressions": 2,
+  "full_goal": "active",
+  "installation": false,
+  "native_app_launch": false,
+  "service_or_global_registration": false,
+  "external_review": "NOT_RUN",
+  "worker_contract": {
+    "required_model": "chatgpt-web/gpt-6-astra",
+    "required_effort": "max",
+    "required_model_exposed": false,
+    "dispatched": false,
+    "substitution": false
+  },
+  "current_source_acceptance": {
+    "receipt": "outputs/gbrain-source-delta-20261025T223243Z/public-source-delta-delivery/acceptance.json",
+    "sha256": "5c924584793be174ff7ca286842de160780bd22453453c883d493b39b01e4098",
+    "recorded_trials": 8,
+    "source_index_engine_trials": [
+      {
+        "phase": "version",
+        "engine_writes": {
+          "links_added": 1,
+          "links_removed": 1,
+          "pages_purged": 0,
+          "pages_put": 1
+        },
+        "unchanged_revisions": 5,
+        "source_update": {
+          "after": {
+            "cursor": 20,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          },
+          "archive_rows": {
+            "edges_deleted": 0,
+            "edges_put": 0,
+            "nodes_deleted": 0,
+            "nodes_put": 1,
+            "targets_put": 0
+          },
+          "base_database_sha256": "36666e46089930fa5bf09afc5664e714c31421663565e85a141efd15461237dd",
+          "candidate_groups": 1,
+          "candidate_nodes": 1,
+          "complete_source_comparison": true,
+          "events": 5,
+          "mode": "journal_delta",
+          "through": {
+            "cursor": 25,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          }
+        },
+        "index_updates": {
+          "links_deleted": 0,
+          "links_put": 1,
+          "mode": "index_delta",
+          "pages_deleted": 0,
+          "pages_put": 1
+        }
+      },
+      {
+        "phase": "interrupted-add",
+        "engine_writes": {
+          "links_added": 1,
+          "links_removed": 0,
+          "pages_purged": 0,
+          "pages_put": 1
+        },
+        "crash_exit": 24,
+        "unpublished_generation_discarded": true,
+        "recovered_by": "full current-source rebuild"
+      },
+      {
+        "phase": "add",
+        "engine_writes": {
+          "links_added": 1,
+          "links_removed": 0,
+          "pages_purged": 0,
+          "pages_put": 1
+        },
+        "source_update": {
+          "after": {
+            "cursor": 30,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          },
+          "archive_rows": {
+            "edges_deleted": 0,
+            "edges_put": 0,
+            "nodes_deleted": 0,
+            "nodes_put": 1,
+            "targets_put": 0
+          },
+          "base_database_sha256": "ef7d528cdadff0b639452dc134d302b392d2c99545e4c76eccd35bff060f5c4d",
+          "candidate_groups": 1,
+          "candidate_nodes": 1,
+          "complete_source_comparison": true,
+          "events": 5,
+          "mode": "journal_delta",
+          "through": {
+            "cursor": 35,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          }
+        },
+        "index_updates": {
+          "links_deleted": 0,
+          "links_put": 1,
+          "mode": "index_delta",
+          "pages_deleted": 0,
+          "pages_put": 1
+        }
+      },
+      {
+        "phase": "retract",
+        "engine_writes": {
+          "links_added": 0,
+          "links_removed": 0,
+          "pages_purged": 1,
+          "pages_put": 0
+        },
+        "source_update": {
+          "after": {
+            "cursor": 35,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          },
+          "archive_rows": {
+            "edges_deleted": 0,
+            "edges_put": 0,
+            "nodes_deleted": 1,
+            "nodes_put": 0,
+            "targets_put": 0
+          },
+          "base_database_sha256": "9c8c581db0f2b2d060fbcadd606610d4e36766b6f5c2b0eeddf97f1fd3a5a616",
+          "candidate_groups": 1,
+          "candidate_nodes": 1,
+          "complete_source_comparison": true,
+          "events": 1,
+          "mode": "journal_delta",
+          "through": {
+            "cursor": 36,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          }
+        },
+        "index_updates": {
+          "links_deleted": 1,
+          "links_put": 0,
+          "mode": "index_delta",
+          "pages_deleted": 1,
+          "pages_put": 0
+        }
+      },
+      {
+        "phase": "share",
+        "engine_writes": {
+          "links_added": 3,
+          "links_removed": 0,
+          "pages_purged": 0,
+          "pages_put": 1
+        },
+        "source_update": {
+          "after": {
+            "cursor": 36,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          },
+          "archive_rows": {
+            "edges_deleted": 0,
+            "edges_put": 1,
+            "nodes_deleted": 0,
+            "nodes_put": 1,
+            "targets_put": 0
+          },
+          "base_database_sha256": "5b450ec92a3e6c798d6dcff0cdd23ee24705fdf255d07dd2e65e989d15a2eefa",
+          "candidate_groups": 2,
+          "candidate_nodes": 1,
+          "complete_source_comparison": true,
+          "events": 11,
+          "mode": "journal_delta",
+          "through": {
+            "cursor": 47,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          }
+        },
+        "index_updates": {
+          "links_deleted": 0,
+          "links_put": 3,
+          "mode": "index_delta",
+          "pages_deleted": 0,
+          "pages_put": 1
+        }
+      },
+      {
+        "phase": "owner-retract",
+        "engine_writes": {
+          "links_added": 0,
+          "links_removed": 2,
+          "pages_purged": 0,
+          "pages_put": 1
+        },
+        "source_update": {
+          "after": {
+            "cursor": 47,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          },
+          "archive_rows": {
+            "edges_deleted": 1,
+            "edges_put": 0,
+            "nodes_deleted": 0,
+            "nodes_put": 1,
+            "targets_put": 0
+          },
+          "base_database_sha256": "e4dd3c7697c062514dc698fa581cab9ebc810c21e688bf6b76c13baf7624372b",
+          "candidate_groups": 2,
+          "candidate_nodes": 1,
+          "complete_source_comparison": true,
+          "events": 2,
+          "mode": "journal_delta",
+          "through": {
+            "cursor": 49,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          }
+        },
+        "index_updates": {
+          "links_deleted": 2,
+          "links_put": 0,
+          "mode": "index_delta",
+          "pages_deleted": 0,
+          "pages_put": 1
+        }
+      },
+      {
+        "phase": "relation-only",
+        "engine_writes": {
+          "links_added": 1,
+          "links_removed": 0,
+          "pages_purged": 0,
+          "pages_put": 0
+        },
+        "source_update": {
+          "after": {
+            "cursor": 49,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          },
+          "archive_rows": {
+            "edges_deleted": 0,
+            "edges_put": 1,
+            "nodes_deleted": 0,
+            "nodes_put": 0,
+            "targets_put": 0
+          },
+          "base_database_sha256": "ccf99486f2cc5c970b41d77b579d598c5a297c8000621f9134dc2162298fe940",
+          "candidate_groups": 3,
+          "candidate_nodes": 0,
+          "complete_source_comparison": true,
+          "events": 1,
+          "mode": "journal_delta",
+          "through": {
+            "cursor": 50,
+            "stream_id": "stream:d4c7f8fd31dc59a8f1a018117c330877b2b97e899a6fc04bef3e1232acfc98a7"
+          }
+        },
+        "index_updates": {
+          "links_deleted": 0,
+          "links_put": 1,
+          "mode": "index_delta",
+          "pages_deleted": 0,
+          "pages_put": 0
+        }
+      },
+      {
+        "phase": "unlink",
+        "engine_writes": {
+          "links_added": 0,
+          "links_removed": 1,
+          "pages_purged": 0,
+          "pages_put": 0
+        },
+        "source_update": {
+          "mode": "full_export",
+          "reason": "untracked_source_change"
+        },
+        "index_updates": {
+          "links_deleted": 1,
+          "links_put": 0,
+          "mode": "index_delta",
+          "pages_deleted": 0,
+          "pages_put": 0
+        }
+      }
+    ],
+    "mcp_requests": 6,
+    "accepted_mcp_paths": 4,
+    "rejected_mcp_paths": 2,
+    "watcher_exits": [
+      23,
+      0,
+      24,
+      0,
+      1,
+      0
+    ],
+    "original_public_fixture_unchanged": true,
+    "final_generations": 0,
+    "current_modules_exact": true
+  },
+  "negative_controls": {
+    "receipt": "outputs/gbrain-source-delta-20261025T223243Z/negative-controls.json",
+    "sha256": "6b1508d284b52c59403546d9152fbfb709ae75b1fc70fc97505391ba2b06bbd4"
+  },
+  "baseline_regression_control": {
+    "receipt": "outputs/gbrain-source-delta-20261025T223243Z/pre-fix-collection-control.json",
+    "sha256": "d3e23192c706c7a81f16e8006c73673d273603f866472aaea3bbb4e7ba66bf93"
+  },
+  "consumer_receipt": {
+    "receipt": "outputs/gbrain-source-delta-20261025T223243Z/consumer-tests.json",
+    "sha256": "5befca6e1a400937a5017ce654a136cb1ecfa8dfd5c50d04599b817705790b7b",
+    "collection_module_matches_live_replay": true
+  },
+  "limits": [
+    "selective logical source/index/engine rows; complete comparisons/regeneration/copy/hash/readback remain",
+    "journal window100000events and20000keys falls back to complete baseline; no truncated success",
+    "public copy, not actual publisher/native account permission events",
+    "native/service/private/independent/external/formal/installed/release gates remain open"
+  ]
+}

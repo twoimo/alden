@@ -1,0 +1,228 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "정규화 · 표기와 동일성 결정",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "normalization.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "syntax",
+      "label": "원문 표기 후보"
+    },
+    {
+      "id": "decision",
+      "label": "명시적 동일성 결정"
+    },
+    {
+      "id": "overlay",
+      "label": "파생 오버레이"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "detail",
+      "type": "backend",
+      "label": "검증 원문",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1822
+        }
+      ],
+      "lane": "syntax",
+      "col": 0,
+      "sublabel": "출처·본문 hash"
+    },
+    {
+      "id": "notation",
+      "type": "backend",
+      "label": "표기 후보",
+      "sources": [
+        {
+          "path": "scripts/alden_body_normalization.py",
+          "line": 1,
+          "end_line": 18
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1811,
+          "end_line": 1843
+        }
+      ],
+      "lane": "syntax",
+      "col": 1,
+      "sublabel": "숫자·날짜·단위"
+    },
+    {
+      "id": "display",
+      "type": "frontend",
+      "label": "근거 표시",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1823,
+          "end_line": 1843
+        }
+      ],
+      "lane": "syntax",
+      "col": 2,
+      "sublabel": "진위 판단 아님"
+    },
+    {
+      "id": "preview",
+      "type": "backend",
+      "label": "병합 미리보기",
+      "sources": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "line": 2705,
+          "end_line": 2715
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 688,
+          "end_line": 727
+        }
+      ],
+      "lane": "decision",
+      "col": 0,
+      "sublabel": "멤버·권한 확인"
+    },
+    {
+      "id": "optin",
+      "type": "security",
+      "label": "명시 동의",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 688,
+          "end_line": 702
+        }
+      ],
+      "lane": "decision",
+      "col": 1,
+      "sublabel": "apply / revert"
+    },
+    {
+      "id": "recheck",
+      "type": "security",
+      "label": "수정 버전 검사",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 496,
+          "end_line": 514
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 517,
+          "end_line": 539
+        }
+      ],
+      "lane": "decision",
+      "col": 2,
+      "sublabel": "출처 지문·중복"
+    },
+    {
+      "id": "overlay",
+      "type": "database",
+      "label": "결정 저장",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 539,
+          "end_line": 562
+        }
+      ],
+      "lane": "overlay",
+      "col": 2,
+      "sublabel": "파생 오버레이"
+    },
+    {
+      "id": "revert",
+      "type": "backend",
+      "label": "결정 되돌림",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 565,
+          "end_line": 592
+        }
+      ],
+      "lane": "overlay",
+      "col": 3,
+      "sublabel": "원본·결정 보존"
+    }
+  ],
+  "edges": [
+    {
+      "id": "detail-notation",
+      "from": "detail",
+      "to": "notation",
+      "variant": "default",
+      "label": "본문 범위"
+    },
+    {
+      "id": "notation-display",
+      "from": "notation",
+      "to": "display",
+      "variant": "default",
+      "label": "후보만"
+    },
+    {
+      "id": "preview-optin",
+      "from": "preview",
+      "to": "optin",
+      "variant": "default",
+      "label": "계획"
+    },
+    {
+      "id": "optin-recheck",
+      "from": "optin",
+      "to": "recheck",
+      "variant": "security",
+      "label": "명시 허용"
+    },
+    {
+      "id": "recheck-overlay",
+      "from": "recheck",
+      "to": "overlay",
+      "variant": "default",
+      "label": "현재 계획"
+    },
+    {
+      "id": "overlay-revert",
+      "from": "overlay",
+      "to": "revert",
+      "variant": "security",
+      "label": "버전 일치"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "자동 동일시 없음",
+      "items": [
+        "어휘 표기는 I/O 없는 후보 분석이다. 숫자·날짜 변환은 사실 확인이나 자동 병합이 아니다.",
+        "본문 offset은 Python Unicode code point 기준이며 표시 범위·본문 해시에 묶인다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "되돌릴 수 있는 결정",
+      "items": [
+        "apply는 요청 ID·계획 해시·권한·revision을 검사한다. revert는 활성 오버레이만 제거한다.",
+        "원본 문서·관계·불변 결정 이력은 보존한다."
+      ]
+    }
+  ]
+}

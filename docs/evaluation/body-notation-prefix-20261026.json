@@ -1,0 +1,267 @@
+{
+  "evaluation_utc": "2026-10-26T13:49:52.007694+00:00",
+  "product_head": "0dd1a1951c7ca537b78393d5949f632332331bea",
+  "full_goal": "active",
+  "candidate_only": true,
+  "change": "suppress independent denominator annotations in unsupported bare numeric fractions/ratios; preserve word/identity labels and typed numerator rates",
+  "body_parser_sha256": "53b77c86e567f9d62f50e882a6ec71ef7b89c1641567aa8fabb5010efb086652",
+  "ci": {
+    "url": "https://github.com/twoimo/alden/actions/runs/40331568480",
+    "success_jobs": 4,
+    "total_jobs": 4
+  },
+  "local_tests": {
+    "related_python_methods": 75,
+    "related_python_modules": 5,
+    "frontend_methods": 53,
+    "frontend_files": 3
+  },
+  "independent_controls": {
+    "author": "native gpt-6-astra subagent",
+    "methods": 8,
+    "input_checks": 5720,
+    "initial_candidate_failed_inputs": 72,
+    "final_parent_rerun_failed_inputs": 0,
+    "test_script_unchanged": true,
+    "worker_closed": true,
+    "external_review_substitute": false
+  },
+  "mutation_verification": {
+    "rejected_mutants": 10,
+    "current_and_restored_pass": true,
+    "source_sha256": "53b77c86e567f9d62f50e882a6ec71ef7b89c1641567aa8fabb5010efb086652",
+    "bounds": {
+      "body_characters": 131072,
+      "candidates_per_body": 64,
+      "token_characters": 128,
+      "integer_oracle_generated_cases": 112,
+      "compound_integer_oracle_cases": 10,
+      "joined_timestamp_suffix_cases": 39,
+      "timestamp_boundary_controls": 24,
+      "fraction_ratio_tail_cases": 960,
+      "quantity_label_rate_line_controls": 8,
+      "unsupported_sign_spacing_cases": 28,
+      "numbered_label_controls": 120
+    },
+    "theorem_or_semantic_gold": false
+  },
+  "actual_original_readback": {
+    "projects_requested": 5,
+    "projects_with_eligible_details": 4,
+    "annotated_detail_budget": 10,
+    "verified_annotated_details": 7,
+    "coverage": [
+      {
+        "project_slot": 1,
+        "listed": 1,
+        "detail_attempts": 1,
+        "annotated_details_verified": 1
+      },
+      {
+        "project_slot": 2,
+        "listed": 16,
+        "detail_attempts": 2,
+        "annotated_details_verified": 2
+      },
+      {
+        "project_slot": 3,
+        "listed": 16,
+        "detail_attempts": 2,
+        "annotated_details_verified": 2
+      },
+      {
+        "project_slot": 4,
+        "listed": 16,
+        "detail_attempts": 16,
+        "annotated_details_verified": 0
+      },
+      {
+        "project_slot": 5,
+        "listed": 16,
+        "detail_attempts": 2,
+        "annotated_details_verified": 2
+      }
+    ],
+    "canonical_content_class_excluded": 16,
+    "source_version_hash_offsets_verified": true,
+    "added_candidates": 0,
+    "removed_candidates": 0,
+    "original_bug_reproduced_in_sample": false,
+    "original_query_only_connection_contexts": 259,
+    "original_operational_writes": 0,
+    "native_calls": 0,
+    "gui_launches": 0,
+    "installed_ui": false,
+    "representative_semantic_gold": false
+  },
+  "canonical_export_epoch_comparison": {
+    "epochs": 3,
+    "all_integrity_verified": true,
+    "counts": [
+      {
+        "claim_records": 48355,
+        "edges": 48355,
+        "nodes": 26651,
+        "targets": 43
+      },
+      {
+        "claim_records": 48355,
+        "edges": 48355,
+        "nodes": 26651,
+        "targets": 43
+      },
+      {
+        "claim_records": 48355,
+        "edges": 48355,
+        "nodes": 26651,
+        "targets": 43
+      }
+    ],
+    "pairs": [
+      {
+        "epochs": [
+          0,
+          1
+        ],
+        "counts_equal": true,
+        "row_hashes_equal": false,
+        "checkpoint_equal": false,
+        "tables": {
+          "targets": {
+            "old_rows": 43,
+            "new_rows": 43,
+            "added": 0,
+            "removed": 0,
+            "changed": 0,
+            "unchanged": 43,
+            "changed_field_occurrences": {},
+            "row_change_shapes": {}
+          },
+          "nodes": {
+            "old_rows": 26651,
+            "new_rows": 26651,
+            "added": 0,
+            "removed": 0,
+            "changed": 9,
+            "unchanged": 26642,
+            "changed_field_occurrences": {
+              "source_contexts[*].version": 9,
+              "source_version": 9
+            },
+            "row_change_shapes": {
+              "source_contexts[*].version,source_version": 9
+            }
+          },
+          "edges": {
+            "old_rows": 48355,
+            "new_rows": 48355,
+            "added": 0,
+            "removed": 0,
+            "changed": 0,
+            "unchanged": 48355,
+            "changed_field_occurrences": {},
+            "row_change_shapes": {}
+          }
+        }
+      },
+      {
+        "epochs": [
+          1,
+          2
+        ],
+        "counts_equal": true,
+        "row_hashes_equal": false,
+        "checkpoint_equal": false,
+        "tables": {
+          "targets": {
+            "old_rows": 43,
+            "new_rows": 43,
+            "added": 0,
+            "removed": 0,
+            "changed": 0,
+            "unchanged": 43,
+            "changed_field_occurrences": {},
+            "row_change_shapes": {}
+          },
+          "nodes": {
+            "old_rows": 26651,
+            "new_rows": 26651,
+            "added": 0,
+            "removed": 0,
+            "changed": 6,
+            "unchanged": 26645,
+            "changed_field_occurrences": {
+              "source_contexts[*].version": 6,
+              "source_version": 6
+            },
+            "row_change_shapes": {
+              "source_contexts[*].version,source_version": 6
+            }
+          },
+          "edges": {
+            "old_rows": 48355,
+            "new_rows": 48355,
+            "added": 0,
+            "removed": 0,
+            "changed": 0,
+            "unchanged": 48355,
+            "changed_field_occurrences": {},
+            "row_change_shapes": {}
+          }
+        }
+      }
+    ],
+    "opaque_versions_not_ignored": true,
+    "raw_change_cause_determined": false
+  },
+  "candidate": {
+    "version": "0.3.220",
+    "tracked_source_files": 2036,
+    "app_files": 96,
+    "python_resources": 82,
+    "all_resource_files": 92,
+    "body_parser_matches_actual_source_readback": true,
+    "canonical_check_exit": 0,
+    "identity_only_check_exit": 0,
+    "app_signature": "Apple Development",
+    "cli_signature": "linker ad-hoc",
+    "developer_id_application_present": false,
+    "zip_bytes": 22491762,
+    "zip_sha256": "8cfb5dec3a01413e7c18cf0da62a6d0a0567f9ee4626cb18b7a8f35d9c52d7f8",
+    "zip_bytes_file_directory_modes_exact": true,
+    "older_apps_and_extractions_preserved": 24,
+    "prior_output_files_preserved": 396,
+    "configuration_match_build_start": 5,
+    "configuration_files": 5,
+    "configuration_match_original_baseline": 3,
+    "task_configuration_drift": false,
+    "first_build_prekey_clone_path_rejection_reconciled": true,
+    "ordinary_second_build_and_receipt_check_pass": true,
+    "force_or_evaluation_override": false,
+    "installation": false,
+    "gui_launch": false,
+    "release": false
+  },
+  "safety": {
+    "Alden": "off",
+    "model_and_collector_preserved": true,
+    "original_operational_writes": 0,
+    "global_configuration_writes": false,
+    "sdk_repair": false,
+    "new_enrollment": false,
+    "provider_calls": false,
+    "source_current_guard_changed": false,
+    "canonical_collection_export_producer_hashes_unchanged": 8,
+    "existing_gbrain_pending_preserved": true,
+    "active": false,
+    "ready": false,
+    "source_current_cache_published": false
+  },
+  "limits": [
+    "actual readback is7eligible details from4of5declared projects; one project has one row, another first16records are technical metadata",
+    "zero observed actual annotation changes is not an original reproduction of the synthetic fraction error",
+    "bounded mutation/adversarial checks are not full Unicode/expression semantics, semantic gold or formal proof",
+    "not installed/launched/notarized/released; held independent web-Astra/ChatGPT-Gemini-reverse and full-goal gates remain"
+  ],
+  "private_evidence": "gbrain-source-change-20261026T125538Z (local only; no bodies, identities, raw hashes, authority records or cursors published)"
+}

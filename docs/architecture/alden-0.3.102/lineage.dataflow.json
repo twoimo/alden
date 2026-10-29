@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Alden 0.3.102 · 원문·관측·통합 그래프 계보",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ],
+    "animation": "none"
+  },
+  "stages": [
+    {
+      "label": "독립 원본"
+    },
+    {
+      "label": "출처와 접근"
+    },
+    {
+      "label": "버전·조회"
+    },
+    {
+      "label": "표시 합성"
+    },
+    {
+      "label": "탐색·반환"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "declared102",
+      "type": "external",
+      "label": "선언한 자료 집합",
+      "sublabel": "프로젝트·계정·파일",
+      "stage": 0,
+      "row": 0,
+      "width": 140
+    },
+    {
+      "id": "vault102",
+      "type": "database",
+      "label": "OSK 정본",
+      "sublabel": "원본 SDK·노트 ID",
+      "stage": 0,
+      "row": 1,
+      "width": 140
+    },
+    {
+      "id": "capture102",
+      "type": "security",
+      "label": "원문·권한 보존",
+      "sublabel": "ID·해시·대상·범위",
+      "stage": 1,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "sdk102",
+      "type": "security",
+      "label": "허용된 정본 조회",
+      "sublabel": "정본과 파생본 구분",
+      "stage": 1,
+      "row": 1,
+      "width": 160
+    },
+    {
+      "id": "projection102",
+      "type": "database",
+      "label": "수집 검색·투영",
+      "sublabel": "현재 버전·관계 이력",
+      "stage": 2,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "memory102",
+      "type": "backend",
+      "label": "기억·대화 snapshot",
+      "sublabel": "별도 source 정체성",
+      "stage": 2,
+      "row": 1,
+      "width": 160
+    },
+    {
+      "id": "merge102",
+      "type": "backend",
+      "label": "범위 지정 합성",
+      "sublabel": "ID·source 버전 유지",
+      "stage": 3,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "scene102",
+      "type": "frontend",
+      "label": "단일 3D 뷰어",
+      "sublabel": "선택·검색·목록·근거",
+      "stage": 4,
+      "row": 0,
+      "width": 160
+    }
+  ],
+  "flows": [
+    {
+      "id": "capture_source102",
+      "from": "declared102",
+      "to": "capture102",
+      "label": "선언 자료",
+      "classification": "원본 보존"
+    },
+    {
+      "id": "capture_store102",
+      "from": "capture102",
+      "to": "projection102",
+      "label": "버전 저장",
+      "classification": "권한별 투영",
+      "labelAt": [
+        423,
+        200
+      ]
+    },
+    {
+      "id": "vault_sdk102",
+      "from": "vault102",
+      "to": "sdk102",
+      "label": "정본 조회",
+      "classification": "SDK 정본"
+    },
+    {
+      "id": "sdk_snapshot102",
+      "from": "sdk102",
+      "to": "memory102",
+      "label": "허용 snapshot",
+      "classification": "별도 기억 출처",
+      "labelAt": [
+        423,
+        314
+      ]
+    },
+    {
+      "id": "projection_merge102",
+      "from": "projection102",
+      "to": "merge102",
+      "label": "선택한 범위",
+      "classification": "전체·프로젝트·페이지",
+      "toSide": "left",
+      "route": "straight",
+      "labelAt": [
+        638,
+        105
+      ]
+    },
+    {
+      "id": "memory_merge102",
+      "from": "memory102",
+      "to": "merge102",
+      "label": "기억 합성 조건",
+      "classification": "전체 첫 페이지·기억 선택"
+    },
+    {
+      "id": "merge_scene102",
+      "from": "merge102",
+      "to": "scene102",
+      "label": "동일 ID·근거",
+      "classification": "단일 표시 snapshot",
+      "labelAt": [
+        853,
+        200
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "하나의 화면과 여러 정본",
+      "items": [
+        "출처와 프로젝트 권한, 원본 ID와 버전·hash를 유지해 하나의 논리 그래프로 조회한다. 정본 저장소의 소유권은 보존한다.",
+        "재수집의 확인 관측은 source_observations, 관계 변화는 relation_versions에 별도 기록한다. 원문이 같아도 관측 시각을 새로 확인할 수 있다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "계보 검증과 미결",
+      "items": [
+        "프로젝트·다음 페이지는 범위를 따른다. 원본 ID·버전·권한을 보존하고 근접을 저장 관계로 승격하지 않는다.",
+        "모든 원본·여러 호스트·자동 재취득·독립 의미/동일인 gold는 아직 미완료다."
+      ]
+    }
+  ]
+}

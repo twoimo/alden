@@ -1,0 +1,280 @@
+{
+  "basis": "reversible candidate; externally unvalidated",
+  "previous_head": "3fd7f0d503775be2d4a77451e86190c038232dce",
+  "publisher_source_commit": "33d73cb54c14e2e988272764ddff59a5ead10915",
+  "tests": {
+    "related": 469,
+    "new_paged": 24,
+    "messenger_relation": 342,
+    "fresh_consumer_processes": 16,
+    "isolated_mutants_detected": 11
+  },
+  "source_modules_sha256": {
+    "alden_gbrain_client.py": "5300d0acf697fe6aa3d10becb38571cafb7ab9e8e4d2f456532a03882f150f45",
+    "alden_gbrain_import.py": "414bf68dcf8657b3315dbaf0a195f7f6f6739517ceb1ec51ec665fa0786c92f2"
+  },
+  "actual_engine_5000_import": {
+    "ok": true,
+    "state": "published",
+    "fingerprint": "012a83b37f5ce14b9ab20b0ed99c8260ea8fdbc8c6490feb6c8fd775ea904a20",
+    "removed_generations": 0,
+    "source_nodes": 5000,
+    "origins": 1,
+    "observed_groups": 4999,
+    "membership_links": 5000,
+    "pages": 5001,
+    "links": 9999,
+    "verified_queries": 5001,
+    "verified_direction": "out",
+    "enumerated_pages": 5001,
+    "paged_outgoing_pages": 1,
+    "paged_outgoing_links": 5000,
+    "update_mode": "full_rebuild",
+    "source_update": {
+      "mode": "full_export",
+      "reason": "new_baseline"
+    },
+    "index_updates": {
+      "mode": "full_index",
+      "pages_put": 5001,
+      "pages_deleted": 0,
+      "links_put": 9999,
+      "links_deleted": 0
+    }
+  },
+  "actual_9436_matrix": [
+    {
+      "outgoing": 5000,
+      "full_refresh": {
+        "ok": true,
+        "state": "published",
+        "fingerprint": "012a83b37f5ce14b9ab20b0ed99c8260ea8fdbc8c6490feb6c8fd775ea904a20",
+        "removed_generations": 0,
+        "source_nodes": 5000,
+        "origins": 1,
+        "observed_groups": 4999,
+        "membership_links": 5000,
+        "pages": 5001,
+        "links": 9999,
+        "verified_queries": 5001,
+        "verified_direction": "out",
+        "enumerated_pages": 5001,
+        "paged_outgoing_pages": 1,
+        "paged_outgoing_links": 5000,
+        "update_mode": "full_rebuild",
+        "source_update": {
+          "mode": "full_export",
+          "reason": "new_baseline"
+        },
+        "index_updates": {
+          "mode": "full_index",
+          "pages_put": 5001,
+          "pages_deleted": 0,
+          "links_put": 9999,
+          "links_deleted": 0
+        }
+      },
+      "independent_page_limits": [
+        317,
+        499
+      ],
+      "bounded_traversal": "gbrain_graph_unavailable",
+      "fingerprint": "012a83b37f5ce14b9ab20b0ed99c8260ea8fdbc8c6490feb6c8fd775ea904a20",
+      "name": "full-5000"
+    },
+    {
+      "outgoing": 9436,
+      "full_refresh": {
+        "ok": true,
+        "state": "published",
+        "fingerprint": "d8e3148eb7aa30b9f04f63c001ca0519b473b0d05ae9b730411d0e36e79275bc",
+        "removed_generations": 1,
+        "source_nodes": 9436,
+        "origins": 1,
+        "observed_groups": 9435,
+        "membership_links": 9436,
+        "pages": 9437,
+        "links": 18871,
+        "verified_queries": 9437,
+        "verified_direction": "out",
+        "enumerated_pages": 9437,
+        "paged_outgoing_pages": 1,
+        "paged_outgoing_links": 9436,
+        "update_mode": "engine_delta",
+        "engine_writes": {
+          "pages_put": 4436,
+          "pages_purged": 0,
+          "links_added": 8872,
+          "links_removed": 0
+        },
+        "source_update": {
+          "mode": "journal_delta",
+          "base_database_sha256": "cd22aca24872e14ecb6027549cab42886bc54c1fee15ebedbf8b09c4f79159c5",
+          "after": {
+            "cursor": 25005,
+            "stream_id": "stream:a731e45c3da62653104101092653b1b6c8f9508a6469bf25522b3af11da8d62b"
+          },
+          "through": {
+            "stream_id": "stream:a731e45c3da62653104101092653b1b6c8f9508a6469bf25522b3af11da8d62b",
+            "cursor": 47190
+          },
+          "events": 22185,
+          "candidate_nodes": 4436,
+          "candidate_groups": 9435,
+          "archive_rows": {
+            "targets_put": 0,
+            "nodes_put": 4436,
+            "nodes_deleted": 0,
+            "edges_put": 4436,
+            "edges_deleted": 0
+          },
+          "complete_source_comparison": true
+        },
+        "index_updates": {
+          "mode": "index_delta",
+          "pages_put": 4436,
+          "pages_deleted": 0,
+          "links_put": 8872,
+          "links_deleted": 0
+        }
+      },
+      "independent_page_limits": [
+        317,
+        499
+      ],
+      "bounded_traversal": "gbrain_graph_unavailable",
+      "fingerprint": "d8e3148eb7aa30b9f04f63c001ca0519b473b0d05ae9b730411d0e36e79275bc",
+      "name": "delta-9436"
+    },
+    {
+      "outgoing": 9436,
+      "full_refresh": {
+        "ok": true,
+        "state": "published",
+        "fingerprint": "d8e3148eb7aa30b9f04f63c001ca0519b473b0d05ae9b730411d0e36e79275bc",
+        "removed_generations": 1,
+        "source_nodes": 9436,
+        "origins": 1,
+        "observed_groups": 9435,
+        "membership_links": 9436,
+        "pages": 9437,
+        "links": 18871,
+        "verified_queries": 9437,
+        "verified_direction": "out",
+        "enumerated_pages": 9437,
+        "paged_outgoing_pages": 1,
+        "paged_outgoing_links": 9436,
+        "update_mode": "full_rebuild",
+        "source_update": {
+          "mode": "journal_delta",
+          "base_database_sha256": "5c790268cff0b8c315a572ef16114636c781690090c0bb5355df1de56bd1e32f",
+          "after": {
+            "cursor": 47190,
+            "stream_id": "stream:a731e45c3da62653104101092653b1b6c8f9508a6469bf25522b3af11da8d62b"
+          },
+          "through": {
+            "stream_id": "stream:a731e45c3da62653104101092653b1b6c8f9508a6469bf25522b3af11da8d62b",
+            "cursor": 47190
+          },
+          "events": 0,
+          "candidate_nodes": 0,
+          "candidate_groups": 0,
+          "archive_rows": {
+            "targets_put": 0,
+            "nodes_put": 0,
+            "nodes_deleted": 0,
+            "edges_put": 0,
+            "edges_deleted": 0
+          },
+          "complete_source_comparison": true
+        },
+        "index_updates": {
+          "mode": "index_delta",
+          "pages_put": 0,
+          "pages_deleted": 0,
+          "links_put": 0,
+          "links_deleted": 0
+        }
+      },
+      "independent_page_limits": [
+        317,
+        499
+      ],
+      "bounded_traversal": "gbrain_graph_unavailable",
+      "fingerprint": "d8e3148eb7aa30b9f04f63c001ca0519b473b0d05ae9b730411d0e36e79275bc",
+      "name": "full-9436"
+    }
+  ],
+  "reproduction": "gbrain-paged-links/replay.py",
+  "long_context_high_degree": "explicit rejection above2000UTF16units; unbounded contexts unsupported",
+  "unknown_notices": "rejected; exact reviewed backup_coverage/coaching is inert",
+  "gui_launches": 0,
+  "installation": false,
+  "external_audit": "NOT_RUN",
+  "required_web_astra_worker": "unavailable; not substituted",
+  "full_goal": "active",
+  "fresh_engine_rebuild": {
+    "baseline_actual_pages": 6,
+    "baseline_committed": 0,
+    "baseline_error": "revision_conflict",
+    "fixed_actual_pages": 6,
+    "fixed_committed": 6,
+    "fingerprint_unchanged": true,
+    "delta_revision_preconditions_retained": true
+  },
+  "actual_packaged_engine": {
+    "trials": [
+      {
+        "outgoing": 9436,
+        "full_refresh": {
+          "ok": true,
+          "state": "published",
+          "fingerprint": "1594435c502bb49f99ba9d0463d2a4ac81213e3e074a8ecb3e6060312119521b",
+          "removed_generations": 0,
+          "source_nodes": 9436,
+          "origins": 1,
+          "observed_groups": 9435,
+          "membership_links": 9436,
+          "pages": 9437,
+          "links": 18871,
+          "verified_queries": 9437,
+          "verified_direction": "out",
+          "enumerated_pages": 9437,
+          "paged_outgoing_pages": 1,
+          "paged_outgoing_links": 9436,
+          "update_mode": "full_rebuild",
+          "source_update": {
+            "mode": "full_export",
+            "reason": "new_baseline"
+          },
+          "index_updates": {
+            "mode": "full_index",
+            "pages_put": 9437,
+            "pages_deleted": 0,
+            "links_put": 18871,
+            "links_deleted": 0
+          }
+        },
+        "independent_page_limits": [
+          317,
+          499
+        ],
+        "bounded_traversal": "gbrain_graph_unavailable",
+        "fingerprint": "1594435c502bb49f99ba9d0463d2a4ac81213e3e074a8ecb3e6060312119521b",
+        "name": "full-9436"
+      }
+    ],
+    "module_pins": {
+      "alden_gbrain_client.py": "5300d0acf697fe6aa3d10becb38571cafb7ab9e8e4d2f456532a03882f150f45",
+      "alden_gbrain_import.py": "414bf68dcf8657b3315dbaf0a195f7f6f6739517ceb1ec51ec665fa0786c92f2",
+      "alden_gbrain_cache.py": "5862029e748d2d99c06fdaad2477b7756e9441ced1fb570b43ce33f0ec63cb3f",
+      "alden_gbrain_delta.py": "bd6fa96640c7bdb1e4a2ac75406d2d9b798fef8384f917d55ccbc61118367266",
+      "alden_collection.py": "1983ae346572822537885b834e896e7beba06ed667b2d42b80c059eed1da78f7",
+      "alden_collection_export.py": "3c552cd4625d834559b8e1f8be400d2e623cbed70f05dd134b155a0df21bc56c",
+      "alden_collection_delta.py": "ee3d846b7d09cd2ee473901a4854556aa1140ba421fcfc209f1e83709bbbf751"
+    },
+    "remaining_generations": 0,
+    "fixture": "explicit synthetic star; no original/private account reads"
+  },
+  "actual_source_generations_remaining": 0
+}

@@ -37,7 +37,7 @@ fi
 if [ -n "${AUTO_REPLY_ROOM:-}" ]; then
   set -- "$@" --room "$AUTO_REPLY_ROOM"
 fi
-CLI=${AUTO_REPLY_BIN:-"$ROOT/target/release/openkakao-cli"}
+CLI=${AUTO_REPLY_BIN:-"$ROOT/target/release/alden-cli"}
 if [ -x "$CLI" ]; then
   set -- "$@" --bin "$CLI"
 fi

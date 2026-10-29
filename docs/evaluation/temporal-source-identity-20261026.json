@@ -1,0 +1,48 @@
+{
+  "base_revision": "12fe9f24a9c72a859bcb922b846e1e6df993bdfc",
+  "requirement": "retain distinct source evidence during latest-observation selection; no lexical identity inference",
+  "runtime_files": {
+    "alden_collection_retrieval.py": "f1861a109140d621b46ea6341ac97780815e5dd4bb1b8f78037e6a6b8c74e386",
+    "alden_retrieval_time.py": "e15acf66ea60be3bdc1756f1fd4f5d69825faa1f6985dbf6218de803963c45f4",
+    "alden_collection.py": "f161418bfc152f76c1b0bdc398ca57a049593e2aa816948cd75f30862b4f2cb8"
+  },
+  "source_reference": {
+    "records": 4,
+    "publisher_origins": 2,
+    "cases": 6,
+    "baseline_passed": 4,
+    "after_passed": 6,
+    "independent_human_gold": false,
+    "representative_private_gold": false,
+    "packet_sha256": "c12b7854c177077b0a87cf65f1932af0898b85941c63a003eb58a9fc784cd191"
+  },
+  "tests": {
+    "affected": 178,
+    "failed": 0,
+    "skipped": 0,
+    "original_baseline_detected": true,
+    "isolated_mutants_detected": 4
+  },
+  "replay": {
+    "command": "PYTHONPATH=scripts python3 -B -m unittest tests.test_alden_collection_retrieval.CollectionRetrievalTests.test_public_source_temporal_identity_reference",
+    "new_embeddings": 0,
+    "operational_writes": 0,
+    "native_app_launches": 0,
+    "collection_database_unchanged": true
+  },
+  "oracle_correction": {
+    "initial_expectation": "Oct20 and Oct22 date-only insurance records were initially expected to select only Oct22",
+    "correction": "Retain both: publisher dates do not specify time or timezone. Oct20 late in UTC-14 can be later than Oct22 early in UTC+14. The existing conservative overlapping-date behavior is correct.",
+    "product_change_for_this_case": false,
+    "initial_baseline_preserved": "reference-baseline.json",
+    "scope": "source-date precision; no independent truth claim"
+  },
+  "evidence_directory": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/outputs/temporal-identity-source-20261025T152035Z",
+  "remaining": [
+    "independent representative semantic/time/contradiction/entity gold",
+    "OSK canonical-note alias/source identity evaluation",
+    "native installed-path verification under app-off hold",
+    "current-source external cross-audit",
+    "normal release and operations"
+  ]
+}

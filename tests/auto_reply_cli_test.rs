@@ -7,7 +7,7 @@ use openkakao_cli::auto_reply_service::{
 
 fn cmd() -> Command {
     #[allow(deprecated)]
-    Command::cargo_bin("openkakao-cli").unwrap()
+    Command::cargo_bin("alden-cli").unwrap()
 }
 
 #[test]
