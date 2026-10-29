@@ -3862,6 +3862,8 @@ def _fts_query_terms(haystacks: list[str]) -> str:
     terms: list[str] = []
     seen: set[str] = set()
     particles = ("으로", "부터", "까지", "처럼", "보다", "은", "는", "이", "가", "을", "를", "도", "에", "과", "와", "의", "로", "만")
+    extra_particles = ("에서는", "에서도", "에게는", "에게도", "에서", "에게")
+    extra_terms: list[str] = []
     for haystack in haystacks:
         words: list[str] = []
         word: list[str] = []
@@ -3877,6 +3879,10 @@ def _fts_query_terms(haystacks: list[str]) -> str:
         if word:
             words.append("".join(word))
         for raw in words:
+            for particle in extra_particles:
+                if len(raw) > len(particle) + 1 and raw.endswith(particle):
+                    extra_terms.append(raw[: -len(particle)])
+                    break
             candidates = [raw]
             for particle in particles:
                 if len(raw) > len(particle) + 1 and raw.endswith(particle):
@@ -3887,6 +3893,13 @@ def _fts_query_terms(haystacks: list[str]) -> str:
                     continue
                 seen.add(term)
                 terms.append('"' + term.replace('"', '""') + '"')
+    # Preserve every legacy term before using spare slots for longer particles.
+    for term in extra_terms:
+        if len(terms) >= 24:
+            break
+        if term not in seen:
+            seen.add(term)
+            terms.append('"' + term.replace('"', '""') + '"')
     return " OR ".join(terms[:24])
 
 
