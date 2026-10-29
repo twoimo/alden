@@ -29,7 +29,7 @@ import alden_chat_metrics as metrics
 import alden_knowledge_turn as loop
 import alden_knowledge_tool_protocol as protocol
 from alden_chat_turns import get_request
-import test_alden_knowledge_turn as fixture
+from tests import test_alden_knowledge_turn as fixture
 
 completion, MODEL = fixture.completion, fixture.MODEL
 
