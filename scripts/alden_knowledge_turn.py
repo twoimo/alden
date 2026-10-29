@@ -78,8 +78,9 @@ def _visible_text(text):
     return value
 
 
-def _post(adapter, messages, token, *, allow_tool, checkpoint, source_fence):
+def _post(adapter, messages, token, *, allow_tool, checkpoint, source_fence, observations=None):
     from alden_knowledge_tool_protocol import MAX_RESPONSE_BYTES, tool_schema, parse_completion
+    from alden_chat_metrics import observe_local_knowledge_completion
     from alden_voice import _local_urlopen
     checkpoint()
     try:
@@ -120,6 +121,11 @@ def _post(adapter, messages, token, *, allow_tool, checkpoint, source_fence):
         body = _strict_json(raw)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise RuntimeError('local_llm_tool_protocol_invalid') from exc
+    if observations is not None:
+        if type(observations) is not list or len(observations) >= 2:
+            raise RuntimeError('local_llm_tool_protocol_invalid')
+        observations.append(observe_local_knowledge_completion(
+            body, response_bytes=len(raw), allow_tool=allow_tool))
     return parse_completion(body, adapter.model.removeprefix('mlx/'), allow_tool=allow_tool)
 
 
@@ -151,7 +157,7 @@ def generate(adapter, root, ticket, text, original_token, *, history, check_cont
         'source': 'text', 'transport': 'local', 'model_id': adapter.model,
         'reasoning_effort': adapter.reasoning_effort, 'local_request_id': uuid.uuid4().hex,
         'requested_at_unix': time.time(), 'state': 'running', 'cancelled': False}
-    loop = {'state': 'deciding', 'hops': [], 'read_count': 0}
+    loop = {'state': 'deciding', 'hops': [], 'read_count': 0, 'wire_observations': []}
     adapter.last_metrics = {'request': request, 'tool_loop': loop}
     source_receipt = None
     def verify_sources():
@@ -177,7 +183,8 @@ def generate(adapter, root, ticket, text, original_token, *, history, check_cont
             for hop in range(2):
                 checkpoint()
                 parsed = _post(adapter, messages, token, allow_tool=hop == 0,
-                               checkpoint=checkpoint, source_fence=verify_sources)
+                               checkpoint=checkpoint, source_fence=verify_sources,
+                               observations=loop['wire_observations'])
                 if any(row['id'] == parsed['response_id'] for row in loop['hops']):
                     raise RuntimeError('local_llm_tool_protocol_invalid')
                 loop['hops'].append({'id': parsed['response_id'], 'model': parsed['model'],

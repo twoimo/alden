@@ -18,6 +18,7 @@ import math
 import re
 from collections.abc import Mapping
 from alden_model_routes import EFFORTS
+from alden_knowledge_tool_protocol import MAX_RESPONSE_BYTES
 
 MAX_GENERATION_JSON_BYTES = 4096
 _MAX_COUNTER = 9_007_199_254_740_991
@@ -63,6 +64,28 @@ _USAGE_DETAIL_FIELDS = {
         "reasoning_tokens", "accepted_prediction_tokens", "rejected_prediction_tokens",
     }),
 }
+_WIRE_COUNT_LIMIT = 64
+_WIRE_OUTER_STATES = frozenset({'object', 'invalid_type'})
+_WIRE_FINISH_REASONS = frozenset({'stop', 'tool_calls', 'length', 'content_filter', 'function_call'})
+_WIRE_ENUMS = {
+    'choices_state': frozenset({'missing', 'invalid_type', 'list'}),
+    'first_choice_state': frozenset({'object', 'invalid_type'}),
+    'finish_reason': _WIRE_FINISH_REASONS | {'missing', 'null', 'invalid_type', 'unknown'},
+    'message_state': frozenset({'missing', 'invalid_type', 'object'}),
+    'tool_calls_state': frozenset({'missing', 'null', 'invalid_type', 'list'}),
+}
+_WIRE_BOOLEANS = frozenset({
+    'choice_count_overflow', 'choice_index_valid', 'tool_call_count_overflow',
+    'legacy_function_call_present',
+})
+_WIRE_COUNTS = frozenset({'choice_count', 'tool_call_count'})
+# The chat caller appends terminal_state after sanitizing. Keep room for the
+# longest existing terminal label without increasing the durable 4 KiB bound.
+_WIRE_TERMINAL_RESERVE = 32
+_WIRE_OPTIONAL_SHAPES = (
+    'first_choice_state', 'choice_index_valid', 'message_state',
+    'legacy_function_call_present', 'choices_state', 'tool_calls_state',
+)
 
 
 def _invalid() -> ValueError:
@@ -134,6 +157,146 @@ def _usage(raw: object) -> dict:
     return result
 
 
+def observe_local_knowledge_completion(payload, *, response_bytes, allow_tool):
+    """Describe decoded HTTP shape before acceptance, without private values.
+
+    A wire finish reason does not attest the decoder's original termination or
+    tool spans that a serving formatter may have removed. Missing structures
+    remain missing observations; only actual lists have observed counts.
+    """
+    if (type(response_bytes) is not int or not 0 <= response_bytes <= MAX_RESPONSE_BYTES
+            or type(allow_tool) is not bool):
+        raise _invalid()
+    result = {'origin': 'local_http_completion', 'response_bytes': response_bytes,
+              'allow_tool': allow_tool,
+              'outer_state': 'object' if type(payload) is dict else 'invalid_type'}
+    if type(payload) is not dict:
+        return result
+    if 'choices' not in payload:
+        result['choices_state'] = 'missing'
+        return result
+    choices = payload['choices']
+    if type(choices) is not list:
+        result['choices_state'] = 'invalid_type'
+        return result
+    result.update(choices_state='list', choice_count=min(len(choices), _WIRE_COUNT_LIMIT),
+                  choice_count_overflow=len(choices) > _WIRE_COUNT_LIMIT)
+    if not choices:
+        return result
+    choice = choices[0]
+    result['first_choice_state'] = 'object' if type(choice) is dict else 'invalid_type'
+    if type(choice) is not dict:
+        return result
+    result['choice_index_valid'] = type(choice.get('index')) is int and choice['index'] == 0
+    reason = choice.get('finish_reason')
+    if 'finish_reason' not in choice:
+        result['finish_reason'] = 'missing'
+    elif reason is None:
+        result['finish_reason'] = 'null'
+    elif type(reason) is not str:
+        result['finish_reason'] = 'invalid_type'
+    else:
+        result['finish_reason'] = reason if reason in _WIRE_FINISH_REASONS else 'unknown'
+    if 'message' not in choice:
+        result['message_state'] = 'missing'
+        return result
+    message = choice['message']
+    result['message_state'] = 'object' if type(message) is dict else 'invalid_type'
+    if type(message) is not dict:
+        return result
+    result['legacy_function_call_present'] = 'function_call' in message
+    if 'tool_calls' not in message:
+        result['tool_calls_state'] = 'missing'
+    elif message['tool_calls'] is None:
+        result['tool_calls_state'] = 'null'
+    elif type(message['tool_calls']) is not list:
+        result['tool_calls_state'] = 'invalid_type'
+    else:
+        calls = message['tool_calls']
+        result.update(tool_calls_state='list', tool_call_count=min(len(calls), _WIRE_COUNT_LIMIT),
+                      tool_call_count_overflow=len(calls) > _WIRE_COUNT_LIMIT)
+    return result
+
+
+def _wire_observations(raw):
+    if not isinstance(raw, list) or len(raw) > 2:
+        raise _invalid()
+    result = []
+    for row in raw:
+        if (not isinstance(row, Mapping) or row.get('origin') != 'local_http_completion'
+                or type(row.get('response_bytes')) is not int
+                or not 0 <= row['response_bytes'] <= MAX_RESPONSE_BYTES
+                or type(row.get('allow_tool')) is not bool
+                or not _one_of(row.get('outer_state'), _WIRE_OUTER_STATES)):
+            raise _invalid()
+        safe = {key: row[key] for key in ('origin', 'response_bytes', 'allow_tool', 'outer_state')}
+        for key, allowed in _WIRE_ENUMS.items():
+            if _one_of(row.get(key), allowed):
+                safe[key] = row[key]
+        for key in _WIRE_BOOLEANS:
+            if type(row.get(key)) is bool:
+                safe[key] = row[key]
+        for key in _WIRE_COUNTS:
+            value = row.get(key)
+            if type(value) is int and 0 <= value <= _WIRE_COUNT_LIMIT:
+                safe[key] = value
+        result.append(safe)
+    return result
+
+
+def _generation_size(value):
+    return len(json.dumps(value, ensure_ascii=True, allow_nan=False,
+                          sort_keys=True, separators=(',', ':')).encode('utf-8'))
+
+
+def _fit_wire_observations(result, *, reserve=_WIRE_TERMINAL_RESERVE):
+    loop = result.get('tool_loop', {})
+    observations = loop.get('wire_observations')
+    if not observations:
+        if (loop.get('wire_observations_omitted_for_budget') is True
+                and _generation_size(result) > MAX_GENERATION_JSON_BYTES - reserve):
+            loop.pop('wire_observations_omitted_for_budget')
+        return
+    target = MAX_GENERATION_JSON_BYTES - reserve
+    if _generation_size(result) <= target:
+        return
+    # Only diagnostic shape fields are optional here. Keep request/source
+    # binding, usage, finish reasons, observed counts/overflow and core bases.
+    # A missing compacted field is unknown, never an inferred zero or success.
+    for key in _WIRE_OPTIONAL_SHAPES:
+        for row in observations:
+            if key == 'legacy_function_call_present' and row.get(key) is True:
+                continue
+            if key in row:
+                del row[key]
+                loop['wire_observations_compacted'] = True
+        if _generation_size(result) <= target:
+            return
+    # These new optional diagnostics must not invalidate previously valid
+    # primary evidence. Prefer the latest response if a large attachment/source
+    # receipt leaves no room for both. An omitted row is unknown, not zero.
+    while observations and _generation_size(result) > target:
+        observations.pop(0)
+        loop['wire_observations_omitted_for_budget'] = True
+    if not observations:
+        del loop['wire_observations']
+        loop.pop('wire_observations_compacted', None)
+    if _generation_size(result) > target:
+        loop.pop('wire_observations_omitted_for_budget', None)
+
+
+def bound_generation_evidence(result, *, reserve=0):
+    """Fit optional diagnostics after the host adds safe receipt fields.
+
+    Primary evidence must already be sanitized by its owner. This does not
+    sanitize arbitrary additional fields or relax the durable byte limit.
+    """
+    _fit_wire_observations(result, reserve=reserve)
+    if _generation_size(result) > MAX_GENERATION_JSON_BYTES:
+        raise _invalid()
+    return result
+
+
 def _tool_loop(raw):
     if not isinstance(raw, Mapping) or raw.get('state') not in {'no_call', 'read_completed', 'failed'}:
         raise _invalid()
@@ -154,6 +317,8 @@ def _tool_loop(raw):
     if raw['state'] == 'read_completed' and (kinds != ['tool', 'final'] or reads != 1): raise _invalid()
     if len(kinds) == 2 and (kinds != ['tool', 'final'] or reads != 1): raise _invalid()
     result = {'state': raw['state'], 'hop_count': len(safe), 'read_count': reads, 'hops': safe}
+    if 'wire_observations' in raw:
+        result['wire_observations'] = _wire_observations(raw['wire_observations'])
     elapsed = _ms(raw.get('elapsed_ms'))
     if elapsed is not None:
         result.update(elapsed_ms=elapsed, elapsed_scope='whole_local_knowledge_loop')
@@ -301,7 +466,4 @@ def sanitize_generation(selection: object, metrics: object, ticket: object) -> d
     error_code = generation_error_code(metrics.get("error_code"))
     if error_code is not None:
         result["error_code"] = error_code
-    if len(json.dumps(result, ensure_ascii=True, allow_nan=False,
-                      sort_keys=True, separators=(",", ":")).encode("utf-8")) > MAX_GENERATION_JSON_BYTES:
-        raise _invalid()
-    return result
+    return bound_generation_evidence(result, reserve=_WIRE_TERMINAL_RESERVE)

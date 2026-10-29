@@ -261,11 +261,8 @@ def generation_evidence(selection, metrics, ticket, terminal_state):
         if submitted!=expected:
             raise ValueError('generation_metadata_invalid')
         result['transport_images']=submitted
-    from alden_chat_metrics import MAX_GENERATION_JSON_BYTES
-    if len(json.dumps(result, ensure_ascii=True, allow_nan=False,
-                      sort_keys=True, separators=(',', ':')).encode('utf-8')) > MAX_GENERATION_JSON_BYTES:
-        raise ValueError('generation_metadata_invalid')
-    return result
+    from alden_chat_metrics import bound_generation_evidence
+    return bound_generation_evidence(result)
 
 
 def image_context_prompt(ticket):
@@ -491,11 +488,11 @@ def failure_generation(selection, ticket, state, *, error_code=None):
         # Model selection can fail before an adapter exists. Preserve only an
         # exact safe reason, without inventing response/model/timing evidence
         # or replacing a more specific bound adapter error.
-        from alden_chat_metrics import generation_error_code
+        from alden_chat_metrics import generation_error_code, bound_generation_evidence
         safe = generation_error_code(error_code)
         if state == 'failed' and safe is not None and 'error_code' not in result:
             result['error_code'] = safe
-        return result
+        return bound_generation_evidence(result)
     except ValueError:
         # Preserve the cancellation/failure itself, without attributing unsafe
         # or mismatched observations to this request.
