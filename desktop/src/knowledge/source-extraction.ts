@@ -8,6 +8,8 @@ const packetKeys = ['schema', 'kind', 'binding', 'parser', 'processing_version',
   'input_sha256', 'input_bytes', 'extracted_text_sha256', 'extracted_text_bytes', 'segment_count',
   'body_complete', 'parser_truncated', 'status'];
 const bindingKeys = ['document_id', 'target_id', 'version', 'raw_sha256', 'detail_body_sha256'];
+const nodeKeys = ['id', 'canonicalId', 'sourceVersion', 'sourceTarget', 'sourcePlatform'];
+const selectionKeys = ['source_extraction', 'body', 'basis', 'platform', 'node_id', 'version', 'target_id', 'raw_sha256'];
 const sha = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
 const parser = (value: unknown): value is string => typeof value === 'string' && /^[a-z][a-z0-9_.:-]{0,127}$/.test(value);
 const scope = (value: unknown): value is string => typeof value === 'string' && /^[a-z][a-z0-9-]{0,63}$/.test(value);
@@ -38,8 +40,24 @@ function unchangedData(value: ObjectValue, snapshot: DataSnapshot): boolean {
   });
 }
 
+/** Fence the live reference before reading it across hash/DOM reactions. */
+function referenceGuard(value: object, keys: string[]): () => boolean {
+  const prototype = Object.getPrototypeOf(value);
+  if (![Object.prototype, null].includes(prototype)) return () => false;
+  const descriptors = keys.map(key => Object.getOwnPropertyDescriptor(value, key));
+  if (descriptors.some(item => item && !('value' in item))) return () => false;
+  return () => Object.getPrototypeOf(value) === prototype && keys.every((key, index) => {
+    const actual = Object.getOwnPropertyDescriptor(value, key), prior = descriptors[index];
+    return !prior ? !actual && !(key in value) : !!actual && 'value' in actual
+      && Object.is(actual.value, prior.value) && actual.enumerable === prior.enumerable
+      && actual.configurable === prior.configurable && actual.writable === prior.writable;
+  });
+}
+
 /** Bind the bounded parser receipt to this exact delivered body, before display cleanup. */
 export async function verifiedSourceExtraction(node: KnowledgeNode, selected: ObjectValue): Promise<SourceExtractionStatus | null> {
+  const nodeCurrent = referenceGuard(node, nodeKeys), selectionCurrent = referenceGuard(selected, selectionKeys);
+  if (!nodeCurrent() || !selectionCurrent()) return null;
   const packet = exactObject(selected.source_extraction, packetKeys);
   const binding = exactObject(packet?.binding, bindingKeys);
   const body = selected.body;
@@ -59,7 +77,7 @@ export async function verifiedSourceExtraction(node: KnowledgeNode, selected: Ob
   if (packet.status !== status) return null;
   const documentId = binding.document_id, targetId = binding.target_id, version = binding.version;
   const archiveHash = binding.raw_sha256, bodyHash = binding.detail_body_sha256;
-  const stillBound = () => selected.source_extraction === packet && selected.body === body
+  const stillBound = () => nodeCurrent() && selectionCurrent() && selected.source_extraction === packet && selected.body === body
     && selected.basis === 'source_record' && selected.platform === 'files'
     && (!node.sourcePlatform || node.sourcePlatform === 'files') && matchesSourceReference(node, selected)
     && documentId === (node.canonicalId || node.id) && targetId === node.sourceTarget
@@ -93,6 +111,8 @@ const notices: Record<SourceExtractionStatus | 'unknown', string> = {
 export function renderSourceExtraction(bodyElement: HTMLElement, node: KnowledgeNode, selected: ObjectValue | null): void {
   const root = bodyElement.ownerDocument;
   root.querySelectorAll('.knowledge-source-extraction').forEach(item => item.remove());
+  const nodeCurrent = referenceGuard(node, nodeKeys), selectionCurrent = selected ? referenceGuard(selected, selectionKeys) : () => true;
+  if (!nodeCurrent() || !selectionCurrent()) return;
   if (node.sourcePlatform !== 'files'
     && (node.sourcePlatform || selected?.basis !== 'source_record' || selected.platform !== 'files')) return;
   const notice = root.createElement('p'); notice.className = 'knowledge-source-extraction';
@@ -108,8 +128,12 @@ export function renderSourceExtraction(bodyElement: HTMLElement, node: Knowledge
   void verifiedSourceExtraction(node, selected).then(status => {
     const pane = root.querySelector<HTMLDialogElement>('dialog#knowledge-note-pane');
     if (!notice.isConnected) return;
-    if (node.id !== nodeId || pane && (pane.hidden || !pane.open || pane.dataset.nodeId !== nodeId || pane.closest('[hidden]'))) {
+    if (Object.getOwnPropertyDescriptor(node, 'id')?.value !== nodeId
+      || pane && (pane.hidden || !pane.open || pane.dataset.nodeId !== nodeId || pane.closest('[hidden]'))) {
       notice.remove(); return;
+    }
+    if (!nodeCurrent() || !selectionCurrent()) {
+      notice.dataset.status = 'unknown'; notice.textContent = notices.unknown; return;
     }
     // Verification resolves before this separate Promise reaction. Commit only
     // while that same immutable receipt still owns the current source/body.

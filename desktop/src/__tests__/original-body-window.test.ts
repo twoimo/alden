@@ -363,6 +363,48 @@ describe('actual detail reader controls', () => {
     if (target === 'packet' || target === 'binding' || target === 'capture') expect(section().dataset.state).toBe('failure');
   });
 
+  it.each(['selected', 'version'] as const)('does not read an introduced %s getter when the sibling extraction hash finishes after the original-body fence', async target => {
+    const receiptHash = deferred<ArrayBuffer>(), mutation = deferred<void>();
+    const actualDigest = webcrypto.subtle.digest.bind(webcrypto.subtle);
+    let digestCalls = 0;
+    const digest = vi.fn((...args: Parameters<typeof actualDigest>) =>
+      ++digestCalls === 1 ? receiptHash.promise : actualDigest(...args));
+    vi.stubGlobal('crypto', { subtle: { digest } });
+    const value = response(), getter = vi.fn(() => { throw new Error('introduced getter'); });
+    const { selected, data } = render(details(), { read: async () => value, isCurrent: () => true });
+    // renderNodeDetails starts the extraction receipt hash before the clicked
+    // original-body reader starts its independent text/body hash pair.
+    expect(digest).toHaveBeenCalledOnce();
+    expect(new TextDecoder().decode(digest.mock.calls[0][1])).toBe(retained);
+    const aggregate = Promise.all.bind(Promise);
+    const spy = vi.spyOn(Promise, 'all').mockImplementationOnce(values => {
+      const result = aggregate(values);
+      // Verify the original-body reply first, then mutate before its separate
+      // renderer reaction. Keep the sibling receipt hash pending throughout.
+      void result.then(() => queueMicrotask(() => {
+        const [object, key] = target === 'selected' ? [selected, 'source_extraction'] : [data.nodes[0], 'sourceVersion'];
+        Object.defineProperty(object, key, { configurable: true, enumerable: true, get: getter });
+        mutation.resolve();
+      }));
+      return result;
+    });
+    buttons()[0].click();
+    await mutation.promise;
+    expect(spy).toHaveBeenCalledOnce(); spy.mockRestore();
+    expect(digest).toHaveBeenCalledTimes(3);
+    expect(textArea().textContent).toBe(''); expect(textArea().hidden).toBe(true);
+    expect(section().dataset.state).toBe('loading'); expect(getter).not.toHaveBeenCalled();
+
+    receiptHash.resolve(Uint8Array.from(Buffer.from(sha(retained), 'hex')).buffer);
+    await receiptHash.promise;
+    // The receipt verifier's continuation precedes this await; its separate
+    // DOM reaction precedes the next microtask, including a rejected receipt.
+    await Promise.resolve();
+    expect(textArea().textContent).toBe(''); expect(textArea().hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('.knowledge-source-extraction')?.dataset.status).toBe('unknown');
+    expect(getter, getter.mock.results[0]?.value?.stack).not.toHaveBeenCalled();
+  });
+
   it('fails closed when hashing is unavailable and can retry after a transport failure', async () => {
     const read = vi.fn().mockRejectedValueOnce(new Error('private path')).mockResolvedValue(response());
     render(details(), { read, isCurrent: () => true });

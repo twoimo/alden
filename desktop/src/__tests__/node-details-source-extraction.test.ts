@@ -426,3 +426,35 @@ describe('coverage commit after hash verification', () => {
     expect(notice()?.textContent).not.toContain('추출 완료');
   });
 });
+
+describe.each(['hash', 'dom'] as const)('source reference accessors introduced during %s', phase => {
+  const references: Array<['node' | 'selected', string]> = [
+    ...['id', 'canonicalId', 'sourceVersion', 'sourceTarget', 'sourcePlatform'].map(key => ['node', key] as ['node', string]),
+    ...['source_extraction', 'body', 'basis', 'platform', 'node_id', 'version', 'target_id', 'raw_sha256']
+      .map(key => ['selected', key] as ['selected', string]),
+  ];
+  it.each(references)('rejects %s.%s without evaluating the accessor', async (owner, key) => {
+    const pending = deferredDigest(), data = graph(), selected = detail();
+    const object = owner === 'node' ? data.nodes[0] as unknown as ObjectValue : selected;
+    const prior = Object.getOwnPropertyDescriptor(object, key)!;
+    const getter = vi.fn(() => prior.value);
+    const mutate = () => Object.defineProperty(object, key, { configurable: true, enumerable: true, get: getter });
+    let mutated!: () => void;
+    const mutation = new Promise<void>(resolve => { mutated = resolve; });
+    vi.stubGlobal('crypto', { subtle: { digest: () => {
+      if (phase === 'dom') void pending.promise.then(() => queueMicrotask(() => { mutate(); mutated(); }));
+      return pending.promise;
+    } } });
+    if (phase === 'hash') {
+      const result = verifiedSourceExtraction(data.nodes[0], selected);
+      mutate(); pending.finish();
+      expect(await result).toBeNull();
+    } else {
+      renderNodeDetails(data, data.nodes[0], { ok: true, details: selected });
+      pending.finish(); await mutation; await flush();
+      if (owner === 'node' && key === 'id') expect(notice()).toBeNull();
+      else expect(notice()?.dataset.status).toBe('unknown');
+    }
+    expect(getter).not.toHaveBeenCalled();
+  });
+});
