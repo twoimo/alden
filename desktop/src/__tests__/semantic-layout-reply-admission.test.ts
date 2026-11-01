@@ -64,3 +64,11 @@ it('owns published checkpoint and returned labels independently from callback an
   const returned = driver.labelsFor(view, new Set())!; returned[0][1] = 'reader mutation';
   expect(driver.labelsFor(view, new Set())).toEqual(expected); driver.clear();
 });
+
+it('publishes a completed generation once and ignores its duplicate or malformed late messages', () => {
+  const port = new Port(), apply = vi.fn(), driver = new SemanticLayoutDriver(apply, () => port), view = source();
+  driver.request(view, new Map(), new Set(), new Set()); const reply = port.reply(); port.emit(reply);
+  port.emit(structuredClone(reply)); port.emit(null);
+  expect(apply).toHaveBeenCalledTimes(1);
+  expect(driver.diagnostics.state).toBe('ready'); expect(driver.settled).toBe(true); driver.clear();
+});

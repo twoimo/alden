@@ -109,7 +109,7 @@ export class SemanticLayoutDriver {
     this.worker = worker; this.busy = true; this.pendingReflow = reflow; this.requestedPins = pinKey;
     this.requestedKey = key; this.requestedInputs=inputs; this.state = { state: 'pending', generation: id };
     worker.onmessage = event => {
-      if (this.worker !== worker || id !== this.generation) return;
+      if (this.worker !== worker || id !== this.generation || !this.busy) return;
       const raw=event.data;
       const reject=()=>{this.stop();this.state={state:'failed',reason:'semantic_layout_invalid_reply'};};
       if(!raw||typeof raw!=='object'||Array.isArray(raw)||!Number.isSafeInteger(raw.id)){reject();return;}
