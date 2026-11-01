@@ -1,0 +1,24 @@
+{
+  "candidate_only": true,
+  "installed": false,
+  "inputs": {
+    "docs/evaluation/context-consumer-210-20261021/consumer.patch": "6187adddc1846bba7877eafb652141ee00ec3b2914bb819c0b8f69543db0015a",
+    "docs/evaluation/context-consumer-210-20261021/consumer_cases.py": "88ae45ed88f4b428aaa2edfeda5da5084ce09796246745885a60a0a49935bbd6",
+    "docs/evaluation/context-consumer-210-20261021/run_fixtures.py": "4d35ce9d475a0402aaf4c49a5783c2265aba275b74b9eb1e6572a87c243c7a57",
+    "docs/evaluation/matched-context-207-20261021/candidate.patch": "faa6884e750c4840fc03a94001b492895edb5d9a50166a41478658bb11204331",
+    "docs/evaluation/matched-context-207-20261021/context_cases.py": "fdb92eeb3ebe8c4fd4c30e56e38093fd64e9b28611f41a69314ed282160d304f",
+    "docs/evaluation/named-source-207-20261021/named_source_cases.py": "1297671729a44b16bed318d6c91ea7ffb6133ba53c14079709d05ec91f486751",
+    "scripts/alden_collection.py": "00ed7d755e138c7bfcd57f48218c35781c7f15937c56b2a22d5bb6a87d506920",
+    "scripts/alden_collection_retrieval.py": "51bfb4fa29c67ad5863345d4342e98c485d7baec504412bb5b7e7468bfb4a938",
+    "scripts/alden_content_evidence.py": "81ef356159d953660ea860eb94632a2d9995149ce6126bcf2e68086fbd23d0df",
+    "scripts/alden_retrieval_time.py": "e15acf66ea60be3bdc1756f1fd4f5d69825faa1f6985dbf6218de803963c45f4",
+    "scripts/alden_source_text.py": "2168a4cb678c7e77c5155f1d26fdc7fb2ade4ed6a4580e5c0d99444bb71bf4a5",
+    "scripts/alden_voice.py": "052928e27c7d8a09e13e6e925790c459faea35f458f105cefea220cc2f92a4cf",
+    "scripts/auto_reply_knowledge_graph.py": "86d4213424c95823c179802a67fcdcffa28b755e0e263632f999b725a41fe8e6",
+    "tests/test_alden_collection_retrieval.py": "2a29e36c22c2a20b0c2cc57b18b931a835bdcc98172cc3bf2e40beb170a47fc0",
+    "tests/test_alden_voice_retrieval.py": "ad6cacdabe8baf2340760d6f89edad5246b5c2f08ae830140e7086da8ce8390c",
+    "docs/evaluation/context-consumer-210-20261021/README.md": "e2327257da7f67197c265d3b12fac344de052e8470c362faddc05e48d0bba458"
+  },
+  "scope": "Exact hash-bound source snapshot over parent revision; uninstalled retrieval/consumer delta. Production NFC routing fix is separate. External review and promotion remain incomplete.",
+  "parent_revision": "709681675b1e7183f9dd1a7062d48e1a326360a6"
+}

@@ -1,0 +1,260 @@
+{
+  "family": "normalization",
+  "scope": "정규화 · 표기와 동일성 결정",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "detail": {
+      "claim": "검증 원문 — 출처·본문 hash",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1822,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "64cce7e2e16d8cf938322e509b29b0b8893b147d54d36f88f40b029c421d58ba",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "notation": {
+      "claim": "표기 후보 — 숫자·날짜·단위",
+      "sources": [
+        {
+          "path": "scripts/alden_body_normalization.py",
+          "line": 1,
+          "end_line": 18,
+          "file_sha256": "53b77c86e567f9d62f50e882a6ec71ef7b89c1641567aa8fabb5010efb086652",
+          "range_sha256": "2237b582c1bdc7f839913e0670f27545f4d19f31f699f02153345fee4921a4ed",
+          "local_source": "../../../scripts/alden_body_normalization.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1811,
+          "end_line": 1843,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "68138b97ee0687a1d0fce3f3fc367db9a9295702e3c3fcaaa952cfed8bcae732",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "display": {
+      "claim": "근거 표시 — 진위 판단 아님",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1823,
+          "end_line": 1843,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "eaef7bc88c3c45ef9427ec3967931f1287eec35a38ab84f59b1869d1bdebe925",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "preview": {
+      "claim": "병합 미리보기 — 멤버·권한 확인",
+      "sources": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "line": 2705,
+          "end_line": 2715,
+          "file_sha256": "3c6c3d147d986886f9cf26c360079417d7c973a498e37b91455ff00dd219979b",
+          "range_sha256": "3d2bb67f7f3c393b85f143a77d84b579f7365a58e6883a2318edf571ecac6845",
+          "local_source": "../../../scripts/auto-reply-menubar.py"
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 688,
+          "end_line": 727,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "33112da3f8769935fb1266d6c70bac130c17b0dd7e7386069de9c14f98a57fdb",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    },
+    "optin": {
+      "claim": "명시 동의 — apply / revert",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 688,
+          "end_line": 702,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "4d71822906ca5bf2be919ea3ce23161df5377d51af43cf44ed786406e976060e",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    },
+    "recheck": {
+      "claim": "수정 버전 검사 — 출처 지문·중복",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 496,
+          "end_line": 514,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "35b43eb6e1d62ab3a6b3dde317894fd29d2643a99c9ec22b9132df84c064ecca",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 517,
+          "end_line": 539,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "d578d7d6014a230088c16342cebd69e30761d576820d893bb3c4914f49ca6f9d",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    },
+    "overlay": {
+      "claim": "결정 저장 — 파생 오버레이",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 539,
+          "end_line": 562,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "da7a63f41c0f8ba8b858f263d75e9d35c29c76d22438ca00843148861dff9e1e",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    },
+    "revert": {
+      "claim": "결정 되돌림 — 원본·결정 보존",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 565,
+          "end_line": 592,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "b37c259a18b0d5871eef2a2b34048696d579edd6f91dcb08328ed9aab5ccd021",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "detail-notation",
+      "claim": "본문 범위",
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1785,
+          "end_line": 1822,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "64cce7e2e16d8cf938322e509b29b0b8893b147d54d36f88f40b029c421d58ba",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "notation-display",
+      "claim": "후보만",
+      "sources": [
+        {
+          "path": "scripts/alden_body_normalization.py",
+          "line": 1,
+          "end_line": 18,
+          "file_sha256": "53b77c86e567f9d62f50e882a6ec71ef7b89c1641567aa8fabb5010efb086652",
+          "range_sha256": "2237b582c1bdc7f839913e0670f27545f4d19f31f699f02153345fee4921a4ed",
+          "local_source": "../../../scripts/alden_body_normalization.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1811,
+          "end_line": 1843,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "68138b97ee0687a1d0fce3f3fc367db9a9295702e3c3fcaaa952cfed8bcae732",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "preview-optin",
+      "claim": "계획",
+      "sources": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "line": 2705,
+          "end_line": 2715,
+          "file_sha256": "3c6c3d147d986886f9cf26c360079417d7c973a498e37b91455ff00dd219979b",
+          "range_sha256": "3d2bb67f7f3c393b85f143a77d84b579f7365a58e6883a2318edf571ecac6845",
+          "local_source": "../../../scripts/auto-reply-menubar.py"
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 688,
+          "end_line": 727,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "33112da3f8769935fb1266d6c70bac130c17b0dd7e7386069de9c14f98a57fdb",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    },
+    {
+      "id": "optin-recheck",
+      "claim": "명시 허용",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 688,
+          "end_line": 702,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "4d71822906ca5bf2be919ea3ce23161df5377d51af43cf44ed786406e976060e",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    },
+    {
+      "id": "recheck-overlay",
+      "claim": "현재 계획",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 496,
+          "end_line": 514,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "35b43eb6e1d62ab3a6b3dde317894fd29d2643a99c9ec22b9132df84c064ecca",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 517,
+          "end_line": 539,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "d578d7d6014a230088c16342cebd69e30761d576820d893bb3c4914f49ca6f9d",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    },
+    {
+      "id": "overlay-revert",
+      "claim": "버전 일치",
+      "sources": [
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "line": 539,
+          "end_line": 562,
+          "file_sha256": "6878e66e9b2d5181291b0aa76d03ad17d645554f874a5dcbb6a98ed6803c567f",
+          "range_sha256": "da7a63f41c0f8ba8b858f263d75e9d35c29c76d22438ca00843148861dff9e1e",
+          "local_source": "../../../scripts/alden_entity_resolution.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "claim": "표시 클라이언트도 원문 id/target/version/raw hash/body hash와 offset 계약을 검증한다.",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/body-notation.ts",
+          "line": 37,
+          "end_line": 59,
+          "file_sha256": "eb7fc194b8b82ff92a578ed3c7f271019353aded43d3a9dc835d7e307cd165b6",
+          "range_sha256": "becbf842f6cabfbfc3e825163206dcd9c3b94aaadbe6cf7f20791a228055598b",
+          "local_source": "../../../desktop/src/knowledge/body-notation.ts"
+        }
+      ]
+    }
+  ]
+}

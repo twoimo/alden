@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Alden 0.3.92 · 독립 원본과 단일 뷰어의 계보",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ]
+  },
+  "stages": [
+    {
+      "label": "독립 원본"
+    },
+    {
+      "label": "출처와 접근"
+    },
+    {
+      "label": "버전·조회"
+    },
+    {
+      "label": "표시 합성"
+    },
+    {
+      "label": "탐색·반환"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "declared92",
+      "type": "external",
+      "label": "선언한 자료 집합",
+      "sublabel": "프로젝트·계정·파일",
+      "stage": 0,
+      "row": 0,
+      "width": 140
+    },
+    {
+      "id": "vault92",
+      "type": "database",
+      "label": "OSK 정본",
+      "sublabel": "원본 SDK·노트 ID",
+      "stage": 0,
+      "row": 1,
+      "width": 140
+    },
+    {
+      "id": "capture92",
+      "type": "security",
+      "label": "원문·권한 보존",
+      "sublabel": "ID·해시·대상·범위",
+      "stage": 1,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "sdk92",
+      "type": "security",
+      "label": "허용된 정본 조회",
+      "sublabel": "정본과 파생본 구분",
+      "stage": 1,
+      "row": 1,
+      "width": 160
+    },
+    {
+      "id": "projection92",
+      "type": "database",
+      "label": "수집 검색·투영",
+      "sublabel": "현재 버전·관계 이력",
+      "stage": 2,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "memory92",
+      "type": "backend",
+      "label": "기억·대화 snapshot",
+      "sublabel": "별도 source 정체성",
+      "stage": 2,
+      "row": 1,
+      "width": 160
+    },
+    {
+      "id": "merge92",
+      "type": "backend",
+      "label": "범위 지정 합성",
+      "sublabel": "ID·source 버전 유지",
+      "stage": 3,
+      "row": 0,
+      "width": 160
+    },
+    {
+      "id": "scene92",
+      "type": "frontend",
+      "label": "단일 3D 뷰어",
+      "sublabel": "선택·검색·목록·근거",
+      "stage": 4,
+      "row": 0,
+      "width": 160
+    }
+  ],
+  "flows": [
+    {
+      "id": "capture_source92",
+      "from": "declared92",
+      "to": "capture92",
+      "label": "선언 자료",
+      "classification": "원본 보존"
+    },
+    {
+      "id": "capture_store92",
+      "from": "capture92",
+      "to": "projection92",
+      "label": "버전 저장",
+      "classification": "권한별 투영",
+      "labelAt": [
+        423,
+        200
+      ]
+    },
+    {
+      "id": "vault_sdk92",
+      "from": "vault92",
+      "to": "sdk92",
+      "label": "정본 조회",
+      "classification": "SDK 정본"
+    },
+    {
+      "id": "sdk_snapshot92",
+      "from": "sdk92",
+      "to": "memory92",
+      "label": "허용 snapshot",
+      "classification": "별도 기억 출처",
+      "labelAt": [
+        423,
+        314
+      ]
+    },
+    {
+      "id": "projection_merge92",
+      "from": "projection92",
+      "to": "merge92",
+      "label": "선택한 범위",
+      "classification": "전체·프로젝트·페이지",
+      "toSide": "left",
+      "route": "straight",
+      "labelAt": [
+        638,
+        105
+      ]
+    },
+    {
+      "id": "memory_merge92",
+      "from": "memory92",
+      "to": "merge92",
+      "label": "기억 합성 조건",
+      "classification": "전체 첫 페이지·기억 선택"
+    },
+    {
+      "id": "merge_scene92",
+      "from": "merge92",
+      "to": "scene92",
+      "label": "동일 ID·근거",
+      "classification": "단일 표시 snapshot",
+      "labelAt": [
+        853,
+        200
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "하나의 화면과 여러 정본",
+      "items": [
+        "기억 선택 또는 focus 없는 전체 첫 페이지에서 기억을 조회한다. 수집 조회 가능 여부·부분 실패를 반영해 합성한다.",
+        "CollectionStore와 OSK 원본을 하나의 파일로 덮어쓰거나 전량 복제한 완료 상태로 표시하지 않는다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "계보 검증과 미결",
+      "items": [
+        "프로젝트·다음 페이지는 범위를 따른다. 원본 ID·버전·권한을 보존하고 근접을 저장 관계로 승격하지 않는다.",
+        "모든 원본·여러 호스트·자동 재취득·독립 의미/동일인 gold는 아직 미완료다."
+      ]
+    }
+  ]
+}

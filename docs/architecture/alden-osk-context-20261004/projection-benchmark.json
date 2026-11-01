@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "runtime": "v26.10.0",
+  "warmup": 30,
+  "iterations": 96,
+  "scope": "Pure projection on a private real OSK snapshot; runs on graph changes, not every frame. Not GPU/frame/voice latency or a before-after speed claim.",
+  "cases": [
+    {
+      "nodes": 6,
+      "sourceEdges": 0,
+      "samples": 200,
+      "p50Ms": 0.02733299999999872,
+      "p95Ms": 0.08575000000000443,
+      "maxMs": 0.16745800000000344
+    },
+    {
+      "nodes": 12,
+      "sourceEdges": 0,
+      "samples": 200,
+      "p50Ms": 0.049917000000000655,
+      "p95Ms": 0.1202079999999981,
+      "maxMs": 0.4715409999999949
+    },
+    {
+      "nodes": 24,
+      "sourceEdges": 119,
+      "samples": 200,
+      "p50Ms": 0.7602080000000058,
+      "p95Ms": 1.0777909999999906,
+      "maxMs": 5.957375000000013
+    }
+  ]
+}

@@ -1,0 +1,250 @@
+{
+  "family": "evaluation",
+  "scope": "평가 · 학습과 승격 경계",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "cli": {
+      "claim": "모드 선택 — 학습·평가 분리",
+      "sources": [
+        {
+          "path": "scripts/auto_reply_finetune.py",
+          "line": 1507,
+          "end_line": 1534,
+          "file_sha256": "aa231b5c2a531887ea6fd99375cda7686c4b855e9ff31ebc448fd1d2fa17695a",
+          "range_sha256": "6a9400139f03276145fb1b9cb55ac834b8b7dcc0136d8e7e66dd7287d08eb28e",
+          "local_source": "../../../scripts/auto_reply_finetune.py"
+        }
+      ]
+    },
+    "evalinput": {
+      "claim": "평가 입력 고정 — 데이터·가중치 hash",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 243,
+          "end_line": 280,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "56e5d19267e483f21a4df22b57310ca325268b37aa380a9f76961ea562d04707",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        }
+      ]
+    },
+    "score": {
+      "claim": "점수 계산 — 기본 validation",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 281,
+          "end_line": 300,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "56829d990be0782fff117b6c4e036ded5926228cb4a5e2b18c053612cfe6c7e4",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        }
+      ]
+    },
+    "receipt": {
+      "claim": "평가 영수증 — evaluated / unavailable",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 301,
+          "end_line": 306,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "2da0655c6a2e15146c308e6c4c0815dd204af511acbeaba5af1a7a544e4273e6",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        },
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 321,
+          "end_line": 344,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "fd0d4abe18443666f2a99bd9256cc6d5ad5df0c007da951b59cbefb98c466f15",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        }
+      ]
+    },
+    "traininput": {
+      "claim": "학습 입력 검사 — tokenizer·예산",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 81,
+          "end_line": 119,
+          "file_sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "range_sha256": "ec5d24ff0640e6e1cc40c23e18dec8fe29b94915a231975489a134c1d6836ab6",
+          "local_source": "../../../scripts/alden_dpo_training.py"
+        }
+      ]
+    },
+    "train": {
+      "claim": "DPO 업데이트 — 명시된 train split",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 152,
+          "end_line": 180,
+          "file_sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "range_sha256": "dcca89634fff68e0eca2bc260caeefa5a85860fdd9fc380ce5d11f3a08af1302",
+          "local_source": "../../../scripts/alden_dpo_training.py"
+        }
+      ]
+    },
+    "adapter": {
+      "claim": "사설 어댑터 — 재로드·기본값 보존",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 220,
+          "end_line": 263,
+          "file_sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "range_sha256": "66283d9f88cf1db4543713db7b1c3ea506b113372651cf6851782323c056b462",
+          "local_source": "../../../scripts/alden_dpo_training.py"
+        }
+      ]
+    },
+    "boundary": {
+      "claim": "승격 없음 — model_promoted=false",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 301,
+          "end_line": 306,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "2da0655c6a2e15146c308e6c4c0815dd204af511acbeaba5af1a7a544e4273e6",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        },
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 226,
+          "end_line": 240,
+          "file_sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "range_sha256": "4365d9a3722c08284b03d9b144c4bf7d4344ee989ac4f18242a2353efe4b684f",
+          "local_source": "../../../scripts/alden_dpo_training.py"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "cli-evalinput",
+      "claim": "평가 모드",
+      "sources": [
+        {
+          "path": "scripts/auto_reply_finetune.py",
+          "line": 1507,
+          "end_line": 1534,
+          "file_sha256": "aa231b5c2a531887ea6fd99375cda7686c4b855e9ff31ebc448fd1d2fa17695a",
+          "range_sha256": "6a9400139f03276145fb1b9cb55ac834b8b7dcc0136d8e7e66dd7287d08eb28e",
+          "local_source": "../../../scripts/auto_reply_finetune.py"
+        }
+      ]
+    },
+    {
+      "id": "evalinput-score",
+      "claim": "hash 고정",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 243,
+          "end_line": 280,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "56e5d19267e483f21a4df22b57310ca325268b37aa380a9f76961ea562d04707",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        }
+      ]
+    },
+    {
+      "id": "score-receipt",
+      "claim": "검사 후 저장",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 281,
+          "end_line": 300,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "56829d990be0782fff117b6c4e036ded5926228cb4a5e2b18c053612cfe6c7e4",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        }
+      ]
+    },
+    {
+      "id": "cli-traininput",
+      "claim": "학습 모드",
+      "sources": [
+        {
+          "path": "scripts/auto_reply_finetune.py",
+          "line": 1507,
+          "end_line": 1534,
+          "file_sha256": "aa231b5c2a531887ea6fd99375cda7686c4b855e9ff31ebc448fd1d2fa17695a",
+          "range_sha256": "6a9400139f03276145fb1b9cb55ac834b8b7dcc0136d8e7e66dd7287d08eb28e",
+          "local_source": "../../../scripts/auto_reply_finetune.py"
+        }
+      ]
+    },
+    {
+      "id": "traininput-train",
+      "claim": "명시 실행",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 81,
+          "end_line": 119,
+          "file_sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "range_sha256": "ec5d24ff0640e6e1cc40c23e18dec8fe29b94915a231975489a134c1d6836ab6",
+          "local_source": "../../../scripts/alden_dpo_training.py"
+        }
+      ]
+    },
+    {
+      "id": "train-adapter",
+      "claim": "검증·저장",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 152,
+          "end_line": 180,
+          "file_sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "range_sha256": "dcca89634fff68e0eca2bc260caeefa5a85860fdd9fc380ce5d11f3a08af1302",
+          "local_source": "../../../scripts/alden_dpo_training.py"
+        }
+      ]
+    },
+    {
+      "id": "receipt-boundary",
+      "claim": "승격 안 함",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 301,
+          "end_line": 306,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "2da0655c6a2e15146c308e6c4c0815dd204af511acbeaba5af1a7a544e4273e6",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        },
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 321,
+          "end_line": 344,
+          "file_sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "range_sha256": "fd0d4abe18443666f2a99bd9256cc6d5ad5df0c007da951b59cbefb98c466f15",
+          "local_source": "../../../scripts/alden_model_evaluation.py"
+        }
+      ]
+    },
+    {
+      "id": "adapter-boundary",
+      "claim": "승격 안 함",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 220,
+          "end_line": 263,
+          "file_sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "range_sha256": "66283d9f88cf1db4543713db7b1c3ea506b113372651cf6851782323c056b462",
+          "local_source": "../../../scripts/alden_dpo_training.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": []
+}

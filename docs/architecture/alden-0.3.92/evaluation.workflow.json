@@ -1,0 +1,133 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.92 · 평가·DPO·제품 승격",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "evaluation92",
+      "label": "구현 경로와 확인 상태"
+    }
+  ],
+  "mainPath": [
+    "evaluation92_0",
+    "evaluation92_1",
+    "evaluation92_2",
+    "evaluation92_3",
+    "evaluation92_4",
+    "evaluation92_5"
+  ],
+  "nodes": [
+    {
+      "id": "evaluation92_0",
+      "lane": "evaluation92",
+      "col": 0,
+      "type": "external",
+      "label": "실패와 선호 자료",
+      "sublabel": "chosen/rejected·source",
+      "width": 132
+    },
+    {
+      "id": "evaluation92_1",
+      "lane": "evaluation92",
+      "col": 1,
+      "type": "security",
+      "label": "독립 자료 분리",
+      "sublabel": "학습과 holdout·중복 방지",
+      "width": 132
+    },
+    {
+      "id": "evaluation92_2",
+      "lane": "evaluation92",
+      "col": 2,
+      "type": "backend",
+      "label": "토큰 확률 계산",
+      "sublabel": "policy/reference checkpoint",
+      "width": 132
+    },
+    {
+      "id": "evaluation92_3",
+      "lane": "evaluation92",
+      "col": 3,
+      "type": "backend",
+      "label": "평가·조건부 학습",
+      "sublabel": "RAM·취소·명시 offline",
+      "width": 132
+    },
+    {
+      "id": "evaluation92_4",
+      "lane": "evaluation92",
+      "col": 4,
+      "type": "security",
+      "label": "독립·회귀 게이트",
+      "sublabel": "품질·지연·원문/인용",
+      "width": 132
+    },
+    {
+      "id": "evaluation92_5",
+      "lane": "evaluation92",
+      "col": 5,
+      "type": "frontend",
+      "label": "제품 승격 보류",
+      "sublabel": "별도 결정·검증·복구",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "evaluation92_edge0",
+      "from": "evaluation92_0",
+      "to": "evaluation92_1",
+      "label": "범위 확인",
+      "role": "main"
+    },
+    {
+      "id": "evaluation92_edge1",
+      "from": "evaluation92_1",
+      "to": "evaluation92_2",
+      "label": "대사",
+      "role": "main"
+    },
+    {
+      "id": "evaluation92_edge2",
+      "from": "evaluation92_2",
+      "to": "evaluation92_3",
+      "label": "확정",
+      "role": "main"
+    },
+    {
+      "id": "evaluation92_edge3",
+      "from": "evaluation92_3",
+      "to": "evaluation92_4",
+      "label": "검증",
+      "role": "main"
+    },
+    {
+      "id": "evaluation92_edge4",
+      "from": "evaluation92_4",
+      "to": "evaluation92_5",
+      "label": "반환",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "단계별 실행 경계",
+      "items": [
+        "평가 실행·손실 계산·실제 가중치 학습·모델 승격을 각각 구분한다.",
+        "학습 완료 코드 경로는 weights_trained=true·model_promoted=false를 기록한다. 실제 실행은 별도 영수증으로 확인한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "현재 미완료",
+      "items": [
+        "넓은 실제 학습·독립 holdout·제품 승격은 확인되지 않았다.",
+        "같은 모델의 자기 승인을 gold로 쓰지 않고 손실 감소를 전체 품질 향상으로 주장하지 않는다."
+      ]
+    }
+  ]
+}

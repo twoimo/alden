@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/private/tmp/alden-current-diagrams-20261005/system.architecture.json",
+  "output": "/private/tmp/alden-current-diagrams-20261005/system.html",
+  "specification": {
+    "sha256": "0aadb2b0753d39f81ae95d5ffcc983d94fbb544e131b3c818cf322b8a751cd3d",
+    "bytes": 3429
+  },
+  "artifact": {
+    "sha256": "7f0b6d11ab4889095dbc9ffbebf746501a22f744821d356479d30b70792423ca",
+    "bytes": 808617
+  },
+  "validation": {
+    "checksPassed": 9,
+    "checkCount": 9,
+    "compositionProfile": "showcase",
+    "compositionStatus": "pass",
+    "errors": 0,
+    "warnings": 0
+  }
+}

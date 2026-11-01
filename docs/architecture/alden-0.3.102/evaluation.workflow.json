@@ -1,0 +1,142 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.102 · 평가·DPO·제품 승격",
+    "quality_profile": "showcase",
+    "animation": "none"
+  },
+  "lanes": [
+    {
+      "id": "evaluation102-phase0",
+      "label": "자료·독립 분리"
+    },
+    {
+      "id": "evaluation102-phase1",
+      "label": "확률·조건부 학습"
+    },
+    {
+      "id": "evaluation102-phase2",
+      "label": "회귀·제품 승격"
+    }
+  ],
+  "mainPath": [
+    "evaluation102_0",
+    "evaluation102_1",
+    "evaluation102_2",
+    "evaluation102_3",
+    "evaluation102_4",
+    "evaluation102_5"
+  ],
+  "nodes": [
+    {
+      "id": "evaluation102_0",
+      "lane": "evaluation102-phase0",
+      "col": 0,
+      "type": "external",
+      "label": "실패와 선호 자료",
+      "sublabel": "chosen/rejected·source",
+      "width": 180
+    },
+    {
+      "id": "evaluation102_1",
+      "lane": "evaluation102-phase0",
+      "col": 1,
+      "type": "security",
+      "label": "독립 자료 분리",
+      "sublabel": "학습과 holdout·중복 방지",
+      "width": 180
+    },
+    {
+      "id": "evaluation102_2",
+      "lane": "evaluation102-phase1",
+      "col": 1,
+      "type": "backend",
+      "label": "토큰 확률 계산",
+      "sublabel": "policy/reference checkpoint",
+      "width": 180
+    },
+    {
+      "id": "evaluation102_3",
+      "lane": "evaluation102-phase1",
+      "col": 2,
+      "type": "backend",
+      "label": "평가·조건부 학습",
+      "sublabel": "RAM·취소·명시 offline",
+      "width": 180
+    },
+    {
+      "id": "evaluation102_4",
+      "lane": "evaluation102-phase2",
+      "col": 2,
+      "type": "security",
+      "label": "독립·회귀 게이트",
+      "sublabel": "품질·지연·원문/인용",
+      "width": 180
+    },
+    {
+      "id": "evaluation102_5",
+      "lane": "evaluation102-phase2",
+      "col": 3,
+      "type": "frontend",
+      "label": "제품 승격 보류",
+      "sublabel": "별도 결정·검증·복구",
+      "width": 180
+    }
+  ],
+  "edges": [
+    {
+      "id": "evaluation102_edge0",
+      "from": "evaluation102_0",
+      "to": "evaluation102_1",
+      "label": "범위 확인",
+      "role": "main"
+    },
+    {
+      "id": "evaluation102_edge1",
+      "from": "evaluation102_1",
+      "to": "evaluation102_2",
+      "label": "대사",
+      "role": "main"
+    },
+    {
+      "id": "evaluation102_edge2",
+      "from": "evaluation102_2",
+      "to": "evaluation102_3",
+      "label": "확정",
+      "role": "main"
+    },
+    {
+      "id": "evaluation102_edge3",
+      "from": "evaluation102_3",
+      "to": "evaluation102_4",
+      "label": "검증",
+      "role": "main"
+    },
+    {
+      "id": "evaluation102_edge4",
+      "from": "evaluation102_4",
+      "to": "evaluation102_5",
+      "label": "반환",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "단계별 실행 경계",
+      "items": [
+        "평가 실행·손실 계산·실제 가중치 학습·모델 승격을 각각 구분한다.",
+        "학습 완료 코드 경로는 weights_trained=true·model_promoted=false를 기록한다. 실제 실행은 별도 영수증으로 확인한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "현재 미완료",
+      "items": [
+        "회귀 테스트·실제 원문 표본·설치 앱 readback을 구분한다. 넓은 독립 holdout·DPO 가중치 학습·제품 승격은 미완료다.",
+        "동일 고정 자료의 품질 감사 hash를 대사했다. 변동이 큰 시간 표본으로 전체 앱 속도·GPU·배터리 향상을 주장하지 않는다."
+      ]
+    }
+  ]
+}

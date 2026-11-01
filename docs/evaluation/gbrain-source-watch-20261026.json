@@ -1,0 +1,57 @@
+{
+  "kind": "gbrain-source-watch-local-evidence-v1",
+  "base_head": "6618c52f692ec6a1318e6014d30be4f59e4928f9",
+  "source_sha256": {
+    "scripts/alden_gbrain_watch.py": "b7c7331bb6bf889cd669aa94a7f52d59afc8ad119d5ddc8f0a1c5df23ea6ec08",
+    "tests/test_alden_gbrain_watch.py": "16b9226170a80bc7c2755c60efedf62d739eacc4077ea5963be7b8eb0154ee32",
+    ".github/workflows/ci.yml": "78f7c12b4bcf7a0213e9b555d91913141ee58e89734e88e327e7dfb805dccc90",
+    "desktop/src-tauri/tauri.conf.json": "0fb52eba833b2df9f7a6bdceee7ec600974dc6728653d2e11f0314c006d94a4a",
+    "desktop/src-tauri/src/resource_layout.rs": "fc76674b34e6198e3cabf60c455e5a78092749ac10d1c19481d57fc4a065fbfe"
+  },
+  "python_tests": 451,
+  "watcher_tests": 26,
+  "isolated_mutants": 11,
+  "full_goal": "active",
+  "installation": false,
+  "native_app_launch": false,
+  "service_or_global_registration": false,
+  "independent_external_review": "NOT_RUN",
+  "worker_contract": {
+    "required_model": "chatgpt-web/gpt-6-astra",
+    "required_effort": "max",
+    "required_model_exposed": false,
+    "worker_dispatched": false,
+    "substitution": false
+  },
+  "current_source_acceptance": {
+    "receipt": "outputs/gbrain-source-watch-20261025T205836Z/source-live-delivery/acceptance.json",
+    "sha256": "e8e04f2e351eed9f147cf5eebf17ec6095a21533554c857fa1058ca6fb27c1ea",
+    "source_nodes": 4,
+    "origins": 2,
+    "pages": 6,
+    "links": 5,
+    "mcp_requests": 5,
+    "accepted_mcp_paths": 3,
+    "rejected_mcp_paths": 2,
+    "watcher_exits": [
+      23,
+      0,
+      1,
+      0
+    ],
+    "actual_crash_after_cache_acceptance_before_consumer_receipt_reconciled": true,
+    "original_public_fixture_unchanged": true,
+    "final_generations": 0,
+    "current_modules_exact": true
+  },
+  "negative_controls": {
+    "receipt": "outputs/gbrain-source-watch-20261025T205836Z/negative-controls-delivery.json",
+    "sha256": "acae086dd9316c5dad636c9683db1d8d8393959af307e997d7d99a6993e81d9a"
+  },
+  "limits": [
+    "controlled public copy; no actual native account event",
+    "full refresh, not engine delta mutation",
+    "no original operational source writes or collector restart",
+    "native/installed/independent/external/formal/release gates remain open"
+  ]
+}

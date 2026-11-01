@@ -1,0 +1,276 @@
+import type { fetchSettingsAction } from '../runtime';
+import type { KnowledgeGraph } from './graph-model';
+import { matchesSourceReference } from './graph-model';
+import { terminalSummary, type TerminalSummary } from './terminal-model';
+import { trendWindow, readTerminalTrend, type TerminalTrend } from './terminal-trend';
+
+export type MapPoint = { id: string; x: number; y: number; z: number };
+const panels = [
+  ['ingest', 'INGEST', '최근 수집'], ['linked', 'LINKED', '선택한 연결'],
+  ['trend', 'f(x)', '저장 변경 이력 · UTC'], ['sectors', 'SECTORS', '지식 유형'],
+  ['chord', 'CHORD', '연결 분포'], ['tail', 'TAIL-F', '처리 이력'],
+] as const;
+export function terminalMarkup(): string {
+  return `<section id="knowledge-terminal" class="knowledge-terminal" aria-label="실시간 지식 터미널">${panels.map(([id, name, label]) =>
+    `<article class="terminal-panel terminal-${id}" aria-labelledby="terminal-${id}-heading"><header><h2 id="terminal-${id}-heading">${name}</h2><span>${label}</span>${id === 'tail' ? '<button id="terminal-follow" type="button" aria-pressed="true" title="새 기록 자동 추적">추적 켜짐</button>' : ''}</header><div id="terminal-${id}" class="terminal-content"></div></article>`).join('')}</section>`;
+}
+export function observationMarkup(): string {
+  return `<aside class="knowledge-observations" aria-label="현재 지도의 보조 관측"><figure><figcaption><strong>SECTOR MAP</strong><span>정면 · XY</span></figcaption><canvas id="terminal-projection-xy" aria-hidden="true"></canvas></figure><figure><figcaption><strong>ORBIT MAP</strong><span>측면 · XZ</span></figcaption><canvas id="terminal-projection-xz" aria-hidden="true"></canvas></figure><div class="terminal-map-readout"><span>현재 표시 범위</span><strong id="terminal-map-count">불러오는 중</strong><p id="terminal-map-selection">지식을 선택해 연결을 확인하세요.</p><small>동일한 배치의 투영 · 연결 최대 300개</small></div></aside>`;
+}
+
+type Row = Record<string, unknown>;
+const stageNames: Record<string, string> = { discovered: '발견', parsed: '내용 읽음', validated: '형식 확인', stored: '저장', published: '갱신 준비', indexed: '검색 반영', failed: '실패', paused: '중지' };
+const colors = ['#8edcf1', '#c8b5f2', '#e6c489', '#91d1bb', '#e5aaca', '#9bbcea'];
+const number = (value: number) => value.toLocaleString('ko-KR');
+const typeName = (value: string): string => ({ video: '영상', document: '문서', source: '출처', source_claim: '원문 주장', topic: '주제', concept: '개념', index: '색인', collection: '지식 모음', person: '인물', claim: '주장', code: '코드' })[value] ?? value;
+
+/** Event-driven DOM/2D views. No timers, renderer, physics or independent subscription. */
+export class KnowledgeTerminal {
+  private readonly controls = new AbortController();
+  private readonly resize: ResizeObserver | null;
+  private graph: KnowledgeGraph = { nodes: [], edges: [] };
+  private summary = terminalSummary(this.graph, null);
+  private points: MapPoint[] = [];
+  private focus: string | null = null;
+  private active = false;
+  private epoch = 0;
+  private scope = '';
+  private busyEpoch: number | null = null;
+  private trend: TerminalTrend | null = null;
+  private pendingTrend: TerminalTrend | null = null;
+  private trendState = '미집계 · 저장 변경 이력을 아직 확인하지 않았습니다.';
+  private follow = true;
+  private history: Row[] = [];
+  private historyStream: string | null = null;
+  private pending: Row[] | null = null;
+  private historyState = '수집 이력을 아직 확인하지 않았습니다.';
+
+  constructor(private readonly root: Document, private readonly load: typeof fetchSettingsAction,
+    private readonly select: (id: string) => void) {
+    const signal = this.controls.signal;
+    root.getElementById('knowledge-terminal')?.addEventListener('click', event => {
+      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button[data-terminal-node]') : null;
+      const node = button?.dataset.terminalNode ? this.summary.nodes.find(node => node.id === button.dataset.terminalNode) : undefined;
+      if (!button || !node) return;
+      if (button.dataset.terminalRecord === 'true' && !matchesSourceReference(node, {
+        node_id: node.id, version: button.dataset.terminalVersion, target_id: button.dataset.terminalTarget,
+      })) return;
+      this.select(node.id);
+    }, { signal });
+    root.getElementById('terminal-follow')?.addEventListener('click', () => {
+      this.follow = !this.follow;
+      if (this.follow && this.pending) { this.history = this.pending; this.pending = null; this.trend = this.pendingTrend; this.pendingTrend = null; this.renderHistory(); this.renderTrend(); }
+      this.followLabel(); this.renderTrend();
+    }, { signal });
+    root.getElementById('knowledge-terminal-toggle')?.addEventListener('click', () => {
+      const dock = root.getElementById('knowledge-terminal'); if (!dock) return;
+      dock.hidden = !dock.hidden;
+      root.getElementById('knowledge-terminal-toggle')?.setAttribute('aria-expanded', String(!dock.hidden));
+    }, { signal });
+    this.resize = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (this.active) this.drawMaps(); }) : null;
+    for (const id of ['terminal-projection-xy', 'terminal-projection-xz']) {
+      const canvas = root.getElementById(id); if (canvas) this.resize?.observe(canvas);
+    }
+    this.render(); this.renderHistory();
+  }
+  visible(active: boolean): void {
+    const wasActive = this.active; this.active = active; this.epoch++;
+    if (wasActive && !active && !this.history.length && this.historyState === '수집 이력을 불러옵니다.') {
+      this.historyState = '수집 이력 갱신이 중지되어 있습니다.'; this.renderHistory();
+    }
+    this.renderTrend();
+    if (active) this.drawMaps();
+  }
+  reset(): void {
+    this.epoch++; this.scope = ''; this.history = []; this.pending = null; this.historyStream = null;
+    this.clearTrend('미집계 · 저장 변경 이력을 아직 확인하지 않았습니다.');
+    this.historyState = '수집 이력을 아직 확인하지 않았습니다.'; this.renderHistory(); this.followLabel();
+  }
+  dispose(): void { this.visible(false); this.controls.abort(); this.resize?.disconnect(); }
+  update(graph: KnowledgeGraph, focus: string | null, points: MapPoint[] = []): void {
+    this.graph = graph; this.focus = focus; this.points = points;
+    this.summary = terminalSummary(graph, focus);
+    this.render(); this.renderHistory();
+  }
+  async refreshHistory(query: Row, collection: boolean): Promise<void> {
+    if (!this.active) return;
+    const options: Row = { limit: 80 };
+    for (const key of ['projects', 'target_id', 'platform', 'search', 'since', 'until']) if (query[key] !== undefined) options[key] = query[key];
+    const window = query.node_type || query.relation ? null : trendWindow(query);
+    if (window) options.trend = window;
+    const key = JSON.stringify([collection, options, query.node_type, query.relation]);
+    if (this.scope !== key) { this.reset(); this.scope = key; }
+    if (!collection) { this.history = []; this.historyState = '대화 기억에는 수집 처리 이력이 없습니다.'; this.clearTrend('미연결 · 대화 기억의 변경 영수증은 지원하지 않습니다.'); this.renderHistory(); return; }
+    if (!window) this.clearTrend('미집계 · 유형·관계 필터 또는 31일을 넘는 기간은 지원하지 않습니다.');
+    if (this.busyEpoch === this.epoch) return;
+    const epoch = this.epoch; this.busyEpoch = epoch;
+    if (this.historyStream) options.stream_id = this.historyStream;
+    if (!this.history.length) { this.historyState = '수집 이력을 불러옵니다.'; this.renderHistory(); }
+    try {
+      const result = await this.load('collection-history', { query: JSON.stringify(options) });
+      if (!this.active || epoch !== this.epoch) return;
+      if (result?.ok !== true || !Array.isArray(result.items)) {
+        this.historyState = '수집 이력을 확인할 수 없습니다.';
+        this.history = []; this.pending = null; this.historyStream = null; this.clearTrend('미집계 · 저장 변경 이력을 확인할 수 없습니다.'); this.renderHistory(); this.followLabel(); return;
+      }
+      const stream = typeof result.stream_id === 'string' ? result.stream_id : null;
+      if (result.reset === true || stream !== null && this.historyStream !== null && stream !== this.historyStream) {
+        this.history = []; this.pending = null; this.clearTrend('미집계 · 이력 범위가 재설정되었습니다.');
+      }
+      this.historyStream = stream;
+      const known = new Set<string>();
+      const ids = new Set(this.summary.nodes.map(node => node.id));
+      const items = result.items.filter((raw): raw is Row => !!raw && typeof raw === 'object' && !Array.isArray(raw))
+        .filter(row => {
+          if (!Number.isSafeInteger(row.sequence) || Number(row.sequence) <= 0 || known.has(String(row.sequence))) return false;
+          if (!stageNames[String(row.stage)] || typeof row.document_label !== 'string') return false;
+          if ((query.node_type || query.relation) && !ids.has(String(row.document_id))) return false;
+          known.add(String(row.sequence)); return true;
+        }).sort((a, b) => Number(b.sequence) - Number(a.sequence)).slice(0, 32);
+      const trend = window ? readTerminalTrend(result, window) : null;
+      if (window && !trend) this.clearTrend('미집계 · 완전한 기간별 저장 영수증 집계를 확인할 수 없습니다.');
+      this.historyState = '수집 범위 · 최근 기록';
+      if (this.follow || !this.history.length) { this.history = items; this.pending = null; this.trend = trend; this.pendingTrend = null; this.renderHistory(); this.renderTrend(); }
+      else { this.pending = items; this.pendingTrend = trend; }
+      this.followLabel();
+    } catch {
+      if (this.active && epoch === this.epoch) {
+        this.historyState = '수집 이력을 확인할 수 없습니다.';
+        this.history = []; this.pending = null; this.historyStream = null; this.clearTrend('미집계 · 저장 변경 이력을 확인할 수 없습니다.'); this.renderHistory(); this.followLabel();
+      }
+    } finally { if (this.busyEpoch === epoch) this.busyEpoch = null; }
+  }
+  synced(): void {
+    const time = this.root.getElementById('terminal-synced');
+    if (time) time.textContent = '확인 ' + new Date().toLocaleTimeString('ko-KR', { hour12: false });
+  }
+  projection(points: MapPoint[]): void { this.points = points; if (this.active) this.drawMaps(); }
+  private make<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = ''): HTMLElementTagNameMap[K] {
+    const node = this.root.createElement(tag); node.textContent = text; node.className = className; return node;
+  }
+  private host(id: string) { return this.root.getElementById(`terminal-${id}`); }
+  private set(id: string, content: Node[]): void { this.host(id)?.replaceChildren(...content); }
+  private empty(text: string) { return this.make('p', text, 'terminal-empty'); }
+  private row(label: string, value: string, id?: string): HTMLElement {
+    const row = this.make(id ? 'button' : 'div', '', 'terminal-row');
+    if (row instanceof HTMLButtonElement) { row.type = 'button'; row.dataset.terminalNode = id; }
+    row.title = label;
+    row.append(this.make('span', label), this.make('small', value)); return row;
+  }
+  private render(): void {
+    const data = this.summary, selected = data.nodes.find(node => node.id === this.focus);
+    this.set('linked', selected ? [this.make('p', selected.label, 'terminal-selection'),
+      ...data.links.map(link => this.row(link.node.label, `${link.direction === 'out' ? '→' : '←'} ${link.edge.relation || '관계'}`, link.node.id)),
+      ...(!data.links.length ? [this.empty('표시 범위에 연결이 없습니다.')] : [])] : [this.empty('지도에서 지식을 선택하세요.')]);
+    this.set('sectors', data.sectors.length ? data.sectors.slice(0, 8).map((sector, i) => {
+      const row = this.row(typeName(sector.name), number(sector.count)); row.style.setProperty('--sector-color', colors[i % colors.length]);
+      row.style.setProperty('--sector-share', `${sector.count / data.nodes.length * 100}%`); row.classList.add('terminal-sector'); return row;
+    }) : [this.empty('표시할 지식이 없습니다.')]);
+    this.renderTrend(); this.renderRoutes(data);
+    const count = this.root.getElementById('terminal-map-count');
+    if (count) count.textContent = `${number(data.nodes.length)} 지식 / ${number(data.edges.length)} 연결`;
+    const selection = this.root.getElementById('terminal-map-selection');
+    if (selection) selection.textContent = selected ? selected.label : '지식을 선택해 연결을 확인하세요.';
+    if (this.active) this.drawMaps();
+  }
+  private clearTrend(state: string): void {
+    this.trend = null; this.pendingTrend = null; this.trendState = state; this.renderTrend();
+  }
+  private renderTrend(): void {
+    const trend = this.trend;
+    if (!trend) { this.set('trend', [this.empty(this.trendState)]); return; }
+    const countDay = (day: TerminalTrend['days'][number]) => day.added + day.revised + day.removed;
+    const peak = Math.max(1, ...trend.days.map(countDay));
+    const total = trend.days.reduce((sum, day) => sum + countDay(day), 0);
+    const chart = this.make('div', '', 'terminal-bars');
+    chart.setAttribute('role', 'img'); chart.setAttribute('aria-label', 'UTC 날짜별 확인된 저장 변경 영수증. 빈 날짜와 원본 전체 유입량은 미집계.');
+    for (const day of trend.days) {
+      const value = countDay(day), bar = this.make('span');
+      bar.dataset.day = day.day; bar.dataset.confirmed = String(value);
+      bar.style.height = value ? `${Math.max(2, value / peak * 100)}%` : '0%';
+      bar.title = `${day.day} UTC · ` + (value ? `추가 ${number(day.added)} · 개정 ${number(day.revised)} · 제거 ${number(day.removed)} 확인` : '확인된 영수증 없음 · 실제량 미집계');
+      chart.append(bar);
+    }
+    const stamp = (at: number) => new Date(at * 1000).toISOString().replace('T', ' ').replace(/:00\.000Z$/, 'Z');
+    this.set('trend', [total ? chart : this.empty('확인된 변경 영수증 없음 · 실제 유입·변경량 미집계'),
+      this.make('p', `${stamp(trend.window.since)} ≤ 저장시각 < ${stamp(trend.window.until)}`, 'terminal-footnote'),
+      this.make('p', `${this.active ? this.follow ? '확인' : '추적 중지 · 확인' : '갱신 중지 · 확인'} ${stamp(trend.observedAt)} · 저장 영수증 ${number(total)}건`, 'terminal-footnote'),
+      this.make('p', `보존된 이력만 집계 · 원본 전체·빈 날짜 미집계${trend.window.until > trend.observedAt ? ' · 확인 시각 이후 미집계' : ''} · 과거 일괄 수집/실시간 구분 미지원 · 관계량 미집계${trend.unclassified ? ` · 분류 제외 ${number(trend.unclassified)}건` : ''}`, 'terminal-footnote')]);
+  }
+  private renderRoutes(data: TerminalSummary): void {
+    const list = data.routes.slice(0, 6);
+    if (!list.length) { this.set('chord', [this.empty('현재 지도에 저장된 연결이 없습니다.')]); return; }
+    const svg = this.root.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 140 90'); svg.setAttribute('aria-hidden', 'true'); svg.classList.add('terminal-chord-chart');
+    const sectors = [...new Set(list.flatMap(route => [route.source, route.target]))];
+    const point = (index: number, offset = 0) => { const angle = index / sectors.length * Math.PI * 2 - Math.PI / 2 + offset; return [70 + Math.cos(angle) * 37, 45 + Math.sin(angle) * 37]; };
+    const ring = this.root.createElementNS(svg.namespaceURI, 'circle');
+    ring.setAttribute('cx', '70'); ring.setAttribute('cy', '45'); ring.setAttribute('r', '37');
+    ring.setAttribute('fill', 'none'); ring.setAttribute('stroke', '#88bad23d'); svg.append(ring);
+    for (const route of list) {
+      const internal = route.source === route.target;
+      const a = point(sectors.indexOf(route.source), internal ? -.28 : 0), b = point(sectors.indexOf(route.target), internal ? .28 : 0);
+      const path = this.root.createElementNS(svg.namespaceURI, 'path');
+      path.setAttribute('d', internal ? `M${a.join(',')} C24,68 116,68 ${b.join(',')}` : `M${a.join(',')} Q70,45 ${b.join(',')}`);
+      path.setAttribute('stroke', colors[sectors.indexOf(route.source) % colors.length]);
+      path.setAttribute('data-route', internal ? 'within-type' : 'between-types');
+      path.setAttribute('stroke-width', String(Math.min(3, .5 + Math.log1p(route.count) / 2))); path.setAttribute('fill', 'none'); svg.append(path);
+    }
+    sectors.forEach((_, i) => { const [x, y] = point(i), dot = this.root.createElementNS(svg.namespaceURI, 'circle'); dot.setAttribute('cx', String(x)); dot.setAttribute('cy', String(y)); dot.setAttribute('r', '3'); dot.setAttribute('fill', colors[i % colors.length]); svg.append(dot); });
+    this.set('chord', [svg, ...list.slice(0, 3).map(route => this.row(route.source === route.target
+      ? `${typeName(route.source)} 내부` : `${typeName(route.source)} → ${typeName(route.target)}`, number(route.count)))]);
+  }
+  private renderHistory(): void {
+    const latest = new Map<string, Row>();
+    for (const row of this.history) { const id = typeof row.document_id === 'string' ? row.document_id : ''; if (id && !latest.has(id)) latest.set(id, row); }
+    const display = (row: Row, ingestion: boolean) => {
+      const stage = stageNames[String(row.stage)], detail = row.details as Row | undefined;
+      const label = row.stage === 'stored' && detail?.change === 'unchanged' ? '변경 없음' : stage;
+      const at = Number(row.at), time = Number.isFinite(at) && at > 0 ? new Date(at * 1000).toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '시각 미상';
+      const node = this.summary.nodes.find(node => matchesSourceReference(node, { node_id: row.document_id, version: row.version, target_id: row.target_id }));
+      const line = this.row(String(row.document_label), ingestion ? label : time, node?.id);
+      if (node) {
+        line.dataset.terminalRecord = 'true'; line.dataset.terminalVersion = String(row.version); line.dataset.terminalTarget = String(row.target_id);
+        line.title = '현재 지도에 표시된 같은 수집 기록 열기 · ' + String(row.document_label);
+      } else line.title += ' · 현재 지도의 같은 출처·기록 버전으로 확인되지 않았습니다.';
+      const badge = this.make('b', label, 'terminal-stage'); badge.dataset.stage = String(row.stage); line.prepend(badge); return line;
+    };
+    this.set('ingest', this.history.length ? [this.make('p', '수집 범위 · 최근 자료', 'terminal-footnote'), ...[...latest.values()].slice(0, 8).map(row => display(row, true))]
+      : [this.empty(this.historyState)]);
+    this.set('tail', this.history.length ? [this.make('p', this.historyState, 'terminal-footnote'), ...this.history.slice(0, 12).map(row => display(row, false))] : [this.empty(this.historyState)]);
+  }
+  private followLabel(): void {
+    const button = this.root.getElementById('terminal-follow'); if (!button) return;
+    button.setAttribute('aria-pressed', String(this.follow));
+    const unseen = this.pending?.filter(row => Number(row.sequence) > Number(this.history[0]?.sequence ?? 0)).length ?? 0;
+    button.textContent = this.follow ? '추적 켜짐' : unseen ? `새 기록 ${unseen}` : '추적 꺼짐';
+  }
+  private drawMaps(): void {
+    const known = new Map(this.points.filter(point => [point.x, point.y, point.z].every(Number.isFinite)).map(point => [point.id, point]));
+    for (const axis of ['xy', 'xz'] as const) {
+      const canvas = this.root.getElementById(`terminal-projection-${axis}`) as HTMLCanvasElement | null;
+      if (!canvas) continue;
+      const width = canvas.clientWidth, height = canvas.clientHeight;
+      if (width <= 0 || height <= 0) continue;
+      const ratio = Math.min(this.root.defaultView?.devicePixelRatio ?? 1, 2);
+      canvas.width = Math.round(width * ratio); canvas.height = Math.round(height * ratio);
+      const context = canvas.getContext('2d'); if (!context) continue;
+      context.scale(ratio, ratio);
+      const points = [...known.values()], radius = Math.max(.01, ...points.map(point => Math.hypot(point.x, point.y, point.z)));
+      const scale = Math.min(width, height) * .43 / radius;
+      const pos = (point: MapPoint) => [width / 2 + point.x * scale, height / 2 - (axis === 'xy' ? point.y : point.z) * scale];
+      context.strokeStyle = '#78b4d416'; context.lineWidth = .55;
+      context.beginPath();
+      for (const edge of this.summary.edges.slice(0, 300)) {
+        const a = known.get(edge.source), b = known.get(edge.target); if (!a || !b) continue;
+        const [ax, ay] = pos(a), [bx, by] = pos(b); context.moveTo(ax, ay); context.lineTo(bx, by);
+      }
+      context.stroke();
+      for (const point of points) {
+        const [x, y] = pos(point), selected = point.id === this.focus;
+        context.fillStyle = selected ? '#f1d296' : '#a5cfe0b0';
+        context.beginPath(); context.arc(x, y, selected ? 3 : .7, 0, Math.PI * 2); context.fill();
+      }
+    }
+  }
+}

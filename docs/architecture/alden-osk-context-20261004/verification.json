@@ -1,0 +1,356 @@
+{
+  "schemaVersion": 1,
+  "version": "0.3.17",
+  "scope": "Actual persisted OSK data and installed read-only audit windows; separate from primary/physical mic/OS lock/notarization",
+  "staging": {
+    "sameStableIds": 115,
+    "activeBefore": 115,
+    "activeAfter": 115,
+    "sourceEdgesBefore": 397,
+    "sourceEdgesAfter": 397,
+    "forcedContains": 0,
+    "badPlaceholderLabels": 0,
+    "pending": 0,
+    "conflicts": 0,
+    "seconds": 125.75266370782629
+  },
+  "live": {
+    "sameStableIds": 115,
+    "activeBefore": 115,
+    "activeAfter": 115,
+    "semanticRelationships": 397,
+    "forcedContains": 0,
+    "badPlaceholderLabels": 0,
+    "pending": 0,
+    "conflicts": 0,
+    "seconds": 82.5071124159731
+  },
+  "installation": {
+    "version": "0.3.17",
+    "builtInstalledFilesMatched": 41,
+    "mismatchCount": 0,
+    "deepStrictAdHocSignatureValid": true
+  },
+  "projection": {
+    "schemaVersion": 1,
+    "runtime": "v26.10.0",
+    "warmup": 30,
+    "iterations": 96,
+    "scope": "Pure projection on a private real OSK snapshot; runs on graph changes, not every frame. Not GPU/frame/voice latency or a before-after speed claim.",
+    "cases": [
+      {
+        "nodes": 6,
+        "sourceEdges": 0,
+        "samples": 200,
+        "p50Ms": 0.02733299999999872,
+        "p95Ms": 0.08575000000000443,
+        "maxMs": 0.16745800000000344
+      },
+      {
+        "nodes": 12,
+        "sourceEdges": 0,
+        "samples": 200,
+        "p50Ms": 0.049917000000000655,
+        "p95Ms": 0.1202079999999981,
+        "maxMs": 0.4715409999999949
+      },
+      {
+        "nodes": 24,
+        "sourceEdges": 119,
+        "samples": 200,
+        "p50Ms": 0.7602080000000058,
+        "p95Ms": 1.0777909999999906,
+        "maxMs": 5.957375000000013
+      }
+    ]
+  },
+  "models": {
+    "native": "gpt-6-astra/xhigh/openai (3 verified session contexts)",
+    "independent": "claude-opus-5-5-high/high (AGY request/backend label and completed response)",
+    "reviewDoesNotGuaranteeBiasElimination": true
+  },
+  "previewIdleFrameDelta": {
+    "sampleMs": 1000,
+    "before": 91,
+    "after": 91,
+    "scope": "development synthetic graph, no physical activity"
+  },
+  "nativeReadOnlyAudits": [
+    {
+      "mode": "isolated-workspaces-authoritative-read-only",
+      "success": true,
+      "version": "0.3.17",
+      "initialNodes": 24,
+      "initialEdges": 119,
+      "navigationRestored": true,
+      "windows": [
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 79,
+          "height": 728,
+          "navigationFirstFrameMs": 16,
+          "page": "memory",
+          "placeholderVisible": false,
+          "scrollWidth": 1200,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 1200
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 4,
+          "graphRenders": 81,
+          "height": 728,
+          "navigationFirstFrameMs": 15,
+          "page": "conversation",
+          "placeholderVisible": false,
+          "scrollWidth": 1200,
+          "settled": true,
+          "transcriptViewportHeight": 605,
+          "width": 1200
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 81,
+          "height": 728,
+          "navigationFirstFrameMs": 3.0000000000009095,
+          "page": "reply",
+          "placeholderVisible": false,
+          "scrollWidth": 1200,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 1200
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 81,
+          "height": 728,
+          "navigationFirstFrameMs": 7,
+          "page": "geeknews",
+          "placeholderVisible": false,
+          "scrollWidth": 1200,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 1200
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 81,
+          "height": 728,
+          "navigationFirstFrameMs": 12,
+          "page": "voice",
+          "placeholderVisible": true,
+          "scrollWidth": 1200,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 1200
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 81,
+          "height": 728,
+          "navigationFirstFrameMs": 2,
+          "page": "history",
+          "placeholderVisible": false,
+          "scrollWidth": 1200,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 1200
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 81,
+          "height": 728,
+          "navigationFirstFrameMs": 12,
+          "page": "settings",
+          "placeholderVisible": false,
+          "scrollWidth": 1200,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 1200
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 94,
+          "height": 648,
+          "navigationFirstFrameMs": 15.00000000000091,
+          "page": "memory",
+          "placeholderVisible": false,
+          "scrollWidth": 640,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 640
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 2,
+          "graphRenders": 95,
+          "height": 648,
+          "navigationFirstFrameMs": 6,
+          "page": "conversation",
+          "placeholderVisible": false,
+          "scrollWidth": 640,
+          "settled": true,
+          "transcriptViewportHeight": 525,
+          "width": 640
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 95,
+          "height": 648,
+          "navigationFirstFrameMs": 13,
+          "page": "reply",
+          "placeholderVisible": false,
+          "scrollWidth": 640,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 640
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 95,
+          "height": 648,
+          "navigationFirstFrameMs": 4,
+          "page": "geeknews",
+          "placeholderVisible": false,
+          "scrollWidth": 640,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 640
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 95,
+          "height": 648,
+          "navigationFirstFrameMs": 3.999999999998181,
+          "page": "voice",
+          "placeholderVisible": true,
+          "scrollWidth": 640,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 640
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 95,
+          "height": 648,
+          "navigationFirstFrameMs": 9,
+          "page": "history",
+          "placeholderVisible": false,
+          "scrollWidth": 640,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 640
+        },
+        {
+          "errorVisible": false,
+          "fullyVisibleMessages": 0,
+          "graphRenders": 95,
+          "height": 648,
+          "navigationFirstFrameMs": 3,
+          "page": "settings",
+          "placeholderVisible": false,
+          "scrollWidth": 640,
+          "settled": true,
+          "transcriptViewportHeight": 0,
+          "width": 640
+        }
+      ],
+      "syntheticVisibilitySignals": [
+        {
+          "hiddenRenderDelta": 0,
+          "postToStoppedObservationUpperBoundMs": 22.883,
+          "sampleMs": 350,
+          "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+          "signal": "display-sleep"
+        },
+        {
+          "hiddenRenderDelta": 0,
+          "postToStoppedObservationUpperBoundMs": 16.162,
+          "sampleMs": 350,
+          "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+          "signal": "session-inactive"
+        }
+      ],
+      "scope": "owned seven-page WKWebView using actual OSK and read-only history/catalog/status adapters; write/start/swap/stop commands unregistered; private captures; no primary/tray/physical voice/shortcut/OS-lock attestation"
+    },
+    {
+      "mode": "isolated-settings-persisted-graph-read-only",
+      "success": true,
+      "version": "0.3.17",
+      "initialNodes": 24,
+      "initialEdges": 119,
+      "navigationRestored": true,
+      "windows": [],
+      "syntheticVisibilitySignals": [
+        {
+          "hiddenRenderDelta": 0,
+          "postToStoppedObservationUpperBoundMs": 15.054416,
+          "sampleMs": 350,
+          "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+          "signal": "display-sleep"
+        },
+        {
+          "hiddenRenderDelta": 0,
+          "postToStoppedObservationUpperBoundMs": 25.849791,
+          "sampleMs": 350,
+          "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+          "signal": "session-inactive"
+        }
+      ],
+      "scope": "owned settings renderer with real persisted graph; other settings unavailable; no GraphRAG lookup/inference/production commands; no primary-process/physical-transition/tray/shortcut/voice attestation"
+    }
+  ],
+  "nativePageObservations": {
+    "pages": 14,
+    "errors": 0,
+    "horizontalOverflow": 0,
+    "p95FirstFrameMs": 16,
+    "scope": "heterogeneous page navigations, not before/after latency gain"
+  },
+  "rawPreservation": {
+    "rawTextFilesPreserved": 5041,
+    "rawTextBytesPreserved": 2226444121,
+    "rawExistingHashesUnchanged": true,
+    "seconds": 6.605723541928455
+  },
+  "titles": {
+    "active": 40,
+    "counts": {
+      "observed_display": 12,
+      "unresolved": 1,
+      "observed_title": 20,
+      "activity_alias": 4,
+      "catalog": 2,
+      "catalog_history": 1
+    },
+    "badPlaceholderLabels": 0,
+    "sameSourceCacheReady": true
+  },
+  "sdkValidation": {
+    "verdict": "PASS",
+    "failures": 0,
+    "unreachable": 0,
+    "warningsPresent": true,
+    "clusterRuleActivated": false
+  },
+  "tests": {
+    "ui": 269,
+    "sdkCorpusRaw": 85,
+    "nativeRust": 106,
+    "cliWholeSuite": "passed",
+    "clippyBothPackages": "passed",
+    "note": "No live send/credential/worker/model restart in checks."
+  }
+}

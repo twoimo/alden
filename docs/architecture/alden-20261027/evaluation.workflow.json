@@ -1,0 +1,237 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "평가 · 학습과 승격 경계",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "evaluation.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "entry",
+      "label": "명시적 CLI 모드"
+    },
+    {
+      "id": "eval",
+      "label": "버전 평가"
+    },
+    {
+      "id": "train",
+      "label": "오프라인 DPO"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "cli",
+      "type": "external",
+      "label": "모드 선택",
+      "sources": [
+        {
+          "path": "scripts/auto_reply_finetune.py",
+          "line": 1507,
+          "end_line": 1534
+        }
+      ],
+      "lane": "entry",
+      "col": 0,
+      "sublabel": "학습·평가 분리"
+    },
+    {
+      "id": "evalinput",
+      "type": "security",
+      "label": "평가 입력 고정",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 243,
+          "end_line": 280
+        }
+      ],
+      "lane": "eval",
+      "col": 1,
+      "sublabel": "데이터·가중치 hash"
+    },
+    {
+      "id": "score",
+      "type": "backend",
+      "label": "점수 계산",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 281,
+          "end_line": 300
+        }
+      ],
+      "lane": "eval",
+      "col": 2,
+      "sublabel": "기본 validation"
+    },
+    {
+      "id": "receipt",
+      "type": "database",
+      "label": "평가 영수증",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 301,
+          "end_line": 306
+        },
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 321,
+          "end_line": 344
+        }
+      ],
+      "lane": "eval",
+      "col": 3,
+      "sublabel": "evaluated / unavailable"
+    },
+    {
+      "id": "traininput",
+      "type": "security",
+      "label": "학습 입력 검사",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 81,
+          "end_line": 119
+        }
+      ],
+      "lane": "train",
+      "col": 1,
+      "sublabel": "tokenizer·예산"
+    },
+    {
+      "id": "train",
+      "type": "backend",
+      "label": "DPO 업데이트",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 152,
+          "end_line": 180
+        }
+      ],
+      "lane": "train",
+      "col": 2,
+      "sublabel": "명시된 train split"
+    },
+    {
+      "id": "adapter",
+      "type": "database",
+      "label": "사설 어댑터",
+      "sources": [
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 220,
+          "end_line": 263
+        }
+      ],
+      "lane": "train",
+      "col": 3,
+      "sublabel": "재로드·기본값 보존"
+    },
+    {
+      "id": "boundary",
+      "type": "security",
+      "label": "승격 없음",
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "line": 301,
+          "end_line": 306
+        },
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "line": 226,
+          "end_line": 240
+        }
+      ],
+      "lane": "entry",
+      "col": 4,
+      "sublabel": "model_promoted=false"
+    }
+  ],
+  "edges": [
+    {
+      "id": "cli-evalinput",
+      "from": "cli",
+      "to": "evalinput",
+      "variant": "default",
+      "label": "평가 모드"
+    },
+    {
+      "id": "evalinput-score",
+      "from": "evalinput",
+      "to": "score",
+      "variant": "default",
+      "label": "hash 고정"
+    },
+    {
+      "id": "score-receipt",
+      "from": "score",
+      "to": "receipt",
+      "variant": "default",
+      "label": "검사 후 저장"
+    },
+    {
+      "id": "cli-traininput",
+      "from": "cli",
+      "to": "traininput",
+      "variant": "default",
+      "label": "학습 모드"
+    },
+    {
+      "id": "traininput-train",
+      "from": "traininput",
+      "to": "train",
+      "variant": "default",
+      "label": "명시 실행"
+    },
+    {
+      "id": "train-adapter",
+      "from": "train",
+      "to": "adapter",
+      "variant": "default",
+      "label": "검증·저장"
+    },
+    {
+      "id": "receipt-boundary",
+      "from": "receipt",
+      "to": "boundary",
+      "variant": "security",
+      "label": "승격 안 함"
+    },
+    {
+      "id": "adapter-boundary",
+      "from": "adapter",
+      "to": "boundary",
+      "variant": "security",
+      "label": "승격 안 함"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "평가 의미",
+      "items": [
+        "validation이 기본이고 final test는 명시 옵션이다. 영수증은 소스·데이터·policy·reference·runtime 버전에 묶인다.",
+        "evaluated는 품질 개선이나 제품 승격을 뜻하지 않는다. unavailable은 평가 성공이 아니다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "실행하지 않은 단계",
+      "items": [
+        "이번 문서는 코드 경계만 확인했다. 모델 평가·학습·승격·설치·릴리스·정식 외부 감사는 실행하지 않았다.",
+        "보충 Argon 의견은 부모 보고이며 webAstra→Gemini→역검증 완료를 대신하지 않는다."
+      ]
+    }
+  ]
+}

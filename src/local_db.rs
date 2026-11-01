@@ -27,6 +27,401 @@ pub struct LocalChat {
     pub display_name: String,
 }
 
+/// Provenance for a read-only listing, never an AX window-name attestation.
+/// Alden aliases do not come from these Kakao database fields.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalChatLabelKind {
+    RoomTitle,
+    DefaultDisplayName,
+    ParticipantAlias,
+    Unavailable,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LocalChatNameObservation {
+    #[serde(flatten)]
+    pub room: LocalChat,
+    pub label_kind: LocalChatLabelKind,
+    pub name_basis: Option<&'static str>,
+    pub room_title: Option<String>,
+    pub display_name_basis: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LocalChatSourceObservation {
+    pub schema_version: u32,
+    pub account_fingerprint: String,
+    /// Unix seconds, measured after the room rows were read in one transaction.
+    pub observed_at: u64,
+    pub rooms: Vec<LocalChatNameObservation>,
+}
+
+impl LocalChatSourceObservation {
+    /// The legacy wire format remains an array with exactly LocalChat's fields.
+    pub fn into_json(self, with_source: bool) -> Result<serde_json::Value> {
+        if with_source {
+            Ok(serde_json::to_value(self)?)
+        } else {
+            let rooms: Vec<LocalChat> = self.rooms.into_iter().map(|row| row.room).collect();
+            Ok(serde_json::to_value(rooms)?)
+        }
+    }
+}
+
+fn has_name_columns(conn: &Connection, table: &str, expected: &[&str]) -> Result<bool> {
+    // Only fixed, source-confirmed table/column names are passed by this module.
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{table}\")"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(expected
+        .iter()
+        .all(|name| columns.iter().any(|column| column == name)))
+}
+
+fn chat_name_query(conn: &Connection) -> Result<String> {
+    // Confirmed by the installed CLI's local-schema. Missing optional tables
+    // in older layouts remain unnamed; never infer a title from arbitrary JSON,
+    // groupNickname, notice content or a synthesized member-name list.
+    let group_name = if has_name_columns(conn, "NTChatMeta", &["chatId", "kakaoGroupName"])? {
+        "(SELECT CASE WHEN COUNT(DISTINCT m.kakaoGroupName) = 1 THEN MIN(m.kakaoGroupName) END
+          FROM NTChatMeta m WHERE m.chatId = r.chatId AND r.chatId > 0
+          AND typeof(m.kakaoGroupName) = 'text' AND TRIM(m.kakaoGroupName) != '')"
+    } else {
+        "NULL"
+    };
+    let link_name = if has_name_columns(conn, "NTChatRoom", &["linkId"])?
+        && has_name_columns(conn, "NTOpenLink", &["linkId", "linkName"])?
+    {
+        "(SELECT o.linkName FROM NTOpenLink o WHERE o.linkId = r.linkId AND r.linkId > 0
+          AND typeof(o.linkName) = 'text' LIMIT 1)"
+    } else {
+        "NULL"
+    };
+    Ok(format!(
+        "SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
+                r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
+                u.displayName, u.friendNickName, u.nickName, {group_name}, {link_name}
+         FROM NTChatRoom r
+         LEFT JOIN NTUser u ON r.directChatMemberUserId = u.userId AND u.linkId = 0
+         ORDER BY r.lastUpdatedAt DESC, r.chatId ASC LIMIT ?"
+    ))
+}
+
+fn chat_name_observation(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalChatNameObservation> {
+    let mut display_name = String::new();
+    let mut display_name_basis = None;
+    let mut display_kind = LocalChatLabelKind::Unavailable;
+    // COALESCE alone considers '' present and masks friendNickName/nickName.
+    // Typed reads also avoid turning malformed blobs/numbers into display text.
+    for (column, basis, kind) in [
+        (
+            7,
+            "NTUser.displayName",
+            LocalChatLabelKind::DefaultDisplayName,
+        ),
+        (
+            8,
+            "NTUser.friendNickName",
+            LocalChatLabelKind::ParticipantAlias,
+        ),
+        (9, "NTUser.nickName", LocalChatLabelKind::DefaultDisplayName),
+    ] {
+        let value = row.get::<_, String>(column).unwrap_or_default();
+        if !value.is_empty() {
+            display_name = value;
+            display_name_basis = Some(basis);
+            display_kind = kind;
+            break;
+        }
+    }
+    let raw_title = row.get::<_, String>(2).unwrap_or_default();
+    let mut room_title = (!raw_title.is_empty()).then_some(raw_title);
+    let mut name_basis = room_title.as_ref().map(|_| "NTChatRoom.chatName");
+    if room_title.is_none() {
+        for (column, basis) in [
+            (10, "NTChatMeta.kakaoGroupName"),
+            (11, "NTOpenLink.linkName"),
+        ] {
+            if let Some(value) = row
+                .get::<_, String>(column)
+                .ok()
+                .and_then(|value| closed_chat_title(&value))
+            {
+                room_title = Some(value);
+                name_basis = Some(basis);
+                break;
+            }
+        }
+    }
+    let (chat_name, label_kind) = if let Some(title) = &room_title {
+        (title.clone(), LocalChatLabelKind::RoomTitle)
+    } else {
+        name_basis = display_name_basis;
+        (display_name.clone(), display_kind)
+    };
+    Ok(LocalChatNameObservation {
+        room: LocalChat {
+            chat_id: row.get(0)?,
+            chat_type: row.get(1)?,
+            chat_name,
+            database_chat_name: None,
+            active_members_count: row.get(3).unwrap_or(0),
+            last_log_id: row.get(4).unwrap_or(0),
+            last_updated_at: row.get(5).unwrap_or(0),
+            unread_count: row.get(6).unwrap_or(0),
+            display_name,
+        },
+        label_kind,
+        name_basis,
+        room_title,
+        display_name_basis,
+    })
+}
+
+#[cfg(test)]
+mod chat_name_tests {
+    use super::*;
+
+    fn fixture(account: &str) -> (tempfile::TempDir, LocalDbReader) {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("names.sqlite3");
+        let conn = Connection::open(&path).unwrap();
+        // The observed source columns/keys, with synthetic values only. There
+        // is deliberately no NTChatMessage table and no credential/cache file.
+        conn.execute_batch(
+            "CREATE TABLE NTChatRoom(chatId INTEGER, linkId INTEGER DEFAULT 0, type INTEGER DEFAULT 1,
+                chatName TEXT, activeMembersCount INTEGER DEFAULT 3, lastLogId INTEGER DEFAULT 0,
+                lastUpdatedAt INTEGER DEFAULT 1, countOfNewMessage INTEGER DEFAULT 0,
+                directChatMemberUserId INTEGER DEFAULT 0, extra TEXT, displayMemberIds BLOB,
+                PRIMARY KEY(chatId,linkId));
+             CREATE TABLE NTUser(userId INTEGER,linkId INTEGER,displayName TEXT,friendNickName TEXT,
+                nickName TEXT,PRIMARY KEY(userId,linkId));
+             CREATE TABLE NTChatMeta(chatId INTEGER,type INTEGER,revision INTEGER DEFAULT 0,
+                updatedAt INTEGER DEFAULT 0,kakaoGroupName TEXT,groupNickname TEXT,content TEXT,
+                PRIMARY KEY(chatId,type));
+             CREATE TABLE NTOpenLink(linkId INTEGER PRIMARY KEY,linkName TEXT);
+             INSERT INTO NTChatRoom(chatId,chatName) VALUES (42,''),(48,''),(49,''),(50,'Shared'),(51,'Shared');
+             INSERT INTO NTChatRoom(chatId,linkId,chatName) VALUES (43,77,''),(44,77,'Explicit');
+             INSERT INTO NTChatRoom(chatId,type,chatName,directChatMemberUserId)
+                VALUES (45,0,'',7),(46,0,'',8),(47,0,'',9),(52,0,'',10);
+             INSERT INTO NTChatMeta(chatId,type,kakaoGroupName) VALUES (42,2,'Group metadata'),(44,2,'Other title');
+             INSERT INTO NTOpenLink VALUES (77,'Open link title');
+             INSERT INTO NTUser VALUES (7,0,'','Friend alias','Nickname'),(8,0,'Displayed','Ignored','Ignored'),
+                (9,0,NULL,NULL,'Nickname'),(10,77,'Other link participant','','');
+             INSERT INTO NTChatMeta(chatId,type,kakaoGroupName,groupNickname,content)
+                VALUES (48,2,NULL,'Not a room title','{\"title\":\"Not evidence\"}');
+             UPDATE NTChatRoom SET extra='{\"name\":\"Not evidence\"}',displayMemberIds=x'0700000000000000' WHERE chatId=48;
+             INSERT INTO NTChatMeta(chatId,type,kakaoGroupName) VALUES (49,2,'Conflicting A'),(49,3,'Conflicting B');"
+        ).unwrap();
+        drop(conn);
+        let reader = LocalDbReader {
+            isolated_replica: false,
+            conn: Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap(),
+            db_identity: database_identity(&path).unwrap(),
+            db_path: path,
+            account_fingerprint: account.to_string(),
+            account_user_id: 900,
+        };
+        (temp, reader)
+    }
+
+    #[test]
+    fn chat_names_use_only_confirmed_title_fields_and_exact_room_link_keys() {
+        let (_temp, reader) = fixture("account-a");
+        let capture = reader.list_chats_with_source(2000).unwrap();
+        let rows: BTreeMap<_, _> = capture.rooms.iter().map(|r| (r.room.chat_id, r)).collect();
+        for (id, title, basis) in [
+            (42, "Group metadata", "NTChatMeta.kakaoGroupName"),
+            (43, "Open link title", "NTOpenLink.linkName"),
+            (44, "Explicit", "NTChatRoom.chatName"),
+        ] {
+            assert_eq!(rows[&id].room.chat_name, title);
+            assert_eq!(rows[&id].room_title.as_deref(), Some(title));
+            assert_eq!(rows[&id].name_basis, Some(basis));
+            assert_eq!(rows[&id].label_kind, LocalChatLabelKind::RoomTitle);
+        }
+        for id in [48, 49, 52] {
+            assert!(rows[&id].room.chat_name.is_empty());
+            assert_eq!(rows[&id].room_title, None);
+            assert_eq!(rows[&id].name_basis, None);
+            assert_eq!(rows[&id].label_kind, LocalChatLabelKind::Unavailable);
+        }
+        // Same titles leave two room IDs intact; they remain ambiguous for AX.
+        let legacy = reader.list_chats(2000).unwrap();
+        assert_eq!(
+            legacy
+                .iter()
+                .filter(|row| row.chat_name == "Shared")
+                .count(),
+            2
+        );
+        assert!(resolve_chat_selectors(&legacy, &[ChatSelector::Name("Shared".into())]).is_err());
+        assert!(resolve_chat_selectors(&legacy, &[ChatSelector::Id(50)]).is_err());
+    }
+
+    #[test]
+    fn chat_names_distinguish_default_display_names_from_participant_aliases() {
+        let (_temp, reader) = fixture("account-a");
+        let capture = reader.list_chats_with_source(2000).unwrap();
+        for (id, display, basis, kind) in [
+            (
+                45,
+                "Friend alias",
+                "NTUser.friendNickName",
+                LocalChatLabelKind::ParticipantAlias,
+            ),
+            (
+                46,
+                "Displayed",
+                "NTUser.displayName",
+                LocalChatLabelKind::DefaultDisplayName,
+            ),
+            (
+                47,
+                "Nickname",
+                "NTUser.nickName",
+                LocalChatLabelKind::DefaultDisplayName,
+            ),
+        ] {
+            let row = capture
+                .rooms
+                .iter()
+                .find(|row| row.room.chat_id == id)
+                .unwrap();
+            assert_eq!(row.room.chat_name, display);
+            assert_eq!(row.room.display_name, display);
+            assert_eq!(row.label_kind, kind);
+            assert_eq!(row.name_basis, Some(basis));
+            assert_eq!(row.display_name_basis, Some(basis));
+            assert_eq!(row.room_title, None);
+        }
+    }
+
+    #[test]
+    fn chat_names_default_array_and_opt_in_source_wire_formats_are_separate() {
+        let (_temp, reader) = fixture("a".repeat(64).as_str());
+        let before = std::fs::read(&reader.db_path).unwrap();
+        let expected = serde_json::to_value(reader.list_chats(2000).unwrap()).unwrap();
+        let legacy = reader
+            .list_chats_with_source(2000)
+            .unwrap()
+            .into_json(false)
+            .unwrap();
+        assert_eq!(legacy, expected);
+        let mut keys: Vec<_> = legacy[0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "active_members_count",
+                "chat_id",
+                "chat_name",
+                "chat_type",
+                "display_name",
+                "last_log_id",
+                "last_updated_at",
+                "unread_count"
+            ]
+        );
+        let capture = reader.list_chats_with_source(2000).unwrap();
+        assert_eq!(capture.account_fingerprint, reader.account_fingerprint());
+        assert_eq!(capture.schema_version, 1);
+        assert!(capture.observed_at > 0);
+        let source = capture.into_json(true).unwrap();
+        assert_eq!(source["account_fingerprint"], "a".repeat(64));
+        assert!(source["rooms"].is_array());
+        assert_eq!(source["rooms"][0]["label_kind"], "room_title");
+        for forbidden in [
+            "user_id",
+            "uuid",
+            "secure_key",
+            "account_user_id",
+            "directChatMemberUserId",
+        ] {
+            assert!(!source.to_string().contains(forbidden));
+        }
+        assert!(reader
+            .conn
+            .execute("UPDATE NTChatRoom SET chatName='forbidden'", [])
+            .is_err());
+        assert_eq!(before, std::fs::read(&reader.db_path).unwrap());
+        assert!(reader.conn.is_autocommit());
+    }
+
+    #[test]
+    fn chat_names_source_is_reader_scoped_and_replacement_is_rejected() {
+        let (_temp_a, reader_a) = fixture("account-a");
+        let (_temp_b, reader_b) = fixture("account-b");
+        let a = reader_a.list_chats_with_source(2000).unwrap();
+        let b = reader_b.list_chats_with_source(2000).unwrap();
+        assert_eq!(a.rooms[0].room.chat_id, b.rooms[0].room.chat_id);
+        assert_eq!(a.rooms[0].room.chat_name, b.rooms[0].room.chat_name);
+        assert_ne!(a.account_fingerprint, b.account_fingerprint);
+        std::fs::rename(&reader_a.db_path, reader_a.db_path.with_extension("old")).unwrap();
+        std::fs::copy(&reader_b.db_path, &reader_a.db_path).unwrap();
+        assert!(reader_a.list_chats_with_source(2000).is_err());
+    }
+
+    #[test]
+    fn chat_names_missing_optional_metadata_and_malformed_names_stay_safe() {
+        let (_temp, reader) = fixture("account-a");
+        let writer = Connection::open(&reader.db_path).unwrap();
+        writer
+            .execute_batch(
+                "DROP TABLE NTChatMeta; DROP TABLE NTOpenLink;
+            UPDATE NTUser SET displayName=x'6162' WHERE userId=7 AND linkId=0;",
+            )
+            .unwrap();
+        let capture = reader.list_chats_with_source(2000).unwrap();
+        let alias = capture
+            .rooms
+            .iter()
+            .find(|row| row.room.chat_id == 45)
+            .unwrap();
+        assert_eq!(alias.room.display_name, "Friend alias");
+        for id in [42, 43] {
+            let row = capture
+                .rooms
+                .iter()
+                .find(|row| row.room.chat_id == id)
+                .unwrap();
+            assert_eq!(row.label_kind, LocalChatLabelKind::Unavailable);
+        }
+        assert!(reader.list_chats_with_source(usize::MAX).is_err());
+        assert!(reader.conn.is_autocommit());
+        assert!(reader.list_chats_with_source(0).unwrap().rooms.is_empty());
+    }
+}
+
+/// Browser histories use decimal strings so JavaScript never rounds IDs.
+/// System rows with nonpositive IDs cannot be passed to `history_page`.
+pub fn history_room_items(mut chats: Vec<LocalChat>) -> Result<Vec<serde_json::Value>> {
+    chats.retain(|chat| chat.chat_id > 0);
+    chats.sort_by(|left, right| {
+        right
+            .last_updated_at
+            .cmp(&left.last_updated_at)
+            .then_with(|| left.chat_id.cmp(&right.chat_id))
+    });
+    chats
+        .into_iter()
+        .map(|chat| {
+            let mut value = serde_json::to_value(&chat)?;
+            value["chat_id"] = json!(chat.chat_id.to_string());
+            value["last_log_id"] = json!(chat.last_log_id.to_string());
+            Ok(value)
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalGroupChat {
     pub chat_id: i64,
@@ -48,6 +443,137 @@ const MAX_CHAT_SELECTORS: usize = 64;
 const MAX_CHAT_TARGETS: usize = 32;
 const MAX_CHAT_NAME_BYTES: usize = 256;
 const MAX_CHAT_INDEX_ROWS: usize = 10_000;
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn history_room_wire_ids_are_exact_and_readable_rooms_are_recent_first() {
+        let room = |chat_id, last_updated_at| LocalChat {
+            chat_id,
+            last_updated_at,
+            chat_type: 1,
+            chat_name: String::new(),
+            database_chat_name: None,
+            active_members_count: 2,
+            last_log_id: 9_007_199_254_740_999,
+            unread_count: 0,
+            display_name: String::new(),
+        };
+        let rows = history_room_items(vec![
+            room(-1, 100),
+            room(42, 5),
+            room(9_007_199_254_740_997, 10),
+            room(0, 200),
+        ])
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["chat_id"], "9007199254740997");
+        assert_eq!(rows[0]["last_log_id"], "9007199254740999");
+        assert_eq!(rows[1]["chat_id"], "42");
+        assert_eq!(rows[0]["last_updated_at"], 10);
+    }
+    fn fixture() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE NTChatMessage(logId INTEGER PRIMARY KEY,chatId INTEGER,authorId INTEGER,message TEXT,attachment TEXT,type INTEGER,sentAt INTEGER); CREATE TABLE NTUser(userId INTEGER,linkId INTEGER,displayName TEXT,friendNickName TEXT,nickName TEXT);").unwrap();
+        c.execute("INSERT INTO NTUser VALUES(7,0,'화자','','')", [])
+            .unwrap();
+        for id in 1..=235 {
+            c.execute(
+                "INSERT INTO NTChatMessage VALUES(?1,42,7,?2,'',1,1234)",
+                rusqlite::params![id, format!("전체 본문 {id}")],
+            )
+            .unwrap();
+        }
+        c
+    }
+    #[test]
+    fn whole_history_has_no_gap_with_identical_timestamps_and_live_appends() {
+        let c = fixture();
+        let mut p = history_page_from_connection(&c, 7, "account", 42, None, None, 50).unwrap();
+        assert_eq!(p.total, 235);
+        let anchor = p.anchor_log_id.parse().unwrap();
+        let mut ids = Vec::new();
+        c.execute(
+            "INSERT INTO NTChatMessage VALUES(999,42,7,'새 메시지','',1,1234)",
+            [],
+        )
+        .unwrap();
+        loop {
+            ids.extend(
+                p.messages
+                    .iter()
+                    .map(|m| m["id"].as_str().unwrap().parse::<i64>().unwrap()),
+            );
+            match p.next_before {
+                Some(ref cursor) => {
+                    p = history_page_from_connection(
+                        &c,
+                        7,
+                        "account",
+                        42,
+                        Some(anchor),
+                        Some(cursor.parse().unwrap()),
+                        50,
+                    )
+                    .unwrap()
+                }
+                None => break,
+            }
+        }
+        ids.sort();
+        assert_eq!(ids, (1..=235).collect::<Vec<_>>());
+        let latest = history_page_from_connection(&c, 7, "account", 42, None, None, 50).unwrap();
+        assert_eq!(latest.total, 236);
+    }
+    #[test]
+    fn whole_history_accepts_older_real_timestamp_rows() {
+        let c = fixture();
+        c.execute(
+            "UPDATE NTChatMessage SET sentAt=1234.125 WHERE logId=235",
+            [],
+        )
+        .unwrap();
+        let page = history_page_from_connection(&c, 7, "account", 42, None, None, 2).unwrap();
+        assert_eq!(page.messages.last().unwrap()["sent_at"], json!(1234.125));
+    }
+    #[test]
+    fn room_boundary_full_text_and_large_ids_are_preserved() {
+        let c = fixture();
+        let id = 9_007_199_254_740_995i64;
+        let text = "긴 원문 <script> 값\n".repeat(2000);
+        c.execute(
+            "INSERT INTO NTChatMessage VALUES(?1,84,8,?2,'첨부',26,1234)",
+            rusqlite::params![id, text],
+        )
+        .unwrap();
+        let p = history_page_from_connection(&c, 7, "account", 84, None, None, 1).unwrap();
+        assert_eq!(p.total, 1);
+        assert_eq!(p.messages[0]["id"], id.to_string());
+        assert_eq!(p.messages[0]["text"], text);
+        assert_eq!(p.messages[0]["is_self"], false);
+    }
+    #[test]
+    fn invalid_cursors_leave_connection_usable() {
+        let c = fixture();
+        for (anchor, before, limit) in [
+            (None, Some(10), 50),
+            (Some(5), Some(6), 50),
+            (None, None, 201),
+        ] {
+            assert!(
+                history_page_from_connection(&c, 7, "account", 42, anchor, before, limit).is_err()
+            );
+        }
+        assert_eq!(
+            history_page_from_connection(&c, 7, "account", 42, None, None, 50)
+                .unwrap()
+                .total,
+            235
+        );
+    }
+}
 
 const GROUP_TITLE_KEYS: &[&str] = &[
     "name",
@@ -452,6 +978,100 @@ pub struct LocalMessage {
     pub sent_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalHistoryPage {
+    pub account: String,
+    pub chat_id: String,
+    pub anchor_log_id: String,
+    pub total: i64,
+    pub next_before: Option<String>,
+    pub messages: Vec<serde_json::Value>,
+}
+
+/// Keyset paging over every available local message. A fixed high-water mark
+/// prevents new messages from shifting later pages; source rows are never edited.
+fn history_page_from_connection(
+    conn: &Connection,
+    account_user_id: i64,
+    account: &str,
+    chat_id: i64,
+    anchor: Option<i64>,
+    before: Option<i64>,
+    limit: usize,
+) -> Result<LocalHistoryPage> {
+    if chat_id <= 0
+        || !(1..=200).contains(&limit)
+        || anchor.is_some_and(|v| v < 0)
+        || before.is_some_and(|v| v <= 0)
+        || (before.is_some() && anchor.is_none())
+    {
+        anyhow::bail!("local history cursor is invalid");
+    }
+    conn.execute_batch("BEGIN")?;
+    let result = (|| -> Result<LocalHistoryPage> {
+        let high = match anchor {
+            Some(v) => v,
+            None => conn.query_row(
+                "SELECT COALESCE(MAX(logId),0) FROM NTChatMessage WHERE chatId=?",
+                [chat_id],
+                |r| r.get(0),
+            )?,
+        };
+        if before.is_some_and(|v| v > high) {
+            anyhow::bail!("local history cursor exceeds its anchor");
+        }
+        let total = conn.query_row(
+            "SELECT COUNT(*) FROM NTChatMessage WHERE chatId=? AND logId<=?",
+            [chat_id, high],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT m.logId,m.authorId,COALESCE((SELECT COALESCE(NULLIF(u.displayName,''),NULLIF(u.friendNickName,''),u.nickName,'') FROM NTUser u WHERE u.userId=m.authorId AND u.linkId=0 LIMIT 1),''),COALESCE(m.message,''),COALESCE(m.attachment,''),m.type,m.sentAt FROM NTChatMessage m WHERE m.chatId=?1 AND m.logId<=?2 AND (?3 IS NULL OR m.logId<?3) ORDER BY m.logId DESC LIMIT ?4"
+        )?;
+        let mut messages = stmt.query_map(rusqlite::params![chat_id,high,before,(limit+1) as i64],|row| {
+            let id:i64=row.get(0)?;let author:i64=row.get(1)?;
+            Ok(json!({"id":id.to_string(),"chat_id":chat_id.to_string(),"author_id":author.to_string(),
+                "is_self":is_self_author(author,account_user_id),"sender":row.get::<_,String>(2)?,
+                "text":row.get::<_,String>(3)?,"attachment":row.get::<_,String>(4)?,
+                "type":row.get::<_,i32>(5)?,"sent_at":match row.get_ref(6)? {
+                    rusqlite::types::ValueRef::Integer(n)=>json!(n),
+                    rusqlite::types::ValueRef::Real(n)=>json!(n),
+                    rusqlite::types::ValueRef::Null=>serde_json::Value::Null,
+                    _=>serde_json::Value::Null,
+                }}))
+        })?.collect::<Result<Vec<_>,_>>()?;
+        let more = messages.len() > limit;
+        messages.truncate(limit);
+        let next = if more {
+            messages
+                .last()
+                .and_then(|m| m["id"].as_str())
+                .map(str::to_owned)
+        } else {
+            None
+        };
+        messages.reverse();
+        Ok(LocalHistoryPage {
+            account: account.to_owned(),
+            chat_id: chat_id.to_string(),
+            anchor_log_id: high.to_string(),
+            total,
+            next_before: next,
+            messages,
+        })
+    })();
+    match result {
+        Ok(page) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(page)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
 /// Numeric self proof only. Display names and `author_id == 0` never count.
 pub fn is_self_author(author_id: i64, account_user_id: i64) -> bool {
     author_id > 0 && account_user_id > 0 && author_id == account_user_id
@@ -500,6 +1120,86 @@ const LOCAL_POLL_ROWS_SQL: &str = "SELECT m.logId, m.chatId, m.authorId,
      WHERE m.chatId = ? AND m.logId > ? AND m.type >= ?
      ORDER BY m.logId ASC, m.sentAt ASC
      LIMIT ?";
+const LOCAL_POLL_TAIL_EVIDENCE_SQL: &str = "SELECT
+            COUNT(CASE WHEN m.logId = ?2 THEN 1 END),
+            COUNT(CASE WHEN m.logId = ?2 AND m.type >= ?4 THEN 1 END),
+            COUNT(CASE WHEN m.logId = ?2 AND m.type < ?4 THEN 1 END),
+            MIN(CASE WHEN m.logId = ?2 THEN m.prevId END),
+            MAX(CASE WHEN m.logId = ?2 THEN m.prevId END),
+            COUNT(CASE WHEN m.logId = ?3 THEN 1 END),
+            COUNT(CASE WHEN m.logId = ?3 AND m.type >= ?4 THEN 1 END)
+     FROM NTChatMessage m
+     WHERE m.chatId = ?1 AND m.logId IN (?2, ?3)";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalPollRoomTailMetadata {
+    advertised_last_log_id: i64,
+    last_user_log_id: i64,
+    last_seen_log_id: i64,
+    last_sync_log_id: i64,
+    last_mchat_log_id: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalPollTailEvidence {
+    advertised_rows: i64,
+    advertised_conversation_rows: i64,
+    advertised_control_rows: i64,
+    advertised_prev_min: Option<i64>,
+    advertised_prev_max: Option<i64>,
+    last_user_rows: i64,
+    last_user_conversation_rows: i64,
+}
+
+/// Resolve the reply-visible tail only when the raw room tail is itself a
+/// visible control row whose direct predecessor is the room's independently
+/// advertised, present conversational tail. Any missing row, mixed type,
+/// conflicting watermark or rowset disagreement keeps the raw tail so the
+/// existing gap proof remains fail-closed.
+fn resolve_local_poll_conversation_tail(
+    metadata: LocalPollRoomTailMetadata,
+    evidence: Option<LocalPollTailEvidence>,
+    after_log_id: i64,
+    total_rows: i64,
+    available_max: Option<i64>,
+) -> i64 {
+    let advertised = metadata.advertised_last_log_id;
+    let conversation = metadata.last_user_log_id;
+    let bounded_ids = advertised > 0
+        && advertised < LOCAL_POLL_MAX_INT64
+        && conversation > 0
+        && conversation < LOCAL_POLL_MAX_INT64
+        && advertised > conversation
+        && conversation >= after_log_id;
+    let matching_room_watermarks = metadata.last_seen_log_id == advertised
+        && metadata.last_sync_log_id == advertised
+        && metadata.last_mchat_log_id == advertised;
+    let matching_rowset_tail = match available_max {
+        Some(tail) => total_rows > 0 && tail == conversation,
+        None => total_rows == 0 && after_log_id == conversation,
+    };
+    let Some(evidence) = evidence else {
+        return advertised;
+    };
+    let exact_visible_control = evidence.advertised_rows == 1
+        && evidence.advertised_conversation_rows == 0
+        && evidence.advertised_control_rows == 1
+        && evidence.advertised_prev_min == Some(conversation)
+        && evidence.advertised_prev_max == Some(conversation);
+    let exact_visible_conversation =
+        evidence.last_user_rows == 1 && evidence.last_user_conversation_rows == 1;
+
+    if bounded_ids
+        && matching_room_watermarks
+        && matching_rowset_tail
+        && exact_visible_control
+        && exact_visible_conversation
+    {
+        conversation
+    } else {
+        advertised
+    }
+}
 
 // Kakao log IDs are global sparse identifiers, so numeric holes are not gaps.
 // Completeness proves the bounded rowset from one SQLite snapshot instead.
@@ -730,6 +1430,18 @@ fn get_user_id_from_plist() -> Result<i64> {
 }
 
 fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
+    // TCC can suspend open() before SQLite's own bounded opener is reached.
+    // Keep the discovery stage bounded too, without using a cached identity
+    // to evade the OS's access decision.
+    run_bounded(
+        std::time::Duration::from_secs(3),
+        "local_account_metadata_access_waiting: macOS app-data access confirmation may be pending"
+            .into(),
+        move || read_user_id_from_plist_with_mode(mode),
+    )
+}
+
+fn read_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
     let home = dirs::home_dir().context("No home directory")?;
     let current_uuid = if mode == IdentityCacheMode::NoMutation {
         get_platform_uuid_without_process().ok()
@@ -1009,7 +1721,7 @@ fn recover_user_id_from_sha512(hex_hash: &str) -> Option<i64> {
     let user_id = found.load(Ordering::SeqCst);
     if user_id > 0 {
         if std::env::var("OPENKAKAO_CLI_DEBUG").is_ok() {
-            eprintln!("[local-db] SHA-512 preimage found: userId={user_id}");
+            eprintln!("[local-db] account identity preimage resolved");
         }
         Some(user_id)
     } else {
@@ -1289,6 +2001,7 @@ fn database_identity(path: &Path) -> Result<DatabaseIdentity> {
 // ---------------------------------------------------------------------------
 
 pub struct LocalDbReader {
+    isolated_replica: bool,
     conn: Connection,
     db_path: PathBuf,
     db_identity: DatabaseIdentity,
@@ -1359,6 +2072,7 @@ impl LocalDbReplicaSource {
         }
         self.ensure_source_identity()?;
         Ok(LocalDbReader {
+            isolated_replica: true,
             conn,
             db_path: replica_path.to_path_buf(),
             db_identity: replica_identity,
@@ -1498,7 +2212,7 @@ impl LocalDbReader {
 
         let db_name = derive_database_name(user_id, &uuid);
         if std::env::var("OPENKAKAO_CLI_DEBUG").is_ok() {
-            eprintln!("[local-db] uuid={uuid} user_id={user_id} derived_db_name={db_name}");
+            eprintln!("[local-db] database source identity resolved");
         }
         let db_path =
             find_database_path(&db_name).context("Failed to locate KakaoTalk local database")?;
@@ -1513,6 +2227,7 @@ impl LocalDbReader {
         }
 
         Ok(Self {
+            isolated_replica: false,
             conn,
             db_path,
             db_identity,
@@ -1582,42 +2297,39 @@ impl LocalDbReader {
     }
 
     pub fn list_chats(&self, limit: usize) -> Result<Vec<LocalChat>> {
-        self.ensure_database_identity()?;
-        let mut stmt = self.conn.prepare(
-            "SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
-                    r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
-                    COALESCE(u.displayName, u.friendNickName, u.nickName, '') as displayName
-             FROM NTChatRoom r
-             LEFT JOIN NTUser u ON r.directChatMemberUserId = u.userId AND u.linkId = 0
-             ORDER BY r.lastUpdatedAt DESC
-             LIMIT ?",
-        )?;
+        Ok(self
+            .list_chats_with_source(limit)?
+            .rooms
+            .into_iter()
+            .map(|row| row.room)
+            .collect())
+    }
 
+    /// Source identity and name evidence belong to this exact reader's rowset.
+    /// Do not attach an independently read identity cache to a legacy JSON array.
+    pub fn list_chats_with_source(&self, limit: usize) -> Result<LocalChatSourceObservation> {
+        self.ensure_database_identity()?;
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(&chat_name_query(&tx)?)?;
         let rows = stmt
-            .query_map([limit as i64], |row| {
-                let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
-                let display_name: String = row.get::<_, String>(7).unwrap_or_default();
-                let title = if chat_name.is_empty() {
-                    display_name.clone()
-                } else {
-                    chat_name
-                };
-                Ok(LocalChat {
-                    chat_id: row.get(0)?,
-                    chat_type: row.get(1)?,
-                    chat_name: title,
-                    database_chat_name: None,
-                    active_members_count: row.get(3).unwrap_or(0),
-                    last_log_id: row.get(4).unwrap_or(0),
-                    last_updated_at: row.get(5).unwrap_or(0),
-                    unread_count: row.get(6).unwrap_or(0),
-                    display_name,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
+            .query_map(
+                [i64::try_from(limit).context("local chat limit is too large")?],
+                chat_name_observation,
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let observed_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("local observation clock is invalid")?
+            .as_secs();
+        tx.commit()?;
         self.ensure_database_identity()?;
-        Ok(rows)
+        Ok(LocalChatSourceObservation {
+            schema_version: 1,
+            account_fingerprint: self.account_fingerprint.clone(),
+            observed_at,
+            rooms: rows,
+        })
     }
 
     /// Read one exact message row by log id from the same read-only snapshot.
@@ -1908,6 +2620,71 @@ impl LocalDbReader {
         Ok(rows)
     }
 
+    pub fn history_page(
+        &self,
+        chat_id: i64,
+        anchor: Option<i64>,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<LocalHistoryPage> {
+        self.ensure_database_identity()?;
+        let page = history_page_from_connection(
+            &self.conn,
+            self.account_user_id,
+            &self.account_fingerprint,
+            chat_id,
+            anchor,
+            before,
+            limit,
+        )?;
+        self.ensure_database_identity()?;
+        Ok(page)
+    }
+
+    pub fn synchronize_corpus(
+        &self,
+        root: &Path,
+        snapshot_id: &str,
+        snapshot_at: i64,
+        max_rows: usize,
+        abort: Option<&Path>,
+    ) -> Result<crate::alden_corpus::Report> {
+        if !self.isolated_replica {
+            anyhow::bail!("corpus_requires_isolated_replica");
+        }
+        self.ensure_database_identity()?;
+        let report = crate::alden_corpus::synchronize(
+            &self.conn,
+            crate::alden_corpus::Options {
+                root,
+                account: &self.account_fingerprint,
+                self_id: self.account_user_id,
+                snapshot_id,
+                snapshot_at,
+                max_rows,
+                abort,
+            },
+        )?;
+        self.ensure_database_identity()?;
+        Ok(report)
+    }
+
+    pub fn collection_summary(&self) -> Result<serde_json::Value> {
+        self.ensure_database_identity()?;
+        let rooms: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM NTChatRoom", [], |r| r.get(0))?;
+        let (messages, first, last): (i64, i64, i64) = self.conn.query_row(
+            "SELECT COUNT(*),COALESCE(MIN(logId),0),COALESCE(MAX(logId),0) FROM NTChatMessage",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        self.ensure_database_identity()?;
+        Ok(
+            json!({"ok":true,"account":self.account_fingerprint,"rooms":rooms,"messages":messages,"first_log_id":first.to_string(),"last_log_id":last.to_string(),"source":"consistent-read-only-db-wal-replica"}),
+        )
+    }
+
     /// Read one exact media row without contacting Kakao servers.
     ///
     /// The database inode is checked before and after the query so callers do
@@ -2106,32 +2883,43 @@ impl LocalDbReader {
         let mut stmt = tx.prepare_cached(
             "SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
                     r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
-                    COALESCE(u.displayName, u.friendNickName, u.nickName, '') as displayName
+                    COALESCE(u.displayName, u.friendNickName, u.nickName, '') as displayName,
+                    r.lastUserLogId, r.lastSeenLogId, r.lastSyncLogId, r.lastMChatLogId
              FROM NTChatRoom r
              LEFT JOIN NTUser u ON r.directChatMemberUserId = u.userId AND u.linkId = 0
              WHERE r.chatId = ?
              LIMIT 1",
         )?;
-        let chat = stmt
+        let (mut chat, tail_metadata) = stmt
             .query_row([chat_id], |row| {
                 let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
                 let display_name: String = row.get::<_, String>(7).unwrap_or_default();
+                let advertised_last_log_id = row.get(4).unwrap_or(0);
                 let title = if chat_name.is_empty() {
                     display_name.clone()
                 } else {
                     chat_name
                 };
-                Ok(LocalChat {
-                    chat_id: row.get(0)?,
-                    chat_type: row.get(1)?,
-                    chat_name: title,
-                    database_chat_name: None,
-                    active_members_count: row.get(3).unwrap_or(0),
-                    last_log_id: row.get(4).unwrap_or(0),
-                    last_updated_at: row.get(5).unwrap_or(0),
-                    unread_count: row.get(6).unwrap_or(0),
-                    display_name,
-                })
+                Ok((
+                    LocalChat {
+                        chat_id: row.get(0)?,
+                        chat_type: row.get(1)?,
+                        chat_name: title,
+                        database_chat_name: None,
+                        active_members_count: row.get(3).unwrap_or(0),
+                        last_log_id: advertised_last_log_id,
+                        last_updated_at: row.get(5).unwrap_or(0),
+                        unread_count: row.get(6).unwrap_or(0),
+                        display_name,
+                    },
+                    LocalPollRoomTailMetadata {
+                        advertised_last_log_id,
+                        last_user_log_id: row.get(8).unwrap_or(0),
+                        last_seen_log_id: row.get(9).unwrap_or(0),
+                        last_sync_log_id: row.get(10).unwrap_or(0),
+                        last_mchat_log_id: row.get(11).unwrap_or(0),
+                    },
+                ))
             })
             .optional()?
             .with_context(|| "Target chat is no longer available")?;
@@ -2149,6 +2937,38 @@ impl LocalDbReader {
         if available_max == Some(LOCAL_POLL_MAX_INT64) {
             anyhow::bail!("reconcile_required");
         }
+        let tail_evidence = if tail_metadata.advertised_last_log_id > tail_metadata.last_user_log_id
+            && tail_metadata.last_user_log_id > 0
+        {
+            Some(tx.prepare_cached(LOCAL_POLL_TAIL_EVIDENCE_SQL)?.query_row(
+                rusqlite::params![
+                    chat_id,
+                    tail_metadata.advertised_last_log_id,
+                    tail_metadata.last_user_log_id,
+                    LOCAL_CONVERSATION_MESSAGE_TYPE_MIN
+                ],
+                |row| {
+                    Ok(LocalPollTailEvidence {
+                        advertised_rows: row.get(0)?,
+                        advertised_conversation_rows: row.get(1)?,
+                        advertised_control_rows: row.get(2)?,
+                        advertised_prev_min: row.get(3)?,
+                        advertised_prev_max: row.get(4)?,
+                        last_user_rows: row.get(5)?,
+                        last_user_conversation_rows: row.get(6)?,
+                    })
+                },
+            )?)
+        } else {
+            None
+        };
+        chat.last_log_id = resolve_local_poll_conversation_tail(
+            tail_metadata,
+            tail_evidence,
+            after_log_id,
+            total_rows,
+            available_max,
+        );
 
         let mut stmt = tx.prepare_cached(LOCAL_POLL_ROWS_SQL)?;
         let account_user_id = self.account_user_id;
@@ -2465,6 +3285,147 @@ mod tests {
             )
             .expect("create local-poll control-row fixture");
         connection
+    }
+
+    fn local_poll_reader_test_fixture() -> (tempfile::TempDir, LocalDbReader) {
+        let tempdir = tempfile::tempdir().expect("create local-poll fixture directory");
+        let db_path = tempdir.path().join("local-poll.sqlite3");
+        let connection = Connection::open(&db_path).expect("open local-poll fixture database");
+        connection
+            .execute_batch(
+                "CREATE TABLE NTUser(
+                    userId INTEGER NOT NULL,
+                    linkId INTEGER NOT NULL,
+                    displayName TEXT,
+                    friendNickName TEXT,
+                    nickName TEXT
+                );
+                CREATE TABLE NTChatRoom(
+                    chatId INTEGER PRIMARY KEY,
+                    type INTEGER NOT NULL,
+                    chatName TEXT,
+                    activeMembersCount INTEGER NOT NULL,
+                    lastLogId INTEGER NOT NULL,
+                    lastUpdatedAt INTEGER NOT NULL,
+                    countOfNewMessage INTEGER NOT NULL,
+                    directChatMemberUserId INTEGER NOT NULL,
+                    lastUserLogId INTEGER NOT NULL,
+                    lastSeenLogId INTEGER NOT NULL,
+                    lastSyncLogId INTEGER NOT NULL,
+                    lastMChatLogId INTEGER NOT NULL
+                );
+                CREATE TABLE NTChatMessage(
+                    chatId INTEGER NOT NULL,
+                    logId INTEGER NOT NULL,
+                    prevId INTEGER NOT NULL,
+                    msgId INTEGER NOT NULL,
+                    authorId INTEGER NOT NULL,
+                    message TEXT,
+                    attachment TEXT,
+                    type INTEGER NOT NULL,
+                    sentAt INTEGER NOT NULL,
+                    PRIMARY KEY(chatId, logId, msgId)
+                );
+
+                INSERT INTO NTChatRoom VALUES
+                    (42, 0, '', 2, 101, 1001, 0, 0, 100, 101, 101, 101),
+                    (43, 0, '', 2, 202, 2002, 0, 0, 202, 202, 202, 202),
+                    (44, 0, '', 2, 301, 3001, 0, 0, 301, 301, 301, 301),
+                    (45, 0, '', 2, 401, 4001, 0, 0, 400, 400, 401, 401),
+                    (46, 0, '', 2, 501, 5001, 0, 0, 500, 501, 501, 501);
+
+                INSERT INTO NTChatMessage
+                    (chatId, logId, prevId, msgId, authorId, message, attachment, type, sentAt)
+                VALUES
+                    (42, 100, 0, 1, 700, 'conversation', '', 1, 1000),
+                    (42, 101, 100, 2, 700, 'control', '', 0, 1001),
+                    (43, 200, 0, 1, 700, 'conversation', '', 1, 2000),
+                    (43, 201, 200, 2, 700, 'control', '', 0, 2001),
+                    (43, 202, 201, 3, 701, 'later-conversation', '', 71, 2002),
+                    (44, 300, 0, 1, 700, 'conversation', '', 1, 3000),
+                    (45, 400, 0, 1, 700, 'conversation', '', 1, 4000),
+                    (45, 401, 400, 2, 700, 'control', '', 0, 4001),
+                    (46, 500, 499, 1, 700, 'malformed-user-tail', '', 0, 5000),
+                    (46, 501, 500, 2, 700, 'control', '', 0, 5001);",
+            )
+            .expect("create local-poll reader fixture");
+        let db_identity = database_identity(&db_path).expect("read fixture identity");
+        let reader = LocalDbReader {
+            isolated_replica: false,
+            conn: connection,
+            db_path,
+            db_identity,
+            account_fingerprint: "fixture".to_string(),
+            account_user_id: 900,
+        };
+        (tempdir, reader)
+    }
+
+    #[test]
+    fn local_poll_resolves_visible_control_tail_to_conversation_predecessor() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let envelope = reader
+            .poll_after(42, LOCAL_POLL_MAX_ROWS, Some(100))
+            .expect("visible control tail should resolve");
+
+        assert!(envelope.messages.is_empty());
+        assert_eq!(envelope.chat.last_log_id, 100);
+        assert_eq!(envelope.completeness.chat_last_log_id, 100);
+        assert_eq!(envelope.completeness.status, "empty");
+        assert!(!envelope.completeness.has_gap);
+        assert_eq!(envelope.completeness.proof, "sqlite_snapshot_rowset");
+    }
+
+    #[test]
+    fn local_poll_missing_advertised_conversation_tail_stays_fail_closed() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let envelope = reader
+            .poll_after(44, LOCAL_POLL_MAX_ROWS, Some(300))
+            .expect("missing tail is represented as a gap page");
+
+        assert!(envelope.messages.is_empty());
+        assert_eq!(envelope.chat.last_log_id, 301);
+        assert_eq!(envelope.completeness.status, "gap");
+        assert!(envelope.completeness.has_gap);
+        assert_eq!(envelope.completeness.proof, "reconcile_required");
+    }
+
+    #[test]
+    fn local_poll_mixed_control_and_later_conversation_tail_is_complete() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let envelope = reader
+            .poll_after(43, LOCAL_POLL_MAX_ROWS, Some(200))
+            .expect("later conversation tail should remain authoritative");
+
+        assert_eq!(
+            envelope
+                .messages
+                .iter()
+                .map(|message| message.log_id)
+                .collect::<Vec<_>>(),
+            vec![202]
+        );
+        assert_eq!(envelope.chat.last_log_id, 202);
+        assert_eq!(envelope.completeness.status, "complete");
+        assert!(!envelope.completeness.has_gap);
+    }
+
+    #[test]
+    fn local_poll_control_tail_resolution_rejects_conflicting_or_malformed_evidence() {
+        let (_tempdir, reader) = local_poll_reader_test_fixture();
+        let conflicting = reader
+            .poll_after(45, LOCAL_POLL_MAX_ROWS, Some(400))
+            .expect("conflicting room watermarks remain a gap page");
+        assert_eq!(conflicting.chat.last_log_id, 401);
+        assert_eq!(conflicting.completeness.status, "gap");
+        assert!(conflicting.completeness.has_gap);
+
+        let malformed = reader
+            .poll_after(46, LOCAL_POLL_MAX_ROWS, Some(499))
+            .expect("non-conversation lastUserLogId remains a gap page");
+        assert_eq!(malformed.chat.last_log_id, 501);
+        assert_eq!(malformed.completeness.status, "gap");
+        assert!(malformed.completeness.has_gap);
     }
 
     #[test]

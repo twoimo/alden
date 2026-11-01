@@ -93,13 +93,15 @@ jobs:
             *) echo "unsupported arch $arch" >&2; exit 1 ;;
           esac
           mkdir -p dist
-          asset="openkakao-cli-darwin-${asset_arch}"
-          cp target/release/openkakao-cli "dist/$asset"
-          chmod +x "dist/$asset"
-          (cd dist && shasum -a 256 "$asset" > SHA256SUMS.txt)
-          digest="$(awk '{print $1}' dist/SHA256SUMS.txt)"
-          ./target/release/openkakao-cli --version
-          ASSET="$asset" DIGEST="$digest" python3 -c '
+          asset="alden-cli-darwin-${asset_arch}"
+          cp target/release/alden-cli "dist/$asset"
+          legacy_asset="openkakao-cli-darwin-${asset_arch}"
+          cp "dist/$asset" "dist/$legacy_asset"
+          chmod +x "dist/$asset" "dist/$legacy_asset"
+          (cd dist && shasum -a 256 "$asset" "$legacy_asset" > SHA256SUMS.txt)
+          digest="$(awk 'NR==1 {print $1}' dist/SHA256SUMS.txt)"
+          ./target/release/alden-cli --version
+          ASSET="$asset" LEGACY_ASSET="$legacy_asset" DIGEST="$digest" python3 -c '
           import json, os, pathlib
           evidence = {
               "schema": "openkakao-bot-release-evidence-v1",
@@ -107,7 +109,8 @@ jobs:
               "tag": os.environ["TAG_NAME"],
               "source_sha": os.environ["SOURCE_SHA"],
               "channel": "stable",
-              "assets": [{"name": os.environ["ASSET"], "sha256": os.environ["DIGEST"]}],
+              "assets": [{"name": os.environ[key], "sha256": os.environ["DIGEST"]}
+                         for key in ("ASSET", "LEGACY_ASSET")],
           }
           pathlib.Path("dist/openkakao-bot-release-evidence-v1.json").write_text(json.dumps(evidence, indent=2) + "\n")
           '

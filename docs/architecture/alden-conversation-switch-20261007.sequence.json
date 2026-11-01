@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Alden · 대화 기록 전환",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1080, 680]
+  },
+  "participants": [
+    {"id": "selection", "type": "frontend", "label": "대화 선택", "sublabel": "명시적 요청"},
+    {"id": "pipeline", "type": "backend", "label": "음성 파이프라인", "sublabel": "대화·턴·취소"},
+    {"id": "history", "type": "database", "label": "로컬 기록", "sublabel": "확정된 대화"},
+    {"id": "inference", "type": "backend", "label": "로컬 추론·재생", "sublabel": "턴 토큰 소유"}
+  ],
+  "segments": [
+    {"from": 150, "to": 280, "label": "이전 대화의 요청"},
+    {"from": 290, "to": 520, "label": "검증 후 대화 경계 전환"},
+    {"from": 540, "to": 600, "label": "늦은 결과의 출처와 취소 보존"}
+  ],
+  "messages": [
+    {"id": "input-a", "from": "selection", "to": "pipeline", "y": 170, "label": "사용자 입력 확정"},
+    {"id": "journal-a", "from": "pipeline", "to": "history", "y": 215, "label": "원래 대화에 저장"},
+    {"id": "generate-a", "from": "pipeline", "to": "inference", "y": 260, "label": "대화 ID를 고정한 턴"},
+    {"id": "select-b", "from": "selection", "to": "pipeline", "y": 310, "label": "다른 대화 선택", "variant": "emphasis"},
+    {"id": "validate-b", "from": "pipeline", "to": "history", "y": 355, "label": "선택한 기록 검증"},
+    {"id": "confirmed-b", "from": "history", "to": "pipeline", "y": 400, "label": "확정 기록·턴 번호", "variant": "return"},
+    {"id": "cancel-a", "from": "pipeline", "to": "inference", "y": 445, "label": "이전 턴 취소·대기 폐기", "variant": "security"},
+    {"id": "restored-b", "from": "pipeline", "to": "selection", "y": 495, "label": "선택한 맥락으로 복원", "variant": "return"},
+    {"id": "late-a", "from": "inference", "to": "pipeline", "y": 565, "label": "늦은 결과 폐기·원래 ID 유지", "variant": "dashed"}
+  ],
+  "cards": [
+    {"dot": "emerald", "title": "대화 경계", "items": ["이전 응답은 새 대화에 저장하거나 재생하지 않는다.", "종료·비상 중단은 기록 선택으로 해제되지 않는다."]},
+    {"dot": "slate", "title": "측정 범위", "items": ["동일 입력·교대 순서의 통제된 30쌍 비교.", "모의 추론 경로이며 물리 마이크·재생 검증과 구분한다."]}
+  ]
+}

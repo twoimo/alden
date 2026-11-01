@@ -1,0 +1,49 @@
+{
+  "version": "0.3.28",
+  "artifact_kind": "ad-hoc candidate; owned native read-only WKWebView",
+  "build_source_commit": "c562f97be6344c108df1eaa4a7764f6b940402b2",
+  "build_had_uncommitted_collection_changes": true,
+  "executable_sha256": "be59fb80190eb3ee8397a8671d6fd22785e1d081cab41520faf25c9c53a009c2",
+  "aggregate_data": {
+    "counts": {
+      "targets": 4,
+      "documents": 26622,
+      "versions": 26622,
+      "memberships": 26622,
+      "relations": 48355,
+      "events": 133110,
+      "runs": 29
+    },
+    "integrity": "ok",
+    "orphans": 0,
+    "complete_checkpoints": 4,
+    "history_rows": 50
+  },
+  "views": [
+    {
+      "width": 640,
+      "height": 648,
+      "collectionState": "ready",
+      "collectionRenderedRows": 8,
+      "navigationFirstFrameMs": 16.99999999999818,
+      "errorVisible": false,
+      "settled": true
+    },
+    {
+      "width": 1200,
+      "height": 728,
+      "collectionState": "ready",
+      "collectionRenderedRows": 10,
+      "navigationFirstFrameMs": 13,
+      "errorVisible": false,
+      "settled": true
+    }
+  ],
+  "screenshots_inspected": [
+    "history-default",
+    "history-compact"
+  ],
+  "primary_installed_process_verified": false,
+  "production_verified": false,
+  "sample_count": 2
+}

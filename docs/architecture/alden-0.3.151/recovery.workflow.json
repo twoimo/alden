@@ -1,0 +1,195 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.151 · 재연결·누락·창 수명주기",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "a151_recovery_input",
+      "label": "입력·검사"
+    },
+    {
+      "id": "a151_recovery_state",
+      "label": "상태·처리"
+    },
+    {
+      "id": "a151_recovery_output",
+      "label": "반영·결과"
+    },
+    {
+      "id": "a151_recovery_boundary",
+      "label": "조건·별도 경로",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "a151_recovery_checkpoint",
+    "a151_recovery_request",
+    "a151_recovery_validate",
+    "a151_recovery_delta",
+    "a151_recovery_restore",
+    "a151_recovery_idle"
+  ],
+  "nodes": [
+    {
+      "id": "a151_recovery_checkpoint",
+      "lane": "a151_recovery_input",
+      "col": 0,
+      "type": "database",
+      "label": "확인한 기준점",
+      "sublabel": "stream·cursor·ID/version",
+      "width": 180
+    },
+    {
+      "id": "a151_recovery_request",
+      "lane": "a151_recovery_input",
+      "col": 1,
+      "type": "backend",
+      "label": "현재 세대 요청",
+      "sublabel": "단일 소비자·취소 기한",
+      "width": 180
+    },
+    {
+      "id": "a151_recovery_validate",
+      "lane": "a151_recovery_state",
+      "col": 1,
+      "type": "security",
+      "label": "응답 경계 검사",
+      "sublabel": "stream·버전·현재 권한",
+      "width": 180
+    },
+    {
+      "id": "a151_recovery_delta",
+      "lane": "a151_recovery_state",
+      "col": 2,
+      "type": "backend",
+      "label": "차이 또는 재동기화",
+      "sublabel": "누락·되감기·중복 처리",
+      "width": 180
+    },
+    {
+      "id": "a151_recovery_restore",
+      "lane": "a151_recovery_output",
+      "col": 2,
+      "type": "frontend",
+      "label": "현재 탐색 복원",
+      "sublabel": "안정 ID·핀·필터·카메라",
+      "width": 180
+    },
+    {
+      "id": "a151_recovery_idle",
+      "lane": "a151_recovery_output",
+      "col": 3,
+      "type": "frontend",
+      "label": "가시성별 렌더",
+      "sublabel": "숨김 중단·단일 루프",
+      "width": 180
+    },
+    {
+      "id": "a151_recovery_snapshot",
+      "lane": "a151_recovery_boundary",
+      "col": 1,
+      "type": "database",
+      "label": "일관된 스냅샷",
+      "sublabel": "보존 범위 밖이면 재기준",
+      "width": 180
+    },
+    {
+      "id": "a151_recovery_discard",
+      "lane": "a151_recovery_boundary",
+      "col": 3,
+      "type": "security",
+      "label": "이전 세대 폐기",
+      "sublabel": "예전 worker·늦은 결과 거부",
+      "width": 180
+    }
+  ],
+  "edges": [
+    {
+      "id": "a151_recovery_edge_0",
+      "from": "a151_recovery_checkpoint",
+      "to": "a151_recovery_request",
+      "label": "확인 지점",
+      "role": "main"
+    },
+    {
+      "id": "a151_recovery_edge_1",
+      "from": "a151_recovery_request",
+      "to": "a151_recovery_validate",
+      "label": "범위 응답",
+      "role": "main"
+    },
+    {
+      "id": "a151_recovery_edge_2",
+      "from": "a151_recovery_validate",
+      "to": "a151_recovery_delta",
+      "label": "현재 세대",
+      "role": "main"
+    },
+    {
+      "id": "a151_recovery_edge_3",
+      "from": "a151_recovery_delta",
+      "to": "a151_recovery_restore",
+      "label": "허용 변경",
+      "role": "main"
+    },
+    {
+      "id": "a151_recovery_edge_4",
+      "from": "a151_recovery_restore",
+      "to": "a151_recovery_idle",
+      "label": "표시 상태",
+      "role": "main"
+    },
+    {
+      "id": "a151_recovery_edge_5",
+      "from": "a151_recovery_validate",
+      "to": "a151_recovery_snapshot",
+      "label": "stream·기간 불일치",
+      "role": "branch"
+    },
+    {
+      "id": "a151_recovery_edge_6",
+      "from": "a151_recovery_request",
+      "to": "a151_recovery_discard",
+      "label": "취소·새 세대",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "a151_recovery_edge_7",
+      "from": "a151_recovery_validate",
+      "to": "a151_recovery_discard",
+      "label": "권한 키 변경",
+      "role": "error",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "위치와 의미",
+      "items": [
+        "기존 위치는 기하 prior로만 재사용",
+        "affinity 권한 변경 시 checkpoint/worker 폐기"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "복원과 수명",
+      "items": [
+        "명시 재배치 외에는 탐색 상태를 보존",
+        "과거 복원 데이터를 새 활동처럼 연출하지 않음"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "실기·자원",
+      "items": [
+        "물리 잠금·절전·여러 host의 장시간 검증",
+        "대표 CPU/GPU/RAM/배터리 측정은 남음"
+      ]
+    }
+  ]
+}

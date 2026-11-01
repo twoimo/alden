@@ -1,0 +1,298 @@
+{
+  "family": "collection",
+  "scope": "수집 · 취득과 저장",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "schedule": {
+      "claim": "대상 선정 — 잠금·일시정지",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 356,
+          "end_line": 385,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "e4b3e8a3007c0081d57b57f3aff96008cf2a4bb15c5b3a09c32abdc40d818ba9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 399,
+          "end_line": 410,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "f28ee34c266b056a89331f47ae118d28dba2a56cc8a1ec4e9c08aa903979ed44",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "enabled": {
+      "claim": "취득 허용 — 정책 revision",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 439,
+          "end_line": 461,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "b1f3701eaf3b7195bb3aa3f8883f112d26a1b29bae346c558d13fa997fc10843",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "line": 130,
+          "end_line": 140,
+          "file_sha256": "f528e80761d1c98a61375409f4c6f2f903ab2f7035ae4801a4e74b209d64d073",
+          "range_sha256": "5251197cf6172ce371deb184ca183809405b5fcc0ba1c511d43bae26c42aa3d5",
+          "local_source": "../../../scripts/alden_source_acquisition.py"
+        }
+      ]
+    },
+    "native": {
+      "claim": "원격 입력 취득 — 허용된 단일 영상",
+      "sources": [
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "line": 141,
+          "end_line": 172,
+          "file_sha256": "f528e80761d1c98a61375409f4c6f2f903ab2f7035ae4801a4e74b209d64d073",
+          "range_sha256": "8e1f7ed91c3303028316a99b9038d02a7a191d8983c0189cd912b6257860cd3d",
+          "local_source": "../../../scripts/alden_source_acquisition.py"
+        }
+      ]
+    },
+    "snapshot": {
+      "claim": "입력 스냅샷 — 선언된 어댑터",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 423,
+          "end_line": 443,
+          "file_sha256": "d80a23dc913724347060e629381677308c364c50fa0bc3d4ae0ed00a0026a15b",
+          "range_sha256": "39ac55220a2ad50ca92ba5711376441970d075ed642a15db8cb16174eee086d4",
+          "local_source": "../../../scripts/alden_collect.py"
+        }
+      ]
+    },
+    "ingest": {
+      "claim": "버전 저장 — 내용·출처 해시",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 444,
+          "end_line": 451,
+          "file_sha256": "d80a23dc913724347060e629381677308c364c50fa0bc3d4ae0ed00a0026a15b",
+          "range_sha256": "a5586b1153743368646df5de730e6d9794a53312bb3a78b93dc16b988322585d",
+          "local_source": "../../../scripts/alden_collect.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1124,
+          "end_line": 1151,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "4ba65ccf413ed5d6d763fa27613c58c79d5b0176127d075541e926af685bfebb",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "capture": {
+      "claim": "원본 보존 — 프런티어·캡처",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 468,
+          "end_line": 476,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "55d21739871d43c5f76f2825faa9e3123cf30d189c52973b9ae054df6f8e59ed",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 908,
+          "end_line": 928,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "6b40beed678864417efd725f9c4b05faf71a599c10544dd830bbd05ca303bbde",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "index": {
+      "claim": "범위 색인 — ready 또는 empty",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 477,
+          "end_line": 483,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "b274c338bdeb1c36c4b19f1a6bf1c7e1993f62b4c51c4cf578d687272092a59f",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    "pending": {
+      "claim": "색인 대기 — 저장 성공과 구분",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 479,
+          "end_line": 502,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "48b84b6153e133c19fdff2ca1628614f78ad286dceb5d49289fa34a6905e6f14",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "schedule-enabled",
+      "claim": "대상",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 356,
+          "end_line": 385,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "e4b3e8a3007c0081d57b57f3aff96008cf2a4bb15c5b3a09c32abdc40d818ba9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 399,
+          "end_line": 410,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "f28ee34c266b056a89331f47ae118d28dba2a56cc8a1ec4e9c08aa903979ed44",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "enabled-native",
+      "claim": "활성화 시",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 439,
+          "end_line": 461,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "b1f3701eaf3b7195bb3aa3f8883f112d26a1b29bae346c558d13fa997fc10843",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "line": 130,
+          "end_line": 140,
+          "file_sha256": "f528e80761d1c98a61375409f4c6f2f903ab2f7035ae4801a4e74b209d64d073",
+          "range_sha256": "5251197cf6172ce371deb184ca183809405b5fcc0ba1c511d43bae26c42aa3d5",
+          "local_source": "../../../scripts/alden_source_acquisition.py"
+        }
+      ]
+    },
+    {
+      "id": "native-snapshot",
+      "claim": "검증 입력",
+      "sources": [
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "line": 141,
+          "end_line": 172,
+          "file_sha256": "f528e80761d1c98a61375409f4c6f2f903ab2f7035ae4801a4e74b209d64d073",
+          "range_sha256": "8e1f7ed91c3303028316a99b9038d02a7a191d8983c0189cd912b6257860cd3d",
+          "local_source": "../../../scripts/alden_source_acquisition.py"
+        }
+      ]
+    },
+    {
+      "id": "schedule-snapshot",
+      "claim": "기존 입력",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 356,
+          "end_line": 385,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "e4b3e8a3007c0081d57b57f3aff96008cf2a4bb15c5b3a09c32abdc40d818ba9",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 399,
+          "end_line": 410,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "f28ee34c266b056a89331f47ae118d28dba2a56cc8a1ec4e9c08aa903979ed44",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "snapshot-ingest",
+      "claim": "완전 스냅샷",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 423,
+          "end_line": 443,
+          "file_sha256": "d80a23dc913724347060e629381677308c364c50fa0bc3d4ae0ed00a0026a15b",
+          "range_sha256": "39ac55220a2ad50ca92ba5711376441970d075ed642a15db8cb16174eee086d4",
+          "local_source": "../../../scripts/alden_collect.py"
+        }
+      ]
+    },
+    {
+      "id": "ingest-capture",
+      "claim": "저장 뒤",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 444,
+          "end_line": 451,
+          "file_sha256": "d80a23dc913724347060e629381677308c364c50fa0bc3d4ae0ed00a0026a15b",
+          "range_sha256": "a5586b1153743368646df5de730e6d9794a53312bb3a78b93dc16b988322585d",
+          "local_source": "../../../scripts/alden_collect.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1124,
+          "end_line": 1151,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "4ba65ccf413ed5d6d763fa27613c58c79d5b0176127d075541e926af685bfebb",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "capture-index",
+      "claim": "범위 전달",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 468,
+          "end_line": 476,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "55d21739871d43c5f76f2825faa9e3123cf30d189c52973b9ae054df6f8e59ed",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 908,
+          "end_line": 928,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "6b40beed678864417efd725f9c4b05faf71a599c10544dd830bbd05ca303bbde",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "index-pending",
+      "claim": "미준비",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 477,
+          "end_line": 483,
+          "file_sha256": "9295a0e8a0c31a60df2add092f50d43415efceebc0def63a603859b193c307d1",
+          "range_sha256": "b274c338bdeb1c36c4b19f1a6bf1c7e1993f62b4c51c4cf578d687272092a59f",
+          "local_source": "../../../scripts/alden_collection_scheduler.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": []
+}

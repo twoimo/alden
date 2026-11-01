@@ -7,7 +7,10 @@ export PATH
 LOG_DIR="${HOME}/Library/Logs/openkakao"
 mkdir -p "${LOG_DIR}"
 
-exec /opt/homebrew/bin/openkakao-cli \
+# Prefer the canonical name; retain the preexisting Homebrew compatibility path.
+CLI=/opt/homebrew/bin/alden-cli
+if [ ! -x "$CLI" ]; then CLI=/opt/homebrew/bin/openkakao-cli; fi
+exec "$CLI" \
   --unattended \
   --allow-watch-side-effects \
   watch \

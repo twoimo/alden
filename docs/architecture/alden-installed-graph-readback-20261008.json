@@ -1,0 +1,361 @@
+{
+  "schema": 1,
+  "version": "0.3.30",
+  "source_commit": "baa0b1047079efee19e8e5650f6c39b6d4f539b1",
+  "scope": "real persisted graph and renderer/navigation in owned floating audit window without key-window activation; runtime snapshot/GraphRAG focus lookup intentionally unavailable; captures private",
+  "installed_bundle_files": 47,
+  "candidate_match": true,
+  "configuration_preserved": {
+    "enrollment.json": true,
+    "reply-model.json": true,
+    "alden-abort.json": true
+  },
+  "services_preserved": true,
+  "ci_run": 37655820941,
+  "native_success": true,
+  "native_report_sha256": "021ca1fedc881776d307ff1c07f5e43d13a78944fb0c16f719fdcc4a102baa46",
+  "views": {
+    "workspaceDefault": [
+      {
+        "page": "memory",
+        "width": 1200,
+        "height": 728,
+        "scrollWidth": 1200,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": "all",
+        "graphDisplayedNodes": 120,
+        "graphDisplayedEdges": 25,
+        "navigationFirstFrameMs": 12,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "conversation",
+        "width": 1200,
+        "height": 728,
+        "scrollWidth": 1200,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 4,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "reply",
+        "width": 1200,
+        "height": 728,
+        "scrollWidth": 1200,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 16,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "geeknews",
+        "width": 1200,
+        "height": 728,
+        "scrollWidth": 1200,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 14,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "voice",
+        "width": 1200,
+        "height": 728,
+        "scrollWidth": 1200,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 6,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "history",
+        "width": 1200,
+        "height": 728,
+        "scrollWidth": 1200,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 4,
+        "collectionState": "ready",
+        "collectionRenderedRows": 10
+      },
+      {
+        "page": "settings",
+        "width": 1200,
+        "height": 728,
+        "scrollWidth": 1200,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 3,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      }
+    ],
+    "workspaceCompact": [
+      {
+        "page": "memory",
+        "width": 640,
+        "height": 648,
+        "scrollWidth": 640,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": "all",
+        "graphDisplayedNodes": 120,
+        "graphDisplayedEdges": 25,
+        "navigationFirstFrameMs": 13.999999999996362,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "conversation",
+        "width": 640,
+        "height": 648,
+        "scrollWidth": 640,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 9.999999999996362,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "reply",
+        "width": 640,
+        "height": 648,
+        "scrollWidth": 640,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 4,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "geeknews",
+        "width": 640,
+        "height": 648,
+        "scrollWidth": 640,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 14,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "voice",
+        "width": 640,
+        "height": 648,
+        "scrollWidth": 640,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 3,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      },
+      {
+        "page": "history",
+        "width": 640,
+        "height": 648,
+        "scrollWidth": 640,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 6,
+        "collectionState": "ready",
+        "collectionRenderedRows": 8
+      },
+      {
+        "page": "settings",
+        "width": 640,
+        "height": 648,
+        "scrollWidth": 640,
+        "settled": true,
+        "errorVisible": false,
+        "graphProject": null,
+        "graphDisplayedNodes": null,
+        "graphDisplayedEdges": null,
+        "navigationFirstFrameMs": 6,
+        "collectionState": null,
+        "collectionRenderedRows": 0
+      }
+    ]
+  },
+  "navigation": {
+    "initial": {
+      "canGoBack": false,
+      "edgeCount": 25,
+      "focusSlot": -1,
+      "focused": false,
+      "hasMoreContexts": true,
+      "hops": 0,
+      "nodeCount": 120,
+      "overviewLimit": 120,
+      "overviewOffset": 0,
+      "source": "collection",
+      "targets": {
+        "camera": [
+          0.00922467419572115,
+          -0.004878548359964041,
+          4.867205016633662
+        ],
+        "lookAt": [
+          0.00922467419572115,
+          -0.004878548359964041,
+          -0.003978979849266651
+        ]
+      }
+    },
+    "overviewMore": {
+      "canGoBack": true,
+      "edgeCount": 14,
+      "focusSlot": -1,
+      "focused": false,
+      "hasMoreContexts": true,
+      "hops": 0,
+      "nodeCount": 120,
+      "overviewLimit": 120,
+      "overviewOffset": 120,
+      "source": "collection",
+      "targets": {
+        "camera": [
+          -0.006171082698639863,
+          0.011255314428359142,
+          4.877525172363494
+        ],
+        "lookAt": [
+          -0.006171082698639863,
+          0.011255314428359142,
+          0.0016205798075230593
+        ]
+      }
+    },
+    "first": {
+      "canGoBack": true,
+      "edgeCount": 25,
+      "focusSlot": 0,
+      "focused": true,
+      "hasMoreContexts": true,
+      "hops": 0,
+      "nodeCount": 120,
+      "overviewLimit": 120,
+      "overviewOffset": 0,
+      "source": "collection",
+      "targets": {
+        "camera": [
+          0.00922467419572115,
+          -0.004878548359964041,
+          5.921254989281218
+        ],
+        "lookAt": [
+          0.00922467419572115,
+          -0.004878548359964041,
+          -0.003978979849266651
+        ]
+      }
+    },
+    "expanded": {
+      "canGoBack": true,
+      "edgeCount": 19,
+      "focusSlot": 0,
+      "focused": true,
+      "hasMoreContexts": false,
+      "hops": 1,
+      "nodeCount": 11,
+      "overviewLimit": 120,
+      "overviewOffset": 0,
+      "source": "collection",
+      "targets": {
+        "camera": [
+          -0.11538843636333104,
+          -0.4453769727826448,
+          2.943528910158117
+        ],
+        "lookAt": [
+          -0.19894557993677764,
+          -0.7678913323838704,
+          0.3935289101581169
+        ]
+      }
+    },
+    "backOverview": {
+      "canGoBack": false,
+      "edgeCount": 25,
+      "focusSlot": -1,
+      "focused": false,
+      "hasMoreContexts": true,
+      "hops": 0,
+      "nodeCount": 120,
+      "overviewLimit": 120,
+      "overviewOffset": 0,
+      "source": "collection",
+      "targets": {
+        "camera": [
+          0.00922467419572115,
+          -0.004878548359964041,
+          4.867205016633662
+        ],
+        "lookAt": [
+          0.00922467419572115,
+          -0.004878548359964041,
+          -0.003978979849266651
+        ]
+      }
+    }
+  },
+  "workspace_signals": [
+    {
+      "hiddenRenderDelta": 0,
+      "postToStoppedObservationUpperBoundMs": 13.202583,
+      "sampleMs": 350,
+      "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+      "signal": "display-sleep"
+    },
+    {
+      "hiddenRenderDelta": 0,
+      "postToStoppedObservationUpperBoundMs": 13.777083000000001,
+      "sampleMs": 350,
+      "scope": "process-local synthetic notification; no physical sleep/session/lock test",
+      "signal": "session-inactive"
+    }
+  ],
+  "primary_gestures_verified": false,
+  "physical_voice_verified": false,
+  "physical_lock_retina_verified": false,
+  "production_verified": false
+}

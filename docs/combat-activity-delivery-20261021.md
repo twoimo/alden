@@ -1,0 +1,25 @@
+# Real-activity space combat visuals
+
+The user requested visible combat in the knowledge graph and explicitly chose **only when actual knowledge activity occurs**. ST13 records this condition without replacing the full 18-item goal or ST01–12.
+
+The existing committed journal and version-bound source-reader already admit `added`, `revised` and `read` receipts. Previously these briefly changed a node's color. A successful admitted receipt now also emits two short volleys of opposing light trails on up to four currently visible real relations. The trails meet in a shield ring and fading shockwave. An isolated node receives a local shield; no connection is invented. Colors distinguish read, added and revised activity. Crossfire is a visual metaphor, not an assertion that sources are hostile or that a relation has a new direction.
+
+No timer generates ambient combat. Pure relationship-change receipts without identified source/version endpoints continue to refresh the graph without inventing shots. Failed, stale, future, wrong-version/target, withdrawn and duplicate receipts are excluded. Navigation, expired, future and retracted edges cannot host a path. Scope changes withdraw existing paths. Hidden/stopped graphs, emergency pause, reduced motion and disposal clear the effect. Graph data, activity history, counters, selection and camera are unchanged by the effect.
+
+Two persistent instanced meshes reuse 5,760 bytes of instance attributes, capped at 48 concurrent exchanges, 96 trails and 48 impact billboards. Each response lasts at most 2.7 seconds and also respects the original receipt expiry. No texture, post-processing pass, model, provider or persistent cache is added. This is a bounded resource design, not a whole-app battery/CPU/GPU improvement claim.
+
+## Verification and limits
+
+- Seven effect regressions cover quiet idle, real-receipt admission, opposing shots/impact/expiry, cutoff/retraction, caps, reusable buffers and lifecycle cleanup. Existing activity/controller tests pass.
+- Browser inspection found that graph reconstruction initially removed the new layer. The persistent-layer exclusion was fixed, and an additional regression now keeps the real layer and its buffers through repeated graph rebuilds. Test fixtures were extended to model the new owned component; existing assertions were retained.
+- Full UI suite: **92 files / 1,033 tests passed**. TypeScript check passed. Initial failed runs are retained separately, not presented as passing evidence.
+- Hidden IAB used the production Hologram/effect modules and an actual installed read-only collection overview of 1,984 nodes. A real menu-CLI source-detail read was checked against the selected node, exact version and target before emitting the same `read` shape as the product reader. No source mutation, inference, invented journal event or synthetic collection was used. This verifies the live read-to-render boundary in a browser harness, not installed native input or new collection acquisition.
+- Focused 19-node and full 1,984-node views visibly showed trails and collision rings. Directly reviewed PNGs and browser receipts are under `outputs/combat-activity-20261020/`. The full overview screenshot uses 1280×720. Focus screenshots used a 1280×720 screenshot surface within an emulated 1440×900 viewport; no full-frame containment claim is made from those captures. Two full-page screenshot attempts failed; the same live tab's supported screenshot API worked. No app/tab restart was inferred from observation failure.
+- Actual read observed up to two additional draw calls (2 idle, 4 with trails plus impacts). Instance arrays remain bounded. After activity, focused-view frame counts stayed 193→193 and overview counts 400→400 with the loop stopped; stop-boundary counts stayed 198→198 and effects were empty. Reduced motion cleared effects. These are scoped browser observations, not physical minimization, native GPU/battery or universal FPS evidence.
+- Owned QA tab/server were closed; four original research tabs were preserved. QA stayed hidden. Runtime target 0.3.199 build, fixed local signature, installation, file/settings readback, running bundle, PR and CI are recorded separately in the delivery manifest. Developer ID/notary and physical/native release gates remain open.
+
+## Retained independent work
+
+The database native-scoring candidate remains offline. Five kernel and 40 existing retrieval tests passed against it; actual full-path snapshot timing and independent review of its numerical screening assumptions are still pending. It is not installed, and no DB/cache authority changed. Both earlier batched text-cache query proposals remain rejected. The shared DB cross-audit reservation and original research are preserved; no lower/alternate model was substituted.
+
+The full goal remains active, including semantic labels/normalization quality, independent human gold, broader collection, voice/input, OSK/multiple hosts, multimodal/DPO/local-model admission, worker proof, Cursor continuation and normal production release gates.

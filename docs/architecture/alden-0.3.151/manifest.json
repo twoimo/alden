@@ -1,0 +1,641 @@
+{
+  "schema": 1,
+  "source_revision": "106b5e07f8cffc9af0cf7a175c376d1d78f0ed5d",
+  "version": "0.3.151",
+  "created_at": "2026-10-18T16:41:38.756849+00:00",
+  "tool_version": "2.17.0-dev.1",
+  "scope": "Nine implementation diagrams, not execution or external cross-audit certification",
+  "diagrams": [
+    {
+      "name": "system",
+      "spec": {
+        "path": "system.architecture.json",
+        "sha256": "827bd4587ac674d805c76b5880fb65b06f685d8a7dee463fc81a1bf0dad80f86",
+        "bytes": 6067
+      },
+      "artifact": {
+        "path": "system.html",
+        "sha256": "086d968a781f608ac4359c859353f1747c08b6efd89a769669284483b9ce63b1",
+        "bytes": 815006
+      },
+      "delivery": {
+        "path": "system-delivery.json",
+        "sha256": "49bd7b8b2d6dcf9a1bd89a91b06093faa4c6f9d7df5c8e80988cc38fb68e3a40",
+        "bytes": 1020
+      },
+      "browser": {
+        "path": "system-browser.json",
+        "sha256": "b5dce6ebffb0a83003266bed1ec1f5b9366a0a25f20d89d6c099c3eb185147bf",
+        "bytes": 17226
+      },
+      "sources": [
+        {
+          "path": "desktop/src/main.ts",
+          "sha256": "d9b2c3cbc6c591dcc6102d4b4fcfc30ddc5584a90a8a495da81b6043bce3effa"
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "sha256": "c037d056865f5e6702a5ec478d2eda2ed09513a95ec427c588ac1cb5b17b840d"
+        },
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs",
+          "sha256": "e29efbc9b6e31dc81a366c4fe22903d32f3219bc632f26bfc52cf3309696fbbb"
+        },
+        {
+          "path": "scripts/alden_model_routes.py",
+          "sha256": "18c1bbac44950108c05febb7624a94f0ef71c01e64107928b6991cdad025a58f"
+        },
+        {
+          "path": "scripts/alden_routed_llm.py",
+          "sha256": "ed6fb8e2ae3cdde2a15472b577b86d78b1a0cccd0cfd9c0598e98b91ef8dd461"
+        },
+        {
+          "path": "scripts/mlx_serve_lifecycle.py",
+          "sha256": "c99738326a279de66aa6f20a0a7759812ac48e4ad4d8aea4f24e26f71300115e"
+        },
+        {
+          "path": "scripts/local_mlx_model_readiness.py",
+          "sha256": "f74168c68564302b1646492c4ff9bc879476c03e1d59d0fe928a56153d0435cd"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "system.visual-check.1440x900.light.png",
+          "sha256": "dd7ecabc49a9b54ef0f2fd303e3fb67292ad34c5bc954100d7d152dd781a34d4",
+          "bytes": 128621
+        },
+        {
+          "path": "system.visual-check.1440x900.dark.png",
+          "sha256": "ef3fff5057f6f432a3f8858799fe3af5dd6b70b0a5fa9445e71c7757459cc96c",
+          "bytes": 129925
+        },
+        {
+          "path": "system.visual-check.2048x1320.light.png",
+          "sha256": "37e2895093440eab83c2c65eb04ec33cb7903499d6bcb29adeed45d72388f643",
+          "bytes": 159187
+        },
+        {
+          "path": "system.visual-check.2048x1320.dark.png",
+          "sha256": "4d865e58c57abbf1fe90752bc56e8d936352294466dc145637768aa81665c643",
+          "bytes": 160834
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "voice",
+      "spec": {
+        "path": "voice.workflow.json",
+        "sha256": "548e6bbee63a7f83cb6a1a3aebb0fe484da7b5dc9d2378412a90e25384b0e999",
+        "bytes": 5073
+      },
+      "artifact": {
+        "path": "voice.html",
+        "sha256": "3785104d0f7ad2b1383be41168798ce7c653500629dc6191f7100f3c87198fcb",
+        "bytes": 812025
+      },
+      "delivery": {
+        "path": "voice-delivery.json",
+        "sha256": "f31684919fcb1e012283c1dbce4025a5cbcfe299494cbb2feeb065e1034ebf91",
+        "bytes": 833
+      },
+      "browser": {
+        "path": "voice-browser.json",
+        "sha256": "e9055a7536edeca21e68dcaef68f76882a3d3a6e7e246dbe5435a2fb2b921816",
+        "bytes": 17330
+      },
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "sha256": "d2e3a3e9fa06d5954e0f89079aa1d0eca66504f443df3981f2161e529419681f"
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "sha256": "c8bda8a237607dd2e4fe357b1281afc78df3eb2bed4000f1fe8903d120fd258c"
+        },
+        {
+          "path": "scripts/alden_chat_turns.py",
+          "sha256": "07801ee8ac16978669ae0471f8a80f6bd695fb7f63058e7ec932e1739cf9e22c"
+        },
+        {
+          "path": "scripts/alden_chat_files.py",
+          "sha256": "f3002f327ef87573d9d023c5319587d9cd7cafca8567b755029046fd5d6c2084"
+        },
+        {
+          "path": "scripts/alden_chat_links.py",
+          "sha256": "25f7b472fe8607acafe3187a5c347c7b104c90ec4985b06ec2294933bb4d9ee1"
+        },
+        {
+          "path": "scripts/alden_input_images.py",
+          "sha256": "5d32ff2471afbf63eca18397c43b5c5e93f873c57ef7c4c46d110faa99321773"
+        },
+        {
+          "path": "scripts/alden_abort.py",
+          "sha256": "29e7414e89ae17956c30008d80cdb6985f7f328cf4f1669bcb6948afcdfcc215"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "voice.visual-check.1440x900.light.png",
+          "sha256": "10d891dde5ee5d7e41054936b88a6f99b70734f81c0d7124a22867327aefafa2",
+          "bytes": 116716
+        },
+        {
+          "path": "voice.visual-check.1440x900.dark.png",
+          "sha256": "bbe86c505221f18e2546bf5bc0e3749a9fb733eab60f67509db96a3b2816431b",
+          "bytes": 118772
+        },
+        {
+          "path": "voice.visual-check.2048x1320.light.png",
+          "sha256": "f7bd5e5efb866536abcb0c2d7d12192909680ef864faaeb461b6e1cf8a76777f",
+          "bytes": 147501
+        },
+        {
+          "path": "voice.visual-check.2048x1320.dark.png",
+          "sha256": "a9d51987669eb397280858d2484efc3b022b684eeaad66d9bbdd08772fe6644d",
+          "bytes": 149527
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "collection",
+      "spec": {
+        "path": "collection.workflow.json",
+        "sha256": "6a5e1cc6639a1780e8959f9e5a594e84a5d0ec81b0d805e6455b142ff83c215d",
+        "bytes": 4993
+      },
+      "artifact": {
+        "path": "collection.html",
+        "sha256": "0e86e65a7e17562ddb928dfcbf09a19a38b0e0d937e4b3acec947ddba185ad95",
+        "bytes": 811694
+      },
+      "delivery": {
+        "path": "collection-delivery.json",
+        "sha256": "d61db1847c99f4ab9525c31569ea7d2f4b53d1933b1262127c14cb93cbb34644",
+        "bytes": 843
+      },
+      "browser": {
+        "path": "collection-browser.json",
+        "sha256": "451475fd3e20a589c31a1da09cdf6a16a6f7ebe4f60d85003ae41e95e53468c8",
+        "bytes": 17295
+      },
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "sha256": "86008311402ccbcca399b7051f550c4bdcab24333a4a889ea43b630ce6d0b4d1"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "0b4be9e25285607ff1f3d52c10d36bc6a41e3e125be1ea66b8ed352961ab04ec"
+        },
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "sha256": "cf8948ff7df296e595513f1b9cc769966075df5d4d1a522cc2e95e038c65bdeb"
+        },
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "sha256": "f528e80761d1c98a61375409f4c6f2f903ab2f7035ae4801a4e74b209d64d073"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "collection.visual-check.1440x900.light.png",
+          "sha256": "bacfba07d96efd4bda3b4bd53a57aa67fac3e30530b1fb717192a70b4504efb2",
+          "bytes": 134373
+        },
+        {
+          "path": "collection.visual-check.1440x900.dark.png",
+          "sha256": "b776f8c7b262186c0e4985e97d52128b3f4711d693f5e41e43bc6fa19e554614",
+          "bytes": 138039
+        },
+        {
+          "path": "collection.visual-check.2048x1320.light.png",
+          "sha256": "0ee47ae95345b8d6ab721acab6bdeb5e28e3949ca5c9a0051371ba3b61b6b671",
+          "bytes": 176249
+        },
+        {
+          "path": "collection.visual-check.2048x1320.dark.png",
+          "sha256": "67f5b8acf52a0122a9fd36b267abc605b936a7f94d341c08fe38e3c85d1d8089",
+          "bytes": 180638
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "lineage",
+      "spec": {
+        "path": "lineage.dataflow.json",
+        "sha256": "e5b93aea700d9e9cc4d941c483193176f8a796ec713ee9ef007e02b10968b03b",
+        "bytes": 4812
+      },
+      "artifact": {
+        "path": "lineage.html",
+        "sha256": "519a49fb7a0b1462cf0ffa10b297a425db26898e4b4f9de7437b952ab7915d45",
+        "bytes": 813679
+      },
+      "delivery": {
+        "path": "lineage-delivery.json",
+        "sha256": "5c9097c95adc880eab9a678a214a6082b5e82581e3ded42aa865dd35903de909",
+        "bytes": 837
+      },
+      "browser": {
+        "path": "lineage-browser.json",
+        "sha256": "367ba2bb9dfbce923c8525759cfd7916f4d7fe998dce043f67c0f7d3a564f798",
+        "bytes": 17202
+      },
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "0b4be9e25285607ff1f3d52c10d36bc6a41e3e125be1ea66b8ed352961ab04ec"
+        },
+        {
+          "path": "scripts/alden_osk.py",
+          "sha256": "88cf7de3a8b85e1e371bc53739c6862a130adb74d974b4ec281afff8273ea1c2"
+        },
+        {
+          "path": "scripts/alden_osk_delta.py",
+          "sha256": "b19efaa80eb7c1423f7b1bed5b5c1c15a21627932df696cb4742cc6b1505c805"
+        },
+        {
+          "path": "scripts/alden_entity_projection.py",
+          "sha256": "30458c37e09b02c7d114257f76f6aee6b10aaf58cf28f051b2e3d1f22cbcfede"
+        },
+        {
+          "path": "scripts/alden_osk_sources.py",
+          "sha256": "177db8c9568fd72516ec75e9ee4529b0c461658844a23c87b7b0f178905c6faa"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "lineage.visual-check.1440x900.light.png",
+          "sha256": "0e1a5492c4f26e9150e58f07de95c571c529c1e541a344169e969f253416b22b",
+          "bytes": 134530
+        },
+        {
+          "path": "lineage.visual-check.1440x900.dark.png",
+          "sha256": "757de2390046343052a0a7a867736ce1c06cfce29b8906600ffa091e1ae91860",
+          "bytes": 137286
+        },
+        {
+          "path": "lineage.visual-check.2048x1320.light.png",
+          "sha256": "a567450a5781d2f7d12e32b69b6bdabb439a97fda3335253e785238c1084c7a7",
+          "bytes": 173371
+        },
+        {
+          "path": "lineage.visual-check.2048x1320.dark.png",
+          "sha256": "021e0fa48b820508dd9a2e8327d344362af5d35a2aae800ae7a869c7aa25a435",
+          "bytes": 175640
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "mcp",
+      "spec": {
+        "path": "mcp.workflow.json",
+        "sha256": "ec22bc75c3ba40073b647c3b039f98c4f5cf11e826628e03b64cc4f119c4bb13",
+        "bytes": 4405
+      },
+      "artifact": {
+        "path": "mcp.html",
+        "sha256": "cf9c205b18303f8e99e11111c6ba2cb04d8eccbc6b6aaf5b7549d9c949806bf8",
+        "bytes": 810802
+      },
+      "delivery": {
+        "path": "mcp-delivery.json",
+        "sha256": "88237b4098b7a6a6480eb072d0cebc71d082cc5169589079614990756df9f12f",
+        "bytes": 829
+      },
+      "browser": {
+        "path": "mcp-browser.json",
+        "sha256": "62ee584ee1413de5b9e0d7f375abe67b59515549635f8e3a2c3da89db3bc3263",
+        "bytes": 17090
+      },
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "sha256": "61fde855a622af1b55b1ea8677d011f59ebed999d0dea21a1b88865be41cbcd9"
+        },
+        {
+          "path": "scripts/alden_status_mcp.py",
+          "sha256": "9db5f87b6dbd90b97be61920e8b4daac14bccc980a7ae9e06b6790e3bf915188"
+        },
+        {
+          "path": "scripts/alden_collection_retrieval.py",
+          "sha256": "a244024c5f1df70eabf8b846aa655e003b98edc122774a1fe09b17de29546ff2"
+        },
+        {
+          "path": "scripts/alden_osk.py",
+          "sha256": "88cf7de3a8b85e1e371bc53739c6862a130adb74d974b4ec281afff8273ea1c2"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "mcp.visual-check.1440x900.light.png",
+          "sha256": "c8ce113bdf6d72322b0e3091224ca869be86515fcb1fd9f3c5baab7888856cbc",
+          "bytes": 118696
+        },
+        {
+          "path": "mcp.visual-check.1440x900.dark.png",
+          "sha256": "1738d45c9f6a5b6ddd4e1557f39c5c382ccbc3088dbcab5d41d725b1e7157c2a",
+          "bytes": 121304
+        },
+        {
+          "path": "mcp.visual-check.2048x1320.light.png",
+          "sha256": "6f40f53d42cb976d79883bbc8cd0e6cadafe43826b4c7d6d51ecb8653ba2d2e2",
+          "bytes": 151354
+        },
+        {
+          "path": "mcp.visual-check.2048x1320.dark.png",
+          "sha256": "22a560405bedb5bde5ffa0e2fbc8cd5b7d69d95a7fab78ee7ea89a9419f19282",
+          "bytes": 153949
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "normalization",
+      "spec": {
+        "path": "normalization.workflow.json",
+        "sha256": "22abed5fce68f402fa0b2ae11b9dc9c4e7cc35683354bb24d5ac97ce4399cd5c",
+        "bytes": 6428
+      },
+      "artifact": {
+        "path": "normalization.html",
+        "sha256": "7cc200d6f4905ce45efa496d356637ce77fae110e98182cc6d6a34cae5ac69ea",
+        "bytes": 817822
+      },
+      "delivery": {
+        "path": "normalization-delivery.json",
+        "sha256": "a96daf760a55ba862af34f6b0b1e2a1fc4a896b961216e31c4fc927736ade024",
+        "bytes": 849
+      },
+      "browser": {
+        "path": "normalization-browser.json",
+        "sha256": "e5223f6c9856c3c1d5cb46a4555e8bdfc3c224205525e4bd7fa6b23d0b1333a6",
+        "bytes": 17298
+      },
+      "sources": [
+        {
+          "path": "scripts/alden_normalization_evidence.py",
+          "sha256": "aab3429bd70ba6d4c742fdd08c62f182f436b97351dc9f95c0b20a74e20e0fbd"
+        },
+        {
+          "path": "scripts/alden_quantity_normalization.py",
+          "sha256": "be1bd588ca04ffa3320313f60827c8ddb56dbf71a376880ac1104f3fb2f2cfb5"
+        },
+        {
+          "path": "scripts/alden_time_normalization.py",
+          "sha256": "84b9cf7bcbaffc0a2c3976c074ec5a7aeac874dec2feb1b5750afa74a0929dca"
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "sha256": "e8d096127de42e176f8db019f499903fa02c2530666f2f5b73d7d744965bdd68"
+        },
+        {
+          "path": "scripts/alden_entity_projection.py",
+          "sha256": "30458c37e09b02c7d114257f76f6aee6b10aaf58cf28f051b2e3d1f22cbcfede"
+        },
+        {
+          "path": "scripts/alden_content_evidence.py",
+          "sha256": "81ef356159d953660ea860eb94632a2d9995149ce6126bcf2e68086fbd23d0df"
+        },
+        {
+          "path": "scripts/alden_graph_quality.py",
+          "sha256": "c89e5960a2d87410973542c1972ab2b260ef3e49ede9d711428f89df24b9d983"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "normalization.visual-check.1440x900.light.png",
+          "sha256": "b4bd4f2d03fafae4df3de78395919131dc3fa5cb11bb25c534fd8c6fc07e3997",
+          "bytes": 138337
+        },
+        {
+          "path": "normalization.visual-check.1440x900.dark.png",
+          "sha256": "b585a53663db0b3f8cef3e949707e22268611ee894b7fa6b136b7f2483108c38",
+          "bytes": 140354
+        },
+        {
+          "path": "normalization.visual-check.2048x1320.light.png",
+          "sha256": "40541419361643463d03ab1b837ef6b944337cfa610fb11ddb129845a6d41278",
+          "bytes": 181147
+        },
+        {
+          "path": "normalization.visual-check.2048x1320.dark.png",
+          "sha256": "1abf07fa847ea660b196601017ebd9e9fb119146b1e23681e423ca33bcc7ca9b",
+          "bytes": 184944
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "activity",
+      "spec": {
+        "path": "activity.dataflow.json",
+        "sha256": "6d125ecc6e889b332376bee13ee3f1902775d10db90384c51edcf4fb794702e1",
+        "bytes": 3272
+      },
+      "artifact": {
+        "path": "activity.html",
+        "sha256": "b9739a5dadadf359b8511c5607027883ca10babc60c04597f8798aded3b63fc6",
+        "bytes": 805046
+      },
+      "delivery": {
+        "path": "activity-delivery.json",
+        "sha256": "19ce93404368c1038ad8f09945a400ad7d16a75ee9bd67adba8634b65382fe71",
+        "bytes": 839
+      },
+      "browser": {
+        "path": "activity-browser.json",
+        "sha256": "d72ea68e11dd3c86b3cbe39fbd4ff53dd2b516a445c1680f40bef021e174cddb",
+        "bytes": 17242
+      },
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "0b4be9e25285607ff1f3d52c10d36bc6a41e3e125be1ea66b8ed352961ab04ec"
+        },
+        {
+          "path": "desktop/src/knowledge/collection-activity.ts",
+          "sha256": "5df5b6b4b375b0987c772b02cbae5fc5c75b20a34e07e0f0c983f572b647aced"
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "sha256": "b062ae2bc19abbba2ad8f34e9bbdce5b933ef689864021a9f89186ef691dda04"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "activity.visual-check.1440x900.light.png",
+          "sha256": "36d67ed969dd742f5fade1a8ffb30e7d29ac89aefb1a03c4488df62981e2a6a6",
+          "bytes": 108191
+        },
+        {
+          "path": "activity.visual-check.1440x900.dark.png",
+          "sha256": "a8051b3109410af2a773bffe7c63a89defbb2cf41970d0437410f766e28ec129",
+          "bytes": 110278
+        },
+        {
+          "path": "activity.visual-check.2048x1320.light.png",
+          "sha256": "aa7613feb66f0d2a080695ef02f5e44148c840037b9852b053143a6929d120f9",
+          "bytes": 137187
+        },
+        {
+          "path": "activity.visual-check.2048x1320.dark.png",
+          "sha256": "beacbd1cc1c8c9967acbca5785784a9dbd4f4c5aed3863e84013aec7eb1c466b",
+          "bytes": 138410
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "recovery",
+      "spec": {
+        "path": "recovery.workflow.json",
+        "sha256": "3355c5f3340a9b137e762a2951f6e017c15733fcfb8d2f77dc417cddf804f756",
+        "bytes": 4893
+      },
+      "artifact": {
+        "path": "recovery.html",
+        "sha256": "3e6156eb464d1d3582a8b10437df8d8c68997b52ef9900474de063c796edf57a",
+        "bytes": 811423
+      },
+      "delivery": {
+        "path": "recovery-delivery.json",
+        "sha256": "23d60714ef094ff3e7b01c361f7bcf4a0b2e184dbf9898f19228da3f61944c5a",
+        "bytes": 839
+      },
+      "browser": {
+        "path": "recovery-browser.json",
+        "sha256": "b0e4a37fc041c540fe684c854e72e15e2f8516ad7ec9d2f11db1b1e84e0c6266",
+        "bytes": 17242
+      },
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/collection-activity.ts",
+          "sha256": "5df5b6b4b375b0987c772b02cbae5fc5c75b20a34e07e0f0c983f572b647aced"
+        },
+        {
+          "path": "desktop/src/knowledge/changes.ts",
+          "sha256": "4d53240abc0e9aac84ef6e0db9b9888557e9d9c058e03ff36b0e3aa5da8042a8"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "sha256": "b34e506a20288e0e36dd89156ec4e7eeeb7d24261bb0f63c199b4d1851135988"
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "sha256": "b062ae2bc19abbba2ad8f34e9bbdce5b933ef689864021a9f89186ef691dda04"
+        },
+        {
+          "path": "scripts/alden_abort.py",
+          "sha256": "29e7414e89ae17956c30008d80cdb6985f7f328cf4f1669bcb6948afcdfcc215"
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "sha256": "c037d056865f5e6702a5ec478d2eda2ed09513a95ec427c588ac1cb5b17b840d"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "recovery.visual-check.1440x900.light.png",
+          "sha256": "71419c2cfc3cf32aae35d4e605f8a9f10376262f3a1d05004bfa21bea96883a6",
+          "bytes": 129783
+        },
+        {
+          "path": "recovery.visual-check.1440x900.dark.png",
+          "sha256": "18ed6f2b8844a8c938fd88c08468b92fc690ff1bad6e6f2ab534854a915ca712",
+          "bytes": 133805
+        },
+        {
+          "path": "recovery.visual-check.2048x1320.light.png",
+          "sha256": "c586821975630a9fc6e778ffb82518795f9eea8a9b27e99d6fdea603e1468f65",
+          "bytes": 173593
+        },
+        {
+          "path": "recovery.visual-check.2048x1320.dark.png",
+          "sha256": "3ea6ab7a74d7edbc33b3d5db10fec0579dbc0c939290da450805f4f9a50c0cdb",
+          "bytes": 177975
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    },
+    {
+      "name": "evaluation",
+      "spec": {
+        "path": "evaluation.workflow.json",
+        "sha256": "b3dcb29bc09b0f8985e0f3406a78b3920fc0063ae3ecee2fa5b3cd4b9ccd0884",
+        "bytes": 5039
+      },
+      "artifact": {
+        "path": "evaluation.html",
+        "sha256": "b33647af2e052dba297d2a92dfac1fca2830ea667c4f621d126c096873e41fb0",
+        "bytes": 810847
+      },
+      "delivery": {
+        "path": "evaluation-delivery.json",
+        "sha256": "fed42289c6c40232d5cf8d777532f2883d1cbf12e825a284899a8b3b0ebf513e",
+        "bytes": 843
+      },
+      "browser": {
+        "path": "evaluation-browser.json",
+        "sha256": "02ae9dc16eb0b66a971e330e437d34ee45835996bee6599b976f1afd9a322e05",
+        "bytes": 17226
+      },
+      "sources": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889"
+        },
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2"
+        },
+        {
+          "path": "scripts/alden_dpo_scorer.py",
+          "sha256": "fba9b19df13d91fe8186d424e0c8b0c47bfb7dad36fa7d60bccca4e8db97f8ab"
+        },
+        {
+          "path": "scripts/alden_dpo_adapter.py",
+          "sha256": "16b2c7e7c75a4db98b91e57a9ab85b40d63ef461ea04292ce5b8a8f1aa14e8ae"
+        },
+        {
+          "path": "scripts/auto_reply_finetune.py",
+          "sha256": "aa231b5c2a531887ea6fd99375cda7686c4b855e9ff31ebc448fd1d2fa17695a"
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "evaluation.visual-check.1440x900.light.png",
+          "sha256": "cb6b41d4c150541275e25c2282a9bb9651170b7f717444c679bcee9ac890a0e1",
+          "bytes": 116288
+        },
+        {
+          "path": "evaluation.visual-check.1440x900.dark.png",
+          "sha256": "98847dc0ae14a868e0aad4bfb16bde33ae175af419cc51c6f342c09d2d3ad1f1",
+          "bytes": 116996
+        },
+        {
+          "path": "evaluation.visual-check.2048x1320.light.png",
+          "sha256": "170f7539413f328ab1e806957be7abc6c1ffed20b12f33945c2511ae59d743f4",
+          "bytes": 149754
+        },
+        {
+          "path": "evaluation.visual-check.2048x1320.dark.png",
+          "sha256": "3130e7718fbc90ae840aacc60eb27697a94d2ba4c19eba7b07a1701bba6ee757",
+          "bytes": 151570
+        }
+      ],
+      "direct_image_review": "passed; readable authored paths and side notes, no material clipping or confusing crossings in reviewed endpoints"
+    }
+  ],
+  "visual_review": {
+    "status": "passed",
+    "reviewer": "main session direct image review",
+    "screenshots": 36,
+    "correction_rounds": 0,
+    "note": "Endpoint light/dark screenshots reviewed directly at both sizes; automated receipts retain visualReview pending. Earlier pre-delivery validation/layout attempts are preserved outside this directory. Fixed Viewer UI is English. Source architecture remains dated151; subsequent152 presentation changes are documented separately."
+  }
+}

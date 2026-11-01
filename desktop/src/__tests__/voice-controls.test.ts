@@ -9,6 +9,8 @@ function voiceElements(): { button: HTMLButtonElement; status: HTMLElement } {
   const button = document.querySelector<HTMLButtonElement>("#voice-start");
   const status = document.querySelector<HTMLElement>("#voice-status");
   if (!button || !status) throw new Error("voice_test_dom_missing");
+  // Explicit microphone input is available without an automatic wake model.
+  expect(button.disabled).toBe(false);
   return { button, status };
 }
 
@@ -31,7 +33,7 @@ describe("settings voice start control", () => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke).toHaveBeenCalledWith("start_voice_session");
+    expect(invoke).toHaveBeenCalledWith("start_manual_voice_session");
     expect(button.disabled).toBe(true);
     expect(button.getAttribute("aria-busy")).toBe("true");
     expect(status.textContent).toBe("음성 듣기를 준비하고 있습니다…");
@@ -44,6 +46,7 @@ describe("settings voice start control", () => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     expect(invoke).toHaveBeenCalledTimes(2);
+    expect(invoke).toHaveBeenLastCalledWith("stop_manual_voice_session");
   });
 
   it.each([
@@ -95,11 +98,29 @@ describe("settings voice start control", () => {
     expect(status.textContent).not.toContain(privateFailure);
   });
 
+  it("does not report a confirmed stop when the native owner cannot confirm it", async () => {
+    const { button, status } = voiceElements();
+    button.dataset.voiceActive = "true";
+    const invoke = vi.fn().mockResolvedValue(false);
+    wireVoiceStart(document, invoke);
+    button.click();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(invoke).toHaveBeenCalledWith("stop_manual_voice_session");
+    expect(status.textContent).toContain("중지를 확인하지 못했습니다");
+    expect(button.dataset.voiceActive).toBe("true");
+  });
+
   it("explains local voice memory blocks in plain Korean without exposing codes", () => {
     expect(voiceErrorMessage("voice_memory_budget_low")).toBe("기기 메모리 여유가 부족해 음성 처리를 멈췄습니다.");
     expect(voiceErrorMessage("voice_memory_budget_unavailable")).toBe("기기 메모리 상태를 확인할 수 없어 음성 처리를 시작하지 않았습니다.");
     expect(voiceErrorMessage("mic_unavailable")).toBe("마이크를 열 수 없습니다. 연결 상태를 확인해 주세요.");
     expect(voiceErrorMessage("mic_disconnected")).toBe("마이크를 사용할 수 없습니다. 연결을 확인해 주세요.");
+    expect(voiceErrorMessage("mic_hardware_lid_closed")).toContain("덮개");
+    expect(voiceErrorMessage("mic_input_route_changed")).toContain("다시 시작");
+    expect(voiceErrorMessage("mic_input_state_unverified")).toContain("확인할 수 없어");
+    expect(voiceErrorMessage("voice_model_configuration_invalid")).toContain("설정");
+    expect(voiceErrorMessage("voice_model_selection_unavailable")).toContain("모델의 연결");
+    expect(voiceErrorMessage("local_llm_model_not_ready")).toContain("준비되지 않았습니다");
     expect(voiceErrorMessage("voice_session_process_check_failed")).toBe("음성 기능을 시작하지 못했습니다.");
     expect(voiceErrorMessage(null)).toBeNull();
   });

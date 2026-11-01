@@ -1,0 +1,273 @@
+{
+  "schema_version": 1,
+  "implementation_commit": "9732617bc78c80fadafd431c250b958b3408683c",
+  "authored_language": "Korean",
+  "fixed_viewer_ui": "English",
+  "diagrams": [
+    {
+      "name": "system",
+      "diagram_type": "architecture",
+      "output": "system.html",
+      "specification_sha256": "0aadb2b0753d39f81ae95d5ffcc983d94fbb544e131b3c818cf322b8a751cd3d",
+      "artifact_sha256": "7f0b6d11ab4889095dbc9ffbebf746501a22f744821d356479d30b70792423ca",
+      "validation": "9/9 showcase; 0 errors; 0 warnings",
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "correction_rounds": 1,
+      "browser_viewports": [
+        [
+          1440,
+          900
+        ],
+        [
+          1600,
+          1000
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          2048,
+          1320
+        ]
+      ],
+      "inspected_screenshots": [
+        "system.visual-check.1440x900.light.png",
+        "system.visual-check.1440x900.dark.png",
+        "system.visual-check.2048x1320.light.png",
+        "system.visual-check.2048x1320.dark.png"
+      ]
+    },
+    {
+      "name": "voice",
+      "diagram_type": "workflow",
+      "output": "voice.html",
+      "specification_sha256": "b28aa6ab6f784a597ca4e196c67728e0ec3c50201788bda949c7fbef6535cc85",
+      "artifact_sha256": "47039f0cba48659944d88263feefcee3b67c572c578202409d8d8d378634de38",
+      "validation": "9/9 showcase; 0 errors; 0 warnings",
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "browser_viewports": [
+        [
+          1440,
+          900
+        ],
+        [
+          1600,
+          1000
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          2048,
+          1320
+        ]
+      ],
+      "inspected_screenshots": [
+        "voice.visual-check.1440x900.light.png",
+        "voice.visual-check.1440x900.dark.png",
+        "voice.visual-check.2048x1320.light.png",
+        "voice.visual-check.2048x1320.dark.png"
+      ]
+    },
+    {
+      "name": "render",
+      "diagram_type": "workflow",
+      "output": "render.html",
+      "specification_sha256": "6ff1a7546aa34758a1766583a4b3503b038d911bbbca4c669597acaf20952dbb",
+      "artifact_sha256": "599ffe165b290f0f08efe072b77b33e977c70ce1178b25730ed95638d54eb2e3",
+      "validation": "9/9 showcase; 0 errors; 0 warnings",
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "browser_viewports": [
+        [
+          1440,
+          900
+        ],
+        [
+          1600,
+          1000
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          2048,
+          1320
+        ]
+      ],
+      "inspected_screenshots": [
+        "render.visual-check.1440x900.light.png",
+        "render.visual-check.1440x900.dark.png",
+        "render.visual-check.2048x1320.light.png",
+        "render.visual-check.2048x1320.dark.png"
+      ]
+    },
+    {
+      "name": "snapshot",
+      "diagram_type": "workflow",
+      "output": "snapshot.html",
+      "specification_sha256": "d8e3438245fd47cf96b28c6261737084ed04e2d0b7ae850d02c5b286a078f90b",
+      "artifact_sha256": "f20d9391d60ccbbc9eca06b740a1ea4e4eb0e6f40e0241a6c1135663bbce1bf1",
+      "validation": "9/9 showcase; 0 errors; 0 warnings",
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "browser_viewports": [
+        [
+          1440,
+          900
+        ],
+        [
+          1600,
+          1000
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          2048,
+          1320
+        ]
+      ],
+      "inspected_screenshots": [
+        "snapshot.visual-check.1440x900.light.png",
+        "snapshot.visual-check.1440x900.dark.png",
+        "snapshot.visual-check.2048x1320.light.png",
+        "snapshot.visual-check.2048x1320.dark.png"
+      ]
+    },
+    {
+      "name": "evaluation",
+      "diagram_type": "workflow",
+      "output": "evaluation.html",
+      "specification_sha256": "dd39b75ba76ae62688f261117e84d16ac88eda850350b35a957091829aec218e",
+      "artifact_sha256": "29148484da3de429b962b9b71d76e7f2c6ec27f94c988ec3cef28d88973b0b06",
+      "validation": "9/9 showcase; 0 errors; 0 warnings",
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "browser_viewports": [
+        [
+          1440,
+          900
+        ],
+        [
+          1600,
+          1000
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          2048,
+          1320
+        ]
+      ],
+      "inspected_screenshots": [
+        "evaluation.visual-check.1440x900.light.png",
+        "evaluation.visual-check.1440x900.dark.png",
+        "evaluation.visual-check.2048x1320.light.png",
+        "evaluation.visual-check.2048x1320.dark.png"
+      ]
+    },
+    {
+      "name": "retrieval",
+      "diagram_type": "sequence",
+      "output": "retrieval.html",
+      "specification_sha256": "56c1b6894440411887d15c3187a6d54092e7d4cda80caa0b57878183677b839f",
+      "artifact_sha256": "c9e6e65ad086b42e7b35af21e391df3a9077408190676cb67f9dd358c5471b4a",
+      "validation": "9/9 showcase; 0 errors; 0 warnings",
+      "browser_evidence": "passed",
+      "visual_review": "passed",
+      "correction_rounds": 0,
+      "browser_viewports": [
+        [
+          1440,
+          900
+        ],
+        [
+          1600,
+          1000
+        ],
+        [
+          1920,
+          1080
+        ],
+        [
+          2048,
+          1320
+        ]
+      ],
+      "inspected_screenshots": [
+        "retrieval.visual-check.1440x900.light.png",
+        "retrieval.visual-check.1440x900.dark.png",
+        "retrieval.visual-check.2048x1320.light.png",
+        "retrieval.visual-check.2048x1320.dark.png"
+      ]
+    }
+  ],
+  "source_bindings": {
+    "system": [
+      "desktop/src-tauri/src/python_bridge.rs",
+      "scripts/alden_tool_runtime.py",
+      "scripts/alden_voice.py",
+      "scripts/alden_osk.py"
+    ],
+    "voice": [
+      "scripts/alden_voice.py",
+      "scripts/alden_abort.py",
+      "desktop/src-tauri/src/python_bridge.rs"
+    ],
+    "render": [
+      "desktop/src/core/lifecycle.ts",
+      "desktop/src/core/lifecycle-wiring.ts",
+      "desktop/src-tauri/src/workspace_visibility.rs"
+    ],
+    "snapshot": [
+      "src/context_sync_replica.rs",
+      "src/local_db.rs",
+      "src/alden_corpus.rs",
+      "scripts/alden_osk_sources.py",
+      "scripts/alden_osk_delta.py"
+    ],
+    "evaluation": [
+      "scripts/alden_model_evaluation.py",
+      "scripts/alden_dpo_scorer.py",
+      "scripts/alden_dpo_training.py"
+    ],
+    "retrieval": [
+      "scripts/alden_osk_retrieval.py",
+      "scripts/auto_reply_knowledge_graph.py",
+      "scripts/alden_voice.py"
+    ]
+  },
+  "source_sha256": {
+    "desktop/src-tauri/src/python_bridge.rs": "4bf0bc1a3499a8db1bcdfc7ae926e7f2dc16385425695662c60ffa75a469d0af",
+    "scripts/alden_tool_runtime.py": "ecb5037cc588c464b75e61b6111a4cda2cc203721f83c2d3159b0f925f38335c",
+    "scripts/alden_voice.py": "043d199a0a4fcf05eb1fbe47301e728cfbb996374597e9398ac4c2daedd0ad27",
+    "scripts/alden_osk.py": "c0b6798fcab580c4fa1acf95d80d6949212dc4adfb2efb13c31a3128b743557e",
+    "scripts/alden_abort.py": "35f251273637121e513d02de5624c0096af319579b4f00cb19a5863cab2d0e91",
+    "desktop/src/core/lifecycle.ts": "28c30dffea81a69db3926d2866d79e52b94d81b04b72e08d9a5785e2cf75bb8f",
+    "desktop/src/core/lifecycle-wiring.ts": "a865805629b1f6ebbd7dd0b90fc349aa89dbed7e863cc8cdb85e188e5c407619",
+    "desktop/src-tauri/src/workspace_visibility.rs": "0f5818492eeab234432f37fed4609a92cde6f46afbdb9912b5d8f0d5e926ab0c",
+    "src/context_sync_replica.rs": "78e0e9b4f9276c6ac9e631b58d3edd1a1d568de7d9c466f886a62692866567eb",
+    "src/local_db.rs": "f33e31422e3685f7e017f5d838720b6cc939c5fac7ebc51589e9294fcb4425df",
+    "src/alden_corpus.rs": "6c9629b200b79df58e8157a6cffc2351fed6a0ac387b41a96d16cb339add7584",
+    "scripts/alden_osk_sources.py": "3e5b7813fc0c6a453c7c068b4ae2fcc55a3b3cb881733496f1bd78358f7a5dbe",
+    "scripts/alden_osk_delta.py": "b60c08e6be6e85cd022da2d6a224024275d652721c5d9f3eb56ac9201ff9e63e",
+    "scripts/alden_model_evaluation.py": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+    "scripts/alden_dpo_scorer.py": "fba9b19df13d91fe8186d424e0c8b0c47bfb7dad36fa7d60bccca4e8db97f8ab",
+    "scripts/alden_dpo_training.py": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+    "scripts/alden_osk_retrieval.py": "e9b14599ff7b729faebd233d61f2ff22c255d13865f26de20e9614c1799d0773",
+    "scripts/auto_reply_knowledge_graph.py": "971fa86d09169f4a115807774d13420460f42690b2e7d7ecc041f2c31ece9635"
+  }
+}

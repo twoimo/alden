@@ -1,0 +1,69 @@
+{
+  "state": "ended",
+  "reply": "확인했습니다",
+  "conversation_id": "a96ad9fa896541439b94e36b1b1eef2f",
+  "turn_id": 1,
+  "result_context_version": 2,
+  "metrics": {
+    "request": {
+      "conversation_id": "a96ad9fa896541439b94e36b1b1eef2f",
+      "turn_id": 1,
+      "context_version": 1,
+      "source": "text",
+      "context_scope": "confirmed_input_before_inference",
+      "local_request_id": "3077eeecaf074d36b4654ad65ba02b1e",
+      "model_id": "mlx/ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+      "requested_at_unix": 1791359389.473923,
+      "state": "completed",
+      "cancelled": false,
+      "completed_at_unix": 1791359390.08205
+    },
+    "backend_request_id": "chatcmpl-1791359389485",
+    "retrieval": {
+      "state": "not_requested",
+      "mode": "none",
+      "sources": 0
+    },
+    "engine_before": {
+      "state": "connected",
+      "observed_at_unix": 1791359389.484226,
+      "scope": "engine_aggregate; not per-request memory",
+      "values": {
+        "vllm:prompt_tokens_total": 52538.0,
+        "vllm:generation_tokens_total": 871.0,
+        "vllm:request_success_total": 32.0,
+        "vllm:request_cancelled_total": 0.0,
+        "vllm:num_requests_running": 0.0,
+        "mlx_serve:mlx_active_bytes": 19554924752.0,
+        "mlx_serve:mlx_cache_bytes": 80498700.0
+      }
+    },
+    "first_model_token_seconds": 0.5670068329200149,
+    "first_visible_token_seconds": 0.5670074999798089,
+    "elapsed_seconds": 0.6067158330697566,
+    "usage": {
+      "prompt_tokens": 150,
+      "completion_tokens": 2,
+      "total_tokens": 152,
+      "prompt_tokens_details": {
+        "cached_tokens": 116
+      }
+    },
+    "finish_reason": "stop",
+    "engine_after": {
+      "state": "connected",
+      "observed_at_unix": 1791359390.081855,
+      "scope": "engine_aggregate; not per-request memory",
+      "values": {
+        "vllm:prompt_tokens_total": 52688.0,
+        "vllm:generation_tokens_total": 873.0,
+        "vllm:request_success_total": 33.0,
+        "vllm:request_cancelled_total": 0.0,
+        "vllm:num_requests_running": 1.0,
+        "mlx_serve:mlx_active_bytes": 19555056756.0,
+        "mlx_serve:mlx_cache_bytes": 80400896.0
+      }
+    }
+  },
+  "scope": "actual local27B; typed synthetic input and silent TTS"
+}

@@ -1,0 +1,33 @@
+{
+  "baseline": "a8c05a0d79907d9eac6f42c6301d155163a6c5e2",
+  "source_sha256": {
+    "scripts/alden_collection.py": "ebd3852f97aba8020a0a0e903f26f8d2be7e1bffa9646112c1042436f2501896",
+    "scripts/alden_gbrain_cache.py": "35f3a1f1cd20991825519bb45f0fe8f0348bb5f327ac15bb30163a20fe3219dd",
+    "scripts/alden_gbrain_bridge.py": "a4634c49fb39322983017f7e9f00c53f32bd6d4c1384741d7aea76e825ac8c1d",
+    "scripts/alden_gbrain_client.py": "f8a8b0fb76c43288fce3abcacc02b365d1272242cf8bbff7a5674a12396c7ffa",
+    "scripts/alden_knowledge_mcp.py": "88893556cbacde4b667ce12b3aae42425f8a7d45142f42c01ce845daf46a7230"
+  },
+  "affected_tests": 288,
+  "lifecycle_tests": 20,
+  "isolated_mutants_detected": 6,
+  "actual_initial_pages": 6,
+  "actual_initial_links": 5,
+  "actual_generation_node_checks": [
+    6,
+    6,
+    3
+  ],
+  "old_generations_removed": 3,
+  "final_generations": 0,
+  "scope": "controlled public reference copy; bounded graph50, not native/whole-corpus/incremental acceptance",
+  "formal_or_external_audit_completed": false,
+  "native_app_started": false,
+  "global_registration": false,
+  "receipts": {
+    "replay-bounded-final/actual-lifecycle-acceptance.json": "c5f3187fb8a26818d2f0c7378884ae5759930d361707f755af1a523b45a3b5da",
+    "replay-bounded-final/source-runtime-pin.json": "389e97294253e19be0353162831d8679022b289f87c767cc04e55fc2ae04ae04",
+    "affected-tests-bounded-final.log": "753f785a54dd96ae1db2213fa7f6ddf99505f55779f6067007d304c9906a87d7",
+    "negative-controls.json": "e84ed18abf71f6a940da30ef972f53099633bb0e7bdaef79ad75ea7f0d32590a",
+    "preservation-before-build.json": "d1de3388fdc0f9e7e9e5dbc8ab3a5e96a0540ee7e09cb241a9d93e018081b40a"
+  }
+}

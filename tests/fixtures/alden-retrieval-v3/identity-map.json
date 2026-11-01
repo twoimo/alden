@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "basis": "Identifier-only fixture migration; no product/runtime/source-store mutation",
+  "previous_fixture": "alden-retrieval-v2",
+  "source_sha256": {
+    "corpus.json": "669965cd5283da87efe7b8016795ae3d9a3aa4b6f1f5d628681d54412c5498e2",
+    "queries.json": "f7f5e8b7a9f9a7dbd9a51d6730bbc2f5f69714559061883be05b9349e03a3ef1"
+  },
+  "source_to_canonical_id": {
+    "topic:tool:computer-use": "ent:topic:tool:computer-use",
+    "topic:model:claude": "ent:topic:model:claude",
+    "topic:place:seoul-food": "ent:topic:place:seoul-food",
+    "topic:project:a-deleted": "ent:topic:project:a-deleted",
+    "topic:project:z-current": "ent:topic:project:z-current",
+    "topic:pricing:a-old": "ent:topic:pricing:a-old",
+    "topic:pricing:z-current": "ent:topic:pricing:z-current",
+    "topic:secret:beta": "ent:topic:secret:beta",
+    "topic:release:alden": "ent:topic:release:alden",
+    "topic:semantic:a-refund": "ent:topic:semantic:a-refund",
+    "topic:semantic:z-payment-history": "ent:topic:semantic:z-payment-history"
+  },
+  "preserved": [
+    "name",
+    "description",
+    "category",
+    "aliases",
+    "facts",
+    "evidence",
+    "query text",
+    "relevance grades",
+    "forbidden judgments",
+    "splits",
+    "snapshot"
+  ],
+  "changed_corpus_metadata": [
+    "description",
+    "watermark",
+    "graph_entity_ids_canonical"
+  ],
+  "limits": "Synthetic ID normalization does not validate human semantics or prove a production retrieval improvement."
+}

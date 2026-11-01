@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "artifact": {
+    "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden/docs/architecture/alden-conversation-switch-20261007.html",
+    "sha256": "835334de56ed87c934ca5e85a9413fd710e30b7dc3251231af7c9cbb705ee57b",
+    "bytes": 806335
+  },
+  "visual_review": "passed",
+  "reviewed_captures": [
+    "1440x900 light",
+    "2048x1320 dark"
+  ],
+  "observations": [
+    "Four participants and all nine transitions are visible.",
+    "Labels do not overlap arrows or neighboring text.",
+    "Both conclusion cards and viewer controls remain inside the page.",
+    "The fixed viewer controls and legend are English; authored copy is Korean."
+  ],
+  "browser_evidence": "See unchanged canonical visual-check receipt: pass, four containment viewports, four endpoint captures."
+}

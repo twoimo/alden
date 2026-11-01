@@ -1,0 +1,27 @@
+{
+  "gbrain_source": "33d73cb54c14e2e988272764ddff59a5ead10915",
+  "open_ontologies_reference": "ef6e781c71aaccaa35c2a1cd06169f0c862d5769",
+  "affected_tests": 267,
+  "gbrain_tests_after_test_only_fix": 29,
+  "isolated_mutants_detected": 5,
+  "actual_stdio_queries": 8,
+  "source_nodes": 4,
+  "source_relations": 1,
+  "derived_pages": 6,
+  "derived_edges": 5,
+  "reference_only_public_fixture": true,
+  "installed_app_started": false,
+  "global_registration": false,
+  "formal_certificates_run": false,
+  "external_audit": "NOT_RUN",
+  "receipts": {
+    "open-ontologies-source-pin.json": "2abe9ffbf01e63959b749064e124cba508ed761f422d659ca6fa5435bf71e26b",
+    "runtime-receipt.json": "b11b086c6a8d8d1d35cfcf7812d689d1e53f1e3d89a9ead56c18304d0cb33035",
+    "schema-acceptance.json": "fc2b5bf520e53c7ee9e2c9977cba068ad79949ac504598f6cf44c724f3d190e2",
+    "alden-projection-typed-integration.json": "5348248ccb605a04b4cdc093fe1140961b37fc182d577bce9d7fed10d0f2df0b",
+    "alden-gbrain-mcp-acceptance.json": "b782c09e595350a8bffb032e6f9187a99e52fa1565167ae016598bd5d7a7fbac",
+    "affected-tests-final.log": "51db415e253e7655601994b773745ff2b996cdfe2cfe261801a7a3c65e8b91ba",
+    "gbrain-tests-final.log": "3b7b58682b2214b623c929e00e824cca06978fb7f519e1d44ebe72b09825130a",
+    "gbrain-negative-controls.json": "44fc50175ddca3659cc7f7a248b95ec2760c4a86dc21818560d635f03ef1da3b"
+  }
+}

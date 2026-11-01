@@ -69,7 +69,7 @@ starts `auto-reply-service.py --mode session` in Terminal with
 isolated Python flags (`-E -B -S`) and stdin from `/dev/null`. The session
 watchdog takes `session-watchdog.owner.lock`, performs a fresh read-only
 identity-bound preflight before every child start, and only then runs the same
-`openkakao-cli auto-reply --chat <exact-selector>` foreground safety gates
+`alden-cli auto-reply --chat <exact-selector>` foreground safety gates
 under `/usr/bin/caffeinate -i` through a separate session guardian. The
 watchdog-to-guardian control pipe and guardian-to-auto-reply liveness pipe are
 EOF-only ownership proofs: death of either owner stops all room worker process
@@ -207,7 +207,7 @@ confirm `valid=true`, `check=true`, `will_send=false`, and
 `workers_started=false`:
 
 ```bash
-openkakao-cli auto-reply \
+alden-cli auto-reply \
   --chat 'bind:417780809780519:부자멘토멘티' \
   --check \
   --json
@@ -225,7 +225,7 @@ exec '/absolute/path/to/python3' -E -B -S \
   --mode session \
   --python '/absolute/path/to/python3' \
   --entry '/absolute/private/runtime/auto-reply-service.py' \
-  --bin '/absolute/private/runtime/openkakao-cli' \
+  --bin '/absolute/private/runtime/alden-cli' \
   --config '/Users/me/.config/openkakao/config.toml' \
   --chat 'bind:417780809780519:부자멘토멘티' \
   --state-root '/Users/me/Library/Application Support/openkakao/auto-reply' \
@@ -297,7 +297,7 @@ exact numeric selectors:
 
 ```bash
 python3 scripts/prepare-auto-reply-session-runtime.py \
-  --bin "$(pwd -P)/target/release/openkakao-cli" \
+  --bin "$(pwd -P)/target/release/alden-cli" \
   --python "$(python3 -c 'import os,sys; print(os.path.realpath(sys.executable))')" \
   --config "$HOME/.config/openkakao/config.toml" \
   --chat 'bind:417780809780519:부자멘토멘티' \
@@ -371,7 +371,7 @@ that retained entries are hidden. The generated
 `open-auto-reply-tui.command` intentionally uses the default redacted mode.
 
 The primary menu-bar app is the Tauri bundle installed by
-`scripts/install-jarvis-desktop.sh`; its `com.openkakao.jarvis.desktop`
+`scripts/install-alden-desktop.sh`; its `com.openkakao.alden.desktop`
 LaunchAgent owns the panel and its Rust/Python bridge. The former Swift
 companion is read-only for Kakao/AX and remains available only through the
 explicit `OPENKAKAO_MENUBAR_BACKEND=swift`
@@ -443,8 +443,8 @@ For explicit one-room or multi-room activation, use the foreground command
 instead of editing launchd plists:
 
 ```bash
-openkakao-cli auto-reply --chat 'name:부자멘토멘티' --check --json
-openkakao-cli auto-reply \
+alden-cli auto-reply --chat 'name:부자멘토멘티' --check --json
+alden-cli auto-reply \
   --chat 'name:부자멘토멘티' \
   --chat 'id:123456789'
 ```
@@ -461,7 +461,7 @@ Preflight mode registers health plus a no-hook watcher argv with `ax-watch --ser
 ```bash
 sh scripts/install-auto-reply-launchd.sh \
   --mode preflight \
-  --bin /absolute/path/to/openkakao-cli \
+  --bin /absolute/path/to/alden-cli \
   --health-bin /absolute/path/to/openkakao-auto-reply-health \
   [--state-root /absolute/path/to/state-root]
 ```
@@ -471,7 +471,7 @@ Production mode keeps the same service-mode watcher argv and adds the fixed unat
 ```bash
 sh scripts/install-auto-reply-launchd.sh \
   --mode production \
-  --bin /absolute/path/to/openkakao-cli \
+  --bin /absolute/path/to/alden-cli \
   --health-bin /absolute/path/to/openkakao-auto-reply-health \
   --hook-path /absolute/path/to/hook-program \
   [--state-root /absolute/path/to/state-root]

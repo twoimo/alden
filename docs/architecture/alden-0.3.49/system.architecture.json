@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Alden 0.3.49 · 프로세스와 추론 경계",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1100,
+      520
+    ],
+    "repository": {
+      "url": "https://github.com/twoimo/alden",
+      "provider": "github",
+      "revision": "58a7264c531a348bdd6e48ec0a11bb1a8f75d349"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "origin": [
+      35,
+      50
+    ],
+    "cols": 4,
+    "cellW": 210,
+    "cellH": 78,
+    "gapX": 60,
+    "gapY": 110
+  },
+  "components": [
+    {
+      "id": "sys_desk",
+      "type": "frontend",
+      "label": "Alden 화면",
+      "sublabel": "대화·기억·3D 탐색",
+      "row": 0,
+      "col": 0,
+      "sources": [
+        {
+          "path": "desktop/src/main.ts"
+        }
+      ]
+    },
+    {
+      "id": "sys_shell",
+      "type": "backend",
+      "label": "Tauri 쉘",
+      "sublabel": "IPC·취소·네이티브 가시성",
+      "row": 0,
+      "col": 1,
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs"
+        }
+      ]
+    },
+    {
+      "id": "sys_bridge",
+      "type": "backend",
+      "label": "Python 작업",
+      "sublabel": "고정 런타임·범위 검증",
+      "row": 0,
+      "col": 2,
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs"
+        }
+      ]
+    },
+    {
+      "id": "sys_router",
+      "type": "backend",
+      "label": "OpenCodex 라우터",
+      "sublabel": "10101 · 명시 원격 설정",
+      "row": 0,
+      "col": 3,
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py"
+        }
+      ]
+    },
+    {
+      "id": "sys_schedule",
+      "type": "backend",
+      "label": "macOS 예약 작업",
+      "sublabel": "1분 확인 · 단일 수집 주기",
+      "row": 1,
+      "col": 0,
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py"
+        }
+      ]
+    },
+    {
+      "id": "sys_local",
+      "type": "backend",
+      "label": "로컬 MLX 모델",
+      "sublabel": "준비·RAM 확인 후 선택",
+      "row": 1,
+      "col": 1,
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py"
+        }
+      ]
+    },
+    {
+      "id": "sys_dense",
+      "type": "backend",
+      "label": "로컬 E5 임베딩",
+      "sublabel": "버전별 파생 검색 색인",
+      "row": 1,
+      "col": 2,
+      "sources": [
+        {
+          "path": "scripts/alden_collection_retrieval.py"
+        }
+      ]
+    },
+    {
+      "id": "sys_remote",
+      "type": "cloud",
+      "label": "Gemini 3.8 Flash",
+      "sublabel": "기본 high · 사용자 원격 선택",
+      "row": 1,
+      "col": 3,
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py"
+        }
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "pos": [
+        810,
+        240
+      ]
+    },
+    {
+      "id": "sys_inputs",
+      "type": "external",
+      "label": "선언한 원문",
+      "sublabel": "Threads·영상·파일·그래프",
+      "row": 2,
+      "col": 0,
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py"
+        }
+      ]
+    },
+    {
+      "id": "sys_store",
+      "type": "database",
+      "label": "수집 저장소",
+      "sublabel": "원문·버전·관계·영속 이력",
+      "row": 2,
+      "col": 1,
+      "sources": [
+        {
+          "path": "scripts/alden_collection.py"
+        }
+      ]
+    },
+    {
+      "id": "sys_osk",
+      "type": "database",
+      "label": "OSK SDK 정본",
+      "sublabel": "원문·권한·허브·출처",
+      "row": 2,
+      "col": 2,
+      "sources": [
+        {
+          "path": "scripts/alden_osk.py"
+        }
+      ]
+    },
+    {
+      "id": "sys_voice",
+      "type": "backend",
+      "label": "로컬 음성 작업",
+      "sublabel": "웨이크 게이트·마이크·STT·TTS",
+      "row": 2,
+      "col": 3,
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py"
+        }
+      ],
+      "size": [
+        190,
+        60
+      ],
+      "pos": [
+        810,
+        430
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "sys_e0",
+      "from": "sys_desk",
+      "to": "sys_shell",
+      "label": "입력·표시"
+    },
+    {
+      "id": "sys_e1",
+      "from": "sys_shell",
+      "to": "sys_bridge",
+      "label": "허용 IPC"
+    },
+    {
+      "id": "sys_e2",
+      "from": "sys_bridge",
+      "to": "sys_router",
+      "label": "선택한 모델"
+    },
+    {
+      "id": "sys_e3",
+      "from": "sys_router",
+      "to": "sys_remote",
+      "label": "명시 원격",
+      "labelAt": [
+        905,
+        124
+      ]
+    },
+    {
+      "id": "sys_e4",
+      "from": "sys_bridge",
+      "to": "sys_local",
+      "label": "로컬 선택"
+    },
+    {
+      "id": "sys_e5",
+      "from": "sys_bridge",
+      "to": "sys_dense",
+      "label": "범위 검색",
+      "labelAt": [
+        635,
+        124
+      ]
+    },
+    {
+      "id": "sys_e6",
+      "from": "sys_schedule",
+      "to": "sys_store",
+      "label": "요청·수집"
+    },
+    {
+      "id": "sys_e7",
+      "from": "sys_inputs",
+      "to": "sys_store",
+      "label": "원문 보존",
+      "labelAt": [
+        270,
+        413
+      ]
+    },
+    {
+      "id": "sys_e8",
+      "from": "sys_store",
+      "to": "sys_dense",
+      "label": "색인·조회",
+      "labelAt": [
+        540,
+        355
+      ]
+    },
+    {
+      "id": "sys_e9",
+      "from": "sys_osk",
+      "to": "sys_dense",
+      "label": "정본 검색"
+    },
+    {
+      "id": "sys_e10",
+      "from": "sys_bridge",
+      "to": "sys_voice",
+      "label": "명시 음성"
+    },
+    {
+      "id": "sys_e11",
+      "from": "sys_bridge",
+      "to": "sys_store",
+      "label": "읽기·명시 제어",
+      "labelAt": [
+        550,
+        310
+      ],
+      "via": [
+        [
+          540,
+          80
+        ],
+        [
+          540,
+          315
+        ],
+        [
+          460,
+          315
+        ],
+        [
+          460,
+          456
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "실행과 미완료 경계",
+      "items": [
+        "로컬 모델은 준비와 RAM 확인 후 사용합니다. 원격 LLM은 사용자 설정 경로입니다.",
+        "실제 음성·전체 호스트 MCP·서명 배포는 미완료 항목을 유지합니다."
+      ]
+    }
+  ]
+}

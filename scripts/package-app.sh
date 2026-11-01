@@ -38,7 +38,9 @@ OUT="$SRC/build"
 APP="$OUT/AutoReplyMenu.app"
 MACOS_DIR="$APP/Contents/MacOS"
 SHELL_BIN="$MACOS_DIR/AutoReplyMenu"
-CORE_BIN="$MACOS_DIR/openkakao-cli"
+CORE_BIN="$APP/Contents/Resources/bin/alden-cli"
+LEGACY_CORE_BIN="$MACOS_DIR/openkakao-cli"
+LEGACY_RESOURCE_BIN="$APP/Contents/Resources/bin/openkakao-cli"
 DMG="$OUT/AutoReplyMenu.dmg"
 PLIST="$SRC/Info.plist"
 SWIFT="$SRC/main.swift"
@@ -50,8 +52,8 @@ fi
 
 # --- Step 1: build the Rust core binary (R9.1) ------------------------------
 echo "package-app: building Rust core (cargo build --release)…" >&2
-( cd "$ROOT" && cargo build --release --bin openkakao-cli )
-CORE_SRC="$ROOT/target/release/openkakao-cli"
+( cd "$ROOT" && cargo build --release --bin alden-cli --bin openkakao-cli )
+CORE_SRC="$ROOT/target/release/alden-cli"
 if [ ! -x "$CORE_SRC" ]; then
   echo "package-app: core binary not found at $CORE_SRC" >&2
   exit 2
@@ -59,7 +61,7 @@ fi
 
 # --- Step 2: assemble the .app bundle (Swift shell + embedded core) ---------
 echo "package-app: assembling $APP…" >&2
-mkdir -p "$MACOS_DIR" "$APP/Contents/Resources"
+mkdir -p "$MACOS_DIR" "$APP/Contents/Resources/bin"
 cp "$PLIST" "$APP/Contents/Info.plist"
 
 SDK=$(/usr/bin/xcrun --show-sdk-path)
@@ -74,8 +76,14 @@ SDK=$(/usr/bin/xcrun --show-sdk-path)
 
 # Embed the Rust core so there is nothing else to install (extra_installers == 0,
 # setup_commands == 0; R9.1).
-cp "$CORE_SRC" "$CORE_BIN"
-/bin/chmod 755 "$CORE_BIN"
+for destination in "$CORE_BIN" "$LEGACY_CORE_BIN" "$LEGACY_RESOURCE_BIN"; do
+  if [ -L "$destination" ]; then
+    echo "package-app: refusing symlinked CLI: $destination" >&2
+    exit 2
+  fi
+  cp "$CORE_SRC" "$destination"
+  /bin/chmod 755 "$destination"
+done
 
 # --- Step 3: package = sign → notarize → staple → DMG (R9.3, R9.5) ----------
 # This is the concrete SigningTools implementation package() drives, in the
@@ -91,8 +99,11 @@ fi
 
 # Stage 1: codesign (SigningTools::codesign).
 echo "package-app: [1/4] codesign…" >&2
-/usr/bin/codesign --force --options runtime --timestamp \
-  --sign "$SIGNING_IDENTITY" "$CORE_BIN"
+for executable in "$CORE_BIN" "$LEGACY_CORE_BIN" "$LEGACY_RESOURCE_BIN"; do
+  /usr/bin/codesign --force --options runtime --timestamp \
+    --sign "$SIGNING_IDENTITY" --identifier com.openkakao.cli "$executable"
+  /usr/bin/codesign --verify --strict "$executable"
+done
 /usr/bin/codesign --force --options runtime --timestamp \
   --sign "$SIGNING_IDENTITY" "$APP"
 

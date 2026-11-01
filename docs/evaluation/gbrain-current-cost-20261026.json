@@ -1,0 +1,247 @@
+{
+  "evaluation_utc": "2026-10-26T12:43:16.328441+00:00",
+  "product_head": "4e98076a7a14316bcaa5a1e46474b6673b0752e9",
+  "diagnostic_parent_head": "652371ec1a407a900b218b36ffd9dd4b3711390a",
+  "full_goal": "active",
+  "candidate_only": true,
+  "production_code_changed": false,
+  "runtime_pin_changed": false,
+  "normal_reader_grants": false,
+  "single_cost_observation": {
+    "samples": 1,
+    "source_export_counts": {
+      "targets": 43,
+      "nodes": 26651,
+      "edges": 48355,
+      "claim_records": 48355
+    },
+    "native_snapshot_counts": {
+      "source_nodes": 26651,
+      "origins": 43,
+      "observed_groups": 48355,
+      "membership_links": 26651,
+      "pages": 26694,
+      "links": 75006
+    },
+    "datasets_are_different_epochs": true,
+    "phase_seconds": {
+      "source_export": 6.718611999996938,
+      "closed_cache_admission": 9.350270583003294,
+      "closed_engine_copy": 2.2870332909806166,
+      "native_complete_readback": 84.50783933300409,
+      "post_authority_and_cleanup": 8.282119707990205
+    },
+    "metrics_are_inclusive_nonadditive": true,
+    "native_rpc_calls": 53715,
+    "rpc_counts": {
+      "initialize": 1,
+      "tools_list": 1,
+      "list_pages": 267,
+      "get_page": 26694,
+      "get_links": 26752
+    },
+    "initial_sql_telemetry_missing": true,
+    "missing_reason": "CollectionStore.root is the collection directory; diagnostic compared state root"
+  },
+  "sql_telemetry_followup": {
+    "samples": 1,
+    "wall_seconds": 6.3157124999852385,
+    "counts": {
+      "targets": 43,
+      "nodes": 26651,
+      "edges": 48355,
+      "claim_records": 48355
+    },
+    "original_query_only_connections": 12,
+    "outer_context_max_seconds": 5.637707749992842,
+    "meaning": "connection-context duration includes non-SQL work; not measured SQL-lock/writer-block duration",
+    "root_predicate_corrected": "exact canonical store.path; CollectionStore.root is state_root/knowledge/collection",
+    "native_calls": 0
+  },
+  "individual_read_window": {
+    "selection_pages": 128,
+    "rounds": [
+      {
+        "width": 1,
+        "wall_seconds": 0.9224780829972588,
+        "pages_verified": 128,
+        "links_verified": 129,
+        "rpc_calls": 256,
+        "decoded_content_sha256": "f755435c41919c8c9f0404e68a346d3eddb26794736033a39e890d946f8b64b7"
+      },
+      {
+        "width": 2,
+        "wall_seconds": 0.3525531250052154,
+        "pages_verified": 128,
+        "links_verified": 129,
+        "rpc_calls": 256,
+        "decoded_content_sha256": "f755435c41919c8c9f0404e68a346d3eddb26794736033a39e890d946f8b64b7"
+      },
+      {
+        "width": 2,
+        "wall_seconds": 0.3960001670056954,
+        "pages_verified": 128,
+        "links_verified": 129,
+        "rpc_calls": 256,
+        "decoded_content_sha256": "f755435c41919c8c9f0404e68a346d3eddb26794736033a39e890d946f8b64b7"
+      },
+      {
+        "width": 1,
+        "wall_seconds": 0.3741147090040613,
+        "pages_verified": 128,
+        "links_verified": 129,
+        "rpc_calls": 256,
+        "decoded_content_sha256": "f755435c41919c8c9f0404e68a346d3eddb26794736033a39e890d946f8b64b7"
+      }
+    ],
+    "individual_json_frames_only": true,
+    "same_decoded_content_all_rounds": true,
+    "max_request_window_bytes": 500,
+    "max_response_window_bytes": 7028,
+    "response_session_bytes": 2001755,
+    "windows": 768,
+    "out_of_order_windows": 250,
+    "reviewed_notice_codes": [
+      "behavior_changes"
+    ],
+    "limits": [
+      "small bounded selection of one frozen actual as-of engine; not current publication",
+      "two observations per width in ABBA order on one warmed session; no p95 or production gain claim",
+      "no parser/failure/cancel adversarial controls or large-window safety acceptance",
+      "SDK static audit separate; no native account/GUI/release/external review acceptance"
+    ]
+  },
+  "optional_duplicate_markdown": {
+    "selection_pages": 512,
+    "rounds": [
+      {
+        "warmup": true,
+        "include_content": true,
+        "wall_seconds": 1.0593332079879474,
+        "verified_pages": 512,
+        "rpc_calls": 512,
+        "decoded_json_bytes": 1153812,
+        "serialized_content_bytes": 291525,
+        "all_other_fields_sha256": "adc77cb89ac0a21b529a2931b3315a0a9069f63e14718227bc347e09a200e237"
+      },
+      {
+        "warmup": true,
+        "include_content": false,
+        "wall_seconds": 0.7233889999915846,
+        "verified_pages": 512,
+        "rpc_calls": 512,
+        "decoded_json_bytes": 847899,
+        "serialized_content_bytes": 0,
+        "all_other_fields_sha256": "adc77cb89ac0a21b529a2931b3315a0a9069f63e14718227bc347e09a200e237"
+      },
+      {
+        "warmup": false,
+        "include_content": true,
+        "wall_seconds": 0.699274874990806,
+        "verified_pages": 512,
+        "rpc_calls": 512,
+        "decoded_json_bytes": 1153812,
+        "serialized_content_bytes": 291525,
+        "all_other_fields_sha256": "adc77cb89ac0a21b529a2931b3315a0a9069f63e14718227bc347e09a200e237"
+      },
+      {
+        "warmup": false,
+        "include_content": false,
+        "wall_seconds": 0.7136917079915293,
+        "verified_pages": 512,
+        "rpc_calls": 512,
+        "decoded_json_bytes": 847899,
+        "serialized_content_bytes": 0,
+        "all_other_fields_sha256": "adc77cb89ac0a21b529a2931b3315a0a9069f63e14718227bc347e09a200e237"
+      },
+      {
+        "warmup": false,
+        "include_content": false,
+        "wall_seconds": 0.7261469590011984,
+        "verified_pages": 512,
+        "rpc_calls": 512,
+        "decoded_json_bytes": 847899,
+        "serialized_content_bytes": 0,
+        "all_other_fields_sha256": "adc77cb89ac0a21b529a2931b3315a0a9069f63e14718227bc347e09a200e237"
+      },
+      {
+        "warmup": false,
+        "include_content": true,
+        "wall_seconds": 0.63870737500838,
+        "verified_pages": 512,
+        "rpc_calls": 512,
+        "decoded_json_bytes": 1153812,
+        "serialized_content_bytes": 291525,
+        "all_other_fields_sha256": "adc77cb89ac0a21b529a2931b3315a0a9069f63e14718227bc347e09a200e237"
+      }
+    ],
+    "all_other_decoded_fields_identical": true,
+    "same_existing_page_verifier_used": true,
+    "reviewed_notice_codes": [
+      "behavior_changes"
+    ],
+    "limits": [
+      "two measured observations per mode on same frozen as-of selection; no p95/full-source gain claim",
+      "decoded JSON byte counts are not exact wire bytes or token/cost savings",
+      "only optional duplicate content and its chars count differ; full canonical page verifier unchanged",
+      "no full native26k repeat, current-source publication, installed GUI or release acceptance"
+    ]
+  },
+  "static_sdk_audit": {
+    "package": "@modelcontextprotocol/sdk",
+    "version": "1.32.1",
+    "integrity": "sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw==",
+    "integrity_verified": true,
+    "metadata_url": "https://registry.npmjs.org/@modelcontextprotocol/sdk/1.32.1",
+    "tarball_url": "https://registry.npmjs.org/@modelcontextprotocol/sdk/-/sdk-1.32.1.tgz",
+    "tarball_sha256": "63a3962282ff29d2ce532945c2edefd9b7c7195b8ec20c027e120e4498b0cb19",
+    "gitHead": "ff07b001194fe60ee9deb2121cf119057565796d",
+    "verified_static_files": 13,
+    "package_code_executed": false,
+    "installation": false,
+    "verdict": "source_level_overlap_supported_caller_bounded_runtime_unproved",
+    "implementation_approval": false,
+    "native_bundle_module_execution_proved": false
+  },
+  "decision": {
+    "production_multiplexing_adopted": false,
+    "response_shape_changed": false,
+    "latency_improvement_established": false,
+    "p95_claimed": false,
+    "token_or_cost_savings_claimed": false,
+    "next_required_evidence": "a measured complete-proof cost reduction with unchanged strict current-source fences"
+  },
+  "safety": {
+    "native_children": 3,
+    "all_native_children_reaped": true,
+    "all_disposable_native_copies_removed": true,
+    "existing_pending_and_owner_preserved": true,
+    "active": false,
+    "ready": false,
+    "original_operational_writes": 0,
+    "collector_paused": false,
+    "protected_model_collector_preserved": true,
+    "gui_launches": 0,
+    "installation": false,
+    "provider_calls": false,
+    "global_configuration_writes": false,
+    "currentness_semantics_changed": false
+  },
+  "limits": [
+    "diagnostic samples and frozen actual as-of engine only; no production end-to-end or p95 acceptance",
+    "pending is unpublished and unavailable to ordinary readers; no new source-current publication attempted",
+    "native Astra audits are additional, not held independent web-Astra/ChatGPT-Gemini-reverse acceptance",
+    "installed UI/TCC/native-account, semantic gold, formal and release gates remain incomplete"
+  ],
+  "private_evidence": "gbrain-current-cost-20261026T115919Z (local only)",
+  "source_module_sha256": {
+    "alden_gbrain_client.py": "65c70404bbcc0f45bf7a929fe62109d7066934a16a21f5c9d4e5f1904f3a978e",
+    "alden_gbrain_cache.py": "99c07891e168310ae60470728455fbe2a2e38a240ac3397afd0538007f97adb0",
+    "alden_gbrain_import.py": "7f7ef42558bb72115caa30220f194ea1cf9e2bf596954810381d86f64694b6e3",
+    "alden_gbrain_delta.py": "bd6fa96640c7bdb1e4a2ac75406d2d9b798fef8384f917d55ccbc61118367266",
+    "alden_collection.py": "1983ae346572822537885b834e896e7beba06ed667b2d42b80c059eed1da78f7",
+    "alden_collection_export.py": "3c552cd4625d834559b8e1f8be400d2e623cbed70f05dd134b155a0df21bc56c",
+    "alden_collection_delta.py": "ee3d846b7d09cd2ee473901a4854556aa1140ba421fcfc209f1e83709bbbf751",
+    "alden_abort.py": "29e7414e89ae17956c30008d80cdb6985f7f328cf4f1669bcb6948afcdfcc215"
+  }
+}

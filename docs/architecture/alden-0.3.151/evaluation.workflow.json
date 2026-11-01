@@ -1,0 +1,184 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.151 · 평가·오프라인 DPO·반영 경계",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "a151_evaluation_evaluation",
+      "label": "버전 평가"
+    },
+    {
+      "id": "a151_evaluation_training",
+      "label": "별도 명시 CLI"
+    }
+  ],
+  "mainPath": [
+    "a151_evaluation_evaluation_dataset",
+    "a151_evaluation_evaluation_identity",
+    "a151_evaluation_evaluation_score",
+    "a151_evaluation_evaluation_receipt"
+  ],
+  "nodes": [
+    {
+      "id": "a151_evaluation_evaluation_dataset",
+      "lane": "a151_evaluation_evaluation",
+      "col": 0,
+      "type": "database",
+      "label": "검증 선호 자료",
+      "sublabel": "출처·train/validation/test",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_evaluation_identity",
+      "lane": "a151_evaluation_evaluation",
+      "col": 1,
+      "type": "security",
+      "label": "모델·자료 결속",
+      "sublabel": "코드/가중치/자료 hash",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_evaluation_score",
+      "lane": "a151_evaluation_evaluation",
+      "col": 2,
+      "type": "backend",
+      "label": "DPO 확률·손실",
+      "sublabel": "실제 토큰 logp·기준 모델",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_evaluation_receipt",
+      "lane": "a151_evaluation_evaluation",
+      "col": 3,
+      "type": "database",
+      "label": "평가 영수증",
+      "sublabel": "훈련 false·승격 false",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_training_request",
+      "lane": "a151_evaluation_training",
+      "col": 0,
+      "type": "external",
+      "label": "훈련 명시 요청",
+      "sublabel": "평가 모드와 동시 실행 금지",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_training_admit",
+      "lane": "a151_evaluation_training",
+      "col": 1,
+      "type": "security",
+      "label": "모델·메모리 확인",
+      "sublabel": "로컬 파일·출처·한도",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_training_train",
+      "lane": "a151_evaluation_training",
+      "col": 2,
+      "type": "backend",
+      "label": "오프라인 DPO",
+      "sublabel": "LoRA·실제 gradient",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_training_candidate",
+      "lane": "a151_evaluation_training",
+      "col": 3,
+      "type": "database",
+      "label": "후보 adapter·영수증",
+      "sublabel": "훈련 true·승격 false",
+      "width": 150
+    },
+    {
+      "id": "a151_evaluation_training_holdout",
+      "lane": "a151_evaluation_training",
+      "col": 4,
+      "type": "backend",
+      "label": "별도 재평가 요청",
+      "sublabel": "holdout·기존 회귀 gate",
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "id": "a151_evaluation_evaluation_edge_0",
+      "from": "a151_evaluation_evaluation_dataset",
+      "to": "a151_evaluation_evaluation_identity",
+      "label": "분리·검증",
+      "role": "main"
+    },
+    {
+      "id": "a151_evaluation_evaluation_edge_1",
+      "from": "a151_evaluation_evaluation_identity",
+      "to": "a151_evaluation_evaluation_score",
+      "label": "고정 split",
+      "role": "main"
+    },
+    {
+      "id": "a151_evaluation_evaluation_edge_2",
+      "from": "a151_evaluation_evaluation_score",
+      "to": "a151_evaluation_evaluation_receipt",
+      "label": "결과 영속",
+      "role": "main"
+    },
+    {
+      "id": "a151_evaluation_training_edge_0",
+      "from": "a151_evaluation_training_request",
+      "to": "a151_evaluation_training_admit",
+      "label": "훈련 조건",
+      "role": "branch"
+    },
+    {
+      "id": "a151_evaluation_training_edge_1",
+      "from": "a151_evaluation_training_admit",
+      "to": "a151_evaluation_training_train",
+      "label": "명시 훈련",
+      "role": "branch"
+    },
+    {
+      "id": "a151_evaluation_training_edge_2",
+      "from": "a151_evaluation_training_train",
+      "to": "a151_evaluation_training_candidate",
+      "label": "reload 대사",
+      "role": "branch"
+    },
+    {
+      "id": "a151_evaluation_training_edge_3",
+      "from": "a151_evaluation_training_candidate",
+      "to": "a151_evaluation_training_holdout",
+      "label": "별도 CLI",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "평가와 학습",
+      "items": [
+        "버전 evaluator는 학습·승격하지 않음",
+        "실제 학습은 별도 명시 CLI와 후보 파일"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "반영 경계",
+      "items": [
+        "loss 감소가 품질 향상은 아님",
+        "어느 경로도 제품 모델을 자동 교체하지 않음"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "남은 평가",
+      "items": [
+        "넓은 독립 실자료·holdout·제품 승격",
+        "고정 합성 셋을 사람 gold로 부르지 않음"
+      ]
+    }
+  ]
+}

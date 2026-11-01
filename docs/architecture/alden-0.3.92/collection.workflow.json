@@ -1,0 +1,133 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.92 · 다중 대상 수집·예약",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "collection92",
+      "label": "구현 경로와 확인 상태"
+    }
+  ],
+  "mainPath": [
+    "collection92_0",
+    "collection92_1",
+    "collection92_2",
+    "collection92_3",
+    "collection92_4",
+    "collection92_5"
+  ],
+  "nodes": [
+    {
+      "id": "collection92_0",
+      "lane": "collection92",
+      "col": 0,
+      "type": "external",
+      "label": "등록한 대상",
+      "sublabel": "출처·프로젝트·권한",
+      "width": 132
+    },
+    {
+      "id": "collection92_1",
+      "lane": "collection92",
+      "col": 1,
+      "type": "security",
+      "label": "예약·명시 요청",
+      "sublabel": "pause·voice·backoff 게이트",
+      "width": 132
+    },
+    {
+      "id": "collection92_2",
+      "lane": "collection92",
+      "col": 2,
+      "type": "backend",
+      "label": "수집·파싱",
+      "sublabel": "선언된 snapshot과 범위",
+      "width": 132
+    },
+    {
+      "id": "collection92_3",
+      "lane": "collection92",
+      "col": 3,
+      "type": "database",
+      "label": "버전 저장",
+      "sublabel": "원문·checkpoint·journal",
+      "width": 132
+    },
+    {
+      "id": "collection92_4",
+      "lane": "collection92",
+      "col": 4,
+      "type": "backend",
+      "label": "검색 반영",
+      "sublabel": "본문·기존 임베딩 재사용",
+      "width": 132
+    },
+    {
+      "id": "collection92_5",
+      "lane": "collection92",
+      "col": 5,
+      "type": "frontend",
+      "label": "완료와 재조회",
+      "sublabel": "결과·다음 실행·실패 상태",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "id": "collection92_edge0",
+      "from": "collection92_0",
+      "to": "collection92_1",
+      "label": "범위 확인",
+      "role": "main"
+    },
+    {
+      "id": "collection92_edge1",
+      "from": "collection92_1",
+      "to": "collection92_2",
+      "label": "대사",
+      "role": "main"
+    },
+    {
+      "id": "collection92_edge2",
+      "from": "collection92_2",
+      "to": "collection92_3",
+      "label": "확정",
+      "role": "main"
+    },
+    {
+      "id": "collection92_edge3",
+      "from": "collection92_3",
+      "to": "collection92_4",
+      "label": "검증",
+      "role": "main"
+    },
+    {
+      "id": "collection92_edge4",
+      "from": "collection92_4",
+      "to": "collection92_5",
+      "label": "반환",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "실행과 저장 구분",
+      "items": [
+        "수집·capture·index의 완료 상태를 따로 보존하고 pending을 완료로 표시하지 않는다.",
+        "이전 snapshot으로 돌아온 변경도 새로운 현재 버전으로 대사한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "운영 경계",
+      "items": [
+        "수집 대상 등록은 메시지·게시 허가가 아니다.",
+        "넓은 실제 계정·채널 재취득과 양 호스트 전체 흐름은 미완료다."
+      ]
+    }
+  ]
+}

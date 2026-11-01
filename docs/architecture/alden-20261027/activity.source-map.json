@@ -1,0 +1,454 @@
+{
+  "family": "activity",
+  "scope": "그래프 · Worker 생명주기",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "request": {
+      "claim": "새 스냅샷 — 현재 권한·핀",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 300,
+          "end_line": 305,
+          "file_sha256": "a2b82aee70c93feb9ca699c15e8ae6e1acf40d233921db0dfa1a3ffaf81edd37",
+          "range_sha256": "92d023f32f168855e27f16c9b8d00c361752fd36b509d81ceb6b7adb61638286",
+          "local_source": "../../../desktop/src/knowledge/hologram.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 66,
+          "end_line": 96,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "908deb1c276424f21d06bd69fc50d2a22d53fd4aae0f952ceb2b813b5918cc5f",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    "pending": {
+      "claim": "Worker 계산 — 세대 번호 고정",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 101,
+          "end_line": 109,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "65af605f629c2b968507419b5e4f6c67b9ac8d36b93649bbc2435b595c19733c",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 130,
+          "end_line": 149,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "3ce852acbd3fd038dbbaf85043ed9bbad55063f7003229bd09409055f28cdb27",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-worker.ts",
+          "line": 6,
+          "end_line": 16,
+          "file_sha256": "6900d7a1bad6403583ce449497b2ebac6f2542074b2a268829e7f085110c9856",
+          "range_sha256": "6b63150aa7491a3f61ade965145c202af927057a5da83354e9c846a92218fbab",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-worker.ts"
+        }
+      ]
+    },
+    "verify": {
+      "claim": "응답 재검사 — 세대·핀·현재성",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 110,
+          "end_line": 120,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "a2f12f6e2a6b5f44d71cc2f81163b7e1abdde3d9a9cfb6442c643cafc3f71689",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    "ready": {
+      "claim": "결과 적용 — 완료 캐시 보관",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 121,
+          "end_line": 125,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "8243c0e5fe71c04210fc7dd6e61797d3bb8b46b594016042e4b32fa5ca3bff5f",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    "cached": {
+      "claim": "완료 캐시 재사용 — 동일 입력만",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 97,
+          "end_line": 100,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "0afa589af99b329238d60da9c96700d6ba1e47ea3db4ff3b24aefb7ec9f96058",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    "stopped": {
+      "claim": "작업 중단 — 숨김·교체·해제",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 160,
+          "end_line": 165,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "453910fb15c8ddf4b2dd758f93f90b97b80c61931111acf6dd24a5364d614c9d",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 543,
+          "end_line": 550,
+          "file_sha256": "a2b82aee70c93feb9ca699c15e8ae6e1acf40d233921db0dfa1a3ffaf81edd37",
+          "range_sha256": "6e7391042b0e03a8e7b90284392eea68ff9095a457a4366f84bb8c9a80280bff",
+          "local_source": "../../../desktop/src/knowledge/hologram.ts"
+        }
+      ]
+    },
+    "failed": {
+      "claim": "계산 실패 — 성공 대체 없음",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 86,
+          "end_line": 87,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "efeb376c4caa3675fcf381d094c7b3995f162f7145206bcde97cecab263571cd",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 118,
+          "end_line": 120,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "ab93fdb577e5e10902688bc73600beb7decdfe84cfd6758353f9b27984457436",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 152,
+          "end_line": 158,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "765183b085ea13750161bca122c8767a9b91d50ddb61e3030b956d9ead69ab80",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "request-pending",
+      "claim": "새 계산",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 300,
+          "end_line": 305,
+          "file_sha256": "a2b82aee70c93feb9ca699c15e8ae6e1acf40d233921db0dfa1a3ffaf81edd37",
+          "range_sha256": "92d023f32f168855e27f16c9b8d00c361752fd36b509d81ceb6b7adb61638286",
+          "local_source": "../../../desktop/src/knowledge/hologram.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 66,
+          "end_line": 96,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "908deb1c276424f21d06bd69fc50d2a22d53fd4aae0f952ceb2b813b5918cc5f",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    {
+      "id": "pending-verify",
+      "claim": "결과",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 101,
+          "end_line": 109,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "65af605f629c2b968507419b5e4f6c67b9ac8d36b93649bbc2435b595c19733c",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 130,
+          "end_line": 149,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "3ce852acbd3fd038dbbaf85043ed9bbad55063f7003229bd09409055f28cdb27",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-worker.ts",
+          "line": 6,
+          "end_line": 16,
+          "file_sha256": "6900d7a1bad6403583ce449497b2ebac6f2542074b2a268829e7f085110c9856",
+          "range_sha256": "6b63150aa7491a3f61ade965145c202af927057a5da83354e9c846a92218fbab",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-worker.ts"
+        }
+      ]
+    },
+    {
+      "id": "verify-ready",
+      "claim": "현재 일치",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 110,
+          "end_line": 120,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "a2f12f6e2a6b5f44d71cc2f81163b7e1abdde3d9a9cfb6442c643cafc3f71689",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    {
+      "id": "request-cached",
+      "claim": "동일 입력",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 300,
+          "end_line": 305,
+          "file_sha256": "a2b82aee70c93feb9ca699c15e8ae6e1acf40d233921db0dfa1a3ffaf81edd37",
+          "range_sha256": "92d023f32f168855e27f16c9b8d00c361752fd36b509d81ceb6b7adb61638286",
+          "local_source": "../../../desktop/src/knowledge/hologram.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 66,
+          "end_line": 96,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "908deb1c276424f21d06bd69fc50d2a22d53fd4aae0f952ceb2b813b5918cc5f",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    {
+      "id": "pending-stopped",
+      "claim": "교체·숨김",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 101,
+          "end_line": 109,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "65af605f629c2b968507419b5e4f6c67b9ac8d36b93649bbc2435b595c19733c",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 130,
+          "end_line": 149,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "3ce852acbd3fd038dbbaf85043ed9bbad55063f7003229bd09409055f28cdb27",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-worker.ts",
+          "line": 6,
+          "end_line": 16,
+          "file_sha256": "6900d7a1bad6403583ce449497b2ebac6f2542074b2a268829e7f085110c9856",
+          "range_sha256": "6b63150aa7491a3f61ade965145c202af927057a5da83354e9c846a92218fbab",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-worker.ts"
+        }
+      ]
+    },
+    {
+      "id": "pending-failed",
+      "claim": "전송 오류",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 101,
+          "end_line": 109,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "65af605f629c2b968507419b5e4f6c67b9ac8d36b93649bbc2435b595c19733c",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 130,
+          "end_line": 149,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "3ce852acbd3fd038dbbaf85043ed9bbad55063f7003229bd09409055f28cdb27",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-worker.ts",
+          "line": 6,
+          "end_line": 16,
+          "file_sha256": "6900d7a1bad6403583ce449497b2ebac6f2542074b2a268829e7f085110c9856",
+          "range_sha256": "6b63150aa7491a3f61ade965145c202af927057a5da83354e9c846a92218fbab",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-worker.ts"
+        }
+      ]
+    },
+    {
+      "id": "verify-failed",
+      "claim": "응답 불완전",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 110,
+          "end_line": 120,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "a2f12f6e2a6b5f44d71cc2f81163b7e1abdde3d9a9cfb6442c643cafc3f71689",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    {
+      "id": "verify-request",
+      "claim": "현재성 변경",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 110,
+          "end_line": 120,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "a2f12f6e2a6b5f44d71cc2f81163b7e1abdde3d9a9cfb6442c643cafc3f71689",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    {
+      "id": "ready-request",
+      "claim": "새 입력",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 121,
+          "end_line": 125,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "8243c0e5fe71c04210fc7dd6e61797d3bb8b46b594016042e4b32fa5ca3bff5f",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    },
+    {
+      "id": "failed-request",
+      "claim": "후속 요청",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 86,
+          "end_line": 87,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "efeb376c4caa3675fcf381d094c7b3995f162f7145206bcde97cecab263571cd",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 118,
+          "end_line": 120,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "ab93fdb577e5e10902688bc73600beb7decdfe84cfd6758353f9b27984457436",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "line": 152,
+          "end_line": 158,
+          "file_sha256": "ab7e388fd86a45be82e8642d21484d815c022166440a397c178cf5816bf8bc00",
+          "range_sha256": "765183b085ea13750161bca122c8767a9b91d50ddb61e3030b956d9ead69ab80",
+          "local_source": "../../../desktop/src/knowledge/semantic-layout-driver.ts"
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "claim": "실제 노드 활동은 현재 버전·대상·성공·시간 조건에 묶인다.",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 324,
+          "end_line": 330,
+          "file_sha256": "a2b82aee70c93feb9ca699c15e8ae6e1acf40d233921db0dfa1a3ffaf81edd37",
+          "range_sha256": "f75d210d5cfd8e11f4a506ef851236294e43ad810c8184a5b9f49d39b43a9abc",
+          "local_source": "../../../desktop/src/knowledge/hologram.ts"
+        }
+      ]
+    },
+    {
+      "claim": "f(x) 실제 호출: terminal.refreshHistory → collection-history → recent_events → _event_trend → readTerminalTrend → renderTrend. 저장 이벤트 dedup, complete run만 분류, deferred unpublished 제외.",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/terminal.ts",
+          "line": 92,
+          "end_line": 138,
+          "file_sha256": "5e309318aacce97051fbaa8475296239ebeedfc819f946e653c9297aeaf28d06",
+          "range_sha256": "e8957cc40b41b2dee4bda377bccf0467dd8001084596601c4e12c3e8c585f6ea",
+          "local_source": "../../../desktop/src/knowledge/terminal.ts"
+        },
+        {
+          "path": "desktop/src/knowledge/terminal.ts",
+          "line": 179,
+          "end_line": 198,
+          "file_sha256": "5e309318aacce97051fbaa8475296239ebeedfc819f946e653c9297aeaf28d06",
+          "range_sha256": "f4b7b6cb958df687a422f2f8128760b8c3e5157e7c48bb35a526331669989d2d",
+          "local_source": "../../../desktop/src/knowledge/terminal.ts"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1918,
+          "end_line": 1949,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "94a0194065c0599f4b35a70e58b5c9921d41055cc6b6f13c77ad9609eed4dc47",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 2020,
+          "end_line": 2073,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "5a5e9db82aa654d562d34e6319b33ece5cd6c8c9f6bde75a6a76c369b12b3530",
+          "local_source": "../../../scripts/alden_collection.py"
+        },
+        {
+          "path": "desktop/src/knowledge/terminal-trend.ts",
+          "line": 19,
+          "end_line": 45,
+          "file_sha256": "30c9cd9fa3d82e523bc0523ed440a2619f6b7c2a3574eb140fdefc63aaea19f1",
+          "range_sha256": "ccb65ce5b3e7026b71684a9d21490772afd8e0fbbf51f34fbec61f39730efee9",
+          "local_source": "../../../desktop/src/knowledge/terminal-trend.ts"
+        }
+      ]
+    },
+    {
+      "claim": "기타 요약은 허용된 표시 slice의 단순 투영이며 f(x)의 입력이 아니다.",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/terminal-model.ts",
+          "line": 10,
+          "end_line": 45,
+          "file_sha256": "ed216b40a4c89338a1fcf807bedfeff25338c6ca31ab4796288d7300e55faa4c",
+          "range_sha256": "17a7f45ae8120344fd88d6e35c069aa50dc78cb7d9f1268e264c2080c0b1bf1a",
+          "local_source": "../../../desktop/src/knowledge/terminal-model.ts"
+        }
+      ]
+    },
+    {
+      "claim": "화면 stop 경로는 semanticLayout.stop과 활동·프레임 루프 중단을 호출한다.",
+      "sources": [
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "line": 230,
+          "end_line": 248,
+          "file_sha256": "a2b82aee70c93feb9ca699c15e8ae6e1acf40d233921db0dfa1a3ffaf81edd37",
+          "range_sha256": "e031aba0c226999bb7261014db91651a7df6c32fd8949b1dbcacbc5b927c9b2a",
+          "local_source": "../../../desktop/src/knowledge/hologram.ts"
+        }
+      ]
+    }
+  ]
+}

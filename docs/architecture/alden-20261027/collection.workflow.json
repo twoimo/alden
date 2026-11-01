@@ -1,0 +1,246 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "수집 · 취득과 저장",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "collection.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "policy",
+      "label": "대상과 정책"
+    },
+    {
+      "id": "data",
+      "label": "취득과 저장"
+    },
+    {
+      "id": "index",
+      "label": "보존과 색인"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "schedule",
+      "type": "backend",
+      "label": "대상 선정",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 356,
+          "end_line": 385
+        },
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 399,
+          "end_line": 410
+        }
+      ],
+      "lane": "policy",
+      "col": 0,
+      "sublabel": "잠금·일시정지"
+    },
+    {
+      "id": "enabled",
+      "type": "security",
+      "label": "취득 허용",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 439,
+          "end_line": 461
+        },
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "line": 130,
+          "end_line": 140
+        }
+      ],
+      "lane": "policy",
+      "col": 1,
+      "sublabel": "정책 revision"
+    },
+    {
+      "id": "native",
+      "type": "external",
+      "label": "원격 입력 취득",
+      "sources": [
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "line": 141,
+          "end_line": 172
+        }
+      ],
+      "lane": "data",
+      "col": 1,
+      "sublabel": "허용된 단일 영상"
+    },
+    {
+      "id": "snapshot",
+      "type": "backend",
+      "label": "입력 스냅샷",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 423,
+          "end_line": 443
+        }
+      ],
+      "lane": "data",
+      "col": 2,
+      "sublabel": "선언된 어댑터"
+    },
+    {
+      "id": "ingest",
+      "type": "database",
+      "label": "버전 저장",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 444,
+          "end_line": 451
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 1124,
+          "end_line": 1151
+        }
+      ],
+      "lane": "data",
+      "col": 3,
+      "sublabel": "내용·출처 해시"
+    },
+    {
+      "id": "capture",
+      "type": "database",
+      "label": "원본 보존",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 468,
+          "end_line": 476
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 908,
+          "end_line": 928
+        }
+      ],
+      "lane": "index",
+      "col": 3,
+      "sublabel": "프런티어·캡처"
+    },
+    {
+      "id": "index",
+      "type": "backend",
+      "label": "범위 색인",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 477,
+          "end_line": 483
+        }
+      ],
+      "lane": "index",
+      "col": 4,
+      "sublabel": "ready 또는 empty"
+    },
+    {
+      "id": "pending",
+      "type": "messagebus",
+      "label": "색인 대기",
+      "sources": [
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "line": 479,
+          "end_line": 502
+        }
+      ],
+      "lane": "policy",
+      "col": 4,
+      "sublabel": "저장 성공과 구분"
+    }
+  ],
+  "edges": [
+    {
+      "id": "schedule-enabled",
+      "from": "schedule",
+      "to": "enabled",
+      "variant": "default",
+      "label": "대상"
+    },
+    {
+      "id": "enabled-native",
+      "from": "enabled",
+      "to": "native",
+      "variant": "security",
+      "label": "활성화 시"
+    },
+    {
+      "id": "native-snapshot",
+      "from": "native",
+      "to": "snapshot",
+      "variant": "default",
+      "label": "검증 입력"
+    },
+    {
+      "id": "schedule-snapshot",
+      "from": "schedule",
+      "to": "snapshot",
+      "variant": "default",
+      "label": "기존 입력"
+    },
+    {
+      "id": "snapshot-ingest",
+      "from": "snapshot",
+      "to": "ingest",
+      "variant": "default",
+      "label": "완전 스냅샷"
+    },
+    {
+      "id": "ingest-capture",
+      "from": "ingest",
+      "to": "capture",
+      "variant": "default",
+      "label": "저장 뒤"
+    },
+    {
+      "id": "capture-index",
+      "from": "capture",
+      "to": "index",
+      "variant": "default",
+      "label": "범위 전달"
+    },
+    {
+      "id": "index-pending",
+      "from": "index",
+      "to": "pending",
+      "variant": "dashed",
+      "label": "미준비"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "취득 범위",
+      "items": [
+        "YouTube 네이티브 취득은 정책이 켜진 기존 단일 영상의 metadata/tracks/captions 경로다.",
+        "Threads·Spark·선언 파일 어댑터 및 메신저 원본 리더 분기는 별도다. 계정 전체 수집 완료를 뜻하지 않는다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "이번 작업",
+      "items": [
+        "이 코드 경로를 읽었을 뿐 네이티브 취득·원본 DB·모델 호출을 실행하지 않았다."
+      ]
+    }
+  ]
+}

@@ -322,6 +322,8 @@ class ReferenceSearchTests(unittest.TestCase):
                 )
             self.assertEqual(result["action"], "reference-search")
             self.assertEqual(result["mode"], "bm25_only")
+            self.assertGreater(len(result["rows"]), 0)
+            self.assertTrue(all(row["topics"] == [] for row in result["rows"]))
         finally:
             if previous_endpoint is not None:
                 os.environ["OPENKAKAO_EMBEDDING_ENDPOINT"] = previous_endpoint
@@ -329,6 +331,32 @@ class ReferenceSearchTests(unittest.TestCase):
                 os.environ["OPENKAKAO_EMBEDDING_URL"] = previous_url
             if previous_model is not None:
                 os.environ["OPENKAKAO_EMBEDDING_MODEL"] = previous_model
+
+    def test_store_entrypoint_preserves_hybrid_retrieval_without_legacy_topics(self):
+        engine = FakeEmbeddingEngine()
+        with tempfile.TemporaryDirectory() as temporary:
+            db = self._database(temporary)
+            self._seed(db)
+            self.search.rebuild_dense_index(db, embedding_engine=engine)
+            options = {
+                "query": "금리 전망",
+                "chat_id": 101,
+                "embedding_engine": engine,
+                "use_environment": False,
+            }
+            expected = self.search.search_reference_packs(db, **options)
+            result = self.store.search_reference_packs(db, **options)
+
+        self.assertEqual(result["mode"], "hybrid_rrf")
+        self.assertGreater(result["candidate_counts"]["bm25"], 0)
+        self.assertGreater(result["candidate_counts"]["dense"], 0)
+        self.assertGreater(len(result["rows"]), 0)
+        for row in expected["rows"]:
+            self.assertEqual(row.pop("topics"), ["investing"])
+        for row in result["rows"]:
+            self.assertEqual(row.pop("topics"), [])
+        # Ranks, scores, evidence IDs, source text and filters are unchanged.
+        self.assertEqual(result, expected)
 
 
 if __name__ == "__main__":

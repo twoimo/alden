@@ -1,0 +1,129 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.49 · 재연결·가시성·복구",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "recovery_input",
+      "label": "입력·처리 경로"
+    },
+    {
+      "id": "recovery_checks",
+      "label": "검증·확정 경로"
+    }
+  ],
+  "mainPath": [
+    "recovery_0",
+    "recovery_1",
+    "recovery_2",
+    "recovery_3",
+    "recovery_4",
+    "recovery_5"
+  ],
+  "nodes": [
+    {
+      "id": "recovery_0",
+      "lane": "recovery_input",
+      "col": 0,
+      "type": "backend",
+      "label": "가시성 변화",
+      "sublabel": "페이지·창·세션 상태",
+      "width": 170
+    },
+    {
+      "id": "recovery_1",
+      "lane": "recovery_checks",
+      "col": 0,
+      "type": "security",
+      "label": "작업 세대 취소",
+      "sublabel": "타이머·RAF·늦은 응답 펜스",
+      "width": 170
+    },
+    {
+      "id": "recovery_2",
+      "lane": "recovery_input",
+      "col": 1,
+      "type": "backend",
+      "label": "마지막 기준점",
+      "sublabel": "cursor·stream·카메라·선택",
+      "width": 170
+    },
+    {
+      "id": "recovery_3",
+      "lane": "recovery_checks",
+      "col": 1,
+      "type": "backend",
+      "label": "증분·새 스냅샷",
+      "sublabel": "교체·되감기 감지·새 기준점",
+      "width": 170
+    },
+    {
+      "id": "recovery_4",
+      "lane": "recovery_input",
+      "col": 2,
+      "type": "security",
+      "label": "버전·위치 복원",
+      "sublabel": "안정 ID·핀·필터 유지",
+      "width": 170
+    },
+    {
+      "id": "recovery_5",
+      "lane": "recovery_checks",
+      "col": 2,
+      "type": "backend",
+      "label": "단일 소비자 재개",
+      "sublabel": "과거 사건은 새 점등으로 재생하지 않음",
+      "width": 170
+    }
+  ],
+  "edges": [
+    {
+      "id": "recovery_e0",
+      "from": "recovery_0",
+      "to": "recovery_1",
+      "label": "숨김·복원",
+      "role": "main"
+    },
+    {
+      "id": "recovery_e1",
+      "from": "recovery_1",
+      "to": "recovery_2",
+      "label": "보존 상태",
+      "role": "main"
+    },
+    {
+      "id": "recovery_e2",
+      "from": "recovery_2",
+      "to": "recovery_3",
+      "label": "같은 저널",
+      "role": "main"
+    },
+    {
+      "id": "recovery_e3",
+      "from": "recovery_3",
+      "to": "recovery_4",
+      "label": "최신 데이터",
+      "role": "main"
+    },
+    {
+      "id": "recovery_e4",
+      "from": "recovery_4",
+      "to": "recovery_5",
+      "label": "한 번 재개",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "확인된 경로와 남은 검증",
+      "items": [
+        "과거 사건은 새 점등으로 재생하지 않음",
+        "물리 잠금·제스처·Retina 전체 검증 미완료"
+      ]
+    }
+  ]
+}

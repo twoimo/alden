@@ -1,0 +1,1949 @@
+{
+  "runtime_version": "0.3.92",
+  "runtime_source_commit": "546ca7eb0758b4b0e8a88302ce9a58c28b150b9d",
+  "scope": "Source-backed architecture artifacts only; product execution, independent source truth, physical measurements and production release are separate",
+  "locale": "Korean authored copy; fixed Viewer UI English",
+  "diagrams": [
+    {
+      "name": "system",
+      "type": "architecture",
+      "specification": "system.architecture.json",
+      "specification_sha256": "8e563d88ea14ca764660b331c068470b2c61b9938cd588de5677e62738c65718",
+      "output": "system.html",
+      "artifact_sha256": "fdcf78fa6d486032c17967de5e94c883a58898df273bdc52af045582ab78c457",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "system-delivery.json",
+      "browser_receipt": "system-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "system.visual-check.1440x900.light.png",
+          "sha256": "559e51d70bf3fb811a77c0f11b9a4a03c8db1893356fcb3088aa4bcbb8aec8e5"
+        },
+        {
+          "path": "system.visual-check.1440x900.dark.png",
+          "sha256": "6a8f2a2fc8810f45241cfaac154cd7a2d30526d29028967107ccd80558e0e724"
+        },
+        {
+          "path": "system.visual-check.2048x1320.light.png",
+          "sha256": "9e46fe109289d1a56ccfb2634efcaf20135139f9ffa24cd2e046c479050059aa"
+        },
+        {
+          "path": "system.visual-check.2048x1320.dark.png",
+          "sha256": "58bc88f3c1d0da4d40675eb1a1f1db1bfcb401c6d7df9189b36d8c2d120849fc"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "desktop/src/main.ts",
+          "sha256": "ba4788391d00b50a41fb22c5f3372d5cd4f01a88fa8e7a8d4a3749610292f0c5",
+          "anchors": [
+            {
+              "line": 10,
+              "text": "import { wireAssistantComposer } from './assistant-composer';"
+            },
+            {
+              "line": 624,
+              "text": "const detachArchiveVisibility=wireRenderLifecycle({transition:state=>{composer.visible(state==='visible');archives.visible(state==='visible');collectionHistory.visible(state==='vis"
+            },
+            {
+              "line": 755,
+              "text": "pauseOnBlur: false,"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/assistant-composer.ts",
+          "sha256": "b8dfeb5c6e2670f69d760ed96314b466a6c0505dd403ade3dc5241742aefb39d",
+          "anchors": [
+            {
+              "line": 7,
+              "text": "requestId: string;"
+            },
+            {
+              "line": 98,
+              "text": "|| !HEX_32.test(String(result.request_id))"
+            },
+            {
+              "line": 99,
+              "text": "|| result.request_id !== owner.requestId) return false;"
+            },
+            {
+              "line": 266,
+              "text": "// Late errors from a retired request never change the current conversation."
+            },
+            {
+              "line": 402,
+              "text": "let requestId: string;"
+            },
+            {
+              "line": 405,
+              "text": "requestId = uncertain && samePayload(uncertain) ? uncertain.requestId : crypto.randomUUID().replace(/-/g, '');"
+            },
+            {
+              "line": 410,
+              "text": "if (!UUID_V4.test(tokenId) || !HEX_32.test(requestId)) {"
+            },
+            {
+              "line": 415,
+              "text": "tokenId, requestId, conversationId: selectedConversation, text: message, textRevision, imageRevision,"
+            },
+            {
+              "line": 424,
+              "text": "input: { request_id: requestId, conversation_id: owned.conversationId, text: message, images: copiedImages },"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "sha256": "c037d056865f5e6702a5ec478d2eda2ed09513a95ec427c588ac1cb5b17b840d",
+          "anchors": [
+            {
+              "line": 6,
+              "text": "mod workspace_visibility;"
+            },
+            {
+              "line": 18,
+              "text": "const VISIBILITY_EVENT: &str = \"alden://visibility\";"
+            },
+            {
+              "line": 21,
+              "text": "/// Payload for the window visibility event: one boolean, never content."
+            },
+            {
+              "line": 22,
+              "text": "fn visibility_payload(visible: bool) -> Value {"
+            },
+            {
+              "line": 26,
+              "text": "fn announce_visibility(app: &tauri::AppHandle, label: &str, visible: bool) {"
+            },
+            {
+              "line": 30,
+              "text": "visibility_payload(visible),"
+            },
+            {
+              "line": 37,
+              "text": "/// away. Making that a guess from `document.visibilityState` and `blur` leaves"
+            },
+            {
+              "line": 54,
+              "text": "announce_visibility(window.app_handle(), window.label(), visible);"
+            },
+            {
+              "line": 57,
+              "text": "/// Report the calling window's current visibility."
+            },
+            {
+              "line": 59,
+              "text": "/// The visibility event is a change notification, so a webview that boots"
+            },
+            {
+              "line": 224,
+              "text": "async fn submit_assistant_input(bridge: tauri::State<'_, PythonBridge>, input: serde_json::Value, token_id: String) -> Result<serde_json::Value, String> {"
+            },
+            {
+              "line": 226,
+              "text": "tauri::async_runtime::spawn_blocking(move || bridge.submit_assistant_input(input, &token_id))"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs",
+          "sha256": "14830435b5320068395a8cec9ebb17e0460aa40dcb67d97e0901065f1fb156ca",
+          "anchors": [
+            {
+              "line": 6,
+              "text": "use std::collections::{HashMap, HashSet};"
+            },
+            {
+              "line": 165,
+              "text": "assistant_runtime: bool,"
+            },
+            {
+              "line": 179,
+              "text": "assistant_runtime: false,"
+            },
+            {
+              "line": 464,
+              "text": "use std::collections::hash_map::DefaultHasher;"
+            },
+            {
+              "line": 961,
+              "text": "pub fn for_assistant_audit(state_root: PathBuf) -> Result<Self, BridgeError> {"
+            },
+            {
+              "line": 992,
+              "text": "let bridge = Self::for_assistant_audit(state_root.clone())?;"
+            },
+            {
+              "line": 998,
+              "text": "&[\"--action\".into(), \"collection-resolution-fixture\".into()], Duration::from_secs(30), None, false)?)?;"
+            },
+            {
+              "line": 1010,
+              "text": "&[\"--action\".into(), \"collection-resolution-fixture-verify\".into()], Duration::from_secs(20), None, false)?)"
+            },
+            {
+              "line": 1198,
+              "text": "if action == \"collection-graph\" {"
+            },
+            {
+              "line": 1205,
+              "text": "\"history-rooms\" | \"history-messages\" | \"collection-affinity\" | \"collection-quality\""
+            },
+            {
+              "line": 1252,
+              "text": "| \"collection-history\""
+            },
+            {
+              "line": 1253,
+              "text": "| \"collection-graph\""
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "sha256": "8a05c1740c6170babbd9a9b63a0642ac28c8ee7dc290df9e81109808635e4674",
+          "anchors": [
+            {
+              "line": 169,
+              "text": "def generate_input(state_root, ticket, text, token, paths, selection):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_model_routes.py",
+          "sha256": "18c1bbac44950108c05febb7624a94f0ef71c01e64107928b6991cdad025a58f",
+          "anchors": [
+            {
+              "line": 19,
+              "text": "DEFAULT_MODEL = \"google-antigravity/gemini-3.8-flash\""
+            },
+            {
+              "line": 20,
+              "text": "DEFAULT_EFFORT = \"high\""
+            },
+            {
+              "line": 93,
+              "text": "def host_workspace():"
+            },
+            {
+              "line": 101,
+              "text": "def catalog(root, *, fetcher=_read, now=None, memory_reader=host_workspace):"
+            },
+            {
+              "line": 158,
+              "text": "\"automatic_candidate\": status == \"available\" and model != \"gpt-6-astra\" and \"tts\" not in model.lower()})"
+            },
+            {
+              "line": 161,
+              "text": "return {\"ok\": True, \"automatic_model\": preview[\"id\"] if preview else None, \"models\": models, \"model\": state.get(\"model\", DEFAULT_MODEL),"
+            },
+            {
+              "line": 162,
+              "text": "\"reasoning_effort\": state.get(\"reasoning_effort\", DEFAULT_EFFORT if state.get(\"model\", DEFAULT_MODEL) == DEFAULT_MODEL else None), \"mode\": state.get(\"mode\", \"manual\"),"
+            },
+            {
+              "line": 176,
+              "text": "requested = options.get(\"model\", DEFAULT_MODEL)"
+            },
+            {
+              "line": 194,
+              "text": "candidates = [row for row in models if row[\"automatic_candidate\"]"
+            },
+            {
+              "line": 195,
+              "text": "and (\"Qwen3.8-27B\" in row[\"id\"] or row[\"id\"] == DEFAULT_MODEL)]"
+            },
+            {
+              "line": 198,
+              "text": "return next((row for row in models if row[\"id\"] == DEFAULT_MODEL and row[\"status\"] in {\"available\", \"connected\"}), None)"
+            },
+            {
+              "line": 200,
+              "text": "def selection(root):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/local_mlx_model_readiness.py",
+          "sha256": "f74168c68564302b1646492c4ff9bc879476c03e1d59d0fe928a56153d0435cd",
+          "anchors": [
+            {
+              "line": 37,
+              "text": "def redirect_request(self, req, fp, code, msg, headers, newurl):"
+            },
+            {
+              "line": 42,
+              "text": "def _local_only_urlopen(request: urllib.request.Request, *, timeout: float):"
+            },
+            {
+              "line": 50,
+              "text": "def canonical_fixed_local_mlx_model_id(value: Any) -> str | None:"
+            },
+            {
+              "line": 64,
+              "text": "def resolve_fixed_local_mlx_catalog_model("
+            },
+            {
+              "line": 78,
+              "text": "def _timeout_error(exc: BaseException) -> bool:"
+            },
+            {
+              "line": 86,
+              "text": "def read_fixed_local_mlx_readiness("
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_osk_retrieval.py",
+          "sha256": "5366bb71baa6f70c46df821c2431a34e1e2f92295edd386b62186efc70649d88",
+          "anchors": [
+            {
+              "line": 34,
+              "text": "def _snapshot(root: Path, cancelled=lambda: False):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "sha256": "03b09771f705760b56e304c994bfc7c67312d7f2c11c740000094de6e015adc7",
+          "anchors": [
+            {
+              "line": 24,
+              "text": "class KnowledgeServer(StdioServer):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "voice",
+      "type": "workflow",
+      "specification": "voice.workflow.json",
+      "specification_sha256": "5af27d98a8ac4affae74319ab1e6dbc90e06c765999c9f925e6a765f9d076d5c",
+      "output": "voice.html",
+      "artifact_sha256": "f3cd7f6618f68f17afc6759d0a5dbfc8f1dfb1275de17fa0804497ee783af997",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "voice-delivery.json",
+      "browser_receipt": "voice-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "voice.visual-check.1440x900.light.png",
+          "sha256": "faf4b3aaf1cd8c555b270aae8ebb63a0fd1df9d90a2e9d6304a3e195aeaf2019"
+        },
+        {
+          "path": "voice.visual-check.1440x900.dark.png",
+          "sha256": "1bddb043f9582fb22f489ded2c819785c34b5bc65d2283fca90631925afba23a"
+        },
+        {
+          "path": "voice.visual-check.2048x1320.light.png",
+          "sha256": "73868ef08b2929c0b132798609c17236a5da970a98f74a786de78753acd1db41"
+        },
+        {
+          "path": "voice.visual-check.2048x1320.dark.png",
+          "sha256": "a6b8d19ae8c2a8ba509bd8507f8e79376e094c0ff988e4a472d60c5ac8963a44"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "desktop/src/assistant-composer.ts",
+          "sha256": "b8dfeb5c6e2670f69d760ed96314b466a6c0505dd403ade3dc5241742aefb39d",
+          "anchors": [
+            {
+              "line": 7,
+              "text": "requestId: string;"
+            },
+            {
+              "line": 98,
+              "text": "|| !HEX_32.test(String(result.request_id))"
+            },
+            {
+              "line": 99,
+              "text": "|| result.request_id !== owner.requestId) return false;"
+            },
+            {
+              "line": 266,
+              "text": "// Late errors from a retired request never change the current conversation."
+            },
+            {
+              "line": 402,
+              "text": "let requestId: string;"
+            },
+            {
+              "line": 405,
+              "text": "requestId = uncertain && samePayload(uncertain) ? uncertain.requestId : crypto.randomUUID().replace(/-/g, '');"
+            },
+            {
+              "line": 410,
+              "text": "if (!UUID_V4.test(tokenId) || !HEX_32.test(requestId)) {"
+            },
+            {
+              "line": 415,
+              "text": "tokenId, requestId, conversationId: selectedConversation, text: message, textRevision, imageRevision,"
+            },
+            {
+              "line": 424,
+              "text": "input: { request_id: requestId, conversation_id: owned.conversationId, text: message, images: copiedImages },"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "sha256": "8a05c1740c6170babbd9a9b63a0642ac28c8ee7dc290df9e81109808635e4674",
+          "anchors": [
+            {
+              "line": 34,
+              "text": "'assistant_image_store_unavailable','assistant_image_model_unsupported',"
+            },
+            {
+              "line": 60,
+              "text": "def validate_input(value):"
+            },
+            {
+              "line": 169,
+              "text": "def generate_input(state_root, ticket, text, token, paths, selection):"
+            },
+            {
+              "line": 170,
+              "text": "from alden_voice import LocalMlxLlm, _voice_knowledge_reference"
+            },
+            {
+              "line": 175,
+              "text": "reference, retrieval = _voice_knowledge_reference(text, ticket['history'], state_root, token)"
+            },
+            {
+              "line": 187,
+              "text": "if paths: raise InputUnavailable('assistant_image_model_unsupported')"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_chat_turns.py",
+          "sha256": "2f29d608b80d75deb1a96b9bcf2df5c3ae20428395896640e74f44a57a1ed425",
+          "anchors": [
+            {
+              "line": 56,
+              "text": "def _identifier(value: object, name: str) -> str:"
+            },
+            {
+              "line": 62,
+              "text": "def _text(value: object, name: str, chars: int, byte_limit: int, *, allow_empty: bool = False) -> str:"
+            },
+            {
+              "line": 73,
+              "text": "def _attachments(value: list[dict] | None) -> list[dict]:"
+            },
+            {
+              "line": 99,
+              "text": "def _provenance(value: list[dict] | None) -> str | None:"
+            },
+            {
+              "line": 114,
+              "text": "def _schema(db: sqlite3.Connection) -> None:"
+            },
+            {
+              "line": 121,
+              "text": "context_version INTEGER NOT NULL,"
+            },
+            {
+              "line": 142,
+              "text": "def _generation(value: dict | None) -> str | None:"
+            },
+            {
+              "line": 157,
+              "text": "def _write(state_root: Path):"
+            },
+            {
+              "line": 175,
+              "text": "def _history(db: sqlite3.Connection, conversation_id: str, before: int) -> list[dict]:"
+            },
+            {
+              "line": 188,
+              "text": "def _history_attachments(db: sqlite3.Connection, conversation_id: str, before: int) -> list[dict]:"
+            },
+            {
+              "line": 218,
+              "text": "def _verify_history_image_sources(db: sqlite3.Connection, ticket: dict) -> None:"
+            },
+            {
+              "line": 232,
+              "text": "def verify_history_image_sources(state_root: Path, ticket: dict) -> None:"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_input_images.py",
+          "sha256": "5d32ff2471afbf63eca18397c43b5c5e93f873c57ef7c4c46d110faa99321773",
+          "anchors": [
+            {
+              "line": 16,
+              "text": "MAX_BYTES = 8 * 1024 * 1024"
+            },
+            {
+              "line": 17,
+              "text": "MAX_PIXELS = 16 * 1024 * 1024"
+            },
+            {
+              "line": 18,
+              "text": "MAX_RASTER_BYTES = 128 * 1024 * 1024"
+            },
+            {
+              "line": 19,
+              "text": "MAX_FRAMES = 64"
+            },
+            {
+              "line": 25,
+              "text": "def _function(lib, name, args, result):"
+            },
+            {
+              "line": 31,
+              "text": "def _native_decode(data, mime):"
+            },
+            {
+              "line": 82,
+              "text": "if not 1 <= count <= MAX_FRAMES:"
+            },
+            {
+              "line": 101,
+              "text": "if pixels > MAX_PIXELS:"
+            },
+            {
+              "line": 117,
+              "text": "if bits_per_pixel(image) > 64 or expected <= 0 or total_raster_bytes + expected > MAX_RASTER_BYTES:"
+            },
+            {
+              "line": 124,
+              "text": "if total_raster_bytes > MAX_RASTER_BYTES:"
+            },
+            {
+              "line": 137,
+              "text": "def validate_image_bytes(data, mime):"
+            },
+            {
+              "line": 140,
+              "text": "if not 0 < len(data) <= MAX_BYTES:"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "sha256": "beb9eea0b13f2bae75766a805281bda41980a6ffc6f018cb940db59fb2cac814",
+          "anchors": [
+            {
+              "line": 115,
+              "text": "class VoiceMemoryBudget:"
+            },
+            {
+              "line": 122,
+              "text": "class VoiceMemoryBudgetError(RuntimeError):"
+            },
+            {
+              "line": 352,
+              "text": "class VoiceState(str, Enum):"
+            },
+            {
+              "line": 391,
+              "text": "class VoiceResult:"
+            },
+            {
+              "line": 402,
+              "text": "class VoiceTurnToken(AbortToken):"
+            },
+            {
+              "line": 422,
+              "text": "class VoiceTurn:"
+            },
+            {
+              "line": 846,
+              "text": "class VoiceStatusStore:"
+            },
+            {
+              "line": 1543,
+              "text": "def _voice_knowledge_reference(text: str, history: Sequence[Mapping[str,str]], root: Path | None,"
+            },
+            {
+              "line": 1634,
+              "text": "class LocalMlxLlm:"
+            },
+            {
+              "line": 1660,
+              "text": "def generate_for_turn(self, text: str, token: AbortToken, *, history=(), turn: VoiceTurn) -> str:"
+            },
+            {
+              "line": 1670,
+              "text": "self._turn_context.reset(binding)"
+            },
+            {
+              "line": 1823,
+              "text": "result = self._generate_response(text, token, history=history, started=started)"
+            },
+            {
+              "line": 1838,
+              "text": "def _generate_response(self, text: str, token: AbortToken, *, history, started: float) -> str:"
+            },
+            {
+              "line": 1842,
+              "text": "reference,retrieval=_voice_knowledge_reference(text,history,self.state_root,token)"
+            },
+            {
+              "line": 1850,
+              "text": "*([{'role':'system','content':reference}] if reference else []),"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_abort.py",
+          "sha256": "35f251273637121e513d02de5624c0096af319579b4f00cb19a5863cab2d0e91",
+          "anchors": [
+            {
+              "line": 37,
+              "text": "class AbortState:"
+            },
+            {
+              "line": 44,
+              "text": "def is_error(self) -> bool:"
+            },
+            {
+              "line": 48,
+              "text": "class AbortStateError(RuntimeError):"
+            },
+            {
+              "line": 52,
+              "text": "def _error_state(code: str) -> AbortState:"
+            },
+            {
+              "line": 56,
+              "text": "def _has_control(value: str) -> bool:"
+            },
+            {
+              "line": 60,
+              "text": "def _safe_state(payload: object) -> AbortState:"
+            },
+            {
+              "line": 93,
+              "text": "def _strict_json_loads(raw: bytes) -> object:"
+            },
+            {
+              "line": 94,
+              "text": "def no_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:"
+            },
+            {
+              "line": 105,
+              "text": "def _validate_root_fd(fd: int) -> str | None:"
+            },
+            {
+              "line": 116,
+              "text": "def _open_root(root: Path, *, create: bool) -> tuple[int | None, str | None]:"
+            },
+            {
+              "line": 138,
+              "text": "def _validate_private_file(fd: int, prefix: str) -> str | None:"
+            },
+            {
+              "line": 151,
+              "text": "def _read_bounded(fd: int) -> bytes:"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "collection",
+      "type": "workflow",
+      "specification": "collection.workflow.json",
+      "specification_sha256": "92050e6ed18b6e6450a3cbbe7f9400ceacc53c7ea97b3d57abe652684b7bad05",
+      "output": "collection.html",
+      "artifact_sha256": "14706ffe43832ce14670066e0efbd100c6115dd3f92925f6367d09e272050dfd",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "collection-delivery.json",
+      "browser_receipt": "collection-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "collection.visual-check.1440x900.light.png",
+          "sha256": "8bc034b86737797cb906f5e19106852132baa68850d4b481f2e043f6803c4d95"
+        },
+        {
+          "path": "collection.visual-check.1440x900.dark.png",
+          "sha256": "91f9d2ec42ddb07ff18ffc3f933bfe3c0e49a262fdf7cec727bd5cee8d47802f"
+        },
+        {
+          "path": "collection.visual-check.2048x1320.light.png",
+          "sha256": "25543e01b1b69b0f12bfeaaa5b9f86f7a4e9e2d4de84643d72454febfdbd9797"
+        },
+        {
+          "path": "collection.visual-check.2048x1320.dark.png",
+          "sha256": "f9287c2555dd659a79a618eed0484302a31c616a982019ee392a03dad4fc99ba"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "scripts/alden_collect.py",
+          "sha256": "b30d42b2f2e189f581cc8ef31e40cfb3b4829ed4c79b6433d316e9e00c9f5195",
+          "anchors": [
+            {
+              "line": 343,
+              "text": "def collect_target(store: CollectionStore, target_id: str, *, cancelled=lambda: False, publication_guard=None):"
+            },
+            {
+              "line": 428,
+              "text": "def main():"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_source_acquisition.py",
+          "sha256": "f528e80761d1c98a61375409f4c6f2f903ab2f7035ae4801a4e74b209d64d073",
+          "anchors": [
+            {
+              "line": 130,
+              "text": "def acquire_input(store, target_id, policy, *, token, cancelled, timeout,"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_collection_scheduler.py",
+          "sha256": "cf8948ff7df296e595513f1b9cc769966075df5d4d1a522cc2e95e038c65bdeb",
+          "anchors": [
+            {
+              "line": 45,
+              "text": "def settings_action(state_root, action, query=None, *, explicit_opt_in=False):"
+            },
+            {
+              "line": 179,
+              "text": "if db.execute(\"SELECT 1 FROM sqlite_master WHERE type='table' AND name='controls'\").fetchone() and not db.execute(\"SELECT 1 FROM sqlite_master WHERE type='table' AND name='manual_r"
+            },
+            {
+              "line": 191,
+              "text": "CREATE TABLE IF NOT EXISTS manual_requests(id TEXT PRIMARY KEY,target_id TEXT NOT NULL,"
+            },
+            {
+              "line": 193,
+              "text": "CREATE UNIQUE INDEX IF NOT EXISTS manual_active_target ON manual_requests(target_id) WHERE state IN ('queued','running');"
+            },
+            {
+              "line": 275,
+              "text": "existing=db.execute('SELECT * FROM manual_requests WHERE id=?',(request_id,)).fetchone()"
+            },
+            {
+              "line": 283,
+              "text": "active=db.execute(\"SELECT id,state FROM manual_requests WHERE target_id=? AND state IN ('queued','running')\",(target_id,)).fetchone()"
+            },
+            {
+              "line": 285,
+              "text": "db.execute(\"INSERT INTO manual_requests VALUES(?,?,?,'queued',NULL,NULL)\",(request_id,target_id,time.time()))"
+            },
+            {
+              "line": 311,
+              "text": "manual=[r[0] for r in db.execute(\"SELECT target_id FROM manual_requests WHERE state IN ('queued','running') ORDER BY requested_at LIMIT 200\")] if db.execute(\"SELECT 1 FROM sqlite_m"
+            },
+            {
+              "line": 322,
+              "text": "def cycle(self, *, max_targets=1, max_seconds=300, target_id=None, collector=collect_target,"
+            },
+            {
+              "line": 346,
+              "text": "db.execute(\"UPDATE manual_requests SET state='queued' WHERE state='running'\")"
+            },
+            {
+              "line": 347,
+              "text": "manual={r['target_id']:r['id'] for r in db.execute(\"SELECT id,target_id FROM manual_requests WHERE state='queued' ORDER BY requested_at\")}"
+            },
+            {
+              "line": 375,
+              "text": "with self.database() as db:db.execute(\"UPDATE manual_requests SET state='running',attempt_id=? WHERE id=?\",(attempt,manual[target_id]))"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "879b2f78dbe2f3335c5b09e157a7abd7cd1ab1eee150612d68e6e730880e664b",
+          "anchors": [
+            {
+              "line": 51,
+              "text": "def normalized_body(value: str) -> str:"
+            },
+            {
+              "line": 162,
+              "text": "class CollectionStore:"
+            },
+            {
+              "line": 540,
+              "text": "def ingest(self, target_id: str, records, *, cursor=None, origin=\"alden\","
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "lineage",
+      "type": "dataflow",
+      "specification": "lineage.dataflow.json",
+      "specification_sha256": "fff3f7d9bf6266ba962b187ebd9848ce50d3aaea89d3a3fec45665ee0eac3ce9",
+      "output": "lineage.html",
+      "artifact_sha256": "363b47c56552e3bc33656cd8654d73fd3aa41f996bd89ddce2e83e2f258c95fc",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "lineage-delivery.json",
+      "browser_receipt": "lineage-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "lineage.visual-check.1440x900.light.png",
+          "sha256": "e1cace6a6c6905636428805bd4df03683302e2cfeb874a37dadecf876a970f61"
+        },
+        {
+          "path": "lineage.visual-check.1440x900.dark.png",
+          "sha256": "083c89c6093302b2c905df7fc329600552d6b668e5a3c2f15aecc1e5c23d8846"
+        },
+        {
+          "path": "lineage.visual-check.2048x1320.light.png",
+          "sha256": "6d8d7fcae262ad8655536b0c41869f2d54abfc614d2be5d09b16ce7b40eef834"
+        },
+        {
+          "path": "lineage.visual-check.2048x1320.dark.png",
+          "sha256": "c0a8fa7d3c829203919f70a06a23a56d24f51e16be30b3c6f8c42a6e7b0e189f"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "sha256": "bc44e005e3b5e30134f609d7e90da9ef8b7eb514913cf94b4977c4560a4ee9cf",
+          "anchors": [
+            {
+              "line": 2866,
+              "text": "if action == \"knowledge-graph\":"
+            },
+            {
+              "line": 2873,
+              "text": "from alden_osk import read_graph"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_osk.py",
+          "sha256": "88cf7de3a8b85e1e371bc53739c6862a130adb74d974b4ec281afff8273ea1c2",
+          "anchors": [
+            {
+              "line": 269,
+              "text": "def _load_engine(state_root: Path, *, read_only: bool = False):"
+            },
+            {
+              "line": 653,
+              "text": "def synchronize(state_root: Path, source: dict | None = None) -> dict:"
+            },
+            {
+              "line": 848,
+              "text": "def read_graph(state_root: Path, *, read_only: bool = False) -> dict:"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "879b2f78dbe2f3335c5b09e157a7abd7cd1ab1eee150612d68e6e730880e664b",
+          "anchors": [
+            {
+              "line": 162,
+              "text": "class CollectionStore:"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/collection-graph.ts",
+          "sha256": "649eb91c1c943d684804f8ed28faaba03875970d3e4dd276411bcd071efa72a1",
+          "anchors": [
+            {
+              "line": 7,
+              "text": "import { unifiedGraph } from './unified-graph';"
+            },
+            {
+              "line": 186,
+              "text": "const includeMemory = this.source.value === 'legacy' || (this.source.value === 'all' && !query.focus && this.state.offset === 0);"
+            },
+            {
+              "line": 187,
+              "text": "const reads = await Promise.allSettled(["
+            },
+            {
+              "line": 189,
+              "text": "includeMemory ? this.load('knowledge-graph') : Promise.resolve(null),"
+            },
+            {
+              "line": 192,
+              "text": "const result = unifiedGraph(values[0], values[1], query);"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/unified-graph.ts",
+          "sha256": "8491583163926838c8a00b9d5ce61268bbef19a4f9248984ec41651e0d6a04d6",
+          "anchors": [
+            {
+              "line": 5,
+              "text": "export function unifiedGraph(collection: Record<string, unknown> | null, memory: Record<string, unknown> | null,"
+            },
+            {
+              "line": 9,
+              "text": "const collectionOnly = Boolean(query.projects || query.target_id || query.platform);"
+            },
+            {
+              "line": 10,
+              "text": "const nodes = collectionOnly ? [] : stored.nodes.filter(node =>"
+            },
+            {
+              "line": 22,
+              "text": "const shownMemory = visibleMemory.slice(0, collectionNodes.length ? 64 : 2048);"
+            },
+            {
+              "line": 23,
+              "text": "const shownIds = new Set(shownMemory.map(node => node.id));"
+            },
+            {
+              "line": 24,
+              "text": "const rawMemory = shownMemory.map(node => ({ ...node, id: prefix(node.id), canonical_id: node.id,"
+            },
+            {
+              "line": 37,
+              "text": "overview_budget: 2048, stale: collection?.stale === true || memory?.stale === true, partial: (collection !== null && collection.ok !== true) || (memory !== null && memory.ok !== tr"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "mcp",
+      "type": "workflow",
+      "specification": "mcp.workflow.json",
+      "specification_sha256": "518c0d3d1290098dd287e918fd086070301582e2ef65798f0b162d2896ebc330",
+      "output": "mcp.html",
+      "artifact_sha256": "9f4549261daa9b52cc48be797240dbfebfdbef76ce6ec61734c385b394e8be45",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "mcp-delivery.json",
+      "browser_receipt": "mcp-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "mcp.visual-check.1440x900.light.png",
+          "sha256": "611160281852ca17045b1a6e2fd4bb634bda49188fc6506a815a3a41c6c39dc9"
+        },
+        {
+          "path": "mcp.visual-check.1440x900.dark.png",
+          "sha256": "ff5b3c51032d798f9268ce14483f62e820f61494f1b6e581080f93f4b382f3aa"
+        },
+        {
+          "path": "mcp.visual-check.2048x1320.light.png",
+          "sha256": "38d8a4d8ad116acc886b72d060d13f15a8c1aedb2916c9e88da6f3a0708d4a4a"
+        },
+        {
+          "path": "mcp.visual-check.2048x1320.dark.png",
+          "sha256": "7884fdf2ebb15c41ca94848b708cfd3bc6ee5c18c0766cac451b0478b79935ec"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "sha256": "03b09771f705760b56e304c994bfc7c67312d7f2c11c740000094de6e015adc7",
+          "anchors": [
+            {
+              "line": 24,
+              "text": "class KnowledgeServer(StdioServer):"
+            },
+            {
+              "line": 27,
+              "text": "def __init__(self, root, allowed_projects, *, tool_timeout=10):"
+            },
+            {
+              "line": 30,
+              "text": "self.allowed = frozenset(allowed_projects)"
+            },
+            {
+              "line": 60,
+              "text": "def valid_call(self, params):"
+            },
+            {
+              "line": 80,
+              "text": "def call_tool(self, params, control):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_status_mcp.py",
+          "sha256": "9db5f87b6dbd90b97be61920e8b4daac14bccc980a7ae9e06b6790e3bf915188",
+          "anchors": [
+            {
+              "line": 78,
+              "text": "def _check(control):"
+            },
+            {
+              "line": 253,
+              "text": "class StdioServer:"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_collection_retrieval.py",
+          "sha256": "3e7bb3253a0aff1026b4b0a64da73e470a12d521cdac0285659bcbafc9716233",
+          "anchors": [
+            {
+              "line": 22,
+              "text": "def _prefer_body_literal_evidence(store, rows, ranked, plans, projects, limit, cancelled):"
+            },
+            {
+              "line": 321,
+              "text": "def retrieve(root, query, *, projects, max_entities=3, max_relations=3,"
+            },
+            {
+              "line": 413,
+              "text": "ranked, body_preferred, body_coverage = _prefer_body_literal_evidence("
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "normalization",
+      "type": "workflow",
+      "specification": "normalization.workflow.json",
+      "specification_sha256": "7f4b0660fa58631ca7928ee886ea3bb920ad0c6e4268226af8cddb04202bb4f3",
+      "output": "normalization.html",
+      "artifact_sha256": "e66ad71d55da4c614594f9baed1930d30b857426adbc2785660399bd18357792",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "normalization-delivery.json",
+      "browser_receipt": "normalization-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "normalization.visual-check.1440x900.light.png",
+          "sha256": "b95e2b64f5fad55c2aaee308ae9744994f14da28616a968ec81876579b3472e8"
+        },
+        {
+          "path": "normalization.visual-check.1440x900.dark.png",
+          "sha256": "5fcb227ef57d3da8734e3bf26c3b68d9e69fd7efeb366da065eaed6de659d653"
+        },
+        {
+          "path": "normalization.visual-check.2048x1320.light.png",
+          "sha256": "6b360bec42564f86a1e5d83509a7844765551205cad613199244c71ba403774b"
+        },
+        {
+          "path": "normalization.visual-check.2048x1320.dark.png",
+          "sha256": "0b5de4ef6dbb2750f6355fb757a591725ba94c3f079dbdc78d71817eed8179a7"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "879b2f78dbe2f3335c5b09e157a7abd7cd1ab1eee150612d68e6e730880e664b",
+          "anchors": [
+            {
+              "line": 47,
+              "text": "def normalized_text(value: str) -> str:"
+            },
+            {
+              "line": 51,
+              "text": "def normalized_body(value: str) -> str:"
+            },
+            {
+              "line": 130,
+              "text": "def require_relation_binding(db, relation, *, allow_new=False):"
+            },
+            {
+              "line": 668,
+              "text": "require_relation_binding(db, {'id':rel_id,'version':digest(evidence.encode()),"
+            },
+            {
+              "line": 753,
+              "text": "require_relation_binding(db, row)"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_graph_quality.py",
+          "sha256": "cf89a2a0b3962b421ba42a9764b20e05640ae473f784cde459210b7fae8f4e5f",
+          "anchors": [
+            {
+              "line": 19,
+              "text": "def _json(value):"
+            },
+            {
+              "line": 20,
+              "text": "def reject(value):"
+            },
+            {
+              "line": 23,
+              "text": "def finite_float(value):"
+            },
+            {
+              "line": 29,
+              "text": "def unique_object(pairs):"
+            },
+            {
+              "line": 44,
+              "text": "def _substantive_field(value, *, title=False):"
+            },
+            {
+              "line": 56,
+              "text": "def _blob(folder, name):"
+            },
+            {
+              "line": 79,
+              "text": "def audit(root, projects, *, verify_sources=False, max_rows=100000,"
+            },
+            {
+              "line": 106,
+              "text": "def check():"
+            },
+            {
+              "line": 118,
+              "text": "def flag(kind, key):"
+            },
+            {
+              "line": 123,
+              "text": "def examine(*values):"
+            },
+            {
+              "line": 260,
+              "text": "evidence_class = content_evidence_class(metadata, effective_body,"
+            },
+            {
+              "line": 263,
+              "text": "if evidence_class in ('metadata_only', 'source_metadata_only', 'unread_body_marker', 'metadata_description'):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_graph_quality_action.py",
+          "sha256": "5cca3b42fd09ce7f567d5a9e36493500429fd4aaacdc24812f9b231fa29236b3",
+          "anchors": [
+            {
+              "line": 131,
+              "text": "def read_action(state_root,query_raw,cancelled=None):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_entity_resolution.py",
+          "sha256": "40db4d122ac1076ebf62b9161fdea8eb35b4c7d48a96f8801d396f65a8d2b7fa",
+          "anchors": [
+            {
+              "line": 109,
+              "text": "def _checked_plan(value):"
+            },
+            {
+              "line": 463,
+              "text": "def _check_plan_current(db, store, plan, *, read_blobs):"
+            },
+            {
+              "line": 484,
+              "text": "def _apply(store, plan, request_id):"
+            },
+            {
+              "line": 532,
+              "text": "def _revert(store, project, resolution_id, expected_revision, request_id):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_collection_retrieval.py",
+          "sha256": "3e7bb3253a0aff1026b4b0a64da73e470a12d521cdac0285659bcbafc9716233",
+          "anchors": [
+            {
+              "line": 22,
+              "text": "def _prefer_body_literal_evidence(store, rows, ranked, plans, projects, limit, cancelled):"
+            },
+            {
+              "line": 402,
+              "text": "from alden_retrieval_time import select_latest, latest_requested, observation_note"
+            },
+            {
+              "line": 403,
+              "text": "latest_query = latest_requested(query,time_from,time_to)"
+            },
+            {
+              "line": 438,
+              "text": "ordered,temporal_selection=select_latest(query,temporal_records,needles=kg.query_haystacks(query,None),time_from=time_from,time_to=time_to)"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_semantic_affinity.py",
+          "sha256": "1ce2492bc32c76da5667ae789179ddefa5af6ad4006638e65a4c2a1c672853d8",
+          "anchors": [
+            {
+              "line": 20,
+              "text": "import resource"
+            },
+            {
+              "line": 45,
+              "text": "def validate(self):"
+            },
+            {
+              "line": 57,
+              "text": "max_source_bytes: int = 64 * 1024 * 1024"
+            },
+            {
+              "line": 66,
+              "text": "def validate(self):"
+            },
+            {
+              "line": 68,
+              "text": "\"max_text_bytes\": 32 * 1024 * 1024, \"max_source_bytes\": 64 * 1024 * 1024,"
+            },
+            {
+              "line": 85,
+              "text": "def _rss():"
+            },
+            {
+              "line": 86,
+              "text": "value = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss"
+            },
+            {
+              "line": 91,
+              "text": "def __init__(self, budgets, cancelled):"
+            },
+            {
+              "line": 97,
+              "text": "def check(self):"
+            },
+            {
+              "line": 107,
+              "text": "def charge(self, key, size):"
+            },
+            {
+              "line": 115,
+              "text": "def progress(self):"
+            },
+            {
+              "line": 127,
+              "text": "def _sql_errors(guard):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "activity",
+      "type": "workflow",
+      "specification": "activity.workflow.json",
+      "specification_sha256": "c6df3fc94d437f745bc9a471fd74573fbde28703ec4a598f1857fcd821352bd8",
+      "output": "activity.html",
+      "artifact_sha256": "ddccb96240e1bd356dc20eb9418a127db863b51707b11bbb59d0f45faa127a53",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "activity-delivery.json",
+      "browser_receipt": "activity-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "activity.visual-check.1440x900.light.png",
+          "sha256": "3322003a320d12a441256eeb12b2753907b05a0c37d7402c9ac6c7537bc4d8a3"
+        },
+        {
+          "path": "activity.visual-check.1440x900.dark.png",
+          "sha256": "23923c0024e9697509b30caf8edd8fd3df32e40b599ad01b3402584ba5758417"
+        },
+        {
+          "path": "activity.visual-check.2048x1320.light.png",
+          "sha256": "102c01aede8d771ce34d4449e2440a5c5213061aee619edce5ffc446c9546bbd"
+        },
+        {
+          "path": "activity.visual-check.2048x1320.dark.png",
+          "sha256": "5bb901b95f568ed9825fd581517896bf43bac18707762db5ae8a84f4351c6c84"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "scripts/alden_collection.py",
+          "sha256": "879b2f78dbe2f3335c5b09e157a7abd7cd1ab1eee150612d68e6e730880e664b",
+          "anchors": [
+            {
+              "line": 180,
+              "text": "journal = db.execute(\"SELECT value FROM meta WHERE key='journal_id'\").fetchone() if has_meta else None"
+            },
+            {
+              "line": 181,
+              "text": "counts = db.execute(\"SELECT value FROM meta WHERE key='journal_counts_v1'\").fetchone() if has_meta else None"
+            },
+            {
+              "line": 282,
+              "text": "db.execute(\"INSERT OR IGNORE INTO meta VALUES('journal_id',?)\", (uuid.uuid4().hex,))"
+            },
+            {
+              "line": 290,
+              "text": "if db.execute(\"SELECT 1 FROM meta WHERE key='journal_counts_v1'\").fetchone() is None:"
+            },
+            {
+              "line": 294,
+              "text": "db.execute(\"INSERT INTO meta VALUES('journal_counts_v1','1')\")"
+            },
+            {
+              "line": 1181,
+              "text": "accelerated = not query and since is None and until is None and db.execute(\"SELECT 1 FROM meta WHERE key='journal_counts_v1' AND value='1'\").fetchone()"
+            },
+            {
+              "line": 1212,
+              "text": "def _activity_scope(db, projects, target_id=None, platform=None):"
+            },
+            {
+              "line": 1214,
+              "text": "journal = db.execute(\"SELECT value FROM meta WHERE key='journal_id'\").fetchone()"
+            },
+            {
+              "line": 1220,
+              "text": "raise RuntimeError('collection_journal_identity_invalid')"
+            },
+            {
+              "line": 1248,
+              "text": "def activity_page(self, *, projects: list[str], after=None, stream_id=None, limit=200,"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/collection-activity.ts",
+          "sha256": "5df5b6b4b375b0987c772b02cbae5fc5c75b20a34e07e0f0c983f572b647aced",
+          "anchors": [
+            {
+              "line": 3,
+              "text": "export const ACTIVITY_TTL_MS = 10000;"
+            },
+            {
+              "line": 9,
+              "text": "type Checkpoint = { stream_id: string; cursor: number };"
+            },
+            {
+              "line": 18,
+              "text": "return row && typeof row.stream_id === 'string' && row.stream_id.length > 0 && row.stream_id.length <= 128 && integer(row.cursor)"
+            },
+            {
+              "line": 19,
+              "text": "? { stream_id: row.stream_id, cursor: row.cursor } : null;"
+            },
+            {
+              "line": 69,
+              "text": "snapshot(value: unknown, nodes: readonly KnowledgeNode[]): void {"
+            },
+            {
+              "line": 74,
+              "text": "if (!this.committed || this.waitingSnapshot || next.stream_id !== this.committed.stream_id) {"
+            },
+            {
+              "line": 85,
+              "text": "if (event.at * 1000 < this.visibleSince || event.at * 1000 > now || now - event.at * 1000 >= ACTIVITY_TTL_MS) {"
+            },
+            {
+              "line": 88,
+              "text": "if (event.sequence > this.snapshotCursor) continue;"
+            },
+            {
+              "line": 105,
+              "text": "const page = await this.read({ activity: true, after: before.cursor, stream_id: before.stream_id, limit: 200 });"
+            },
+            {
+              "line": 109,
+              "text": "if (page.reset === true || next.stream_id !== before.stream_id || next.cursor < before.cursor) {"
+            },
+            {
+              "line": 117,
+              "text": "if (!event || event.sequence <= previous || event.sequence > next.cursor || this.seen.has(event.event_id)) continue;"
+            },
+            {
+              "line": 118,
+              "text": "previous = event.sequence; needsSnapshot ||= event.sequence > this.snapshotCursor; this.seen.add(event.event_id);"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/collection-graph.ts",
+          "sha256": "649eb91c1c943d684804f8ed28faaba03875970d3e4dd276411bcd071efa72a1",
+          "anchors": [
+            {
+              "line": 12,
+              "text": "type GraphPort = Pick<KnowledgeHologram, 'replaceGraph' | 'currentGraph' | 'currentView' | 'navigationTargets' | 'clickNode' | 'showNodeActivity' | 'clearNodeActivity'>"
+            },
+            {
+              "line": 65,
+              "text": "}, () => this.refresh.invalidate(), event => this.graph.showNodeActivity(event), () => this.graph.clearNodeActivity());"
+            },
+            {
+              "line": 210,
+              "text": "this.graph.showNodeActivity({ event_id: `read:${++this.readSequence}`, sequence: 0, document_id: node.id,"
+            },
+            {
+              "line": 273,
+              "text": "if (this.collection) this.journal.snapshot(payload.activity_checkpoint, this.graph.currentView.nodes);"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "sha256": "9b95e9a7e56a919d2ebf10012a0e5b58c3df7626aa59794542e8f531f1171613",
+          "anchors": [
+            {
+              "line": 228,
+              "text": "this.clearNodeActivity();"
+            },
+            {
+              "line": 294,
+              "text": "showNodeActivity(event: NodeActivity): void {"
+            },
+            {
+              "line": 303,
+              "text": "clearNodeActivity(): void {"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "recovery",
+      "type": "workflow",
+      "specification": "recovery.workflow.json",
+      "specification_sha256": "4a99100cc03be71f688f624be10da7f77fdfa463d1b8ced84b8f2e4bdc5c7856",
+      "output": "recovery.html",
+      "artifact_sha256": "34e8858e751f97f369bf00bfb68be7698e6a399611eef3b538cc4070ba6b5501",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "recovery-delivery.json",
+      "browser_receipt": "recovery-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "recovery.visual-check.1440x900.light.png",
+          "sha256": "e836be4ab16fd15e9e4a8eab6760734afadd6f9ffcb8b4b32d247199448c2495"
+        },
+        {
+          "path": "recovery.visual-check.1440x900.dark.png",
+          "sha256": "42f40d27ad36b6175a1fef1904ff70ee1fc48622b6aa40c568fff1eca3209e1c"
+        },
+        {
+          "path": "recovery.visual-check.2048x1320.light.png",
+          "sha256": "df41e3f361e0931a9eca598a3b550a059d64716ce9a2c2b48959a8de30507c76"
+        },
+        {
+          "path": "recovery.visual-check.2048x1320.dark.png",
+          "sha256": "ec7c6889624d36bdbb36e35cfd3143d5a068323ff5f2fbd6da26cfb4c4f8bdae"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "desktop/src/main.ts",
+          "sha256": "ba4788391d00b50a41fb22c5f3372d5cd4f01a88fa8e7a8d4a3749610292f0c5",
+          "anchors": [
+            {
+              "line": 755,
+              "text": "pauseOnBlur: false,"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/core/lifecycle-wiring.ts",
+          "sha256": "12988ca00ae77893410d360e56c3a90e4f4b80fc429da1b77d33817e8a542a90",
+          "anchors": [
+            {
+              "line": 50,
+              "text": "pauseOnBlur?: boolean;"
+            },
+            {
+              "line": 61,
+              "text": "export function wireRenderLifecycle("
+            },
+            {
+              "line": 67,
+              "text": "const pauseOnBlur = options.pauseOnBlur !== false;"
+            },
+            {
+              "line": 101,
+              "text": "if (pauseOnBlur) {"
+            },
+            {
+              "line": 133,
+              "text": "if (pauseOnBlur) {"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/collection-activity.ts",
+          "sha256": "5df5b6b4b375b0987c772b02cbae5fc5c75b20a34e07e0f0c983f572b647aced",
+          "anchors": [
+            {
+              "line": 9,
+              "text": "type Checkpoint = { stream_id: string; cursor: number };"
+            },
+            {
+              "line": 18,
+              "text": "return row && typeof row.stream_id === 'string' && row.stream_id.length > 0 && row.stream_id.length <= 128 && integer(row.cursor)"
+            },
+            {
+              "line": 19,
+              "text": "? { stream_id: row.stream_id, cursor: row.cursor } : null;"
+            },
+            {
+              "line": 47,
+              "text": "private waitingSnapshot = false;"
+            },
+            {
+              "line": 59,
+              "text": "if (this.committed && !this.waitingSnapshot) this.schedule(2500);"
+            },
+            {
+              "line": 67,
+              "text": "this.stop(); this.committed = null; this.waitingSnapshot = false; this.seen.clear(); this.nodes = [];"
+            },
+            {
+              "line": 69,
+              "text": "snapshot(value: unknown, nodes: readonly KnowledgeNode[]): void {"
+            },
+            {
+              "line": 74,
+              "text": "if (!this.committed || this.waitingSnapshot || next.stream_id !== this.committed.stream_id) {"
+            },
+            {
+              "line": 75,
+              "text": "this.committed = next; this.waitingSnapshot = false; this.pending.clear(); this.seen.clear(); this.clear();"
+            },
+            {
+              "line": 95,
+              "text": "if (!this.active || this.waitingSnapshot || !this.committed || this.timer !== null) return;"
+            },
+            {
+              "line": 99,
+              "text": "if (!this.active || !this.committed || this.waitingSnapshot) return;"
+            },
+            {
+              "line": 105,
+              "text": "const page = await this.read({ activity: true, after: before.cursor, stream_id: before.stream_id, limit: 200 });"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout-driver.ts",
+          "sha256": "95c9b14c8b7e1dc4bddf11fae8760abe480dd06cf92030fc6448a288f5f0f5e2",
+          "anchors": [
+            {
+              "line": 8,
+              "text": "pairs: readonly LayoutAffinityPair[]; changed: string[]; pinned: string[]; checkpoint?: SemanticLayoutCheckpoint }"
+            },
+            {
+              "line": 10,
+              "text": "diagnostics?: SemanticLayoutDiagnostics; checkpoint?: SemanticLayoutCheckpoint; wallMs?: number; error?: string }"
+            },
+            {
+              "line": 26,
+              "text": "private checkpoint?: SemanticLayoutCheckpoint;"
+            },
+            {
+              "line": 34,
+              "text": "private completedState:Record<string,unknown>={state:'idle'};"
+            },
+            {
+              "line": 38,
+              "text": "get ready(): boolean { return !!this.checkpoint; }"
+            },
+            {
+              "line": 39,
+              "text": "get settled(): boolean { return !this.busy && !!this.checkpoint && this.appliedKey === this.requestedKey"
+            },
+            {
+              "line": 42,
+              "text": "/** An identical completed snapshot may restore its colour metadata on a"
+            },
+            {
+              "line": 45,
+              "text": "return this.appliedKey===snapshotKey(view,pinned)?this.checkpoint?.labels:undefined;"
+            },
+            {
+              "line": 64,
+              "text": "const restore = [...previous.keys()].some(id => visibleIds.has(id)&&provisional.has(id));"
+            },
+            {
+              "line": 65,
+              "text": "if(key===this.appliedKey&&!restore&&!changedVisible.length&&pinKey===this.appliedPins){"
+            },
+            {
+              "line": 67,
+              "text": "this.requestedKey=key;this.state={...this.completedState,state:'cached',generation:this.generation};return;"
+            },
+            {
+              "line": 70,
+              "text": "// Cancel obsolete work immediately; restore only the last completed cache."
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/semantic-layout.ts",
+          "sha256": "a7d4eb4fa2471290499911ad9151ff774d96d81255d8bf0ccb84d1b79798fc97",
+          "anchors": [
+            {
+              "line": 104,
+              "text": "checkpoint(): SemanticLayoutCheckpoint {"
+            },
+            {
+              "line": 108,
+              "text": "restore(value: SemanticLayoutCheckpoint): void {"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "desktop/src/knowledge/hologram.ts",
+          "sha256": "9b95e9a7e56a919d2ebf10012a0e5b58c3df7626aa59794542e8f531f1171613",
+          "anchors": [
+            {
+              "line": 17,
+              "text": "import { communitySnapshot, type CommunitySnapshot } from './community-snapshot';"
+            },
+            {
+              "line": 125,
+              "text": "private snapshot: RuntimeSnapshot | null = null;"
+            },
+            {
+              "line": 138,
+              "text": "private restoredWindowSize: {width:number; height:number} | null = null;"
+            },
+            {
+              "line": 247,
+              "text": "// The narrow poller owns current input/output; the slow snapshot supplies load."
+            },
+            {
+              "line": 256,
+              "text": "setActivity(snapshot: RuntimeSnapshot | null): void { this.snapshot = snapshot; this.updateOrbActivity(); }"
+            },
+            {
+              "line": 266,
+              "text": "this.activity = this.paused ? PAUSED_ORB : runtimeOrb(this.snapshot, this.latestVoice ?? this.snapshot?.voice ?? null);"
+            },
+            {
+              "line": 278,
+              "text": "this.restoredWindowSize=null;"
+            },
+            {
+              "line": 323,
+              "text": "this.restoredWindowSize=null;"
+            },
+            {
+              "line": 336,
+              "text": "this.view = navigation ? this.drilldown.restore(graph, navigation) : this.drilldown.replaceGraph(graph);"
+            },
+            {
+              "line": 350,
+              "text": "this.restoredWindowSize={width:window.innerWidth,height:window.innerHeight};"
+            },
+            {
+              "line": 395,
+              "text": "/** Explicit audit snapshot only; no labels, identities or per-frame pair work. */"
+            },
+            {
+              "line": 451,
+              "text": "this.restoredWindowSize=null;"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    },
+    {
+      "name": "evaluation",
+      "type": "workflow",
+      "specification": "evaluation.workflow.json",
+      "specification_sha256": "f2cf357ad037993022e83be6e5ad0a73f61426d02713050edeedc2cb07ce759f",
+      "output": "evaluation.html",
+      "artifact_sha256": "d48bfb2ab23220c94e083c9a62a8075140270ee99e3e9cd2757d123302038981",
+      "validation": {
+        "checksPassed": 9,
+        "checkCount": 9,
+        "compositionProfile": "showcase",
+        "compositionStatus": "pass",
+        "errors": 0,
+        "warnings": 0
+      },
+      "delivery_receipt": "evaluation-delivery.json",
+      "browser_receipt": "evaluation-browser.json",
+      "browser_evidence": "passed",
+      "browser_visual_review_field": "pending (machine evidence retained)",
+      "visual_review": "passed",
+      "visual_review_scope": "Exact final four screenshots directly image-inspected: readability, crossings, node/label/card fit, containment and viewport balance",
+      "screenshots": [
+        {
+          "path": "evaluation.visual-check.1440x900.light.png",
+          "sha256": "91a656a60751c31358f0e1c2255f78c453d448cf5561637966bf33eb90ca761c"
+        },
+        {
+          "path": "evaluation.visual-check.1440x900.dark.png",
+          "sha256": "b58ea19894fa7d9c78208f47a8976a6f6ad364b3b9256c201ce44b2ca80840c9"
+        },
+        {
+          "path": "evaluation.visual-check.2048x1320.light.png",
+          "sha256": "2254e39c1f0bba6e9d40bc7ed3c966a2eaa915227c1a4e4839599e3d92edd421"
+        },
+        {
+          "path": "evaluation.visual-check.2048x1320.dark.png",
+          "sha256": "2fb728329d7bf77141ebbc6025dbdafc6d91faa85e4a087d8e26581e754424b6"
+        }
+      ],
+      "code_evidence": [
+        {
+          "path": "scripts/alden_model_evaluation.py",
+          "sha256": "53b95fdd49430bf1183265c7f48493efc848e0e84ef67d79334f9ced98efc889",
+          "anchors": [
+            {
+              "line": 208,
+              "text": "or receipt.get(\"weights_trained\") is not False or receipt.get(\"model_promoted\") is not False"
+            },
+            {
+              "line": 243,
+              "text": "def evaluate_version(*, dataset_path, policy_dir, reference_dir, version,"
+            },
+            {
+              "line": 303,
+              "text": "\"weights_trained\": False, \"model_promoted\": False,"
+            },
+            {
+              "line": 309,
+              "text": "def memory_admission(policy, reference):"
+            },
+            {
+              "line": 342,
+              "text": "\"weights_trained\": False, \"model_promoted\": False}"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_dpo_training.py",
+          "sha256": "63ff34ae11f88077ca0021adf237eb0d9fa78d926ad7dff5c4ea6a5f84c062d2",
+          "anchors": [
+            {
+              "line": 81,
+              "text": "def train_offline(*, dataset_path, policy_dir, reference_dir, training_root, checkpoint_format,"
+            },
+            {
+              "line": 220,
+              "text": "receipt={\"schema_version\":1,\"phase\":\"trained\",\"objective\":\"dpo\",\"candidate_id\":candidate,"
+            },
+            {
+              "line": 226,
+              "text": "\"split_counts\":{k:len(v) for k,v in splits.items()},\"final_test_evaluated\":False,"
+            },
+            {
+              "line": 238,
+              "text": "\"weights_trained\":True,\"model_promoted\":False,\"quality_improvement_claimed\":False,"
+            },
+            {
+              "line": 293,
+              "text": "\"weights_trained\":False,\"model_promoted\":False}"
+            },
+            {
+              "line": 295,
+              "text": "return 0 if result[\"phase\"]==\"trained\" else 2"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_dpo_scorer.py",
+          "sha256": "fba9b19df13d91fe8186d424e0c8b0c47bfb7dad36fa7d60bccca4e8db97f8ab",
+          "anchors": [
+            {
+              "line": 39,
+              "text": "class ScorerError(RuntimeError):"
+            },
+            {
+              "line": 40,
+              "text": "def __init__(self, reason: str):"
+            },
+            {
+              "line": 45,
+              "text": "def _checkpoint_format(value: str | None) -> str:"
+            },
+            {
+              "line": 52,
+              "text": "def _qwen35_sanitize_input("
+            },
+            {
+              "line": 97,
+              "text": "def _scoped_qwen35_model_class(base_model_class, checkpoint_format: str, selected: dict[str, str]):"
+            },
+            {
+              "line": 98,
+              "text": "\"\"\"Return a scorer-only Model subclass without mutating mlx_lm globals.\"\"\""
+            },
+            {
+              "line": 100,
+              "text": "class ScorerQwen35Model(base_model_class):"
+            },
+            {
+              "line": 101,
+              "text": "def sanitize(self, weights):"
+            },
+            {
+              "line": 110,
+              "text": "def _versions() -> dict[str, str]:"
+            },
+            {
+              "line": 120,
+              "text": "def _check_abort(abort_check, deadline) -> None:"
+            },
+            {
+              "line": 127,
+              "text": "def _checkpoint(path: Path | str | None, missing_reason: str) -> Path:"
+            },
+            {
+              "line": 150,
+              "text": "def _tokenizer_files(checkpoint: Path) -> list[Path]:"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        },
+        {
+          "path": "scripts/alden_dpo_adapter.py",
+          "sha256": "16b2c7e7c75a4db98b91e57a9ab85b40d63ef461ea04292ce5b8a8f1aa14e8ae",
+          "anchors": [
+            {
+              "line": 20,
+              "text": "class AdapterError(ValueError):"
+            },
+            {
+              "line": 66,
+              "text": "def snapshot(directory, *, base_sha256, checkpoint_format, abort_check=None, deadline=None):"
+            },
+            {
+              "line": 130,
+              "text": "def apply(model, value, mx):"
+            }
+          ],
+          "verified_same_as_runtime_source": true
+        }
+      ]
+    }
+  ],
+  "parallel_review": {
+    "model": "chatgpt-web/gpt-6-sol",
+    "reasoning_effort": "xhigh",
+    "actual_turn_verified": true,
+    "scope": "Nine supplied summaries and selected source excerpts only; no full repository or runtime certification",
+    "report": "independent-review.md",
+    "disposition": "review-resolution.md",
+    "agent_closed": true,
+    "parent_full_call_path_correction": "The supplied-excerpt review missed local retrieval inside LocalMlxLlm; final voice map and disposition reflect the actual generate_for_turn -> generate -> _generate_response path."
+  }
+}

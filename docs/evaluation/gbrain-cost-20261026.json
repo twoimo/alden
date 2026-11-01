@@ -1,0 +1,524 @@
+{
+  "verified_utc": "2026-10-26T00:03:08.624431+00:00",
+  "head": "5f38c55a0e76cfbb4a9be28b987da9e53992c9f5",
+  "pairs": 3,
+  "scope": {
+    "frozen_public_nodes": 3048,
+    "pages": 3049,
+    "links": 6105,
+    "human_judgments": 3057
+  },
+  "summary": {
+    "wall_seconds": {
+      "full": {
+        "median": 70.90873925000778,
+        "min": 66.42606987501495,
+        "max": 75.67963816600968,
+        "n": 3
+      },
+      "delta": {
+        "median": 18.43054933298845,
+        "min": 17.726874249987304,
+        "max": 20.749522250000155,
+        "n": 3
+      },
+      "reduction_percent_from_medians": 74.00807075696748
+    },
+    "wait4_cpu_seconds": {
+      "full": {
+        "median": 76.916692,
+        "min": 72.602439,
+        "max": 81.404686,
+        "n": 3
+      },
+      "delta": {
+        "median": 20.095056,
+        "min": 19.667582,
+        "max": 22.697707,
+        "n": 3
+      },
+      "reduction_percent_from_medians": 73.87425865896573
+    },
+    "sampled_sum_rss_peak_kib": {
+      "full": {
+        "median": 1445888,
+        "min": 1400432,
+        "max": 1497520,
+        "n": 3
+      },
+      "delta": {
+        "median": 1011616,
+        "min": 925328,
+        "max": 1056672,
+        "n": 3
+      },
+      "reduction_percent_from_medians": 30.034968130311615
+    }
+  },
+  "orders": [
+    [
+      "full",
+      "delta"
+    ],
+    [
+      "delta",
+      "full"
+    ],
+    [
+      "full",
+      "delta"
+    ]
+  ],
+  "logical_result_equivalence_pairs": 3,
+  "engine_queries_per_trial": 3049,
+  "retained_delta_page_revisions_each": 3048,
+  "unchanged_source_bodies": 3048,
+  "changed_source_labels": 1,
+  "unchanged_source_relation_records": 3057,
+  "frozen_original_manifest_exact": true,
+  "frozen_apps_preserved": 13,
+  "protected_config_entries_preserved": 5,
+  "protected_process_hashes": {
+    "2001": "1882656a36ab7f601eba5b9bc679468ce0fdf9d54a71c339bb1f830691023021",
+    "27259": "99f7394639bed6de7e6d0ce8bf501bf0a53312b74425abc4d742c6464836d6e8"
+  },
+  "desktop_processes": 0,
+  "owned_engine_processes": 0,
+  "power_before_after_equal": true,
+  "remaining_generations": 0,
+  "harness_input_rejection": "one unsupported --rebuild option rejected by argparse before cache/provider writes; excluded; exact initialized stores reused with supported refresh",
+  "controls_and_limits": [
+    "not a cold-start/GUI/GPU/native-account/model workload",
+    "three pairs do not establish p95/asymptotic scaling or general production gains",
+    "sum RSS double counts shared pages and sampled peaks can miss brief peaks",
+    "active protected background workloads retained; no workload suspension",
+    "only own copied source/derived stores changed; no user root or service/connection enrollment"
+  ],
+  "measurement_rss": "median of per-trial sampled sum RSS peaks, KiB; shared pages counted for each process",
+  "measurement_cpu": "wait4 platform-accounted command CPU; nested-child accounting experimentally calibrated",
+  "aggregate_formula": "100*(median_full-median_delta)/median_full; no p95/energy/token/asymptotic or population claim",
+  "gui_install_release": false,
+  "full_goal": "active",
+  "product_code_changed": false,
+  "source_module_pins": {
+    "alden_collection.py": "1983ae346572822537885b834e896e7beba06ed667b2d42b80c059eed1da78f7",
+    "alden_collection_export.py": "3c552cd4625d834559b8e1f8be400d2e623cbed70f05dd134b155a0df21bc56c",
+    "alden_collection_delta.py": "ee3d846b7d09cd2ee473901a4854556aa1140ba421fcfc209f1e83709bbbf751",
+    "alden_gbrain_import.py": "8d69fe6b946ce4fe51799cb12ee37b136bca638f95d3eded070efaa8bfd270eb",
+    "alden_gbrain_delta.py": "bd6fa96640c7bdb1e4a2ac75406d2d9b798fef8384f917d55ccbc61118367266",
+    "alden_gbrain_cache.py": "5862029e748d2d99c06fdaad2477b7756e9441ced1fb570b43ce33f0ec63cb3f",
+    "alden_gbrain_client.py": "6747303ff346df82f28bc654de103bfa620687b742892f3ff9b5fafd7bfa0165",
+    "alden_knowledge_mcp.py": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8"
+  },
+  "device": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "python": "3.11.9 (main, Aug 14 2024, 04:17:21) [Clang 18.1.8 ]",
+    "cpus": 18,
+    "memory_bytes": 137438953472,
+    "power": "Now drawing from 'AC Power'"
+  },
+  "calibration": {
+    "nested_child_busy_cpu_target_seconds": 0.4,
+    "observed_wait4_cpu_seconds": 0.42965099999999995,
+    "wait4_accounts_nested_child_in_this_calibration": true,
+    "sampled_tree_processes": 2,
+    "remaining_limits": "sampling misses peaks between observations; RSS sum includes shared pages; root rusage is platform-accounted, not hardware energy"
+  },
+  "trials": [
+    {
+      "round": 1,
+      "order": [
+        "full",
+        "delta"
+      ],
+      "fingerprint": "c4e6b92a675199fffb0d4651512eb454ca7cdeba9e96a4399611a12d4dd51d34",
+      "logical_index_sha256": "086fefac234092a1e8615f563f2d6fa736af9826fb99a848719bd7b28abe789b",
+      "retained_revisions": {
+        "full": 0,
+        "delta": 3048
+      },
+      "delta_writes": {
+        "links_added": 1,
+        "links_removed": 1,
+        "pages_purged": 0,
+        "pages_put": 1
+      },
+      "source_update": {
+        "after": {
+          "cursor": 15240,
+          "stream_id": "stream:aa310eebb5e3c9feabcd40bf2e136f0f5ffe72f134c32b47e09463ea0935111f"
+        },
+        "archive_rows": {
+          "edges_deleted": 0,
+          "edges_put": 0,
+          "nodes_deleted": 0,
+          "nodes_put": 1,
+          "targets_put": 0
+        },
+        "base_database_sha256": "aff1b3986dfdaba8253829a74650897dae53b96365680eb721478da45da4506c",
+        "candidate_groups": 3057,
+        "candidate_nodes": 1,
+        "complete_source_comparison": true,
+        "events": 5,
+        "mode": "journal_delta",
+        "through": {
+          "cursor": 15245,
+          "stream_id": "stream:aa310eebb5e3c9feabcd40bf2e136f0f5ffe72f134c32b47e09463ea0935111f"
+        }
+      },
+      "index_updates": {
+        "links_deleted": 0,
+        "links_put": 1,
+        "mode": "index_delta",
+        "pages_deleted": 0,
+        "pages_put": 1
+      },
+      "measured": {
+        "full": {
+          "wall_seconds": 75.67963816600968,
+          "wait4_cpu_seconds": 81.404686,
+          "sampled_sum_rss_peak_kib": 1400432,
+          "sample_count": 244,
+          "peak_tree_processes": 3,
+          "load_average": [
+            7.6337890625,
+            7.21923828125,
+            7.65283203125
+          ],
+          "phases": {
+            "full_source_export": {
+              "calls": 1,
+              "inclusive_seconds": 0.9937627920007799
+            },
+            "index_preparation": {
+              "calls": 1,
+              "inclusive_seconds": 0.7131422079983167
+            },
+            "current_source_verification": {
+              "calls": 4,
+              "inclusive_seconds": 4.030539626022801
+            },
+            "complete_engine_readback": {
+              "calls": 1,
+              "inclusive_seconds": 9.207121667015599
+            },
+            "full_engine_build_including_verification": {
+              "calls": 1,
+              "inclusive_seconds": 69.41788504100987
+            }
+          }
+        },
+        "delta": {
+          "wall_seconds": 18.43054933298845,
+          "wait4_cpu_seconds": 20.095056,
+          "sampled_sum_rss_peak_kib": 925328,
+          "sample_count": 60,
+          "peak_tree_processes": 2,
+          "load_average": [
+            6.4677734375,
+            7.0029296875,
+            7.5361328125
+          ],
+          "phases": {
+            "delta_full_source_comparison": {
+              "calls": 1,
+              "inclusive_seconds": 0.7916900830168743
+            },
+            "source_delta_export": {
+              "calls": 1,
+              "inclusive_seconds": 1.854061999998521
+            },
+            "index_preparation": {
+              "calls": 1,
+              "inclusive_seconds": 0.5806217920035124
+            },
+            "current_source_verification": {
+              "calls": 4,
+              "inclusive_seconds": 3.8543480839871336
+            },
+            "closed_engine_copy": {
+              "calls": 1,
+              "inclusive_seconds": 1.5476535840134602
+            },
+            "complete_engine_readback": {
+              "calls": 1,
+              "inclusive_seconds": 7.916860707977321
+            },
+            "engine_delta_build_including_verification": {
+              "calls": 1,
+              "inclusive_seconds": 11.546940542000812
+            }
+          }
+        }
+      }
+    },
+    {
+      "round": 2,
+      "order": [
+        "delta",
+        "full"
+      ],
+      "fingerprint": "d1abd5ba1a68346ee0291282602038d8651841b682454167c26a3da25dbd2ae6",
+      "logical_index_sha256": "700380173af2b4a484ca2c96fb7546933bef02886ba0ecbb7d83a3472f585744",
+      "retained_revisions": {
+        "full": 0,
+        "delta": 3048
+      },
+      "delta_writes": {
+        "links_added": 1,
+        "links_removed": 1,
+        "pages_purged": 0,
+        "pages_put": 1
+      },
+      "source_update": {
+        "after": {
+          "cursor": 15245,
+          "stream_id": "stream:aa310eebb5e3c9feabcd40bf2e136f0f5ffe72f134c32b47e09463ea0935111f"
+        },
+        "archive_rows": {
+          "edges_deleted": 0,
+          "edges_put": 0,
+          "nodes_deleted": 0,
+          "nodes_put": 1,
+          "targets_put": 0
+        },
+        "base_database_sha256": "4b3f79dc25ec16052052807fc65cad4aa5af4a8d9626a86bb7bd4eaf5cc09a3f",
+        "candidate_groups": 3057,
+        "candidate_nodes": 1,
+        "complete_source_comparison": true,
+        "events": 5,
+        "mode": "journal_delta",
+        "through": {
+          "cursor": 15250,
+          "stream_id": "stream:aa310eebb5e3c9feabcd40bf2e136f0f5ffe72f134c32b47e09463ea0935111f"
+        }
+      },
+      "index_updates": {
+        "links_deleted": 0,
+        "links_put": 1,
+        "mode": "index_delta",
+        "pages_deleted": 0,
+        "pages_put": 1
+      },
+      "measured": {
+        "full": {
+          "wall_seconds": 66.42606987501495,
+          "wait4_cpu_seconds": 72.602439,
+          "sampled_sum_rss_peak_kib": 1497520,
+          "sample_count": 218,
+          "peak_tree_processes": 3,
+          "load_average": [
+            6.42626953125,
+            6.9111328125,
+            7.4794921875
+          ],
+          "phases": {
+            "full_source_export": {
+              "calls": 1,
+              "inclusive_seconds": 0.8631834590050858
+            },
+            "index_preparation": {
+              "calls": 1,
+              "inclusive_seconds": 0.6954046669998206
+            },
+            "current_source_verification": {
+              "calls": 4,
+              "inclusive_seconds": 3.927740416955203
+            },
+            "complete_engine_readback": {
+              "calls": 1,
+              "inclusive_seconds": 8.044257958012167
+            },
+            "full_engine_build_including_verification": {
+              "calls": 1,
+              "inclusive_seconds": 60.414835875009885
+            }
+          }
+        },
+        "delta": {
+          "wall_seconds": 17.726874249987304,
+          "wait4_cpu_seconds": 19.667582,
+          "sampled_sum_rss_peak_kib": 1056672,
+          "sample_count": 58,
+          "peak_tree_processes": 2,
+          "load_average": [
+            6.09033203125,
+            6.87353515625,
+            7.4765625
+          ],
+          "phases": {
+            "delta_full_source_comparison": {
+              "calls": 1,
+              "inclusive_seconds": 0.7888695000146981
+            },
+            "source_delta_export": {
+              "calls": 1,
+              "inclusive_seconds": 1.8437814589997288
+            },
+            "index_preparation": {
+              "calls": 1,
+              "inclusive_seconds": 0.6478073750040494
+            },
+            "current_source_verification": {
+              "calls": 4,
+              "inclusive_seconds": 3.9968243740149774
+            },
+            "closed_engine_copy": {
+              "calls": 1,
+              "inclusive_seconds": 1.2301354160008486
+            },
+            "complete_engine_readback": {
+              "calls": 1,
+              "inclusive_seconds": 7.63178812499973
+            },
+            "engine_delta_build_including_verification": {
+              "calls": 1,
+              "inclusive_seconds": 10.809454417001689
+            }
+          }
+        }
+      }
+    },
+    {
+      "round": 3,
+      "order": [
+        "full",
+        "delta"
+      ],
+      "fingerprint": "99a425a288f004afd65b89066088d0f3f827631ba9655e1a28f839aee6053d65",
+      "logical_index_sha256": "c6931eeeb9c5b2aa4a3f027a11e67089b0c0cfb79d9fad11f42997c5216d58f0",
+      "retained_revisions": {
+        "full": 0,
+        "delta": 3048
+      },
+      "delta_writes": {
+        "links_added": 1,
+        "links_removed": 1,
+        "pages_purged": 0,
+        "pages_put": 1
+      },
+      "source_update": {
+        "after": {
+          "cursor": 15250,
+          "stream_id": "stream:aa310eebb5e3c9feabcd40bf2e136f0f5ffe72f134c32b47e09463ea0935111f"
+        },
+        "archive_rows": {
+          "edges_deleted": 0,
+          "edges_put": 0,
+          "nodes_deleted": 0,
+          "nodes_put": 1,
+          "targets_put": 0
+        },
+        "base_database_sha256": "ce9be0b17047caa1e5ad9877e77c529242a80b5b8a63d28b293996cfc12cc3b9",
+        "candidate_groups": 3057,
+        "candidate_nodes": 1,
+        "complete_source_comparison": true,
+        "events": 5,
+        "mode": "journal_delta",
+        "through": {
+          "cursor": 15255,
+          "stream_id": "stream:aa310eebb5e3c9feabcd40bf2e136f0f5ffe72f134c32b47e09463ea0935111f"
+        }
+      },
+      "index_updates": {
+        "links_deleted": 0,
+        "links_put": 1,
+        "mode": "index_delta",
+        "pages_deleted": 0,
+        "pages_put": 1
+      },
+      "measured": {
+        "full": {
+          "wall_seconds": 70.90873925000778,
+          "wait4_cpu_seconds": 76.916692,
+          "sampled_sum_rss_peak_kib": 1445888,
+          "sample_count": 230,
+          "peak_tree_processes": 3,
+          "load_average": [
+            8.44580078125,
+            7.1533203125,
+            7.50830078125
+          ],
+          "phases": {
+            "full_source_export": {
+              "calls": 1,
+              "inclusive_seconds": 0.8442719999875408
+            },
+            "index_preparation": {
+              "calls": 1,
+              "inclusive_seconds": 0.7278136670065578
+            },
+            "current_source_verification": {
+              "calls": 4,
+              "inclusive_seconds": 3.5800120840140153
+            },
+            "complete_engine_readback": {
+              "calls": 1,
+              "inclusive_seconds": 9.478066999989096
+            },
+            "full_engine_build_including_verification": {
+              "calls": 1,
+              "inclusive_seconds": 65.30554729097639
+            }
+          }
+        },
+        "delta": {
+          "wall_seconds": 20.749522250000155,
+          "wait4_cpu_seconds": 22.697707,
+          "sampled_sum_rss_peak_kib": 1011616,
+          "sample_count": 67,
+          "peak_tree_processes": 2,
+          "load_average": [
+            7.9169921875,
+            7.41455078125,
+            7.587890625
+          ],
+          "phases": {
+            "delta_full_source_comparison": {
+              "calls": 1,
+              "inclusive_seconds": 0.9865615000016987
+            },
+            "source_delta_export": {
+              "calls": 1,
+              "inclusive_seconds": 2.2094697499996983
+            },
+            "index_preparation": {
+              "calls": 1,
+              "inclusive_seconds": 0.776959499984514
+            },
+            "current_source_verification": {
+              "calls": 4,
+              "inclusive_seconds": 3.8474088319926523
+            },
+            "closed_engine_copy": {
+              "calls": 1,
+              "inclusive_seconds": 1.6524597500101663
+            },
+            "complete_engine_readback": {
+              "calls": 1,
+              "inclusive_seconds": 9.681140917004086
+            },
+            "engine_delta_build_including_verification": {
+              "calls": 1,
+              "inclusive_seconds": 13.51091645899578
+            }
+          }
+        }
+      }
+    }
+  ],
+  "source_package_code_head": "5f38c55a0e76cfbb4a9be28b987da9e53992c9f5",
+  "documentation_only_delivery": true,
+  "evidence_sha256": {
+    "PLAN.json": "70f9ece69bca8788fe632417cb68336648f53d6bb8bff94f944f9b29d73c407a",
+    "input-binding.json": "088598b68f34450badf0ed2d384244b6efbca5f4f551fe06fa5d0cf305f5a884",
+    "input-rejection-recovery.json": "04119e3bcd8f0dfde7c678e935d5d51bbf7f73eeb60dc577e0430d7d545a02fb",
+    "monitor-calibration.json": "c2ebf945276d02a7b786362b31b1b82c2c2d1f26301a49a8ffb3024f7d801ba8",
+    "acceptance.json": "d7827cf473f20115ef533beb7c5bd71e8f4e85eb4014151d7fd6a293a11f8ac7",
+    "measured-summary.json": "fcbb78cb12c84aefbc2614ea2b55a048d75f28e0ef431a2eded4bf8ba6038855",
+    "preservation-after.json": "9af8856f44aefb1552c97fd66ee79a29ce13b7a7e2b07912225d91b705f49368",
+    "run_paired_cost.initial.py": "ca44bbfa32b86c642568948c03457f1b34d2365258ef027b7f454ecb9fa34cff",
+    "run_paired_cost.py": "2164015c3e29f6fabb70d7fabeffb19447ff1e00453254a505da14859c07f2fa"
+  },
+  "external_validation": "NOT_RUN under inherited holds; exact web-Astra/max unavailable; no substitution"
+}

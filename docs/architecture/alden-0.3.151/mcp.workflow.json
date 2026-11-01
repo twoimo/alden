@@ -1,0 +1,185 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.151 · 읽기 전용 MCP와 별도 OSK",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "a151_mcp_mcp",
+      "label": "collection MCP"
+    },
+    {
+      "id": "a151_mcp_osk",
+      "label": "Alden 별도 경로"
+    }
+  ],
+  "mainPath": [
+    "a151_mcp_mcp_host",
+    "a151_mcp_mcp_scope",
+    "a151_mcp_mcp_read",
+    "a151_mcp_mcp_verify",
+    "a151_mcp_mcp_reply"
+  ],
+  "nodes": [
+    {
+      "id": "a151_mcp_mcp_host",
+      "lane": "a151_mcp_mcp",
+      "col": 0,
+      "type": "external",
+      "label": "허용 host 요청",
+      "sublabel": "시작 allowlist·인수",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_mcp_scope",
+      "lane": "a151_mcp_mcp",
+      "col": 1,
+      "type": "security",
+      "label": "고정 도구·범위",
+      "sublabel": "search/graph/history",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_mcp_read",
+      "lane": "a151_mcp_mcp",
+      "col": 2,
+      "type": "database",
+      "label": "기존 collection",
+      "sublabel": "생성·마이그레이션 없음",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_mcp_verify",
+      "lane": "a151_mcp_mcp",
+      "col": 3,
+      "type": "security",
+      "label": "현재 근거 대사",
+      "sublabel": "version·본문·취소·범위",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_mcp_reply",
+      "lane": "a151_mcp_mcp",
+      "col": 4,
+      "type": "external",
+      "label": "범위 있는 응답",
+      "sublabel": "출처·커서·읽은 한도",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_osk_caller",
+      "lane": "a151_mcp_osk",
+      "col": 0,
+      "type": "frontend",
+      "label": "Alden 지식 요청",
+      "sublabel": "Python의 별도 SDK 경로",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_osk_sdk",
+      "lane": "a151_mcp_osk",
+      "col": 1,
+      "type": "backend",
+      "label": "OSK 범위·SDK",
+      "sublabel": "허용 root·현재 노트",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_osk_vault",
+      "lane": "a151_mcp_osk",
+      "col": 2,
+      "type": "database",
+      "label": "독립 OSK 정본",
+      "sublabel": "계보·hash·delta 보관",
+      "width": 155
+    },
+    {
+      "id": "a151_mcp_osk_view",
+      "lane": "a151_mcp_osk",
+      "col": 3,
+      "type": "frontend",
+      "label": "제한된 탐색 투영",
+      "sublabel": "원본·관계 끝점 보존",
+      "width": 155
+    }
+  ],
+  "edges": [
+    {
+      "id": "a151_mcp_mcp_edge_0",
+      "from": "a151_mcp_mcp_host",
+      "to": "a151_mcp_mcp_scope",
+      "label": "고정 도구",
+      "role": "main"
+    },
+    {
+      "id": "a151_mcp_mcp_edge_1",
+      "from": "a151_mcp_mcp_scope",
+      "to": "a151_mcp_mcp_read",
+      "label": "RO 열기",
+      "role": "main"
+    },
+    {
+      "id": "a151_mcp_mcp_edge_2",
+      "from": "a151_mcp_mcp_read",
+      "to": "a151_mcp_mcp_verify",
+      "label": "현재 근거",
+      "role": "main"
+    },
+    {
+      "id": "a151_mcp_mcp_edge_3",
+      "from": "a151_mcp_mcp_verify",
+      "to": "a151_mcp_mcp_reply",
+      "label": "범위 응답",
+      "role": "main"
+    },
+    {
+      "id": "a151_mcp_osk_edge_0",
+      "from": "a151_mcp_osk_caller",
+      "to": "a151_mcp_osk_sdk",
+      "label": "별도 요청",
+      "role": "branch"
+    },
+    {
+      "id": "a151_mcp_osk_edge_1",
+      "from": "a151_mcp_osk_sdk",
+      "to": "a151_mcp_osk_vault",
+      "label": "정본 읽기",
+      "role": "branch"
+    },
+    {
+      "id": "a151_mcp_osk_edge_2",
+      "from": "a151_mcp_osk_vault",
+      "to": "a151_mcp_osk_view",
+      "label": "현재 버전",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "실제 MCP 도구",
+      "items": [
+        "alden_knowledge_search / graph / history",
+        "OSK 전체 검색·수집·resolution 쓰기 API는 아님"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "읽기와 연산",
+      "items": [
+        "collection은 읽기 전용으로 유지",
+        "검색은 선택적 질의 임베딩을 수행할 수 있음"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "실행 검증 범위",
+      "items": [
+        "두 독립 host의 전체 연결은 미완료",
+        "capture ID 불일치·외부 역검증도 별도"
+      ]
+    }
+  ]
+}

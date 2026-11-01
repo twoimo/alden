@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "created_before_execution_epoch": 1791144397.912985,
+  "canonical_snapshot": "223decedc568429f24d5d628b0fca30ae38a6e0376e47761362524583d8f51c5",
+  "notes": 104,
+  "label_source": "parent comparison with stored public-research note bodies; no model-generated judgments",
+  "scope": "Eight new constructed queries over four reviewed research/design notes; not broad or externally independently labeled corpus quality. No policy tuning. Not the DPO final test.",
+  "policy": {
+    "rrf_k": 60,
+    "rrf_weights": [
+      1,
+      1
+    ],
+    "candidate_limit": 40,
+    "max_entities": 5,
+    "max_context_chars": 16000
+  },
+  "queries": [
+    {
+      "id": "source-query-1",
+      "split": "dev",
+      "text": "최종 성공률이 같아도 에이전트 실행 과정의 병목을 따로 살펴봐야 한다는 근거는 어디 있어?",
+      "relevant": {
+        "osk:261005-03xh-d2rb92kp": 3
+      },
+      "expected_note_hash": "ffa80c00722aa42c892c0acddbdae25b065611263ab25d1a2450eae73a28bd94"
+    },
+    {
+      "id": "source-query-2",
+      "split": "dev",
+      "text": "결정적인 명제를 뽑고 반례를 찾는 검증 방법을 설명한 연구를 찾아줘.",
+      "relevant": {
+        "osk:261005-03xh-26nfgfbi": 3
+      },
+      "expected_note_hash": "e1cb41e9bec22f144a6b7d7484ffbb64cfc9ee678caed7c5778b879ea139c6ad"
+    },
+    {
+      "id": "source-query-3",
+      "split": "dev",
+      "text": "사용자와 앱 사이의 세션으로 합성 경험을 만들고 지식 갱신을 시험한 자료가 필요해.",
+      "relevant": {
+        "osk:261005-03xi-natl2svt": 3
+      },
+      "expected_note_hash": "9fe1afea67297ca238feecb14761500d192f56976a860bcc3d96b2fa03d979a0"
+    },
+    {
+      "id": "source-query-4",
+      "split": "dev",
+      "text": "실험 성과가 아닌 올든 설계 제안으로 과정과 주장과 시간을 함께 다룬 기억을 찾아줘.",
+      "relevant": {
+        "osk:261005-03xi-b6m8qslq": 3
+      },
+      "expected_note_hash": "d3c26dd0fa9e212526e45ce92d3d8db45f7324e0ea964975af55fac823ff0e89"
+    },
+    {
+      "id": "source-query-5",
+      "split": "heldout",
+      "text": "과거 경험을 재사용하면 다음 판단을 오도할 수도 있다는 내용의 출처를 보여줘.",
+      "relevant": {
+        "osk:261005-03xh-d2rb92kp": 3
+      },
+      "expected_note_hash": "ffa80c00722aa42c892c0acddbdae25b065611263ab25d1a2450eae73a28bd94"
+    },
+    {
+      "id": "source-query-6",
+      "split": "heldout",
+      "text": "한국어 기억 정리나 토큰 절약 효과가 아직 확인되지 않았다고 적은 반증 연구는?",
+      "relevant": {
+        "osk:261005-03xh-26nfgfbi": 3
+      },
+      "expected_note_hash": "e1cb41e9bec22f144a6b7d7484ffbb64cfc9ee678caed7c5778b879ea139c6ad"
+    },
+    {
+      "id": "source-query-7",
+      "split": "heldout",
+      "text": "합성 벤치마크를 실제 사용자 기억의 정확성으로 단정하면 안 된다는 자료가 뭐야?",
+      "relevant": {
+        "osk:261005-03xi-natl2svt": 3
+      },
+      "expected_note_hash": "9fe1afea67297ca238feecb14761500d192f56976a860bcc3d96b2fa03d979a0"
+    },
+    {
+      "id": "source-query-8",
+      "split": "heldout",
+      "text": "도입 효과를 독립 실패 사례와 동일한 자원 조건으로 측정해야 한다고 한 올든 가설은?",
+      "relevant": {
+        "osk:261005-03xi-b6m8qslq": 3
+      },
+      "expected_note_hash": "d3c26dd0fa9e212526e45ce92d3d8db45f7324e0ea964975af55fac823ff0e89"
+    }
+  ]
+}

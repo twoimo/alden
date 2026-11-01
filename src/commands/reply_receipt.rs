@@ -1,4 +1,4 @@
-//! `openkakao-cli reply-receipt` — the record window's read-only data source.
+//! `alden-cli reply-receipt` — the record window's read-only data source.
 //!
 //! The menu bar used to build its record lines in Python from the raw ledger,
 //! which meant the Korean wording and the "was this turn healthy" judgement

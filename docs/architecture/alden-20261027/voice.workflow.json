@@ -1,0 +1,250 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "음성 · 턴과 취소",
+    "locale": "ko",
+    "quality_profile": "showcase",
+    "output": "voice.html",
+    "repository": {
+      "url": "https://github.com/twoimo/alden.git",
+      "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+      "link_mode": "local-only"
+    }
+  },
+  "lanes": [
+    {
+      "id": "input",
+      "label": "입력과 생성"
+    },
+    {
+      "id": "result",
+      "label": "응답과 확정"
+    },
+    {
+      "id": "stop",
+      "label": "취소·오류",
+      "variant": "exception"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "turn",
+      "type": "frontend",
+      "label": "새 턴",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1256,
+          "end_line": 1282
+        },
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 223,
+          "end_line": 239
+        }
+      ],
+      "lane": "input",
+      "col": 0,
+      "sublabel": "이전 턴 취소"
+    },
+    {
+      "id": "stt",
+      "type": "backend",
+      "label": "음성 인식",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1432,
+          "end_line": 1451
+        }
+      ],
+      "lane": "input",
+      "col": 1,
+      "sublabel": "텍스트는 생략"
+    },
+    {
+      "id": "select",
+      "type": "security",
+      "label": "모델 고정",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2050,
+          "end_line": 2083
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2098,
+          "end_line": 2122
+        }
+      ],
+      "lane": "input",
+      "col": 2,
+      "sublabel": "저장 설정·기본"
+    },
+    {
+      "id": "generate",
+      "type": "backend",
+      "label": "응답 생성",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1453,
+          "end_line": 1490
+        }
+      ],
+      "lane": "input",
+      "col": 3,
+      "sublabel": "턴 토큰 검사"
+    },
+    {
+      "id": "speak",
+      "type": "backend",
+      "label": "음성 출력",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1492,
+          "end_line": 1501
+        }
+      ],
+      "lane": "result",
+      "col": 3,
+      "sublabel": "취소 가능"
+    },
+    {
+      "id": "commit",
+      "type": "database",
+      "label": "응답 확정",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1503,
+          "end_line": 1525
+        }
+      ],
+      "lane": "result",
+      "col": 4,
+      "sublabel": "현재 턴만 저장"
+    },
+    {
+      "id": "abort",
+      "type": "security",
+      "label": "턴 취소",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1284,
+          "end_line": 1298
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1446,
+          "end_line": 1451
+        }
+      ],
+      "lane": "stop",
+      "col": 0,
+      "sublabel": "전역 상태 보존"
+    },
+    {
+      "id": "failure",
+      "type": "security",
+      "label": "단계 오류",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 1482,
+          "end_line": 1501
+        }
+      ],
+      "lane": "stop",
+      "col": 3,
+      "sublabel": "완료로 처리 안 함"
+    }
+  ],
+  "edges": [
+    {
+      "id": "turn-stt",
+      "from": "turn",
+      "to": "stt",
+      "variant": "default",
+      "label": "PCM"
+    },
+    {
+      "id": "stt-select",
+      "from": "stt",
+      "to": "select",
+      "variant": "default",
+      "label": "확인 입력"
+    },
+    {
+      "id": "select-generate",
+      "from": "select",
+      "to": "generate",
+      "variant": "default",
+      "label": "선택 고정"
+    },
+    {
+      "id": "generate-speak",
+      "from": "generate",
+      "to": "speak",
+      "variant": "default",
+      "label": "응답"
+    },
+    {
+      "id": "speak-commit",
+      "from": "speak",
+      "to": "commit",
+      "variant": "default",
+      "label": "출력 완료"
+    },
+    {
+      "id": "turn-abort",
+      "from": "turn",
+      "to": "abort",
+      "variant": "security",
+      "label": "중단"
+    },
+    {
+      "id": "generate-failure",
+      "from": "generate",
+      "to": "failure",
+      "variant": "security",
+      "label": "오류"
+    },
+    {
+      "id": "speak-failure",
+      "from": "speak",
+      "to": "failure",
+      "variant": "security",
+      "label": "출력 오류"
+    }
+  ],
+  "mainPath": [
+    "turn",
+    "stt",
+    "select",
+    "generate",
+    "speak",
+    "commit"
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "취소 범위",
+      "items": [
+        "새 입력은 이전 활성·대기 턴을 취소한다. interrupt는 전역 재개나 설정 변경을 하지 않는다.",
+        "인식된 사용자 입력은 답변 취소 뒤에도 남을 수 있다. 늦은 답변은 활성 턴 검사 뒤 확정한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "경로 범위",
+      "items": [
+        "마이크 파이프라인과 텍스트 요청의 CAS 저장은 별도 경로다. 텍스트 CAS는 MCP/권한 문서에서 다룬다."
+      ]
+    }
+  ]
+}

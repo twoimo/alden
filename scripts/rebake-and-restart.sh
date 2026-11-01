@@ -20,11 +20,11 @@ PY=/usr/bin/python3
 
 cd "$REPO"
 echo "building a new runtime..."
-cargo build --release --bin openkakao-cli || {
+cargo build --release --bin alden-cli --bin openkakao-cli || {
   echo "release build failed; refusing to bake a stale binary"; exit 1
 }
 
-BINARY="$REPO/target/release/openkakao-cli"
+BINARY="$REPO/target/release/alden-cli"
 if [ ! -x "$BINARY" ]; then
   echo "release binary missing; refusing to bake"; exit 1
 fi
@@ -35,13 +35,13 @@ for source_file in $(git ls-files src Cargo.toml); do
   fi
 done
 
-./target/release/openkakao-cli auto-reply-host --bake --json >/tmp/ok-bake.json 2>/tmp/ok-bake.err || {
+./target/release/alden-cli auto-reply-host --bake --json >/tmp/ok-bake.json 2>/tmp/ok-bake.err || {
   echo "bake failed:"; tail -3 /tmp/ok-bake.err; exit 1
 }
 RT=$("$PY" -c 'import json;print(json.load(open("/tmp/ok-bake.json"))["runtime"]["runtime_root"])')
 echo "runtime: $(basename "$RT")"
 
-if ! "$RT/openkakao-cli" --version >/dev/null 2>&1; then
+if ! "$RT/alden-cli" --version >/dev/null 2>&1; then
   echo "the new runtime binary did not start; leaving the running host alone"; exit 1
 fi
 echo "binary check: ok"
@@ -56,7 +56,7 @@ launchctl kickstart -k "$DOMAIN/$LABEL"
 ok=unknown
 for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 10
-  ok=$("$REPO/target/release/openkakao-cli" auto-reply-host --status --json 2>/dev/null | "$PY" -c 'import json,sys
+  ok=$("$REPO/target/release/alden-cli" auto-reply-host --status --json 2>/dev/null | "$PY" -c 'import json,sys
 try: print("true" if json.load(sys.stdin).get("healthy") else "false")
 except Exception: print("unknown")' || echo unknown)
   [ "$ok" = "true" ] && break

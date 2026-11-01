@@ -1,0 +1,333 @@
+{
+  "family": "mcp",
+  "scope": "MCP · 읽기 권한과 로컬 도구",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "request": {
+      "claim": "MCP 호출 — 도구·인자 검사",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 149,
+          "end_line": 178,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "5e235b88ce01f427c8943d60ccd3c37d50784d8d9f218f00bfe4840b077ea107",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    "allow": {
+      "claim": "프로젝트 허용 — 시작 범위 고정",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 35,
+          "end_line": 65,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "e8a525cf5793a73a47ee24df68a87f8f4ee7494c1a169749e70e4deef52a2138",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 149,
+          "end_line": 178,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "5e235b88ce01f427c8943d60ccd3c37d50784d8d9f218f00bfe4840b077ea107",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    "guard": {
+      "claim": "현재 출처 검사 — 취소·기한 포함",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 81,
+          "end_line": 99,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "19710e0394831d537df68baf2256e06db46b29459867bfcbd61c7022e80efbdc",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 180,
+          "end_line": 191,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "9e20b9968f6fe7b002259eb917e2da1eec3029ccadb631fc97b98588899304c6",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    "read": {
+      "claim": "범위 읽기 — 상세 버전 필수",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 193,
+          "end_line": 238,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "33d3c1ccfeb60ff82fc9fb3b496ef78315327823a45ee820d63570108ee88f85",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    "result": {
+      "claim": "결과 반환 — 마지막 검사",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 228,
+          "end_line": 248,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "49e6df8af4d4adfe74a303691d14285f2fb4d00ab51b0cea4e9716135f6b5439",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    "text": {
+      "claim": "지식 요청 — 명시된 입력",
+      "sources": [
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 205,
+          "end_line": 228,
+          "file_sha256": "24b4163e86016e6024c2e91f131f0b60c231656f9c311c839f767c9d684fcf42",
+          "range_sha256": "f2ccc21d5092b0787a80a50dce697354eb5f15557195627f99b0df3986037194",
+          "local_source": "../../../scripts/alden_chat.py"
+        }
+      ]
+    },
+    "strict": {
+      "claim": "엄격 도구 루프 — 최대 2홉·1읽기",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_turn.py",
+          "line": 126,
+          "end_line": 161,
+          "file_sha256": "ace7e0b6254df8901c925817866340fdbb794c1ef8cc946644c48fb439a2222a",
+          "range_sha256": "dc4b55d005d526a52deea32176e912316bce90a9b54545cbb3fbedf6c0838b59",
+          "local_source": "../../../scripts/alden_knowledge_turn.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_turn.py",
+          "line": 173,
+          "end_line": 210,
+          "file_sha256": "ace7e0b6254df8901c925817866340fdbb794c1ef8cc946644c48fb439a2222a",
+          "range_sha256": "ab3dc473ecd6c8a2c32862a0034bc97bda2b6f10e528e75d8609d4c810bf58d8",
+          "local_source": "../../../scripts/alden_knowledge_turn.py"
+        }
+      ]
+    },
+    "commit": {
+      "claim": "텍스트 CAS — 현재 턴만 확정",
+      "sources": [
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 448,
+          "end_line": 475,
+          "file_sha256": "24b4163e86016e6024c2e91f131f0b60c231656f9c311c839f767c9d684fcf42",
+          "range_sha256": "9fee480939fc6ae04d7fdb59442e9e7e7b4d00b0dfbc41bfecaf5f6b6c254b56",
+          "local_source": "../../../scripts/alden_chat.py"
+        },
+        {
+          "path": "scripts/alden_chat_turns.py",
+          "line": 584,
+          "end_line": 615,
+          "file_sha256": "07801ee8ac16978669ae0471f8a80f6bd695fb7f63058e7ec932e1739cf9e22c",
+          "range_sha256": "dfc4ab54da1d08216ccfb855addeaec390a4612acb92c0c0e34c1d6d6e821730",
+          "local_source": "../../../scripts/alden_chat_turns.py"
+        }
+      ]
+    },
+    "rejected": {
+      "claim": "거부·취소 — 권한 확대 없음",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 228,
+          "end_line": 246,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "5715ee771a15e5ba838734c43b968dee35b92ff7ed15df05d0f7afb98a37b320",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 467,
+          "end_line": 477,
+          "file_sha256": "24b4163e86016e6024c2e91f131f0b60c231656f9c311c839f767c9d684fcf42",
+          "range_sha256": "c116c88eecbf423b0834415ac6b0a88d903f54809a73580d3b82de79abbb58e5",
+          "local_source": "../../../scripts/alden_chat.py"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "request-allow",
+      "claim": "검사",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 149,
+          "end_line": 178,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "5e235b88ce01f427c8943d60ccd3c37d50784d8d9f218f00bfe4840b077ea107",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    {
+      "id": "allow-guard",
+      "claim": "허용 범위",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 35,
+          "end_line": 65,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "e8a525cf5793a73a47ee24df68a87f8f4ee7494c1a169749e70e4deef52a2138",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 149,
+          "end_line": 178,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "5e235b88ce01f427c8943d60ccd3c37d50784d8d9f218f00bfe4840b077ea107",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    {
+      "id": "guard-read",
+      "claim": "현재 권한",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 81,
+          "end_line": 99,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "19710e0394831d537df68baf2256e06db46b29459867bfcbd61c7022e80efbdc",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 180,
+          "end_line": 191,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "9e20b9968f6fe7b002259eb917e2da1eec3029ccadb631fc97b98588899304c6",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    {
+      "id": "read-result",
+      "claim": "검증 결과",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 193,
+          "end_line": 238,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "33d3c1ccfeb60ff82fc9fb3b496ef78315327823a45ee820d63570108ee88f85",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    },
+    {
+      "id": "text-strict",
+      "claim": "입력 고정",
+      "sources": [
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 205,
+          "end_line": 228,
+          "file_sha256": "24b4163e86016e6024c2e91f131f0b60c231656f9c311c839f767c9d684fcf42",
+          "range_sha256": "f2ccc21d5092b0787a80a50dce697354eb5f15557195627f99b0df3986037194",
+          "local_source": "../../../scripts/alden_chat.py"
+        }
+      ]
+    },
+    {
+      "id": "strict-read",
+      "claim": "로컬 루프는 AldenToolRuntime.run_requested_knowledge를 통해 출처 권한을 검증한다. MCP stdio 자체를 호출한다는 의미가 아니다.",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_turn.py",
+          "line": 193,
+          "end_line": 208,
+          "file_sha256": "ace7e0b6254df8901c925817866340fdbb794c1ef8cc946644c48fb439a2222a",
+          "range_sha256": "dc0ef6cef192081c604ad8040ef90cff78031b52f6451cfae7eb818c5dd2b75f",
+          "local_source": "../../../scripts/alden_knowledge_turn.py"
+        }
+      ]
+    },
+    {
+      "id": "strict-commit",
+      "claim": "출처 재검사",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_turn.py",
+          "line": 126,
+          "end_line": 161,
+          "file_sha256": "ace7e0b6254df8901c925817866340fdbb794c1ef8cc946644c48fb439a2222a",
+          "range_sha256": "dc4b55d005d526a52deea32176e912316bce90a9b54545cbb3fbedf6c0838b59",
+          "local_source": "../../../scripts/alden_knowledge_turn.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_turn.py",
+          "line": 173,
+          "end_line": 210,
+          "file_sha256": "ace7e0b6254df8901c925817866340fdbb794c1ef8cc946644c48fb439a2222a",
+          "range_sha256": "ab3dc473ecd6c8a2c32862a0034bc97bda2b6f10e528e75d8609d4c810bf58d8",
+          "local_source": "../../../scripts/alden_knowledge_turn.py"
+        }
+      ]
+    },
+    {
+      "id": "read-rejected",
+      "claim": "버전 불일치",
+      "sources": [
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 193,
+          "end_line": 238,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "33d3c1ccfeb60ff82fc9fb3b496ef78315327823a45ee820d63570108ee88f85",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "claim": "로컬 지식 경로는 모델 제공 query/path/project/consent를 받지 않는다. 원래 요청과 원래 token으로 authority receipt를 만들고 현재 state를 재검증한다. MCP 자체는 main의 stdio serve 진입점이다.",
+      "sources": [
+        {
+          "path": "scripts/alden_tool_runtime.py",
+          "line": 220,
+          "end_line": 249,
+          "file_sha256": "196835d680276f333b3cb3698f47fcc8eea08f7bc79662b5b39739947f6bcdba",
+          "range_sha256": "d67971b486677d1c94cc824e660f6124f4507380105d9b2f0a4d8ab4409ba90a",
+          "local_source": "../../../scripts/alden_tool_runtime.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_authority.py",
+          "line": 512,
+          "end_line": 523,
+          "file_sha256": "6881f5d90f75df29e86886a169b869ce760770c1d893fc33c2133ae9a4949ff4",
+          "range_sha256": "a0d7aeab76f8a8ae5befab834882490997b48f16aa89951d659d587836678e98",
+          "local_source": "../../../scripts/alden_knowledge_authority.py"
+        },
+        {
+          "path": "scripts/alden_knowledge_mcp.py",
+          "line": 264,
+          "end_line": 297,
+          "file_sha256": "4831b0c107e498a80c26f6097b4f0d95e543a60bce95657ddff244ebf6ea14e8",
+          "range_sha256": "621ec086715586906cd34eba057f7d233dfb1c925c0e899d7e95ea7e4865ea6a",
+          "local_source": "../../../scripts/alden_knowledge_mcp.py"
+        }
+      ]
+    }
+  ]
+}

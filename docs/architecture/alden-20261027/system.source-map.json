@@ -1,0 +1,316 @@
+{
+  "family": "system",
+  "scope": "Alden · 실행 경계",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "nodes": {
+    "surface": {
+      "claim": "사용자 입력 — 텍스트 · 음성",
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 223,
+          "end_line": 255,
+          "file_sha256": "8a70fadc3fd10d929cc2987bc5951d7cf3388882740f5e2e5bb1e64b44e9890e",
+          "range_sha256": "483bc5a575d7f5213f5548f10b0781c85e3e05612ab933d32b2abd329a6bd473",
+          "local_source": "../../../desktop/src-tauri/src/main.rs"
+        }
+      ]
+    },
+    "bridge": {
+      "claim": "Tauri 브리지 — 허용된 명령",
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 160,
+          "end_line": 184,
+          "file_sha256": "8a70fadc3fd10d929cc2987bc5951d7cf3388882740f5e2e5bb1e64b44e9890e",
+          "range_sha256": "1d44dc4cb80e7b0a293a14685eb002be42645045f722ca24da6f46de98b9ec9f",
+          "local_source": "../../../desktop/src-tauri/src/main.rs"
+        },
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs",
+          "line": 1248,
+          "end_line": 1275,
+          "file_sha256": "376149637bdcfcc77a29a94e231c78ac4885773b022920c619e43a3be41fb3b5",
+          "range_sha256": "0ba45e3e720a457c9e807e16525c8ad559cad5cdc94446e6ba8492f3f6be862f",
+          "local_source": "../../../desktop/src-tauri/src/python_bridge.rs"
+        }
+      ]
+    },
+    "python": {
+      "claim": "Python 실행 — 명령별 소유",
+      "sources": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "line": 2767,
+          "end_line": 2782,
+          "file_sha256": "3c6c3d147d986886f9cf26c360079417d7c973a498e37b91455ff00dd219979b",
+          "range_sha256": "c8b0e773a41726a0b3d0d559e9ab799aa230ec9d1f684d03ec48c1deed284911",
+          "local_source": "../../../scripts/auto-reply-menubar.py"
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 205,
+          "end_line": 228,
+          "file_sha256": "24b4163e86016e6024c2e91f131f0b60c231656f9c311c839f767c9d684fcf42",
+          "range_sha256": "f2ccc21d5092b0787a80a50dce697354eb5f15557195627f99b0df3986037194",
+          "local_source": "../../../scripts/alden_chat.py"
+        }
+      ]
+    },
+    "collection": {
+      "claim": "수집 저장소 — 원본 · 파생 분리",
+      "sources": [
+        {
+          "path": "scripts/alden_collect.py",
+          "line": 423,
+          "end_line": 449,
+          "file_sha256": "d80a23dc913724347060e629381677308c364c50fa0bc3d4ae0ed00a0026a15b",
+          "range_sha256": "b5feaf15309d134a0abf5288837f1bbd30db1b54345d41315cc284fb99b62f1f",
+          "local_source": "../../../scripts/alden_collect.py"
+        },
+        {
+          "path": "scripts/alden_collection.py",
+          "line": 771,
+          "end_line": 809,
+          "file_sha256": "08b338c433d733de62d543c7c3b30ebf6db3b2ca15a7ac00dafccf45f8e23e40",
+          "range_sha256": "e377561738ad090119d6dd4bb8badf299ae1a3e0fa8bae3e3c5fc6d216c33674",
+          "local_source": "../../../scripts/alden_collection.py"
+        }
+      ]
+    },
+    "routing": {
+      "claim": "모델 선택 — 턴마다 선택 고정",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2050,
+          "end_line": 2083,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "e26bed60be1a42cd6bfd48346ae3ff34c6d28c3b779a662ba7145768c02ffd4e",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2098,
+          "end_line": 2122,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "9a883b19a34b19153e08ca5e64b31571a64bc016b982ed42649c10d33d5e48b6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "router": {
+      "claim": "라우터 경로 — Flash / high 기본",
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py",
+          "line": 20,
+          "end_line": 24,
+          "file_sha256": "85d20d2cf9c44a7af5e9c4b37b195e0499061b9a05d2b8c70b9ef5546682c119",
+          "range_sha256": "9481922c48c23c327cdbb6352639c2beca792c6f28afef9cb74e4054b5ab494b",
+          "local_source": "../../../scripts/alden_model_routes.py"
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2111,
+          "end_line": 2114,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "a5b7a333cf0f933b1d8736eb397f2212fc56fe356ccd1c7cbc0f1a614189d05b",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    "local": {
+      "claim": "선택된 로컬 — 정확한 ID · 준비",
+      "sources": [
+        {
+          "path": "scripts/alden_model_routes.py",
+          "line": 140,
+          "end_line": 162,
+          "file_sha256": "85d20d2cf9c44a7af5e9c4b37b195e0499061b9a05d2b8c70b9ef5546682c119",
+          "range_sha256": "1eda2822a058b27c76ddb1d4bbbe632d0cd9c95ac53379d32d730b421382a478",
+          "local_source": "../../../scripts/alden_model_routes.py"
+        },
+        {
+          "path": "scripts/alden_model_routes.py",
+          "line": 199,
+          "end_line": 235,
+          "file_sha256": "85d20d2cf9c44a7af5e9c4b37b195e0499061b9a05d2b8c70b9ef5546682c119",
+          "range_sha256": "21f7ed157b514c2ed6e2c4bec0228be54f18eea0cf18dc69b6c33f343e5e97d4",
+          "local_source": "../../../scripts/alden_model_routes.py"
+        }
+      ]
+    },
+    "cli": {
+      "claim": "alden-cli — 호환 실행명 유지",
+      "sources": [
+        {
+          "path": "Cargo.toml",
+          "line": 1,
+          "end_line": 15,
+          "file_sha256": "ac23c3e470f9d8b887de79796846cefa14c5f77f4c7e47963318a7614acaf63f",
+          "range_sha256": "f1c40bff786be75f0bc07156a6af89aed02a5aec7aea03c5e48afdf15f1869e6",
+          "local_source": "../../../Cargo.toml"
+        },
+        {
+          "path": "src/main.rs",
+          "line": 340,
+          "end_line": 342,
+          "file_sha256": "2d2180d4fd147f237791d5beaa4799d1a54fb4ccdcbe70d1e02ebe84c7844d0b",
+          "range_sha256": "5de6ddefb4fd7e772ffa3ec52a33ea4cfd29f309911010361e3e5f6193b62f27",
+          "local_source": "../../../src/main.rs"
+        }
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "id": "surface-bridge",
+      "claim": "호출",
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 223,
+          "end_line": 255,
+          "file_sha256": "8a70fadc3fd10d929cc2987bc5951d7cf3388882740f5e2e5bb1e64b44e9890e",
+          "range_sha256": "483bc5a575d7f5213f5548f10b0781c85e3e05612ab933d32b2abd329a6bd473",
+          "local_source": "../../../desktop/src-tauri/src/main.rs"
+        }
+      ]
+    },
+    {
+      "id": "bridge-python",
+      "claim": "실행",
+      "sources": [
+        {
+          "path": "desktop/src-tauri/src/main.rs",
+          "line": 160,
+          "end_line": 184,
+          "file_sha256": "8a70fadc3fd10d929cc2987bc5951d7cf3388882740f5e2e5bb1e64b44e9890e",
+          "range_sha256": "1d44dc4cb80e7b0a293a14685eb002be42645045f722ca24da6f46de98b9ec9f",
+          "local_source": "../../../desktop/src-tauri/src/main.rs"
+        },
+        {
+          "path": "desktop/src-tauri/src/python_bridge.rs",
+          "line": 1248,
+          "end_line": 1275,
+          "file_sha256": "376149637bdcfcc77a29a94e231c78ac4885773b022920c619e43a3be41fb3b5",
+          "range_sha256": "0ba45e3e720a457c9e807e16525c8ad559cad5cdc94446e6ba8492f3f6be862f",
+          "local_source": "../../../desktop/src-tauri/src/python_bridge.rs"
+        }
+      ]
+    },
+    {
+      "id": "python-collection",
+      "claim": "범위 읽기",
+      "sources": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "line": 2767,
+          "end_line": 2782,
+          "file_sha256": "3c6c3d147d986886f9cf26c360079417d7c973a498e37b91455ff00dd219979b",
+          "range_sha256": "c8b0e773a41726a0b3d0d559e9ab799aa230ec9d1f684d03ec48c1deed284911",
+          "local_source": "../../../scripts/auto-reply-menubar.py"
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 205,
+          "end_line": 228,
+          "file_sha256": "24b4163e86016e6024c2e91f131f0b60c231656f9c311c839f767c9d684fcf42",
+          "range_sha256": "f2ccc21d5092b0787a80a50dce697354eb5f15557195627f99b0df3986037194",
+          "local_source": "../../../scripts/alden_chat.py"
+        }
+      ]
+    },
+    {
+      "id": "python-routing",
+      "claim": "선택",
+      "sources": [
+        {
+          "path": "scripts/auto-reply-menubar.py",
+          "line": 2767,
+          "end_line": 2782,
+          "file_sha256": "3c6c3d147d986886f9cf26c360079417d7c973a498e37b91455ff00dd219979b",
+          "range_sha256": "c8b0e773a41726a0b3d0d559e9ab799aa230ec9d1f684d03ec48c1deed284911",
+          "local_source": "../../../scripts/auto-reply-menubar.py"
+        },
+        {
+          "path": "scripts/alden_chat.py",
+          "line": 205,
+          "end_line": 228,
+          "file_sha256": "24b4163e86016e6024c2e91f131f0b60c231656f9c311c839f767c9d684fcf42",
+          "range_sha256": "f2ccc21d5092b0787a80a50dce697354eb5f15557195627f99b0df3986037194",
+          "local_source": "../../../scripts/alden_chat.py"
+        }
+      ]
+    },
+    {
+      "id": "routing-router",
+      "claim": "기본 경로",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2050,
+          "end_line": 2083,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "e26bed60be1a42cd6bfd48346ae3ff34c6d28c3b779a662ba7145768c02ffd4e",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2098,
+          "end_line": 2122,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "9a883b19a34b19153e08ca5e64b31571a64bc016b982ed42649c10d33d5e48b6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    },
+    {
+      "id": "routing-local",
+      "claim": "명시 선택",
+      "sources": [
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2050,
+          "end_line": 2083,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "e26bed60be1a42cd6bfd48346ae3ff34c6d28c3b779a662ba7145768c02ffd4e",
+          "local_source": "../../../scripts/alden_voice.py"
+        },
+        {
+          "path": "scripts/alden_voice.py",
+          "line": 2098,
+          "end_line": 2122,
+          "file_sha256": "33184a90cd93254a0d6bc8bae64ec08a9074545e5b9292f4d3c9cf0c8f72e37e",
+          "range_sha256": "9a883b19a34b19153e08ca5e64b31571a64bc016b982ed42649c10d33d5e48b6",
+          "local_source": "../../../scripts/alden_voice.py"
+        }
+      ]
+    }
+  ],
+  "supplemental": [
+    {
+      "claim": "실제 UI 호출부: composer는 submit_assistant_input을, 음성 버튼은 start/stop_manual_voice_session을 호출한다.",
+      "sources": [
+        {
+          "path": "desktop/src/assistant-composer.ts",
+          "line": 536,
+          "end_line": 550,
+          "file_sha256": "2640c29e536ecf54cd88b3fa6b3d9091d944a1b050de7aba42ce07546d9a7cea",
+          "range_sha256": "6f3c5866a1816588f1676435e1bb4403618373d498d83160466beec80293bd36",
+          "local_source": "../../../desktop/src/assistant-composer.ts"
+        },
+        {
+          "path": "desktop/src/voice-controls.ts",
+          "line": 18,
+          "end_line": 36,
+          "file_sha256": "3fca4ca53cad85a812ab4cd34deb63904894fba02b3cfe62fba6be87ead1c4a3",
+          "range_sha256": "fbcf64090ef8dd4244760778a19421576f0123ecc0852fceba39730b1a5cfd41",
+          "local_source": "../../../desktop/src/voice-controls.ts"
+        }
+      ]
+    }
+  ]
+}

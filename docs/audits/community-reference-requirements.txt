@@ -1,0 +1,4 @@
+# Isolated offline audit only; never install into Alden product runtimes.
+leidenalg==0.12.0
+igraph==1.0.0
+texttable==1.7.2

@@ -1,0 +1,2955 @@
+{
+  "schema": 1,
+  "kind": "static-only-cli-receipts",
+  "browser_rendering": "not-run",
+  "export": "not-run",
+  "native": "not-run",
+  "formal_audit": "held-incomplete",
+  "runs": {
+    "validate": [
+      {
+        "family": "system",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "architecture",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.architecture.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "architecture",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.architecture.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.architecture.json",
+            "sha256": "c85d4602e58a1a7f01465f1840efb81b17d233d52cbb6d4dc29579b467c84157",
+            "bytes": 5933
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "architecture",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.architecture.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "c85d4602e58a1a7f01465f1840efb81b17d233d52cbb6d4dc29579b467c84157",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 93.9,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 7.5,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 118,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": true,
+              "emptyTopPx": 40,
+              "emptyTopRatio": 0.114,
+              "occupiedTop": 40,
+              "viewBoxTop": 0,
+              "canvasHeight": 350,
+              "typicalNodeHeight": 62,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "recognized-declared-wide",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 1012.5,
+              "actualBudgetPx": 1012.5,
+              "actualReaderWidth": 1042.5,
+              "desiredReaderWidth": 1042.5,
+              "viewportCap": 1376,
+              "limit": "source-size",
+              "requestedTargetPx": 7.5,
+              "requestedTargetMet": true,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "edge",
+                "id": "surface-bridge",
+                "from": "surface",
+                "to": "bridge"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 7.5,
+              "semanticTextCount": 22
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "voice",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.workflow.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "workflow",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.workflow.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.workflow.json",
+            "sha256": "062344e5364d7fa85ad491daace26fcc7ff58933f1414fccc848d7258b912b02",
+            "bytes": 5356
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "workflow",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.workflow.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "062344e5364d7fa85ad491daace26fcc7ff58933f1414fccc848d7258b912b02",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 9,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 8,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 3,
+              "shortEndpointSegmentCount": 3,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "turn"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "collection",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.workflow.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "workflow",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.workflow.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.workflow.json",
+            "sha256": "4372142fcf2f2f2a176b4a0291f6da093a6aa92788d2a31e6e079c7fe60647f3",
+            "bytes": 5525
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "workflow",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.workflow.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "4372142fcf2f2f2a176b4a0291f6da093a6aa92788d2a31e6e079c7fe60647f3",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 6,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 8,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 1,
+              "shortEndpointSegmentCount": 1,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "schedule"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "lineage",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "dataflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.dataflow.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "dataflow",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.dataflow.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.dataflow.json",
+            "sha256": "e76748f3b7244011fe99d1f5ff8c5bb2f4243b2e5312a15b43cdd98d2ace007e",
+            "bytes": 5160
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "dataflow",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.dataflow.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "e76748f3b7244011fe99d1f5ff8c5bb2f4243b2e5312a15b43cdd98d2ace007e",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 1,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 4,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 7,
+              "maxBends": 4,
+              "routesOverSuggestedBends": 1,
+              "maxStretch": 1.201,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 24,
+              "minInteriorSegmentPx": 53,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [
+                {
+                  "left": {
+                    "id": "records-detail",
+                    "from": "records",
+                    "to": "detail",
+                    "label": "상세 근거",
+                    "collectionIndex": 2,
+                    "artifactIndex": 3
+                  },
+                  "right": {
+                    "id": "scope-paths",
+                    "from": "scope",
+                    "to": "paths",
+                    "label": "현재 권한",
+                    "collectionIndex": 6,
+                    "artifactIndex": 7
+                  },
+                  "point": [
+                    665,
+                    157
+                  ]
+                }
+              ],
+              "detours": [
+                {
+                  "relationship": {
+                    "id": "scope-paths",
+                    "from": "scope",
+                    "to": "paths",
+                    "label": "현재 권한",
+                    "collectionIndex": 6,
+                    "artifactIndex": 7
+                  },
+                  "bends": 4,
+                  "stretch": 1.201
+                }
+              ]
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "raw"
+              },
+              "minimumSourceTextPx": 7,
+              "minimumProjectedTextPx": 7,
+              "semanticTextCount": 21
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "mcp",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.workflow.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "workflow",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.workflow.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.workflow.json",
+            "sha256": "9662ea2f38518faf6578a1bfc8922415b8ddd6201ca283bfe96c7b2338a20614",
+            "bytes": 5905
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "workflow",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.workflow.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "9662ea2f38518faf6578a1bfc8922415b8ddd6201ca283bfe96c7b2338a20614",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 27,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 13,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 1,
+              "shortEndpointSegmentCount": 1,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "request"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 26
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "normalization",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.workflow.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "workflow",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.workflow.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.workflow.json",
+            "sha256": "fc3441e88f0450069ea36fb74765668d9f5edafbeeeb096875e52afeb294da8f",
+            "bytes": 5220
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "workflow",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.workflow.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "fc3441e88f0450069ea36fb74765668d9f5edafbeeeb096875e52afeb294da8f",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 50.4,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 61.2,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "detail"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 22
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "activity",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "lifecycle",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.lifecycle.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "lifecycle",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.lifecycle.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.lifecycle.json",
+            "sha256": "ebfd74c3762085e2a3fb51ce675837cda8a1a8e65f908bca9d0705ebc984bfd5",
+            "bytes": 6240
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "lifecycle",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.lifecycle.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "ebfd74c3762085e2a3fb51ce675837cda8a1a8e65f908bca9d0705ebc984bfd5",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 1,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 9,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8.523421588594704,
+              "maxBends": 2,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1.157,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 30,
+              "minInteriorSegmentPx": 40.3,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [
+                {
+                  "left": {
+                    "id": "pending-stopped",
+                    "from": "pending",
+                    "to": "stopped",
+                    "label": "교체·숨김",
+                    "collectionIndex": 4,
+                    "artifactIndex": 5
+                  },
+                  "right": {
+                    "id": "verify-failed",
+                    "from": "verify",
+                    "to": "failed",
+                    "label": "응답 불완전",
+                    "collectionIndex": 6,
+                    "artifactIndex": 7
+                  },
+                  "point": [
+                    535,
+                    209.99999999999997
+                  ]
+                }
+              ],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "request"
+              },
+              "minimumSourceTextPx": 9,
+              "minimumProjectedTextPx": 8.523421588594704,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "recovery",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.workflow.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "workflow",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.workflow.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.workflow.json",
+            "sha256": "614ed249b7af1526cc5a77e0cc6c81c76485bb12afaa15968afe1866a070d5b4",
+            "bytes": 5701
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "workflow",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.workflow.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "614ed249b7af1526cc5a77e0cc6c81c76485bb12afaa15968afe1866a070d5b4",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 16,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 8,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 4,
+              "shortEndpointSegmentCount": 4,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "reopen"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 26
+            },
+            "issues": []
+          }
+        }
+      },
+      {
+        "family": "evaluation",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "validate",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.workflow.json",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "schemaVersion": 1,
+          "ok": true,
+          "command": "validate",
+          "type": "workflow",
+          "input": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.workflow.json",
+          "candidate": {
+            "path": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.workflow.json",
+            "sha256": "257fe1711bf25ed2e7cddbb833e119a781774d1aa39389ab0ed9c9fd62b1fa7e",
+            "bytes": 5477
+          },
+          "candidateFrozen": true,
+          "nextAction": {
+            "command": "finalize",
+            "arguments": [
+              "workflow",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.workflow.json",
+              "<output.html>",
+              "--quality",
+              "showcase",
+              "--repo-root",
+              "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025",
+              "--candidate-sha256",
+              "257fe1711bf25ed2e7cddbb833e119a781774d1aa39389ab0ed9c9fd62b1fa7e",
+              "--json"
+            ]
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 50.4,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 6,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 20,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "receipt"
+              },
+              "minimumSourceTextPx": 6,
+              "minimumProjectedTextPx": 6,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          }
+        }
+      }
+    ],
+    "render": [
+      {
+        "family": "system",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "architecture",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.architecture.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "voice",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.workflow.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "collection",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.workflow.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "lineage",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "dataflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.dataflow.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "mcp",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.workflow.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "normalization",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.workflow.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "activity",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "lifecycle",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.lifecycle.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "recovery",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.workflow.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      },
+      {
+        "family": "evaluation",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "render",
+          "workflow",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.workflow.json",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.html",
+          "--quality",
+          "showcase",
+          "--repo-root",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0
+      }
+    ],
+    "check": [
+      {
+        "family": "system",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/system.html",
+          "artifact": {
+            "sha256": "c8cdef355063c6a3eaa5f4199e7affce27c461c9a3b2f8fe9a0b216eaf52ae1d",
+            "bytes": 825695
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 93.9,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 7.5,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 118,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": true,
+              "emptyTopPx": 40,
+              "emptyTopRatio": 0.114,
+              "occupiedTop": 40,
+              "viewBoxTop": 0,
+              "canvasHeight": 350,
+              "typicalNodeHeight": 62,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "recognized-declared-wide",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 1012.5,
+              "actualBudgetPx": 1012.5,
+              "actualReaderWidth": 1042.5,
+              "desiredReaderWidth": 1042.5,
+              "viewportCap": 1376,
+              "limit": "source-size",
+              "requestedTargetPx": 7.5,
+              "requestedTargetMet": true,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "edge",
+                "id": "surface-bridge",
+                "from": "surface",
+                "to": "bridge"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 7.5,
+              "semanticTextCount": 22
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "voice",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/voice.html",
+          "artifact": {
+            "sha256": "4b2f75facdac710d7d373c2a50290501bf437a6d6d9bf551b71293a435a4dd3c",
+            "bytes": 826045
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 9,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 8,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 3,
+              "shortEndpointSegmentCount": 3,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "turn"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "collection",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/collection.html",
+          "artifact": {
+            "sha256": "75b315d12344230d689a593f930d99a07c05ff9cb26a0ba4c1494bcc03470b2d",
+            "bytes": 826473
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 6,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 8,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 1,
+              "shortEndpointSegmentCount": 1,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "schedule"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "lineage",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/lineage.html",
+          "artifact": {
+            "sha256": "9292518368185a7242914ad3beec54ec84e7d81f7d37cc0d1ce3163587ed0d68",
+            "bytes": 820079
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 1,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 4,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 7,
+              "maxBends": 4,
+              "routesOverSuggestedBends": 1,
+              "maxStretch": 1.201,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 24,
+              "minInteriorSegmentPx": 53,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [
+                {
+                  "left": {
+                    "id": "records-detail",
+                    "from": "records",
+                    "to": "detail",
+                    "label": "상세 근거",
+                    "collectionIndex": 2,
+                    "artifactIndex": 3
+                  },
+                  "right": {
+                    "id": "scope-paths",
+                    "from": "scope",
+                    "to": "paths",
+                    "label": "현재 권한",
+                    "collectionIndex": 6,
+                    "artifactIndex": 7
+                  },
+                  "point": [
+                    665,
+                    157
+                  ]
+                }
+              ],
+              "detours": [
+                {
+                  "relationship": {
+                    "id": "scope-paths",
+                    "from": "scope",
+                    "to": "paths",
+                    "label": "현재 권한",
+                    "collectionIndex": 6,
+                    "artifactIndex": 7
+                  },
+                  "bends": 4,
+                  "stretch": 1.201
+                }
+              ]
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "raw"
+              },
+              "minimumSourceTextPx": 7,
+              "minimumProjectedTextPx": 7,
+              "semanticTextCount": 21
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "mcp",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/mcp.html",
+          "artifact": {
+            "sha256": "eb45fcbe70acc9ce40fb1fa11366397598fef96986a1637b3029fe9fe46c2664",
+            "bytes": 828506
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 27,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 13,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 1,
+              "shortEndpointSegmentCount": 1,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "request"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 26
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "normalization",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/normalization.html",
+          "artifact": {
+            "sha256": "6fa8362f8f680cfc96cd904a9ec9524b29eac6689907acd22631200b2fc86131",
+            "bytes": 824738
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 50.4,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 61.2,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "detail"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 22
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "activity",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/activity.html",
+          "artifact": {
+            "sha256": "398d78b4f40ad6b3fb06ff1ff661e7c86ac7dd2bd4c1eae4580fa2a482058c38",
+            "bytes": 828453
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 1,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 9,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8.523421588594704,
+              "maxBends": 2,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1.157,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 30,
+              "minInteriorSegmentPx": 40.3,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [
+                {
+                  "left": {
+                    "id": "pending-stopped",
+                    "from": "pending",
+                    "to": "stopped",
+                    "label": "교체·숨김",
+                    "collectionIndex": 4,
+                    "artifactIndex": 5
+                  },
+                  "right": {
+                    "id": "verify-failed",
+                    "from": "verify",
+                    "to": "failed",
+                    "label": "응답 불완전",
+                    "collectionIndex": 6,
+                    "artifactIndex": 7
+                  },
+                  "point": [
+                    535,
+                    209.99999999999997
+                  ]
+                }
+              ],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "request"
+              },
+              "minimumSourceTextPx": 9,
+              "minimumProjectedTextPx": 8.523421588594704,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "recovery",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/recovery.html",
+          "artifact": {
+            "sha256": "d259fa39bedaaf54bfd1921ae3acd862e58e47265317c531c570561cd02ff250",
+            "bytes": 828557
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 16,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 8,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 8,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 4,
+              "shortEndpointSegmentCount": 4,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "reopen"
+              },
+              "minimumSourceTextPx": 8,
+              "minimumProjectedTextPx": 8,
+              "semanticTextCount": 26
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      },
+      {
+        "family": "evaluation",
+        "command": [
+          "/opt/homebrew/Cellar/node/26.12.0/bin/node",
+          "/Users/twoimo/.agents/skills/archify/versions/v3.2.0/bin/archify.mjs",
+          "check",
+          "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.html",
+          "--json"
+        ],
+        "cwd": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027",
+        "exit_code": 0,
+        "receipt": {
+          "ok": true,
+          "file": "/Users/twoimo/Documents/Codex/2026-10-07/macos-ai-alden-ai-1-cpu/work/alden-explicit-references-20261025/docs/architecture/alden-20261027/evaluation.html",
+          "artifact": {
+            "sha256": "c0a21a4ab852d430480336e384c71f587bb993cffe9b4c58a15bd47954f5ad2d",
+            "bytes": 826424
+          },
+          "checks": [
+            {
+              "name": "single_svg",
+              "ok": true,
+              "details": [
+                "found 1 <svg> block(s)"
+              ]
+            },
+            {
+              "name": "finite_svg",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "orthogonal_arrows",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "label_route_clearance",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_crossings",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "relationship_corridors",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "container_border_runs",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "route_rhythm",
+              "ok": true,
+              "details": []
+            },
+            {
+              "name": "legend_clearance",
+              "ok": true,
+              "details": []
+            }
+          ],
+          "composition": {
+            "schemaVersion": 1,
+            "profile": "showcase",
+            "status": "pass",
+            "summary": {
+              "errors": 0,
+              "warnings": 0
+            },
+            "metrics": {
+              "properCrossings": 0,
+              "resolvedCrossovers": 0,
+              "ambiguousCorridors": 0,
+              "arrowheadCollisions": 0,
+              "containerBorderRuns": 0,
+              "labelRouteClearanceIssues": 0,
+              "labelCanvasOverflowIssues": 0,
+              "minLabelRouteClearance": 50.4,
+              "desktopReadabilityIssues": 0,
+              "viewportHeightIssues": 0,
+              "minProjectedNodeTextPx": 6,
+              "maxBends": 0,
+              "routesOverSuggestedBends": 0,
+              "maxStretch": 1,
+              "routesOverSuggestedStretch": 0,
+              "minSegmentPx": 20,
+              "minInteriorSegmentPx": null,
+              "shortSegmentCount": 0,
+              "shortEndpointSegmentCount": 0,
+              "shortInteriorSegmentCount": 0,
+              "microSegmentCount": 0
+            },
+            "suggestedLimits": {
+              "bendsPerRelationship": 2,
+              "stretch": 1.35,
+              "segmentPx": 16,
+              "microSegmentPx": 8
+            },
+            "routeReview": {
+              "crossings": [],
+              "detours": []
+            },
+            "leadingSpace": {
+              "measured": false,
+              "reviewSuggested": false
+            },
+            "desktopReadability": {
+              "budgetBasis": "legacy-930",
+              "readerContract": "declared-wide-v1",
+              "availableDiagramWidth": 930,
+              "actualBudgetPx": 930,
+              "limit": "legacy",
+              "requestedTargetPx": null,
+              "requestedTargetMet": null,
+              "hardFloorPx": 6,
+              "hardFloorMet": true,
+              "minimumOwner": {
+                "kind": "node",
+                "id": "receipt"
+              },
+              "minimumSourceTextPx": 6,
+              "minimumProjectedTextPx": 6,
+              "semanticTextCount": 24
+            },
+            "issues": []
+          },
+          "provenance": "unknown"
+        }
+      }
+    ]
+  }
+}

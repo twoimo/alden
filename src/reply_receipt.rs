@@ -466,6 +466,22 @@ fn known_reason(code: &str) -> Option<&'static str> {
         "retrieval_command_failed" => Some("검색 명령 실행 실패"),
         "operator_dismissed" => Some("운영자가 넘김"),
         "link_unavailable" => Some("링크를 못 읽음"),
+        "link_timeout" => Some("링크 시간 초과"),
+        "link_dns_timeout" => Some("링크 주소 확인 시간 초과"),
+        "link_dns_unavailable" => Some("링크 주소를 찾지 못함"),
+        "link_not_public" => Some("공개 링크가 아님"),
+        "link_connection_timeout" => Some("링크 연결 시간 초과"),
+        "link_connection_unavailable" => Some("링크에 연결하지 못함"),
+        "link_http_unavailable" => Some("링크 페이지를 받지 못함"),
+        "link_redirect_unavailable" => Some("링크 이동을 따르지 못함"),
+        "link_encoding_unavailable" => Some("링크 인코딩을 읽지 못함"),
+        "link_read_timeout" => Some("링크 본문 시간 초과"),
+        "link_read_unavailable" => Some("링크 본문을 읽지 못함"),
+        "link_response_budget" => Some("링크 응답이 너무 큼"),
+        "link_source_budget" => Some("링크 응답이 너무 크거나 비어 있음"),
+        "link_source_identity_invalid" => Some("링크 출처를 확인하지 못함"),
+        "link_format_unavailable" => Some("지원하지 않는 링크 형식"),
+        "link_binary_content" => Some("링크에서 읽을 수 있는 본문을 찾지 못함"),
         "similar_recent_self" => Some("비슷한 답변을 이미 보냄"),
         "identity_question" => Some("정체 확인 질문"),
         "identity_question_requires_owner" => Some("정체 확인은 운영자 몫"),
@@ -1453,10 +1469,39 @@ mod tests {
     }
 
     #[test]
+    fn link_failure_receipt_keeps_stage_specific_reason() {
+        let room = render_room(
+            "fixture",
+            &[generation(
+                "link-failure",
+                json!({
+                    "status":"skipped", "decision":"skip", "reply":"",
+                    "reason":"link_http_unavailable", "retrieval":{"attempted":false}
+                }),
+            )],
+            10,
+        );
+        assert_eq!(room["receipts"][0]["reason_code"], "link_http_unavailable");
+        assert_eq!(
+            room["receipts"][0]["reason_text"],
+            "링크 페이지를 받지 못함"
+        );
+        assert!(room["lines"][0]
+            .as_str()
+            .unwrap()
+            .contains("링크 페이지를 받지 못함"));
+    }
+
+    #[test]
     fn unknown_reason_codes_stay_readable_and_traceable() {
         // 목록에는 영어 식별자가 새지 않는다. 대신 원래 코드는 여전히
         // 추적할 수 있어야 한다 (2026-09-16).
         assert_eq!(reason_text("brand_new_reason"), "기록된 사유");
+        assert_eq!(
+            reason_text("link_http_unavailable"),
+            "링크 페이지를 받지 못함"
+        );
+        assert_eq!(reason_text("link_dns_unavailable"), "링크 주소를 찾지 못함");
         assert_eq!(reason_text("brand_new_reason: 왜 그런지"), "기록된 사유");
         assert_eq!(reason_text("social_reply:"), "대화 참여");
         assert!(reason_code_unknown("brand_new_reason"));

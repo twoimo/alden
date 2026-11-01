@@ -84,23 +84,19 @@ def _find_cli_bin() -> Path:
     if stable is not None:
         return stable
     p = Path(__file__).resolve()
-    bundle_bin = p.parent.parent / "bin" / "openkakao-cli"
-    if bundle_bin.is_file():
-        return bundle_bin
-    tauri_app_bin = Path(
-        "/Applications/OpenKakao Jarvis.app/Contents/Resources/bin/openkakao-cli"
+    # Compatibility applies only to these existing fixed locations, never PATH.
+    roots = (
+        p.parent.parent / "bin",
+        Path("/Applications/Alden.app/Contents/Resources/bin"),
+        Path("/Applications/AutoReplyMenu.app/Contents/Resources/bin"),
+        p.parents[1] / "target" / "release",
     )
-    if tauri_app_bin.is_file():
-        return tauri_app_bin
-    legacy_app_bin = Path(
-        "/Applications/AutoReplyMenu.app/Contents/Resources/bin/openkakao-cli"
-    )
-    if legacy_app_bin.is_file():
-        return legacy_app_bin
-    repo_bin = p.parents[1] / "target" / "release" / "openkakao-cli"
-    if repo_bin.is_file():
-        return repo_bin
-    return repo_bin
+    for directory in roots:
+        for name in ("alden-cli", "openkakao-cli"):
+            candidate = directory / name
+            if candidate.is_file():
+                return candidate
+    return roots[-1] / "alden-cli"
 
 BINARY = _find_cli_bin()
 PYTHON = os.environ.get("OPENKAKAO_PYTHON", "python3")

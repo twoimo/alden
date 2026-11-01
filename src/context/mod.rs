@@ -36,7 +36,6 @@ const CONTEXT_REPLY_BUNDLE_DECISION_LIMIT: usize = 6;
 const CONTEXT_REPLY_BUNDLE_MAX_JSON_BYTES: usize = 64 * 1024;
 const CONTEXT_KEYWORD_CANDIDATE_CAP: usize = 256;
 const CONTEXT_VECTOR_CANDIDATE_CAP: usize = 256;
-const CONTEXT_TOPIC_CANDIDATE_CAP: usize = 64;
 const STYLE_VECTOR_CANDIDATE_CAP: usize = 256;
 const REPLY_DECISION_CANDIDATE_CAP: usize = 128;
 const MAX_REPLY_EVIDENCE_IDS: usize = 64;
@@ -83,6 +82,7 @@ pub struct LiveContextEvent {
     pub attachment: String,
     #[serde(default)]
     pub message_type: i32,
+    /// Legacy wire field. Non-empty messages are indexed without a topic filter.
     #[serde(default)]
     pub interest_only: bool,
 }
@@ -977,205 +977,10 @@ fn classify_style_message(message: &str) -> StyleMessageFeatures {
     }
 }
 
-const TOPIC_LEXICON: &[(&str, &[&str])] = &[
-    (
-        "contact",
-        &[
-            "번호",
-            "연락처",
-            "전화번호",
-            "폰번호",
-            "핸드폰",
-            "휴대폰",
-            "전화",
-        ],
-    ),
-    (
-        "ax_macos",
-        &[
-            "ax api",
-            "axapi",
-            "손쉬운 사용",
-            "accessibility",
-            "axui",
-            "axtextarea",
-            "axshowmenu",
-        ],
-    ),
-    (
-        "computer_use",
-        &[
-            "컴퓨터 유즈",
-            "computer use",
-            "computer-use",
-            "스크린샷",
-            "픽셀",
-            "마우스",
-        ],
-    ),
-    (
-        "llm_tools",
-        &[
-            "토큰",
-            "cursor",
-            "grok",
-            "gemini",
-            "claude",
-            "chatgpt",
-            "가재코드",
-            "모델",
-        ],
-    ),
-    (
-        "kakao_auto",
-        &["자동답", "local-send", "reply-to", "카톡 답", "워커"],
-    ),
-    (
-        "business",
-        &[
-            "사업자",
-            "지원",
-            "세금",
-            "신청서",
-            "사업",
-            "창업",
-            "매출",
-            "영업",
-            "법인",
-            "스타트업",
-        ],
-    ),
-    ("infra", &["리눅스", "linux", "가상머신"]),
-    ("news", &["긱뉴스", "geeknews", "hada.io"]),
-    ("identity", &["나임", "연우지", "사람이지"]),
-    (
-        "stocks",
-        &[
-            "주식",
-            "증권",
-            "코스피",
-            "코스닥",
-            "나스닥",
-            "다우",
-            "배당",
-            "상장",
-            "공모주",
-            "etf",
-            "양도세",
-            "매수",
-            "매도",
-            "주가",
-        ],
-    ),
-    (
-        "coins",
-        &[
-            "코인",
-            "비트코인",
-            "이더리움",
-            "알트",
-            "업비트",
-            "빗썸",
-            "바이낸스",
-            "김치프리미엄",
-            "김프",
-            "btc",
-            "eth",
-            "blockchain",
-            "블록체인",
-        ],
-    ),
-    (
-        "investing",
-        &[
-            "투자",
-            "수익률",
-            "포트폴리오",
-            "자산배분",
-            "적립",
-            "펀드",
-            "재테크",
-            "시드",
-        ],
-    ),
-    (
-        "real_estate",
-        &[
-            "부동산",
-            "아파트",
-            "전세",
-            "월세",
-            "매매",
-            "청약",
-            "분양",
-            "등기",
-            "전세사기",
-            "집값",
-        ],
-    ),
-    ("auction", &["경매", "공매", "낙찰", "입찰", "경매물건"]),
-    (
-        "ai",
-        &[
-            "인공지능",
-            "챗gpt",
-            "chatgpt",
-            "지피티",
-            "llm",
-            "그록",
-            "grok",
-            "클로드",
-            "claude",
-            "제미니",
-            "gemini",
-            "머신러닝",
-            "딥러닝",
-            "openai",
-            "anthropic",
-        ],
-    ),
-];
-
-const INTEREST_TOPICS: &[&str] = &[
-    "stocks",
-    "coins",
-    "investing",
-    "real_estate",
-    "auction",
-    "business",
-    "ai",
-];
-const TOPIC_LEXICON_VERSION: &str = "2";
-
-fn classify_message_topics(message: &str) -> Vec<&'static str> {
-    let text = message.trim();
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let lower = text.to_ascii_lowercase();
-    let mut topics = Vec::new();
-    for (topic, needles) in TOPIC_LEXICON {
-        let matched = needles.iter().any(|needle| {
-            if needle.bytes().all(|byte| byte.is_ascii()) {
-                // See `topic_lexicon_ascii_needles_are_lowercase`: every ASCII
-                // needle is already lowercase, so matching the precomputed
-                // lowercase haystack avoids one String per needle per message.
-                lower.contains(*needle)
-            } else {
-                text.contains(needle)
-            }
-        });
-        if matched {
-            topics.push(*topic);
-        }
-    }
-    topics
-}
-
-fn message_has_interest_topic(message: &str) -> bool {
-    classify_message_topics(message)
-        .iter()
-        .any(|topic| INTEREST_TOPICS.contains(topic))
+/// Compatibility entry point: raw message text does not establish topics.
+/// Knowledge relationships are supplied by the OSK repository workflow.
+pub fn classify_message_topics(_message: &str) -> Vec<&'static str> {
+    Vec::new()
 }
 
 fn push_unique_fragment(parts: &mut Vec<String>, value: &str) {
@@ -1264,106 +1069,6 @@ fn live_index_text(message: &str, attachment: &str, message_type: i32) -> String
         text.truncate(LIVE_CONTEXT_MAX_FIELD_BYTES);
     }
     text
-}
-
-fn ensure_topic_lexicon(tx: &rusqlite::Transaction<'_>) -> Result<()> {
-    let current: Option<String> = tx
-        .query_row(
-            "SELECT value FROM context_retrieval_meta WHERE key = 'topic_lexicon_version'",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if current.as_deref() == Some(TOPIC_LEXICON_VERSION) {
-        return Ok(());
-    }
-    backfill_message_topics(tx)?;
-    tx.execute(
-        "INSERT INTO context_retrieval_meta(key, value)
-         VALUES ('topic_lexicon_version', ?1)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        [TOPIC_LEXICON_VERSION],
-    )?;
-    Ok(())
-}
-
-fn insert_message_topics(
-    conn: &Connection,
-    message_id: i64,
-    chat: &str,
-    source: &str,
-    date: &str,
-    message: &str,
-) -> Result<()> {
-    if message_id <= 0 {
-        return Ok(());
-    }
-    for topic in classify_message_topics(message) {
-        let added = conn.execute(
-            "INSERT OR IGNORE INTO context_message_topics(message_id, topic)
-             VALUES (?1, ?2)",
-            params![message_id, topic],
-        )?;
-        if added == 0 {
-            continue;
-        }
-        conn.execute(
-            "INSERT INTO context_topic_stats(
-                chat, source, topic, message_count, last_date
-             ) VALUES (?1, ?2, ?3, 1, ?4)
-             ON CONFLICT(chat, source, topic) DO UPDATE SET
-                message_count = message_count + 1,
-                last_date = CASE
-                    WHEN excluded.last_date > last_date THEN excluded.last_date
-                    ELSE last_date
-                END",
-            params![chat, source, topic, date],
-        )?;
-    }
-    Ok(())
-}
-
-fn backfill_message_topics(conn: &Connection) -> Result<()> {
-    let mut last_id = 0_i64;
-    loop {
-        let mut stmt = conn.prepare(
-            "SELECT id, chat, source, date, message
-             FROM context_messages
-             WHERE id > ?1
-             ORDER BY id ASC
-             LIMIT 1000",
-        )?;
-        let batch = stmt
-            .query_map([last_id], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(stmt);
-        if batch.is_empty() {
-            break;
-        }
-        for (id, chat, source, date, message) in batch {
-            last_id = id;
-            insert_message_topics(conn, id, &chat, &source, &date, &message)?;
-        }
-    }
-    Ok(())
-}
-
-fn context_topic_tables_ready(conn: &Connection) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master
-         WHERE type = 'table' AND name = 'context_message_topics'",
-        [],
-        |row| row.get(0),
-    )?;
-    Ok(count == 1)
 }
 
 #[cfg(test)]
@@ -1919,10 +1624,7 @@ fn mark_bot_sent_features(features_json: &str, event_id: &str, offset_seconds: i
             "content_kind".to_string(),
             serde_json::json!("bot_sent_reply"),
         );
-        object.insert(
-            "bot_sent_event_id".to_string(),
-            serde_json::json!(event_id),
-        );
+        object.insert("bot_sent_event_id".to_string(), serde_json::json!(event_id));
         object.insert(
             "bot_sent_offset_seconds".to_string(),
             serde_json::json!(offset_seconds),
@@ -2384,8 +2086,7 @@ pub fn ingest_live_context_events(
             clear_pending_participant_burst(&mut source);
         } else {
             let index_text = live_index_text(message, &event.attachment, event.message_type);
-            let should_index = !index_text.is_empty()
-                && (!event.interest_only || message_has_interest_topic(&index_text));
+            let should_index = !index_text.is_empty();
             if should_index {
                 tx.execute(
                     "INSERT INTO context_messages(
@@ -2401,14 +2102,6 @@ pub fn ingest_live_context_events(
                     ],
                 )?;
                 context_message_id = Some(tx.last_insert_rowid());
-                insert_message_topics(
-                    &tx,
-                    context_message_id.unwrap_or(0),
-                    chat,
-                    &source_id,
-                    &date,
-                    &index_text,
-                )?;
                 indexed_messages += 1;
             }
 
@@ -2696,10 +2389,7 @@ pub fn index_csv_with_queue(
     }
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM context_messages WHERE source = ?1", [&source])?;
-    tx.execute(
-        "DELETE FROM owner_style WHERE source = ?1",
-        [&source],
-    )?;
+    tx.execute("DELETE FROM owner_style WHERE source = ?1", [&source])?;
     tx.execute(
         "DELETE FROM owner_style_profile WHERE source = ?1",
         [&source],
@@ -2725,7 +2415,8 @@ pub fn index_csv_with_queue(
         // not produce a response-time sample either.
         let bot_send = if user == STYLE_USER {
             row_sent_at.and_then(|sent_at| {
-                let (matched, ambiguous) = match_confirmed_send(&confirmed_sends, &message, sent_at);
+                let (matched, ambiguous) =
+                    match_confirmed_send(&confirmed_sends, &message, sent_at);
                 matched
                     .filter(|_| !ambiguous)
                     .map(|send| (send, sent_at - send.sent_at))
@@ -2756,7 +2447,6 @@ pub fn index_csv_with_queue(
             .and_then(|mut stmt| {
                 stmt.execute(params![source, chat, date, user, message, vector_to_bytes(&vector)])
             })?;
-        insert_message_topics(&tx, tx.last_insert_rowid(), chat, &source, &date, &message)?;
         if user == STYLE_USER {
             let mut features = classify_style_message(&message);
             if let Some((send, offset)) = bot_send {
@@ -2932,21 +2622,19 @@ fn response_time_distribution_second_splits(
         }
         let first_midpoint = first_start + (first_end - first_start) / 2;
         let first_split = first_candidates[first_midpoint];
-        let lower =
-            second_candidates.partition_point(|boundary| *boundary < first_split + minimum);
+        let lower = second_candidates.partition_point(|boundary| *boundary < first_split + minimum);
         let scan_start = second_start.max(lower);
         let mut best: Option<(f64, usize)> = None;
         for position in scan_start..=second_end {
             let second_split = second_candidates[position];
-            let sse =
-                response_time_segment_sse(prefix_sum, prefix_square_sum, 0, first_split)
-                    + response_time_segment_sse(
-                        prefix_sum,
-                        prefix_square_sum,
-                        first_split,
-                        second_split,
-                    )
-                    + response_time_segment_sse(prefix_sum, prefix_square_sum, second_split, total);
+            let sse = response_time_segment_sse(prefix_sum, prefix_square_sum, 0, first_split)
+                + response_time_segment_sse(
+                    prefix_sum,
+                    prefix_square_sum,
+                    first_split,
+                    second_split,
+                )
+                + response_time_segment_sse(prefix_sum, prefix_square_sum, second_split, total);
             if best.is_none_or(|(best_sse, _)| sse < best_sse) {
                 best = Some((sse, position));
             }
@@ -3674,8 +3362,14 @@ pub fn record_reply_decision(db_path: &Path, record_json: &str) -> Result<bool> 
         }
     }
     let mut evidence_map = serde_json::Map::new();
-    evidence_map.insert("evidence_ids".into(), serde_json::to_value(&input.evidence_ids)?);
-    evidence_map.insert("style_policy_version".into(), serde_json::to_value(&input.style_policy_version)?);
+    evidence_map.insert(
+        "evidence_ids".into(),
+        serde_json::to_value(&input.evidence_ids)?,
+    );
+    evidence_map.insert(
+        "style_policy_version".into(),
+        serde_json::to_value(&input.style_policy_version)?,
+    );
     if let Some(prov) = &input.provenance {
         evidence_map.insert("provenance".into(), prov.clone());
     }
@@ -4299,7 +3993,15 @@ pub fn search(
 ) -> Result<Vec<ContextResult>> {
     // 기본 경로는 결정적 로컬 해시 임베더를 주입해 리팩터링 이전과 동일한
     // 검색 결과·정렬을 그대로 유지한다.
-    search_with_embedder(db_path, chat, source, query, mode, limit, &LocalHashEmbedder)
+    search_with_embedder(
+        db_path,
+        chat,
+        source,
+        query,
+        mode,
+        limit,
+        &LocalHashEmbedder,
+    )
 }
 
 /// 착탈식 임베더를 주입받는 검색 진입점. 기본 `search`는 `LocalHashEmbedder`를
@@ -5258,8 +4960,9 @@ fn set_context_db_permissions(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
 
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-                .with_context(|| format!("secure context database directory {}", parent.display()))?;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).with_context(|| {
+                format!("secure context database directory {}", parent.display())
+            })?;
         }
 
         for file in [
@@ -5296,11 +4999,10 @@ fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
 }
 
 fn checkpoint_context_wal_truncate(conn: &Connection) -> Result<()> {
-    let (busy, log_frames, checkpointed_frames): (i64, i64, i64) = conn.query_row(
-        "PRAGMA wal_checkpoint(TRUNCATE)",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
+    let (busy, log_frames, checkpointed_frames): (i64, i64, i64) =
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
     if busy != 0 {
         anyhow::bail!(
             "context WAL truncate checkpoint remained busy ({checkpointed_frames}/{log_frames} frames checkpointed)"
@@ -5945,20 +5647,24 @@ fn migrate_live_context_schema(conn: &Connection) -> Result<()> {
         .optional()?;
     match version.as_deref() {
         Some("1") => {
-            backfill_message_topics(&tx)?;
             tx.execute(
                 "UPDATE context_retrieval_meta
                  SET value = ?1
                  WHERE key = 'live_context_schema'",
                 [LIVE_CONTEXT_SCHEMA_VERSION],
             )?;
-            ensure_topic_lexicon(&tx)?;
         }
-        Some(value) if value == LIVE_CONTEXT_SCHEMA_VERSION => {
-            ensure_topic_lexicon(&tx)?;
-        }
+        Some(value) if value == LIVE_CONTEXT_SCHEMA_VERSION => {}
         _ => anyhow::bail!("live context index migration required"),
     }
+    // Keep the legacy schema callable, but retire lexical topic projections on
+    // every writable open, including databases already at the current version.
+    // Source messages, event identities and search vectors are untouched.
+    tx.execute_batch(
+        "DELETE FROM context_message_topics;
+         DELETE FROM context_topic_stats;
+         DELETE FROM context_retrieval_meta WHERE key = 'topic_lexicon_version';",
+    )?;
     tx.commit()?;
     Ok(())
 }
@@ -6141,65 +5847,6 @@ fn vector_search_excluding(
     Ok(candidates)
 }
 
-fn topic_search_excluding(
-    conn: &Connection,
-    chat: Option<&str>,
-    source: Option<&str>,
-    query: &str,
-    excluded_context_ids: &BTreeSet<i64>,
-) -> Result<Vec<ContextCandidate>> {
-    if !context_topic_tables_ready(conn)? {
-        return Ok(Vec::new());
-    }
-    let topics = classify_message_topics(query);
-    if topics.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut stmt = conn.prepare(
-        "SELECT m.id, m.chat, m.source, m.date, m.user_name, m.message
-         FROM context_message_topics t
-         JOIN context_messages m ON m.id = t.message_id
-         WHERE t.topic = ?1
-           AND (?2 IS NULL OR m.chat = ?2)
-           AND (?3 IS NULL OR m.source = ?3)
-         ORDER BY m.id DESC
-         LIMIT ?4",
-    )?;
-    let candidate_limit = CONTEXT_TOPIC_CANDIDATE_CAP.saturating_add(excluded_context_ids.len());
-    let mut results = Vec::new();
-    let mut seen = BTreeSet::new();
-    for topic in topics {
-        let rows = stmt.query_map(
-            params![topic, chat, source, candidate_limit as i64],
-            |row| {
-                Ok(ContextCandidate {
-                    id: row.get(0)?,
-                    result: ContextResult {
-                        chat: row.get(1)?,
-                        source: row.get(2)?,
-                        date: row.get(3)?,
-                        user: row.get(4)?,
-                        message: row.get(5)?,
-                        score: 1.0,
-                        mode: "topic".into(),
-                    },
-                })
-            },
-        )?;
-        for row in rows {
-            let row = row?;
-            if excluded_context_ids.contains(&row.id) || !seen.insert(row.id) {
-                continue;
-            }
-            results.push(row);
-            if results.len() == CONTEXT_TOPIC_CANDIDATE_CAP {
-                return Ok(results);
-            }
-        }
-    }
-    Ok(results)
-}
-
 fn hybrid_search_excluding(
     conn: &Connection,
     chat: Option<&str>,
@@ -6227,18 +5874,6 @@ fn hybrid_search_excluding(
         })
         .collect::<Vec<_>>();
     for (rank, item) in vector.into_iter().enumerate() {
-        let score = 1.0 / (rank as f32 + 1.0);
-        if let Some(existing) = merged.iter_mut().find(|existing| existing.id == item.id) {
-            existing.result.score += score;
-        } else {
-            let mut item = item;
-            item.result.score = score;
-            item.result.mode = "hybrid".into();
-            merged.push(item);
-        }
-    }
-    let topics = topic_search_excluding(conn, chat, source, query, excluded_context_ids)?;
-    for (rank, item) in topics.into_iter().enumerate() {
         let score = 1.0 / (rank as f32 + 1.0);
         if let Some(existing) = merged.iter_mut().find(|existing| existing.id == item.id) {
             existing.result.score += score;
@@ -6368,11 +6003,10 @@ mod tests {
 
         writer.execute_batch("BEGIN EXCLUSIVE")?;
         let reader = open_db_readonly(&db)?;
-        let messages: i64 = reader.query_row(
-            "SELECT COUNT(*) FROM context_messages",
-            [],
-            |row| row.get(0),
-        )?;
+        let messages: i64 =
+            reader.query_row("SELECT COUNT(*) FROM context_messages", [], |row| {
+                row.get(0)
+            })?;
         writer.execute_batch("ROLLBACK")?;
         assert_eq!(messages, 0);
         Ok(())
@@ -6387,7 +6021,10 @@ mod tests {
         conn.execute(
             "INSERT INTO context_messages(source, chat, date, user_name, message, vector)
              VALUES ('source', 'chat', '2026-09-24', 'user', ?1, ?2)",
-            params![retired_message, vector_to_bytes(&encode_vector(retired_message))],
+            params![
+                retired_message,
+                vector_to_bytes(&encode_vector(retired_message))
+            ],
         )?;
         checkpoint_context_wal_truncate(&conn)?;
 
@@ -6400,7 +6037,9 @@ mod tests {
         let wal = fs::read(sqlite_sidecar_path(&db, "-wal")).unwrap_or_default();
         let main_db = fs::read(&db)?;
         assert_eq!(wal.len(), 0);
-        assert!(!wal.windows(retired_message.len()).any(|w| w == retired_message.as_bytes()));
+        assert!(!wal
+            .windows(retired_message.len())
+            .any(|w| w == retired_message.as_bytes()));
         assert!(!main_db
             .windows(retired_message.len())
             .any(|w| w == retired_message.as_bytes()));
@@ -6422,15 +6061,15 @@ mod tests {
         )?;
         set_context_db_permissions(&db)?;
 
-        assert_eq!(fs::metadata(dir.path())?.permissions().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::metadata(dir.path())?.permissions().mode() & 0o777,
+            0o700
+        );
         assert_eq!(fs::metadata(&db)?.permissions().mode() & 0o777, 0o600);
         for suffix in ["-wal", "-shm"] {
             let sidecar = sqlite_sidecar_path(&db, suffix);
             if sidecar.exists() {
-                assert_eq!(
-                    fs::metadata(sidecar)?.permissions().mode() & 0o777,
-                    0o600
-                );
+                assert_eq!(fs::metadata(sidecar)?.permissions().mode() & 0o777, 0o600);
             }
         }
         Ok(())
@@ -6472,12 +6111,8 @@ mod tests {
 
     #[test]
     fn derive_deferential_endings_are_formal_honorific() {
-        let profile = style_profile_with_stats(
-            &[("습니다", 8), ("합니다", 4), ("요", 2)],
-            0,
-            5,
-            &[],
-        );
+        let profile =
+            style_profile_with_stats(&[("습니다", 8), ("합니다", 4), ("요", 2)], 0, 5, &[]);
         let (honorific, formality) = derive_style_profile_honorific_formality(&profile);
         assert_eq!(honorific, Honorific::Honorific);
         assert_eq!(formality, Formality::Formal);
@@ -6486,12 +6121,7 @@ mod tests {
     #[test]
     fn derive_polite_with_emoji_is_informal_honorific() {
         // 해요체 위주 + 이모지/축약이 섞이면 존댓말이지만 비격식체.
-        let profile = style_profile_with_stats(
-            &[("요", 10), ("죠", 3)],
-            6,
-            2,
-            &[("ㅋㅋ", 4)],
-        );
+        let profile = style_profile_with_stats(&[("요", 10), ("죠", 3)], 6, 2, &[("ㅋㅋ", 4)]);
         let (honorific, formality) = derive_style_profile_honorific_formality(&profile);
         assert_eq!(honorific, Honorific::Honorific);
         assert_eq!(formality, Formality::Informal);
@@ -6521,12 +6151,8 @@ mod tests {
     #[test]
     fn derive_deferential_overwhelmed_by_emoji_is_informal() {
         // 합쇼체가 있어도 이모지·축약 신호가 우세하면 비격식체로 본다.
-        let profile = style_profile_with_stats(
-            &[("습니다", 2), ("요", 6)],
-            20,
-            1,
-            &[("ㅋㅋㅋ", 10)],
-        );
+        let profile =
+            style_profile_with_stats(&[("습니다", 2), ("요", 6)], 20, 1, &[("ㅋㅋㅋ", 10)]);
         let (honorific, formality) = derive_style_profile_honorific_formality(&profile);
         assert_eq!(honorific, Honorific::Honorific);
         assert_eq!(formality, Formality::Informal);
@@ -6647,85 +6273,87 @@ mod tests {
         ));
     }
     #[test]
-    fn topic_lexicon_ascii_needles_are_lowercase() {
-        // `classify_message_topics` matches ASCII needles against the already
-        // lowercased haystack without re-lowercasing them (saves one String per
-        // needle per message). That shortcut is only correct while every ASCII
-        // needle is stored lowercase; this guards future lexicon edits.
-        for (topic, needles) in TOPIC_LEXICON {
-            for needle in *needles {
-                if needle.bytes().all(|byte| byte.is_ascii()) {
-                    assert_eq!(
-                        *needle,
-                        needle.to_ascii_lowercase(),
-                        "topic `{topic}` has a non-lowercase ASCII needle `{needle}`"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
     fn assistant_tell_style_matches_case_insensitively() {
         assert!(is_assistant_tell_style("I CAN HELP with that"));
         assert!(is_assistant_tell_style("도와드릴 수 있어요"));
         assert!(!is_assistant_tell_style("오늘 저녁에 뭐 해?"));
     }
 
+    fn topic_test_rows(conn: &Connection, sql: &str) -> Vec<Vec<rusqlite::types::Value>> {
+        let mut stmt = conn.prepare(sql).unwrap();
+        let columns = stmt.column_count();
+        stmt.query_map([], |row| (0..columns).map(|i| row.get(i)).collect())
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
+    fn assert_no_message_topics(conn: &Connection) {
+        for table in ["context_message_topics", "context_topic_stats"] {
+            let count: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 0, "{table}");
+        }
+    }
+
     #[test]
-    fn classify_message_topics_assigns_contact_and_ax() {
-        assert_eq!(
-            classify_message_topics("연락처 저장함 010-1234-5678"),
-            vec!["contact"]
-        );
-        assert!(classify_message_topics("어제 번호 이야기해줫던거 머더라").contains(&"contact"));
-        assert!(
-            classify_message_topics("AX API가 손쉬운 사용으로 카톡 조작함").contains(&"ax_macos")
-        );
-        assert!(classify_message_topics("토큰 부자ㄷㄷ").contains(&"llm_tools"));
-        assert!(classify_message_topics("ㅋㅋㅋ").is_empty());
-        assert!(classify_message_topics("코스피 배당주 투자").contains(&"stocks"));
-        assert!(classify_message_topics("업비트 비트코인").contains(&"coins"));
-        assert!(classify_message_topics("전세 부동산 경매").contains(&"real_estate"));
-        assert!(classify_message_topics("전세 부동산 경매").contains(&"auction"));
-        assert!(classify_message_topics("그록 인공지능").contains(&"ai"));
-        assert!(message_has_interest_topic("공모주 넣었어요"));
-        assert!(!message_has_interest_topic("ㅋㅋㅋ"));
+    fn topic_classifier_compatibility_never_infers_categories() {
+        for text in [
+            "",
+            "stock STOCK stocks AI ai crypto CRYPTO 주식 비트코인 투자 인공지능 ",
+            "연락처 번호 AX API 손쉬운 사용 토큰 모델 컴퓨터 유즈 자동답 ",
+            "코스피 배당주 업비트 전세 부동산 경매 사업 그록 chatgpt ",
+        ] {
+            for repetitions in [1, 32] {
+                assert!(classify_message_topics(&text.repeat(repetitions)).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn live_index_text_preserves_attachment_content_without_topics() {
         let indexed = live_index_text(
             "사진",
             r#"{"urls":["https://grok.com/supergrok"],"src_message":"67% 슈퍼그록"}"#,
             2,
         );
-        assert!(indexed.contains("https://grok.com/supergrok"));
-        assert!(indexed.contains("슈퍼그록"));
-        assert!(message_has_interest_topic(&indexed));
+        assert_eq!(indexed, "사진\nhttps://grok.com/supergrok\n67% 슈퍼그록");
+        assert!(classify_message_topics(&indexed).is_empty());
     }
 
     #[test]
-    fn interest_only_indexes_investing_and_skips_chatter() {
+    fn interest_only_compatibility_preserves_all_messages_without_topics() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("interest-only.sqlite3");
         let chat_id = 415878504092105;
         let chat = "변우중";
-        let mut keep = live_event(chat_id, 11, "변우중", "비트코인 지금 들어가도 됨?", 100);
-        keep.interest_only = true;
-        let mut skip = live_event(chat_id, 12, "변우중", "ㅋㅋㅋ", 110);
-        skip.interest_only = true;
-        let mut photo = live_event(chat_id, 13, "변우중", "사진", 120);
-        photo.interest_only = true;
-        photo.message_type = 2;
-        photo.attachment = r#"{"src_message":"강남 아파트 경매 보셈"}"#.into();
-        ingest_live_context_events(
+        let repeated = "stock AI crypto 주식 비트코인 인공지능 ".repeat(32);
+        let mut events = vec![
+            live_event(chat_id, 11, "변우중", repeated.trim(), 100),
+            live_event(chat_id, 12, "변우중", "ㅋㅋㅋ", 110),
+            live_event(chat_id, 13, STYLE_USER, "ㅇㅇ 저장해둘게", 120),
+            live_event(chat_id, 14, "변우중", "사진", 130),
+        ];
+        for event in &mut events {
+            event.interest_only = true;
+        }
+        events[3].message_type = 2;
+        events[3].attachment = r#"{"src_message":"강남 아파트 경매 보셈"}"#.into();
+        let result = ingest_live_context_events(
             &db,
             TEST_ACCOUNT_FINGERPRINT,
             chat_id,
             chat,
             0,
-            &[keep, skip, photo],
+            &events,
             true,
             false,
         )
         .unwrap();
+        assert_eq!(result.indexed_messages, 4);
         let conn = open_db(&db).unwrap();
         let messages: Vec<String> = conn
             .prepare("SELECT message FROM context_messages ORDER BY id")
@@ -6734,103 +6362,167 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<_>>()
             .unwrap();
-        assert_eq!(messages.len(), 2);
-        assert!(messages.iter().any(|row| row.contains("비트코인")));
-        assert!(messages.iter().any(|row| row.contains("경매")));
-        assert!(!messages.iter().any(|row| row == "ㅋㅋㅋ"));
-        let topics: Vec<String> = conn
-            .prepare("SELECT DISTINCT topic FROM context_message_topics ORDER BY topic")
-            .unwrap()
-            .query_map([], |row| row.get(0))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        assert!(topics.iter().any(|topic| topic == "coins"));
-    }
-
-    #[test]
-    fn topic_overlay_recalls_contact_thread_without_shared_keyword() {
-        let dir = tempdir().unwrap();
-        let db = dir.path().join("topics.sqlite3");
-        let path = dir.path().join("chat.csv");
-        fs::write(
-            &path,
-            "Date,User,Message\n\
-2026-01-01 10:00:00,문승현,연락처 저장함 010-1234-5678\n\
-2026-01-01 10:00:10,최연우,ㅇㅇ 저장해둘게\n\
-2026-01-01 12:00:00,문승현,AX API가 손쉬운 사용으로 카톡 조작함\n\
-2026-01-01 12:00:05,최연우,컴퓨터 유즈보다 AX가 나음\n\
-2026-01-01 13:00:00,문승현,토큰 부자ㄷㄷ\n",
-        )
-        .unwrap();
-        assert_eq!(index_csv(&db, "부자멘토멘티", &path).unwrap(), 5);
-
-        let recalled = search(
-            &db,
-            Some("부자멘토멘티"),
-            None,
-            "어제 번호 이야기해줫던거 머더라",
-            "hybrid",
-            5,
-        )
-        .unwrap();
-        assert!(
-            recalled
-                .iter()
-                .any(|row| row.message.contains("010-") || row.message.contains("연락처")),
-            "{recalled:?}"
+        assert_eq!(
+            messages,
+            vec![
+                repeated.trim(),
+                "ㅋㅋㅋ",
+                "ㅇㅇ 저장해둘게",
+                "사진\n강남 아파트 경매 보셈",
+            ]
         );
-
-        let ax = search(
-            &db,
-            Some("부자멘토멘티"),
-            None,
-            "AX API 손쉬운 사용",
-            "hybrid",
-            5,
-        )
-        .unwrap();
-        assert!(
-            ax.iter()
-                .any(|row| row.message.contains("손쉬운 사용") || row.message.contains("AX")),
-            "{ax:?}"
-        );
-        assert!(!ax.iter().any(|row| row.message.contains("010-")), "{ax:?}");
-
-        let conn = open_db(&db).unwrap();
-        conn.execute("DELETE FROM context_message_topics", [])
-            .unwrap();
-        conn.execute("DELETE FROM context_topic_stats", []).unwrap();
-        conn.execute(
-            "UPDATE context_retrieval_meta SET value = '1' WHERE key = 'live_context_schema'",
-            [],
+        assert_no_message_topics(&conn);
+        let queries = [
+            "SELECT * FROM context_messages ORDER BY id",
+            "SELECT * FROM context_sources ORDER BY source",
+            "SELECT * FROM context_live_events ORDER BY source, chat_id, log_id",
+            "SELECT * FROM owner_style ORDER BY id",
+        ];
+        let before: Vec<_> = queries
+            .iter()
+            .map(|sql| topic_test_rows(&conn, sql))
+            .collect();
+        conn.execute_batch(
+            "INSERT INTO context_message_topics SELECT id, 'stocks' FROM context_messages;
+             INSERT INTO context_topic_stats SELECT chat, source, 'stocks', COUNT(*), MAX(date)
+                 FROM context_messages GROUP BY chat, source;",
         )
         .unwrap();
         drop(conn);
+        ensure_live_context_schema(&db).unwrap();
+        let conn = open_db_readonly(&db).unwrap();
+        for (sql, expected) in queries.iter().zip(&before) {
+            assert_eq!(&topic_test_rows(&conn, sql), expected, "{sql}");
+        }
+        assert_no_message_topics(&conn);
+        drop(conn);
+        let replay = ingest_live_context_events(
+            &db,
+            TEST_ACCOUNT_FINGERPRINT,
+            chat_id,
+            chat,
+            0,
+            &events,
+            true,
+            false,
+        )
+        .unwrap();
+        assert_eq!(replay.duplicate_events, 4);
+        assert_eq!(replay.indexed_messages, 0);
+        let conn = open_db_readonly(&db).unwrap();
+        assert_eq!(topic_test_rows(&conn, queries[0]), before[0]);
+        assert_eq!(topic_test_rows(&conn, queries[2]), before[2]);
+        assert_no_message_topics(&conn);
+    }
+
+    #[test]
+    fn csv_and_schema_migration_retire_topics_without_changing_sources_or_search_data() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("topics.sqlite3");
+        let path = dir.path().join("chat.csv");
+        let repeated = "stock AI crypto 주식 비트코인 인공지능 ".repeat(32);
+        fs::write(&path, format!(
+            "Date,User,Message\n2026-01-01 10:00:00,민수,{repeated}\n2026-01-01 10:00:10,최연우,ㅇㅇ 저장해둘게\n"
+        )).unwrap();
+        assert_eq!(index_csv(&db, "부자멘토멘티", &path).unwrap(), 2);
         let conn = open_db(&db).unwrap();
-        let version: String = conn
-            .query_row(
-                "SELECT value FROM context_retrieval_meta WHERE key = 'live_context_schema'",
-                [],
-                |row| row.get(0),
+        assert_no_message_topics(&conn);
+        let queries = [
+            "SELECT * FROM context_messages ORDER BY id",
+            "SELECT * FROM owner_style ORDER BY id",
+            "SELECT rowid, bm25(context_messages_fts) FROM context_messages_fts
+                 WHERE context_messages_fts MATCH 'stock OR AI OR crypto' ORDER BY rowid",
+        ];
+        let before: Vec<_> = queries
+            .iter()
+            .map(|sql| topic_test_rows(&conn, sql))
+            .collect();
+        assert_eq!(before[2].len(), 1);
+        drop(conn);
+        for version in [
+            "1",
+            LIVE_CONTEXT_SCHEMA_VERSION,
+            LIVE_CONTEXT_SCHEMA_VERSION,
+        ] {
+            let conn = open_db(&db).unwrap();
+            conn.execute_batch(
+                "INSERT INTO context_message_topics SELECT id, 'ai' FROM context_messages;
+                 INSERT INTO context_topic_stats SELECT chat, source, 'ai', COUNT(*), MAX(date)
+                     FROM context_messages GROUP BY chat, source;
+                 INSERT INTO context_retrieval_meta VALUES ('topic_lexicon_version', '2');",
             )
             .unwrap();
-        assert_eq!(version, LIVE_CONTEXT_SCHEMA_VERSION);
-        let n: i64 = conn
-            .query_row("SELECT COUNT(*) FROM context_message_topics", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert!(n >= 3, "backfill topics {n}");
-        let contact: i64 = conn
-            .query_row(
-                "SELECT message_count FROM context_topic_stats
-                 WHERE chat = '부자멘토멘티' AND topic = 'contact'",
-                [],
-                |row| row.get(0),
+            conn.execute(
+                "UPDATE context_retrieval_meta SET value=?1 WHERE key='live_context_schema'",
+                [version],
             )
             .unwrap();
-        assert!(contact >= 1, "contact stats {contact}");
+            drop(conn);
+            let conn = open_db(&db).unwrap();
+            for (sql, expected) in queries.iter().zip(&before) {
+                assert_eq!(&topic_test_rows(&conn, sql), expected, "{sql}");
+            }
+            assert_no_message_topics(&conn);
+            let version: String = conn
+                .query_row(
+                    "SELECT value FROM context_retrieval_meta WHERE key='live_context_schema'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(version, LIVE_CONTEXT_SCHEMA_VERSION);
+            assert!(topic_test_rows(
+                &conn,
+                "SELECT value FROM context_retrieval_meta WHERE key='topic_lexicon_version'"
+            )
+            .is_empty());
+        }
+        // Re-import and an explicit index rebuild must not reinject labels.
+        assert_eq!(index_csv(&db, "부자멘토멘티", &path).unwrap(), 2);
+        rebuild_context_index(&db).unwrap();
+        let conn = open_db_readonly(&db).unwrap();
+        assert_no_message_topics(&conn);
+        assert_eq!(topic_test_rows(&conn, queries[0]), before[0]);
+        assert_eq!(topic_test_rows(&conn, queries[2]), before[2]);
+    }
+
+    #[test]
+    fn hybrid_search_ignores_legacy_topic_labels_without_mutating_rows() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("topics-search.sqlite3");
+        let conn = open_db(&db).unwrap();
+        insert_context_row(
+            &conn,
+            "source",
+            "chat",
+            "2026-01-01",
+            "stock AI crypto 인공지능",
+        );
+        insert_context_row(&conn, "source", "chat", "2026-01-02", "점심 김치찌개");
+        let query = "stock AI crypto 인공지능";
+        let baseline = search(&db, Some("chat"), None, query, "hybrid", 5).unwrap();
+        assert_eq!(baseline.len(), 1);
+        conn.execute_batch(
+            "INSERT INTO context_message_topics SELECT id, 'ai' FROM context_messages;",
+        )
+        .unwrap();
+        let before = topic_test_rows(&conn, "SELECT * FROM context_messages ORDER BY id");
+        let found = search(&db, Some("chat"), None, query, "hybrid", 5).unwrap();
+        assert_eq!(
+            serde_json::to_value(&found).unwrap(),
+            serde_json::to_value(&baseline).unwrap()
+        );
+        assert!(search(&db, Some("chat"), None, "그록", "hybrid", 5)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            topic_test_rows(&conn, "SELECT * FROM context_messages ORDER BY id"),
+            before
+        );
+        assert_eq!(
+            topic_test_rows(&conn, "SELECT * FROM context_message_topics").len(),
+            2
+        );
     }
 
     #[test]
@@ -6880,9 +6572,7 @@ mod tests {
 
         let conn = open_db(&db).unwrap();
         let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM owner_style", [], |row| {
-                row.get(0)
-            })
+            .query_row("SELECT COUNT(*) FROM owner_style", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
     }
@@ -6971,9 +6661,7 @@ mod tests {
     /// Exhaustive reference for the shipped exact split search. Kept in the
     /// test module so every randomized case can assert the optimized path
     /// returns the identical distribution.
-    fn exhaustive_response_time_distribution(
-        delays: &[f64],
-    ) -> Option<ResponseTimeDistribution> {
+    fn exhaustive_response_time_distribution(delays: &[f64]) -> Option<ResponseTimeDistribution> {
         if delays.len() < RESPONSE_TIME_DISTRIBUTION_MIN_SAMPLES
             || delays.iter().any(|delay| {
                 !delay.is_finite() || !(0.0..=MAX_RESPONSE_DELAY_SECONDS as f64).contains(delay)
@@ -7017,8 +6705,7 @@ mod tests {
         let immediate_upper_seconds = delays[first_split - 1].min(global_upper_seconds);
         let short_lower_seconds = delays[first_split].max(MIN_SCHEDULED_RESPONSE_DELAY_SECONDS);
         let short_upper_seconds = delays[second_split - 1].min(global_upper_seconds);
-        let delayed_lower_seconds =
-            delays[second_split].max(MIN_SCHEDULED_RESPONSE_DELAY_SECONDS);
+        let delayed_lower_seconds = delays[second_split].max(MIN_SCHEDULED_RESPONSE_DELAY_SECONDS);
         if immediate_upper_seconds < MIN_SCHEDULED_RESPONSE_DELAY_SECONDS
             || short_lower_seconds > short_upper_seconds
             || delayed_lower_seconds > global_upper_seconds
@@ -7088,7 +6775,9 @@ mod tests {
     }
 
     fn deterministic_delays(seed: u64, count: usize) -> Vec<f64> {
-        let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let mut state = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let mut next = move || {
             state = state
                 .wrapping_mul(6364136223846793005)
@@ -7134,16 +6823,16 @@ mod tests {
                     "split diverged at count={count} seed={seed}"
                 );
                 assert_eq!(fast.global_upper_seconds, reference.global_upper_seconds);
-                assert_eq!(
-                    fast.tail_winsorized_count,
-                    reference.tail_winsorized_count
-                );
+                assert_eq!(fast.tail_winsorized_count, reference.tail_winsorized_count);
                 assert_eq!(fast.sample_count, reference.sample_count);
                 for (optimized, naive) in fast.components.iter().zip(reference.components.iter()) {
                     assert_eq!(optimized.name, naive.name);
                     assert_eq!(optimized.sample_count, naive.sample_count);
                     assert_eq!(optimized.weight, naive.weight);
-                    assert_eq!(optimized.normal_location_seconds, naive.normal_location_seconds);
+                    assert_eq!(
+                        optimized.normal_location_seconds,
+                        naive.normal_location_seconds
+                    );
                     assert_eq!(optimized.normal_scale_seconds, naive.normal_scale_seconds);
                     assert_eq!(optimized.lower_seconds, naive.lower_seconds);
                     assert_eq!(optimized.upper_seconds, naive.upper_seconds);
@@ -7180,7 +6869,9 @@ mod tests {
     }
 
     fn duplicate_heavy_delays(seed: u64, count: usize) -> Vec<f64> {
-        let mut state = seed.wrapping_mul(2862933555777941757).wrapping_add(3037000493);
+        let mut state = seed
+            .wrapping_mul(2862933555777941757)
+            .wrapping_add(3037000493);
         let mut next = move || {
             state = state
                 .wrapping_mul(2862933555777941757)
@@ -7246,7 +6937,9 @@ mod tests {
                     );
                     assert_eq!(fast.global_upper_seconds, reference.global_upper_seconds);
                     assert_eq!(fast.tail_winsorized_count, reference.tail_winsorized_count);
-                    for (optimized, naive) in fast.components.iter().zip(reference.components.iter()) {
+                    for (optimized, naive) in
+                        fast.components.iter().zip(reference.components.iter())
+                    {
                         assert_eq!(optimized.name, naive.name);
                         assert_eq!(optimized.sample_count, naive.sample_count);
                         assert_eq!(optimized.weight, naive.weight);
@@ -7413,10 +7106,10 @@ mod tests {
         let db = dir.path().join("relative.sqlite3");
         let path = fixture(dir.path(), "chat.csv", "hello");
         index_csv(&db, "방", &path).unwrap();
-    // Token-less queries (`!!!`) no longer fail the whole vector lookup:
-    // they return an empty hit list so style/timing bundles keep flowing.
-    let hits = search(&db, Some("방"), None, "!!!", "vector", 5).unwrap();
-    assert!(hits.is_empty());
+        // Token-less queries (`!!!`) no longer fail the whole vector lookup:
+        // they return an empty hit list so style/timing bundles keep flowing.
+        let hits = search(&db, Some("방"), None, "!!!", "vector", 5).unwrap();
+        assert!(hits.is_empty());
     }
     #[test]
     fn records_and_searches_reply_decisions() {
@@ -9388,10 +9081,11 @@ mod tests {
                 .unwrap()
                 .to_rfc3339()
         };
-        let sent_at = chrono::NaiveDateTime::parse_from_str("2026-01-01 10:00:00", "%Y-%m-%d %H:%M:%S")
-            .unwrap()
-            .and_utc()
-            .timestamp();
+        let sent_at =
+            chrono::NaiveDateTime::parse_from_str("2026-01-01 10:00:00", "%Y-%m-%d %H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp();
         record_sent_reply(
             &db,
             "bot-1",
@@ -9445,10 +9139,11 @@ mod tests {
         let db = dir.path().join("csv-queue-send.sqlite3");
         ensure_live_context_schema(&db).unwrap();
         let reply = "역시 세긴 하네요";
-        let sent_at = chrono::NaiveDateTime::parse_from_str("2026-01-01 10:00:04", "%Y-%m-%d %H:%M:%S")
-            .unwrap()
-            .and_utc()
-            .timestamp();
+        let sent_at =
+            chrono::NaiveDateTime::parse_from_str("2026-01-01 10:00:04", "%Y-%m-%d %H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp();
         let queue = dir.path().join("reply-queue.sqlite3");
         {
             let conn = Connection::open(&queue).unwrap();
@@ -9503,13 +9198,11 @@ mod tests {
         let db = dir.path().join("csv-bot-pacing.sqlite3");
         ensure_live_context_schema(&db).unwrap();
         let bot_reply = "역시 세긴 하네요";
-        let bot_sent_at = chrono::NaiveDateTime::parse_from_str(
-            "2026-01-01 10:00:04",
-            "%Y-%m-%d %H:%M:%S",
-        )
-        .unwrap()
-        .and_utc()
-        .timestamp();
+        let bot_sent_at =
+            chrono::NaiveDateTime::parse_from_str("2026-01-01 10:00:04", "%Y-%m-%d %H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp();
         record_sent_reply(
             &db,
             "bot-pacing",
@@ -9724,5 +9417,4 @@ mod tests {
         assert_eq!(kind, "bot_sent_reply");
         assert_eq!(eligible, 0);
     }
-
 }

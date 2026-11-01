@@ -3,7 +3,7 @@ use predicates::prelude::*;
 
 fn cmd() -> Command {
     #[allow(deprecated)]
-    Command::cargo_bin("openkakao-cli").unwrap()
+    Command::cargo_bin("alden-cli").unwrap()
 }
 
 #[test]
@@ -12,7 +12,7 @@ fn help_exits_zero() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("OpenKakao Rust CLI"));
+        .stdout(predicate::str::contains("Alden CLI"));
 }
 
 #[test]
@@ -184,4 +184,21 @@ fn cache_stats_json_outputs_valid_json() {
         parsed["chats"].is_array(),
         "cache-stats --json 'chats' should be an array"
     );
+}
+
+#[test]
+fn legacy_executable_preserves_canonical_help_and_version_without_side_effects() {
+    for flag in ["--help", "--version"] {
+        let canonical = cmd().arg(flag).output().unwrap();
+        #[allow(deprecated)]
+        let legacy = Command::cargo_bin("openkakao-cli")
+            .unwrap()
+            .arg(flag)
+            .output()
+            .unwrap();
+        assert!(canonical.status.success());
+        assert!(legacy.status.success());
+        assert_eq!(canonical.stdout, legacy.stdout);
+        assert!(String::from_utf8_lossy(&legacy.stdout).contains("alden-cli"));
+    }
 }

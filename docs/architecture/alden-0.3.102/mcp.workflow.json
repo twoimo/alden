@@ -1,0 +1,142 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Alden 0.3.102 · 호스트와 scoped MCP",
+    "quality_profile": "showcase",
+    "animation": "none"
+  },
+  "lanes": [
+    {
+      "id": "mcp102-phase0",
+      "label": "호스트·요청"
+    },
+    {
+      "id": "mcp102-phase1",
+      "label": "범위·허용 조회"
+    },
+    {
+      "id": "mcp102-phase2",
+      "label": "근거·반환"
+    }
+  ],
+  "mainPath": [
+    "mcp102_0",
+    "mcp102_1",
+    "mcp102_2",
+    "mcp102_3",
+    "mcp102_4",
+    "mcp102_5"
+  ],
+  "nodes": [
+    {
+      "id": "mcp102_0",
+      "lane": "mcp102-phase0",
+      "col": 0,
+      "type": "frontend",
+      "label": "호스트 입력",
+      "sublabel": "명시 스킬·자료 집합",
+      "width": 180
+    },
+    {
+      "id": "mcp102_1",
+      "lane": "mcp102-phase0",
+      "col": 1,
+      "type": "messagebus",
+      "label": "호스트 인계",
+      "sublabel": "출처 artifact·ACK",
+      "width": 180
+    },
+    {
+      "id": "mcp102_2",
+      "lane": "mcp102-phase1",
+      "col": 1,
+      "type": "security",
+      "label": "시작 범위",
+      "sublabel": "프로젝트 allowlist",
+      "width": 180
+    },
+    {
+      "id": "mcp102_3",
+      "lane": "mcp102-phase1",
+      "col": 2,
+      "type": "database",
+      "label": "source 대사",
+      "sublabel": "ID·버전·권한·원문 해시",
+      "width": 180
+    },
+    {
+      "id": "mcp102_4",
+      "lane": "mcp102-phase2",
+      "col": 2,
+      "type": "backend",
+      "label": "읽기와 검색",
+      "sublabel": "본문 근거·RRF·예산",
+      "width": 180
+    },
+    {
+      "id": "mcp102_5",
+      "lane": "mcp102-phase2",
+      "col": 3,
+      "type": "frontend",
+      "label": "반환과 확인",
+      "sublabel": "근거·실패·범위 밖 거절",
+      "width": 180
+    }
+  ],
+  "edges": [
+    {
+      "id": "mcp102_edge0",
+      "from": "mcp102_0",
+      "to": "mcp102_1",
+      "label": "범위 확인",
+      "role": "main"
+    },
+    {
+      "id": "mcp102_edge1",
+      "from": "mcp102_1",
+      "to": "mcp102_2",
+      "label": "대사",
+      "role": "main"
+    },
+    {
+      "id": "mcp102_edge2",
+      "from": "mcp102_2",
+      "to": "mcp102_3",
+      "label": "확정",
+      "role": "main"
+    },
+    {
+      "id": "mcp102_edge3",
+      "from": "mcp102_3",
+      "to": "mcp102_4",
+      "label": "검증",
+      "role": "main"
+    },
+    {
+      "id": "mcp102_edge4",
+      "from": "mcp102_4",
+      "to": "mcp102_5",
+      "label": "반환",
+      "role": "main"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "실제 확인된 경로",
+      "items": [
+        "설치 Resources의 owned stdio MCP에서 범위 내 검색과 범위 밖 거절을 확인했다.",
+        "조회와 저장/갱신은 분리하며 독립 원본과 source 버전을 유지한다."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "호스트 통합 미결",
+      "items": [
+        "현재 도구 등록과 허용 범위의 읽기를 확인한 사실과 여러 독립 호스트의 전체 입력→저장→화면 검증을 구분한다.",
+        "전역 OSK scope 충돌·쓰기 통합과 독립 호스트 검증은 미완료다. 실패를 저장 성공이나 동기화 완료로 표시하지 않는다."
+      ]
+    }
+  ]
+}

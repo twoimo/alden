@@ -1,0 +1,161 @@
+{
+  "node_id": "record-a",
+  "basis": "source_record",
+  "target_id": "target-a",
+  "version": "v1",
+  "raw_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "body": "😀 기한 2026년 2월 23일, 연봉 5천만원, 수량 −5명. 비율 5%p, 범위 8~3kg. 연도 26년 2월 23일. 단위 없는 5천. 큰 수 9007199254740993명. <img src=x onerror=alert(1)>",
+  "truncated": false,
+  "body_notation": {
+    "binding": {
+      "basis": "verified_source_record_detail",
+      "document_id": "record-a",
+      "target_id": "target-a",
+      "version": "v1",
+      "raw_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "body_sha256": "3bd423a018cc59c3bc022869685c893d5a120b898774622ee622a7e5e33a3f83",
+      "body_scope": "detail_body"
+    },
+    "analysis": {
+      "policy": "body-notation-candidates-v1",
+      "state": "supported_notation_scan_complete",
+      "body_sha256": "3bd423a018cc59c3bc022869685c893d5a120b898774622ee622a7e5e33a3f83",
+      "body_characters": 130,
+      "offset_basis": "exact_supplied_unicode_codepoints",
+      "semantic_validity": "not_assessed",
+      "client_offset_basis": "exact_supplied_utf16_code_units",
+      "source_authorization": "caller_must_bind_permitted_current_source_version",
+      "candidates": [
+        {
+          "kind": "time",
+          "start": 5,
+          "end": 17,
+          "raw": "2026년 2월 23일",
+          "status": "normalized",
+          "precision": "day",
+          "canonical": "2026-02-23",
+          "basis": "date_only",
+          "reason": null,
+          "utf16_start": 6,
+          "utf16_end": 18
+        },
+        {
+          "start": 22,
+          "end": 26,
+          "raw": "5천만원",
+          "source_unit": "원",
+          "source_sign": "unsigned",
+          "kind": "quantity",
+          "status": "normalized",
+          "canonical_value": "50000000",
+          "canonical_unit": "원",
+          "dimension": "money_won_unspecified",
+          "reason": null,
+          "utf16_start": 23,
+          "utf16_end": 27
+        },
+        {
+          "start": 31,
+          "end": 34,
+          "raw": "−5명",
+          "source_unit": "명",
+          "source_sign": "negative",
+          "kind": "quantity",
+          "status": "normalized",
+          "canonical_value": "-5",
+          "canonical_unit": "명",
+          "dimension": "person_count",
+          "reason": null,
+          "utf16_start": 32,
+          "utf16_end": 35
+        },
+        {
+          "start": 39,
+          "end": 42,
+          "raw": "5%p",
+          "source_unit": "%p",
+          "source_sign": "unsigned",
+          "kind": "quantity",
+          "status": "normalized",
+          "canonical_value": "5",
+          "canonical_unit": "%p",
+          "dimension": "percentage_point",
+          "reason": null,
+          "utf16_start": 40,
+          "utf16_end": 43
+        },
+        {
+          "start": 47,
+          "end": 52,
+          "raw": "8~3kg",
+          "source_unit": "kg",
+          "source_sign": "unsigned",
+          "kind": "quantity_range",
+          "status": "normalized",
+          "reason": null,
+          "first": {
+            "status": "normalized",
+            "dimension": "mass",
+            "canonical_value": "8000",
+            "canonical_unit": "g",
+            "reason": null
+          },
+          "last": {
+            "status": "normalized",
+            "dimension": "mass",
+            "canonical_value": "3000",
+            "canonical_unit": "g",
+            "reason": null
+          },
+          "range_marker": "~",
+          "written_order": "descending",
+          "utf16_start": 48,
+          "utf16_end": 53
+        },
+        {
+          "kind": "time",
+          "start": 57,
+          "end": 67,
+          "raw": "26년 2월 23일",
+          "status": "ambiguous",
+          "canonical": null,
+          "reason": "century_not_declared",
+          "precision": "day",
+          "basis": "body_notation",
+          "utf16_start": 58,
+          "utf16_end": 68
+        },
+        {
+          "kind": "untyped_number",
+          "start": 75,
+          "end": 78,
+          "raw": "5천.",
+          "status": "ambiguous",
+          "reason": "unit_not_declared",
+          "source_unit": null,
+          "canonical_unit": null,
+          "dimension": null,
+          "canonical_value": null,
+          "utf16_start": 76,
+          "utf16_end": 79
+        },
+        {
+          "start": 83,
+          "end": 100,
+          "raw": "9007199254740993명",
+          "source_unit": "명",
+          "source_sign": "unsigned",
+          "kind": "quantity",
+          "status": "normalized",
+          "canonical_value": "9007199254740993",
+          "canonical_unit": "명",
+          "dimension": "person_count",
+          "reason": null,
+          "utf16_start": 84,
+          "utf16_end": 101
+        }
+      ],
+      "truncated": false
+    }
+  }
+}

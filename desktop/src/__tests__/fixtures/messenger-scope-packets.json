@@ -1,0 +1,996 @@
+{
+  "kind": "Controlled source/callback + real isolated SQLite; DOM replay only, not native UI/live collection.",
+  "revocation": {
+    "before_history": {
+      "ok": true,
+      "items": [
+        {
+          "sequence": 10,
+          "event_id": "event:90835f0138887b287bb0ab2c420ccdeeb532099a5db13c79c76b3bf9a4371106",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "indexed",
+          "at": 1792709785.364652,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "dense_index": "not_yet_confirmed",
+            "index": "sqlite_fts5"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 9,
+          "event_id": "event:7e6f9f40365018e04b5317eba7ed2542a87f55c511c95f2b1819504c878dbc50",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "stored",
+          "at": 1792709785.364544,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "change": "unchanged"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 8,
+          "event_id": "event:aa14eeece7a786b9b153121aefd2e88794464f4ccc3f9df6b47e741455b4fb67",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "validated",
+          "at": 1792709785.364481,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "validation": "identity, byte hash and shape only; not semantic truth"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 7,
+          "event_id": "event:a59080bee485075cd310e71197400dbd03434a623737de51e5da6fcdec1e8800",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "parsed",
+          "at": 1792709785.364414,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 6,
+          "event_id": "event:5feb6ae5da8f19aea5fb43274036fe98e06de7d55bea8272966a20d443a473b3",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "discovered",
+          "at": 1792709785.364182,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 5,
+          "event_id": "event:6c52de12f037e01e4a1763d047fbd122146757a53437204732e42580a0bd9049",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "indexed",
+          "at": 1792709785.353672,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "dense_index": "not_yet_confirmed",
+            "index": "sqlite_fts5"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 4,
+          "event_id": "event:c8c9d1032e1a5a48b28c0d8d8a41e46cb3d87e503561117854befe20032bbc23",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "stored",
+          "at": 1792709785.3536398,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "change": "added"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 3,
+          "event_id": "event:917c78708ec5707970a3947845ea60be034e567c052cc079dfd3d90de945f537",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "validated",
+          "at": 1792709785.353604,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "validation": "identity, byte hash and shape only; not semantic truth"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 2,
+          "event_id": "event:1a4bab4bcd8a7757f666f258218e6708ae8c804e8c849d6c7fa523fa1149880d",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "parsed",
+          "at": 1792709785.353559,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 1,
+          "event_id": "event:7aa248034f1701dfa23063c61c70ee2a067d025e6fbe0e25fa1ba34038211cb7",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "discovered",
+          "at": 1792709785.353368,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        }
+      ],
+      "next": null,
+      "cursor": 10,
+      "stream_id": "stream:2962e6d88e60ef42b0d0466928dd5bf085aff8a4255bc60f4a52983eb7654ea0",
+      "reset": false,
+      "summary": {
+        "total": 10,
+        "stages": {
+          "discovered": 2,
+          "failed": 0,
+          "indexed": 2,
+          "parsed": 2,
+          "paused": 0,
+          "stored": 2,
+          "validated": 2
+        },
+        "changes": {
+          "added": 1,
+          "revised": 0,
+          "unchanged": 1,
+          "removed": 0,
+          "relations_changed": 0
+        },
+        "as_of": 10
+      },
+      "projects": [
+        {
+          "project": "messenger-evaluation",
+          "targets": 1
+        }
+      ],
+      "targets": [
+        {
+          "id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "label": "telegram",
+          "platform": "telegram"
+        }
+      ]
+    },
+    "after_history": {
+      "ok": true,
+      "items": [],
+      "next": null,
+      "cursor": 10,
+      "stream_id": "stream:be39d506be2c81d48927a18473b2c3ada3c4e16101465a39108186706dac97ce",
+      "reset": true,
+      "summary": {
+        "total": 0,
+        "stages": {
+          "discovered": 0,
+          "failed": 0,
+          "indexed": 0,
+          "parsed": 0,
+          "paused": 0,
+          "stored": 0,
+          "validated": 0
+        },
+        "changes": {
+          "added": 0,
+          "revised": 0,
+          "unchanged": 0,
+          "removed": 0,
+          "relations_changed": 0
+        },
+        "as_of": 10
+      },
+      "projects": [
+        {
+          "project": "messenger-evaluation",
+          "targets": 1
+        }
+      ],
+      "targets": [
+        {
+          "id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "label": "telegram",
+          "platform": "telegram"
+        }
+      ]
+    },
+    "before_activity": {
+      "ok": true,
+      "items": [],
+      "cursor": 10,
+      "latest": 10,
+      "stream_id": "stream:2962e6d88e60ef42b0d0466928dd5bf085aff8a4255bc60f4a52983eb7654ea0",
+      "reset": true,
+      "has_more": false
+    },
+    "after_activity": {
+      "ok": true,
+      "items": [],
+      "cursor": 10,
+      "latest": 10,
+      "stream_id": "stream:be39d506be2c81d48927a18473b2c3ada3c4e16101465a39108186706dac97ce",
+      "reset": true,
+      "has_more": false
+    },
+    "before_graph": {
+      "ok": true,
+      "nodes": [
+        {
+          "id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "category": "knowledge-candidate",
+          "importance": 20,
+          "updated_at": 1792709785.35348,
+          "description": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "space": "messenger-evaluation",
+          "source_version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "source_url": null,
+          "source_target": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "source_platform": "graph",
+          "source_contexts": [
+            {
+              "project": "messenger-evaluation",
+              "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+              "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+              "label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다."
+            }
+          ],
+          "degree": 0,
+          "degree_scope": "permitted filtered graph",
+          "source_metadata": {
+            "kind": "knowledge-candidate",
+            "content_evidence": "content_candidate"
+          },
+          "evidence": {
+            "kind": "snapshot",
+            "source_event_ids": [
+              "messenger-content:cb2adfb056a0ad099fc4354e349a79c50959498f002c4c7c8d21911ed959a2de"
+            ],
+            "chat_id": "",
+            "confirmed_at": null,
+            "retracted": false
+          }
+        }
+      ],
+      "edges": [],
+      "total_nodes": 1,
+      "total_edges": 0,
+      "next": null,
+      "focus": null,
+      "scope": [
+        "messenger-evaluation"
+      ],
+      "facets": {
+        "node_types": [
+          "knowledge-candidate"
+        ],
+        "relations": []
+      },
+      "targets": [
+        {
+          "id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "label": "telegram",
+          "platform": "telegram"
+        }
+      ],
+      "revision": 10,
+      "display_scope": "bounded derived projection; not full graph",
+      "activity_checkpoint": {
+        "stream_id": "stream:2962e6d88e60ef42b0d0466928dd5bf085aff8a4255bc60f4a52983eb7654ea0",
+        "cursor": 10
+      }
+    },
+    "after_graph": {
+      "ok": true,
+      "nodes": [],
+      "edges": [],
+      "total_nodes": 0,
+      "total_edges": 0,
+      "next": null,
+      "facets": {
+        "node_types": [],
+        "relations": []
+      },
+      "activity_checkpoint": {
+        "stream_id": "stream:be39d506be2c81d48927a18473b2c3ada3c4e16101465a39108186706dac97ce",
+        "cursor": 10
+      }
+    }
+  },
+  "new_knowledge": {
+    "before_history": {
+      "ok": true,
+      "items": [
+        {
+          "sequence": 10,
+          "event_id": "event:90835f0138887b287bb0ab2c420ccdeeb532099a5db13c79c76b3bf9a4371106",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "indexed",
+          "at": 1792709785.4442298,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "dense_index": "not_yet_confirmed",
+            "index": "sqlite_fts5"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 9,
+          "event_id": "event:7e6f9f40365018e04b5317eba7ed2542a87f55c511c95f2b1819504c878dbc50",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "stored",
+          "at": 1792709785.444205,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "change": "unchanged"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 8,
+          "event_id": "event:aa14eeece7a786b9b153121aefd2e88794464f4ccc3f9df6b47e741455b4fb67",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "validated",
+          "at": 1792709785.444179,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "validation": "identity, byte hash and shape only; not semantic truth"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 7,
+          "event_id": "event:a59080bee485075cd310e71197400dbd03434a623737de51e5da6fcdec1e8800",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "parsed",
+          "at": 1792709785.444163,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 6,
+          "event_id": "event:5feb6ae5da8f19aea5fb43274036fe98e06de7d55bea8272966a20d443a473b3",
+          "run_id": "messenger-page:14dce00a23880435afa5642a79339f082cc1a059e999fa5597418adbecfaa7a2",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "discovered",
+          "at": 1792709785.4440682,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 5,
+          "event_id": "event:6c52de12f037e01e4a1763d047fbd122146757a53437204732e42580a0bd9049",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "indexed",
+          "at": 1792709785.433759,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "dense_index": "not_yet_confirmed",
+            "index": "sqlite_fts5"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 4,
+          "event_id": "event:c8c9d1032e1a5a48b28c0d8d8a41e46cb3d87e503561117854befe20032bbc23",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "stored",
+          "at": 1792709785.4337258,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "change": "added"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 3,
+          "event_id": "event:917c78708ec5707970a3947845ea60be034e567c052cc079dfd3d90de945f537",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "validated",
+          "at": 1792709785.4336839,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {
+            "validation": "identity, byte hash and shape only; not semantic truth"
+          },
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 2,
+          "event_id": "event:1a4bab4bcd8a7757f666f258218e6708ae8c804e8c849d6c7fa523fa1149880d",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "parsed",
+          "at": 1792709785.4336362,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 1,
+          "event_id": "event:7aa248034f1701dfa23063c61c70ee2a067d025e6fbe0e25fa1ba34038211cb7",
+          "run_id": "messenger-page:5fc059162bdc5f55fbccb19f90ab6883f9209dcca6a8ff3d02ec3139235e461b",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "discovered",
+          "at": 1792709785.433414,
+          "document_id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "details": {},
+          "origin": "messenger-db:telegram:backfill",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        }
+      ],
+      "next": null,
+      "cursor": 10,
+      "stream_id": "stream:71d267a49ba50aba12455774eccc39eb6d487d00d77f3a71bdd236520a6ab86d",
+      "reset": false,
+      "summary": {
+        "total": 10,
+        "stages": {
+          "discovered": 2,
+          "failed": 0,
+          "indexed": 2,
+          "parsed": 2,
+          "paused": 0,
+          "stored": 2,
+          "validated": 2
+        },
+        "changes": {
+          "added": 1,
+          "revised": 0,
+          "unchanged": 1,
+          "removed": 0,
+          "relations_changed": 0
+        },
+        "as_of": 10
+      },
+      "projects": [
+        {
+          "project": "messenger-evaluation",
+          "targets": 1
+        }
+      ],
+      "targets": [
+        {
+          "id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "label": "telegram",
+          "platform": "telegram"
+        }
+      ]
+    },
+    "after_history": {
+      "ok": true,
+      "items": [
+        {
+          "sequence": 11,
+          "event_id": "event:5d818925b8d18350a25f932795f04aef87fc6fb48fcded326a0b4cbf4a345144",
+          "run_id": "messenger-page:cdc4306a96d6e3005761ff8949d535da21db77c2dac290ea82068853fbf3fa6e",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "discovered",
+          "at": 1792709785.465395,
+          "document_id": "graph:f7f66d1e7d47218a51f715d901505865c16606741a42926536173b68e936a1e0",
+          "version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+          "details": {},
+          "origin": "messenger-db:telegram:live",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 12,
+          "event_id": "event:2babbe7ea43154cb24b32829d4331d4a6006c826d613dd38e731afd0d3221c82",
+          "run_id": "messenger-page:cdc4306a96d6e3005761ff8949d535da21db77c2dac290ea82068853fbf3fa6e",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "parsed",
+          "at": 1792709785.465557,
+          "document_id": "graph:f7f66d1e7d47218a51f715d901505865c16606741a42926536173b68e936a1e0",
+          "version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+          "details": {},
+          "origin": "messenger-db:telegram:live",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 13,
+          "event_id": "event:61113c4e69cc8391ace87316ba9b032ae6af8c94b573b318997776a7283b0d20",
+          "run_id": "messenger-page:cdc4306a96d6e3005761ff8949d535da21db77c2dac290ea82068853fbf3fa6e",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "validated",
+          "at": 1792709785.465597,
+          "document_id": "graph:f7f66d1e7d47218a51f715d901505865c16606741a42926536173b68e936a1e0",
+          "version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+          "details": {
+            "validation": "identity, byte hash and shape only; not semantic truth"
+          },
+          "origin": "messenger-db:telegram:live",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 14,
+          "event_id": "event:a369de38b0e4a52dde42f8f33d1ae2e55b772a9b0c2f1efacd225b605cea34e8",
+          "run_id": "messenger-page:cdc4306a96d6e3005761ff8949d535da21db77c2dac290ea82068853fbf3fa6e",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "stored",
+          "at": 1792709785.465632,
+          "document_id": "graph:f7f66d1e7d47218a51f715d901505865c16606741a42926536173b68e936a1e0",
+          "version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+          "details": {
+            "change": "added"
+          },
+          "origin": "messenger-db:telegram:live",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        },
+        {
+          "sequence": 15,
+          "event_id": "event:b5ee5d9fc8eed7de010071c88780c8f1c8b670d11a88200324f18233504b98dc",
+          "run_id": "messenger-page:cdc4306a96d6e3005761ff8949d535da21db77c2dac290ea82068853fbf3fa6e",
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "stage": "indexed",
+          "at": 1792709785.4656599,
+          "document_id": "graph:f7f66d1e7d47218a51f715d901505865c16606741a42926536173b68e936a1e0",
+          "version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+          "details": {
+            "dense_index": "not_yet_confirmed",
+            "index": "sqlite_fts5"
+          },
+          "origin": "messenger-db:telegram:live",
+          "run_state": "complete",
+          "target_label": "telegram",
+          "platform": "telegram",
+          "document_label": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.",
+          "source_url": "",
+          "projects": [
+            "messenger-evaluation"
+          ]
+        }
+      ],
+      "next": null,
+      "cursor": 15,
+      "stream_id": "stream:71d267a49ba50aba12455774eccc39eb6d487d00d77f3a71bdd236520a6ab86d",
+      "reset": false,
+      "summary": null,
+      "projects": [
+        {
+          "project": "messenger-evaluation",
+          "targets": 1
+        }
+      ],
+      "targets": [
+        {
+          "id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "label": "telegram",
+          "platform": "telegram"
+        }
+      ]
+    },
+    "before_activity": {
+      "ok": true,
+      "items": [],
+      "cursor": 10,
+      "latest": 10,
+      "stream_id": "stream:71d267a49ba50aba12455774eccc39eb6d487d00d77f3a71bdd236520a6ab86d",
+      "reset": true,
+      "has_more": false
+    },
+    "after_activity": {
+      "ok": true,
+      "items": [
+        {
+          "sequence": 14,
+          "event_id": "event:a369de38b0e4a52dde42f8f33d1ae2e55b772a9b0c2f1efacd225b605cea34e8",
+          "document_id": "graph:f7f66d1e7d47218a51f715d901505865c16606741a42926536173b68e936a1e0",
+          "version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+          "at": 1792709785.465632,
+          "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "run_id": "messenger-page:cdc4306a96d6e3005761ff8949d535da21db77c2dac290ea82068853fbf3fa6e",
+          "origin": "messenger-db:telegram:live",
+          "kind": "added",
+          "success": true
+        }
+      ],
+      "cursor": 15,
+      "latest": 15,
+      "stream_id": "stream:71d267a49ba50aba12455774eccc39eb6d487d00d77f3a71bdd236520a6ab86d",
+      "reset": false,
+      "has_more": false,
+      "refresh_required": false
+    },
+    "before_graph": {
+      "ok": true,
+      "nodes": [
+        {
+          "id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "category": "knowledge-candidate",
+          "importance": 20,
+          "updated_at": 1792709785.43354,
+          "description": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "space": "messenger-evaluation",
+          "source_version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "source_url": null,
+          "source_target": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "source_platform": "graph",
+          "source_contexts": [
+            {
+              "project": "messenger-evaluation",
+              "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+              "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+              "label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다."
+            }
+          ],
+          "degree": 0,
+          "degree_scope": "permitted filtered graph",
+          "source_metadata": {
+            "kind": "knowledge-candidate",
+            "content_evidence": "content_candidate"
+          },
+          "evidence": {
+            "kind": "snapshot",
+            "source_event_ids": [
+              "messenger-content:cb2adfb056a0ad099fc4354e349a79c50959498f002c4c7c8d21911ed959a2de"
+            ],
+            "chat_id": "",
+            "confirmed_at": null,
+            "retracted": false
+          }
+        }
+      ],
+      "edges": [],
+      "total_nodes": 1,
+      "total_edges": 0,
+      "next": null,
+      "focus": null,
+      "scope": [
+        "messenger-evaluation"
+      ],
+      "facets": {
+        "node_types": [
+          "knowledge-candidate"
+        ],
+        "relations": []
+      },
+      "targets": [
+        {
+          "id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "label": "telegram",
+          "platform": "telegram"
+        }
+      ],
+      "revision": 10,
+      "display_scope": "bounded derived projection; not full graph",
+      "activity_checkpoint": {
+        "stream_id": "stream:71d267a49ba50aba12455774eccc39eb6d487d00d77f3a71bdd236520a6ab86d",
+        "cursor": 10
+      }
+    },
+    "after_graph": {
+      "ok": true,
+      "nodes": [
+        {
+          "id": "graph:af0ea30043696465d398324477a54415c4fabc4164e058ad94037f3d613631da",
+          "label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "category": "knowledge-candidate",
+          "importance": 20,
+          "updated_at": 1792709785.43354,
+          "description": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다.",
+          "space": "messenger-evaluation",
+          "source_version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+          "source_url": null,
+          "source_target": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "source_platform": "graph",
+          "source_contexts": [
+            {
+              "project": "messenger-evaluation",
+              "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+              "version": "version:14f1921a5880d7d9b46554a6d3a98490b8fdb871b2c122259be1a55e13301ceb",
+              "label": "회의 자료 검토 일정은 화요일 오후 3시로 결정되었습니다."
+            }
+          ],
+          "degree": 0,
+          "degree_scope": "permitted filtered graph",
+          "source_metadata": {
+            "kind": "knowledge-candidate",
+            "content_evidence": "content_candidate"
+          },
+          "evidence": {
+            "kind": "snapshot",
+            "source_event_ids": [
+              "messenger-content:cb2adfb056a0ad099fc4354e349a79c50959498f002c4c7c8d21911ed959a2de"
+            ],
+            "chat_id": "",
+            "confirmed_at": null,
+            "retracted": false
+          }
+        },
+        {
+          "id": "graph:f7f66d1e7d47218a51f715d901505865c16606741a42926536173b68e936a1e0",
+          "label": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.",
+          "category": "knowledge-candidate",
+          "importance": 20,
+          "updated_at": 1792709785.46548,
+          "description": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다.",
+          "space": "messenger-evaluation",
+          "source_version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+          "source_url": null,
+          "source_target": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "source_platform": "graph",
+          "source_contexts": [
+            {
+              "project": "messenger-evaluation",
+              "target_id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+              "version": "version:34456f50372f8f9021bf469c43643b1b4d9a0336fa9a7ccb89a7553b1e88d2b4",
+              "label": "회의 운영 원칙은 금요일부터 새로운 일정으로 변경되었습니다."
+            }
+          ],
+          "degree": 0,
+          "degree_scope": "permitted filtered graph",
+          "source_metadata": {
+            "kind": "knowledge-candidate",
+            "content_evidence": "content_candidate"
+          },
+          "evidence": {
+            "kind": "snapshot",
+            "source_event_ids": [
+              "messenger-content:a4a21f6967f982200c5ab5fa1e9c37e1df4cb8c86fcc7fe9b6963bada78908b2"
+            ],
+            "chat_id": "",
+            "confirmed_at": null,
+            "retracted": false
+          }
+        }
+      ],
+      "edges": [],
+      "total_nodes": 2,
+      "total_edges": 0,
+      "next": null,
+      "focus": null,
+      "scope": [
+        "messenger-evaluation"
+      ],
+      "facets": {
+        "node_types": [
+          "knowledge-candidate"
+        ],
+        "relations": []
+      },
+      "targets": [
+        {
+          "id": "target-telegram:d27433b2be460a14ad5d80a94ce638bcbb7f462179a1d809335602df35d0fcda",
+          "label": "telegram",
+          "platform": "telegram"
+        }
+      ],
+      "revision": 15,
+      "display_scope": "bounded derived projection; not full graph",
+      "activity_checkpoint": {
+        "stream_id": "stream:71d267a49ba50aba12455774eccc39eb6d487d00d77f3a71bdd236520a6ab86d",
+        "cursor": 15
+      }
+    }
+  }
+}

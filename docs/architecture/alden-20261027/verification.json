@@ -1,0 +1,107 @@
+{
+  "schema": 1,
+  "observed_at": "2026-10-27T05:45:25.295724+00:00",
+  "revision": "d4f088b3fc7d9f6a8b24613bf05d02e6ff882bc4",
+  "all_source_files_match_commit": true,
+  "source_files_checked": 33,
+  "source_group_sha256": "949afa7c72a51cd8786642502fcd559dffa3d19f7d9b912e1599bc3cdc525cca",
+  "manifest_sha256": "c046b4bd4e719bd592e4bab175c973d03a8916532620f5df25e3201a488866f9",
+  "bound_files_reloaded": 30,
+  "local_readme_links_checked": 48,
+  "historical_files_unchanged": 92,
+  "nine_families": true,
+  "embedded_sources_equal_json": true,
+  "cli_validate_pass": 9,
+  "cli_generate_pass": 9,
+  "cli_static_check_pass": 9,
+  "static_checks_per_artifact": 9,
+  "errors": 0,
+  "warnings": 0,
+  "not_run": [
+    "browser render",
+    "perceptual readability",
+    "export",
+    "Alden/native startup",
+    "model/database calls",
+    "source tests",
+    "install",
+    "release",
+    "formal webAstra/Gemini/reverse audit"
+  ],
+  "model": "unknown",
+  "effort": "unknown",
+  "parent_integration": {
+    "observed_at": "2026-10-27T05:50:56.748394+00:00",
+    "runtime_source_matches_current_commit": "ee75780859869b4346c57457b1a490d7785bdab7",
+    "source_files_reloaded": 33,
+    "all_source_hashes_unchanged": true,
+    "edit": "README wording only; removed transient worker commit/push assertions; noJSON/HTML/source-map/runtime edits",
+    "bound_files_reloaded": 30,
+    "local_readme_links_checked": 48,
+    "browser_render": "not-run",
+    "original_worker_manifest_sha256": "5dac86918049647434bbbfd7e5c5e1e69e161c3cfc597c96df30a40be5ddda99",
+    "htmlPostprocess": {
+      "kind": "remove ASCII indentation from otherwise empty lines only",
+      "count": 137,
+      "originalsPreserved": true,
+      "staticChecksAfterPostprocess": [
+        {
+          "file": "activity.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "collection.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "evaluation.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "lineage.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "mcp.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "normalization.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "recovery.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "system.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        },
+        {
+          "file": "voice.html",
+          "ok": true,
+          "checks": 9,
+          "provenance": "unknown"
+        }
+      ],
+      "schemaJSONSourceMapUnchanged": true,
+      "browserRender": "not-run"
+    }
+  }
+}
