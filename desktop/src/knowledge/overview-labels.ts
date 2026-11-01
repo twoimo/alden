@@ -10,8 +10,14 @@ const CONCISE_SUBJECTS = new Set(['자소서', '면접']);
 const CHANNEL_TITLE = /(?:채널|티비|tv|channel)$/i;
 const MEDIA_BUCKET = /(?:^|[·\s/])(?:(?:일반|전체)\s*(?:동)?영상|(?:동)?영상\s*(?:모음|목록)|snippets?)(?:\s*\d+\s*(?:개|편|건)?)?$/i;
 
+// Count letters rather than a particular alphabet. Combining marks belong to
+// their letters (e.g. Indic/Arabic text) but cannot make a one-letter term two.
+function descriptiveTerms(label: string): string[] {
+  return label.split(/[·・\s/]+/).filter(term => /\p{L}[\p{L}\p{M}]*\p{L}/u.test(term));
+}
+
 function descriptiveOverviewLabel(label: string): boolean {
-  const terms = label.split(/[·\s/]+/).filter(term => /[A-Za-z가-힣]{2}/.test(term));
+  const terms = descriptiveTerms(label);
   // Ambiguous single-term labels stay on their nodes for hover/focus access.
   // This is a display heuristic, not a person or content classification.
   return terms.length >= 2 && !CHANNEL_TITLE.test(label) && !MEDIA_BUCKET.test(label);
@@ -32,7 +38,7 @@ export function overviewRoutingStar(label: string, category?: string): boolean {
   if (GENERIC.test(text) || BUCKET.test(text)) return true;
   if ((category === 'hub' || category === 'code') && !/[가-힣]/.test(text)) return true;
   if (category !== 'source_group') return false;
-  const terms = text.split(/[·\s/]+/).filter(term => /[A-Za-z가-힣]{2}/.test(term));
+  const terms = descriptiveTerms(text);
   return terms.length < 2;
 }
 
@@ -92,7 +98,7 @@ function selectSavedLabels(nodes: readonly KnowledgeNode[], limit: number): Know
     const label = node.label.normalize('NFC').replace(/\s+/g, ' ').trim();
     if (node.evidence.retracted || (node.contentEvidence && node.contentEvidence !== 'content_candidate')
       || PEOPLE.test(node.category) || ['collection','hub','index','metadata'].includes(node.category)
-      || GENERIC.test(label) || BUCKET.test(label) || !/[A-Za-z가-힣]/.test(label)
+      || GENERIC.test(label) || BUCKET.test(label) || !/\p{L}/u.test(label)
       || /^@[^\s]+$/.test(label) || internalGraphLabel(label)
       || !(descriptiveOverviewLabel(label) || TOPIC.test(node.category) && CONCISE_SUBJECTS.has(label))) return [];
     const tier = TOPIC.test(node.category) ? 0 : CLAIM.test(node.category) ? 1 : node.category === 'code' ? 3 : 2;
