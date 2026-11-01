@@ -13,7 +13,7 @@ it.each(titles)('keeps the saved multi-term title %s eligible without altering i
   expect(overviewRoutingStar(label, 'source_group')).toBe(false);
 });
 
-it.each(['中文', 'ひらがな', '123 456', '😀 😃', 'अि बि', 'graph:資料 条件', 'source:資料 条件', 'readme.md'])('keeps ambiguous or internal title %s out of overview captions', label => {
+it.each(['中文', 'ひらがな', '123 456', '😀 😃', 'अि बि', 'graph:資料 条件', 'source:資料 条件', 'readme.md', '기타・미분류', '홍보・안내', '채용・snippets'])('keeps ambiguous or internal title %s out of overview captions', label => {
   const nodes = parseKnowledgeGraph({ nodes: [{ id: 'saved', label, category: 'topic' }], edges: [] }).nodes;
   expect(selectOverviewLabels(nodes)).toEqual([]);
 });

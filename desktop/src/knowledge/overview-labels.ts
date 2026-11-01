@@ -1,14 +1,14 @@
 import type { KnowledgeNode } from './graph-model';
 
-const GENERIC = /^(?:기타(?:[·\s/]+미분류)?|미분류|일반\s*동영상|전체\s*동영상|동영상|영상|unknown|untitled|snippets?|index|readme(?:\.md)?|src|dist|node_modules)$/i;
-const BUCKET = /^(?:홍보(?:[·\s]+안내)?|외부\s*자료(?:[·\s]+링크)?)$/;
+const GENERIC = /^(?:기타(?:[·・\s/]+미분류)?|미분류|일반\s*동영상|전체\s*동영상|동영상|영상|unknown|untitled|snippets?|index|readme(?:\.md)?|src|dist|node_modules)$/i;
+const BUCKET = /^(?:홍보(?:[·・\s]+안내)?|외부\s*자료(?:[·・\s]+링크)?)$/;
 const PEOPLE = /^(?:author|person|creator|channel|source_group|인물|사람|대화 상대|화자)$/i;
 const TOPIC = /^(?:topic|concept|subject|주제|개념)$/i;
 const CLAIM = /^(?:claim|source_claim|memory|note|knowledge|지식|기억)$/i;
 // Concise saved subjects used by the career graph, not inferred person names.
 const CONCISE_SUBJECTS = new Set(['자소서', '면접']);
 const CHANNEL_TITLE = /(?:채널|티비|tv|channel)$/i;
-const MEDIA_BUCKET = /(?:^|[·\s/])(?:(?:일반|전체)\s*(?:동)?영상|(?:동)?영상\s*(?:모음|목록)|snippets?)(?:\s*\d+\s*(?:개|편|건)?)?$/i;
+const MEDIA_BUCKET = /(?:^|[·・\s/])(?:(?:일반|전체)\s*(?:동)?영상|(?:동)?영상\s*(?:모음|목록)|snippets?)(?:\s*\d+\s*(?:개|편|건)?)?$/i;
 
 // Count letters rather than a particular alphabet. Combining marks belong to
 // their letters (e.g. Indic/Arabic text) but cannot make a one-letter term two.
