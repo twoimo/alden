@@ -3,6 +3,7 @@ import type { LayoutAffinityPair } from './layout-affinity';
 import type { Point3 } from './plasticity';
 import { SEMANTIC_LAYOUT_LIMITS, type SemanticLayoutCheckpoint, type SemanticLayoutDiagnostics } from './semantic-layout';
 import { relationCurrentlyValid } from './relation-validity';
+import { admitSemanticReply, copySemanticCheckpoint } from './semantic-layout-reply';
 
 export interface LayoutRequest { id: number; view: KnowledgeView; previous: Array<[string, Point3]>;
   pairs: readonly LayoutAffinityPair[]; changed: string[]; pinned: string[]; nowMs: number; reflow?: boolean; checkpoint?: SemanticLayoutCheckpoint }
@@ -60,7 +61,7 @@ export class SemanticLayoutDriver {
   /** An identical completed snapshot may restore its colour metadata on a
    * rebuild. Matching IDs alone never confer permission to reuse labels. */
   labelsFor(view:KnowledgeView,pinned:ReadonlySet<string>):ReadonlyArray<[string,string]>|undefined {
-    return this.appliedKey===snapshotKey(view,pinned)?this.checkpoint?.labels:undefined;
+    return this.appliedKey===snapshotKey(view,pinned)?this.checkpoint?.labels.map(([id,label])=>[id,label] as [string,string]):undefined;
   }
 
   request(view: KnowledgeView, previous: ReadonlyMap<string, Point3>, changed: ReadonlySet<string>, pinned: ReadonlySet<string>,
@@ -108,21 +109,27 @@ export class SemanticLayoutDriver {
     this.worker = worker; this.busy = true; this.pendingReflow = reflow; this.requestedPins = pinKey;
     this.requestedKey = key; this.requestedInputs=inputs; this.state = { state: 'pending', generation: id };
     worker.onmessage = event => {
-      if (this.worker !== worker || event.data.id !== id || id !== this.generation) return;
+      if (this.worker !== worker || id !== this.generation) return;
+      const raw=event.data;
+      const reject=()=>{this.stop();this.state={state:'failed',reason:'semantic_layout_invalid_reply'};};
+      if(!raw||typeof raw!=='object'||Array.isArray(raw)||!Number.isSafeInteger(raw.id)){reject();return;}
+      if(raw.id!==id)return;
       this.busy = false; this.pendingReflow = false;
       // A boundary can pass while the main thread is unable to run its timer.
       // Discard that reply before publishing any position or membership state.
       if(snapshotKey(view,pinned)!==key||JSON.stringify(pinCoordinates())!==pinKey){
         this.request(view,previous,changed,pinned,provisional,reflow);return;
       }
-      if (event.data.error || !event.data.anchors || !event.data.diagnostics || !event.data.checkpoint) {
-        this.state = { state: 'failed', reason: event.data.error ?? 'semantic_layout_invalid_reply' }; return;
+      if (raw.error) {
+        this.stop();this.state = { state: 'failed', reason: typeof raw.error==='string'?raw.error:'semantic_layout_invalid_reply' }; return;
       }
-      this.appliedKey = key; this.appliedPins=pinKey; this.checkpoint = event.data.checkpoint;
+      const admitted=admitSemanticReply(raw,view,pinned,previous);
+      if(!admitted){reject();return;}
+      this.appliedKey = key; this.appliedPins=pinKey; this.checkpoint = admitted.checkpoint;
       this.completedPositions=this.checkpoint.positions;
-      this.state = { state: 'ready', generation: id, wallMs: event.data.wallMs, ...event.data.diagnostics, ...priorBasis };
+      this.state = { ...admitted.diagnostics, ...priorBasis, state: 'ready', generation: id, wallMs: admitted.wallMs };
       this.completedState={...this.state};
-      this.apply(event.data);
+      this.apply({...admitted,checkpoint:copySemanticCheckpoint(this.checkpoint!)});
     };
     worker.onerror = () => {
       this.failWorker(worker, id, 'runtime');
@@ -145,7 +152,7 @@ export class SemanticLayoutDriver {
     this.state={...this.state,...priorBasis};
     try {
       worker.postMessage({ id, view: compact, previous: retained.map(([key, p]) => [key, { x: p.x, y: p.y, z: p.z }]),
-        pairs, changed: [...changed], pinned: [...pinned], nowMs, reflow, checkpoint: this.checkpoint });
+        pairs, changed: [...changed], pinned: [...pinned], nowMs, reflow, checkpoint: this.checkpoint?copySemanticCheckpoint(this.checkpoint):undefined });
     } catch { this.failWorker(worker, id, 'post'); }
   }
 
