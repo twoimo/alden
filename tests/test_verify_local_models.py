@@ -58,9 +58,7 @@ class _Response:
 class _FakeOpener:
     def __init__(self, catalog, completion=None):
         self.catalog = catalog
-        self.completion = completion or {
-            "choices": [{"message": {"content": "확인"}}]
-        }
+        self.completion = completion
         self.calls = []
 
     def __call__(self, request, *, timeout):
@@ -71,7 +69,15 @@ class _FakeOpener:
             request.full_url == CHAT_COMPLETIONS_URL
             and request.get_method() == "POST"
         ):
-            return _Response(self.completion, url=CHAT_COMPLETIONS_URL)
+            requested_model = json.loads(request.data)["model"]
+            payload = self.completion if self.completion is not None else {
+                "model": requested_model,
+                "choices": [{
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "확인"},
+                }],
+            }
+            return _Response(payload, url=CHAT_COMPLETIONS_URL)
         raise AssertionError(f"unexpected request: {request.get_method()} {request.full_url}")
 
 
@@ -185,7 +191,7 @@ class VerifyLocalModelsTests(unittest.TestCase):
         )
         missing_content = verify_local_model(
             RESIDENT_MODEL_ID,
-            opener=_FakeOpener(self._ready_catalog(), {"choices": [{}]}),
+            opener=_FakeOpener(self._ready_catalog(), {"model": RESIDENT_MODEL_ID, "choices": [{}]}),
         )
 
         self.assertEqual(malformed_models.reason, "models_malformed_json")
@@ -193,6 +199,35 @@ class VerifyLocalModelsTests(unittest.TestCase):
         self.assertEqual(missing_content.reason, "generation_missing_content")
         self.assertTrue(missing_content.readiness)
         self.assertFalse(missing_content.generation)
+
+    def test_generation_requires_selected_model_completion_role_and_probe(self):
+        valid = {
+            "model": RESIDENT_MODEL_ID,
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "확인"}}],
+        }
+        cases = [
+            ({**valid, "model": SWAP_MODEL_ID}, "generation_wrong_model"),
+            ({**valid, "model": None}, "generation_wrong_model"),
+            ({**valid, "choices": [{"finish_reason": "length", "message": {"role": "assistant", "content": "확인"}}]}, "generation_incomplete"),
+            ({**valid, "choices": [{"finish_reason": "stop", "message": {"role": "user", "content": "확인"}}]}, "generation_wrong_role"),
+            ({**valid, "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "다른 응답"}}]}, "generation_probe_mismatch"),
+        ]
+        for completion, reason in cases:
+            with self.subTest(reason=reason, payload=completion):
+                result = verify_local_model(RESIDENT_MODEL_ID, opener=_FakeOpener(self._ready_catalog(), completion))
+                self.assertTrue(result.readiness)
+                self.assertFalse(result.generation)
+                self.assertEqual(result.reason, reason)
+
+    def test_local_gateway_rejects_numeric_overflow_before_readiness_or_generation(self):
+        def overflowed(request, *, timeout):
+            del timeout
+            if request.full_url == MODELS_URL:
+                return _Response(b'{"data":[{"id":"x","score":1e400}]}', url=MODELS_URL)
+            raise AssertionError("generation must not be requested")
+        result = verify_local_model(RESIDENT_MODEL_ID, opener=overflowed)
+        self.assertEqual(result.reason, "models_malformed_json")
+        self.assertFalse(result.readiness)
 
     def test_oversized_json_and_row_count_are_bounded(self):
         oversized = verify_local_model(
@@ -307,7 +342,11 @@ class VerifyLocalModelsTests(unittest.TestCase):
         secret_text = "GENERATED_SECRET headers=Bearer-SECRET raw-server-output"
         opener = _FakeOpener(
             self._ready_catalog(),
-            {"choices": [{"message": {"content": secret_text}}]},
+            {
+                "model": RESIDENT_MODEL_ID,
+                "provider_private_debug": secret_text,
+                "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "확인"}}],
+            },
         )
         stdout = io.StringIO()
 

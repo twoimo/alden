@@ -68,6 +68,37 @@ class DeltaTests(unittest.TestCase):
             db.execute("UPDATE corpus_meta SET value='1' WHERE key='complete'");db.execute("UPDATE corpus_meta SET value=? WHERE key='account'",('2'*64,))
         with self.assertRaisesRegex(RuntimeError,'not_complete'):delta.capture(self.state,self.filter)
 
+    def test_complete_snapshot_removes_metadata_with_tombstone_and_allows_readd(self):
+        first=delta.capture(self.state,self.filter)
+        self.assertEqual(first['metadata_changed'],2)
+        old_files=self.texts()
+        cache=self.state/'knowledge/osk/vault/_sources/kakao/deltas/versions.sqlite3'
+        foreign='kakao:other-account:room:42'
+        with sqlite3.connect(cache) as db:
+            db.execute('INSERT INTO metadata_versions VALUES(?,?)',(foreign,'independent'))
+        with sqlite3.connect(self.source) as db:
+            db.execute("UPDATE corpus_meta SET value='v2' WHERE key='snapshot'")
+            db.execute("DELETE FROM alden_rooms WHERE chat_id='42'")
+        removed=delta.capture(self.state,self.filter)
+        self.assertEqual((removed['changed'],removed['removed'],removed['metadata_changed'],removed['metadata_removed']),
+                         (0,0,0,1))
+        new_files=self.texts()
+        new_text=b''.join(body for path,body in new_files.items() if path not in old_files).decode()
+        self.assertIn('external_source_removed',new_text)
+        self.assertIn('kakao:'+self.account+':room:42',new_text)
+        with sqlite3.connect(cache) as db:
+            ids={r[0] for r in db.execute('SELECT source_id FROM metadata_versions')}
+        self.assertNotIn('kakao:'+self.account+':room:42',ids)
+        self.assertIn('kakao:'+self.account+':author:7',ids)
+        self.assertIn(foreign,ids)
+        with sqlite3.connect(self.source) as db:
+            db.execute("UPDATE corpus_meta SET value='v3' WHERE key='snapshot'")
+            db.execute("INSERT INTO alden_rooms VALUES('42','방')")
+        restored=delta.capture(self.state,self.filter)
+        self.assertEqual(restored['metadata_changed'],1)
+        self.assertEqual(restored['metadata_removed'],0)
+        self.assertEqual(delta.capture(self.state,self.filter)['state'],'unchanged')
+
     def test_original_access_wait_keeps_saved_sync_and_uses_collection_backoff(self):
         # Collection and sync adapters are fake; no real DB access, worker/send
         # or model action occurs in this behavior test.

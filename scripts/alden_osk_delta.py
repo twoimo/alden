@@ -68,7 +68,7 @@ def capture(state_root: Path, filter_text, *, cancelled=lambda:False) -> dict:
                 cache.executemany('INSERT INTO versions VALUES(?,?,?,?,?)',rows)
             cache.executemany('INSERT INTO metadata VALUES(?,?)',[('account',account),('initialized','1')]);cache.commit()
         source.execute('ATTACH DATABASE ? AS previous',(cache_path.as_uri()+'?mode=ro',))
-        blocks=[];updates=[];deletions=[];metadata_updates=[];chunks=changed=removed=0;size=0
+        blocks=[];updates=[];deletions=[];metadata_updates=[];metadata_deletions=[];current_metadata=set();chunks=changed=removed=0;size=0
         def append(record):
             nonlocal blocks,size
             if cancelled():raise RuntimeError('osk_delta_cancelled')
@@ -87,10 +87,19 @@ def capture(state_root: Path, filter_text, *, cancelled=lambda:False) -> dict:
             key=_identity(account,row);append({'record_kind':'external_source_removed','source_role':'source_state','source_id':key,'snapshot':snapshot});removed+=1;deletions.append((row['row_id'],))
         for table,column,kind in [('alden_rooms','chat_id','room'),('alden_authors','author_id','author')]:
             for row in source.execute('SELECT * FROM '+table+' ORDER BY '+column):
-                key=f'kakao:{account}:{kind}:{row[column]}';record={'record_kind':'external_corpus_metadata','source_role':'source_metadata','source_id':key,'table':table,'original':dict(row)}
+                key=f'kakao:{account}:{kind}:{row[column]}';current_metadata.add(key);record={'record_kind':'external_corpus_metadata','source_role':'source_metadata','source_id':key,'table':table,'original':dict(row)}
                 fingerprint=_hash(filter_text(json.dumps(record,ensure_ascii=False,sort_keys=True,default=_json_value))[0].encode())
                 old=cache.execute('SELECT fingerprint FROM metadata_versions WHERE source_id=?',(key,)).fetchone()
                 if old is None or old[0]!=fingerprint:append(record);metadata_updates.append((key,fingerprint))
+        # A complete published snapshot can remove a room or author. Record a
+        # tombstone for previously tracked metadata, scoped to this account;
+        # unrelated index entries and other accounts must never be removed.
+        prefixes=(f'kakao:{account}:room:',f'kakao:{account}:author:')
+        for (source_id,) in cache.execute('SELECT source_id FROM metadata_versions ORDER BY source_id'):
+            if source_id.startswith(prefixes) and source_id not in current_metadata:
+                append({'record_kind':'external_source_removed','source_role':'source_state',
+                        'source_id':source_id,'snapshot':snapshot})
+                metadata_deletions.append((source_id,))
         flush()
         if cancelled():raise RuntimeError('osk_delta_cancelled')
         total=source.execute('SELECT COUNT(*) FROM alden_messages').fetchone()[0]
@@ -100,7 +109,8 @@ def capture(state_root: Path, filter_text, *, cancelled=lambda:False) -> dict:
         cache.execute('BEGIN IMMEDIATE');cache.executemany('DELETE FROM versions WHERE row_id=?',deletions)
         cache.executemany('INSERT INTO versions VALUES(?,?,?,?,?) ON CONFLICT(row_id) DO UPDATE SET chat_id=excluded.chat_id,log_id=excluded.log_id,digest=excluded.digest,self=excluded.self',updates)
         cache.executemany('INSERT INTO metadata_versions VALUES(?,?) ON CONFLICT(source_id) DO UPDATE SET fingerprint=excluded.fingerprint',metadata_updates)
+        cache.executemany('DELETE FROM metadata_versions WHERE source_id=?',metadata_deletions)
         for key,value in [('snapshot',snapshot),('rows',str(total)),('captured_at',str(int(time.time())))]:cache.execute('INSERT INTO metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,value))
         cache.commit()
     cache_path.chmod(0o600)
-    return {'ok':True,'state':'captured','snapshot':snapshot,'rows':total,'changed':changed,'removed':removed,'metadata_changed':len(metadata_updates),'chunks':chunks,'elapsed_ms':(time.perf_counter()-started)*1000}
+    return {'ok':True,'state':'captured','snapshot':snapshot,'rows':total,'changed':changed,'removed':removed,'metadata_changed':len(metadata_updates),'metadata_removed':len(metadata_deletions),'chunks':chunks,'elapsed_ms':(time.perf_counter()-started)*1000}

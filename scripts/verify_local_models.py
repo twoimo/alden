@@ -158,6 +158,13 @@ def _reject_json_constant(_value: str) -> None:
     raise ValueError("non-standard JSON constant")
 
 
+def _reject_nonfinite_float(literal: str) -> float:
+    value = float(literal)
+    if not math.isfinite(value):
+        raise ValueError("non-finite JSON number")
+    return value
+
+
 def _response_status(response: Any) -> int | None:
     status = getattr(response, "status", None)
     if status is None:
@@ -229,7 +236,7 @@ def _read_json_response(
     if len(raw) > MAX_RESPONSE_BYTES:
         raise _ProbeFailure(f"{stage}_response_too_large")
     try:
-        return json.loads(raw, parse_constant=_reject_json_constant)
+        return json.loads(raw, parse_constant=_reject_json_constant, parse_float=_reject_nonfinite_float)
     except (ValueError, TypeError, RecursionError):
         raise _ProbeFailure(f"{stage}_malformed_json") from None
 
@@ -260,7 +267,7 @@ def _require_ready_model(payload: Any, model: str) -> None:
         raise _ProbeFailure("model_not_ready")
 
 
-def _require_generation(payload: Any) -> None:
+def _require_generation(payload: Any, requested_model: str) -> None:
     if not isinstance(payload, dict):
         raise _ProbeFailure("generation_malformed_json")
     choices = payload.get("choices")
@@ -278,6 +285,14 @@ def _require_generation(payload: Any) -> None:
         raise _ProbeFailure("generation_missing_content")
     if len(content) > MAX_CONTENT_CHARS:
         raise _ProbeFailure("generation_content_too_large")
+    if canonical_fixed_model_id(payload.get("model")) != requested_model:
+        raise _ProbeFailure("generation_wrong_model")
+    if message.get("role") != "assistant":
+        raise _ProbeFailure("generation_wrong_role")
+    if choices[0].get("finish_reason") != "stop":
+        raise _ProbeFailure("generation_incomplete")
+    if content.strip() != "확인":
+        raise _ProbeFailure("generation_probe_mismatch")
 
 
 def verify_local_model(
@@ -355,7 +370,7 @@ def verify_local_model(
                 clock=clock,
                 stage="generation",
             )
-            _require_generation(generation_payload)
+            _require_generation(generation_payload, model)
     except MlxRequestAdmissionClosed as exc:
         return VerificationResult(
             model,
