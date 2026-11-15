@@ -101,6 +101,7 @@ class FakeCli:
         self.preflight: object = "ready"
         self.send: object = "confirmed"
         self.before_send = None
+        self.pre_send_tail = 0
         self.after_record = None
         self.runner = None
         connection = sqlite3.connect(context_db)
@@ -140,6 +141,12 @@ class FakeCli:
                 return self._answer(_next(self.preflight), argv)
             if self.before_send is not None:
                 self.before_send(argv)
+            # The newest row local-send sees before it touches the composer,
+            # as pre_send_tail_log_id computes it in src/commands/local_send.rs.
+            source = options["env"].get("OPENKAKAO_EXPECTED_SOURCE_LOG_ID") or "0"
+            self.pre_send_tail = max(
+                [int(source)] + [row["log_id"] for row in self.transcript]
+            )
             return self._answer(self.send, argv)
         raise AssertionError(f"unexpected CLI command: {argv[:2]}")
 
@@ -292,6 +299,7 @@ class FakeCli:
             "status": "accepted_unconfirmed",
             "confirmed": False,
             "network": False,
+            "pre_send_tail_log_id": self.pre_send_tail,
         }
         if scripted == "ready":
             payload = {
@@ -317,6 +325,11 @@ class FakeCli:
             payload = unconfirmed
         elif scripted == "posted_but_unconfirmed":
             # The room shows the reply, but the CLI gave up waiting for it.
+            self.post(argv[3], is_self=True, author_id=1)
+            payload = unconfirmed
+        elif scripted == "posted_twice_but_unconfirmed":
+            # KakaoTalk delivered the reply twice; the CLI rejects a duplicate.
+            self.post(argv[3], is_self=True, author_id=1)
             self.post(argv[3], is_self=True, author_id=1)
             payload = unconfirmed
         elif isinstance(scripted, dict):
@@ -818,6 +831,42 @@ class DueDraftDeliveryTests(SendPathCase):
             ("ax", "sending", "sending", "local_db_confirmed"),
             self.transitions(event["event_id"]),
         )
+
+    def test_matching_row_the_account_wrote_before_the_send_is_not_its_proof(self):
+        event = self.inbound(510)
+        job = self.due_draft(event, REPLY)
+        # The account types the same words on another device just before Return.
+        self.cli.before_send = lambda _argv: self.cli.post(REPLY, is_self=True, author_id=1)
+        self.cli.send = "accepted_unconfirmed"
+
+        self.process(job)
+
+        self.assertEqual(
+            self.outcome(event["event_id"]),
+            ("delivery_unknown", *DRAFT, REPLY, 3.0, "delivery_unknown"),
+        )
+        self.assertNotIn(
+            ("ax", "sending", "sending", "local_db_confirmed"),
+            self.transitions(event["event_id"]),
+        )
+        self.assert_left_for_reconciliation(event["event_id"], REPLY)
+
+    def test_reply_that_landed_twice_is_not_confirmed(self):
+        event = self.inbound(511)
+        job = self.due_draft(event, REPLY)
+        self.cli.send = "posted_twice_but_unconfirmed"
+
+        self.process(job)
+
+        self.assertEqual(
+            self.outcome(event["event_id"]),
+            ("delivery_unknown", *DRAFT, REPLY, 3.0, "delivery_unknown"),
+        )
+        self.assertNotIn(
+            ("ax", "sending", "sending", "local_db_confirmed"),
+            self.transitions(event["event_id"]),
+        )
+        self.assert_left_for_reconciliation(event["event_id"], REPLY)
 
     def test_send_refused_before_composing_is_retried_inside_the_window(self):
         event = self.inbound(505)
