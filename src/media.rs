@@ -338,161 +338,169 @@ pub fn parse_image_download_sources(
     let message_type = kakao_still_image_kind(message_type)
         .ok_or_else(|| anyhow::anyhow!("Message type is not a supported image attachment"))?;
     match message_type {
-        2 | 14 => {
-            let emoticon_path = object
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.is_empty());
-            let has_talk_locator = object
-                .get("url")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|value| !value.is_empty())
-                || object
-                    .get("k")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|value| !value.is_empty());
-            let (url, locator_hint, requires_credentials) = if message_type == 14 {
-                match (emoticon_path, has_talk_locator) {
-                    (Some(_), true) => {
-                        anyhow::bail!("Emoticon attachment has ambiguous locators")
-                    }
-                    (Some(path), false) => (safe_emoticon_path(path)?, path.to_string(), false),
-                    (None, _) => image_locator(object)?,
-                }
-            } else {
-                if emoticon_path.is_some() {
-                    anyhow::bail!("Photo attachment has an unexpected emoticon path");
-                }
-                image_locator(object)?
-            };
-            let (declared_size, declared_width, declared_height) = if message_type == 2 {
-                (
-                    Some(positive_u64(object.get("s"), "s", MAX_IMAGE_BYTES)?),
-                    Some(positive_dimension(object.get("w"), "w")?),
-                    Some(positive_dimension(object.get("h"), "h")?),
-                )
-            } else {
-                let width = object.get("width");
-                let height = object.get("height");
-                if width.is_some() != height.is_some() {
-                    anyhow::bail!("Emoticon dimensions are incomplete");
-                }
-                (
-                    None,
-                    width
-                        .map(|value| positive_dimension(Some(value), "width"))
-                        .transpose()?,
-                    height
-                        .map(|value| positive_dimension(Some(value), "height"))
-                        .transpose()?,
-                )
-            };
-            let declared_kind = object
-                .get(if message_type == 2 { "mt" } else { "type" })
-                .and_then(serde_json::Value::as_str)
-                .and_then(normalized_media_type);
-            let extension_kind = locator_extension_media_type(&locator_hint);
-            if declared_kind.is_some()
-                && extension_kind.is_some()
-                && declared_kind != extension_kind
-            {
-                anyhow::bail!("Image attachment media type conflicts with its locator");
-            }
-            Ok(vec![ImageDownloadSource {
-                url,
-                requires_credentials,
-                declared_size,
-                declared_width,
-                declared_height,
-                expected_media_type: declared_kind.or(extension_kind).map(str::to_string),
-            }])
-        }
-        27 => {
-            if object.get("url").is_some() || object.get("k").is_some() {
-                anyhow::bail!("Multi-photo attachment has ambiguous scalar locators");
-            }
-            let keys = string_array(object, "kl")?;
-            let urls = string_array(object, "imageUrls")?;
-            let count = urls
-                .as_ref()
-                .map(Vec::len)
-                .or_else(|| keys.as_ref().map(Vec::len))
-                .ok_or_else(|| anyhow::anyhow!("Multi-photo attachment has no locators"))?;
-            if !(2..=MAX_IMAGE_INPUTS).contains(&count)
-                || keys.as_ref().is_some_and(|values| values.len() != count)
-                || urls.as_ref().is_some_and(|values| values.len() != count)
-            {
-                anyhow::bail!("Multi-photo attachment locator count is invalid");
-            }
-            let sizes = positive_u64_array(object, "sl", count, MAX_IMAGE_BYTES)?;
-            let widths = positive_u64_array(object, "wl", count, u64::from(MAX_IMAGE_DIMENSION))?;
-            let heights = positive_u64_array(object, "hl", count, u64::from(MAX_IMAGE_DIMENSION))?;
-            if sizes.iter().sum::<u64>() > MAX_IMAGE_BATCH_BYTES {
-                anyhow::bail!("Multi-photo attachment exceeds the aggregate byte cap");
-            }
-            validate_optional_string_array(object, "csl", count, 128)?;
-            validate_optional_string_array(object, "thumbnailUrls", count, 4096)?;
-            validate_optional_dimension_array(object, "thumbnailWidths", count)?;
-            validate_optional_dimension_array(object, "thumbnailHeights", count)?;
-            let media_types = match string_array(object, "mtl")? {
-                Some(values) if values.len() == count => values
-                    .into_iter()
-                    .map(|value| {
-                        normalized_media_type(value)
-                            .map(str::to_string)
-                            .ok_or_else(|| anyhow::anyhow!("Attachment mtl has an invalid item"))
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-                Some(_) => anyhow::bail!("Attachment mtl has the wrong shape"),
-                None => Vec::new(),
-            };
-            let mut seen_urls = HashSet::new();
-            let mut seen_keys = HashSet::new();
-            let mut sources = Vec::with_capacity(count);
-            for index in 0..count {
-                let direct = urls
-                    .as_ref()
-                    .map(|values| safe_kakao_media_url(values[index]))
-                    .transpose()?;
-                let key_url = keys
-                    .as_ref()
-                    .map(|values| safe_media_key(values[index]))
-                    .transpose()?;
-                if direct
-                    .as_ref()
-                    .is_some_and(|value| !seen_urls.insert(value.clone()))
-                    || key_url
-                        .as_ref()
-                        .is_some_and(|value| !seen_keys.insert(value.clone()))
-                {
-                    anyhow::bail!("Multi-photo attachment contains duplicate locators");
-                }
-                let url = direct
-                    .clone()
-                    .or(key_url.clone())
-                    .ok_or_else(|| anyhow::anyhow!("Multi-photo item has no locator"))?;
-                let locator_hint = urls
-                    .as_ref()
-                    .map(|values| values[index])
-                    .or_else(|| keys.as_ref().map(|values| values[index]))
-                    .unwrap_or("");
-                let expected = media_types
-                    .get(index)
-                    .cloned()
-                    .or_else(|| locator_extension_media_type(locator_hint).map(str::to_string));
-                sources.push(ImageDownloadSource {
-                    url,
-                    requires_credentials: direct.is_none(),
-                    declared_size: Some(sizes[index]),
-                    declared_width: Some(widths[index] as u32),
-                    declared_height: Some(heights[index] as u32),
-                    expected_media_type: expected,
-                });
-            }
-            Ok(sources)
-        }
+        2 | 14 => Ok(vec![single_image_source(object, message_type)?]),
+        27 => multi_photo_sources(object),
         _ => anyhow::bail!("Message type is not a supported image attachment"),
     }
+}
+
+/// A photo (2) or emoticon (14) attachment, which carries exactly one locator.
+fn single_image_source(
+    object: &serde_json::Map<String, serde_json::Value>,
+    message_type: i32,
+) -> Result<ImageDownloadSource> {
+    let emoticon_path = object
+        .get("path")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty());
+    let has_talk_locator = object
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+        || object
+            .get("k")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.is_empty());
+    let (url, locator_hint, requires_credentials) = if message_type == 14 {
+        match (emoticon_path, has_talk_locator) {
+            (Some(_), true) => {
+                anyhow::bail!("Emoticon attachment has ambiguous locators")
+            }
+            (Some(path), false) => (safe_emoticon_path(path)?, path.to_string(), false),
+            (None, _) => image_locator(object)?,
+        }
+    } else {
+        if emoticon_path.is_some() {
+            anyhow::bail!("Photo attachment has an unexpected emoticon path");
+        }
+        image_locator(object)?
+    };
+    let (declared_size, declared_width, declared_height) = if message_type == 2 {
+        (
+            Some(positive_u64(object.get("s"), "s", MAX_IMAGE_BYTES)?),
+            Some(positive_dimension(object.get("w"), "w")?),
+            Some(positive_dimension(object.get("h"), "h")?),
+        )
+    } else {
+        let width = object.get("width");
+        let height = object.get("height");
+        if width.is_some() != height.is_some() {
+            anyhow::bail!("Emoticon dimensions are incomplete");
+        }
+        (
+            None,
+            width
+                .map(|value| positive_dimension(Some(value), "width"))
+                .transpose()?,
+            height
+                .map(|value| positive_dimension(Some(value), "height"))
+                .transpose()?,
+        )
+    };
+    let declared_kind = object
+        .get(if message_type == 2 { "mt" } else { "type" })
+        .and_then(serde_json::Value::as_str)
+        .and_then(normalized_media_type);
+    let extension_kind = locator_extension_media_type(&locator_hint);
+    if declared_kind.is_some() && extension_kind.is_some() && declared_kind != extension_kind {
+        anyhow::bail!("Image attachment media type conflicts with its locator");
+    }
+    Ok(ImageDownloadSource {
+        url,
+        requires_credentials,
+        declared_size,
+        declared_width,
+        declared_height,
+        expected_media_type: declared_kind.or(extension_kind).map(str::to_string),
+    })
+}
+
+/// A multi-photo (27) attachment: parallel per-item arrays in the sender's order.
+fn multi_photo_sources(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<Vec<ImageDownloadSource>> {
+    if object.get("url").is_some() || object.get("k").is_some() {
+        anyhow::bail!("Multi-photo attachment has ambiguous scalar locators");
+    }
+    let keys = string_array(object, "kl")?;
+    let urls = string_array(object, "imageUrls")?;
+    let count = urls
+        .as_ref()
+        .map(Vec::len)
+        .or_else(|| keys.as_ref().map(Vec::len))
+        .ok_or_else(|| anyhow::anyhow!("Multi-photo attachment has no locators"))?;
+    if !(2..=MAX_IMAGE_INPUTS).contains(&count)
+        || keys.as_ref().is_some_and(|values| values.len() != count)
+        || urls.as_ref().is_some_and(|values| values.len() != count)
+    {
+        anyhow::bail!("Multi-photo attachment locator count is invalid");
+    }
+    let sizes = positive_u64_array(object, "sl", count, MAX_IMAGE_BYTES)?;
+    let widths = positive_u64_array(object, "wl", count, u64::from(MAX_IMAGE_DIMENSION))?;
+    let heights = positive_u64_array(object, "hl", count, u64::from(MAX_IMAGE_DIMENSION))?;
+    if sizes.iter().sum::<u64>() > MAX_IMAGE_BATCH_BYTES {
+        anyhow::bail!("Multi-photo attachment exceeds the aggregate byte cap");
+    }
+    validate_optional_string_array(object, "csl", count, 128)?;
+    validate_optional_string_array(object, "thumbnailUrls", count, 4096)?;
+    validate_optional_dimension_array(object, "thumbnailWidths", count)?;
+    validate_optional_dimension_array(object, "thumbnailHeights", count)?;
+    let media_types = match string_array(object, "mtl")? {
+        Some(values) if values.len() == count => values
+            .into_iter()
+            .map(|value| {
+                normalized_media_type(value)
+                    .map(str::to_string)
+                    .ok_or_else(|| anyhow::anyhow!("Attachment mtl has an invalid item"))
+            })
+            .collect::<Result<Vec<_>>>()?,
+        Some(_) => anyhow::bail!("Attachment mtl has the wrong shape"),
+        None => Vec::new(),
+    };
+    let mut seen_urls = HashSet::new();
+    let mut seen_keys = HashSet::new();
+    let mut sources = Vec::with_capacity(count);
+    for index in 0..count {
+        let direct = urls
+            .as_ref()
+            .map(|values| safe_kakao_media_url(values[index]))
+            .transpose()?;
+        let key_url = keys
+            .as_ref()
+            .map(|values| safe_media_key(values[index]))
+            .transpose()?;
+        if direct
+            .as_ref()
+            .is_some_and(|value| !seen_urls.insert(value.clone()))
+            || key_url
+                .as_ref()
+                .is_some_and(|value| !seen_keys.insert(value.clone()))
+        {
+            anyhow::bail!("Multi-photo attachment contains duplicate locators");
+        }
+        let requires_credentials = direct.is_none();
+        let url = direct
+            .or(key_url)
+            .ok_or_else(|| anyhow::anyhow!("Multi-photo item has no locator"))?;
+        let locator_hint = urls
+            .as_ref()
+            .map(|values| values[index])
+            .or_else(|| keys.as_ref().map(|values| values[index]))
+            .unwrap_or("");
+        let expected = media_types
+            .get(index)
+            .cloned()
+            .or_else(|| locator_extension_media_type(locator_hint).map(str::to_string));
+        sources.push(ImageDownloadSource {
+            url,
+            requires_credentials,
+            declared_size: Some(sizes[index]),
+            declared_width: Some(widths[index] as u32),
+            declared_height: Some(heights[index] as u32),
+            expected_media_type: expected,
+        });
+    }
+    Ok(sources)
 }
 
 /// Parse attachment JSON to extract download URL and filename.
