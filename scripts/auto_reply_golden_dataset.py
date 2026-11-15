@@ -7,7 +7,7 @@ are joined:
    on. A sent row proves delivery, not quality, so it only becomes gold when the
    approval ledger (golden/quality-approvals.jsonl) accepts it or the row itself
    carries a quality flag. Without a verdict the row is dropped, or kept and
-   labelled model_generated under --include-unreviewed-evidence (2026-09-19).
+   labelled model_generated under --include-unreviewed-evidence.
 2. context.sqlite3 holds the room transcript. The self author's own messages
    are the human gold answers: they are what the operator really typed, with no
    model in the loop.
@@ -16,7 +16,7 @@ Every emitted row records where it came from, who accepted it (quality, log_id,
 event_id, reviewer), which room it belongs to, the conversation window that
 precedes it, and a deterministic content hash used for de-duplication. Nothing
 here touches the network, and the context database is opened read-only so a
-running worker is never blocked (2026-09-17).
+running worker is never blocked.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ _URL_ONLY_PATTERN = re.compile(r"^(?:https?://|www\.)\S+$")
 _REPEAT_PATTERN = re.compile(r"(.)\1{4,}")
 # The room importer rewrites some payloads into a fixed summary block. Those
 # blocks are machine prose, not the operator's own phrasing, so they must never
-# be learned as a gold answer (2026-09-17).
+# be learned as a gold answer.
 _SUMMARY_BLOCK_PATTERN = re.compile(r"^\[설명자료\]|무엇을:|어떻게:|핵심:주장:")
 # Automated feeds post under the operator's nickname in a few rooms.
 _BOT_PREFIXES = ("GeekNews TOP5", "GeekNews TOP", "[GeekNews]")
@@ -64,13 +64,13 @@ _BOT_PREFIXES = ("GeekNews TOP5", "GeekNews TOP", "[GeekNews]")
 DEFAULT_SELF_AUTHORS: tuple[str, ...] = ("최연우",)
 # KakaoTalk users split one thought across several sends. Merging consecutive
 # self messages inside this gap produces the answer the operator actually meant
-# instead of a nine-character fragment (2026-09-17).
+# instead of a nine-character fragment.
 DEFAULT_MERGE_GAP_SECONDS = 180
 
 # Where the golden set records that a person looked at a model-written reply and
 # accepted it. Delivery success is not a language judgement - a reply can be
 # sent and still be wrong - so a sent row only becomes gold once something
-# explicit says so (2026-09-19).
+# explicit says so.
 QUALITY_HUMAN_AUTHORED = "human_authored"
 QUALITY_APPROVED = "approved"
 QUALITY_UNREVIEWED = "unreviewed"
@@ -196,7 +196,7 @@ class QualityApprovals:
 
     The ledger is append-only JSONL and the last verdict for a key wins, so a
     row can be approved, rejected, and approved again without rewriting what a
-    reviewer already said (2026-09-19).
+    reviewer already said.
     """
 
     by_log_id: dict[str, dict[str, str]] = field(default_factory=dict)
@@ -501,7 +501,6 @@ def iter_self_pairs(
     # Every participant is read, not only the self author: the prompt window is
     # made of what other people said right before the gold answer. Filtering the
     # self author in SQL left the window empty and produced no pairs at all
-    # (2026-09-17).
     query = (
         "SELECT id, chat, date, user_name, message FROM context_messages"
         f"{room_clause} ORDER BY chat, id"
@@ -538,7 +537,7 @@ def iter_self_pairs(
         )
 
     # Positional access keeps this working for a plain tuple connection as well
-    # as the Row-factory connection the CLI opens (2026-09-17).
+    # as the Row-factory connection the CLI opens.
     for row in connection.execute(query, params):
         row_id, row_chat, row_date, row_user, row_message = row[:5]
         room = str(row_chat or "")
@@ -629,7 +628,7 @@ def resolve_inbound_messages(
 
     The evidence ledger stores the outgoing reply but not always the message
     that triggered it. context_live_events maps the KakaoTalk log id onto the
-    transcript row, which is where the inbound text still lives (2026-09-17).
+    transcript row, which is where the inbound text still lives.
     """
     lookup: dict[int, dict[str, str]] = {}
     unique = sorted({int(x) for x in log_ids if int(x) > 0})
@@ -682,7 +681,7 @@ def iter_evidence_pairs(
     rows carrying an approval verdict (or an inline quality flag) become gold.
     require_approval=False keeps the rest and labels them model_generated so an
     exploratory set is still possible, but a rejected row is always dropped and
-    the two cases are never mixed silently (2026-09-19).
+    the two cases are never mixed silently.
     """
     if not evidence_path.exists():
         return
@@ -943,7 +942,6 @@ def _db_has_transcript(path: Path) -> bool:
     The state root keeps a small context.sqlite3 that only holds operator
     prompts, while the real transcript lives in the openkakao application
     support root. The name alone is not enough, so the table is probed
-    (2026-09-17).
     """
     if not path.is_file():
         return False
@@ -1046,7 +1044,7 @@ def _print_candidates(
 
     Delivery success is the only thing the ledger proves, so the review list is
     the whole set of sent rows that carry no verdict. Each line is JSON with the
-    log_id the approve/reject flags take (2026-09-19).
+    log_id the approve/reject flags take.
     """
     inbound_lookup: dict[int, dict[str, str]] = {}
     paths = _evidence_paths(state_root)

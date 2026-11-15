@@ -10,7 +10,6 @@ answers, so both numbers are measured and reported together.
 
 Nothing here downloads weights or starts training on its own; every entry point
 takes explicit paths and the caller decides when to spend the compute
-(2026-09-17).
 """
 
 from __future__ import annotations
@@ -43,7 +42,6 @@ try:
     # The golden extractor owns the transcript clock format, so its parser is
     # reused instead of re-implemented: a session bucket that disagrees with
     # the row's own timestamp would put one burst on both sides of the split
-    # (2026-09-19).
     from scripts.auto_reply_golden_dataset import parse_timestamp
 except ImportError:  # `scripts` is not importable from inside its own directory
     from auto_reply_golden_dataset import parse_timestamp
@@ -54,7 +52,7 @@ DEFAULT_TEST_RATIO = 0.05
 DEFAULT_SEED = 42
 # Golden rows are cut from the same room bursts, so neighbours share most of
 # their window text. Two rows further apart than this gap come from separate
-# conversations and may land on opposite sides of the split (2026-09-19).
+# conversations and may land on opposite sides of the split.
 DEFAULT_SESSION_GAP = 1800.0
 # mlx_lm.lora masks the prompt when told to, so the model is scored on the
 # answer only. The instruction line frames the task the same way every time.
@@ -122,7 +120,7 @@ def _to_mlx_row(record: dict[str, Any], instruction: str) -> dict[str, str]:
 
     mlx_lm reads a prompt/completion pair for completions-style data. The room
     window is folded into the prompt so the model sees the same context the
-    live worker would give it (2026-09-17).
+    live worker would give it.
     """
     prompt = str(record.get("prompt") or "").strip()
     window = record.get("window")
@@ -156,7 +154,7 @@ def _session_key(record: dict[str, Any], session_gap: float) -> tuple[str, str] 
     A row without a room cannot be held together with anything else, so it is
     its own group. A room row whose clock cannot be read joins that room's
     no_clock group: an unreadable timestamp must not become a licence to split
-    a burst apart (2026-09-19).
+    a burst apart.
     """
     room = str(record.get("room") or "").strip()
     if not room:
@@ -202,7 +200,7 @@ def build_splits(
     row-by-row shuffle puts one conversation on both sides of the split and the
     held-out loss stops measuring anything. The rows are therefore
     de-duplicated on the whitespace-folded prompt and then grouped by room and
-    session, and a whole group is dealt to exactly one split (2026-09-19).
+    session, and a whole group is dealt to exactly one split.
     """
     stats = SplitStats()
     if not pairs:
@@ -259,7 +257,6 @@ def build_splits(
         # One burst can swallow the whole test and valid budget and leave
         # nothing to train on. Demote the smallest group that is not already
         # training, which is how a single-group dataset ends up in train
-        # (2026-09-19).
         smallest = min(range(len(entries)), key=lambda i: (len(entries[i][0]), i))
         entries[smallest] = (entries[smallest][0], "train")
 
@@ -311,7 +308,7 @@ def plan_training(
 
     The iteration count is derived from the dataset when the caller does not
     pin it: two epochs over the training split is enough to move a small set
-    without overfitting it into memorised replies (2026-09-17).
+    without overfitting it into memorised replies.
     """
     effective_iters = iters
     if effective_iters <= 0:
@@ -410,7 +407,7 @@ def _parse_test_loss(output: str) -> float | None:
             continue
         # The line reads "Test loss 3.412, Test ppl 30.3". Take the
         # number directly after the word loss, not the last number on
-        # the line, which is the perplexity (2026-09-17).
+        # the line, which is the perplexity.
         parts = stripped.replace(",", " ").split()
         for index, token in enumerate(parts):
             if token.lower() == "loss" and index + 1 < len(parts):
@@ -448,7 +445,7 @@ def evaluate_adapter(
 
     The same call is used before and after training, so the two numbers are
     comparable. A missing mlx_lm is reported rather than raised, because the
-    evaluation is diagnostic and must not kill a scheduled run (2026-09-17).
+    evaluation is diagnostic and must not kill a scheduled run.
     """
     executable = _resolve_lora_executable()
     if not executable:
@@ -725,7 +722,7 @@ def evaluate_preference_pairs(
 
 
 # ---------------------------------------------------------------------------
-# DPO 응답 토큰 로그확률 수집 (2026-09-22)
+# DPO 응답 토큰 로그확률 수집
 #
 # 로컬 MLX 게이트웨이는 요청에 logprobs=true를 주면 모델이 직접 생성한 토큰의
 # 로그확률을 돌려준다. 다만 echo 모드를 구현하지 않고 assistant prefill도
