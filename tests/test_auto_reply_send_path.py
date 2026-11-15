@@ -947,6 +947,18 @@ class ProvenSkipTests(SendPathCase):
             ],
         )
 
+    def test_skip_without_a_durable_audit_stays_unknown_without_a_queue_connection(self):
+        event = self.inbound(605)
+        job = self.due_draft(event, "")
+        self.cli.record_outcome = "failed"
+
+        # A caller without its own queue connection writes the row unguarded.
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.module.process_job(job, "scheduled", None)
+
+        self.assertEqual(self.status(event["event_id"]), "delivery_unknown")
+        self.assert_left_for_reconciliation(event["event_id"], "")
+
     def test_skip_that_loses_its_queue_row_is_left_for_reconciliation(self):
         event = self.inbound(604)
         job = self.due_draft(event, "")
