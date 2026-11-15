@@ -300,13 +300,7 @@ impl LocoClient {
             {
                 Ok(Ok(response)) => {
                     if let Ok(host) = response.body.get_str("host") {
-                        let loco_port = response
-                            .body
-                            .get_i32("port")
-                            .ok()
-                            .filter(|&p| p > 0 && p <= 65535)
-                            .map(|p| p as u16)
-                            .unwrap_or(DEFAULT_LOCO_PORT);
+                        let loco_port = checkin_loco_port(&response.body);
                         eprintln!(
                             "[checkin] Server: {}:{} (TLS={}, port={})",
                             host, loco_port, use_tls, port
@@ -566,20 +560,11 @@ impl LocoClient {
             return Err(anyhow!("No checkin hosts in booking response"));
         }
 
-        // Get ports from wifi config
-        let ports: Vec<u16> = config
-            .get_document("wifi")
-            .ok()
-            .and_then(|w| w.get_array("ports").ok())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_i32().map(|p| p as u16))
-                    .collect()
-            })
-            .unwrap_or_default();
-
         let checkin_host = &checkin_hosts[0];
-        let checkin_port = ports.first().copied().unwrap_or(DEFAULT_LOCO_PORT);
+        let checkin_port = booking_ports(&config)
+            .first()
+            .copied()
+            .unwrap_or(DEFAULT_LOCO_PORT);
 
         // Phase 2: Checkin
         let (checkin_data, use_tls) = self.checkin(checkin_host, checkin_port).await?;
@@ -588,10 +573,7 @@ impl LocoClient {
             .get_str("host")
             .map_err(|_| anyhow!("No LOCO host from checkin"))?
             .to_string();
-        let loco_port = checkin_data
-            .get_i32("port")
-            .map(|p| p as u16)
-            .unwrap_or(DEFAULT_LOCO_PORT);
+        let loco_port = checkin_loco_port(&checkin_data);
 
         // Phase 3: Connect and login
         self.connect(&loco_host, loco_port, use_tls).await?;
@@ -665,6 +647,31 @@ impl LocoClient {
             }
         }
     }
+}
+
+fn booking_ports(config: &Document) -> Vec<u16> {
+    config
+        .get_document("wifi")
+        .ok()
+        .and_then(|w| w.get_array("ports").ok())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_i32().and_then(port))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn checkin_loco_port(checkin: &Document) -> u16 {
+    checkin
+        .get_i32("port")
+        .ok()
+        .and_then(port)
+        .unwrap_or(DEFAULT_LOCO_PORT)
+}
+
+fn port(raw: i32) -> Option<u16> {
+    u16::try_from(raw).ok().filter(|&p| p != 0)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -764,4 +771,24 @@ pub async fn loco_upload(
 
     eprintln!("[upload] Complete");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn booking_ports_skip_values_outside_the_port_range() {
+        let config = doc! { "wifi": { "ports": [70000_i32, -1_i32, 0_i32, 9282_i32, 443_i32] } };
+        assert_eq!(booking_ports(&config), vec![9282, 443]);
+    }
+
+    #[test]
+    fn checkin_port_outside_the_port_range_falls_back_to_the_default() {
+        for bad in [70000_i32, -1, 0] {
+            assert_eq!(checkin_loco_port(&doc! { "port": bad }), DEFAULT_LOCO_PORT);
+        }
+        assert_eq!(checkin_loco_port(&doc! { "port": 9282_i32 }), 9282);
+        assert_eq!(checkin_loco_port(&doc! {}), DEFAULT_LOCO_PORT);
+    }
 }
