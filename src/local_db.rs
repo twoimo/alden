@@ -1140,59 +1140,25 @@ fn find_database_path_in(container_dir: &Path, db_name: &str) -> Result<PathBuf>
         anyhow::bail!("KakaoTalk container path contains a symlink");
     }
 
-    // Fast path: the database file name is deterministic, so open it directly.
-    // Directory enumeration can stall while the sandbox container is unhealthy,
-    // but lookup-by-name keeps working.
-    let direct_path = container_dir.join(db_name);
-    if let Ok(metadata) = std::fs::symlink_metadata(&direct_path) {
-        let under_root = direct_path
+    // The database file name is deterministic, so look it up by name:
+    // directory enumeration can stall while the sandbox container is
+    // unhealthy, but lookup-by-name keeps working. KakaoTalk also creates
+    // hex-named directories, so only a regular file counts.
+    let path = container_dir.join(db_name);
+    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+        let under_root = path
             .canonicalize()
             .map(|value| value.strip_prefix(&container_root).is_ok())
             .unwrap_or(false);
         #[cfg(unix)]
-        {
+        let owner_only_writable = {
             use std::os::unix::fs::MetadataExt;
-            if metadata.file_type().is_file()
-                && under_root
-                && metadata.uid() == unsafe { libc::geteuid() }
-                && metadata.mode() & 0o022 == 0
-            {
-                return Ok(direct_path);
-            }
-        }
+            metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o022 == 0
+        };
         #[cfg(not(unix))]
-        if metadata.file_type().is_file() && under_root {
-            return Ok(direct_path);
-        }
-    }
-
-    // Look for a FILE (not directory) matching the derived database name.
-    // Must check it's a regular file — KakaoTalk also creates hex-named directories.
-    if let Ok(entries) = std::fs::read_dir(container_dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let path = entry.path();
-            let metadata = match std::fs::symlink_metadata(&path) {
-                Ok(metadata) => metadata,
-                Err(_) => continue,
-            };
-            if name == db_name
-                && metadata.file_type().is_file()
-                && path
-                    .canonicalize()
-                    .map(|value| value.strip_prefix(&container_root).is_ok())
-                    .unwrap_or(false)
-            {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::MetadataExt;
-                    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o022 != 0
-                    {
-                        continue;
-                    }
-                }
-                return Ok(path);
-            }
+        let owner_only_writable = true;
+        if metadata.file_type().is_file() && under_root && owner_only_writable {
+            return Ok(path);
         }
     }
 
