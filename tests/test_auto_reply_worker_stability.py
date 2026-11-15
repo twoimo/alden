@@ -562,3 +562,41 @@ class PortabilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GeekNewsReadbackTests(unittest.TestCase):
+    def _fake_cli(self, directory: Path, body: str) -> Path:
+        script = directory / "openkakao-cli"
+        script.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        script.chmod(0o700)
+        return script
+
+    def test_readback_accepts_a_full_page_larger_than_the_model_output_cap(self):
+        worker = load_worker("geeknews_readback_large_page")
+        with tempfile.TemporaryDirectory() as raw:
+            rows = [
+                {"chat_id": 325, "log_id": index + 1, "message": "x" * 900, "attachment": "{}" * 200}
+                for index in range(100)
+            ]
+            page = Path(raw) / "page.json"
+            page.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+            self.assertGreater(page.stat().st_size, worker.MAX_MODEL_OUTPUT_BYTES)
+            cli = self._fake_cli(Path(raw), f"cat '{page}'\n")
+            result = worker._geeknews_confirmation_rows(str(cli), 325)
+        self.assertIsNotNone(result, "a 100-row page over 64 KiB is a valid baseline")
+        self.assertEqual(len(result), 100)
+
+    def test_readback_failure_names_its_reason_without_message_content(self):
+        worker = load_worker("geeknews_readback_reason")
+        with tempfile.TemporaryDirectory() as raw:
+            missing = Path(raw) / "absent-cli"
+            stderr = io.StringIO()
+            with mock.patch.object(sys, "stderr", stderr):
+                self.assertIsNone(worker._geeknews_confirmation_rows(str(missing), 325))
+            failing = self._fake_cli(Path(raw), "echo secret-body; exit 3\n")
+            with mock.patch.object(sys, "stderr", stderr):
+                self.assertIsNone(worker._geeknews_confirmation_rows(str(failing), 325))
+        report = stderr.getvalue()
+        self.assertIn("binary_unavailable", report)
+        self.assertIn("exit_3", report)
+        self.assertNotIn("secret-body", report)
