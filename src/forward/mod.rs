@@ -70,10 +70,11 @@ pub enum StepAttempt {
     Empty,
     /// The rung did not answer within the two-second bound (R7.5).
     TimedOut,
-    /// The rung needs an OS permission that is not granted: either the
-    /// screen-recording gate skipped the screen-capture rung without calling it
-    /// (R9.10), or the rung itself reported [`AcquireError::PermissionDenied`].
+    /// The screen-recording gate skipped the screen-capture rung without
+    /// calling it (R9.10).
     PermissionMissing,
+    /// The rung ran and reported [`AcquireError::PermissionDenied`].
+    PermissionDenied,
     /// The rung failed with a transport/availability error.
     Error(&'static str),
     /// The rung was not reached because an earlier rung already succeeded.
@@ -159,7 +160,7 @@ impl ImageLadder<'_> {
                 }
                 Ok(_) | Err(AcquireError::Empty) => attempts[idx] = StepAttempt::Empty,
                 Err(AcquireError::PermissionDenied) => {
-                    attempts[idx] = StepAttempt::PermissionMissing
+                    attempts[idx] = StepAttempt::PermissionDenied
                 }
                 Err(AcquireError::NotAvailable) => {
                     attempts[idx] = StepAttempt::Error("not_available")
@@ -1069,6 +1070,8 @@ fn miss_reasons(
 fn acquire_miss_reason(outcome: &LadderOutcome) -> String {
     if outcome.attempts.contains(&StepAttempt::PermissionMissing) {
         "화면 기록 권한이 없어 일부 이미지를 가져오지 못했어요.".to_string()
+    } else if outcome.attempts.contains(&StepAttempt::PermissionDenied) {
+        "이미지에 접근할 권한이 없어 일부 이미지를 가져오지 못했어요.".to_string()
     } else if outcome.attempts.iter().all(|a| *a == StepAttempt::TimedOut) {
         "이미지 확보가 시간 안에 끝나지 않았어요.".to_string()
     } else {
@@ -1204,6 +1207,53 @@ mod forward_tests {
             canonical_link_key("https://x.com/p?id=Q"),
             canonical_link_key("https://x.com/p?id=q")
         );
+    }
+
+    struct DeniedAcquirer;
+    impl ImageAcquirer for DeniedAcquirer {
+        fn kind(&self) -> ImageAcquisition {
+            ImageAcquisition::OriginalSave
+        }
+        fn acquire(&self, _r: &ImageRef) -> Result<ImageBlob, AcquireError> {
+            Err(AcquireError::PermissionDenied)
+        }
+    }
+
+    #[test]
+    fn original_save_denial_is_not_reported_as_missing_screen_recording() {
+        let denied = DeniedAcquirer;
+        let cache = NeverAcquirer {
+            kind: ImageAcquisition::CacheFolder,
+        };
+        let capture = NeverAcquirer {
+            kind: ImageAcquisition::ScreenCapture,
+        };
+        let clock = VirtualClock::new(0);
+        let ladder = ImageLadder {
+            steps: [&denied, &cache, &capture],
+            clock: &clock,
+        };
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(1)),
+            &ScriptedSender::new(RoomSendOutcome::Sent {
+                images_delivered: 0,
+            }),
+            &ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        let reasons = match delivered_rooms(&run.outcome).remove(0).2 {
+            DeliveryResult::PartialFailure { miss_reasons, .. } => miss_reasons,
+            other => panic!("expected a partial failure, got {other:?}"),
+        };
+        assert_eq!(reasons.len(), 1);
+        assert!(
+            !reasons[0].contains("화면 기록"),
+            "screen recording is granted, yet the reason blames it: {}",
+            reasons[0]
+        );
+        assert!(reasons[0].contains("권한"), "{}", reasons[0]);
     }
 
     #[test]
