@@ -14815,6 +14815,57 @@ def durable_policy_skip(
     return record_or_confirm_context_skip(record)
 
 
+def finish_proven_skip(
+    event: dict,
+    event_id: str,
+    connection: sqlite3.Connection | None,
+    reason: str,
+    *,
+    category: str = "policy",
+    audited_event: dict | None = None,
+    rewrite_event: bool = False,
+    unknown_fields: dict[str, object] | None = None,
+    **queue_fields: object,
+) -> bool:
+    """Close a job that sent nothing: the audit, then the queue row, then the event.
+
+    The decision-store audit is the proof that nothing was sent, so it is
+    written first. A job whose audit is not durable is not a skip. It is fenced
+    as delivery_unknown with ``unknown_fields``, which default to projecting the
+    skip onto that row.
+
+    ``audited_event`` is what the audit describes when that is not ``event``.
+    ``rewrite_event`` stores ``event`` on the queue row. ``queue_fields`` are
+    the remaining columns of the skipped row.
+    """
+    if not durable_policy_skip(
+        event if audited_event is None else audited_event,
+        event_id,
+        reason,
+        category=category,
+    ):
+        if unknown_fields is None:
+            unknown_fields = {"decision": "skip", "reason": reason, "category": category}
+        finish_delivery_unknown(event, event_id, connection, **unknown_fields)
+        return False
+    if rewrite_event:
+        queue_fields["event_json"] = json.dumps(event, ensure_ascii=False)
+    if not settle_processing_transition(
+        event,
+        event_id,
+        connection,
+        status="skipped",
+        due_at=None,
+        decision="skip",
+        reason=reason,
+        category=category,
+        **queue_fields,
+    ):
+        return False
+    complete_event(event_id, "")
+    return True
+
+
 def finish_burst_superseded(
     event: dict,
     event_id: str,
@@ -14864,39 +14915,17 @@ def finish_conversation_advanced(
     connection: sqlite3.Connection | None,
 ) -> bool:
     event = release_media_event(event)
-    audited_event = _coalesced_burst_event(event)
-    if not durable_policy_skip(
-        audited_event,
-        event_id,
-        "conversation_advanced",
-        category="policy",
-    ):
-        finish_delivery_unknown(
-            event,
-            event_id,
-            connection,
-            decision="skip",
-            reason="conversation_advanced",
-            category="policy",
-        )
-        return False
-    if not settle_processing_transition(
+    return finish_proven_skip(
         event,
         event_id,
         connection,
-        status="skipped",
-        due_at=None,
-        decision="skip",
-        reason="conversation_advanced",
-        category="policy",
+        "conversation_advanced",
+        audited_event=_coalesced_burst_event(event),
+        rewrite_event=True,
         reply=None,
         scheduled_delay_seconds=None,
         error_class=None,
-        event_json=json.dumps(event, ensure_ascii=False),
-    ):
-        return False
-    complete_event(event_id, "")
-    return True
+    )
 
 
 def finish_scheduled_stale_backlog(
@@ -14906,37 +14935,17 @@ def finish_scheduled_stale_backlog(
 ) -> None:
     """Project one expired scheduled reply as a strict, proven no-send skip."""
     event = release_media_event(event)
-    audited_event = _coalesced_burst_event(event)
-    if not durable_policy_skip(
-        audited_event,
-        event_id,
-        "stale_backlog",
-    ):
-        finish_delivery_unknown(
-            event,
-            event_id,
-            connection,
-            decision="skip",
-            reason="stale_backlog",
-            category="policy",
-        )
-        return
-    if not settle_processing_transition(
+    finish_proven_skip(
         event,
         event_id,
         connection,
-        status="skipped",
-        due_at=None,
-        decision="skip",
-        reason="stale_backlog",
-        category="policy",
+        "stale_backlog",
+        audited_event=_coalesced_burst_event(event),
+        rewrite_event=True,
         reply=None,
         scheduled_delay_seconds=None,
         error_class=None,
-        event_json=json.dumps(event, ensure_ascii=False),
-    ):
-        return
-    complete_event(event_id, "")
+    )
 
 
 def defer_scheduled_pre_send_unavailable(
@@ -15131,32 +15140,16 @@ def finish_turn_policy_skip(
         finish_conversation_advanced(event, event_id, connection)
         return
     event = release_media_event(event)
-    if not durable_policy_skip(event, event_id, reason):
-        finish_delivery_unknown(
-            event,
-            event_id,
-            connection,
-            decision="skip",
-            reason=reason,
-            category="policy",
-        )
-        return
-    if not settle_processing_transition(
+    finish_proven_skip(
         event,
         event_id,
         connection,
-        status="skipped",
-        due_at=None,
-        decision="skip",
-        reason=reason,
-        category="policy",
+        reason,
+        rewrite_event=True,
         reply=None,
         scheduled_delay_seconds=None,
         error_class=None,
-        event_json=json.dumps(event, ensure_ascii=False),
-    ):
-        return
-    complete_event(event_id, "")
+    )
 
 
 def process_job(
@@ -15203,36 +15196,15 @@ def process_job(
         except (TypeError, ValueError):
             suffix = None
         if _proactive_unknown_is_closed_slot(event, suffix):
-            if not durable_policy_skip(
-                event,
-                event_id,
-                "stale_backlog",
-                category="policy",
-            ):
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    decision="skip",
-                    reason="stale_backlog",
-                    category="policy",
-                )
-                return
-            if not settle_processing_transition(
+            finish_proven_skip(
                 event,
                 event_id,
                 connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason="stale_backlog",
-                category="policy",
+                "stale_backlog",
                 reply=None,
                 scheduled_delay_seconds=None,
                 error_class="stale_backlog",
-            ):
-                return
-            complete_event(event_id, "")
+            )
             return
 
     if previous_status == "scheduled":
@@ -15306,36 +15278,16 @@ def process_job(
             return
 
         if not reply:
-            if not durable_policy_skip(
-                event,
-                event_id,
-                "empty_scheduled_reply",
-                category="uncertain",
-            ):
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    decision="skip",
-                    reason="empty_scheduled_reply",
-                    category="uncertain",
-                )
-                return
-            if not settle_processing_transition(
+            finish_proven_skip(
                 event,
                 event_id,
                 connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason="empty_scheduled_reply",
+                "empty_scheduled_reply",
                 category="uncertain",
                 reply=None,
                 scheduled_delay_seconds=None,
                 error_class="empty_scheduled_reply",
-            ):
-                return
-            complete_event(event_id, "")
+            )
             return
 
         inbound_text = str(event.get("message") or "")
@@ -15367,36 +15319,15 @@ def process_job(
                 skip_reason = f"policy_{reasons_out[0]}"
 
         if not valid:
-            if not durable_policy_skip(
-                event,
-                event_id,
-                skip_reason,
-                category="policy",
-            ):
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    decision="skip",
-                    reason=skip_reason,
-                    category="policy",
-                )
-                return
-            if not settle_processing_transition(
+            finish_proven_skip(
                 event,
                 event_id,
                 connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason=skip_reason,
-                category="policy",
+                skip_reason,
                 reply=None,
                 scheduled_delay_seconds=None,
                 error_class=skip_reason,
-            ):
-                return
-            complete_event(event_id, "")
+            )
             return
 
         preflight = pre_ax_delivery_probe(
@@ -15452,22 +15383,14 @@ def process_job(
             event, reply, _event_recent_conversation(event), connection
         )
         if repeat_hold:
-            if not durable_policy_skip(event, event_id, repeat_hold, category="policy"):
-                finish_delivery_unknown(event, event_id, connection)
-                return
-            if not settle_processing_transition(
+            finish_proven_skip(
                 event,
                 event_id,
                 connection,
-                status="skipped",
-                due_at=None,
-                decision="skip",
-                reason=repeat_hold,
-                category="policy",
+                repeat_hold,
+                unknown_fields={},
                 error_class=repeat_hold,
-            ):
-                return
-            complete_event(event_id, "")
+            )
             return
         hold_reasons: list[str] = []
         if not send_reply(
@@ -15500,30 +15423,17 @@ def process_job(
                     if hold_reason == "send_allowlist_rejected"
                     else "policy"
                 )
-                if not durable_policy_skip(event, event_id, hold_reason, category=hold_category):
-                    finish_delivery_unknown(
-                        event,
-                        event_id,
-                        connection,
-                        reply=reply,
-                        error_class=hold_reason,
-                    )
-                    return
-                if not settle_processing_transition(
+                finish_proven_skip(
                     event,
                     event_id,
                     connection,
-                    status="skipped",
-                    due_at=None,
-                    decision="skip",
-                    reason=hold_reason,
+                    hold_reason,
                     category=hold_category,
+                    unknown_fields={"reply": reply, "error_class": hold_reason},
                     reply=None,
                     scheduled_delay_seconds=None,
                     error_class=hold_reason,
-                ):
-                    return
-                complete_event(event_id, "")
+                )
                 return
             # Inspect the durable send phase before classifying newer room
             # activity.  Once ``sending`` is committed, Return may already
