@@ -476,6 +476,8 @@ pub enum RelaySendOutcome {
         /// The plain-language fence reason.
         reason: String,
     },
+    /// The send did not happen. The relay holds the message and tries the
+    /// room again next tick, so a transient failure never drops a message.
     Failed {
         /// A short, stable failure code.
         code: &'static str,
@@ -853,12 +855,19 @@ impl<'a> TelegramRelay<'a> {
                             images_sent |= 1 << i;
                         }
                     }
-                    // Fenced rooms never receive a send (R7.15). Neither fencing
-                    // nor a failed send is an image miss, so neither triggers a
-                    // retry.
-                    RelaySendOutcome::Fenced { .. } | RelaySendOutcome::Failed { .. } => {
+                    // Fenced rooms never receive a send (R7.15), and the fence is
+                    // final for this message.
+                    RelaySendOutcome::Fenced { .. } => {
                         all_delivered = false;
                         delivered_min = 0;
+                        continue;
+                    }
+                    // A failed send is not an image miss: hold the message
+                    // without counting a mismatch, and try again next tick.
+                    RelaySendOutcome::Failed { .. } => {
+                        all_delivered = false;
+                        retrying = true;
+                        delivered_min = delivered_min.min(images_sent.count_ones() as usize);
                         continue;
                     }
                 }
@@ -1527,6 +1536,43 @@ mod tests {
             tick.processed[0].settlement,
             Settlement::MissRetrying(_)
         ));
+    }
+
+    #[test]
+    fn failed_send_holds_the_message_for_the_next_tick() {
+        let clock = VirtualClock::new(0);
+        let ax = FakeAxReadPort::new(vec![msg("m1", 1, 0, "hello")]);
+        let rig = LadderRig::acquiring(clock.clone());
+        let ladder = rig.ladder_acquiring();
+        let sender = SequenceSender::new(vec![
+            RelaySendOutcome::Failed {
+                code: "ax_send_failed",
+            },
+            sent(0),
+        ]);
+        let store = SqliteRelayStore::open_in_memory().unwrap();
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
+
+        let first = relay.tick();
+        assert_eq!(
+            relay.cursor().last_at,
+            0,
+            "a failed send must not move the cursor past the message, got {:?}",
+            first.processed[0].settlement
+        );
+        let second = relay.tick();
+        assert!(matches!(
+            second.processed[0].settlement,
+            Settlement::Committed(_)
+        ));
+        assert_eq!(
+            sender.calls(),
+            vec![("hello".to_string(), 0), ("hello".to_string(), 0)]
+        );
+        assert!(store
+            .is_delivered(10, &crate::context::provenance_id("m1"))
+            .unwrap());
     }
 
     #[test]
