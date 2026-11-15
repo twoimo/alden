@@ -193,9 +193,7 @@ pub(super) fn live_index_text(message: &str, attachment: &str, message_type: i32
         }
     }
     let mut text = parts.join("\n");
-    if text.len() > LIVE_CONTEXT_MAX_FIELD_BYTES {
-        text.truncate(LIVE_CONTEXT_MAX_FIELD_BYTES);
-    }
+    text.truncate(text.floor_char_boundary(LIVE_CONTEXT_MAX_FIELD_BYTES));
     text
 }
 
