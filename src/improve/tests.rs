@@ -845,6 +845,33 @@ fn improver_watch_no_rollback_when_quality_holds() {
 }
 
 #[test]
+fn improver_rolls_back_on_a_drop_of_exactly_five() {
+    let (store, knob_store, model, net, clock) = improver_env();
+    let mut improver = SelfImprover::new(
+        &store,
+        &knob_store,
+        &model,
+        &net,
+        &clock,
+        StyleTarget::default(),
+        None,
+    );
+    improver
+        .promote(
+            ("room-1".to_string(), SignalKind::LowQuality),
+            &knobs("v2"),
+            &eval(70.0, 100, &[]),
+            &eval(80.0, 100, &[]),
+            50,
+            &[80; 20],
+        )
+        .unwrap();
+    let rollback = improver.watch_after_promotion(&[75; 20]).unwrap();
+    assert!(rollback.is_some(), "a 5-point drop must roll back (R8.12)");
+    assert_eq!(knob_store.current().1, knobs("v1"));
+}
+
+#[test]
 fn improver_manual_rollback_round_trips() {
     let (store, knob_store, model, net, clock) = improver_env();
     let mut improver = SelfImprover::new(

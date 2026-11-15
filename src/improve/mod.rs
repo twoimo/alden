@@ -1404,7 +1404,7 @@ impl<'a> SelfImprover<'a> {
         }
     }
 
-    /// 승격 후 실사용 20건을 감시하고, 승격 직전 20건 평균보다 5점 넘게 낮으면
+    /// 승격 후 실사용 20건을 감시하고, 승격 직전 20건 평균보다 5점 이상 낮으면
     /// 자동으로 되돌린다 (R8.12).
     pub fn watch_after_promotion(
         &mut self,
@@ -1417,7 +1417,7 @@ impl<'a> SelfImprover<'a> {
             return Ok(None);
         }
         let after_mean = mean_u8(&recent20[recent20.len() - WATCH_WINDOW..]);
-        if after_mean >= watch.baseline_mean - ROLLBACK_DROP {
+        if after_mean > watch.baseline_mean - ROLLBACK_DROP {
             return Ok(None);
         }
 

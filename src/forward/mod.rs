@@ -17,7 +17,7 @@
 //!   combination is **not** recorded in the [`DeliveryLedger`], so the request
 //!   can be retried. Only a fully-delivered combination is marked (R6.14).
 //! * **Once per (room, link) (R6.7).** The [`DeliveryLedger`] keys on the
-//!   [`canonical_link_key`] (case- and trailing-slash-insensitive), so an
+//!   [`canonical_link_key`] (scheme/host-case- and trailing-slash-insensitive), so an
 //!   already-delivered combination is refused with a plain-language "already
 //!   sent" and zero new sends.
 //! * **The journal stays redacted (R6.11).** Only the stage, result code,
@@ -43,7 +43,7 @@
 //!   whether the acquired image came from screen capture
 //!   ([`LadderOutcome::used_screen_capture`], R7.6).
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 
 use crate::collector::{CollectFailure, Collected, RoutingCollector};
@@ -70,10 +70,11 @@ pub enum StepAttempt {
     Empty,
     /// The rung did not answer within the two-second bound (R7.5).
     TimedOut,
-    /// The rung needs an OS permission that is not granted: either the
-    /// screen-recording gate skipped the screen-capture rung without calling it
-    /// (R9.10), or the rung itself reported [`AcquireError::PermissionDenied`].
+    /// The screen-recording gate skipped the screen-capture rung without
+    /// calling it (R9.10).
     PermissionMissing,
+    /// The rung ran and reported [`AcquireError::PermissionDenied`].
+    PermissionDenied,
     /// The rung failed with a transport/availability error.
     Error(&'static str),
     /// The rung was not reached because an earlier rung already succeeded.
@@ -159,7 +160,7 @@ impl ImageLadder<'_> {
                 }
                 Ok(_) | Err(AcquireError::Empty) => attempts[idx] = StepAttempt::Empty,
                 Err(AcquireError::PermissionDenied) => {
-                    attempts[idx] = StepAttempt::PermissionMissing
+                    attempts[idx] = StepAttempt::PermissionDenied
                 }
                 Err(AcquireError::NotAvailable) => {
                     attempts[idx] = StepAttempt::Error("not_available")
@@ -290,11 +291,19 @@ pub fn summarize(body: &str) -> String {
 }
 
 /// The canonical key that decides whether two links are "the same" for
-/// once-per-room delivery (R6.7): case-insensitive, ignoring any trailing
-/// slashes.
+/// once-per-room delivery (R6.7): the scheme and host compare
+/// case-insensitively, the path, query, and fragment case-sensitively (as URLs
+/// do, so `youtu.be/aBc` and `youtu.be/AbC` stay distinct), and trailing
+/// slashes are ignored.
 pub fn canonical_link_key(url: &str) -> String {
-    let trimmed = url.trim().to_lowercase();
-    trimmed.trim_end_matches('/').to_string()
+    let url = url.trim();
+    let authority_start = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[authority_start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| authority_start + i);
+    let mut key = url[..authority_end].to_lowercase();
+    key.push_str(&url[authority_end..]);
+    key.trim_end_matches('/').to_string()
 }
 
 /// How many items of each personal-information kind were masked (R6.13).
@@ -484,7 +493,9 @@ impl ForwardMessage {
 /// The source vs delivered image counts for one (room, link) forward (R6.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageTally {
-    /// The number of images in the source post (including any over the cap).
+    /// The number of source images that are sent: the post's images up to the
+    /// per-message cap. Images over the cap are reported as dropped instead,
+    /// so a delivery of every image that fits is complete.
     pub source: usize,
     pub delivered: usize,
 }
@@ -508,7 +519,9 @@ pub enum LedgerError {
 /// Records which (room, link) combinations have been confirmed as delivered, so
 /// each link is forwarded to each room at most once (R6.7, R6.14).
 pub trait DeliveryLedger {
-    fn is_delivered(&self, chat_id: i64, link_key: &str) -> bool;
+    /// Whether the combination was delivered. An error means "unknown", and
+    /// the forwarder holds the send rather than risk a second delivery.
+    fn is_delivered(&self, chat_id: i64, link_key: &str) -> Result<bool, LedgerError>;
 
     /// Record a confirmed delivery. Only a fully-delivered combination is ever
     /// marked (R6.14); an image-count mismatch never calls this, so it stays
@@ -561,14 +574,16 @@ pub fn ensure_forward_ledger_schema(conn: &Connection) -> Result<(), LedgerError
 }
 
 impl DeliveryLedger for SqliteDeliveryLedger {
-    fn is_delivered(&self, chat_id: i64, link_key: &str) -> bool {
+    fn is_delivered(&self, chat_id: i64, link_key: &str) -> Result<bool, LedgerError> {
         self.conn
             .query_row(
                 "SELECT 1 FROM forward_ledger WHERE chat_id = ?1 AND link_key = ?2",
                 params![chat_id, link_key],
                 |_| Ok(()),
             )
-            .is_ok()
+            .optional()
+            .map(|row| row.is_some())
+            .map_err(ledger_err)
     }
 
     fn mark(&self, chat_id: i64, link_key: &str, at: i64) -> Result<(), LedgerError> {
@@ -689,6 +704,10 @@ pub enum DeliveryResult {
         /// Per-issue plain-language reasons for the miss (R6.6).
         miss_reasons: Vec<String>,
     },
+    /// The delivery did not complete. `ledger_read_failed` means nothing was
+    /// sent because the ledger could not say whether the room already had it;
+    /// `ledger_write_failed` means the room received it but the ledger could
+    /// not record that, so forwarding again would send it twice.
     Failed {
         /// A short, stable failure code.
         code: &'static str,
@@ -867,14 +886,7 @@ impl LinkForwarder<'_> {
         let rooms = resolved
             .iter()
             .map(|room| {
-                self.deliver_to_room(
-                    room,
-                    &link_key,
-                    &message,
-                    source_images,
-                    &acquire_misses,
-                    start,
-                )
+                self.deliver_to_room(room, &link_key, &message, included, &acquire_misses, start)
             })
             .collect();
 
@@ -890,46 +902,58 @@ impl LinkForwarder<'_> {
     }
 
     /// Deliver one built message to one room, applying the once-per-room and
-    /// image-parity rules (R6.5, R6.6, R6.7, R6.10, R6.14).
+    /// image-parity rules (R6.5, R6.6, R6.7, R6.10, R6.14). Parity is against
+    /// `included_images`, the post's images up to [`MAX_IMAGES_PER_POST`]: the
+    /// ones over the cap are never sent, so they cannot keep a delivery from
+    /// completing.
     fn deliver_to_room(
         &self,
         room: &ResolvedRoom,
         link_key: &str,
         message: &ForwardMessage,
-        source_images: usize,
+        included_images: usize,
         acquire_misses: &[String],
         start: i64,
     ) -> RoomDelivery {
-        let result = if self.ledger.is_delivered(room.chat_id, link_key) {
-            DeliveryResult::AlreadyDelivered
-        } else {
-            match self
-                .sender
-                .send_forward(room.chat_id, &message.render(), &message.images)
-            {
-                RoomSendOutcome::Fenced { reason } => DeliveryResult::Fenced { reason },
-                RoomSendOutcome::Failed { code } => DeliveryResult::Failed { code },
-                RoomSendOutcome::Sent { images_delivered } => {
-                    let images = ImageTally {
-                        source: source_images,
-                        delivered: images_delivered,
-                    };
-                    if images.is_complete() {
-                        let _ = self
-                            .ledger
-                            .mark(room.chat_id, link_key, self.clock.now_ms());
-                        DeliveryResult::Sent { images }
-                    } else {
-                        // Image-count mismatch is a partial failure: do NOT mark, so
-                        // the combination stays retryable (R6.6).
-                        DeliveryResult::PartialFailure {
-                            miss_reasons: miss_reasons(
-                                source_images,
-                                images_delivered,
-                                message.dropped_images,
-                                acquire_misses,
-                            ),
-                            images,
+        let result = match self.ledger.is_delivered(room.chat_id, link_key) {
+            Ok(true) => DeliveryResult::AlreadyDelivered,
+            Err(_) => DeliveryResult::Failed {
+                code: "ledger_read_failed",
+            },
+            Ok(false) => {
+                match self
+                    .sender
+                    .send_forward(room.chat_id, &message.render(), &message.images)
+                {
+                    RoomSendOutcome::Fenced { reason } => DeliveryResult::Fenced { reason },
+                    RoomSendOutcome::Failed { code } => DeliveryResult::Failed { code },
+                    RoomSendOutcome::Sent { images_delivered } => {
+                        let images = ImageTally {
+                            source: included_images,
+                            delivered: images_delivered,
+                        };
+                        if images.is_complete() {
+                            match self
+                                .ledger
+                                .mark(room.chat_id, link_key, self.clock.now_ms())
+                            {
+                                Ok(()) => DeliveryResult::Sent { images },
+                                Err(_) => DeliveryResult::Failed {
+                                    code: "ledger_write_failed",
+                                },
+                            }
+                        } else {
+                            // Image-count mismatch is a partial failure: do NOT mark, so
+                            // the combination stays retryable (R6.6).
+                            DeliveryResult::PartialFailure {
+                                miss_reasons: miss_reasons(
+                                    included_images,
+                                    images_delivered,
+                                    message.dropped_images,
+                                    acquire_misses,
+                                ),
+                                images,
+                            }
                         }
                     }
                 }
@@ -943,7 +967,7 @@ impl LinkForwarder<'_> {
             status,
             result_code,
             start,
-            Some(source_images as u32),
+            Some(included_images as u32),
             Some(delivered as u32),
         );
         RoomDelivery {
@@ -1029,8 +1053,10 @@ fn delivery_journal_record(result: &DeliveryResult) -> (Stage, StageStatus, &'st
     }
 }
 
+/// `included` and `delivered` count only images under the per-post cap; the
+/// `dropped` ones over it are explained separately.
 fn miss_reasons(
-    source: usize,
+    included: usize,
     delivered: usize,
     dropped: usize,
     acquire_misses: &[String],
@@ -1044,8 +1070,8 @@ fn miss_reasons(
     for reason in acquire_misses {
         reasons.push(reason.clone());
     }
-    let missing = source.saturating_sub(delivered);
-    let accounted = dropped + acquire_misses.len();
+    let missing = included.saturating_sub(delivered);
+    let accounted = acquire_misses.len();
     if missing > accounted {
         reasons.push(format!(
             "이미지 {}장은 전송에 실패했어요. 다시 보내 볼까요?",
@@ -1061,6 +1087,8 @@ fn miss_reasons(
 fn acquire_miss_reason(outcome: &LadderOutcome) -> String {
     if outcome.attempts.contains(&StepAttempt::PermissionMissing) {
         "화면 기록 권한이 없어 일부 이미지를 가져오지 못했어요.".to_string()
+    } else if outcome.attempts.contains(&StepAttempt::PermissionDenied) {
+        "이미지에 접근할 권한이 없어 일부 이미지를 가져오지 못했어요.".to_string()
     } else if outcome.attempts.iter().all(|a| *a == StepAttempt::TimedOut) {
         "이미지 확보가 시간 안에 끝나지 않았어요.".to_string()
     } else {
@@ -1178,12 +1206,150 @@ mod forward_tests {
     }
 
     #[test]
-    fn canonical_link_key_ignores_case_and_trailing_slash() {
+    fn canonical_link_key_folds_scheme_and_host_case_and_trailing_slash() {
         assert_eq!(
-            canonical_link_key("https://Example.com/Post/"),
-            canonical_link_key("https://example.com/post")
+            canonical_link_key(" HTTPS://Example.COM/Post/ "),
+            canonical_link_key("https://example.com/Post")
         );
         assert_eq!(canonical_link_key("https://x.com/a///"), "https://x.com/a");
+    }
+
+    #[test]
+    fn canonical_link_key_keeps_path_case() {
+        assert_ne!(
+            canonical_link_key("https://youtu.be/aBc"),
+            canonical_link_key("https://youtu.be/AbC")
+        );
+        assert_ne!(
+            canonical_link_key("https://x.com/p?id=Q"),
+            canonical_link_key("https://x.com/p?id=q")
+        );
+    }
+
+    struct DeniedAcquirer;
+    impl ImageAcquirer for DeniedAcquirer {
+        fn kind(&self) -> ImageAcquisition {
+            ImageAcquisition::OriginalSave
+        }
+        fn acquire(&self, _r: &ImageRef) -> Result<ImageBlob, AcquireError> {
+            Err(AcquireError::PermissionDenied)
+        }
+    }
+
+    #[test]
+    fn original_save_denial_is_not_reported_as_missing_screen_recording() {
+        let denied = DeniedAcquirer;
+        let cache = NeverAcquirer {
+            kind: ImageAcquisition::CacheFolder,
+        };
+        let capture = NeverAcquirer {
+            kind: ImageAcquisition::ScreenCapture,
+        };
+        let clock = VirtualClock::new(0);
+        let ladder = ImageLadder {
+            steps: [&denied, &cache, &capture],
+            clock: &clock,
+        };
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(1)),
+            &ScriptedSender::new(RoomSendOutcome::Sent {
+                images_delivered: 0,
+            }),
+            &ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        let reasons = match delivered_rooms(&run.outcome).remove(0).2 {
+            DeliveryResult::PartialFailure { miss_reasons, .. } => miss_reasons,
+            other => panic!("expected a partial failure, got {other:?}"),
+        };
+        assert_eq!(reasons.len(), 1);
+        assert!(
+            !reasons[0].contains("화면 기록"),
+            "screen recording is granted, yet the reason blames it: {}",
+            reasons[0]
+        );
+        assert!(reasons[0].contains("권한"), "{}", reasons[0]);
+    }
+
+    fn forward_once_with(ledger: &dyn DeliveryLedger, sender: &ScriptedSender) -> DeliveryResult {
+        let cat = catalog(&[(1, "스터디")]);
+        let collector = ScriptedCollector::ok(collected(0));
+        let journal = SqliteHistoryStore::open_in_memory().unwrap();
+        let clock = VirtualClock::new(0);
+        let never = NeverAcquirer {
+            kind: ImageAcquisition::OriginalSave,
+        };
+        let ladder = ImageLadder {
+            steps: [&never, &never, &never],
+            clock: &clock,
+        };
+        let fwd = LinkForwarder {
+            collector: &collector,
+            sender,
+            ledger,
+            catalog: &cat,
+            ladder: &ladder,
+            journal: &journal,
+            clock: &clock,
+            screen_recording_granted: true,
+        };
+        match fwd.forward(&ForwardRequest {
+            links: vec!["https://x.com/a".into()],
+            room_mentions: vec!["스터디".into()],
+        }) {
+            ForwardOutcome::Ran { links } => delivered_rooms(&links[0].outcome).remove(0).2,
+            other => panic!("expected ran, got {other:?}"),
+        }
+    }
+
+    /// A ledger on disk whose table a second connection then breaks with
+    /// `fault_sql`, so the real store sees a real SQLite error.
+    fn faulty_ledger(fault_sql: &str) -> (tempfile::TempDir, SqliteDeliveryLedger) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.db");
+        let ledger = SqliteDeliveryLedger::open(&path).unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(fault_sql)
+            .unwrap();
+        (dir, ledger)
+    }
+
+    #[test]
+    fn unreadable_ledger_holds_the_send() {
+        let (_dir, ledger) = faulty_ledger("DROP TABLE forward_ledger;");
+        let sender = ScriptedSender::new(RoomSendOutcome::Sent {
+            images_delivered: 0,
+        });
+        let result = forward_once_with(&ledger, &sender);
+        assert_eq!(
+            sender.send_count(),
+            0,
+            "a ledger read error must not read as not-delivered"
+        );
+        assert!(
+            matches!(result, DeliveryResult::Failed { .. }),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn unwritable_ledger_does_not_report_sent() {
+        let (_dir, ledger) = faulty_ledger(
+            "CREATE TRIGGER refuse BEFORE INSERT ON forward_ledger
+             BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        );
+        let sender = ScriptedSender::new(RoomSendOutcome::Sent {
+            images_delivered: 0,
+        });
+        let result = forward_once_with(&ledger, &sender);
+        assert_eq!(sender.send_count(), 1);
+        assert!(
+            matches!(result, DeliveryResult::Failed { .. }),
+            "an unrecorded delivery must not report success: {result:?}"
+        );
     }
 
     #[test]
@@ -1255,10 +1421,10 @@ mod forward_tests {
     fn ledger_marks_and_reports_delivered() {
         let ledger = SqliteDeliveryLedger::open_in_memory().unwrap();
         let key = canonical_link_key("https://x.com/a/");
-        assert!(!ledger.is_delivered(1, &key));
+        assert!(!ledger.is_delivered(1, &key).unwrap());
         ledger.mark(1, &key, 100).unwrap();
-        assert!(ledger.is_delivered(1, &key));
-        assert!(!ledger.is_delivered(2, &key));
+        assert!(ledger.is_delivered(1, &key).unwrap());
+        assert!(!ledger.is_delivered(2, &key).unwrap());
     }
 
     #[test]
@@ -1276,8 +1442,8 @@ mod forward_tests {
             )
             .unwrap();
         assert_eq!(count, FORWARD_LEDGER_MAX_PER_ROOM as i64);
-        assert!(ledger.is_delivered(1, "link-1004"));
-        assert!(!ledger.is_delivered(1, "link-0"));
+        assert!(ledger.is_delivered(1, "link-1004").unwrap());
+        assert!(!ledger.is_delivered(1, "link-0").unwrap());
     }
 
     struct ScriptedCollector {
@@ -1539,7 +1705,9 @@ mod forward_tests {
             }
             other => panic!("expected ran, got {other:?}"),
         }
-        assert!(ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
+        assert!(ledger
+            .is_delivered(1, &canonical_link_key("https://x.com/a"))
+            .unwrap());
     }
 
     #[test]
@@ -1586,7 +1754,9 @@ mod forward_tests {
             },
             other => panic!("expected ran, got {other:?}"),
         }
-        assert!(!ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
+        assert!(!ledger
+            .is_delivered(1, &canonical_link_key("https://x.com/a"))
+            .unwrap());
     }
 
     #[test]
@@ -1667,7 +1837,9 @@ mod forward_tests {
             },
             other => panic!("expected ran, got {other:?}"),
         }
-        assert!(!ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
+        assert!(!ledger
+            .is_delivered(1, &canonical_link_key("https://x.com/a"))
+            .unwrap());
     }
 
     #[test]
@@ -1746,10 +1918,10 @@ mod forward_tests {
                 } => {
                     assert_eq!(*source_images, 12);
                     assert_eq!(*dropped_images, 2);
-                    assert!(matches!(
-                        rooms[0].result,
-                        DeliveryResult::PartialFailure { .. }
-                    ));
+                    assert!(matches!(rooms[0].result, DeliveryResult::Sent { .. }));
+                    assert!(ledger
+                        .is_delivered(1, &canonical_link_key("https://x.com/a"))
+                        .unwrap());
                 }
                 other => panic!("expected delivered, got {other:?}"),
             },
@@ -1897,7 +2069,11 @@ mod forward_tests {
             .collect();
         let marked = [1, 2]
             .iter()
-            .map(|chat_id| ledger.is_delivered(*chat_id, &canonical_link_key("https://x.com/a")))
+            .map(|chat_id| {
+                ledger
+                    .is_delivered(*chat_id, &canonical_link_key("https://x.com/a"))
+                    .unwrap()
+            })
             .collect();
         ForwardRun {
             outcome,
@@ -2085,11 +2261,58 @@ mod forward_tests {
         );
         assert_eq!(run.marked, vec![false, false]);
 
-        // Twelve source images: two are dropped by the per-post cap.
+        // Twelve source images: two are dropped by the per-post cap, and
+        // delivering the ten that fit completes the (room, link), so a repeat
+        // forward sends nothing (R6.4, R6.7).
         let run = forward_and_record(
             &ScriptedCollector::ok(collected(12)),
             &ScriptedSender::new(RoomSendOutcome::Sent {
                 images_delivered: MAX_IMAGES_PER_POST,
+            }),
+            &ok_ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        assert!(matches!(
+            run.outcome,
+            LinkOutcome::Delivered {
+                source_images: 12,
+                dropped_images: 2,
+                ..
+            }
+        ));
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![(
+                1,
+                s("스터디"),
+                DeliveryResult::Sent {
+                    images: ImageTally {
+                        source: 10,
+                        delivered: 10
+                    },
+                }
+            )]
+        );
+        assert_eq!(
+            run.journal,
+            vec![(
+                Stage::Commit,
+                StageStatus::Success,
+                s("forward_sent"),
+                Some(10),
+                Some(10)
+            )]
+        );
+        assert_eq!(run.marked, vec![true, false]);
+
+        // Twelve source images with one of the ten missing: the miss names both
+        // the cap and the failed image.
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(12)),
+            &ScriptedSender::new(RoomSendOutcome::Sent {
+                images_delivered: MAX_IMAGES_PER_POST - 1,
             }),
             &ok_ladder,
             true,
@@ -2103,25 +2326,17 @@ mod forward_tests {
                 s("스터디"),
                 DeliveryResult::PartialFailure {
                     images: ImageTally {
-                        source: 12,
-                        delivered: 10
+                        source: 10,
+                        delivered: 9
                     },
-                    miss_reasons: vec![s(
-                        "이미지 2장은 한 게시물 최대 10장 제한을 넘어 전달하지 못했어요."
-                    )],
+                    miss_reasons: vec![
+                        s("이미지 2장은 한 게시물 최대 10장 제한을 넘어 전달하지 못했어요."),
+                        s("이미지 1장은 전송에 실패했어요. 다시 보내 볼까요?"),
+                    ],
                 }
             )]
         );
-        assert_eq!(
-            run.journal,
-            vec![(
-                Stage::Commit,
-                StageStatus::Failed,
-                s("forward_partial"),
-                Some(12),
-                Some(10)
-            )]
-        );
+        assert_eq!(run.marked, vec![false, false]);
 
         // No rung yields an image and screen capture lacks permission.
         let never = [

@@ -37,7 +37,7 @@
 use std::cell::Cell;
 
 use openkakao_cli::collector::{
-    AsideCollector, Collected, CollectError, CollectFailure, CollectorPath, LoopbackEndpoint,
+    AsideCollector, CollectError, CollectFailure, Collected, CollectorPath, LoopbackEndpoint,
     PageCollector, RoutingCollector, SwitchReason, TempScope, ASIDE_COLLECT_TIMEOUT_SECS,
     COLLECT_DEADLINE_SECS, DELETION_DEADLINE_MS, HEALTH_TIMEOUT_SECS,
 };
@@ -136,7 +136,11 @@ struct CountingTransport {
 }
 
 impl openkakao_cli::collector::AsideTransport for CountingTransport {
-    fn health(&self, _endpoint: &LoopbackEndpoint) -> Result<(), CollectError> {
+    fn health(
+        &self,
+        _endpoint: &LoopbackEndpoint,
+        _bound: std::time::Duration,
+    ) -> Result<(), CollectError> {
         self.health_calls.set(self.health_calls.get() + 1);
         self.clock.advance_ms(self.health_delay_ms);
         self.health_result.clone()
@@ -148,6 +152,7 @@ impl openkakao_cli::collector::AsideTransport for CountingTransport {
         _url: &str,
         _session: Option<&Secret>,
         _scope: &mut TempScope,
+        _bound: std::time::Duration,
     ) -> Result<Collected, CollectError> {
         self.fetch_result.clone()
     }
@@ -556,8 +561,12 @@ impl RoomSender for CountingSender {
 /// A delivery ledger that records nothing and reports nothing delivered.
 struct NeverDeliveredLedger;
 impl openkakao_cli::forward::DeliveryLedger for NeverDeliveredLedger {
-    fn is_delivered(&self, _chat_id: i64, _link_key: &str) -> bool {
-        false
+    fn is_delivered(
+        &self,
+        _chat_id: i64,
+        _link_key: &str,
+    ) -> Result<bool, openkakao_cli::forward::LedgerError> {
+        Ok(false)
     }
     fn mark(
         &self,

@@ -26,7 +26,11 @@
 //! * **No login (R11.9).** There is no path anywhere here that logs into the
 //!   target service; only publicly-reachable posts are collected.
 //! * **Temp data is always deleted (R11.8).** [`TempScope`] deletes its raw
-//!   working data on [`TempScope::finish`] and, as a safety net, on `Drop`.
+//!   working data on [`TempScope::finish`] and, as a safety net, on `Drop`. A
+//!   deletion that fails or misses the five-second bound fails the collection
+//!   with [`CollectFailure::TempDataNotDeleted`], so it is never silent.
+
+use std::time::Duration;
 
 use thiserror::Error;
 
@@ -42,6 +46,10 @@ pub const HEALTH_TIMEOUT_SECS: u64 = 3;
 pub const ASIDE_COLLECT_TIMEOUT_SECS: u64 = 10;
 /// The bound within which temporary raw data must be deleted (R11.8).
 pub const DELETION_DEADLINE_MS: u64 = 5_000;
+/// The most page-body bytes the fallback path keeps. A forward summary is at
+/// most 700 characters, so 1 MiB leaves ample room while keeping a huge or
+/// hostile page from being copied and scanned in full.
+pub const MAX_FALLBACK_BODY_BYTES: usize = 1 << 20;
 
 /// Which collection path produced a result (R11.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +64,8 @@ pub enum SwitchReason {
     NotInstalled,
     /// The connection check did not answer within three seconds (R11.2).
     HealthTimeout,
+    /// The connection check answered with an error (R11.2).
+    HealthFailed,
     /// Aside passed its health check but errored mid-collection (R11.11).
     MidCollectError,
     /// Aside passed its health check but did not answer within ten seconds
@@ -72,6 +82,7 @@ impl SwitchReason {
         match self {
             SwitchReason::NotInstalled => "Aside가 설치되어 있지 않아 다른 방법으로 가져왔어요",
             SwitchReason::HealthTimeout => "Aside 연결 확인이 늦어 다른 방법으로 가져왔어요",
+            SwitchReason::HealthFailed => "Aside 연결 확인에 실패해 다른 방법으로 가져왔어요",
             SwitchReason::MidCollectError => "Aside가 도중에 실패해 다른 방법으로 가져왔어요",
             SwitchReason::MidCollectTimeout => "Aside 응답이 늦어 다른 방법으로 가져왔어요",
             SwitchReason::SecretUnavailable => "접속 정보를 쓸 수 없어 다른 방법으로 가져왔어요",
@@ -143,6 +154,10 @@ pub enum CollectFailure {
     Terminal(CollectError),
     /// The twenty-second overall bound elapsed (R11.12).
     DeadlineExceeded,
+    /// The temporary raw data was not deleted, or not within five seconds
+    /// (R11.8). This replaces any other outcome, so the breach always reaches
+    /// the caller and its journal and the link is not forwarded.
+    TempDataNotDeleted(DeletionReport),
 }
 
 /// The report of deleting a [`TempScope`]'s raw working data (R11.8).
@@ -251,21 +266,28 @@ impl LoopbackEndpoint {
 ///
 /// Abstracted so no real network is needed in tests, and — more importantly —
 /// so the collector only ever knows the loopback endpoint it was handed, never
-/// an external editor's MCP configuration (R11.5). Timing is measured by the
-/// caller on the injected clock, so the transport itself needs no clock.
+/// an external editor's MCP configuration (R11.5).
+///
+/// The collector cannot interrupt a call that blocks, so each call carries its
+/// time bound and the transport must give up by then (for example as its HTTP
+/// client timeout), answering [`CollectError::HealthTimeout`] or
+/// [`CollectError::Timeout`]. The caller also measures each call on the
+/// injected clock and treats a late answer as a timeout.
 pub trait AsideTransport {
-    /// A single connection-check request to the loopback endpoint (R11.2).
-    fn health(&self, endpoint: &LoopbackEndpoint) -> Result<(), CollectError>;
+    /// A single connection-check request to the loopback endpoint, abandoned
+    /// after `bound` (R11.2).
+    fn health(&self, endpoint: &LoopbackEndpoint, bound: Duration) -> Result<(), CollectError>;
 
-    /// Fetch structured content for `url` through the loopback MCP server.
-    /// `session` is the collector session secret, borrowed so its contents are
-    /// never copied or rendered.
+    /// Fetch structured content for `url` through the loopback MCP server,
+    /// abandoned after `bound` (R11.11). `session` is the collector session
+    /// secret, borrowed so its contents are never copied or rendered.
     fn fetch(
         &self,
         endpoint: &LoopbackEndpoint,
         url: &str,
         session: Option<&Secret>,
         scope: &mut TempScope,
+        bound: Duration,
     ) -> Result<Collected, CollectError>;
 }
 
@@ -306,7 +328,9 @@ impl PageCollector for AsideCollector<'_> {
         // Exactly one connection-check request, bounded to three seconds on the
         // injected clock (R11.2).
         let start = self.clock.now_ms();
-        let result = self.transport.health(&self.endpoint);
+        let result = self
+            .transport
+            .health(&self.endpoint, Duration::from_secs(HEALTH_TIMEOUT_SECS));
         let elapsed = self.clock.now_ms().saturating_sub(start);
         if elapsed > (HEALTH_TIMEOUT_SECS * 1000) as i64 {
             return Err(CollectError::HealthTimeout);
@@ -324,9 +348,13 @@ impl PageCollector for AsideCollector<'_> {
         })?;
 
         let start = self.clock.now_ms();
-        let mut result = self
-            .transport
-            .fetch(&self.endpoint, url, Some(&session), scope);
+        let mut result = self.transport.fetch(
+            &self.endpoint,
+            url,
+            Some(&session),
+            scope,
+            Duration::from_secs(ASIDE_COLLECT_TIMEOUT_SECS),
+        );
         let elapsed = self.clock.now_ms().saturating_sub(start);
         if elapsed > (ASIDE_COLLECT_TIMEOUT_SECS * 1000) as i64 {
             return Err(CollectError::Timeout);
@@ -376,7 +404,7 @@ impl PageCollector for FallbackCollector<'_> {
         match response.status {
             200 => Ok(Collected {
                 title: None,
-                body: String::from_utf8_lossy(&response.body).into_owned(),
+                body: bounded_text(&response.body),
                 images: Vec::new(),
                 author: None,
                 path: CollectorPath::Fallback,
@@ -387,6 +415,16 @@ impl PageCollector for FallbackCollector<'_> {
             other => Err(CollectError::Transport(format!("HTTP {other}"))),
         }
     }
+}
+
+/// Decode at most [`MAX_FALLBACK_BODY_BYTES`] of `bytes`, cutting before a
+/// UTF-8 sequence that the bound would split.
+fn bounded_text(bytes: &[u8]) -> String {
+    let mut end = bytes.len().min(MAX_FALLBACK_BODY_BYTES);
+    while end > 0 && end < bytes.len() && bytes[end] & 0b1100_0000 == 0b1000_0000 {
+        end -= 1;
+    }
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 /// The result of the Aside attempt, before deciding whether to fall back.
@@ -430,7 +468,10 @@ impl RoutingCollector<'_> {
         };
 
         let outcome = self.collect_within(url, &mut scope);
-        let _report = scope.finish();
+        let report = scope.finish();
+        if !report.deleted || !report.within_deadline {
+            return Err(CollectFailure::TempDataNotDeleted(report));
+        }
         outcome
     }
 
@@ -498,14 +539,13 @@ impl RoutingCollector<'_> {
                     aside_error: err,
                 },
             },
-            Err(err @ CollectError::NotInstalled) => AsideAttempt::Switch {
-                reason: SwitchReason::NotInstalled,
-                aside_error: err,
-            },
-            // A health timeout, or any other health failure, falls back as a
-            // health timeout-class switch.
             Err(err) => AsideAttempt::Switch {
-                reason: SwitchReason::HealthTimeout,
+                reason: match err {
+                    CollectError::NotInstalled => SwitchReason::NotInstalled,
+                    CollectError::HealthTimeout => SwitchReason::HealthTimeout,
+                    CollectError::Unauthorized { .. } => SwitchReason::SecretUnavailable,
+                    _ => SwitchReason::HealthFailed,
+                },
                 aside_error: err,
             },
         }
@@ -673,6 +713,83 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_health_check_is_not_reported_as_a_timeout() {
+        let clock = VirtualClock::new(0);
+        let aside = ScriptedCollector::unhealthy(
+            CollectorPath::Aside,
+            CollectError::Transport("connection refused".into()),
+        );
+        let fallback = ScriptedCollector::healthy(
+            CollectorPath::Fallback,
+            Ok(collected(CollectorPath::Fallback)),
+        );
+        let router = RoutingCollector {
+            aside: &aside,
+            fallback: &fallback,
+            clock: &clock,
+        };
+        let out = router.collect("https://example.com/post").unwrap();
+        let reason = out.switched.expect("switched to the fallback");
+        assert_ne!(
+            reason,
+            SwitchReason::HealthTimeout,
+            "an immediate refusal was reported as \"{}\"",
+            reason.as_plain()
+        );
+    }
+
+    /// Collects successfully but leaves a file in a read-only directory under
+    /// the scope, so deleting the scope fails for real.
+    struct UndeletableWriter {
+        locked: std::cell::RefCell<Option<std::path::PathBuf>>,
+    }
+    impl PageCollector for UndeletableWriter {
+        fn path(&self) -> CollectorPath {
+            CollectorPath::Aside
+        }
+        fn health_check(&self) -> Result<(), CollectError> {
+            Ok(())
+        }
+        fn collect(&self, _url: &str, scope: &mut TempScope) -> Result<Collected, CollectError> {
+            use std::os::unix::fs::PermissionsExt;
+            let locked = scope.path().unwrap().join("locked");
+            std::fs::create_dir(&locked).unwrap();
+            std::fs::write(locked.join("raw.html"), b"<html>").unwrap();
+            std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+            *self.locked.borrow_mut() = Some(locked);
+            Ok(collected(CollectorPath::Aside))
+        }
+    }
+
+    #[test]
+    fn undeleted_temp_data_is_reported_not_dropped() {
+        use std::os::unix::fs::PermissionsExt;
+        let clock = VirtualClock::new(0);
+        let aside = UndeletableWriter {
+            locked: std::cell::RefCell::new(None),
+        };
+        let fallback = ScriptedCollector::healthy(
+            CollectorPath::Fallback,
+            Ok(collected(CollectorPath::Fallback)),
+        );
+        let router = RoutingCollector {
+            aside: &aside,
+            fallback: &fallback,
+            clock: &clock,
+        };
+        let out = router.collect("https://example.com/post");
+
+        let locked = aside.locked.borrow().clone().unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(locked.parent().unwrap()).unwrap();
+
+        match out {
+            Err(CollectFailure::TempDataNotDeleted(report)) => assert!(!report.deleted),
+            other => panic!("raw data was left behind, yet the collection returned {other:?}"),
+        }
+    }
+
+    #[test]
     fn private_is_terminal_and_never_tries_fallback() {
         let clock = VirtualClock::new(0);
         let aside = ScriptedCollector::healthy(CollectorPath::Aside, Err(CollectError::Private));
@@ -799,9 +916,15 @@ mod tests {
         health_result: Result<(), CollectError>,
         health_takes_ms: i64,
         clock: VirtualClock,
+        bounds: std::cell::RefCell<Vec<std::time::Duration>>,
     }
     impl AsideTransport for FakeTransport {
-        fn health(&self, _endpoint: &LoopbackEndpoint) -> Result<(), CollectError> {
+        fn health(
+            &self,
+            _endpoint: &LoopbackEndpoint,
+            bound: std::time::Duration,
+        ) -> Result<(), CollectError> {
+            self.bounds.borrow_mut().push(bound);
             self.clock.advance_ms(self.health_takes_ms);
             self.health_result.clone()
         }
@@ -811,9 +934,35 @@ mod tests {
             _url: &str,
             _session: Option<&Secret>,
             _scope: &mut TempScope,
+            bound: std::time::Duration,
         ) -> Result<Collected, CollectError> {
+            self.bounds.borrow_mut().push(bound);
             Ok(collected(CollectorPath::Aside))
         }
+    }
+
+    #[test]
+    fn aside_hands_each_transport_call_its_time_bound() {
+        let clock = VirtualClock::new(0);
+        let transport = FakeTransport {
+            health_result: Ok(()),
+            health_takes_ms: 10,
+            clock: clock.clone(),
+            bounds: Default::default(),
+        };
+        let secrets = OkSecrets;
+        let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);
+        aside.health_check().unwrap();
+        aside
+            .collect("https://example.com/post", &mut TempScope::new().unwrap())
+            .unwrap();
+        assert_eq!(
+            *transport.bounds.borrow(),
+            vec![
+                std::time::Duration::from_secs(HEALTH_TIMEOUT_SECS),
+                std::time::Duration::from_secs(ASIDE_COLLECT_TIMEOUT_SECS)
+            ]
+        );
     }
 
     struct OkSecrets;
@@ -837,6 +986,7 @@ mod tests {
             health_result: Ok(()),
             health_takes_ms: (HEALTH_TIMEOUT_SECS as i64) * 1000 + 1,
             clock: clock.clone(),
+            bounds: Default::default(),
         };
         let secrets = OkSecrets;
         let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);
@@ -850,6 +1000,7 @@ mod tests {
             health_result: Ok(()),
             health_takes_ms: 500,
             clock: clock.clone(),
+            bounds: Default::default(),
         };
         let secrets = OkSecrets;
         let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);
@@ -863,6 +1014,7 @@ mod tests {
             health_result: Ok(()),
             health_takes_ms: 10,
             clock: clock.clone(),
+            bounds: Default::default(),
         };
         let secrets = MissingSecrets;
         let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);
@@ -921,5 +1073,42 @@ mod tests {
         let _ = ImageRef {
             locator: "x".into(),
         };
+    }
+
+    struct BodyNet {
+        body: Vec<u8>,
+    }
+    impl NetworkPort for BodyNet {
+        fn request(
+            &self,
+            _req: crate::ports::HttpRequest,
+        ) -> Result<crate::ports::HttpResponse, PortError> {
+            Ok(crate::ports::HttpResponse {
+                status: 200,
+                body: self.body.clone(),
+            })
+        }
+        fn egress_count(&self) -> usize {
+            0
+        }
+    }
+
+    #[test]
+    fn fallback_bounds_the_page_body_on_a_character_boundary() {
+        let net = BodyNet {
+            body: "가".repeat(2 << 20).into_bytes(),
+        };
+        let mut scope = TempScope::new().unwrap();
+        let out = FallbackCollector::new(&net)
+            .collect("https://x", &mut scope)
+            .unwrap();
+        assert!(
+            out.body.len() <= MAX_FALLBACK_BODY_BYTES,
+            "kept {} bytes of a {}-byte page",
+            out.body.len(),
+            net.body.len()
+        );
+        assert!(out.body.len() > MAX_FALLBACK_BODY_BYTES - 3);
+        assert!(!out.body.contains('\u{FFFD}'), "a character was split");
     }
 }
