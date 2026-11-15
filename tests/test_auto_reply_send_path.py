@@ -552,6 +552,24 @@ class SendPathCase(unittest.TestCase):
         finally:
             writer.close()
 
+    def journal_other_messages(self, count: int) -> None:
+        """Journal `count` other room messages the way db-watch does."""
+        writer = sqlite3.connect(self.module.QUEUE)
+        try:
+            writer.executemany(
+                "INSERT INTO pipeline_transitions(schema_version, event_id, "
+                "attempt_no, component, from_state, to_state, code, source_epoch, "
+                "occurred_at_ns) VALUES (1, ?, 0, 'ingress', 'detected', 'hooking', "
+                "'candidate_persisted', ?, ?)",
+                [
+                    (f"db:{CHAT_ID}:{100_000 + n}", EPOCH, time.time_ns())
+                    for n in range(count)
+                ],
+            )
+            writer.commit()
+        finally:
+            writer.close()
+
     def supersede(self, event_id: str, successor_log_id: int) -> None:
         """Record that a newer message of the same burst replaced this job."""
         self.change_queue_row(
@@ -747,6 +765,32 @@ class DueDraftDeliveryTests(SendPathCase):
         )
         self.assertIsNone(self.module.claim_job(time.time() + 86400.0, self.connection))
         self.assertEqual(len(self.cli.sends()), 1)
+
+    def test_unconfirmed_send_is_never_retried_after_the_journal_rolls_over(self):
+        event = self.inbound(509)
+        job = self.due_draft(event, REPLY)
+        self.cli.send = "accepted_unconfirmed"
+        self.process(job)
+        self.assertEqual(self.status(event["event_id"]), "delivery_unknown")
+
+        self.journal_other_messages(self.module.transition_journal.JOURNAL_MAX_ROWS)
+        self.assertEqual(self.transitions(event["event_id"]), [])
+
+        # What worker_main does while it is fenced: recover, give up, claim.
+        self.cli.send = "confirmed"
+        for _ in range(3):
+            self.module.recover_stale_jobs(self.connection)
+            self.module._auto_reconcile_give_up(self.connection, time.time())
+            claimed = self.module.claim_job(time.time() + 86400.0, self.connection)
+            if claimed is not None:
+                self.process(*claimed)
+
+        self.assertEqual(len(self.cli.sends()), 1)
+        self.assertEqual(
+            self.outcome(event["event_id"]),
+            ("delivery_unknown", *DRAFT, REPLY, 3.0, "delivery_unknown"),
+        )
+        self.assertGreater(self.module._queue_reconciliation_blockers(self.connection), 0)
 
     def test_send_the_cli_could_not_confirm_is_adopted_from_the_room_transcript(self):
         event = self.inbound(504)
