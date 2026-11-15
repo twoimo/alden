@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import io
+import os
 import subprocess
 import tempfile
 import unicodedata
@@ -17,6 +18,7 @@ from scripts.dream_rsi_alphaxiv import (
     DPO_EVAL_UNAVAILABLE,
     DREAM_RSI_PAPER_ID,
     MAX_CLI_JSON_BYTES,
+    MAX_SUMMARY_CHARS,
     build_dpo_provenance,
     build_exploration_provenance,
     build_provenance_report,
@@ -490,6 +492,475 @@ class ExplorationAndDpoTests(unittest.TestCase):
         self.assertEqual(probe["status"], "not_supplied")
         self.assertEqual(probe["freshness"], "unknown")
         self.assertFalse(probe["stale_success_reused"])
+
+
+def _unavailable(
+    reason: str,
+    *,
+    provider: str,
+    requested: str,
+    isolated: bool,
+    query: str = "DREAM-RSI",
+    resolved: str | None = None,
+    commands: tuple = (),
+    selected: dict | None = None,
+) -> dict:
+    return {
+        "status": "unavailable",
+        "reason": reason,
+        "analysis_available": False,
+        "provider": provider,
+        "query": query,
+        "selection_method": "none",
+        "selected_paper": selected,
+        "evidence": None,
+        "string_similarity_used": False,
+        "cli": {
+            "requested": requested,
+            "resolved": resolved,
+            "isolated_context": isolated,
+            "commands": list(commands),
+        },
+    }
+
+
+def _command(
+    operation: str,
+    argv: list,
+    *,
+    returncode: int | None = 0,
+    reason: str = "",
+    stderr: str = "",
+) -> dict:
+    record: dict = {
+        "operation": operation,
+        "argv": argv,
+        "status": "unavailable" if reason else "ok",
+        "returncode": returncode,
+    }
+    if reason:
+        record["reason"] = reason
+    if stderr:
+        record["stderr"] = stderr
+    return record
+
+
+_PAPER = DREAM_RSI_PAPER_ID
+_SEARCH = ["search", "papers", "DREAM-RSI", "--json"]
+_USE = ["context", "use", "paper", _PAPER]
+_SHOW = ["context", "show", "--json"]
+_SUMMARY = ["paper", "summary", "--json"]
+_ORX = ["paper", _PAPER, "--source", "alphaxiv", "--no-telemetry"]
+_DIRECT = {"paper_id": _PAPER, "title": "", "url": ""}
+_ORX_SELECTED = {
+    "paper_id": _PAPER,
+    "title": "",
+    "url": f"https://www.alphaxiv.org/abs/{_PAPER}",
+}
+
+
+def _json(payload: object) -> bytes:
+    return json.dumps(payload).encode()
+
+
+class PaperReportEnvelopeTests(unittest.TestCase):
+    """Pin the whole report a caller serializes, not only status and reason."""
+
+    def test_alphaxiv_rejections_before_any_command(self):
+        cases = [
+            ({"query": "-rf"}, "invalid_query:query_looks_like_option", {"query": "-rf"}),
+            ({"timeout": 0.05}, "invalid_timeout", {}),
+            ({"timeout": 61}, "invalid_timeout", {}),
+            ({"alphaxiv_cli": "../alphaxiv"}, "invalid_cli_path", {"requested": "../alphaxiv"}),
+            ({"paper_id": "not a paper"}, "invalid_paper_id", {"resolved": "/mock/alphaxiv"}),
+        ]
+        for arguments, reason, envelope in cases:
+            with self.subTest(reason=reason, arguments=arguments), mock.patch(
+                "scripts.dream_rsi_alphaxiv.shutil.which", return_value="/mock/alphaxiv"
+            ), mock.patch("scripts.dream_rsi_alphaxiv.subprocess.run") as run:
+                call = {"query": "DREAM-RSI", "paper_source": "alphaxiv", **arguments}
+                report = collect_paper_report(call.pop("query"), **call)
+                run.assert_not_called()
+                expected = {
+                    "provider": "alphaxiv_cli",
+                    "requested": "alphaxiv",
+                    "isolated": True,
+                    **envelope,
+                }
+                self.assertEqual(report, _unavailable(reason, **expected))
+
+    @mock.patch("scripts.dream_rsi_alphaxiv.shutil.which", return_value=None)
+    def test_unresolved_providers_report_the_provider_they_tried(self, _which):
+        long_query = "q" * 600
+        self.assertEqual(
+            collect_paper_report("DREAM-RSI", paper_source="alphaxiv"),
+            _unavailable(
+                "cli_missing", provider="alphaxiv_cli", requested="alphaxiv", isolated=True
+            ),
+        )
+        self.assertEqual(
+            collect_paper_report(long_query, paper_source="bogus", alphaxiv_cli="ax"),
+            _unavailable(
+                "invalid_paper_source",
+                provider="alphaxiv_cli",
+                requested="ax",
+                isolated=True,
+                query="q" * 512,
+            ),
+        )
+        self.assertEqual(
+            collect_paper_report(long_query, paper_source="auto", orx_cli="orx-next"),
+            _unavailable(
+                "cli_missing",
+                provider="orx_cli",
+                requested="orx-next",
+                isolated=False,
+                query="q" * 512,
+            ),
+        )
+        self.assertEqual(
+            collect_orx_paper_report("DREAM-RSI"),
+            _unavailable("cli_missing", provider="orx_cli", requested="orx", isolated=False),
+        )
+
+    def test_alphaxiv_failures_keep_commands_and_selected_paper(self):
+        def show_ok():
+            return _completed(_json({"paper_id": _PAPER, "title": "Ctx"}))
+
+        titled = {"paper_id": _PAPER, "title": "Ctx", "url": ""}
+        use_ok = _command("context_use_paper", _USE)
+        cases = [
+            (
+                "cli_nonzero",
+                {"paper_id": None},
+                [_completed(returncode=7, stderr=b"boom")],
+                [_command("search_papers", _SEARCH, returncode=7, reason="cli_nonzero", stderr="boom")],
+                None,
+            ),
+            (
+                "incomplete_search_response",
+                {"paper_id": None},
+                [_completed(b"[]")],
+                [_command("search_papers", _SEARCH)],
+                None,
+            ),
+            (
+                "cli_timeout",
+                {},
+                [subprocess.TimeoutExpired(["alphaxiv"], 1)],
+                [_command("context_use_paper", _USE, returncode=None, reason="cli_timeout")],
+                _DIRECT,
+            ),
+            (
+                "invalid_json",
+                {},
+                [_completed(b"selected"), _completed(b"not-json")],
+                [use_ok, _command("context_show", _SHOW, reason="invalid_json")],
+                _DIRECT,
+            ),
+            (
+                "paper_identity_mismatch",
+                {},
+                [
+                    _completed(b"selected"),
+                    _completed(_json({"paper_id": "2609.00001", "title": "Other"})),
+                ],
+                [use_ok, _command("context_show", _SHOW)],
+                _DIRECT,
+            ),
+            (
+                "incomplete_paper_metadata",
+                {},
+                [_completed(b"selected"), _completed(_json({"paper_id": _PAPER}))],
+                [use_ok, _command("context_show", _SHOW)],
+                _DIRECT,
+            ),
+            (
+                "cli_nonzero",
+                {},
+                [_completed(b"selected"), show_ok(), _completed(returncode=1)],
+                [
+                    use_ok,
+                    _command("context_show", _SHOW),
+                    _command("paper_summary", _SUMMARY, returncode=1, reason="cli_nonzero"),
+                ],
+                titled,
+            ),
+            (
+                "incomplete_summary_response",
+                {},
+                [_completed(b"selected"), show_ok(), _completed(_json({"summary": ""}))],
+                [use_ok, _command("context_show", _SHOW), _command("paper_summary", _SUMMARY)],
+                titled,
+            ),
+        ]
+        for reason, arguments, outputs, commands, selected in cases:
+            with self.subTest(reason=reason, commands=len(commands)), mock.patch(
+                "scripts.dream_rsi_alphaxiv.shutil.which", return_value="/mock/alphaxiv"
+            ), mock.patch("scripts.dream_rsi_alphaxiv.subprocess.run", side_effect=outputs):
+                call = {"paper_source": "alphaxiv", "paper_id": _PAPER, **arguments}
+                self.assertEqual(
+                    collect_paper_report("DREAM-RSI", **call),
+                    _unavailable(
+                        reason,
+                        provider="alphaxiv_cli",
+                        requested="alphaxiv",
+                        isolated=True,
+                        resolved="/mock/alphaxiv",
+                        commands=tuple(commands),
+                        selected=selected,
+                    ),
+                )
+
+    @mock.patch("scripts.dream_rsi_alphaxiv.subprocess.run")
+    @mock.patch("scripts.dream_rsi_alphaxiv.shutil.which", return_value="/mock/alphaxiv")
+    def test_alphaxiv_search_success_report_and_isolated_environment(self, _which, run):
+        found = {
+            "paper_id": _PAPER,
+            "title": "Found",
+            "url": f"https://arxiv.org/abs/{_PAPER}",
+        }
+        run.side_effect = [
+            _completed(_json({"papers": [found, {"paper_id": "2609.00002", "title": "Second"}]})),
+            _completed(b"selected"),
+            _completed(_json({"paper_id": _PAPER, "title": "Ctx"})),
+            _completed(_json({"summary": " verified summary "})),
+        ]
+
+        report = collect_paper_report("DREAM-RSI", paper_source="alphaxiv", timeout=3)
+
+        self.assertEqual(
+            report,
+            {
+                "status": "ok",
+                "reason": "alphaxiv_summary_verified",
+                "analysis_available": True,
+                "provider": "alphaxiv_cli",
+                "query": "DREAM-RSI",
+                "selection_method": "alphaxiv_search_rank_1",
+                "selected_paper": found,
+                "evidence": {
+                    "kind": "alphaxiv_paper_summary",
+                    "summary": "verified summary",
+                    "source_operation": "paper_summary",
+                },
+                "string_similarity_used": False,
+                "cli": {
+                    "requested": "alphaxiv",
+                    "resolved": "/mock/alphaxiv",
+                    "isolated_context": True,
+                    "commands": [
+                        _command("search_papers", _SEARCH),
+                        _command("context_use_paper", _USE),
+                        _command("context_show", _SHOW),
+                        _command("paper_summary", _SUMMARY),
+                    ],
+                },
+            },
+        )
+        homes = {call.kwargs["env"]["ALPHAXIV_HOME"] for call in run.call_args_list}
+        self.assertEqual(len(homes), 1)
+        self.assertTrue(Path(homes.pop()).name.startswith("openkakao-alphaxiv-"))
+        self.assertEqual({call.kwargs["timeout"] for call in run.call_args_list}, {3.0})
+
+    def test_orx_rejections_before_any_command(self):
+        cases = [
+            ({"query": "-x"}, "invalid_query:query_looks_like_option", {"query": "-x"}),
+            ({"paper_id": "../etc"}, "invalid_paper_id", {}),
+            ({"timeout": "soon"}, "invalid_timeout", {}),
+            ({"orx_cli": "bin/orx"}, "invalid_cli_path", {"requested": "bin/orx"}),
+        ]
+        for arguments, reason, envelope in cases:
+            with self.subTest(reason=reason), mock.patch(
+                "scripts.dream_rsi_alphaxiv.shutil.which", return_value="/mock/orx"
+            ), mock.patch("scripts.dream_rsi_alphaxiv.subprocess.run") as run:
+                call = {"query": "DREAM-RSI", **arguments}
+                report = collect_orx_paper_report(call.pop("query"), **call)
+                run.assert_not_called()
+                expected = {
+                    "provider": "orx_cli",
+                    "requested": "orx",
+                    "isolated": False,
+                    **envelope,
+                }
+                self.assertEqual(report, _unavailable(reason, **expected))
+
+    def test_orx_failures_keep_command_and_selected_paper(self):
+        header = f"alphaXiv: https://www.alphaxiv.org/abs/{_PAPER}\n"
+        ran = _command("orx_paper", _ORX)
+        cases = [
+            (
+                "cli_nonzero",
+                _completed(returncode=3),
+                _command("orx_paper", _ORX, returncode=3, reason="cli_nonzero"),
+            ),
+            ("incomplete_summary_response", _completed(b"\n\n"), ran),
+            (
+                "identity_mismatch",
+                _completed(b"alphaXiv: https://www.alphaxiv.org/abs/2609.00001\nbody"),
+                ran,
+            ),
+            ("incomplete_summary_response", _completed(header.encode()), ran),
+            (
+                "text_too_long",
+                _completed((header + "x" * (MAX_SUMMARY_CHARS + 1)).encode()),
+                ran,
+            ),
+        ]
+        for reason, output, command in cases:
+            with self.subTest(reason=reason), mock.patch(
+                "scripts.dream_rsi_alphaxiv.shutil.which", return_value="/mock/orx"
+            ), mock.patch("scripts.dream_rsi_alphaxiv.subprocess.run", return_value=output):
+                self.assertEqual(
+                    collect_orx_paper_report("DREAM-RSI"),
+                    _unavailable(
+                        reason,
+                        provider="orx_cli",
+                        requested="orx",
+                        isolated=False,
+                        resolved="/mock/orx",
+                        commands=(command,),
+                        selected=_ORX_SELECTED,
+                    ),
+                )
+
+    @mock.patch("scripts.dream_rsi_alphaxiv.subprocess.run")
+    @mock.patch("scripts.dream_rsi_alphaxiv.shutil.which", return_value="/mock/orx")
+    def test_orx_success_report_environment_and_clamped_timeout(self, _which, run):
+        run.return_value = _completed(
+            f"\nalphaXiv: http://alphaxiv.org/abs/{_PAPER}v2\n# Report\nverified\n".encode()
+        )
+
+        report = collect_orx_paper_report("DREAM-RSI", timeout=1000)
+
+        self.assertEqual(
+            report,
+            {
+                "status": "ok",
+                "reason": "orx_report_verified",
+                "analysis_available": True,
+                "provider": "orx_cli",
+                "query": "DREAM-RSI",
+                "selection_method": "direct_paper_id",
+                "selected_paper": _ORX_SELECTED,
+                "evidence": {
+                    "kind": "orx_alphaxiv_paper_report",
+                    "summary": "# Report\nverified",
+                    "source_operation": "orx_paper",
+                },
+                "string_similarity_used": False,
+                "cli": {
+                    "requested": "orx",
+                    "resolved": "/mock/orx",
+                    "isolated_context": False,
+                    "commands": [_command("orx_paper", _ORX)],
+                },
+            },
+        )
+        self.assertEqual(run.call_args.kwargs["timeout"], 60.0)
+        self.assertEqual(run.call_args.kwargs["env"], dict(os.environ))
+
+        collect_orx_paper_report("DREAM-RSI", timeout=0.0001)
+        self.assertEqual(run.call_args.kwargs["timeout"], 0.1)
+
+
+class InvalidProvenanceInputShapeTests(unittest.TestCase):
+    def test_dpo_rejections_return_fixed_shapes(self):
+        self.assertEqual(
+            build_dpo_provenance(None),
+            {
+                "status": DPO_EVAL_UNAVAILABLE,
+                "reason": "not_supplied",
+                "evaluated": 0,
+                "unavailable": 0,
+                "mean_loss": None,
+                "method": "response_token_logprob",
+                "string_similarity_used": False,
+                "pairs": [],
+            },
+        )
+        cases = [
+            ({"pairs": "p1"}, "invalid_pairs"),
+            ({"pairs": [{}] * 129}, "invalid_pairs"),
+            ({"pairs": [], "beta": "steep"}, "invalid_dpo_metadata"),
+            ({"pairs": [], "tokenizer_id": "tok\x00"}, "invalid_dpo_metadata"),
+            ({"pairs": [], "base_model": "b" * 513}, "invalid_dpo_metadata"),
+            ({"pairs": [], "beta": 0}, "invalid_beta"),
+            ({"pairs": [], "beta": float("nan")}, "invalid_beta"),
+            ({"pairs": [{"pair_id": "p1"}, "p2"]}, "invalid_pair"),
+        ]
+        for dpo, reason in cases:
+            with self.subTest(reason=reason, dpo=str(dpo)[:40]):
+                self.assertEqual(
+                    build_dpo_provenance(dpo),
+                    {
+                        "status": "invalid_input",
+                        "reason": reason,
+                        "method": "response_token_logprob",
+                        "string_similarity_used": False,
+                        "pairs": [],
+                    },
+                )
+
+    def test_runtime_probe_rejections_keep_the_no_reuse_flags(self):
+        base = {
+            "status": "not_supplied",
+            "source": "none",
+            "freshness": "unknown",
+            "stale_success_reused": False,
+            "probe_executed_by_report": False,
+            "model_switch_performed": False,
+        }
+        valid = {
+            "gateway": "http://127.0.0.1:11234/v1",
+            "model": "mlx/model",
+            "result": "OK",
+            "latency_ms": 10,
+            "timeout_ms": 100,
+        }
+        self.assertEqual(build_runtime_model_probe_provenance(None), base)
+        cases = [
+            ("probe", "invalid_runtime_model_probe"),
+            ({**valid, "gateway": ""}, "invalid_runtime_model_probe"),
+            ({**valid, "latency_ms": "fast"}, "invalid_runtime_model_probe"),
+            ({**valid, "timeout_ms": None}, "invalid_runtime_model_probe"),
+            ({**valid, "latency_ms": -1}, "invalid_probe_timing"),
+            ({**valid, "latency_ms": 101}, "invalid_probe_timing"),
+            ({**valid, "timeout_ms": 0, "latency_ms": 0}, "invalid_probe_timing"),
+            ({**valid, "advertised_models": "all"}, "invalid_advertised_models"),
+            ({**valid, "advertised_models": [{}] * 17}, "invalid_advertised_models"),
+            ({**valid, "advertised_models": ["model"]}, "invalid_advertised_model"),
+            (
+                {**valid, "advertised_models": [{"model": "m", "loaded": True}]},
+                "invalid_advertised_model",
+            ),
+            (
+                {**valid, "advertised_models": [{"model": "m", "state": "ready", "loaded": 1}]},
+                "invalid_advertised_model",
+            ),
+        ]
+        for probe, reason in cases:
+            with self.subTest(reason=reason, probe=str(probe)[-60:]):
+                self.assertEqual(
+                    build_runtime_model_probe_provenance(probe),
+                    {**base, "status": "invalid_input", "reason": reason},
+                )
+        self.assertEqual(
+            build_runtime_model_probe_provenance(
+                {**valid, "advertised_models": [{"model": "m", "state": "ready", "loaded": True}]}
+            ),
+            {
+                "status": "observed",
+                "source": "caller_supplied_current_observation",
+                "freshness": "current_observation",
+                "observed_date": "",
+                **valid,
+                "advertised_models": [{"model": "m", "loaded": True, "state": "ready"}],
+                "stale_success_reused": False,
+                "probe_executed_by_report": False,
+                "model_switch_performed": False,
+            },
+        )
 
 
 class GoldenReplayRegressionTests(unittest.TestCase):

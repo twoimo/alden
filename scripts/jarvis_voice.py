@@ -55,6 +55,7 @@ VOICE_STATUS_HEARTBEAT_SECONDS = 5.0
 VOICE_MIC_POLL_SECONDS = 0.02
 VOICE_MIC_STALE_SECONDS = 15.0
 VOICE_MIC_FRAME_SAMPLES = 320
+VOICE_MIC_FRAME_BYTES = VOICE_MIC_FRAME_SAMPLES * 2
 # The last bounded host run began with 1.65 GiB of swap headroom and crossed
 # the 512 MiB emergency stop while a voice model stage was still running.
 # Keep 2 GiB free before starting either large local voice model, plus enough
@@ -461,7 +462,7 @@ class OpenWakeVadFrontend:
         try:
             import numpy as np
 
-            return np.frombuffer(pcm16, dtype=np.int16, count=320)
+            return np.frombuffer(pcm16, dtype=np.int16, count=VOICE_MIC_FRAME_SAMPLES)
         except Exception:
             samples = array("h")
             samples.frombytes(pcm16)
@@ -470,7 +471,7 @@ class OpenWakeVadFrontend:
     def analyze(self, pcm16: bytes) -> AudioFrameAnalysis:
         # WebRTC VAD accepts 10/20/30 ms frames. A 20 ms frame at 16 kHz is
         # 320 int16 samples / 640 bytes; callers must keep this boundary.
-        if len(pcm16) != 640:
+        if len(pcm16) != VOICE_MIC_FRAME_BYTES:
             raise ValueError("voice_frame_size_invalid")
         wake_input = self._wake_input(pcm16)
         stock = self._score(self.stock_model.predict(wake_input))
@@ -588,7 +589,6 @@ class JarvisVoicePipeline:
         self._wake_source = "none"
         self._custom_model_selected = False
         self._transcript = ""
-        self._reply = ""
         self._speech_frames = 0
         self._silence_frames = 0
         self._noise_frames = 0
@@ -635,16 +635,13 @@ class JarvisVoicePipeline:
         self.state = state
         self.ring.clear()
         self._publish(error_code)
-        return VoiceResult(state=state, error_code=error_code, transcript=getattr(self, "_transcript", ""), reply=getattr(self, "_reply", ""))
+        return VoiceResult(state=state, error_code=error_code, transcript=self._transcript)
 
     def mic_disconnected(self) -> VoiceResult:
         return self._end(VoiceState.ERROR, "mic_disconnected")
 
     def mic_unavailable(self) -> VoiceResult:
         return self._end(VoiceState.ERROR, "mic_unavailable")
-
-    def model_swap_failed(self) -> VoiceResult:
-        return self._end(VoiceState.ERROR, "model_swap_failed")
 
     def feed_audio(
         self,
@@ -936,8 +933,6 @@ class Qwen3TtsAdapter:
             peak = max((abs(x) for x in samples_list), default=0.0)
             if peak > 1.0:
                 samples_list = [x / peak for x in samples_list]
-            from array import array
-
             pcm_arr = array("h", [int(max(-32768, min(32767, round(x * 32767.0)))) for x in samples_list])
             pcm_bytes = pcm_arr.tobytes()
             nframes = len(pcm_arr)
@@ -1202,13 +1197,25 @@ def run_file_pipeline(
     accepted = False
     stock_max = 0.0
     custom_max = 0.0
-    for offset in range(0, len(wake_pcm) - 639, 640):
-        analysis = frontend.analyze(wake_pcm[offset : offset + 640])
+
+    def not_accepted(result: VoiceResult) -> dict[str, Any]:
+        return {
+            "accepted": False,
+            "state": result.state.value,
+            "error_code": result.error_code,
+            "stock_max": stock_max,
+            "custom_max": custom_max,
+            "custom_model_selected": selected is not None,
+        }
+
+    for offset in range(0, len(wake_pcm) - VOICE_MIC_FRAME_BYTES + 1, VOICE_MIC_FRAME_BYTES):
+        frame = wake_pcm[offset : offset + VOICE_MIC_FRAME_BYTES]
+        analysis = frontend.analyze(frame)
         stock_max = max(stock_max, analysis.stock_wake_score)
         if analysis.custom_wake_score is not None:
             custom_max = max(custom_max, analysis.custom_wake_score)
         result = pipeline.feed_audio(
-            wake_pcm[offset : offset + 640],
+            frame,
             rms=analysis.rms,
             speech=analysis.speech,
             stock_wake_score=analysis.stock_wake_score,
@@ -1218,24 +1225,9 @@ def run_file_pipeline(
             accepted = True
             break
         if result is not None:
-            return {
-                "accepted": False,
-                "state": result.state.value,
-                "error_code": result.error_code,
-                "stock_max": stock_max,
-                "custom_max": custom_max,
-                "custom_model_selected": selected is not None,
-            }
+            return not_accepted(result)
     if not accepted:
-        ended = pipeline._end(VoiceState.ENDED, "wake_miss")
-        return {
-            "accepted": False,
-            "state": ended.state.value,
-            "error_code": ended.error_code,
-            "stock_max": stock_max,
-            "custom_max": custom_max,
-            "custom_model_selected": selected is not None,
-        }
+        return not_accepted(pipeline._end(VoiceState.ENDED, "wake_miss"))
 
     utterance = _load_wav_pcm16(utterance_wav)
     voice = pipeline.process_utterance(utterance)

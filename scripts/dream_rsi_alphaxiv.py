@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -86,7 +87,7 @@ def _validate_paper_id(value: Any) -> str:
     return paper_id
 
 
-def _resolve_alphaxiv_cli(requested: Any) -> tuple[str | None, str | None]:
+def _resolve_cli(requested: Any) -> tuple[str | None, str | None]:
     """Resolve one executable without allowing option/path injection."""
     try:
         value = _valid_plain_text(requested, limit=4096)
@@ -115,11 +116,6 @@ def _resolve_alphaxiv_cli(requested: Any) -> tuple[str | None, str | None]:
     return found, None
 
 
-def _resolve_orx_cli(requested: Any) -> tuple[str | None, str | None]:
-    """Resolve the OpenResearch CLI with the same executable-path guard."""
-    return _resolve_alphaxiv_cli(requested)
-
-
 def _bytes(value: Any) -> bytes:
     if value is None:
         return b""
@@ -143,12 +139,8 @@ def _sanitize_stderr(value: Any) -> str:
     try:
         if isinstance(value, bytes):
             text = value.decode("utf-8", errors="replace")
-        elif isinstance(value, str):
-            text = value
-        elif value is None:
-            text = ""
         else:
-            text = str(value)
+            text = "" if value is None else str(value)
         sanitized = []
         for character in text:
             category = unicodedata.category(character)
@@ -164,7 +156,7 @@ def _sanitize_stderr(value: Any) -> str:
         return ""
 
 
-def _run_alphaxiv(
+def _run_cli(
     executable: str,
     args: Sequence[str],
     *,
@@ -341,34 +333,73 @@ def _summary_text(payload: Any) -> str | None:
     return text
 
 
-def _paper_unavailable(
-    *,
-    requested_cli: str,
-    resolved_cli: str | None,
-    query: str,
-    reason: str,
-    provider: str = "alphaxiv_cli",
-    commands: list[dict[str, Any]] | None = None,
-    selected_paper: dict[str, str] | None = None,
-    isolated_context: bool = True,
-) -> dict[str, Any]:
-    return {
-        "status": "unavailable",
-        "reason": reason,
-        "analysis_available": False,
-        "provider": provider,
-        "query": query,
-        "selection_method": "none",
-        "selected_paper": selected_paper,
-        "evidence": None,
-        "string_similarity_used": False,
-        "cli": {
-            "requested": requested_cli,
-            "resolved": resolved_cli,
-            "isolated_context": isolated_context,
-            "commands": commands or [],
-        },
-    }
+@dataclass
+class _PaperAttempt:
+    """What one provider attempt knows so far; every paper report is built from it."""
+
+    provider: str
+    isolated_context: bool
+    requested_cli: str
+    query: str
+    resolved_cli: str | None = None
+    selected_paper: dict[str, str] | None = None
+    commands: list[dict[str, Any]] = field(default_factory=list)
+
+    def unavailable(self, reason: str) -> dict[str, Any]:
+        return self._report("unavailable", reason, selection_method="none", evidence=None)
+
+    def verified(
+        self, reason: str, *, selection_method: str, evidence: dict[str, str]
+    ) -> dict[str, Any]:
+        return self._report("ok", reason, selection_method=selection_method, evidence=evidence)
+
+    def _report(
+        self,
+        status: str,
+        reason: str,
+        *,
+        selection_method: str,
+        evidence: dict[str, str] | None,
+    ) -> dict[str, Any]:
+        return {
+            "status": status,
+            "reason": reason,
+            "analysis_available": evidence is not None,
+            "provider": self.provider,
+            "query": self.query,
+            "selection_method": selection_method,
+            "selected_paper": self.selected_paper,
+            "evidence": evidence,
+            "string_similarity_used": False,
+            "cli": {
+                "requested": self.requested_cli,
+                "resolved": self.resolved_cli,
+                "isolated_context": self.isolated_context,
+                "commands": self.commands,
+            },
+        }
+
+
+def _verified_orx_summary(report_text: str, paper_id: str) -> tuple[str | None, str]:
+    """Return the report body, or the reason its alphaXiv header cannot be trusted."""
+    lines = report_text.splitlines()
+    header_index = next(
+        (index for index, line in enumerate(lines) if line.strip()),
+        None,
+    )
+    if header_index is None:
+        return None, "incomplete_summary_response"
+    identity = re.compile(
+        rf"^alphaXiv:\s*https?://(?:www\.)?alphaxiv\.org/abs/{re.escape(paper_id)}(?:v\d+)?\s*$"
+    )
+    if not identity.fullmatch(lines[header_index].strip()):
+        return None, "identity_mismatch"
+    summary = "\n".join(lines[header_index + 1 :]).strip()
+    if not summary:
+        return None, "incomplete_summary_response"
+    if len(summary) > MAX_SUMMARY_CHARS:
+        return None, "text_too_long"
+    return summary, ""
 
 
 def collect_orx_paper_report(
@@ -379,56 +410,34 @@ def collect_orx_paper_report(
     paper_id: str = DREAM_RSI_PAPER_ID,
 ) -> dict[str, Any]:
     """Collect one identity-verified alphaXiv report through OpenResearch."""
-    requested_cli = str(orx_cli)
+    attempt = _PaperAttempt(
+        provider="orx_cli",
+        isolated_context=False,
+        requested_cli=str(orx_cli),
+        query=str(query)[:MAX_QUERY_CHARS],
+    )
     try:
-        safe_query = _validate_query(query)
+        attempt.query = _validate_query(query)
     except ValueError as exc:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=None,
-            query=str(query)[:MAX_QUERY_CHARS],
-            reason=f"invalid_query:{exc}",
-            provider="orx_cli",
-            isolated_context=False,
-        )
+        return attempt.unavailable(f"invalid_query:{exc}")
     try:
         selected_id = _validate_paper_id(paper_id)
     except ValueError:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=None,
-            query=safe_query,
-            reason="invalid_paper_id",
-            provider="orx_cli",
-            isolated_context=False,
-        )
+        return attempt.unavailable("invalid_paper_id")
     try:
         timeout_value = float(timeout)
     except (OverflowError, TypeError, ValueError):
         timeout_value = float("nan")
     if not math.isfinite(timeout_value):
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=None,
-            query=safe_query,
-            reason="invalid_timeout",
-            provider="orx_cli",
-            isolated_context=False,
-        )
+        return attempt.unavailable("invalid_timeout")
     timeout_value = min(MAX_TIMEOUT_SECONDS, max(0.1, timeout_value))
 
-    executable, resolve_error = _resolve_orx_cli(orx_cli)
+    executable, resolve_error = _resolve_cli(orx_cli)
     if resolve_error or not executable:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=None,
-            query=safe_query,
-            reason=resolve_error or "cli_missing",
-            provider="orx_cli",
-            isolated_context=False,
-        )
+        return attempt.unavailable(resolve_error or "cli_missing")
+    attempt.resolved_cli = executable
 
-    report_text, command = _run_alphaxiv(
+    report_text, command = _run_cli(
         executable,
         ("paper", selected_id, "--source", "alphaxiv", "--no-telemetry"),
         timeout=timeout_value,
@@ -436,100 +445,27 @@ def collect_orx_paper_report(
         expect_json=False,
         operation="orx_paper",
     )
-    commands = [command]
-    selected = {
+    attempt.commands.append(command)
+    attempt.selected_paper = {
         "paper_id": selected_id,
         "title": "",
         "url": f"https://www.alphaxiv.org/abs/{selected_id}",
     }
     if report_text is None:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=executable,
-            query=safe_query,
-            reason=str(command.get("reason") or "paper_unavailable"),
-            provider="orx_cli",
-            isolated_context=False,
-            commands=commands,
-            selected_paper=selected,
-        )
+        return attempt.unavailable(str(command.get("reason") or "paper_unavailable"))
 
-    lines = report_text.splitlines()
-    header_index = next(
-        (index for index, line in enumerate(lines) if line.strip()),
-        None,
-    )
-    if header_index is None:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=executable,
-            query=safe_query,
-            reason="incomplete_summary_response",
-            provider="orx_cli",
-            isolated_context=False,
-            commands=commands,
-            selected_paper=selected,
-        )
-    identity = re.compile(
-        rf"^alphaXiv:\s*https?://(?:www\.)?alphaxiv\.org/abs/{re.escape(selected_id)}(?:v\d+)?\s*$"
-    )
-    if not identity.fullmatch(lines[header_index].strip()):
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=executable,
-            query=safe_query,
-            reason="identity_mismatch",
-            provider="orx_cli",
-            isolated_context=False,
-            commands=commands,
-            selected_paper=selected,
-        )
-
-    summary = "\n".join(lines[header_index + 1 :]).strip()
-    if not summary:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=executable,
-            query=safe_query,
-            reason="incomplete_summary_response",
-            provider="orx_cli",
-            isolated_context=False,
-            commands=commands,
-            selected_paper=selected,
-        )
-    if len(summary) > MAX_SUMMARY_CHARS:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=executable,
-            query=safe_query,
-            reason="text_too_long",
-            provider="orx_cli",
-            isolated_context=False,
-            commands=commands,
-            selected_paper=selected,
-        )
-
-    return {
-        "status": "ok",
-        "reason": "orx_report_verified",
-        "analysis_available": True,
-        "provider": "orx_cli",
-        "query": safe_query,
-        "selection_method": "direct_paper_id",
-        "selected_paper": selected,
-        "evidence": {
+    summary, failure = _verified_orx_summary(report_text, selected_id)
+    if summary is None:
+        return attempt.unavailable(failure)
+    return attempt.verified(
+        "orx_report_verified",
+        selection_method="direct_paper_id",
+        evidence={
             "kind": "orx_alphaxiv_paper_report",
             "summary": summary,
             "source_operation": "orx_paper",
         },
-        "string_similarity_used": False,
-        "cli": {
-            "requested": requested_cli,
-            "resolved": executable,
-            "isolated_context": False,
-            "commands": commands,
-        },
-    }
+    )
 
 
 def collect_paper_report(
@@ -542,6 +478,18 @@ def collect_paper_report(
     paper_id: str | None = None,
 ) -> dict[str, Any]:
     """Collect deterministic paper evidence through one selected provider."""
+    if paper_source == "auto":
+        if _resolve_cli(alphaxiv_cli)[0]:
+            paper_source = "alphaxiv"
+        elif _resolve_cli(orx_cli)[0]:
+            paper_source = "orx"
+        else:
+            return _PaperAttempt(
+                provider="orx_cli",
+                isolated_context=False,
+                requested_cli=str(orx_cli),
+                query=str(query)[:MAX_QUERY_CHARS],
+            ).unavailable("cli_missing")
     if paper_source == "orx":
         return collect_orx_paper_report(
             query,
@@ -549,229 +497,116 @@ def collect_paper_report(
             timeout=timeout,
             paper_id=paper_id or DREAM_RSI_PAPER_ID,
         )
-    if paper_source == "auto":
-        executable, _ = _resolve_alphaxiv_cli(alphaxiv_cli)
-        if executable:
-            return collect_paper_report(
-                query,
-                alphaxiv_cli=alphaxiv_cli,
-                orx_cli=orx_cli,
-                paper_source="alphaxiv",
-                timeout=timeout,
-                paper_id=paper_id,
-            )
-        orx_executable, _ = _resolve_orx_cli(orx_cli)
-        if orx_executable:
-            return collect_orx_paper_report(
-                query,
-                orx_cli=orx_cli,
-                timeout=timeout,
-                paper_id=paper_id or DREAM_RSI_PAPER_ID,
-            )
-        return _paper_unavailable(
-            requested_cli=str(orx_cli),
-            resolved_cli=None,
-            query=str(query)[:MAX_QUERY_CHARS],
-            reason="cli_missing",
-            provider="orx_cli",
-            isolated_context=False,
+    if paper_source == "alphaxiv":
+        return _collect_alphaxiv_paper_report(
+            query, alphaxiv_cli=alphaxiv_cli, timeout=timeout, paper_id=paper_id
         )
-    if paper_source != "alphaxiv":
-        return _paper_unavailable(
-            requested_cli=str(alphaxiv_cli),
-            resolved_cli=None,
-            query=str(query)[:MAX_QUERY_CHARS],
-            reason="invalid_paper_source",
-        )
+    return _PaperAttempt(
+        provider="alphaxiv_cli",
+        isolated_context=True,
+        requested_cli=str(alphaxiv_cli),
+        query=str(query)[:MAX_QUERY_CHARS],
+    ).unavailable("invalid_paper_source")
 
-    requested_cli = str(alphaxiv_cli)
+
+def _collect_alphaxiv_paper_report(
+    query: str,
+    *,
+    alphaxiv_cli: str,
+    timeout: float,
+    paper_id: str | None,
+) -> dict[str, Any]:
+    """Select a paper, then verify its identity and summary in an isolated CLI home."""
+    attempt = _PaperAttempt(
+        provider="alphaxiv_cli",
+        isolated_context=True,
+        requested_cli=str(alphaxiv_cli),
+        query=str(query)[:MAX_QUERY_CHARS],
+    )
     try:
-        safe_query = _validate_query(query)
+        safe_query = attempt.query = _validate_query(query)
     except ValueError as exc:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=None,
-            query=str(query)[:MAX_QUERY_CHARS],
-            reason=f"invalid_query:{exc}",
-        )
+        return attempt.unavailable(f"invalid_query:{exc}")
     try:
         timeout_value = float(timeout)
     except (OverflowError, TypeError, ValueError):
         timeout_value = -1.0
     if not (0.1 <= timeout_value <= MAX_TIMEOUT_SECONDS):
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=None,
-            query=safe_query,
-            reason="invalid_timeout",
-        )
+        return attempt.unavailable("invalid_timeout")
 
-    executable, resolve_error = _resolve_alphaxiv_cli(alphaxiv_cli)
+    executable, resolve_error = _resolve_cli(alphaxiv_cli)
     if resolve_error or not executable:
-        return _paper_unavailable(
-            requested_cli=requested_cli,
-            resolved_cli=None,
-            query=safe_query,
-            reason=resolve_error or "cli_missing",
-        )
+        return attempt.unavailable(resolve_error or "cli_missing")
+    attempt.resolved_cli = executable
 
-    commands: list[dict[str, Any]] = []
-    selected: dict[str, str] | None = None
-    selection_method = "direct_paper_id" if paper_id else "alphaxiv_search_rank_1"
     with tempfile.TemporaryDirectory(prefix="openkakao-alphaxiv-") as temp_home:
         env = dict(os.environ)
         env["ALPHAXIV_HOME"] = temp_home
+
+        def run(operation: str, *args: str, expect_json: bool) -> tuple[Any | None, str]:
+            payload, record = _run_cli(
+                executable,
+                args,
+                timeout=timeout_value,
+                env=env,
+                expect_json=expect_json,
+                operation=operation,
+            )
+            attempt.commands.append(record)
+            return payload, str(record.get("reason") or "")
 
         if paper_id:
             try:
                 selected_id = _validate_paper_id(paper_id)
             except ValueError:
-                return _paper_unavailable(
-                    requested_cli=requested_cli,
-                    resolved_cli=executable,
-                    query=safe_query,
-                    reason="invalid_paper_id",
-                )
+                return attempt.unavailable("invalid_paper_id")
             selected = {"paper_id": selected_id, "title": "", "url": ""}
         else:
-            search_payload, search_record = _run_alphaxiv(
-                executable,
-                ("search", "papers", safe_query, "--json"),
-                timeout=timeout_value,
-                env=env,
-                expect_json=True,
-                operation="search_papers",
+            search_payload, failure = run(
+                "search_papers", "search", "papers", safe_query, "--json", expect_json=True
             )
-            commands.append(search_record)
             if search_payload is None:
-                return _paper_unavailable(
-                    requested_cli=requested_cli,
-                    resolved_cli=executable,
-                    query=safe_query,
-                    reason=str(search_record.get("reason") or "search_unavailable"),
-                    commands=commands,
-                )
+                return attempt.unavailable(failure or "search_unavailable")
             papers = _extract_search_papers(search_payload)
             if not papers:
-                return _paper_unavailable(
-                    requested_cli=requested_cli,
-                    resolved_cli=executable,
-                    query=safe_query,
-                    reason="incomplete_search_response",
-                    commands=commands,
-                )
+                return attempt.unavailable("incomplete_search_response")
             selected = papers[0]
+        attempt.selected_paper = selected
 
-        assert selected is not None
-        context_payload, context_record = _run_alphaxiv(
-            executable,
-            ("context", "use", "paper", selected["paper_id"]),
-            timeout=timeout_value,
-            env=env,
-            expect_json=False,
-            operation="context_use_paper",
+        context_payload, failure = run(
+            "context_use_paper", "context", "use", "paper", selected["paper_id"], expect_json=False
         )
-        commands.append(context_record)
         if context_payload is None:
-            return _paper_unavailable(
-                requested_cli=requested_cli,
-                resolved_cli=executable,
-                query=safe_query,
-                reason=str(context_record.get("reason") or "context_unavailable"),
-                commands=commands,
-                selected_paper=selected,
-            )
+            return attempt.unavailable(failure or "context_unavailable")
 
-        shown, show_record = _run_alphaxiv(
-            executable,
-            ("context", "show", "--json"),
-            timeout=timeout_value,
-            env=env,
-            expect_json=True,
-            operation="context_show",
-        )
-        commands.append(show_record)
+        shown, failure = run("context_show", "context", "show", "--json", expect_json=True)
         if shown is None:
-            return _paper_unavailable(
-                requested_cli=requested_cli,
-                resolved_cli=executable,
-                query=safe_query,
-                reason=str(show_record.get("reason") or "context_unavailable"),
-                commands=commands,
-                selected_paper=selected,
-            )
+            return attempt.unavailable(failure or "context_unavailable")
         context_id, context_title = _context_identity(shown)
         if context_id != selected["paper_id"]:
-            return _paper_unavailable(
-                requested_cli=requested_cli,
-                resolved_cli=executable,
-                query=safe_query,
-                reason="paper_identity_mismatch",
-                commands=commands,
-                selected_paper=selected,
-            )
+            return attempt.unavailable("paper_identity_mismatch")
+        selected["title"] = selected["title"] or context_title
         if not selected["title"]:
-            selected["title"] = context_title
-        if not selected["title"]:
-            return _paper_unavailable(
-                requested_cli=requested_cli,
-                resolved_cli=executable,
-                query=safe_query,
-                reason="incomplete_paper_metadata",
-                commands=commands,
-                selected_paper=selected,
-            )
+            return attempt.unavailable("incomplete_paper_metadata")
 
-        summary_payload, summary_record = _run_alphaxiv(
-            executable,
-            ("paper", "summary", "--json"),
-            timeout=timeout_value,
-            env=env,
-            expect_json=True,
-            operation="paper_summary",
+        summary_payload, failure = run(
+            "paper_summary", "paper", "summary", "--json", expect_json=True
         )
-        commands.append(summary_record)
         if summary_payload is None:
-            return _paper_unavailable(
-                requested_cli=requested_cli,
-                resolved_cli=executable,
-                query=safe_query,
-                reason=str(summary_record.get("reason") or "summary_unavailable"),
-                commands=commands,
-                selected_paper=selected,
-            )
+            return attempt.unavailable(failure or "summary_unavailable")
         summary = _summary_text(summary_payload)
         if summary is None:
-            return _paper_unavailable(
-                requested_cli=requested_cli,
-                resolved_cli=executable,
-                query=safe_query,
-                reason="incomplete_summary_response",
-                commands=commands,
-                selected_paper=selected,
-            )
+            return attempt.unavailable("incomplete_summary_response")
 
-    return {
-        "status": "ok",
-        "reason": "alphaxiv_summary_verified",
-        "analysis_available": True,
-        "provider": "alphaxiv_cli",
-        "query": safe_query,
-        "selection_method": selection_method,
-        "selected_paper": selected,
-        "evidence": {
+    return attempt.verified(
+        "alphaxiv_summary_verified",
+        selection_method="direct_paper_id" if paper_id else "alphaxiv_search_rank_1",
+        evidence={
             "kind": "alphaxiv_paper_summary",
             "summary": summary,
             "source_operation": "paper_summary",
         },
-        "string_similarity_used": False,
-        "cli": {
-            "requested": requested_cli,
-            "resolved": executable,
-            "isolated_context": True,
-            "commands": commands,
-        },
-    }
+    )
 
 
 def _safe_eval_report(report: Any) -> dict[str, Any]:
@@ -881,43 +716,29 @@ def build_dpo_provenance(dpo: Any) -> dict[str, Any]:
             "string_similarity_used": False,
             "pairs": [],
         }
-    pairs = dpo.get("pairs")
-    if not isinstance(pairs, list) or len(pairs) > MAX_DPO_PAIRS:
+
+    def invalid(reason: str) -> dict[str, Any]:
         return {
             "status": "invalid_input",
-            "reason": "invalid_pairs",
+            "reason": reason,
             "method": "response_token_logprob",
             "string_similarity_used": False,
             "pairs": [],
         }
+
+    pairs = dpo.get("pairs")
+    if not isinstance(pairs, list) or len(pairs) > MAX_DPO_PAIRS:
+        return invalid("invalid_pairs")
     try:
         tokenizer_id = _valid_plain_text(dpo.get("tokenizer_id"), limit=256, allow_empty=True)
         base_model = _valid_plain_text(dpo.get("base_model"), limit=512, allow_empty=True)
         beta = float(dpo.get("beta", 0.1))
     except (ValueError, TypeError):
-        return {
-            "status": "invalid_input",
-            "reason": "invalid_dpo_metadata",
-            "method": "response_token_logprob",
-            "string_similarity_used": False,
-            "pairs": [],
-        }
+        return invalid("invalid_dpo_metadata")
     if not (0.0 < beta <= 10.0):
-        return {
-            "status": "invalid_input",
-            "reason": "invalid_beta",
-            "method": "response_token_logprob",
-            "string_similarity_used": False,
-            "pairs": [],
-        }
+        return invalid("invalid_beta")
     if any(not isinstance(pair, dict) for pair in pairs):
-        return {
-            "status": "invalid_input",
-            "reason": "invalid_pair",
-            "method": "response_token_logprob",
-            "string_similarity_used": False,
-            "pairs": [],
-        }
+        return invalid("invalid_pair")
 
     evaluated = evaluate_preference_pairs(
         pairs,
@@ -967,8 +788,12 @@ def build_runtime_model_probe_provenance(probe: Any) -> dict[str, Any]:
     }
     if probe is None:
         return base
+
+    def invalid(reason: str) -> dict[str, Any]:
+        return {**base, "status": "invalid_input", "reason": reason}
+
     if not isinstance(probe, dict):
-        return {**base, "status": "invalid_input", "reason": "invalid_runtime_model_probe"}
+        return invalid("invalid_runtime_model_probe")
 
     try:
         gateway = _valid_plain_text(probe.get("gateway"), limit=2048)
@@ -980,25 +805,25 @@ def build_runtime_model_probe_provenance(probe: Any) -> dict[str, Any]:
         latency_ms = int(probe.get("latency_ms"))
         timeout_ms = int(probe.get("timeout_ms"))
     except (TypeError, ValueError):
-        return {**base, "status": "invalid_input", "reason": "invalid_runtime_model_probe"}
+        return invalid("invalid_runtime_model_probe")
     if latency_ms < 0 or timeout_ms <= 0 or latency_ms > timeout_ms:
-        return {**base, "status": "invalid_input", "reason": "invalid_probe_timing"}
+        return invalid("invalid_probe_timing")
 
     raw_advertised = probe.get("advertised_models", [])
     if not isinstance(raw_advertised, list) or len(raw_advertised) > MAX_RUNTIME_MODELS:
-        return {**base, "status": "invalid_input", "reason": "invalid_advertised_models"}
+        return invalid("invalid_advertised_models")
     advertised: list[dict[str, Any]] = []
     for item in raw_advertised:
         if not isinstance(item, dict):
-            return {**base, "status": "invalid_input", "reason": "invalid_advertised_model"}
+            return invalid("invalid_advertised_model")
         try:
             item_model = _valid_plain_text(item.get("model"), limit=512)
             state = _valid_plain_text(item.get("state"), limit=64)
         except ValueError:
-            return {**base, "status": "invalid_input", "reason": "invalid_advertised_model"}
+            return invalid("invalid_advertised_model")
         loaded = item.get("loaded")
         if not isinstance(loaded, bool):
-            return {**base, "status": "invalid_input", "reason": "invalid_advertised_model"}
+            return invalid("invalid_advertised_model")
         advertised.append({"model": item_model, "loaded": loaded, "state": state})
 
     return {

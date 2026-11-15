@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { AnimationLoop } from "../core/animation-loop";
+import { cssColor, disposeObject, spherePoint } from "../core/scene-helpers";
 import {
   KnowledgeDrilldown,
   type KnowledgeGraph,
@@ -13,29 +14,6 @@ export interface KnowledgeFocusEvent {
 }
 
 type FocusHandler = (event: KnowledgeFocusEvent) => void;
-
-function cssColor(name: string, fallback: string): THREE.Color {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return new THREE.Color(value || fallback);
-}
-
-function spherePoint(index: number, count: number, radius: number): THREE.Vector3 {
-  const offset = 2 / Math.max(count, 1);
-  const y = (index * offset - 1) + offset / 2;
-  const ring = Math.sqrt(Math.max(0, 1 - y * y));
-  const phi = index * Math.PI * (3 - Math.sqrt(5));
-  return new THREE.Vector3(Math.cos(phi) * ring * radius, y * radius, Math.sin(phi) * ring * radius);
-}
-
-function disposeObject(object: THREE.Object3D): void {
-  object.traverse((child) => {
-    if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments || child instanceof THREE.Line) {
-      child.geometry.dispose();
-      const materials = Array.isArray(child.material) ? child.material : [child.material];
-      materials.forEach((material) => material.dispose());
-    }
-  });
-}
 
 export class KnowledgeHologram {
   private readonly renderer: THREE.WebGLRenderer;
@@ -98,10 +76,6 @@ export class KnowledgeHologram {
 
   get renderCount(): number {
     return this.loop.renderCount;
-  }
-
-  get currentView(): KnowledgeView {
-    return this.view;
   }
 
   clickNode(nodeId: string): KnowledgeView {

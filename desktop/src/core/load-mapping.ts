@@ -1,17 +1,6 @@
-import type { BackgroundStatus, JobEvent, PipelineStatus } from "../contracts";
+import type { BackgroundStatus, JobEvent, PipelineStage, PipelineStatus } from "../contracts";
 
 const TOTAL_BOOST = 0.35;
-
-export const PIPELINE_STAGE_IDS = [
-  "detect",
-  "authorize",
-  "queue",
-  "context",
-  "model",
-  "delay",
-  "send",
-  "confirm",
-] as const;
 
 export interface SourceLoads {
   reply: number;
@@ -30,11 +19,7 @@ export interface LatticePulse {
   density: number;
 }
 
-// Active reply phases map to bounded load: detect .10, authorize .15,
-// queue .20, context .35, model .85, delay .05, send .60, confirm .25.
-// The table lives at module scope: the poll path rebuilt it on every call
-// before this (2026-09-22).
-const PIPELINE_STAGE_WEIGHTS: Readonly<Record<string, number>> = {
+const PIPELINE_STAGE_WEIGHTS: Readonly<Partial<Record<PipelineStage, number>>> = {
   detect: 0.10,
   authorize: 0.15,
   queue: 0.20,
@@ -45,14 +30,13 @@ const PIPELINE_STAGE_WEIGHTS: Readonly<Record<string, number>> = {
   confirm: 0.25,
 };
 
-function clamp01(value: number): number {
+export function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(1, Math.max(0, value));
 }
 
-// Branch instead of building `[reply, geeknews, dbSync]` per frame. The order
-// and the "0 for anything past the third ring" fallback match the array the
-// allocating path used.
+// Branch instead of building `[reply, geeknews, dbSync]` per frame. A ring
+// past the third has no source of its own.
 function sourceAt(loads: SourceLoads, index: number): number {
   if (index === 0) return loads.reply;
   if (index === 1) return loads.geeknews;
@@ -95,8 +79,7 @@ export function ringTargetVelocities(
  * * (1 + 0.35 * max(clamp01(total), clamp01(voice))). The last factor is
  * exactly 1 when both global signals are zero.
  *
- * The render loop owns one scratch array and writes into it, so a 15-30fps
- * loop stops allocating a fresh array per frame (2026-09-22).
+ * The render loop passes its own scratch array, so a frame allocates nothing.
  */
 export function writeRingTargetVelocities(
   out: number[],
@@ -115,12 +98,12 @@ export function writeRingTargetVelocities(
   return out;
 }
 
-export function latticePulse(total: number, seconds: number): LatticePulse {
-  return writeLatticePulse({ frequency: 0, amplitude: 0, opacity: 0, density: 0 }, total, seconds);
+export function latticePulse(total: number): LatticePulse {
+  return writeLatticePulse({ frequency: 0, amplitude: 0, opacity: 0, density: 0 }, total);
 }
 
 /** Write the lattice pulse into a reused object. F = F0*(1+0.8L), A = 0.05+0.05L, O = 0.06+0.12L. */
-export function writeLatticePulse(out: LatticePulse, total: number, _seconds: number): LatticePulse {
+export function writeLatticePulse(out: LatticePulse, total: number): LatticePulse {
   const load = clamp01(total);
   out.frequency = 1.0 * (1 + 0.8 * load);
   out.amplitude = 0.05 + 0.05 * load;

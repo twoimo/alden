@@ -96,7 +96,7 @@ class LegacyFrame {
     this.nucleusScale += this.nucleusVelocity * dt;
 
     const seconds = nowMs / 1000;
-    const pulse = latticePulse(this.smoothSources.total, seconds);
+    const pulse = latticePulse(this.smoothSources.total);
     const backgroundPulse = 1 + pulse.amplitude * Math.sin(seconds * pulse.frequency * Math.PI * 2);
     // The old body did compute the acoustic term as well; leaving it out here
     // would drop one Math.sin from the "before" side and flatter legacy.
@@ -158,13 +158,13 @@ report("now: reused scratch array", () => {
 console.log("lattice pulse (per frame)");
 report("legacy: object literal", () => {
   for (let index = 0; index < ITERATIONS; index += 1) {
-    const pulse = latticePulse(LOADS.total, 12.5);
+    const pulse = latticePulse(LOADS.total);
     sink += pulse.frequency + pulse.amplitude + pulse.opacity;
   }
 });
 report("now: reused object", () => {
   for (let index = 0; index < ITERATIONS; index += 1) {
-    const pulse = writeLatticePulse(pulseOut, LOADS.total, 12.5);
+    const pulse = writeLatticePulse(pulseOut, LOADS.total);
     sink += pulse.frequency + pulse.amplitude + pulse.opacity;
   }
 });
@@ -178,7 +178,7 @@ report("legacy: inline render body", () => {
 report("now: CoreRenderState.step", () => {
   for (let index = 0; index < ITERATIONS; index += 1) {
     tick += 1;
-    newFrame.step(DT, tick * 33, BASE, GAIN);
+    newFrame.step(DT, BASE, GAIN);
   }
 });
 
