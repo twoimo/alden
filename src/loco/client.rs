@@ -23,6 +23,30 @@ const BOOKING_HOST: &str = "booking-loco.kakao.com";
 const BOOKING_PORT: u16 = 443;
 const DEFAULT_LOCO_PORT: u16 = 5223;
 
+// Tests shorten both deadlines so silent-server cases settle in milliseconds.
+const CONNECT_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    Duration::from_secs(10)
+};
+const RESPONSE_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    Duration::from_secs(30)
+};
+
+async fn within<T>(
+    limit: Duration,
+    waiting_for: &str,
+    work: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    timeout(limit, work).await.unwrap_or_else(|_| {
+        Err(anyhow!(
+            "timed out after {limit:?} waiting for {waiting_for}"
+        ))
+    })
+}
+
 enum LocoStream {
     Tls(Box<TlsStream<TcpStream>>),
     Legacy {
@@ -100,7 +124,7 @@ impl LocoStream {
 
                     // Read additional frames if the first frame doesn't contain the full packet
                     while decrypted.len() < total_needed {
-                        let fragment_result = timeout(Duration::from_secs(30), async {
+                        let frame2 = within(RESPONSE_TIMEOUT, "the next LOCO frame", async {
                             let mut size_buf2 = [0u8; 4];
                             stream.read_exact(&mut size_buf2).await?;
                             let size2 = ReadBytesExt::read_u32::<LittleEndian>(&mut Cursor::new(
@@ -111,18 +135,11 @@ impl LocoStream {
                             }
                             let mut frame2 = vec![0u8; size2];
                             stream.read_exact(&mut frame2).await?;
-                            Ok::<Vec<u8>, anyhow::Error>(frame2)
+                            Ok(frame2)
                         })
-                        .await;
-
-                        match fragment_result {
-                            Ok(Ok(frame2)) => {
-                                let decrypted2 = encryptor.decrypt(&frame2)?;
-                                decrypted.extend_from_slice(&decrypted2);
-                            }
-                            Ok(Err(e)) => return Err(e),
-                            Err(_) => return Err(anyhow!("Frame reassembly timed out after 30s")),
-                        }
+                        .await?;
+                        let decrypted2 = encryptor.decrypt(&frame2)?;
+                        decrypted.extend_from_slice(&decrypted2);
                     }
                 }
 
@@ -152,6 +169,20 @@ async fn tls_connect(host: &str, port: u16) -> Result<TlsStream<TcpStream>> {
 
 /// Execute a one-shot LOCO request: connect, send one packet, read one response, close.
 async fn loco_oneshot(
+    host: &str,
+    port: u16,
+    packet: &LocoPacket,
+    use_tls: bool,
+) -> Result<LocoPacket> {
+    within(
+        CONNECT_TIMEOUT,
+        &format!("a LOCO reply from {host}:{port}"),
+        loco_exchange(host, port, packet, use_tls),
+    )
+    .await
+}
+
+async fn loco_exchange(
     host: &str,
     port: u16,
     packet: &LocoPacket,
@@ -292,13 +323,8 @@ impl LocoClient {
                 "[checkin] Trying {}:{} (TLS={})...",
                 checkin_host, port, use_tls
             );
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                loco_oneshot(checkin_host, *port, &pkt, *use_tls),
-            )
-            .await
-            {
-                Ok(Ok(response)) => {
+            match loco_oneshot(checkin_host, *port, &pkt, *use_tls).await {
+                Ok(response) => {
                     if let Ok(host) = response.body.get_str("host") {
                         let loco_port = checkin_loco_port(&response.body);
                         eprintln!(
@@ -309,11 +335,8 @@ impl LocoClient {
                     }
                     eprintln!("[checkin] No host in response, trying next...");
                 }
-                Ok(Err(e)) => {
+                Err(e) => {
                     eprintln!("[checkin] TLS={} port={} failed: {}", use_tls, port, e);
-                }
-                Err(_) => {
-                    eprintln!("[checkin] TLS={} port={} timed out", use_tls, port);
                 }
             }
         }
@@ -328,11 +351,15 @@ impl LocoClient {
             host, port, use_tls
         );
 
+        let waiting_for = format!("a LOCO connection to {host}:{port}");
         if use_tls {
-            let tls = tls_connect(host, port).await?;
+            let tls = within(CONNECT_TIMEOUT, &waiting_for, tls_connect(host, port)).await?;
             self.stream = Some(LocoStream::Tls(Box::new(tls)));
         } else {
-            let mut tcp = TcpStream::connect((host, port)).await?;
+            let mut tcp = within(CONNECT_TIMEOUT, &waiting_for, async {
+                Ok(TcpStream::connect((host, port)).await?)
+            })
+            .await?;
             let enc = LocoEncryptor::new();
             let handshake = enc.build_handshake_packet()?;
             if (std::env::var("OPENKAKAO_CLI_DEBUG").is_ok()
@@ -389,7 +416,7 @@ impl LocoClient {
         // Read packets until we find the response matching our packet_id
         let mut skip_count = 0usize;
         loop {
-            let response = match stream.recv_packet().await {
+            let response = match within(RESPONSE_TIMEOUT, method, stream.recv_packet()).await {
                 Ok(r) => r,
                 Err(e) => {
                     self.is_dirty = true;
@@ -693,7 +720,12 @@ pub async fn loco_upload(
     eprintln!("[upload] Connecting to {}:{}...", vhost, port);
 
     // Upload server uses legacy encrypted connection (same as main LOCO)
-    let mut tcp = TcpStream::connect((vhost, port)).await?;
+    let mut tcp = within(
+        CONNECT_TIMEOUT,
+        &format!("an upload connection to {vhost}:{port}"),
+        async { Ok(TcpStream::connect((vhost, port)).await?) },
+    )
+    .await?;
     let enc = LocoEncryptor::new();
     let handshake = enc.build_handshake_packet()?;
     tcp.write_all(&handshake).await?;
@@ -731,7 +763,12 @@ pub async fn loco_upload(
     stream.send_packet(&post_pkt).await?;
 
     // Read POST response
-    let post_resp = stream.recv_packet().await?;
+    let post_resp = within(
+        RESPONSE_TIMEOUT,
+        "the upload POST reply",
+        stream.recv_packet(),
+    )
+    .await?;
     let post_status = post_resp.status();
     if post_status != 0 {
         return Err(anyhow!(
@@ -759,7 +796,12 @@ pub async fn loco_upload(
     }
 
     // Wait for upload completion response
-    let upload_resp = stream.recv_packet().await?;
+    let upload_resp = within(
+        RESPONSE_TIMEOUT,
+        "the upload completion reply",
+        stream.recv_packet(),
+    )
+    .await?;
     let upload_status = upload_resp.status();
     if upload_status != 0 {
         return Err(anyhow!(
@@ -776,6 +818,79 @@ pub async fn loco_upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn silent_server() -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        port
+    }
+
+    async fn settles<T>(work: impl std::future::Future<Output = T>) -> T {
+        timeout(Duration::from_secs(5), work)
+            .await
+            .expect("hung on a server that never answers")
+    }
+
+    fn credentials() -> KakaoCredentials {
+        KakaoCredentials::new(
+            "token".into(),
+            1,
+            "uuid".into(),
+            "3.7.0".into(),
+            "ua".into(),
+            "a".into(),
+        )
+    }
+
+    #[tokio::test]
+    async fn oneshot_to_a_silent_server_times_out() {
+        let port = silent_server().await;
+        let packet = PacketBuilder::new().build("GETCONF", doc! {});
+        assert!(settles(loco_oneshot("127.0.0.1", port, &packet, false))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn tls_oneshot_to_a_silent_server_times_out() {
+        let port = silent_server().await;
+        let packet = PacketBuilder::new().build("GETCONF", doc! {});
+        assert!(settles(loco_oneshot("127.0.0.1", port, &packet, true))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn tls_connect_to_a_silent_server_times_out() {
+        let port = silent_server().await;
+        let mut client = LocoClient::new(credentials());
+        assert!(settles(client.connect("127.0.0.1", port, true))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn command_to_a_silent_server_times_out() {
+        let port = silent_server().await;
+        let mut client = LocoClient::new(credentials());
+        settles(client.connect("127.0.0.1", port, false))
+            .await
+            .unwrap();
+        assert!(settles(client.send_command("PING", doc! {})).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn upload_to_a_silent_server_times_out() {
+        let port = silent_server().await;
+        let upload = loco_upload("127.0.0.1", port, 1, "key", 2, b"data", 2, 1, 1, "3.7.0");
+        assert!(settles(upload).await.is_err());
+    }
 
     #[test]
     fn booking_ports_skip_values_outside_the_port_range() {
