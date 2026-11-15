@@ -653,10 +653,7 @@ def _perform_preflight(
                     "reason": str(exc),
                 }
                 try:
-                    (state_root / "preflight-skipped.json").write_text(
-                        json.dumps(aggregate_failure, ensure_ascii=False, indent=2),
-                        encoding="utf-8",
-                    )
+                    _write_receipt(state_root / "preflight-skipped.json", aggregate_failure)
                 except OSError:
                     pass
                 raise SystemExit(str(exc)) from None

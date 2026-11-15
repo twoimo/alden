@@ -233,6 +233,56 @@ class CatalogSelectorTests(unittest.TestCase):
         self.assertIn("whole set rejected attempt 1", artifact["reason"])
         self.assertIn("whole set rejected attempt 2", artifact["reason"])
 
+    def test_failed_aggregate_artifact_write_keeps_the_previous_artifact(self):
+        # RLIMIT_FSIZE turns any write past 64 bytes into EFBIG, which is how
+        # a full disk interrupts the artifact write halfway through.
+        child = """\
+import importlib.util
+import resource
+import sys
+from pathlib import Path
+from unittest import mock
+
+entry, state_root = sys.argv[1], Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location("service_artifact_child", entry)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+resource.setrlimit(resource.RLIMIT_FSIZE, (64, 64))
+with mock.patch.object(
+    module, "_catalog_selectors", return_value=["id:1", "id:2", "id:3"]
+), mock.patch.object(
+    module, "_preflight_cli", return_value=(False, {}, "rejected " * 40)
+):
+    try:
+        module._perform_preflight(
+            Path("/tmp/python"),
+            Path("/tmp/entry.py"),
+            Path("/tmp/openkakao-cli"),
+            Path("/tmp/config.toml"),
+            None,
+            state_root,
+            invalidate=False,
+        )
+    except SystemExit as exc:
+        print("preflight fenced:", str(exc)[:16])
+"""
+        previous = json.dumps({"scope": "aggregate", "selectors": [], "reason": "old"})
+        with tempfile.TemporaryDirectory() as raw:
+            state_root = Path(raw)
+            artifact = state_root / "preflight-skipped.json"
+            artifact.write_text(previous, encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-c", child, str(ENTRY), str(state_root)],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("preflight fenced:", result.stdout)
+            self.assertEqual(artifact.read_text(encoding="utf-8"), previous)
+
     def test_catalog_preflight_requires_full_set_capable_first_call(self):
         module = load_entry("auto_reply_catalog_full_set_only_test")
         candidates = ["id:1", "id:2", "id:3"]
