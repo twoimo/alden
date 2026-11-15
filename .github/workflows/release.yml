@@ -76,6 +76,9 @@ jobs:
       - name: Cargo test
         run: cargo test --manifest-path $MANIFEST
 
+      - name: Lint CLI crate (clippy)
+        run: cargo clippy --manifest-path $MANIFEST --all-targets -- -D warnings
+
       - name: Cargo release build
         run: cargo build --release --manifest-path $MANIFEST
 
