@@ -5186,12 +5186,18 @@ fn open_db(path: &Path) -> Result<Connection> {
         }
     }
     set_context_db_permissions(path)?;
+    migrate(&conn, was_missing)?;
+    set_context_db_permissions(path)?;
+    Ok(conn)
+}
+
+fn migrate(conn: &Connection, was_missing: bool) -> Result<()> {
     // Owner-scope rename (R10.6): before the `CREATE TABLE IF NOT EXISTS owner_*`
     // statements run, rename any legacy `choi_yeonwoo_*` tables so an upgrading
     // database keeps its style/context data instead of orphaning it under the
     // old names. `profile::migrate_owner_scope` later adds the `owner_key`
     // column and records the migration marker once the owner is confirmed.
-    rename_legacy_owner_tables(&conn)?;
+    rename_legacy_owner_tables(conn)?;
     conn.execute_batch("PRAGMA secure_delete = ON;
         PRAGMA journal_size_limit = 0;
         PRAGMA wal_autocheckpoint = 1000;
@@ -5328,11 +5334,10 @@ fn open_db(path: &Path) -> Result<Connection> {
             [RETRIEVAL_INDEX_SCHEMA_VERSION],
         )?;
     }
-    migrate_live_context_schema(&conn)?;
-    migrate_style_policy(&conn)?;
-    migrate_response_time_distribution_schema(&conn)?;
-    set_context_db_permissions(path)?;
-    Ok(conn)
+    migrate_live_context_schema(conn)?;
+    migrate_style_policy(conn)?;
+    migrate_response_time_distribution_schema(conn)?;
+    Ok(())
 }
 
 fn migrate_style_policy(conn: &Connection) -> Result<()> {
