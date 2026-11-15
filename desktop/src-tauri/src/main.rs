@@ -10,6 +10,8 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 const PANEL_WIDTH: f64 = 276.0;
 const VISIBILITY_EVENT: &str = "jarvis://visibility";
+// Time a quitting app gives a model swap to roll back on its own.
+const APP_EXIT_COOPERATIVE_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Payload for the window visibility event: one boolean, never content.
 fn visibility_payload(visible: bool) -> Value {
@@ -279,8 +281,16 @@ fn main() {
             }
             _ => {}
         })
-        .run(tauri::generate_context!())
-        .expect("error while running OpenKakao Jarvis");
+        .build(tauri::generate_context!())
+        .expect("error while building OpenKakao Jarvis")
+        .run(|app, event| {
+            // Quitting must not orphan a Python child (for example a model
+            // swap in progress). Stop owned children without latching the abort.
+            if let tauri::RunEvent::Exit = event {
+                app.state::<PythonBridge>()
+                    .terminate_children(APP_EXIT_COOPERATIVE_GRACE);
+            }
+        });
 }
 
 #[cfg(test)]

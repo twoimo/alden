@@ -31,6 +31,8 @@ const OUTPUT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 // pipe drains after the leader is gone.
 const PROCESS_TERM_GRACE: Duration = Duration::from_millis(250);
 const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
+// Hard-stop window on quit, after the cooperative grace has run out.
+const TERMINATE_HARD_GRACE: Duration = Duration::from_secs(2);
 const BROWSER_TOOL_OUTPUT_LIMIT_BYTES: usize = 96 * 1024;
 const BROWSER_TOOL_RESULT_LIMIT_BYTES: usize = 64 * 1024;
 const BROWSER_TOOL_TASK_LIMIT_BYTES: usize = 16 * 1024;
@@ -695,6 +697,42 @@ impl PythonBridge {
             return Err(BridgeError::StateIo);
         }
         Ok(())
+    }
+
+    /// Quit path: stop every owned child. Model swaps get their cooperative
+    /// marker first and the grace to roll back. Everything still registered is
+    /// then hard-stopped. The abort latch is deliberately not written, because
+    /// a latch refuses every later job until a human resume.
+    pub fn terminate_children(&self, cooperative_grace: Duration) {
+        if let Ok(map) = self.cancellations.lock() {
+            for handle in map.values() {
+                if let Some(marker) = handle.cooperative_marker.as_deref() {
+                    let _ = write_model_swap_cancel_marker(marker);
+                }
+            }
+        }
+        self.wait_for_registry_drain(cooperative_grace);
+        if let Ok(map) = self.cancellations.lock() {
+            for handle in map.values() {
+                handle.flag.store(true, Ordering::SeqCst);
+            }
+        }
+        self.wait_for_registry_drain(TERMINATE_HARD_GRACE);
+    }
+
+    fn wait_for_registry_drain(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            let empty = self
+                .cancellations
+                .lock()
+                .map(|map| map.is_empty())
+                .unwrap_or(true);
+            if empty {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     pub fn start_voice_session(&self) -> Result<(), BridgeError> {
@@ -5351,6 +5389,35 @@ mod tests {
 
         assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
         assert_eq!(still_listed, Some(None), "running swap job was removed or relabelled");
+    }
+
+    #[test]
+    fn app_exit_stops_children_without_latching_future_jobs() {
+        // Quitting mid-job must not orphan the child, and must not write the
+        // emergency latch: a latch blocks every later job until a human resume.
+        let (bridge, root) = fixture_bridge("exit-stop", SLEEPING_CHILD);
+        let worker = bridge.clone();
+        let (outcome_tx, outcome_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let result = worker.run_python_with_output_limit(PythonRun {
+                timeout: Duration::from_secs(60),
+                ..PythonRun::default()
+            });
+            let _ = outcome_tx.send(result.map(|_| ()));
+        });
+        let pid = wait_for_pid_file(&bridge.config.state_root.join("child.pid"));
+        bridge.terminate_children(Duration::from_millis(100));
+        let outcome = outcome_rx.recv_timeout(Duration::from_secs(5));
+        let gone = wait_until_gone(pid, Duration::from_secs(2));
+        kill_own_child(pid);
+        let latched = bridge.config.state_root.join(ABORT_STATE_NAME).exists();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            matches!(outcome, Ok(Err(BridgeError::Cancelled))),
+            "exit did not stop the child: {outcome:?}"
+        );
+        assert!(gone, "child survived app exit");
+        assert!(!latched, "app exit latched the abort");
     }
 
     #[test]
