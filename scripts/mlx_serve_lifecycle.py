@@ -316,15 +316,7 @@ def validate_executable(
         home_root = root.resolve(strict=False)
     except OSError:
         return "launch_executable_unsafe"
-    allowed = False
-    for base in (home_root, Path("/Applications")):
-        try:
-            resolved.relative_to(base)
-            allowed = True
-            break
-        except ValueError:
-            continue
-    if not allowed:
+    if not any(resolved.is_relative_to(base) for base in (home_root, Path("/Applications"))):
         return "launch_executable_unsafe"
     try:
         metadata = path.lstat()
@@ -758,10 +750,11 @@ def launch_app_owned_server(
     listeners = runtime.listeners(spec.port)
     if listeners:
         record = read_app_owned_state(state_root)
-        attested = record is not None and attest_app_owned_server(
-            record, hooks=runtime, spec=spec
-        ) == ""
-        if attested and record is not None and record.pid in listeners:
+        if (
+            record is not None
+            and attest_app_owned_server(record, hooks=runtime, spec=spec) == ""
+            and record.pid in listeners
+        ):
             return LaunchResult(
                 True,
                 LaunchStage.ALREADY_RUNNING,
