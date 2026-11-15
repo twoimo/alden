@@ -63,11 +63,12 @@ docs: update API endpoint documentation
 
 ## Push 전 체크리스트
 
-`.github/workflows/ci.yml`과 같은 게이트를 로컬에서 먼저 돌려 주세요. 릴리스 워크플로우는 이 중 CLI 크레이트의 test와 clippy를 다시 돌립니다.
+`.github/workflows/ci.yml`과 같은 게이트를 로컬에서 먼저 돌려 주세요. 릴리스 워크플로우는 이 중 CLI 크레이트의 fmt, test, clippy를 다시 돌립니다.
 
 CLI 크레이트:
 
 ```bash
+cargo fmt --manifest-path Cargo.toml --check
 cargo test --manifest-path Cargo.toml
 cargo clippy --manifest-path Cargo.toml --all-targets -- -D warnings
 sh scripts/test-auto-reply-launchd-artifacts.sh
@@ -88,8 +89,6 @@ cargo fetch --manifest-path desktop/src-tauri/Cargo.toml --locked
 OPENKAKAO_TAURI_SOURCE_CHECK=1 cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked --offline
 OPENKAKAO_TAURI_SOURCE_CHECK=1 cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --all-targets --locked --offline -- -D warnings
 ```
-
-CLI 크레이트는 아직 `cargo fmt` 기준으로 정리되지 않아 CI가 `cargo fmt --check`를 돌리지 않습니다. 고친 파일만 포매팅하고, 무관한 파일을 한꺼번에 재포매팅하지 마세요.
 
 `tests.test_auto_reply_menubar`는 저장소에 없는 frozen `.pyc`가 필요해 CI에서 돌지 않습니다. 메뉴 막대 코드를 고쳤다면 baked runtime이 있는 머신에서 `python3 -m unittest tests.test_auto_reply_menubar`를 따로 돌려 주세요.
 

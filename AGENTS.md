@@ -1,122 +1,123 @@
-# AI Agent Integration Guide
+# Alden agent guide
 
-openkakao-cli is designed for AI agent integration. All commands support `--json` for structured output.
+Alden ships `openkakao-cli`, a KakaoTalk for macOS auto-reply agent. The CLI reads the
+local KakaoTalk SQLCipher database. It sends through macOS Accessibility (AX), and a Python
+runtime under `scripts/` composes the replies. Every command takes `--json`. JSON goes to
+stdout and diagnostics go to stderr.
 
-## Safety Model
+## Layout
 
-LOCO write operations (send, delete, edit, react) are **disabled by default** to prevent account bans.
-Documented product send is AX `local-send` (`allow_ax_send` + `allowed_send_chats`). `local-delete` is AX `모두에게서 삭제`, not LOCO. LOCO `send`/`delete`/`edit`/`react`/`mark-read` stay research-quarantined behind `allow_loco_write`. Supported realtime watch is `ax-watch`, not LOCO `watch`. Context/style search is 최연우-persona adjunct. GeekNews uses the official Atom feed, three KST slots, TOP5 numbered after a blank line with blank lines between items, and persists seen/slots only after a confirmed send. Session-monitor is the only unattended host; never hide the user's existing Terminal.
+- `src/` holds the Rust crate. `src/main.rs` defines the clap CLI. Handlers live in
+  `src/commands/` and the domain modules beside it (`ax_send.rs`, `safety/`, `context/`,
+  `local_db.rs`, `geeknews/`, `loco/`).
+- `scripts/` holds the Python auto-reply runtime: worker, service, supervisor, db-watch,
+  session-monitor and menubar. Production runs a baked, frozen copy of these files, not
+  the checkout.
+- `tests/` holds Rust integration tests (`*.rs`) and Python `unittest` modules (`test_*.py`).
+- `desktop/` is the Tauri desktop app (Vite + TypeScript front end, `src-tauri/` bridge).
+- `macos/AutoReplyMenu/` is the legacy Swift menu extra, still built in CI.
 
-### Safe commands (always available, no server contact)
+## Checks
+
+Run the gate that matches what you touched. These are the CI commands.
 
 ```bash
-# Read chats from local KakaoTalk database (SQLCipher, no network)
-openkakao-cli local-chats --json
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+python3 -m unittest tests.test_auto_reply_worker_mlx   # name the modules you touched
+sh scripts/test-auto-reply-launchd-artifacts.sh
+(cd desktop && npm test -- --run && npm run build)
+OPENKAKAO_TAURI_SOURCE_CHECK=1 cargo test --manifest-path desktop/src-tauri/Cargo.toml --locked
+```
+
+- The CI Python list is in `.github/workflows/ci.yml`. A new Python test module only runs
+  in CI after you add it there.
+- Run Python tests with `HOME` pointed at an empty temp dir. `tests/auto_reply_hermetic.py`
+  guards `tests.test_auto_reply_cli_runtime`; other modules have no such guard yet.
+- `tests.test_auto_reply_menubar` needs the baked frozen `.pyc`, so it fails on a fresh
+  checkout. That failure does not mean your change broke it.
+- A Python change reaches production only after a new runtime is baked and installed.
+  Say "source-only" when you have not done that.
+
+## Never touch the live account while developing
+
+Every write reaches real people on the user's real KakaoTalk account, and LOCO writes can
+get the account banned.
+
+- Tests use the fake database, process and AX adapters (`src/fakes/` and the Python fakes
+  in `tests/`). No test sends, opens KakaoTalk windows, or loads a real model.
+- Preview every write with `--dry-run --json` first. Run a real write only when the user
+  asked for that exact message in that exact room.
+- Do not edit `~/.config/openkakao/config.toml` or `~/Library/Application Support/openkakao/`
+  unless the user asks.
+- Never kill processes by name. Never adopt or stop a running supervisor, service or
+  session-monitor. Never hide or close the user's Terminal windows.
+
+## Send surfaces and gates
+
+| Surface | Command | Gate in `config.toml` |
+| --- | --- | --- |
+| AX send (the product path) | `local-send <room> "<text>"` | `safety.allow_ax_send` plus the room in `safety.allowed_send_chats` |
+| AX delete (`모두에게서 삭제`) | `local-delete <room> "<visible text>"` | same AX gates |
+| Foreground auto-reply | `auto-reply --chat <selector>` | AX gates plus the runtime's own checks |
+| LOCO writes (research only) | `send`, `send-me`, `delete`, `edit`, `react`, `mark-read` | `safety.allow_loco_write` |
+
+- LOCO writes are quarantined. Do not enable `allow_loco_write` or `--unattended
+  --allow-non-interactive-send` unless the user asks for LOCO research.
+- Realtime watching uses `ax-watch`, not LOCO `watch`.
+
+## Safe commands
+
+```bash
+openkakao-cli auth-status --json
+openkakao-cli local-chats --json             # local DB, no network
 openkakao-cli local-read <chat_id> -n 30 --json
 openkakao-cli local-search "keyword" --json
 openkakao-cli local-schema
-
-# Preview actions without executing
-openkakao-cli send 123 "message" --dry-run --json
-openkakao-cli delete 123 456 --dry-run --json
+openkakao-cli local-send "<room>" "<text>" --dry-run --json
+openkakao-cli send <chat_id> "<text>" --dry-run --json
 ```
 
-### Safe commands (REST API, lower risk)
+- `doctor --json` checks the token against Kakao's REST API when credentials exist.
+  `chats`, `read <chat_id> --rest`, `friends` and `me` also call that API. They are
+  read-only but not zero-risk.
+- The `local-*` reads and `send-me --dry-run` can rewrite
+  `~/Library/Application Support/openkakao/local-db-identity.json` when it is stale.
+- `context-*` commands migrate whatever database they open. Point `--db` at a scratch copy
+  when you are only testing.
 
-```bash
-openkakao-cli chats --json
-openkakao-cli read <chat_id> --rest --json
-openkakao-cli friends --json
-openkakao-cli me --json
-openkakao-cli doctor --json
-```
+## Auto-reply runtime
 
-### Risky commands (require opt-in)
-
-These require `allow_loco_write = true` in `~/.config/openkakao/config.toml`:
-
-```bash
-openkakao-cli send <chat_id> "message" -y --json
-openkakao-cli send --me "test" -y --json    # Send to memo chat
-openkakao-cli delete <chat_id> <log_id> -y --json
-openkakao-cli edit <chat_id> <log_id> "new" -y --json
-openkakao-cli react <chat_id> <log_id> --json
-openkakao-cli local-delete "부자멘토멘티" "보이는 메시지 일부" -y --json
-```
-
-### Foreground automatic replies
-
-Automatic replies use the separate AX/database-authoritative safety gates, not
-`allow_loco_write`. Always run a read-only preflight first:
+Always run the read-only preflight before starting a reply loop.
 
 ```bash
 openkakao-cli auto-reply --chat '부자멘토멘티' --check --json
 openkakao-cli auto-reply --chat '부자멘토멘티' --model gemini-3.6-flash
-# Interactive terminals omit --model and pick the LLM with arrow keys.
 openkakao-cli auto-reply --chat 'name:부자멘토멘티' --chat id:123456789
-# For an unnamed local group-room row, attest the already-open exact AX window:
 openkakao-cli auto-reply --chat 'bind:417780809780519:부자멘토멘티' --check --json
 ```
-# Unattended host (Kakao-blind monitor only; never owns AX send)
-openkakao-cli auto-reply-host --status --json
-openkakao-cli auto-reply-host --bake --json
-openkakao-cli auto-reply-host --tick --manifest <runtime>/session-monitor-manifest.json --state-root "$HOME/Library/Application Support/openkakao/auto-reply"
 
-`--chat` may be repeated or contain comma-separated exact `id:`/`name:`
-selectors. The command is foreground-only and `Ctrl-C` stops its owned
-workers. It never adopts or kills an existing supervisor, and tests must use
-fake database/process/AX adapters rather than a live send.
+- `--chat` repeats or takes comma-separated exact `id:`, `name:` or `bind:<chat_id>:<name>`
+  selectors. `bind:` attests an already-open AX window for an unnamed group-room row.
+- Interactive terminals may omit `--model` and pick the model with the arrow keys.
+- `auto-reply` is foreground-only. `Ctrl-C` stops the workers it started.
+- `auto-reply-host` (`--status`, `--bake`, `--tick --manifest <file> --state-root <dir>`) is
+  the Kakao-blind unattended host run by the session monitor. It only opens Terminal and
+  never owns AX send. The session monitor is the only unattended host.
 
-## Unattended Mode
+## Product rules the code must keep
 
-For fully non-interactive operation:
+- Context and style search support the 최연우 persona. They are an adjunct to the reply,
+  not the source of truth.
+- GeekNews reads the official Atom feed and posts in three KST slots. It numbers a TOP5
+  after a blank line, with a blank line between items. It persists seen items and slots
+  only after the send is confirmed in the local database.
+- An auto-reply worker send counts only after `confirm_worker_local_delivery` finds the
+  outgoing row in the local database. An interactive `local-send` has no such confirmation.
 
-```bash
-openkakao-cli --unattended --allow-non-interactive-send send <chat_id> "msg" -y --json
-```
+## Conventions
 
-Or configure in `~/.config/openkakao/config.toml`:
-
-```toml
-[mode]
-unattended = true
-
-[send]
-allow_non_interactive = true
-
-[safety]
-allow_loco_write = true
-min_unattended_send_interval_secs = 10
-```
-
-## Recommended Agent Workflow
-
-1. **Read** with `local-chats` / `local-read` (zero risk)
-2. **Preview** with `--dry-run` before any write
-3. **Execute** only after user confirmation
-4. **Prefer** `--me` flag for testing sends
-
-## JSON Output
-
-All commands with `--json` return structured JSON to stdout. Diagnostic messages go to stderr.
-
-```bash
-# List chats
-openkakao-cli local-chats --json
-# Returns: [{"chat_id": 123, "chat_type": 0, "chat_name": "...", ...}]
-
-# Read messages
-openkakao-cli local-read 123 --json
-# Returns: [{"log_id": 456, "chat_id": 123, "sender_name": "...", "message": "...", ...}]
-
-# Dry-run
-openkakao-cli send 123 "hello" --dry-run --json
-# Returns: {"dry_run": true, "action": "send", "chat_id": 123, "message": "..."}
-```
-
-## Diagnostics
-
-```bash
-openkakao-cli doctor --json        # Check installation, credentials, local DB access
-openkakao-cli auth-status --json   # Check auth recovery state
-```
+- Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`).
+- `rust-toolchain.toml` pins Rust. Keep new dependencies to a minimum.
+- Record point-in-time verification in `docs/engineering-status.md`, not here.
