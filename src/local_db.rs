@@ -1460,6 +1460,51 @@ fn open_encrypted_connection_bounded(db_path: &Path, secure_key: &str) -> Result
     })
 }
 
+/// Maps the `NTChatRoom` projection shared by the chat listings and
+/// `poll_after`: `chatId, type, chatName, activeMembersCount, lastLogId,
+/// lastUpdatedAt, countOfNewMessage, displayName`. An unnamed room takes its
+/// direct member's display name.
+fn local_chat_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LocalChat> {
+    let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
+    let display_name: String = row.get::<_, String>(7).unwrap_or_default();
+    let title = if chat_name.is_empty() {
+        display_name.clone()
+    } else {
+        chat_name
+    };
+    Ok(LocalChat {
+        chat_id: row.get(0)?,
+        chat_type: row.get(1)?,
+        chat_name: title,
+        database_chat_name: None,
+        active_members_count: row.get(3).unwrap_or(0),
+        last_log_id: row.get(4).unwrap_or(0),
+        last_updated_at: row.get(5).unwrap_or(0),
+        unread_count: row.get(6).unwrap_or(0),
+        display_name,
+    })
+}
+
+/// Maps the `NTChatMessage` projection `logId, chatId, authorId, senderName,
+/// message, attachment, type, sentAt`.
+fn local_message_from_row(
+    row: &rusqlite::Row<'_>,
+    account_user_id: i64,
+) -> rusqlite::Result<LocalMessage> {
+    let author_id = row.get(2).unwrap_or(0);
+    Ok(LocalMessage {
+        log_id: row.get(0)?,
+        chat_id: row.get(1)?,
+        author_id,
+        is_self: is_self_author(author_id, account_user_id),
+        sender_name: row.get(3).unwrap_or_default(),
+        message: row.get(4).unwrap_or_default(),
+        attachment: row.get(5).unwrap_or_default(),
+        message_type: row.get(6).unwrap_or(0),
+        sent_at: row.get(7).unwrap_or(0),
+    })
+}
+
 impl LocalDbReader {
     pub fn open() -> Result<Self> {
         Self::open_with_cache_mode(IdentityCacheMode::Normal)
@@ -1577,26 +1622,7 @@ impl LocalDbReader {
         )?;
 
         let rows = stmt
-            .query_map([limit as i64], |row| {
-                let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
-                let display_name: String = row.get::<_, String>(7).unwrap_or_default();
-                let title = if chat_name.is_empty() {
-                    display_name.clone()
-                } else {
-                    chat_name
-                };
-                Ok(LocalChat {
-                    chat_id: row.get(0)?,
-                    chat_type: row.get(1)?,
-                    chat_name: title,
-                    database_chat_name: None,
-                    active_members_count: row.get(3).unwrap_or(0),
-                    last_log_id: row.get(4).unwrap_or(0),
-                    last_updated_at: row.get(5).unwrap_or(0),
-                    unread_count: row.get(6).unwrap_or(0),
-                    display_name,
-                })
-            })?
+            .query_map([limit as i64], local_chat_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
 
         self.ensure_database_identity()?;
@@ -1616,40 +1642,22 @@ impl LocalDbReader {
         log_id: i64,
     ) -> Result<Option<LocalMessage>> {
         self.ensure_database_identity()?;
-        let mut stmt = self.conn.prepare(
-            "SELECT m.logId, m.chatId, m.authorId,
+        let account_user_id = self.account_user_id;
+        let message = self
+            .conn
+            .prepare(
+                "SELECT m.logId, m.chatId, m.authorId,
                 COALESCE(u.displayName, u.friendNickName, u.nickName, '') as senderName,
                 COALESCE(m.message, '') as message, m.attachment, m.type, m.sentAt
              FROM NTChatMessage m
              LEFT JOIN NTUser u ON m.authorId = u.userId AND u.linkId = 0
              WHERE m.chatId = ? AND m.logId = ?
              LIMIT 1",
-        )?;
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(chat_id), Box::new(log_id)];
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let account_user_id = self.account_user_id;
-        let mut rows = stmt.query(params_refs.as_slice())?;
-        let message = match rows.next()? {
-            Some(row) => {
-                let author_id: i64 = row.get(2).unwrap_or(0);
-                Some(LocalMessage {
-                    log_id: row.get(0)?,
-                    chat_id: row.get(1)?,
-                    author_id,
-                    is_self: is_self_author(author_id, account_user_id),
-                    sender_name: row.get(3).unwrap_or_default(),
-                    message: row.get(4).unwrap_or_default(),
-                    attachment: row.get(5).unwrap_or_default(),
-                    message_type: row.get(6).unwrap_or(0),
-                    sent_at: row.get(7).unwrap_or(0),
-                })
-            }
-            None => None,
-        };
-        drop(rows);
-        drop(stmt);
+            )?
+            .query_row(rusqlite::params![chat_id, log_id], |row| {
+                local_message_from_row(row, account_user_id)
+            })
+            .optional()?;
         self.ensure_database_identity()?;
         Ok(message)
     }
@@ -1793,26 +1801,7 @@ impl LocalDbReader {
                  ORDER BY r.chatId ASC",
             )?;
             let rows = stmt
-                .query_map([], |row| {
-                    let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
-                    let display_name: String = row.get::<_, String>(7).unwrap_or_default();
-                    let title = if chat_name.is_empty() {
-                        display_name.clone()
-                    } else {
-                        chat_name
-                    };
-                    Ok(LocalChat {
-                        chat_id: row.get(0)?,
-                        chat_type: row.get(1)?,
-                        chat_name: title,
-                        database_chat_name: None,
-                        active_members_count: row.get(3).unwrap_or(0),
-                        last_log_id: row.get(4).unwrap_or(0),
-                        last_updated_at: row.get(5).unwrap_or(0),
-                        unread_count: row.get(6).unwrap_or(0),
-                        display_name,
-                    })
-                })?
+                .query_map([], local_chat_from_row)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })();
@@ -1837,9 +1826,11 @@ impl LocalDbReader {
         since_ts: Option<i64>,
     ) -> Result<Vec<LocalMessage>> {
         self.ensure_database_identity()?;
-        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
-            if let Some(ts) = since_ts {
-                (
+        let account_user_id = self.account_user_id;
+        let map_row = |row: &rusqlite::Row<'_>| local_message_from_row(row, account_user_id);
+        let rows = if let Some(ts) = since_ts {
+            self.conn
+                .prepare(
                     "SELECT m.logId, m.chatId, m.authorId,
                         COALESCE(u.displayName, u.friendNickName, u.nickName, '') as senderName,
                         COALESCE(m.message, '') as message, m.attachment, m.type, m.sentAt
@@ -1847,12 +1838,13 @@ impl LocalDbReader {
                  LEFT JOIN NTUser u ON m.authorId = u.userId AND u.linkId = 0
                  WHERE m.chatId = ? AND m.sentAt >= ?
                  ORDER BY m.sentAt DESC
-                 LIMIT ?"
-                        .to_string(),
-                    vec![Box::new(chat_id), Box::new(ts), Box::new(limit as i64)],
-                )
-            } else {
-                (
+                 LIMIT ?",
+                )?
+                .query_map(rusqlite::params![chat_id, ts, limit as i64], map_row)?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            self.conn
+                .prepare(
                     "SELECT m.logId, m.chatId, m.authorId,
                         COALESCE(u.displayName, u.friendNickName, u.nickName, '') as senderName,
                         COALESCE(m.message, '') as message, m.attachment, m.type, m.sentAt
@@ -1860,32 +1852,11 @@ impl LocalDbReader {
                  LEFT JOIN NTUser u ON m.authorId = u.userId AND u.linkId = 0
                  WHERE m.chatId = ?
                  ORDER BY m.sentAt DESC
-                 LIMIT ?"
-                        .to_string(),
-                    vec![Box::new(chat_id), Box::new(limit as i64)],
-                )
-            };
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        let account_user_id = self.account_user_id;
-        let rows = stmt
-            .query_map(params_refs.as_slice(), |row| {
-                let author_id = row.get(2).unwrap_or(0);
-                Ok(LocalMessage {
-                    log_id: row.get(0)?,
-                    chat_id: row.get(1)?,
-                    author_id,
-                    is_self: is_self_author(author_id, account_user_id),
-                    sender_name: row.get(3).unwrap_or_default(),
-                    message: row.get(4).unwrap_or_default(),
-                    attachment: row.get(5).unwrap_or_default(),
-                    message_type: row.get(6).unwrap_or(0),
-                    sent_at: row.get(7).unwrap_or(0),
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+                 LIMIT ?",
+                )?
+                .query_map(rusqlite::params![chat_id, limit as i64], map_row)?
+                .collect::<Result<Vec<_>, _>>()?
+        };
 
         self.ensure_database_identity()?;
         Ok(rows)
@@ -2096,26 +2067,7 @@ impl LocalDbReader {
              LIMIT 1",
         )?;
         let chat = stmt
-            .query_row([chat_id], |row| {
-                let chat_name: String = row.get::<_, String>(2).unwrap_or_default();
-                let display_name: String = row.get::<_, String>(7).unwrap_or_default();
-                let title = if chat_name.is_empty() {
-                    display_name.clone()
-                } else {
-                    chat_name
-                };
-                Ok(LocalChat {
-                    chat_id: row.get(0)?,
-                    chat_type: row.get(1)?,
-                    chat_name: title,
-                    database_chat_name: None,
-                    active_members_count: row.get(3).unwrap_or(0),
-                    last_log_id: row.get(4).unwrap_or(0),
-                    last_updated_at: row.get(5).unwrap_or(0),
-                    unread_count: row.get(6).unwrap_or(0),
-                    display_name,
-                })
-            })
+            .query_row([chat_id], local_chat_from_row)
             .optional()?
             .with_context(|| "Target chat is no longer available")?;
         drop(stmt);
@@ -2142,20 +2094,7 @@ impl LocalDbReader {
                 LOCAL_CONVERSATION_MESSAGE_TYPE_MIN,
                 limit as i64
             ],
-            |row| {
-                let author_id = row.get(2).unwrap_or(0);
-                Ok(LocalMessage {
-                    log_id: row.get(0)?,
-                    chat_id: row.get(1)?,
-                    author_id,
-                    is_self: is_self_author(author_id, account_user_id),
-                    sender_name: row.get(3).unwrap_or_default(),
-                    message: row.get(4).unwrap_or_default(),
-                    attachment: row.get(5).unwrap_or_default(),
-                    message_type: row.get(6).unwrap_or(0),
-                    sent_at: row.get(7).unwrap_or(0),
-                })
-            },
+            |row| local_message_from_row(row, account_user_id),
         )?;
         let messages = rows.collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
