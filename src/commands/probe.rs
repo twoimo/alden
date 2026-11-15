@@ -7,7 +7,7 @@ use crate::loco;
 use crate::loco_helpers::{
     loco_connect_with_auto_refresh, reconnect_loco_probe_client, should_retry_loco_probe_error,
 };
-use crate::util::{get_creds, print_section_title};
+use crate::util::{get_creds, print_section_title, truncate};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MethodProbeResult {
@@ -208,18 +208,19 @@ pub fn cmd_loco_chatinfo(chat_id: i64, json: bool) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&json_val)?);
         } else {
             print_section_title(&format!("Chat info: {}", chat_id));
-            for (k, v) in response.body.iter() {
-                let v_str = format!("{:?}", v);
-                if v_str.len() > 100 {
-                    println!("  {}: {}...", k, &v_str[..100]);
-                } else {
-                    println!("  {}: {}", k, v_str);
-                }
+            for line in chat_info_lines(&response.body) {
+                println!("{line}");
             }
         }
 
         Ok(())
     })
+}
+
+fn chat_info_lines(body: &bson::Document) -> Vec<String> {
+    body.iter()
+        .map(|(k, v)| format!("  {k}: {}", truncate(&format!("{v:?}"), 100)))
+        .collect()
 }
 
 pub async fn probe_method_variants(
@@ -277,4 +278,20 @@ pub async fn probe_method_variants(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_info_preview_keeps_korean_values_whole() {
+        let lines = chat_info_lines(&bson::doc! { "name": "가".repeat(100) });
+        assert_eq!(lines.len(), 1);
+        let preview = lines[0]
+            .strip_prefix("  name: ")
+            .and_then(|rest| rest.strip_suffix("..."))
+            .expect("long value is shown as a truncated preview");
+        assert_eq!(preview.chars().count(), 100);
+    }
 }

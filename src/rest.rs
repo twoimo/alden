@@ -13,6 +13,7 @@ use crate::error::OpenKakaoError;
 use crate::model::{
     json_i64, json_string, ChatMember, ChatMessage, ChatRoom, Friend, KakaoCredentials, MyProfile,
 };
+use crate::util::truncate;
 
 const BASE_URL: &str = "https://katalk.kakao.com";
 const PILSNER_URL: &str = "https://talk-pilsner.kakao.com";
@@ -375,13 +376,7 @@ impl KakaoRestClient {
             .with_context(|| format!("{endpoint} request failed"))?;
 
         let text = response.text().context("Failed to read response")?;
-        serde_json::from_str(&text).with_context(|| {
-            format!(
-                "Failed to parse {} response: {}",
-                endpoint,
-                &text[..200.min(text.len())]
-            )
-        })
+        parse_account_response(endpoint, &text)
     }
 
     // NOTE: a passcode/register_device flow (request_passcode.json,
@@ -532,9 +527,25 @@ impl KakaoRestClient {
     }
 }
 
+fn parse_account_response(endpoint: &str, text: &str) -> Result<Value> {
+    serde_json::from_str(text).with_context(|| {
+        format!(
+            "Failed to parse {endpoint} response: {}",
+            truncate(text, 200)
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unparseable_korean_account_response_is_an_error_not_a_panic() {
+        let body = "가".repeat(100);
+        let error = parse_account_response("login.json", &body).unwrap_err();
+        assert!(error.to_string().contains(&body));
+    }
 
     #[test]
     fn xvc_is_deterministic_sha512_prefix() {
