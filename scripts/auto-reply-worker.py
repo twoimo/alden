@@ -13387,68 +13387,12 @@ def _log_pre_send_block(
     )
 
 
-def send_reply(
-    reply: str,
-    *,
-    event: dict | None = None,
-    event_id: str = "",
-    connection: sqlite3.Connection | None = None,
-    expected_target_chat_id: int | None = None,
-    expected_owner: str | None = None,
-    expected_epoch: int | None = None,
-    hold_out: list[str] | None = None,
-) -> bool:
-    # This is the final automatic-outbound boundary. Revalidate here so a
-    # pre-policy or externally corrupted scheduled row can never bypass the
-    # model-output parser and reach local-send.
-    inbound = str((event or {}).get("message") or "")
-    recorded_laughter = (event or {}).get("laughter_allowed")
-    recorded_awe = (event or {}).get("awe_allowed")
-    if not _outbound_reaction_allows(
-        reply,
-        inbound,
-        laughter_allowed=recorded_laughter if isinstance(recorded_laughter, bool) else None,
-        awe_allowed=recorded_awe if isinstance(recorded_awe, bool) else None,
-    ) or not _outbound_question_allows(reply, inbound):
-        return False
-    if (event or {}).get("proactive") is not True and not _outbound_register_allows(
-        reply, recipient=_event_author_nickname(event or {})
-    ):
-        return False
-    if os.environ.get("OPENKAKAO_HOOK_DRY_RUN") == "1":
-        return True
-    if event is None or numeric_author_identity_status(event) != "allowed":
-        return False
-    if _WORKER_HEALTH is not None and not _WORKER_HEALTH.local_ready():
-        return False
-    if not BIN.exists():
-        return False
-    ready, initial_token = send_readiness_fence(
-        expected_target_chat_id=expected_target_chat_id,
-        expected_owner=expected_owner,
-        expected_epoch=expected_epoch,
-    )
-    if not ready:
-        return False
-    if (
-        event is not None
-        and event.get("proactive") is not True
-        and conversation_advanced_past_event(event) is None
-    ):
-        return False
-    command = [
-        str(BIN),
-        "local-send",
-        CHAT,
-        reply,
-        "--yes",
-        "--json",
-        "--no-prefix",
-    ]
-    inbound_quote = _inbound_reply_to_text(event)
-    if inbound_quote:
-        command.extend(["--reply-to", inbound_quote])
-    composer_allowlist_path = Path(str(QUEUE)).parent / "composer-allowlist.json"
+def _allow_composer_draft(composer_allowlist_path: Path, reply: str) -> None:
+    """Tell the CLI that `reply` may already be typed in the composer.
+
+    The file keeps the eight most recent drafts, newest first, so a draft a
+    crashed send left behind is recognized as the worker's own text.
+    """
     allowed: list[str] = [reply]
     try:
         previous = json.loads(composer_allowlist_path.read_text(encoding="utf-8"))
@@ -13466,17 +13410,19 @@ def send_reply(
         )
     except OSError:
         pass
-    preflight_command = [
-        str(BIN),
-        "local-send",
-        CHAT,
-        "openkakao-read-only-preflight",
-        "--yes",
-        "--json",
-        "--no-prefix",
-        "--preflight",
-    ]
-    worker_environment = {
+
+
+def _local_send_environment(
+    event: dict | None,
+    expected_target_chat_id: int | None,
+    composer_allowlist_path: Path,
+) -> dict[str, str]:
+    """Build the whole environment of the CLI that checks and then sends.
+
+    The CLI inherits nothing else. It refuses to send unless the room, the
+    owner, the epoch, and the inbound row it is answering match what it sees.
+    """
+    return {
         "HOME": str(Path.home()),
         "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
         # The operator's attestation exception must reach the CLI this worker
@@ -13540,7 +13486,30 @@ def send_reply(
         ),
         "OPENKAKAO_COMPOSER_ALLOWLIST": str(composer_allowlist_path),
     }
-    preflight = None
+
+
+def _send_preflight_ready(
+    worker_environment: dict[str, str],
+    *,
+    event: dict | None,
+    event_id: str,
+    connection: sqlite3.Connection | None,
+    hold_out: list[str] | None,
+) -> bool:
+    """Run the read-only send preflight, with retries, and say whether the send may start.
+
+    A room outside the send allowlist is reported through ``hold_out``.
+    """
+    preflight_command = [
+        str(BIN),
+        "local-send",
+        CHAT,
+        "openkakao-read-only-preflight",
+        "--yes",
+        "--json",
+        "--no-prefix",
+        "--preflight",
+    ]
     preflight_returncode: object = None
     preflight_candidate: object = None
     preflight_stderr: object = None
@@ -13572,8 +13541,7 @@ def send_reply(
             and candidate.get("will_send") is False
             and candidate.get("network") is False
         ):
-            preflight = candidate
-            break
+            return True
         if (
             returncode == 0
             and isinstance(candidate, dict)
@@ -13591,13 +13559,7 @@ def send_reply(
                 # Exact outbound text may still be sitting unsent. The send
                 # path reapplies that same draft and clicks 전송; a foreign
                 # draft still fails closed without mutation.
-                preflight = {
-                    "status": "preflight_ready",
-                    "preflight_ready": True,
-                    "will_send": False,
-                    "network": False,
-                }
-                break
+                return True
             if event is not None:
                 event["_composer_occupied"] = True
             _log_pre_send_block(
@@ -13609,28 +13571,103 @@ def send_reply(
         preflight_stderr = stderr_bytes
         if attempt + 1 < PRE_SEND_PREFLIGHT_ATTEMPTS:
             time.sleep(PRE_SEND_PREFLIGHT_RETRY_SECONDS)
-    if preflight is None:
-        detail_text = ""
-        if isinstance(preflight_stderr, (bytes, bytearray)):
-            detail_text = bytes(preflight_stderr).decode("utf-8", "replace")
-        elif isinstance(preflight_stderr, str):
-            detail_text = preflight_stderr
-        if SEND_PREFLIGHT_ALLOWLIST_MARKER in detail_text:
-            _log_pre_send_block(
-                "send_allowlist_rejected",
-                preflight_returncode,
-                preflight_candidate,
-                preflight_stderr,
-            )
-            if hold_out is not None:
-                hold_out.append("send_allowlist_rejected")
-            return False
+    detail_text = ""
+    if isinstance(preflight_stderr, (bytes, bytearray)):
+        detail_text = bytes(preflight_stderr).decode("utf-8", "replace")
+    elif isinstance(preflight_stderr, str):
+        detail_text = preflight_stderr
+    if SEND_PREFLIGHT_ALLOWLIST_MARKER in detail_text:
         _log_pre_send_block(
-            "preflight_unavailable",
+            "send_allowlist_rejected",
             preflight_returncode,
             preflight_candidate,
             preflight_stderr,
         )
+        if hold_out is not None:
+            hold_out.append("send_allowlist_rejected")
+        return False
+    _log_pre_send_block(
+        "preflight_unavailable",
+        preflight_returncode,
+        preflight_candidate,
+        preflight_stderr,
+    )
+    return False
+
+
+def send_reply(
+    reply: str,
+    *,
+    event: dict | None = None,
+    event_id: str = "",
+    connection: sqlite3.Connection | None = None,
+    expected_target_chat_id: int | None = None,
+    expected_owner: str | None = None,
+    expected_epoch: int | None = None,
+    hold_out: list[str] | None = None,
+) -> bool:
+    # This is the final automatic-outbound boundary. Revalidate here so a
+    # pre-policy or externally corrupted scheduled row can never bypass the
+    # model-output parser and reach local-send.
+    inbound = str((event or {}).get("message") or "")
+    recorded_laughter = (event or {}).get("laughter_allowed")
+    recorded_awe = (event or {}).get("awe_allowed")
+    if not _outbound_reaction_allows(
+        reply,
+        inbound,
+        laughter_allowed=recorded_laughter if isinstance(recorded_laughter, bool) else None,
+        awe_allowed=recorded_awe if isinstance(recorded_awe, bool) else None,
+    ) or not _outbound_question_allows(reply, inbound):
+        return False
+    if (event or {}).get("proactive") is not True and not _outbound_register_allows(
+        reply, recipient=_event_author_nickname(event or {})
+    ):
+        return False
+    if os.environ.get("OPENKAKAO_HOOK_DRY_RUN") == "1":
+        return True
+    if event is None or numeric_author_identity_status(event) != "allowed":
+        return False
+    if _WORKER_HEALTH is not None and not _WORKER_HEALTH.local_ready():
+        return False
+    if not BIN.exists():
+        return False
+    ready, initial_token = send_readiness_fence(
+        expected_target_chat_id=expected_target_chat_id,
+        expected_owner=expected_owner,
+        expected_epoch=expected_epoch,
+    )
+    if not ready:
+        return False
+    if (
+        event is not None
+        and event.get("proactive") is not True
+        and conversation_advanced_past_event(event) is None
+    ):
+        return False
+    command = [
+        str(BIN),
+        "local-send",
+        CHAT,
+        reply,
+        "--yes",
+        "--json",
+        "--no-prefix",
+    ]
+    inbound_quote = _inbound_reply_to_text(event)
+    if inbound_quote:
+        command.extend(["--reply-to", inbound_quote])
+    composer_allowlist_path = Path(str(QUEUE)).parent / "composer-allowlist.json"
+    _allow_composer_draft(composer_allowlist_path, reply)
+    worker_environment = _local_send_environment(
+        event, expected_target_chat_id, composer_allowlist_path
+    )
+    if not _send_preflight_ready(
+        worker_environment,
+        event=event,
+        event_id=event_id,
+        connection=connection,
+        hold_out=hold_out,
+    ):
         return False
     ready, _ = send_readiness_fence(
         expected_target_chat_id=expected_target_chat_id,
