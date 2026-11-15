@@ -493,7 +493,9 @@ impl ForwardMessage {
 /// The source vs delivered image counts for one (room, link) forward (R6.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageTally {
-    /// The number of images in the source post (including any over the cap).
+    /// The number of source images that are sent: the post's images up to the
+    /// per-message cap. Images over the cap are reported as dropped instead,
+    /// so a delivery of every image that fits is complete.
     pub source: usize,
     pub delivered: usize,
 }
@@ -876,14 +878,7 @@ impl LinkForwarder<'_> {
         let rooms = resolved
             .iter()
             .map(|room| {
-                self.deliver_to_room(
-                    room,
-                    &link_key,
-                    &message,
-                    source_images,
-                    &acquire_misses,
-                    start,
-                )
+                self.deliver_to_room(room, &link_key, &message, included, &acquire_misses, start)
             })
             .collect();
 
@@ -899,13 +894,16 @@ impl LinkForwarder<'_> {
     }
 
     /// Deliver one built message to one room, applying the once-per-room and
-    /// image-parity rules (R6.5, R6.6, R6.7, R6.10, R6.14).
+    /// image-parity rules (R6.5, R6.6, R6.7, R6.10, R6.14). Parity is against
+    /// `included_images`, the post's images up to [`MAX_IMAGES_PER_POST`]: the
+    /// ones over the cap are never sent, so they cannot keep a delivery from
+    /// completing.
     fn deliver_to_room(
         &self,
         room: &ResolvedRoom,
         link_key: &str,
         message: &ForwardMessage,
-        source_images: usize,
+        included_images: usize,
         acquire_misses: &[String],
         start: i64,
     ) -> RoomDelivery {
@@ -920,7 +918,7 @@ impl LinkForwarder<'_> {
                 RoomSendOutcome::Failed { code } => DeliveryResult::Failed { code },
                 RoomSendOutcome::Sent { images_delivered } => {
                     let images = ImageTally {
-                        source: source_images,
+                        source: included_images,
                         delivered: images_delivered,
                     };
                     if images.is_complete() {
@@ -933,7 +931,7 @@ impl LinkForwarder<'_> {
                         // the combination stays retryable (R6.6).
                         DeliveryResult::PartialFailure {
                             miss_reasons: miss_reasons(
-                                source_images,
+                                included_images,
                                 images_delivered,
                                 message.dropped_images,
                                 acquire_misses,
@@ -952,7 +950,7 @@ impl LinkForwarder<'_> {
             status,
             result_code,
             start,
-            Some(source_images as u32),
+            Some(included_images as u32),
             Some(delivered as u32),
         );
         RoomDelivery {
@@ -1038,8 +1036,10 @@ fn delivery_journal_record(result: &DeliveryResult) -> (Stage, StageStatus, &'st
     }
 }
 
+/// `included` and `delivered` count only images under the per-post cap; the
+/// `dropped` ones over it are explained separately.
 fn miss_reasons(
-    source: usize,
+    included: usize,
     delivered: usize,
     dropped: usize,
     acquire_misses: &[String],
@@ -1053,8 +1053,8 @@ fn miss_reasons(
     for reason in acquire_misses {
         reasons.push(reason.clone());
     }
-    let missing = source.saturating_sub(delivered);
-    let accounted = dropped + acquire_misses.len();
+    let missing = included.saturating_sub(delivered);
+    let accounted = acquire_misses.len();
     if missing > accounted {
         reasons.push(format!(
             "이미지 {}장은 전송에 실패했어요. 다시 보내 볼까요?",
@@ -1816,10 +1816,8 @@ mod forward_tests {
                 } => {
                     assert_eq!(*source_images, 12);
                     assert_eq!(*dropped_images, 2);
-                    assert!(matches!(
-                        rooms[0].result,
-                        DeliveryResult::PartialFailure { .. }
-                    ));
+                    assert!(matches!(rooms[0].result, DeliveryResult::Sent { .. }));
+                    assert!(ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
                 }
                 other => panic!("expected delivered, got {other:?}"),
             },
@@ -2155,11 +2153,58 @@ mod forward_tests {
         );
         assert_eq!(run.marked, vec![false, false]);
 
-        // Twelve source images: two are dropped by the per-post cap.
+        // Twelve source images: two are dropped by the per-post cap, and
+        // delivering the ten that fit completes the (room, link), so a repeat
+        // forward sends nothing (R6.4, R6.7).
         let run = forward_and_record(
             &ScriptedCollector::ok(collected(12)),
             &ScriptedSender::new(RoomSendOutcome::Sent {
                 images_delivered: MAX_IMAGES_PER_POST,
+            }),
+            &ok_ladder,
+            true,
+            &["스터디"],
+            &[],
+        );
+        assert!(matches!(
+            run.outcome,
+            LinkOutcome::Delivered {
+                source_images: 12,
+                dropped_images: 2,
+                ..
+            }
+        ));
+        assert_eq!(
+            delivered_rooms(&run.outcome),
+            vec![(
+                1,
+                s("스터디"),
+                DeliveryResult::Sent {
+                    images: ImageTally {
+                        source: 10,
+                        delivered: 10
+                    },
+                }
+            )]
+        );
+        assert_eq!(
+            run.journal,
+            vec![(
+                Stage::Commit,
+                StageStatus::Success,
+                s("forward_sent"),
+                Some(10),
+                Some(10)
+            )]
+        );
+        assert_eq!(run.marked, vec![true, false]);
+
+        // Twelve source images with one of the ten missing: the miss names both
+        // the cap and the failed image.
+        let run = forward_and_record(
+            &ScriptedCollector::ok(collected(12)),
+            &ScriptedSender::new(RoomSendOutcome::Sent {
+                images_delivered: MAX_IMAGES_PER_POST - 1,
             }),
             &ok_ladder,
             true,
@@ -2173,25 +2218,17 @@ mod forward_tests {
                 s("스터디"),
                 DeliveryResult::PartialFailure {
                     images: ImageTally {
-                        source: 12,
-                        delivered: 10
+                        source: 10,
+                        delivered: 9
                     },
-                    miss_reasons: vec![s(
-                        "이미지 2장은 한 게시물 최대 10장 제한을 넘어 전달하지 못했어요."
-                    )],
+                    miss_reasons: vec![
+                        s("이미지 2장은 한 게시물 최대 10장 제한을 넘어 전달하지 못했어요."),
+                        s("이미지 1장은 전송에 실패했어요. 다시 보내 볼까요?"),
+                    ],
                 }
             )]
         );
-        assert_eq!(
-            run.journal,
-            vec![(
-                Stage::Commit,
-                StageStatus::Failed,
-                s("forward_partial"),
-                Some(12),
-                Some(10)
-            )]
-        );
+        assert_eq!(run.marked, vec![false, false]);
 
         // No rung yields an image and screen capture lacks permission.
         let never = [
