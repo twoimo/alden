@@ -9822,7 +9822,7 @@ print(json.dumps({
         ]
         bounded = db_watch._merge_recent_tail([], many)
         self.assertEqual(len(bounded), db_watch.RECENT_MESSAGE_LIMIT)
-        self.assertEqual(bounded[0]["log_id"], 7)
+        self.assertEqual([row["log_id"] for row in bounded], list(range(13, 20)))
         self.assertEqual(
             db_watch._merge_recent_tail(tail, [second]),
             tail,
