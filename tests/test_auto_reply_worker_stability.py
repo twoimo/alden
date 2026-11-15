@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import signal
 import subprocess
@@ -328,6 +329,126 @@ class GeekNewsCursorTests(unittest.TestCase):
             self.worker._geeknews_slot_open(lunch + 60),
             "a morning post confirmed late burned the lunch slot",
         )
+
+
+NIMDA = 325472527151234
+OTHER = 417780809780519
+
+
+class GeekNewsOperatorTests(unittest.TestCase):
+    """The host slot CLI: auto-reply-worker.py --geeknews --send."""
+
+    def setUp(self):
+        self.worker = load_worker("auto_reply_geeknews_operator_test")
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.state_root = Path(temporary.name)
+        (self.state_root / "menubar-room-catalog.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "rooms": [
+                        {"chat_id": NIMDA, "title": "NIMDA room", "geeknews": True},
+                        {"chat_id": OTHER, "title": "Other room", "geeknews": True},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.room = self.state_root / "rooms" / str(NIMDA)
+        self.room.mkdir(parents=True, mode=0o700)
+        self.queue = self.room / "reply-queue.sqlite3"
+        self.feed = geeknews_feed(10, 11, 12)
+        self.room_rows: list[dict] = [
+            {"chat_id": NIMDA, "log_id": 500, "sent_at": 900, "is_self": False, "message": "hi"}
+        ]
+        self.reads: list[list[str]] = []
+        self.sends: list[list[str]] = []
+        self.send_result = None
+
+    def local_read(self, command, **kwargs):
+        self.reads.append(list(command))
+        rows = [row for row in self.room_rows if str(row["chat_id"]) == command[2]]
+        return 0, json.dumps(rows).encode("utf-8"), b""
+
+    def local_send(self, command, **kwargs):
+        self.sends.append(list(command))
+        self.send_kwargs = kwargs
+        if isinstance(self.send_result, BaseException):
+            raise self.send_result
+        window = {"NIMDA room": NIMDA, "Other room": OTHER}.get(command[2])
+        if window is None:
+            return mock.Mock(returncode=1)
+        self.room_rows.append(
+            {
+                "chat_id": window,
+                "log_id": 501,
+                "sent_at": 1000,
+                "is_self": True,
+                "message": command[3],
+            }
+        )
+        return mock.Mock(returncode=0)
+
+    def run_operator(self, *extra: str) -> int:
+        arguments = ["--geeknews", "--send", "--bin", "/fake/openkakao-cli", *extra]
+        with (
+            mock.patch.object(self.worker, "_fetch_geeknews_feed_xml", return_value=self.feed),
+            mock.patch.object(self.worker, "_run_bounded_process", side_effect=self.local_read),
+            mock.patch.object(self.worker.subprocess, "run", side_effect=self.local_send),
+            mock.patch.object(self.worker.time, "time", return_value=1000.0),
+            mock.patch.object(self.worker.sys, "stderr"),
+            mock.patch.object(self.worker.sys, "stdout"),
+        ):
+            return self.worker.geeknews_operator_cli(arguments)
+
+    def cursor(self) -> dict:
+        path = self.room / "geeknews-rss-cursor.json"
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def test_confirmed_send_records_ids_and_the_marked_slot(self):
+        result = self.run_operator(
+            "--chat", "NIMDA room", "--queue", str(self.queue),
+            "--mark-slot", "2026-08-16:morning",
+        )
+        self.assertEqual(result, 0)
+        self.assertEqual(self.sends[0][1:3], ["local-send", "NIMDA room"])
+        self.assertEqual(self.cursor()["seen_ids"], [10, 11, 12])
+        self.assertEqual(self.cursor()["posted_slots"], ["2026-08-16:morning"])
+
+    @unittest.expectedFailure
+    def test_local_send_is_bounded_by_a_timeout(self):
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(result, 0)
+        timeout = self.send_kwargs.get("timeout")
+        self.assertIsNotNone(timeout, "local-send can wait forever")
+        self.assertGreater(timeout, 0)
+        self.assertLessEqual(timeout, 120)
+
+    @unittest.expectedFailure
+    def test_a_timed_out_send_that_never_landed_leaves_the_cursor_alone(self):
+        self.send_result = subprocess.TimeoutExpired(["local-send"], 60.0)
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(result, 3)
+        self.assertEqual(self.cursor(), {})
+
+    @unittest.expectedFailure
+    def test_a_chat_that_is_not_the_queue_room_is_never_sent(self):
+        result = self.run_operator("--chat", "Other room", "--queue", str(self.queue))
+        self.assertEqual(result, 4)
+        self.assertEqual(self.sends, [], "posted to one room while verifying another")
+
+    @unittest.expectedFailure
+    def test_a_numeric_chat_sends_to_the_title_bound_to_that_room(self):
+        result = self.run_operator("--chat", f"id:{NIMDA}", "--queue", str(self.queue))
+        self.assertEqual(result, 0)
+        self.assertEqual(self.sends[0][1:3], ["local-send", "NIMDA room"])
+
+    @unittest.expectedFailure
+    def test_the_queue_has_no_hard_coded_default_room(self):
+        with self.assertRaises(SystemExit):
+            self.run_operator("--chat", "NIMDA room")
+        self.assertEqual(self.sends, [])
 
 
 if __name__ == "__main__":
