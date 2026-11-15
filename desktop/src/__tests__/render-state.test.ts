@@ -48,8 +48,8 @@ describe("reused render scratch space", () => {
   it("writes the lattice pulse into the caller's object", () => {
     const out: LatticePulse = { frequency: 0, amplitude: 0, opacity: 0, density: 0 };
     for (const total of [-4, 0, 0.5, 1, 5, Number.NaN]) {
-      expect(writeLatticePulse(out, total, 0)).toBe(out);
-      expect(out).toEqual(latticePulse(total, 0));
+      expect(writeLatticePulse(out, total)).toBe(out);
+      expect(out).toEqual(latticePulse(total));
     }
   });
 
@@ -91,7 +91,7 @@ describe("core render state", () => {
         ringVelocity[ring] = damp(ringVelocity[ring], targets[ring], 1.8 + ring * 0.55);
       }
 
-      frame = state.step(dt, index * 20, BASE, GAIN);
+      frame = state.step(dt, BASE, GAIN);
       expect(frame.smoothLoad).toBeCloseTo(smoothLoad, 12);
       expect(frame.smoothVoiceRms).toBeCloseTo(smoothVoice, 12);
       expect(frame.nucleusScale).toBeCloseTo(scale, 12);
@@ -105,11 +105,11 @@ describe("core render state", () => {
   it("returns one reused frame object and never regrows its arrays", () => {
     const state = new CoreRenderState();
     state.setSignals(0.5, 0.2, loads(0.4, 0.4, 0.4, 0.5));
-    const first = state.step(0.016, 0, BASE, GAIN);
+    const first = state.step(0.016, BASE, GAIN);
     const velocities = first.ringVelocities;
     const targets = first.ringTargets;
     for (let index = 1; index <= 200; index += 1) {
-      const frame = state.step(0.016, index * 16, BASE, GAIN);
+      const frame = state.step(0.016, BASE, GAIN);
       expect(frame).toBe(first);
       expect(frame.ringVelocities).toBe(velocities);
       expect(frame.ringTargets).toBe(targets);
@@ -121,7 +121,7 @@ describe("core render state", () => {
   it("allocates no array in the per-frame path", () => {
     const state = new CoreRenderState();
     state.setSignals(0.6, 0.2, loads(0.5, 0.5, 0.5, 0.6));
-    state.step(0.016, 0, BASE, GAIN);
+    state.step(0.016, BASE, GAIN);
     const realMap = Array.prototype.map;
     const realSlice = Array.prototype.slice;
     const realConcat = Array.prototype.concat;
@@ -141,7 +141,7 @@ describe("core render state", () => {
     };
     try {
       for (let index = 0; index < 300; index += 1) {
-        state.step(0.016, index * 16, BASE, GAIN);
+        state.step(0.016, BASE, GAIN);
       }
     } finally {
       prototype.map = realMap;
@@ -154,12 +154,12 @@ describe("core render state", () => {
   it("clamps a long resume gap and survives non-finite input", () => {
     const state = new CoreRenderState();
     state.setSignals(1, 1, loads(1, 1, 1, 1));
-    const resumed = state.step(10, 1_000_000, BASE, GAIN);
+    const resumed = state.step(10, BASE, GAIN);
     expect(resumed.dt).toBe(0.25);
     expect(resumed.smoothLoad).toBeLessThan(1);
     expect(Number.isFinite(resumed.nucleusScale)).toBe(true);
 
-    const broken = state.step(Number.NaN, Number.NaN, BASE, GAIN);
+    const broken = state.step(Number.NaN, BASE, GAIN);
     expect(broken.dt).toBe(0);
     for (const value of [
       broken.smoothLoad,
@@ -182,7 +182,7 @@ describe("core render state", () => {
       total: Number.POSITIVE_INFINITY,
     });
     expect(state.jobLoad).toBe(0);
-    const frame = state.step(0.05, 0, BASE, GAIN);
+    const frame = state.step(0.05, BASE, GAIN);
     expect(frame.latticeScale).toBeGreaterThan(0);
     expect(Number.isFinite(frame.nucleusScale)).toBe(true);
     expect([...frame.ringTargets].every((value) => Number.isFinite(value))).toBe(true);
@@ -190,7 +190,7 @@ describe("core render state", () => {
 
   it("resizes its ring arrays when the ring count changes", () => {
     const state = new CoreRenderState();
-    const frame = state.step(0.016, 0, [0.1, 0.2, 0.3, 0.4], [1, 1, 1, 1]);
+    const frame = state.step(0.016, [0.1, 0.2, 0.3, 0.4], [1, 1, 1, 1]);
     expect(frame.ringVelocities.length).toBe(4);
     expect(frame.ringTargets.length).toBe(4);
     expect([...frame.ringTargets].every((value) => Number.isFinite(value))).toBe(true);
@@ -199,7 +199,7 @@ describe("core render state", () => {
   it("preserves 15fps elapsed time and lets voice activity drive global motion", () => {
     const state = new CoreRenderState();
     state.setSignals(0, 0.8, loads(0, 0, 0, 0));
-    const frame = state.step(1 / 15, 0, BASE, GAIN);
+    const frame = state.step(1 / 15, BASE, GAIN);
     expect(frame.dt).toBeCloseTo(1 / 15, 12);
     expect(frame.jobLoad).toBe(0.8);
     expect(frame.pulse.density).toBeGreaterThan(0);
@@ -210,9 +210,9 @@ describe("core render state", () => {
   it("accumulates pulse phase continuously as load changes", () => {
     const state = new CoreRenderState();
     state.setSignals(0, 0, loads(0, 0, 0, 0));
-    const first = state.step(0.05, 0, BASE, GAIN).latticeScale;
+    const first = state.step(0.05, BASE, GAIN).latticeScale;
     state.setSignals(1, 0, loads(0, 0, 0, 1));
-    const second = state.step(0.05, 50, BASE, GAIN).latticeScale;
+    const second = state.step(0.05, BASE, GAIN).latticeScale;
     expect(first).toBeGreaterThan(1);
     expect(second).toBeGreaterThan(1);
     expect(Math.abs(second - first)).toBeLessThan(0.1);
@@ -227,7 +227,7 @@ describe("core render state", () => {
       state.setSignals(0, 0, loads(0, 0, 0, target));
       const counts = new Set<number>();
       for (let frame = 0; frame < fps * 3; frame += 1) {
-        const density = state.step(1 / fps, frame * 1000 / fps, BASE, GAIN).pulse.density;
+        const density = state.step(1 / fps, BASE, GAIN).pulse.density;
         const count = pulseLatticeDrawCount(density, lattice.drawCounts);
         expect(target === 1 ? count >= previous : count <= previous).toBe(true);
         // Even the first frame of a full step is smaller than the old tier jump.

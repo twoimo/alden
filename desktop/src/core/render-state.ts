@@ -86,12 +86,7 @@ export class CoreRenderState {
   }
 
   /** Advance the smoothing and spring state by one frame; returns `this`. */
-  step(
-    dtSeconds: number,
-    _nowMs: number,
-    base: readonly number[],
-    gain: readonly number[],
-  ): CoreRenderState {
+  step(dtSeconds: number, base: readonly number[], gain: readonly number[]): CoreRenderState {
     if (base.length !== this.ringVelocities.length) this.resizeRings(base.length);
     const dt = Number.isFinite(dtSeconds) && dtSeconds > 0
       ? Math.min(dtSeconds, MAX_FRAME_SECONDS)
@@ -140,7 +135,7 @@ export class CoreRenderState {
     }
 
     const globalLoad = Math.max(total, this.smoothLoad, this.smoothVoiceRms);
-    const pulse = writeLatticePulse(this.pulse, globalLoad, 0);
+    const pulse = writeLatticePulse(this.pulse, globalLoad);
     this.pulsePhase = (this.pulsePhase + TAU * pulse.frequency * dt) % TAU;
     this.acousticPhase = (this.acousticPhase + TAU * ACOUSTIC_WOBBLE_HZ * dt) % TAU;
     const backgroundPulse = 1 + pulse.amplitude * Math.sin(this.pulsePhase);

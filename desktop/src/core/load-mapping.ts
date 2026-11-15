@@ -104,12 +104,12 @@ export function writeRingTargetVelocities(
   return out;
 }
 
-export function latticePulse(total: number, seconds: number): LatticePulse {
-  return writeLatticePulse({ frequency: 0, amplitude: 0, opacity: 0, density: 0 }, total, seconds);
+export function latticePulse(total: number): LatticePulse {
+  return writeLatticePulse({ frequency: 0, amplitude: 0, opacity: 0, density: 0 }, total);
 }
 
 /** Write the lattice pulse into a reused object. F = F0*(1+0.8L), A = 0.05+0.05L, O = 0.06+0.12L. */
-export function writeLatticePulse(out: LatticePulse, total: number, _seconds: number): LatticePulse {
+export function writeLatticePulse(out: LatticePulse, total: number): LatticePulse {
   const load = clamp01(total);
   out.frequency = 1.0 * (1 + 0.8 * load);
   out.amplitude = 0.05 + 0.05 * load;

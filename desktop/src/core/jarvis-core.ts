@@ -109,7 +109,7 @@ export class JarvisCore {
     );
     this.root.add(this.nucleus);
 
-    this.loop = new AnimationLoop((dt, nowMs) => this.render(dt, nowMs));
+    this.loop = new AnimationLoop((dt) => this.render(dt));
   }
 
   start(): void {
@@ -141,10 +141,10 @@ export class JarvisCore {
     this.renderer.dispose();
   }
 
-  private render(dt: number, nowMs: number): void {
+  private render(dt: number): void {
     // One reused frame object per tick: no array, closure or object is built
     // inside the 15-30fps loop (2026-09-22).
-    const frame = this.state.step(dt, nowMs, this.ringBaseVelocity, this.ringGain);
+    const frame = this.state.step(dt, this.ringBaseVelocity, this.ringGain);
     const rings = this.rings;
     const velocities = frame.ringVelocities;
     for (let index = 0; index < rings.length; index += 1) {
