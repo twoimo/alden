@@ -15799,6 +15799,7 @@ def _worker_sleep_seconds(now: float, next_recovery_at: float) -> float:
 
 GEEKNEWS_FEED_URL = "https://news.hada.io/rss/news"
 GEEKNEWS_TOPIC_RE = re.compile(r"^https://news\.hada\.io/topic\?id=([1-9][0-9]{0,9})\Z")
+GEEKNEWS_TOPIC_LINK_RE = re.compile(r"https://news\.hada\.io/topic\?id=([1-9][0-9]{0,9})(?![0-9])")
 GEEKNEWS_CURSOR_NAME = "geeknews-rss-cursor.json"
 GEEKNEWS_MAX_ITEMS = 5
 GEEKNEWS_MAX_SUMMARY_CHARS = 90
@@ -15942,7 +15943,18 @@ def _mark_geeknews_digest_confirmed(event: dict, *, now: float | None = None) ->
         if isinstance(sent_at, int) and not isinstance(sent_at, bool) and sent_at > 0
         else None
     )
-    _store_geeknews_seen_ids(ids, max(ids, default=0), now=now, posted_slot=posted_slot)
+    try:
+        _store_geeknews_seen_ids(ids, max(ids, default=0), now=now, posted_slot=posted_slot)
+    except OSError as error:
+        # The room already shows this post. Raising here would leave the job
+        # in `sending`; its `sent` queue row keeps these ids out of the next
+        # selection instead.
+        print(
+            f"[geeknews] confirmed post not recorded in the room cursor: "
+            f"{type(error).__name__}: {error} ids={sorted(ids)}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _store_geeknews_seen_ids(
@@ -15988,11 +16000,46 @@ def _store_geeknews_seen_ids(
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
-        except OSError:
+        except BaseException:
             try:
                 os.unlink(temporary)
             except OSError:
                 pass
+            raise
+
+
+def _geeknews_queue_posted_ids(connection: sqlite3.Connection) -> set[int]:
+    """Topic ids of GeekNews jobs this room's queue records as sent."""
+    rows = connection.execute(
+        """
+        SELECT json_extract(event_json, '$.proactive_ids') FROM reply_jobs
+        WHERE status = 'sent'
+          AND json_extract(event_json, '$.proactive_query') = 'geeknews-rss'
+        """
+    ).fetchall()
+    posted: set[int] = set()
+    for (raw,) in rows:
+        try:
+            values = json.loads(raw) if raw else []
+        except (TypeError, ValueError):
+            continue
+        if isinstance(values, list):
+            posted.update(
+                item
+                for item in values
+                if isinstance(item, int) and not isinstance(item, bool) and item > 0
+            )
+    return posted
+
+
+def _geeknews_room_posted_ids(rows: list[dict]) -> set[int]:
+    """Topic ids our own messages in a room readback already linked."""
+    return {
+        int(match.group(1))
+        for row in rows
+        if row.get("is_self") is True
+        for match in GEEKNEWS_TOPIC_LINK_RE.finditer(str(row.get("message") or ""))
+    }
 
 
 def _html_to_plain(value: str) -> str:
@@ -16092,12 +16139,22 @@ def _format_geeknews_top3_line(
     return f"GeekNews TOP5 · {when}\n\n" + "\n\n".join(numbered)
 
 
-def _next_geeknews_digest(*, fetcher=None, now: float | None = None) -> dict | None:
+def _next_geeknews_digest(
+    *,
+    fetcher=None,
+    now: float | None = None,
+    already_posted: frozenset[int] | set[int] = frozenset(),
+) -> dict | None:
+    """Pick the next TOP5 the cursor and `already_posted` have not seen.
+
+    `already_posted` carries a second durable record of past posts, so a post
+    whose cursor write failed is not picked again.
+    """
     xml = _fetch_geeknews_feed_xml(fetcher)
     items = _parse_geeknews_entries(xml)
     if not items:
         return None
-    seen = _load_geeknews_seen_ids()
+    seen = _load_geeknews_seen_ids() | set(already_posted)
     fresh = [item for item in items if item["id"] not in seen]
     if not fresh:
         return None
@@ -16432,7 +16489,9 @@ def maybe_enqueue_proactive_topic(
                     "ids": [],
                 }
     if digest is None:
-        digest = _next_geeknews_digest(now=now)
+        digest = _next_geeknews_digest(
+            now=now, already_posted=_geeknews_queue_posted_ids(connection)
+        )
     if not isinstance(digest, dict):
         return None
     title = str(digest.get("title") or "").strip()
@@ -17280,7 +17339,19 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
     args = parser.parse_args(arguments)
     global QUEUE
     QUEUE = Path(args.queue)
-    digest = _next_geeknews_digest()
+    already_posted: set[int] = set()
+    if args.send:
+        room = _geeknews_operator_room(args.chat, QUEUE)
+        if room is None:
+            print("--chat is not the catalog room of --queue; not sent", file=sys.stderr)
+            return 4
+        confirmation_chat_id, title = room
+        baseline_rows = _geeknews_confirmation_rows(args.bin, confirmation_chat_id)
+        if baseline_rows is None:
+            print("unable to establish room readback baseline; not sent", file=sys.stderr)
+            return 4
+        already_posted = _geeknews_room_posted_ids(baseline_rows)
+    digest = _next_geeknews_digest(already_posted=already_posted)
     if digest is None:
         print("no unseen GeekNews items", file=sys.stderr)
         return 2
@@ -17290,15 +17361,6 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
         print(message)
         print(f"# ids={ids}", file=sys.stderr)
         return 0
-    room = _geeknews_operator_room(args.chat, QUEUE)
-    if room is None:
-        print("--chat is not the catalog room of --queue; not sent", file=sys.stderr)
-        return 4
-    confirmation_chat_id, title = room
-    baseline_rows = _geeknews_confirmation_rows(args.bin, confirmation_chat_id)
-    if baseline_rows is None:
-        print("unable to establish room readback baseline; not sent", file=sys.stderr)
-        return 4
     baseline_log_id = max((row["log_id"] for row in baseline_rows), default=0)
     send_started_at = int(time.time())
     try:
@@ -17331,9 +17393,18 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
     if confirmation_log_id is None:
         print("sent but not locally confirmed; cursor unchanged", file=sys.stderr)
         return 3
-    _store_geeknews_seen_ids(
-        set(ids), max(ids, default=0), posted_slot=args.mark_slot or None
-    )
+    try:
+        _store_geeknews_seen_ids(
+            set(ids), max(ids, default=0), posted_slot=args.mark_slot or None
+        )
+    except OSError as error:
+        print(
+            f"# confirmed log_id={confirmation_log_id} ids={ids} but the room cursor "
+            f"was not written ({type(error).__name__}: {error}); the next send skips "
+            "these ids only while they stay in the room readback",
+            file=sys.stderr,
+        )
+        return 5
     print(f"# confirmed log_id={confirmation_log_id} ids={ids}", file=sys.stderr)
     return 0
 

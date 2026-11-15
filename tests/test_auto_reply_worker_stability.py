@@ -333,7 +333,6 @@ class GeekNewsCursorTests(unittest.TestCase):
             "a morning post confirmed late burned the lunch slot",
         )
 
-    @unittest.expectedFailure
     def test_worker_alerts_when_a_confirmed_post_cannot_be_recorded(self):
         self.cursor_path.mkdir()
         stderr = io.StringIO()
@@ -347,7 +346,6 @@ class GeekNewsCursorTests(unittest.TestCase):
             )
         self.assertRegex(stderr.getvalue(), r"\b10\b.*\b11\b")
 
-    @unittest.expectedFailure
     def test_worker_does_not_repost_a_confirmed_digest_the_cursor_missed(self):
         morning = self.slot_time("morning")
         lunch = self.slot_time("lunch")
@@ -521,7 +519,6 @@ class GeekNewsOperatorTests(unittest.TestCase):
             self.run_operator("--chat", "NIMDA room")
         self.assertEqual(self.sends, [])
 
-    @unittest.expectedFailure
     def test_a_confirmed_post_the_cursor_cannot_record_is_reported(self):
         (self.room / "geeknews-rss-cursor.json").mkdir()
         result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
@@ -529,7 +526,6 @@ class GeekNewsOperatorTests(unittest.TestCase):
         self.assertEqual(result, 5, "a confirmed but unrecorded post exited as a success")
         self.assertRegex(self.stderr.getvalue(), r"\b10\b.*\b11\b.*\b12\b")
 
-    @unittest.expectedFailure
     def test_items_the_room_already_shows_as_our_posts_are_not_sent_again(self):
         self.room_rows += [
             {
