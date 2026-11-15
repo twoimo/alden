@@ -5168,8 +5168,16 @@ mod tests {
         for relative in resource_layout::DATA_FILES {
             write_fixture_file(&root.join(relative), b"fixture only", false);
         }
-        write_fixture_file(&root.join(resource_layout::CLI), b"#!/bin/sh\nexit 0\n", true);
-        write_fixture_file(&root.join(resource_layout::MENUBAR_SCRIPT), script.as_bytes(), false);
+        write_fixture_file(
+            &root.join(resource_layout::CLI),
+            b"#!/bin/sh\nexit 0\n",
+            true,
+        );
+        write_fixture_file(
+            &root.join(resource_layout::MENUBAR_SCRIPT),
+            script.as_bytes(),
+            false,
+        );
         let mut bridge = PythonBridge::new();
         let config = Arc::get_mut(&mut bridge.config).unwrap();
         config.python = PathBuf::from("python3");
@@ -5393,7 +5401,11 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
 
         assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
-        assert_eq!(still_listed, Some(None), "running browser job was removed or relabelled");
+        assert_eq!(
+            still_listed,
+            Some(None),
+            "running browser job was removed or relabelled"
+        );
     }
 
     #[test]
@@ -5416,7 +5428,11 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
 
         assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
-        assert_eq!(still_listed, Some(None), "running swap job was removed or relabelled");
+        assert_eq!(
+            still_listed,
+            Some(None),
+            "running swap job was removed or relabelled"
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -5489,7 +5505,10 @@ mod tests {
         let other_untouched = fs::read(&in_flight).unwrap();
         fs::remove_dir_all(&temp).unwrap();
 
-        assert!(result.is_ok(), "a second writer collided with an in-flight temp file");
+        assert!(
+            result.is_ok(),
+            "a second writer collided with an in-flight temp file"
+        );
         assert_eq!(written, Some(json!(true)));
         assert_eq!(other_untouched, b"other writer");
     }
