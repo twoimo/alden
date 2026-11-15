@@ -56,6 +56,8 @@ pub enum SwitchReason {
     NotInstalled,
     /// The connection check did not answer within three seconds (R11.2).
     HealthTimeout,
+    /// The connection check answered with an error (R11.2).
+    HealthFailed,
     /// Aside passed its health check but errored mid-collection (R11.11).
     MidCollectError,
     /// Aside passed its health check but did not answer within ten seconds
@@ -72,6 +74,7 @@ impl SwitchReason {
         match self {
             SwitchReason::NotInstalled => "Aside가 설치되어 있지 않아 다른 방법으로 가져왔어요",
             SwitchReason::HealthTimeout => "Aside 연결 확인이 늦어 다른 방법으로 가져왔어요",
+            SwitchReason::HealthFailed => "Aside 연결 확인에 실패해 다른 방법으로 가져왔어요",
             SwitchReason::MidCollectError => "Aside가 도중에 실패해 다른 방법으로 가져왔어요",
             SwitchReason::MidCollectTimeout => "Aside 응답이 늦어 다른 방법으로 가져왔어요",
             SwitchReason::SecretUnavailable => "접속 정보를 쓸 수 없어 다른 방법으로 가져왔어요",
@@ -498,14 +501,13 @@ impl RoutingCollector<'_> {
                     aside_error: err,
                 },
             },
-            Err(err @ CollectError::NotInstalled) => AsideAttempt::Switch {
-                reason: SwitchReason::NotInstalled,
-                aside_error: err,
-            },
-            // A health timeout, or any other health failure, falls back as a
-            // health timeout-class switch.
             Err(err) => AsideAttempt::Switch {
-                reason: SwitchReason::HealthTimeout,
+                reason: match err {
+                    CollectError::NotInstalled => SwitchReason::NotInstalled,
+                    CollectError::HealthTimeout => SwitchReason::HealthTimeout,
+                    CollectError::Unauthorized { .. } => SwitchReason::SecretUnavailable,
+                    _ => SwitchReason::HealthFailed,
+                },
                 aside_error: err,
             },
         }
@@ -670,6 +672,32 @@ mod tests {
         assert_eq!(out.path, CollectorPath::Fallback);
         assert_eq!(out.switched, Some(SwitchReason::NotInstalled));
         assert_eq!(aside.collect_calls(), 0);
+    }
+
+    #[test]
+    fn a_failed_health_check_is_not_reported_as_a_timeout() {
+        let clock = VirtualClock::new(0);
+        let aside = ScriptedCollector::unhealthy(
+            CollectorPath::Aside,
+            CollectError::Transport("connection refused".into()),
+        );
+        let fallback = ScriptedCollector::healthy(
+            CollectorPath::Fallback,
+            Ok(collected(CollectorPath::Fallback)),
+        );
+        let router = RoutingCollector {
+            aside: &aside,
+            fallback: &fallback,
+            clock: &clock,
+        };
+        let out = router.collect("https://example.com/post").unwrap();
+        let reason = out.switched.expect("switched to the fallback");
+        assert_ne!(
+            reason,
+            SwitchReason::HealthTimeout,
+            "an immediate refusal was reported as \"{}\"",
+            reason.as_plain()
+        );
     }
 
     #[test]
