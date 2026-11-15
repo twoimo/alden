@@ -17707,6 +17707,10 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             """
             noon = datetime(2026, 8, 17, 16, 20, tzinfo=module.GEEKNEWS_SLOT_TZ).timestamp()
             first = module._next_geeknews_digest(fetcher=lambda: feed, now=noon)
+            module._mark_geeknews_digest_confirmed(
+                {"proactive_ids": first["ids"], "proactive_query": "geeknews-rss"},
+                now=noon,
+            )
             second = module._next_geeknews_digest(fetcher=lambda: feed, now=noon)
         self.assertIsNotNone(first)
         self.assertEqual(first["ids"], [10, 11])
@@ -17734,13 +17738,13 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
               </entry>
             </feed>
             """
-            first = module._next_geeknews_digest(fetcher=lambda: feed, persist_seen=False)
-            second = module._next_geeknews_digest(fetcher=lambda: feed, persist_seen=False)
+            first = module._next_geeknews_digest(fetcher=lambda: feed)
+            second = module._next_geeknews_digest(fetcher=lambda: feed)
             self.assertEqual(first["ids"], [10])
             self.assertEqual(second["ids"], [10])
             event = {"proactive_ids": [10], "proactive_query": "geeknews-rss"}
             module._mark_geeknews_digest_confirmed(event, now=1_700_000_000)
-            third = module._next_geeknews_digest(fetcher=lambda: feed, persist_seen=False)
+            third = module._next_geeknews_digest(fetcher=lambda: feed)
             self.assertIsNone(third)
             cursor = module._load_geeknews_cursor()
             self.assertIn("10", [str(item) for item in cursor.get("seen_ids") or []])
@@ -17756,12 +17760,8 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
               </entry>
             </feed>
             """
-            first = module._next_geeknews_digest(
-                fetcher=lambda: feed, persist_seen=False
-            )
-            second = module._next_geeknews_digest(
-                fetcher=lambda: feed, persist_seen=False
-            )
+            first = module._next_geeknews_digest(fetcher=lambda: feed)
+            second = module._next_geeknews_digest(fetcher=lambda: feed)
         self.assertIsNotNone(first)
         self.assertEqual(first["ids"], [10])
         self.assertIsNotNone(second)

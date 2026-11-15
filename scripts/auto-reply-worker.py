@@ -16083,9 +16083,7 @@ def _format_geeknews_top3_line(
     return f"GeekNews TOP5 · {when}\n\n" + "\n\n".join(numbered)
 
 
-def _next_geeknews_digest(
-    *, fetcher=None, now: float | None = None, persist_seen: bool = True
-) -> dict | None:
+def _next_geeknews_digest(*, fetcher=None, now: float | None = None) -> dict | None:
     xml = _fetch_geeknews_feed_xml(fetcher)
     items = _parse_geeknews_entries(xml)
     if not items:
@@ -16095,10 +16093,6 @@ def _next_geeknews_digest(
     if not fresh:
         return None
     chosen = fresh[:GEEKNEWS_MAX_ITEMS]
-    newest = max(item["id"] for item in items)
-    if persist_seen:
-        seen.update(item["id"] for item in chosen)
-        _store_geeknews_seen_ids(seen, newest, now=now)
     message = _format_geeknews_top3_line(chosen, now=now)
     if not message:
         return None
@@ -16429,7 +16423,7 @@ def maybe_enqueue_proactive_topic(
                     "ids": [],
                 }
     if digest is None:
-        digest = _next_geeknews_digest(now=now, persist_seen=False)
+        digest = _next_geeknews_digest(now=now)
     if not isinstance(digest, dict):
         return None
     title = str(digest.get("title") or "").strip()
@@ -17264,7 +17258,7 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
     args = parser.parse_args(arguments)
     global QUEUE
     QUEUE = Path(args.queue)
-    digest = _next_geeknews_digest(persist_seen=False)
+    digest = _next_geeknews_digest()
     if digest is None:
         print("no unseen GeekNews items", file=sys.stderr)
         return 2

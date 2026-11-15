@@ -260,7 +260,6 @@ class GeekNewsCursorTests(unittest.TestCase):
                 return start + 60
         raise AssertionError(name)
 
-    @unittest.expectedFailure
     def test_selecting_a_digest_never_writes_the_cursor(self):
         now = self.slot_time("morning")
         first = self.worker._next_geeknews_digest(
