@@ -147,9 +147,11 @@ export interface VoiceStatus {
 
 type JsonRecord = Record<string, unknown>;
 const JOB_EVENT_KEYS = new Set(["jobId", "kind", "stage", "load", "time", "errorCode"]);
-const RECEIPT_OUTCOMES = new Set(["sent", "deferred", "scheduled", "skipped"]);
+const RECEIPT_OUTCOMES = new Set<RecentReceipt["outcome"]>(["sent", "deferred", "scheduled", "skipped"]);
 const RECEIPT_REASON_SLUG = /^[a-z][a-z0-9_]{0,63}$/;
-const RETRIEVAL_STATES = new Set(["ok", "empty", "skipped", "error", "index_not_ready", "unrecorded"]);
+const RETRIEVAL_STATES = new Set<RecentReceipt["retrievalState"]>([
+  "ok", "empty", "skipped", "error", "index_not_ready", "unrecorded",
+]);
 const GEEKNEWS_BACKGROUND_STATES = new Set<BackgroundSourceState>(["sending", "confirmed", "idle", "unknown"]);
 const DB_SYNC_BACKGROUND_STATES = new Set<BackgroundSourceState>(["retrying", "stalled", "syncing", "behind", "ready", "unknown"]);
 const PIPELINE_STAGES = new Set<PipelineStage>([
@@ -163,6 +165,10 @@ function record(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as JsonRecord)
     : null;
+}
+
+function list(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
 }
 
 function finiteNumber(value: unknown, fallback = 0): number {
@@ -185,12 +191,27 @@ function text(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
+/** The first candidate that is a string; the bridge sends some fields in two spellings. */
+function firstString(...candidates: unknown[]): string | null {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") return candidate;
+  }
+  return null;
+}
+
+function member<T extends string>(allowed: ReadonlySet<T>, value: unknown): T | null {
+  return typeof value === "string" && allowed.has(value as T) ? (value as T) : null;
+}
+
+function positiveChatId(value: unknown): number | null {
+  const chatId = finiteNumber(value, -1);
+  return Number.isInteger(chatId) && chatId > 0 ? chatId : null;
+}
+
 function parseBackgroundSource(value: unknown, allowed: ReadonlySet<BackgroundSourceState>): BackgroundSource {
   const source = record(value);
-  const rawState = typeof source?.state === "string" ? source.state : "unknown";
-  const state = allowed.has(rawState as BackgroundSourceState) ? rawState as BackgroundSourceState : "unknown";
   return {
-    state,
+    state: member(allowed, source?.state) ?? "unknown",
     activity: roundActivity(source?.activity),
     caption: text(source?.caption).slice(0, 120),
   };
@@ -198,21 +219,12 @@ function parseBackgroundSource(value: unknown, allowed: ReadonlySet<BackgroundSo
 
 export function parseBackground(value: unknown): BackgroundStatus {
   const background = record(value);
-  if (!background) {
-    return {
-      activity: 0,
-      caption: "",
-      replyLoad: 0,
-      geeknews: parseBackgroundSource(null, GEEKNEWS_BACKGROUND_STATES),
-      dbSync: parseBackgroundSource(null, DB_SYNC_BACKGROUND_STATES),
-    };
-  }
   return {
-    activity: roundActivity(background.activity),
-    caption: text(background.caption).slice(0, 120),
-    replyLoad: roundActivity(background.replyLoad ?? background.reply_load),
-    geeknews: parseBackgroundSource(background.geeknews, GEEKNEWS_BACKGROUND_STATES),
-    dbSync: parseBackgroundSource(background.dbSync ?? background.db_sync, DB_SYNC_BACKGROUND_STATES),
+    activity: roundActivity(background?.activity),
+    caption: text(background?.caption).slice(0, 120),
+    replyLoad: roundActivity(background?.replyLoad ?? background?.reply_load),
+    geeknews: parseBackgroundSource(background?.geeknews, GEEKNEWS_BACKGROUND_STATES),
+    dbSync: parseBackgroundSource(background?.dbSync ?? background?.db_sync, DB_SYNC_BACKGROUND_STATES),
   };
 }
 
@@ -279,15 +291,11 @@ function unavailablePipeline(): PipelineStatus {
 }
 
 function pipelineOutcome(value: unknown): PipelineOutcome {
-  return typeof value === "string" && PIPELINE_OUTCOMES.has(value as PipelineOutcome)
-    ? value as PipelineOutcome
-    : "unknown";
+  return member(PIPELINE_OUTCOMES, value) ?? "unknown";
 }
 
 function pipelineStage(value: unknown): PipelineStage {
-  return typeof value === "string" && PIPELINE_STAGES.has(value as PipelineStage)
-    ? value as PipelineStage
-    : "unknown";
+  return member(PIPELINE_STAGES, value) ?? "unknown";
 }
 
 function pipelineIndex(value: unknown): number | null {
@@ -358,7 +366,7 @@ export function parseJobEvent(value: unknown): JobEvent | null {
     jobId: input.jobId,
     kind: input.kind,
     stage: input.stage,
-    load: Math.min(1, Math.max(0, input.load)),
+    load: clamp01(input.load),
     time: input.time,
     errorCode: input.errorCode,
   };
@@ -389,52 +397,16 @@ export function unavailableSnapshot(errorCode: string | null = "snapshot_unavail
     terminal: { sent: 0, skipped: 0, deliveryUnknown: 0, burstSuperseded: 0 },
     contextSync: { mode: "async", waited: false },
     replyModelId: null,
-    voice: { available: false, state: "unavailable", rms: 0, errorCode: null, wakeSource: "none", updatedAt: 0, wakePhrase: "", threshold: 0.65, customModelSelected: false },
+    voice: parseVoice(null),
     errorCode,
   };
 }
 
-function parseRecentReceipt(value: unknown): RecentReceipt | null {
-  const input = record(value);
-  if (!input) return null;
-  const chatId = finiteNumber(input.chatId, -1);
-  const outcome = typeof input.outcome === "string" ? input.outcome : "";
-  const rawReasonCode = typeof input.reasonCode === "string" ? input.reasonCode : "";
-  const reasonCode = RECEIPT_REASON_SLUG.test(rawReasonCode) ? rawReasonCode : "unspecified";
-  const rawRetrievalState = typeof input.retrievalState === "string" ? input.retrievalState : "";
-  const retrievalState = RETRIEVAL_STATES.has(rawRetrievalState) ? rawRetrievalState : "unrecorded";
-  if (!Number.isInteger(chatId) || chatId <= 0) return null;
-  if (typeof input.title !== "string" || typeof input.displayTime !== "string" || typeof input.clock !== "string") return null;
-  if (typeof input.reasonText !== "string") return null;
-  if (!RECEIPT_OUTCOMES.has(outcome)) return null;
-  const rawOutcomeText = typeof input.outcomeText === "string"
-    ? input.outcomeText
-    : typeof input.outcome_text === "string"
-      ? input.outcome_text
-      : "";
-  return {
-    chatId,
-    title: input.title.slice(0, 120),
-    displayTime: input.displayTime.slice(0, 32),
-    clock: input.clock.slice(0, 8),
-    outcome: outcome as RecentReceipt["outcome"],
-    outcomeText: rawOutcomeText.slice(0, 32),
-    reasonCode,
-    reasonText: input.reasonText.slice(0, 64),
-    retrievalState: retrievalState as RecentReceipt["retrievalState"],
-  };
-}
-
-export function parseRuntimeSnapshot(value: unknown): RuntimeSnapshot {
-  const input = record(value);
-  if (!input) return unavailableSnapshot("snapshot_invalid");
-
-  const roomsRaw = Array.isArray(input.rooms) ? input.rooms : [];
-  const rooms = roomsRaw.flatMap((item): RoomSummary[] => {
+function parseRooms(value: unknown): RoomSummary[] {
+  return list(value).flatMap((item): RoomSummary[] => {
     const room = record(item);
-    if (!room) return [];
-    const chatId = finiteNumber(room.chat_id ?? room.chatId, -1);
-    if (!Number.isInteger(chatId) || chatId <= 0) return [];
+    const chatId = positiveChatId(room?.chat_id ?? room?.chatId);
+    if (!room || chatId === null) return [];
     return [{
       chatId,
       title: text(room.title, `id:${chatId}`),
@@ -443,46 +415,79 @@ export function parseRuntimeSnapshot(value: unknown): RuntimeSnapshot {
       openJobs: nonNegativeInt(room.open_jobs ?? room.openJobs),
     }];
   });
+}
 
-  const availableChatsRaw = Array.isArray(input.availableChats ?? input.available_chats)
-    ? (input.availableChats ?? input.available_chats)
-    : [];
-  const availableChats = (availableChatsRaw as unknown[]).flatMap((item): AvailableChatSummary[] => {
+function parseAvailableChats(value: unknown): AvailableChatSummary[] {
+  return list(value).flatMap((item): AvailableChatSummary[] => {
     const chat = record(item);
-    if (!chat) return [];
-    const chatId = finiteNumber(chat.chat_id ?? chat.chatId, -1);
-    if (!Number.isInteger(chatId) || chatId <= 0) return [];
+    const chatId = positiveChatId(chat?.chat_id ?? chat?.chatId);
+    if (!chat || chatId === null) return [];
     return [{
       chatId,
-      title: text(chat.title, "id:" + chatId),
+      title: text(chat.title, `id:${chatId}`),
       catalog: chat.catalog === true,
       live: chat.live === true,
     }];
   });
+}
 
-  const jobsRaw = Array.isArray(input.jobs) ? input.jobs : [];
-  const jobs = jobsRaw.map(parseJobEvent).filter((item): item is JobEvent => item !== null);
-  const receiptsRaw = Array.isArray(input.recent_receipts)
-    ? input.recent_receipts
-    : Array.isArray(input.recentReceipts)
-      ? input.recentReceipts
-      : [];
-  const recentReceipts = receiptsRaw
-    .map(parseRecentReceipt)
-    .filter((item): item is RecentReceipt => item !== null)
-    .slice(0, 12);
+function parseRecentReceipt(value: unknown): RecentReceipt | null {
+  const input = record(value);
+  if (!input) return null;
+  const chatId = positiveChatId(input.chatId);
+  const outcome = member(RECEIPT_OUTCOMES, input.outcome);
+  if (chatId === null || outcome === null) return null;
+  if (typeof input.title !== "string" || typeof input.displayTime !== "string" || typeof input.clock !== "string") return null;
+  if (typeof input.reasonText !== "string") return null;
+  const reasonCode = text(input.reasonCode);
+  return {
+    chatId,
+    title: input.title.slice(0, 120),
+    displayTime: input.displayTime.slice(0, 32),
+    clock: input.clock.slice(0, 8),
+    outcome,
+    outcomeText: (firstString(input.outcomeText, input.outcome_text) ?? "").slice(0, 32),
+    reasonCode: RECEIPT_REASON_SLUG.test(reasonCode) ? reasonCode : "unspecified",
+    reasonText: input.reasonText.slice(0, 64),
+    retrievalState: member(RETRIEVAL_STATES, input.retrievalState) ?? "unrecorded",
+  };
+}
+
+function parseVoice(value: unknown): VoiceStatus {
+  const voice = record(value);
+  const wakeSources = [voice?.wake_source, voice?.wakeSource];
+  return {
+    available: voice?.available === true,
+    state: text(voice?.state, "unavailable"),
+    rms: clamp01(voice?.rms),
+    errorCode: firstString(voice?.error_code, voice?.errorCode),
+    wakeSource: wakeSources.includes("stock") ? "stock" : wakeSources.includes("custom") ? "custom" : "none",
+    updatedAt: nonNegativeInt(voice?.updated_at ?? voice?.updatedAt),
+    wakePhrase: text(voice?.wake_phrase ?? voice?.wakePhrase),
+    threshold: Math.min(0.95, Math.max(0.65, finiteNumber(voice?.threshold, 0.65))),
+    customModelSelected: voice?.custom_model_selected === true || voice?.customModelSelected === true,
+  };
+}
+
+export function parseRuntimeSnapshot(value: unknown): RuntimeSnapshot {
+  const input = record(value);
+  if (!input) return unavailableSnapshot("snapshot_invalid");
+
+  const receipts = Array.isArray(input.recent_receipts) ? input.recent_receipts : list(input.recentReceipts);
   const terminal = record(input.terminal_counts ?? input.terminal) ?? {};
   const contextSync = record(input.context_sync ?? input.contextSync);
-  const voice = record(input.voice);
   const contextValid = contextSync?.mode === "async" && contextSync.waited === false;
 
   return {
     available: input.available !== false && contextValid,
-    rooms,
-    availableChats,
-    jobs,
-    recentReceipts,
-    jobLoad: Math.min(1, Math.max(0, finiteNumber(input.job_load ?? input.jobLoad, 0))),
+    rooms: parseRooms(input.rooms),
+    availableChats: parseAvailableChats(input.availableChats ?? input.available_chats),
+    jobs: list(input.jobs).map(parseJobEvent).filter((item): item is JobEvent => item !== null),
+    recentReceipts: receipts
+      .map(parseRecentReceipt)
+      .filter((item): item is RecentReceipt => item !== null)
+      .slice(0, 12),
+    jobLoad: clamp01(input.job_load ?? input.jobLoad),
     background: parseBackground(input.background),
     onDevice: parseOnDevice(input.onDevice ?? input.ondevice_hardware),
     pipeline: parsePipeline(input.pipeline),
@@ -493,31 +498,9 @@ export function parseRuntimeSnapshot(value: unknown): RuntimeSnapshot {
       burstSuperseded: nonNegativeInt(terminal.burst_superseded ?? terminal.burstSuperseded),
     },
     contextSync: { mode: "async", waited: false },
-    replyModelId: typeof input.reply_model_id === "string"
-      ? input.reply_model_id
-      : typeof input.replyModelId === "string"
-        ? input.replyModelId
-        : null,
-    voice: {
-      available: voice?.available === true,
-      state: text(voice?.state, "unavailable"),
-      rms: Math.min(1, Math.max(0, finiteNumber(voice?.rms, 0))),
-      errorCode: typeof voice?.error_code === "string"
-        ? voice.error_code
-        : typeof voice?.errorCode === "string"
-          ? voice.errorCode
-          : null,
-      wakeSource: voice?.wake_source === "stock" || voice?.wakeSource === "stock"
-        ? "stock"
-        : voice?.wake_source === "custom" || voice?.wakeSource === "custom"
-          ? "custom"
-          : "none",
-      updatedAt: nonNegativeInt(voice?.updated_at ?? voice?.updatedAt),
-      wakePhrase: text(voice?.wake_phrase ?? voice?.wakePhrase, ""),
-      threshold: Math.min(0.95, Math.max(0.65, finiteNumber(voice?.threshold, 0.65))),
-      customModelSelected: voice?.custom_model_selected === true || voice?.customModelSelected === true,
-    },
-    errorCode: contextValid ? (typeof input.error_code === "string" ? input.error_code : null) : "context_sync_invalid",
+    replyModelId: firstString(input.reply_model_id, input.replyModelId),
+    voice: parseVoice(input.voice),
+    errorCode: contextValid ? firstString(input.error_code) : "context_sync_invalid",
   };
 }
 
