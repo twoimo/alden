@@ -6,8 +6,7 @@ import {
   type CancellationToken,
   type RuntimeSnapshot,
 } from "./contracts";
-import type { SourceLoads } from "./core/load-mapping";
-import { RenderLifecycle } from "./core/lifecycle";
+import { RenderLifecycle, type RenderLoopControl } from "./core/lifecycle";
 import {
   tauriVisibilitySubscriber,
   tauriVisibilityReader,
@@ -37,6 +36,7 @@ import {
   RuntimeSnapshotPoller,
   browserPollScheduler,
   type PollTimerScheduler,
+  type RuntimeSignalSink,
   type SnapshotCanceller,
   type SnapshotLoader,
 } from "./runtime-poller";
@@ -50,11 +50,8 @@ if (!app) throw new Error("app_root_missing");
 const isSettings = new URLSearchParams(window.location.search).get("view") === "settings";
 document.body.classList.add(isSettings ? "settings-view" : "panel-view");
 
-interface JarvisCoreControl {
+interface JarvisCoreControl extends RenderLoopControl, RuntimeSignalSink {
   readonly renderCount: number;
-  start(): void;
-  stop(): void;
-  setSignals(jobLoad: number, voiceRms: number, sources?: SourceLoads): void;
   dispose(): void;
 }
 
@@ -63,27 +60,18 @@ function setText(id: string, value: string): void {
   if (element) element.textContent = value;
 }
 
-function showPanelUnavailable(message: string): void {
-  app.dataset.state = "unavailable";
-  const panel = document.querySelector<HTMLElement>(".jarvis-panel");
-  if (!panel) return;
-  let status = document.getElementById("panel-status");
-  if (!status) {
-    status = document.createElement("p");
-    status.id = "panel-status";
-    status.setAttribute("role", "status");
-    status.setAttribute("aria-live", "polite");
-    status.style.cssText = "position:absolute;left:12px;right:12px;bottom:9px;margin:0;text-align:center;font-size:10px;line-height:1.35;color:var(--muted);pointer-events:none";
-    panel.append(status);
-  }
-  status.textContent = message;
-}
-
 function renderPanelUnavailable(): void {
   app.innerHTML = mainPanelMarkup();
+  app.dataset.state = "unavailable";
   document.querySelector<HTMLCanvasElement>(".jarvis-core")
     ?.setAttribute("aria-label", "Jarvis core 확인 불가");
-  showPanelUnavailable("Jarvis 상태를 확인할 수 없습니다.");
+  const status = document.createElement("p");
+  status.id = "panel-status";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.style.cssText = "position:absolute;left:12px;right:12px;bottom:9px;margin:0;text-align:center;font-size:10px;line-height:1.35;color:var(--muted);pointer-events:none";
+  status.textContent = "Jarvis 상태를 확인할 수 없습니다.";
+  document.querySelector<HTMLElement>(".jarvis-panel")?.append(status);
 }
 
 function wireRoomAdd(loadSnapshot: SnapshotLoader, loadAction: typeof fetchSettingsAction): void {
@@ -233,24 +221,28 @@ function wireModelSelection(): void {
   });
 }
 
+const VOICE_STATE_LABELS: Readonly<Record<string, string>> = {
+  idle: "마이크가 대기 중입니다.",
+  wake_listen: "호출어를 기다리고 있습니다.",
+  user_listen: "말씀을 듣고 있습니다.",
+  transcribing: "말씀을 정리하고 있습니다.",
+  generating: "답변을 준비하고 있습니다.",
+  speaking: "답변을 말하고 있습니다.",
+  ended: "음성 대화가 끝났습니다.",
+  aborted: "음성 대화가 끝났습니다.",
+  error: "음성 기능을 사용할 수 없습니다.",
+};
+
 function renderVoice(snapshot: RuntimeSnapshot): void {
   const voice = snapshot.voice;
   if (!voice.available) {
     setText("voice-status", "음성 상태를 확인할 수 없습니다.");
     return;
   }
-  const labels: Record<string, string> = {
-    idle: "마이크가 대기 중입니다.",
-    wake_listen: "호출어를 기다리고 있습니다.",
-    user_listen: "말씀을 듣고 있습니다.",
-    transcribing: "말씀을 정리하고 있습니다.",
-    generating: "답변을 준비하고 있습니다.",
-    speaking: "답변을 말하고 있습니다.",
-    ended: "음성 대화가 끝났습니다.",
-    aborted: "음성 대화가 끝났습니다.",
-    error: "음성 기능을 사용할 수 없습니다.",
-  };
-  setText("voice-status", voiceErrorMessage(voice.errorCode) ?? labels[voice.state] ?? "음성 상태를 확인하고 있습니다.");
+  setText(
+    "voice-status",
+    voiceErrorMessage(voice.errorCode) ?? VOICE_STATE_LABELS[voice.state] ?? "음성 상태를 확인하고 있습니다.",
+  );
 }
 
 function renderSettingsUnavailable(): void {
@@ -325,6 +317,30 @@ function renderKnowledgeRelations(
   });
 }
 
+function relatedTalkSummary(focus: Record<string, unknown> | null): string {
+  if (!focus || focus.ok !== true) return "관련 대화를 찾지 못했습니다.";
+  const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
+  if (facts.length === 0) return "관련 대화를 찾지 못했습니다.";
+  const firstFact = facts[0].slice(0, 180);
+  return `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`;
+}
+
+function renderAccessibleNodes(nodes: readonly KnowledgeNode[], select: (nodeId: string) => void): void {
+  const container = document.querySelector<HTMLDivElement>("#knowledge-accessible-nodes");
+  if (!container) return;
+  container.replaceChildren();
+  nodes.slice(0, ON_SCREEN_NODE_CAP).forEach((node) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "knowledge-a11y-node";
+    button.dataset.nodeId = node.id;
+    button.textContent = node.label;
+    button.setAttribute("aria-label", `${node.label} 선택`);
+    button.addEventListener("click", () => select(node.id));
+    container.append(button);
+  });
+}
+
 async function setupKnowledgeGraph(
   payload: Record<string, unknown> | null,
   snapshot: RuntimeSnapshot,
@@ -338,13 +354,8 @@ async function setupKnowledgeGraph(
     return null;
   }
 
-  setText(
-    "knowledge-summary",
-    `대화에서 찾은 연결 항목 ${graph.nodes.length}개`,
-  );
+  setText("knowledge-summary", `대화에서 찾은 연결 항목 ${graph.nodes.length}개`);
   setText("knowledge-mode", payload?.stale === true ? "자료 확인 필요" : "연결된 주제");
-
-  const a11yContainer = document.querySelector<HTMLDivElement>("#knowledge-accessible-nodes");
 
   let activeNodeId = "";
   const { KnowledgeHologram } = await import("./knowledge/hologram");
@@ -363,16 +374,7 @@ async function setupKnowledgeGraph(
       nodeId: node.id,
       chatId: localRoom,
     }).then((focus) => {
-      if (activeNodeId !== node.id) return;
-      if (!focus || focus.ok !== true) {
-        setText("knowledge-retrieve", "관련 대화를 찾지 못했습니다.");
-        return;
-      }
-      const facts = Array.isArray(focus.facts) ? focus.facts.filter((item): item is string => typeof item === "string") : [];
-      const firstFact = facts[0]?.slice(0, 180);
-      setText("knowledge-retrieve", facts.length
-        ? `관련 정보 ${facts.length}건을 찾았습니다.${firstFact ? ` ${firstFact}` : ""}`
-        : "관련 대화를 찾지 못했습니다.");
+      if (activeNodeId === node.id) setText("knowledge-retrieve", relatedTalkSummary(focus));
     });
   });
 
@@ -385,22 +387,7 @@ async function setupKnowledgeGraph(
     renderKnowledgeRelations(graph, node, view, snapshot);
   });
 
-  if (a11yContainer) {
-    a11yContainer.replaceChildren();
-    graph.nodes.slice(0, ON_SCREEN_NODE_CAP).forEach((node) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "knowledge-a11y-node";
-      btn.dataset.nodeId = node.id;
-      btn.textContent = node.label;
-      btn.setAttribute("aria-label", `${node.label} 선택`);
-      btn.addEventListener("click", () => {
-        hologram.clickNode(node.id);
-      });
-      a11yContainer.append(btn);
-    });
-  }
-
+  renderAccessibleNodes(graph.nodes, (nodeId) => hologram.clickNode(nodeId));
   return hologram;
 }
 

@@ -1,5 +1,5 @@
 import { LAYOUT } from "./tokens";
-import type { RuntimeSnapshot } from "./contracts";
+import type { BackgroundSourceState, RecentReceipt, RuntimeSnapshot } from "./contracts";
 
 export const MAIN_PANEL_CONTROLS = Object.freeze([] as const);
 
@@ -132,29 +132,29 @@ export function renderHistory(snapshot: RuntimeSnapshot, root: Document = docume
     heading.className = "history-receipt-title";
     heading.textContent = `${receipt.displayTime || receipt.clock || "시간 미기록"} · ${receipt.title}`;
 
+    const outcome = receipt.outcomeText || receiptOutcomeLabel(receipt.outcome);
     const badge = root.createElement("span");
     badge.className = "history-receipt-badge";
-    badge.textContent = receipt.outcomeText || receiptOutcomeLabel(receipt.outcome);
+    badge.textContent = outcome;
 
     header.append(heading, badge);
 
     const detail = root.createElement("span");
     detail.className = "history-receipt-detail";
     const reason = receipt.reasonText || receiptReasonLabel(receipt.reasonCode);
-    detail.textContent = `${receipt.outcomeText || receiptOutcomeLabel(receipt.outcome)} · ${reason} · 대화 찾기 ${retrievalLabel(receipt.retrievalState)}`;
+    detail.textContent = `${outcome} · ${reason} · 대화 찾기 ${retrievalLabel(receipt.retrievalState)}`;
 
     row.append(header, detail);
     list.append(row);
   });
 }
 
-function receiptOutcomeLabel(outcome: string): string {
+function receiptOutcomeLabel(outcome: RecentReceipt["outcome"]): string {
   switch (outcome) {
     case "sent": return "답변 완료";
     case "deferred": return "나중에 처리";
     case "scheduled": return "예약됨";
     case "skipped": return "건너뜀";
-    default: return "기록됨";
   }
 }
 
@@ -168,26 +168,24 @@ function receiptReasonLabel(reasonCode: string): string {
   }
 }
 
-function retrievalLabel(state: string): string {
+function retrievalLabel(state: RecentReceipt["retrievalState"]): string {
   switch (state) {
     case "ok": return "자료 확인됨";
     case "empty": return "관련 자료 없음";
     case "skipped": return "확인하지 않음";
     case "error": return "자료를 확인하지 못함";
     case "index_not_ready": return "자료 준비 중";
-    default: return "상태 확인 중";
+    case "unrecorded": return "상태 확인 중";
   }
 }
 
-function activityStateLabel(value: unknown): string {
-  const state = safeDisplayString(value, "").toLowerCase();
-  if (["active", "running", "in_progress", "processing"].includes(state)) return "진행 중";
-  if (["ready", "complete", "completed", "done", "ok", "success"].includes(state)) return "완료";
-  if (["queued", "pending", "waiting"].includes(state)) return "대기 중";
-  if (["sending", "send", "publishing"].includes(state)) return "전송 중";
-  if (["behind", "stale"].includes(state)) return "새로 확인 필요";
-  if (["error", "failed", "unavailable", "blocked"].includes(state)) return "확인 필요";
-  return "확인 중";
+function activityStateLabel(state: BackgroundSourceState): string {
+  switch (state) {
+    case "sending": return "전송 중";
+    case "ready": return "완료";
+    case "behind": return "새로 확인 필요";
+    default: return "확인 중";
+  }
 }
 
 export function renderBackground(snapshot: RuntimeSnapshot, root: Document = document): void {
@@ -219,25 +217,16 @@ export function renderBackground(snapshot: RuntimeSnapshot, root: Document = doc
   target.textContent = `작업 현황 · 답변 대기 ${pendingReplies}건 · 긱뉴스 ${activityStateLabel(background.geeknews.state)} · 대화 준비 ${activityStateLabel(background.dbSync.state)}${pipeline}${jobs}`;
 }
 
-function safeDisplayString(value: unknown, fallback: string): string {
-  if (value === undefined || value === null) return fallback;
-  try {
-    return String(value);
-  } catch {
-    return fallback;
-  }
-}
-
 export function renderRooms(snapshot: RuntimeSnapshot, root: Document = document): void {
   const popup = root.querySelector<HTMLSelectElement>("#settings-room-popup");
   if (popup) {
+    const summary = root.getElementById("room-summary");
     popup.replaceChildren();
     if (snapshot.rooms.length === 0) {
       const option = document.createElement("option");
       option.textContent = snapshot.available ? "등록된 채팅방이 없습니다." : "채팅방 목록을 불러오지 못했습니다.";
       option.value = "";
       popup.append(option);
-      const summary = root.getElementById("room-summary");
       if (summary) summary.textContent = snapshot.available
         ? "등록된 채팅방이 없습니다."
         : "채팅방 목록을 불러오지 못했습니다. 다시 확인해 주세요.";
@@ -249,7 +238,6 @@ export function renderRooms(snapshot: RuntimeSnapshot, root: Document = document
         popup.append(option);
       });
       const live = snapshot.rooms.filter((room) => room.live).length;
-      const summary = root.getElementById("room-summary");
       if (summary) summary.textContent = `등록된 채팅방 ${snapshot.rooms.length}개 · 연결됨 ${live}개`;
     }
   }
