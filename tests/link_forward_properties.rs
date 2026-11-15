@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use openkakao_cli::collector::{
-    Collected, CollectError, CollectFailure, CollectorPath, PageCollector, RoutingCollector,
+    CollectError, CollectFailure, Collected, CollectorPath, PageCollector, RoutingCollector,
     TempScope,
 };
 use openkakao_cli::fakes::{BlockingRealSendPort, ForbiddenNetwork, VirtualClock};
@@ -39,7 +39,7 @@ use openkakao_cli::forward::{
 };
 use openkakao_cli::logging::{FlowKind, HistoryStore, SqliteHistoryStore};
 use openkakao_cli::ports::{
-    AcquireError, ImageAcquisition, ImageAcquirer, ImageBlob, ImageRef, NetworkPort, SendPort,
+    AcquireError, ImageAcquirer, ImageAcquisition, ImageBlob, ImageRef, NetworkPort, SendPort,
 };
 use openkakao_cli::room_catalog::{CatalogRoom, InMemoryRoomCatalog, MapRoomDirectory};
 use proptest::prelude::*;
@@ -269,7 +269,12 @@ impl MentionSpec {
                 } else {
                     base.to_string()
                 };
-                format!("{}{}{}", " ".repeat(*pad_left), base, " ".repeat(*pad_right))
+                format!(
+                    "{}{}{}",
+                    " ".repeat(*pad_left),
+                    base,
+                    " ".repeat(*pad_right)
+                )
             }
             MentionSpec::Junk(s) => s.clone(),
         }
@@ -649,7 +654,8 @@ enum Repeat {
     Same,
     /// The same link with a trailing slash (a canonical-key match).
     TrailingSlash,
-    /// The same link upper-cased (a canonical-key match).
+    /// The same link with its scheme and host upper-cased (a canonical-key
+    /// match; the path stays case-sensitive).
     UpperCase,
 }
 
@@ -666,7 +672,7 @@ proptest! {
 
     /// Property 21: repeating the same forward request (with app-restart-like
     /// rebuilds of the forwarder over the same persistent ledger, and
-    /// case/trailing-slash link variants) up to 20 times delivers each (link,
+    /// scheme/host-case and trailing-slash link variants) up to 20 times delivers each (link,
     /// room) pair at most once — every repeat after the first reports
     /// `AlreadyDelivered` with zero new sends, and the total confirmed sends
     /// equals the number of target rooms (R6.7, R6.14, R12.7).
@@ -700,7 +706,7 @@ proptest! {
             let link = match repeat {
                 Repeat::Same => base.to_string(),
                 Repeat::TrailingSlash => format!("{base}/"),
-                Repeat::UpperCase => base.to_uppercase(),
+                Repeat::UpperCase => "HTTPS://EXAMPLE.COM/Post".to_string(),
             };
 
             // A fresh forwarder each iteration models an app restart while the

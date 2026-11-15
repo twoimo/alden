@@ -17,7 +17,7 @@
 //!   combination is **not** recorded in the [`DeliveryLedger`], so the request
 //!   can be retried. Only a fully-delivered combination is marked (R6.14).
 //! * **Once per (room, link) (R6.7).** The [`DeliveryLedger`] keys on the
-//!   [`canonical_link_key`] (case- and trailing-slash-insensitive), so an
+//!   [`canonical_link_key`] (scheme/host-case- and trailing-slash-insensitive), so an
 //!   already-delivered combination is refused with a plain-language "already
 //!   sent" and zero new sends.
 //! * **The journal stays redacted (R6.11).** Only the stage, result code,
@@ -290,11 +290,19 @@ pub fn summarize(body: &str) -> String {
 }
 
 /// The canonical key that decides whether two links are "the same" for
-/// once-per-room delivery (R6.7): case-insensitive, ignoring any trailing
-/// slashes.
+/// once-per-room delivery (R6.7): the scheme and host compare
+/// case-insensitively, the path, query, and fragment case-sensitively (as URLs
+/// do, so `youtu.be/aBc` and `youtu.be/AbC` stay distinct), and trailing
+/// slashes are ignored.
 pub fn canonical_link_key(url: &str) -> String {
-    let trimmed = url.trim().to_lowercase();
-    trimmed.trim_end_matches('/').to_string()
+    let url = url.trim();
+    let authority_start = url.find("://").map_or(0, |i| i + 3);
+    let authority_end = url[authority_start..]
+        .find(['/', '?', '#'])
+        .map_or(url.len(), |i| authority_start + i);
+    let mut key = url[..authority_end].to_lowercase();
+    key.push_str(&url[authority_end..]);
+    key.trim_end_matches('/').to_string()
 }
 
 /// How many items of each personal-information kind were masked (R6.13).
@@ -1178,12 +1186,24 @@ mod forward_tests {
     }
 
     #[test]
-    fn canonical_link_key_ignores_case_and_trailing_slash() {
+    fn canonical_link_key_folds_scheme_and_host_case_and_trailing_slash() {
         assert_eq!(
-            canonical_link_key("https://Example.com/Post/"),
-            canonical_link_key("https://example.com/post")
+            canonical_link_key(" HTTPS://Example.COM/Post/ "),
+            canonical_link_key("https://example.com/Post")
         );
         assert_eq!(canonical_link_key("https://x.com/a///"), "https://x.com/a");
+    }
+
+    #[test]
+    fn canonical_link_key_keeps_path_case() {
+        assert_ne!(
+            canonical_link_key("https://youtu.be/aBc"),
+            canonical_link_key("https://youtu.be/AbC")
+        );
+        assert_ne!(
+            canonical_link_key("https://x.com/p?id=Q"),
+            canonical_link_key("https://x.com/p?id=q")
+        );
     }
 
     #[test]
