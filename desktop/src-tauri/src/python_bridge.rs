@@ -3,14 +3,16 @@ use crate::resource_layout::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -25,6 +27,12 @@ const MODEL_SWAP_TIMEOUT: Duration = Duration::from_secs(120);
 const MODEL_SWAP_RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const MLX_LAUNCH_TIMEOUT: Duration = Duration::from_secs(150);
 const OUTPUT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+// SIGTERM grace before SIGKILL on a stopped process group, and the bound on
+// pipe drains after the leader is gone.
+const PROCESS_TERM_GRACE: Duration = Duration::from_millis(250);
+const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
+// Hard-stop window on quit, after the cooperative grace has run out.
+const TERMINATE_HARD_GRACE: Duration = Duration::from_secs(2);
 const BROWSER_TOOL_OUTPUT_LIMIT_BYTES: usize = 96 * 1024;
 const BROWSER_TOOL_RESULT_LIMIT_BYTES: usize = 64 * 1024;
 const BROWSER_TOOL_TASK_LIMIT_BYTES: usize = 16 * 1024;
@@ -51,6 +59,11 @@ const MODEL_SWAP_OPT_IN: &str = "qwen38-27b-explicit-v1";
 const MODEL_SWAP_CANCEL_DIR: &str = "model-swap-cancel";
 const VOICE_TTS_OUT_NAME: &str = "jarvis-voice-out.wav";
 static VOICE_SESSION_START_LOCK: Mutex<()> = Mutex::new(());
+static MARKER_TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Registry keys for children started without a caller token. The prefix is
+// refused for caller tokens, so the UI cannot cancel these entries by name.
+const INTERNAL_CANCEL_PREFIX: &str = "internal:";
+static INTERNAL_CANCEL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[derive(Debug, Error)]
 pub enum BridgeError {
@@ -125,6 +138,10 @@ struct PythonRun<'a> {
     output_limit: usize,
     stdin_payload: Option<&'a [u8]>,
     global_abort_grace: Option<Duration>,
+    /// Runs once the child is registered and about to spawn. A refused call
+    /// (duplicate token, bad resources) never reaches it, so it cannot begin
+    /// or finish a job that another call owns.
+    on_registered: Option<&'a dyn Fn()>,
 }
 
 impl Default for PythonRun<'_> {
@@ -137,6 +154,7 @@ impl Default for PythonRun<'_> {
             output_limit: OUTPUT_LIMIT_BYTES,
             stdin_payload: None,
             global_abort_grace: None,
+            on_registered: None,
         }
     }
 }
@@ -425,22 +443,26 @@ impl PythonBridge {
         let is_swap = action == "model-swap";
         let is_mlx_launch = action == MLX_SERVER_LAUNCH_ACTION;
         let swap_job_id = token_id.unwrap_or("model-swap");
-        if is_swap {
+        let begun = Cell::new(false);
+        let begin = || {
             self.begin_job(swap_job_id, "model_swap", "swap", 0.9);
-        }
+            begun.set(true);
+        };
         let result: Result<Value, BridgeError> = (|| {
-            let bytes = self.run_python(
-                &args,
-                if is_swap {
+            let bytes = self.run_python_with_output_limit(PythonRun {
+                extra: &args,
+                timeout: if is_swap {
                     MODEL_SWAP_TIMEOUT
                 } else if is_mlx_launch {
                     MLX_LAUNCH_TIMEOUT
                 } else {
                     DEFAULT_TIMEOUT
                 },
-                if is_swap { token_id } else { None },
-                is_swap,
-            )?;
+                token_id: if is_swap { token_id } else { None },
+                cooperative_cancel: is_swap,
+                on_registered: if is_swap { Some(&begin) } else { None },
+                ..PythonRun::default()
+            })?;
             let value = parse_json_output(&bytes)?;
             Ok(match action {
                 "models" => sanitize_models(&value),
@@ -459,7 +481,7 @@ impl PythonBridge {
                 _ => return Err(BridgeError::ActionNotAllowed),
             })
         })();
-        if is_swap {
+        if is_swap && begun.get() {
             self.finish_job(swap_job_id);
         }
         result
@@ -477,7 +499,11 @@ impl PythonBridge {
         let args = browser_tool_args(job_id, task)?;
         let internal_token = format!("browser-tool-{job_id}");
         let cancellation_token = token_id.unwrap_or(&internal_token);
-        self.begin_job(job_id, "browser", "running", 0.7);
+        let begun = Cell::new(false);
+        let begin = || {
+            self.begin_job(job_id, "browser", "running", 0.7);
+            begun.set(true);
+        };
         let result: Result<SafeBrowserToolResult, BridgeError> = (|| {
             let bytes = self.run_python_with_output_limit(PythonRun {
                 extra: &args,
@@ -486,11 +512,17 @@ impl PythonBridge {
                 output_limit: BROWSER_TOOL_OUTPUT_LIMIT_BYTES,
                 stdin_payload: Some(task.as_bytes()),
                 global_abort_grace: Some(BROWSER_TOOL_ABORT_GRACE),
+                on_registered: Some(&begin),
                 ..PythonRun::default()
             })?;
             let value = parse_json_output(&bytes)?;
             Ok(sanitize_browser_tool_result(&value))
         })();
+        if !begun.get() {
+            // Refused before the child started. The job entry, if any, belongs
+            // to the call that holds the token, so leave it alone.
+            return result;
+        }
         match &result {
             Ok(value) if !value.error_code.is_empty() => {
                 self.set_job_error(job_id, Some(&value.error_code));
@@ -591,6 +623,9 @@ impl PythonBridge {
     }
 
     pub fn cancel(&self, token_id: &str) -> bool {
+        if token_id.starts_with(INTERNAL_CANCEL_PREFIX) {
+            return false;
+        }
         let Ok(map) = self.cancellations.lock() else {
             return false;
         };
@@ -664,6 +699,42 @@ impl PythonBridge {
         Ok(())
     }
 
+    /// Quit path: stop every owned child. Model swaps get their cooperative
+    /// marker first and the grace to roll back. Everything still registered is
+    /// then hard-stopped. The abort latch is deliberately not written, because
+    /// a latch refuses every later job until a human resume.
+    pub fn terminate_children(&self, cooperative_grace: Duration) {
+        if let Ok(map) = self.cancellations.lock() {
+            for handle in map.values() {
+                if let Some(marker) = handle.cooperative_marker.as_deref() {
+                    let _ = write_model_swap_cancel_marker(marker);
+                }
+            }
+        }
+        self.wait_for_registry_drain(cooperative_grace);
+        if let Ok(map) = self.cancellations.lock() {
+            for handle in map.values() {
+                handle.flag.store(true, Ordering::SeqCst);
+            }
+        }
+        self.wait_for_registry_drain(TERMINATE_HARD_GRACE);
+    }
+
+    fn wait_for_registry_drain(&self, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            let empty = self
+                .cancellations
+                .lock()
+                .map(|map| map.is_empty())
+                .unwrap_or(true);
+            if empty {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     pub fn start_voice_session(&self) -> Result<(), BridgeError> {
         start_voice_session_if_absent(&self.config.state_root, voice_session_is_running, || {
             let resources = self.config.resources()?;
@@ -675,7 +746,7 @@ impl PythonBridge {
             )?;
             voice_session_command(&plan, &self.config.state_root)?
                 .spawn()
-                .map(|_| ())
+                .map(reap_in_background)
                 .map_err(|_| BridgeError::Spawn)
         })
     }
@@ -705,6 +776,7 @@ impl PythonBridge {
             output_limit,
             stdin_payload,
             global_abort_grace,
+            on_registered,
         } = run;
         let resources = self.config.resources()?;
         resources.validate().map_err(BridgeError::from)?;
@@ -737,31 +809,41 @@ impl PythonBridge {
         } else {
             None
         };
-        if let Some(token) = token_id {
-            {
-                let mut map = self
-                    .cancellations
-                    .lock()
-                    .map_err(|_| BridgeError::StateIo)?;
-                if map.contains_key(token) {
-                    return Err(BridgeError::ActionNotAllowed);
-                }
-                if let Some(flag) = global_abort_flag.as_ref() {
-                    if global_abort_is_latched(&self.config.state_root) {
-                        // The child still starts so Python can return its fixed
-                        // aborted envelope; Rust enforces the hard deadline.
-                        flag.store(true, Ordering::SeqCst);
-                    }
-                }
-                map.insert(
-                    token.to_string(),
-                    CancellationHandle {
-                        flag: cancel_flag.clone(),
-                        cooperative_marker: cooperative_marker.clone(),
-                        global_abort_flag: global_abort_flag.clone(),
-                    },
-                );
+        // Every child is registered so global abort and shutdown can reach it.
+        // Callers without a token get an internal key the UI cannot cancel.
+        let registry_key = match token_id {
+            Some(token) if token.starts_with(INTERNAL_CANCEL_PREFIX) => {
+                return Err(BridgeError::ActionNotAllowed);
             }
+            Some(token) => token.to_string(),
+            None => internal_cancel_key(),
+        };
+        {
+            let mut map = self
+                .cancellations
+                .lock()
+                .map_err(|_| BridgeError::StateIo)?;
+            if map.contains_key(&registry_key) {
+                return Err(BridgeError::ActionNotAllowed);
+            }
+            if let Some(flag) = global_abort_flag.as_ref() {
+                if global_abort_is_latched(&self.config.state_root) {
+                    // The child still starts so Python can return its fixed
+                    // aborted envelope; Rust enforces the hard deadline.
+                    flag.store(true, Ordering::SeqCst);
+                }
+            }
+            map.insert(
+                registry_key.clone(),
+                CancellationHandle {
+                    flag: cancel_flag.clone(),
+                    cooperative_marker: cooperative_marker.clone(),
+                    global_abort_flag: global_abort_flag.clone(),
+                },
+            );
+        }
+        if let Some(on_registered) = on_registered {
+            on_registered();
         }
 
         let mut args = vec![
@@ -791,10 +873,8 @@ impl PythonBridge {
                 recovery_timeout: MODEL_SWAP_RECOVERY_TIMEOUT,
             },
         );
-        if let Some(token) = token_id {
-            if let Ok(mut map) = self.cancellations.lock() {
-                map.remove(token);
-            }
+        if let Ok(mut map) = self.cancellations.lock() {
+            map.remove(&registry_key);
         }
         if let Some(marker) = cooperative_marker {
             let _ = fs::remove_file(marker);
@@ -958,8 +1038,12 @@ fn run_process_with_recovery(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        // A private group lets stop signals reach descendants, not just the
+        // direct child. The group id is the child's pid.
+        .process_group(0);
     let mut child = command.spawn().map_err(|_| BridgeError::Spawn)?;
+    let group = i32::try_from(child.id()).map_err(|_| BridgeError::Spawn)?;
     let mut stdin_writer = if let Some(payload) = stdin_payload {
         let mut stdin = child.stdin.take().ok_or(BridgeError::Spawn)?;
         let payload = payload.to_vec();
@@ -998,12 +1082,7 @@ fn run_process_with_recovery(
     let mut global_abort_started = None;
     let status = loop {
         if hard_cancel_flag.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            if let Some(writer) = stdin_writer.take() {
-                let _ = writer.join();
-            }
-            let _ = reader.join();
+            stop_process_group(&mut child, group, stdin_writer, reader);
             return Err(BridgeError::Cancelled);
         }
         if global_abort
@@ -1021,12 +1100,7 @@ fn run_process_with_recovery(
                 }
             }
             if recovery_started.is_none_or(|since| since.elapsed() >= recovery_timeout) {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(writer) = stdin_writer.take() {
-                    let _ = writer.join();
-                }
-                let _ = reader.join();
+                stop_process_group(&mut child, group, stdin_writer, reader);
                 return Err(BridgeError::Timeout);
             }
         }
@@ -1038,12 +1112,7 @@ fn run_process_with_recovery(
                         .as_ref()
                         .is_some_and(|(_, grace)| since.elapsed() >= *grace)
                 }) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    if let Some(writer) = stdin_writer.take() {
-                        let _ = writer.join();
-                    }
-                    let _ = reader.join();
+                    stop_process_group(&mut child, group, stdin_writer, reader);
                     return Err(BridgeError::Cancelled);
                 }
                 thread::sleep(Duration::from_millis(10));
@@ -1051,8 +1120,22 @@ fn run_process_with_recovery(
         }
     };
 
+    // The leader has exited, but a descendant may still hold the pipes open.
+    // Every wait below is bounded; a stuck pipe is stopped, then abandoned.
     if let Some(writer) = stdin_writer.take() {
+        if !wait_for_thread(&writer, PIPE_DRAIN_GRACE) {
+            signal_process_group(group, libc::SIGKILL);
+            if !wait_for_thread(&writer, PIPE_DRAIN_GRACE) {
+                return Err(BridgeError::Wait);
+            }
+        }
         writer.join().map_err(|_| BridgeError::Wait)??;
+    }
+    if !wait_for_thread(&reader, PIPE_DRAIN_GRACE) {
+        signal_process_group(group, libc::SIGKILL);
+        if !wait_for_thread(&reader, PIPE_DRAIN_GRACE) {
+            return Err(BridgeError::Wait);
+        }
     }
     let (output, oversized) = reader.join().map_err(|_| BridgeError::Wait)??;
     if oversized {
@@ -1065,6 +1148,72 @@ fn run_process_with_recovery(
         return Err(BridgeError::Empty);
     }
     Ok(output)
+}
+
+/// Stop a child and everything it spawned, then release its pipe threads.
+fn stop_process_group(
+    child: &mut Child,
+    group: i32,
+    stdin_writer: Option<thread::JoinHandle<Result<(), BridgeError>>>,
+    reader: thread::JoinHandle<Result<(Vec<u8>, bool), BridgeError>>,
+) {
+    terminate_process_group(child, group);
+    if let Some(writer) = stdin_writer {
+        let _ = join_when_finished(writer, PIPE_DRAIN_GRACE);
+    }
+    let _ = join_when_finished(reader, PIPE_DRAIN_GRACE);
+}
+
+/// SIGTERM the group, allow a short grace for handlers, then SIGKILL whatever
+/// remains. The leader is reaped here so the group id stays reserved until the
+/// group is gone.
+fn terminate_process_group(child: &mut Child, group: i32) {
+    signal_process_group(group, libc::SIGTERM);
+    let deadline = Instant::now() + PROCESS_TERM_GRACE;
+    loop {
+        let _ = child.try_wait();
+        if !process_group_alive(group) || Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if process_group_alive(group) {
+        signal_process_group(group, libc::SIGKILL);
+    }
+    let _ = child.wait();
+}
+
+fn signal_process_group(group: i32, signal: libc::c_int) {
+    // A negative pid addresses the process group. Errors mean the group is
+    // already gone, which is the state we want.
+    unsafe {
+        libc::killpg(group, signal);
+    }
+}
+
+fn process_group_alive(group: i32) -> bool {
+    unsafe { libc::killpg(group, 0) == 0 }
+}
+
+fn wait_for_thread<T>(handle: &thread::JoinHandle<T>, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while !handle.is_finished() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    true
+}
+
+/// Join only a finished thread. A thread still blocked on a pipe is detached
+/// rather than joined, so the caller's deadline holds.
+fn join_when_finished<T>(handle: thread::JoinHandle<T>, limit: Duration) -> Option<T> {
+    if wait_for_thread(&handle, limit) {
+        handle.join().ok()
+    } else {
+        None
+    }
 }
 
 fn parse_json_output(bytes: &[u8]) -> Result<Value, BridgeError> {
@@ -1399,6 +1548,11 @@ fn settings_action_args(
     Ok(args)
 }
 
+fn internal_cancel_key() -> String {
+    let seq = INTERNAL_CANCEL_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{INTERNAL_CANCEL_PREFIX}{seq}")
+}
+
 fn valid_model_swap_token(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 36 {
@@ -1597,14 +1751,42 @@ fn read_voice_process_args(pid: i32) -> Result<Option<VoiceProcessArgs>, BridgeE
         )
     };
     if result != 0 {
-        return if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
-            Ok(None) // Exited since ps; permission/parse failures still block spawn.
+        // Exited since ps (a zombie or a reaped PID) is not a listener.
+        // Anything still alive that we cannot read keeps blocking the spawn.
+        return if process_has_exited(pid) {
+            Ok(None)
         } else {
             Err(BridgeError::VoiceProcessCheck)
         };
     }
     bytes.truncate(size);
     parse_voice_process_args(&bytes).map(Some)
+}
+
+/// True only when the PID is gone or is a zombie. Live processes, including
+/// ones whose argv cannot be read, return false so they keep blocking a start.
+#[cfg(target_os = "macos")]
+fn process_has_exited(pid: i32) -> bool {
+    let mut info: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdshortinfo>();
+    let Ok(size_arg) = libc::c_int::try_from(size) else {
+        return false;
+    };
+    // SAFETY: info is writable for exactly size bytes; this is a read-only
+    // query that sends no signal.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDT_SHORTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdshortinfo).cast(),
+            size_arg,
+        )
+    };
+    if written == size_arg {
+        return info.pbsi_status == libc::SZOMB;
+    }
+    written <= 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1662,6 +1844,15 @@ fn plan_voice_session(
         script,
         tts_out: state_root.join(VOICE_TTS_OUT_NAME),
     })
+}
+
+/// The voice session outlives the call that starts it, so the bridge does not
+/// keep the handle. One background wait collects the exit status; dropping the
+/// Child unwaited would leave a zombie once the session ends.
+fn reap_in_background(mut child: Child) {
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 fn voice_session_command(
@@ -1899,7 +2090,10 @@ fn write_model_swap_cancel_marker(path: &Path) -> Result<(), BridgeError> {
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or(BridgeError::StateIo)?;
-    let temp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    // Same-process writers share the pid, so each write also takes a sequence
+    // number; create_new then never collides with a writer in flight.
+    let seq = MARKER_TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".{file_name}.{}.{seq}.tmp", std::process::id()));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -4948,5 +5142,429 @@ mod tests {
             Some(&Some(plan.tts_out.clone().into_os_string()))
         );
         let _ = fs::remove_dir_all(&temp);
+    }
+
+    // Fixture bridge: every bundled payload path exists with synthetic bytes,
+    // so resource validation passes and tests reach the real spawn path. The
+    // dev layout with `python3` runs the synthetic script found at the menubar
+    // path. Nothing from the installed app, a LaunchAgent, or the real state
+    // directories is touched.
+    fn write_fixture_file(path: &Path, bytes: &[u8], executable: bool) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(
+            path,
+            std::os::unix::fs::PermissionsExt::from_mode(if executable { 0o755 } else { 0o644 }),
+        )
+        .unwrap();
+    }
+
+    fn fixture_bridge(name: &str, script: &str) -> (PythonBridge, PathBuf) {
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-bridge-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for relative in resource_layout::DATA_FILES {
+            write_fixture_file(&root.join(relative), b"fixture only", false);
+        }
+        write_fixture_file(
+            &root.join(resource_layout::CLI),
+            b"#!/bin/sh\nexit 0\n",
+            true,
+        );
+        write_fixture_file(
+            &root.join(resource_layout::MENUBAR_SCRIPT),
+            script.as_bytes(),
+            false,
+        );
+        let mut bridge = PythonBridge::new();
+        let config = Arc::get_mut(&mut bridge.config).unwrap();
+        config.python = PathBuf::from("python3");
+        config.resources = Ok(ResourceLayout {
+            root: root.clone(),
+            installed: false,
+            script: root.join(resource_layout::MENUBAR_SCRIPT),
+            bin: root.join(resource_layout::CLI),
+        });
+        config.state_root = root.join("state");
+        config.logs_dir = root.join("logs");
+        (bridge, root)
+    }
+
+    /// Synthetic child: records its own PID under the state root, then sleeps.
+    const SLEEPING_CHILD: &str = "import os, sys, time\nfrom pathlib import Path\nstate = Path(sys.argv[sys.argv.index('--state-root') + 1])\nstate.mkdir(parents=True, exist_ok=True)\n(state / 'child.pid').write_text(str(os.getpid()))\ntime.sleep(30)\n";
+
+    fn wait_for_pid_file(path: &Path) -> i32 {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(pid) = fs::read_to_string(path)
+                .ok()
+                .and_then(|text| text.trim().parse::<i32>().ok())
+            {
+                return pid;
+            }
+            assert!(Instant::now() < deadline, "child never published its pid");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Signal 0 probes existence only for a PID this test spawned. A reaped
+    /// process reports ESRCH; a zombie still answers, so the probe also proves
+    /// the bridge reaped it.
+    fn pid_is_gone(pid: i32) -> bool {
+        let probe = unsafe { libc::kill(pid, 0) };
+        probe == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
+
+    fn wait_until_gone(pid: i32, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            if pid_is_gone(pid) {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        pid_is_gone(pid)
+    }
+
+    /// Cleanup only: kills a PID that a test's own synthetic child published.
+    fn kill_own_child(pid: i32) {
+        if pid > 0 && !pid_is_gone(pid) {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+
+    #[test]
+    fn timeout_stops_grandchild_that_holds_stdout() {
+        // A shell spawns a sleeping grandchild that inherits stdout. Killing only
+        // the shell used to leave the pipe open, so the timeout waited 30s.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-group-timeout-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let pid_file = temp.join("grandchild.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; sleep 30", pid_file.display());
+        let started = Instant::now();
+        let result = run_process_with_recovery(
+            "sh",
+            &["-c".to_string(), script],
+            Duration::from_millis(200),
+            1024,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: Arc::new(AtomicBool::new(false)),
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+        );
+        let elapsed = started.elapsed();
+        let grandchild = wait_for_pid_file(&pid_file);
+        let gone = wait_until_gone(grandchild, Duration::from_secs(2));
+        kill_own_child(grandchild);
+        fs::remove_dir_all(&temp).unwrap();
+        assert!(matches!(result, Err(BridgeError::Timeout)));
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "timeout stretched to {elapsed:?} by a grandchild holding stdout"
+        );
+        assert!(gone, "grandchild survived the timeout");
+    }
+
+    #[test]
+    fn cancel_gives_child_a_sigterm_grace_before_kill() {
+        // The child installs a SIGTERM handler that records the signal. A
+        // SIGKILL-only stop never runs it, so the marker would be missing.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-term-grace-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let term_marker = temp.join("term.txt");
+        let ready = temp.join("ready.pid");
+        let script = "import os, pathlib, signal, sys, time\n\
+            term, ready = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])\n\
+            def on_term(*_):\n    term.write_text('term')\n    sys.exit(0)\n\
+            signal.signal(signal.SIGTERM, on_term)\n\
+            ready.write_text(str(os.getpid()))\n\
+            time.sleep(30)\n";
+        let cancel = Arc::new(AtomicBool::new(false));
+        let trigger = cancel.clone();
+        let ready_for_trigger = ready.clone();
+        let signal = thread::spawn(move || {
+            let child_pid = wait_for_pid_file(&ready_for_trigger);
+            trigger.store(true, Ordering::SeqCst);
+            child_pid
+        });
+        let result = run_process_with_recovery(
+            "python3",
+            &[
+                "-c".to_string(),
+                script.to_string(),
+                term_marker.to_string_lossy().into_owned(),
+                ready.to_string_lossy().into_owned(),
+            ],
+            Duration::from_secs(20),
+            1024,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: cancel,
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+        );
+        let child_pid = signal.join().unwrap();
+        let gone = wait_until_gone(child_pid, Duration::from_secs(2));
+        let marker = fs::read_to_string(&term_marker).ok();
+        kill_own_child(child_pid);
+        fs::remove_dir_all(&temp).unwrap();
+        assert!(matches!(result, Err(BridgeError::Cancelled)));
+        assert_eq!(marker.as_deref(), Some("term"), "SIGTERM was not delivered");
+        assert!(gone, "child survived cancellation");
+    }
+
+    #[test]
+    fn normal_exit_does_not_wait_on_a_lingering_grandchild() {
+        // The leader succeeds, but a background grandchild keeps stdout open.
+        // The pipe drain used to be unbounded, so this blocked for 30s.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-group-exit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let pid_file = temp.join("grandchild.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; echo done", pid_file.display());
+        let started = Instant::now();
+        let result = run_process_with_recovery(
+            "sh",
+            &["-c".to_string(), script],
+            Duration::from_secs(5),
+            1024,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: Arc::new(AtomicBool::new(false)),
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+        );
+        let elapsed = started.elapsed();
+        let grandchild = wait_for_pid_file(&pid_file);
+        let gone = wait_until_gone(grandchild, Duration::from_secs(2));
+        kill_own_child(grandchild);
+        fs::remove_dir_all(&temp).unwrap();
+        assert_eq!(result.unwrap(), b"done\n");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "normal exit waited {elapsed:?} on a lingering grandchild"
+        );
+        assert!(gone, "lingering grandchild was not stopped");
+    }
+
+    fn register_token_in_use(bridge: &PythonBridge, token: &str) {
+        bridge.cancellations.lock().unwrap().insert(
+            token.to_string(),
+            CancellationHandle {
+                flag: Arc::new(AtomicBool::new(false)),
+                cooperative_marker: None,
+                global_abort_flag: None,
+            },
+        );
+    }
+
+    fn job_error_code(bridge: &PythonBridge, job_id: &str) -> Option<Option<String>> {
+        bridge
+            .jobs_snapshot()
+            .into_iter()
+            .find(|event| event.job_id == job_id)
+            .map(|event| event.error_code)
+    }
+
+    #[test]
+    fn rejected_duplicate_browser_token_keeps_the_running_job() {
+        // A duplicate token is refused before any child starts. The refusal must
+        // not finish or re-label the job that still owns the token.
+        let (bridge, root) = fixture_bridge("dup-browser", SLEEPING_CHILD);
+        register_token_in_use(&bridge, "browser-dup");
+        bridge.begin_job("job-running", "browser", "running", 0.7);
+
+        let result = bridge.run_browser_tool("job-running", "open page", Some("browser-dup"));
+        let still_listed = job_error_code(&bridge, "job-running");
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
+        assert_eq!(
+            still_listed,
+            Some(None),
+            "running browser job was removed or relabelled"
+        );
+    }
+
+    #[test]
+    fn rejected_duplicate_model_swap_token_keeps_the_running_job() {
+        let (bridge, root) = fixture_bridge("dup-swap", SLEEPING_CHILD);
+        let token = "123e4567-e89b-42d3-a456-426614174099";
+        register_token_in_use(&bridge, token);
+        bridge.begin_job(token, "model_swap", "swap", 0.9);
+
+        let result = bridge.fetch_settings_action(
+            "model-swap",
+            None,
+            None,
+            None,
+            Some(SWAP_MODEL_ID),
+            Some(true),
+            Some(token),
+        );
+        let still_listed = job_error_code(&bridge, token);
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
+        assert_eq!(
+            still_listed,
+            Some(None),
+            "running swap job was removed or relabelled"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn exited_candidates_are_not_read_as_a_failed_voice_check() {
+        // ps can list a same-user Python process that exits before its argv is
+        // read. macOS answers EINVAL for a zombie and for a PID that is gone, so
+        // the probe used to refuse every voice start in that window.
+        let mut child = Command::new("sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = i32::try_from(child.id()).unwrap();
+        thread::sleep(Duration::from_millis(200));
+        let zombie = read_voice_process_args(pid);
+        child.wait().unwrap();
+        let reaped = read_voice_process_args(pid);
+        assert!(matches!(zombie, Ok(None)), "zombie refused: {zombie:?}");
+        assert!(matches!(reaped, Ok(None)), "reaped pid refused: {reaped:?}");
+    }
+
+    #[test]
+    fn app_exit_stops_children_without_latching_future_jobs() {
+        // Quitting mid-job must not orphan the child, and must not write the
+        // emergency latch: a latch blocks every later job until a human resume.
+        let (bridge, root) = fixture_bridge("exit-stop", SLEEPING_CHILD);
+        let worker = bridge.clone();
+        let (outcome_tx, outcome_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let result = worker.run_python_with_output_limit(PythonRun {
+                timeout: Duration::from_secs(60),
+                ..PythonRun::default()
+            });
+            let _ = outcome_tx.send(result.map(|_| ()));
+        });
+        let pid = wait_for_pid_file(&bridge.config.state_root.join("child.pid"));
+        bridge.terminate_children(Duration::from_millis(100));
+        let outcome = outcome_rx.recv_timeout(Duration::from_secs(5));
+        let gone = wait_until_gone(pid, Duration::from_secs(2));
+        kill_own_child(pid);
+        let latched = bridge.config.state_root.join(ABORT_STATE_NAME).exists();
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            matches!(outcome, Ok(Err(BridgeError::Cancelled))),
+            "exit did not stop the child: {outcome:?}"
+        );
+        assert!(gone, "child survived app exit");
+        assert!(!latched, "app exit latched the abort");
+    }
+
+    #[test]
+    fn cancel_marker_writes_do_not_collide_on_temp_names() {
+        // Writers in one process share a pid. A writer that is already in flight
+        // holds the pid-based temp name, and create_new used to make the second
+        // writer fail. Each write needs its own temp name.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-marker-collide-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let marker = temp.join("marker.json");
+        let in_flight = temp.join(format!(".marker.json.{}.tmp", std::process::id()));
+        fs::write(&in_flight, b"other writer").unwrap();
+
+        let result = write_model_swap_cancel_marker(&marker);
+        let written = safe_small_json(&marker).and_then(|value| value.get("cancelled").cloned());
+        let other_untouched = fs::read(&in_flight).unwrap();
+        fs::remove_dir_all(&temp).unwrap();
+
+        assert!(
+            result.is_ok(),
+            "a second writer collided with an in-flight temp file"
+        );
+        assert_eq!(written, Some(json!(true)));
+        assert_eq!(other_untouched, b"other writer");
+    }
+
+    #[test]
+    fn voice_session_child_is_reaped_after_it_exits() {
+        // The voice child is detached on purpose, but dropping the Child without
+        // waiting leaves a zombie once it exits. The fixture interpreter records
+        // its PID under the state root and exits straight away.
+        let (mut bridge, root) = fixture_bridge("voice-reap", SLEEPING_CHILD);
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let voice_python = root.join("bin/voice-python");
+        write_fixture_file(
+            &voice_python,
+            b"#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --state-root ]; then echo $$ > \"$2/voice.pid\"; fi\n  shift\ndone\nexit 0\n",
+            true,
+        );
+        Arc::get_mut(&mut bridge.config).unwrap().voice_python = voice_python;
+
+        bridge.start_voice_session().unwrap();
+        let pid = wait_for_pid_file(&state.join("voice.pid"));
+        let gone = wait_until_gone(pid, Duration::from_secs(2));
+        kill_own_child(pid);
+        fs::remove_dir_all(root).unwrap();
+        assert!(gone, "exited voice session child was left as a zombie");
+    }
+
+    #[test]
+    fn global_abort_reaches_untokened_child() {
+        // mlx-server-launch, model-set, model-prepare, room-upsert and the
+        // knowledge actions run without a token. Global abort must still reach
+        // them during their long timeouts.
+        let (bridge, root) = fixture_bridge("untokened-abort", SLEEPING_CHILD);
+        let worker = bridge.clone();
+        let (outcome_tx, outcome_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let result = worker.run_python_with_output_limit(PythonRun {
+                timeout: Duration::from_secs(60),
+                ..PythonRun::default()
+            });
+            let _ = outcome_tx.send(result.map(|_| ()));
+        });
+        let pid = wait_for_pid_file(&bridge.config.state_root.join("child.pid"));
+        let started = Instant::now();
+        bridge.global_abort().unwrap();
+        let outcome = outcome_rx.recv_timeout(Duration::from_secs(5));
+        let returned_in = started.elapsed();
+        let gone = wait_until_gone(pid, Duration::from_secs(2));
+        kill_own_child(pid);
+        fs::remove_dir_all(root).unwrap();
+        assert!(
+            matches!(outcome, Ok(Err(BridgeError::Cancelled))),
+            "untokened child was not aborted: {outcome:?}"
+        );
+        assert!(returned_in < Duration::from_secs(2));
+        assert!(gone, "aborted child survived");
     }
 }
