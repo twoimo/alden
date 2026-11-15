@@ -13918,14 +13918,17 @@ print(json.dumps({
         module = self._load_auto_reply_module(
             "auto_reply_scheduled_strict_skip_test"
         )
+        self._room_is_current(module)
+        # The scheduled path names the first policy rule a draft breaks, and a
+        # two-ㅋ run fails the reaction rule before the laughter rule.
         cases = (
-            ("context", True, "planned", "context_only_author", "context_only"),
-            ("empty", False, None, "empty_scheduled_reply", "uncertain"),
+            ("self-author", "self", "planned", "self_author", "policy"),
+            ("empty", "allowed", None, "empty_scheduled_reply", "uncertain"),
             (
                 "short-laughter",
-                False,
+                "allowed",
                 "좋네ㅋㅋ",
-                module.REPLY_LAUGHTER_POLICY_REASON,
+                "policy_reaction_mismatch",
                 "policy",
             ),
         )
@@ -13933,7 +13936,7 @@ print(json.dumps({
             self._point_queue(module, Path(temporary))
             queue = self._worker_queue_connection(module)
             try:
-                for index, (name, context_only, reply, reason, category) in enumerate(
+                for index, (name, identity, reply, reason, category) in enumerate(
                     cases,
                     start=1,
                 ):
@@ -13944,6 +13947,7 @@ print(json.dumps({
                             name,
                             int(time.time()),
                         )
+                        event["analysis_watermark_log_id"] = event["log_id"]
                         event["response_window_upper_seconds"] = 300.0
                         job = {
                             "event_id": event["event_id"],
@@ -13989,22 +13993,12 @@ print(json.dumps({
                             mock.patch.object(
                                 module,
                                 "numeric_author_identity_status",
-                                return_value="allowed",
+                                return_value=identity,
                             ),
                             mock.patch.object(
                                 module,
                                 "event_exceeds_response_upper",
                                 return_value=False,
-                            ),
-                            mock.patch.object(
-                                module,
-                                "conversation_advanced_past_event",
-                                return_value=False,
-                            ),
-                            mock.patch.object(
-                                module,
-                                "is_context_only_author",
-                                return_value=context_only,
                             ),
                             mock.patch.object(
                                 module,
