@@ -28,12 +28,10 @@ class LaughterSelectionTests(unittest.TestCase):
             draft, "그건 좀 세네", laughter_allowed=True
         )
 
-    @unittest.expectedFailure
     def test_allowed_four_run_reply_passes_through_unchanged(self):
         for _ in range(20):
             self.assertEqual(self.sanitize("ㅋㅋㅋㅋ 그건 좀"), "ㅋㅋㅋㅋ 그건 좀")
 
-    @unittest.expectedFailure
     def test_same_draft_always_sanitizes_to_the_same_reply(self):
         outputs = {self.sanitize("좋네 ㅋㅋㅋ") for _ in range(20)}
         self.assertEqual(len(outputs), 1, outputs)

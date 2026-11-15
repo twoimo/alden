@@ -9692,20 +9692,21 @@ def _owner_laughter_run_lengths(profile: dict | None) -> list[int]:
 
 
 def _resample_laughter_runs(text: str, profile: dict | None = None) -> str:
-    """Replace each ㅋ{3,} run with a length sampled from the owner distribution.
+    """Replace each exact ㅋㅋㅋ run with a length sampled from the owner distribution.
 
-    Prevents the model tendency to always emit exactly 3 ㅋ.
-    Runs shorter than 3 are left as-is (stripped by the policy).
+    Prevents the model tendency to always emit exactly 3 ㅋ. A longer run is
+    already varied and stays as written. The draft seeds the draw, so the same
+    draft always sanitizes to the same reply.
     """
-    import random
     pool = _owner_laughter_run_lengths(profile)
     if not pool:
         return text
+    draw = random.Random(text)
 
     def _replace(match):
-        return "ㅋ" * random.choice(pool)
+        return "ㅋ" * draw.choice(pool)
 
-    return re.sub(r"ㅋ{3,}", _replace, text)
+    return re.sub(r"(?<!ㅋ)ㅋ{3}(?!ㅋ)", _replace, text)
 
 
 
