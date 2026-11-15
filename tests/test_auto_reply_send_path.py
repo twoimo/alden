@@ -1602,6 +1602,36 @@ class SendBoundaryTests(SendPathCase):
             {"allowed": [f"답 {index}" for index in range(9, 1, -1)]},
         )
 
+    def test_only_a_reply_about_to_be_typed_enters_the_composer_allowlist(self):
+        allowlist = self.room / "composer-allowlist.json"
+        unavailable = (1, b"", b"KakaoTalk window is not open")
+
+        blocked = self.inbound(770)
+        self.due_draft(blocked, "막힌 답")
+        self.cli.preflight = unavailable
+        with mock.patch.object(self.module, "PRE_SEND_PREFLIGHT_RETRY_SECONDS", 0.0):
+            self.assertEqual(self.send_reply("막힌 답", blocked)[:2], (False, []))
+
+        held = self.inbound(771)
+        scheduled = json.loads(self.due_draft(held, "보류된 답")["event_json"])
+        self.cli.preflight = "ready"
+        self.observe_room_tail(772)
+        self.assertEqual(
+            self.send_reply("보류된 답", scheduled)[:2],
+            (False, ["conversation_context_changed"]),
+        )
+        self.assertEqual(self.cli.sends(), [])
+        self.assertFalse(allowlist.exists())
+
+        sent = self.inbound(773)
+        self.due_draft(sent, REPLY)
+        at_send = []
+        self.cli.before_send = lambda _argv: at_send.append(
+            json.loads(allowlist.read_text(encoding="utf-8"))
+        )
+        self.assertTrue(self.send_reply(REPLY, sent)[0])
+        self.assertEqual(at_send, [{"allowed": [REPLY]}])
+
     def test_preflight_is_retried_a_bounded_number_of_times(self):
         event = self.inbound(760)
         self.due_draft(event, REPLY)
