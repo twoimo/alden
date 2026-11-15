@@ -1,4 +1,4 @@
-//! The Telegram-desktop → KakaoTalk relay (텔레그램중계기) — task 8 (R7).
+//! The Telegram-desktop → KakaoTalk relay (텔레그램중계기) (R7).
 //!
 //! The relay reads a registered Telegram desktop conversation through macOS
 //! Accessibility ([`AxReadPort`]) and forwards each new message — text, links,
@@ -14,10 +14,11 @@
 //!   [`Settlement::MissFinal`]; a [`Settlement::MissRetrying`] leaves the cursor
 //!   in place, so the confirmed-send sequence is always a subsequence of the
 //!   original time order.
-//! * **Retry only the missing images, then give up after three (R7.8, R7.18).**
-//!   An image-count mismatch keeps the cursor pinned and retries on the next
-//!   tick, re-acquiring the missing images; three consecutive mismatches settle
-//!   the message as [`Settlement::MissFinal`] and the cursor advances.
+//! * **Retry an image mismatch, then give up after three (R7.8, R7.18).**
+//!   An image-count mismatch keeps the cursor pinned, so the next tick
+//!   re-acquires every image and re-sends the whole message to each room not
+//!   yet marked delivered; three consecutive mismatches settle the message as
+//!   [`Settlement::MissFinal`] and the cursor advances.
 //! * **Deliver each (message, room) at most once (R7.10, R12.7).** The
 //!   [`RelayLedger`] records a confirmed delivery keyed by `(chat_id,
 //!   provenance-hashed message id)`, so an app restart, AX reconnect, or retry
@@ -44,10 +45,6 @@ use crate::logging::{FlowKind, HistoryStore, PipelineEvent, Stage, StageStatus};
 use crate::ports::{AxReadPort, Clock, DetectMode, ImageBlob};
 
 pub use crate::ports::{ExcludedAttachment, LinkRef};
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 /// The maximum registered relay pairs (R7.1).
 pub const MAX_PAIRS: usize = 8;
@@ -76,11 +73,6 @@ pub const P50_TARGET_MS: u64 = 3_000;
 /// The P95 relay-latency target, in milliseconds (R7.11).
 pub const P95_TARGET_MS: u64 = 10_000;
 
-// ---------------------------------------------------------------------------
-// Pair
-// ---------------------------------------------------------------------------
-
-/// A reference to a Telegram desktop conversation in a relay pair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TelegramChatRef {
     /// A stable identifier for the Telegram conversation (never stored raw).
@@ -91,7 +83,6 @@ pub struct TelegramChatRef {
 /// relays into (R7.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayPair {
-    /// The Telegram desktop conversation to read.
     pub telegram: TelegramChatRef,
     /// The target KakaoTalk room chat ids (each on the automation allowlist).
     pub kakao_rooms: Vec<i64>,
@@ -111,10 +102,6 @@ impl RelayPair {
         ))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Cursor
-// ---------------------------------------------------------------------------
 
 /// The last relayed position in a pair's Telegram stream (R7.1).
 ///
@@ -141,10 +128,6 @@ impl RelayCursor {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Latency window
-// ---------------------------------------------------------------------------
-
 /// A rolling window of the most recent relay latencies (R7.11).
 ///
 /// It keeps at most [`LATENCY_WINDOW_MAX`] samples and reports percentiles only
@@ -155,7 +138,6 @@ pub struct LatencyWindow {
 }
 
 impl LatencyWindow {
-    /// A fresh, empty window.
     pub fn new() -> Self {
         Self {
             samples: VecDeque::new(),
@@ -170,12 +152,10 @@ impl LatencyWindow {
         self.samples.push_back(latency_ms);
     }
 
-    /// How many samples are currently held.
     pub fn len(&self) -> usize {
         self.samples.len()
     }
 
-    /// Whether the window holds no samples.
     pub fn is_empty(&self) -> bool {
         self.samples.is_empty()
     }
@@ -203,7 +183,6 @@ impl LatencyWindow {
                 || self.p95().is_some_and(|v| v > P95_TARGET_MS))
     }
 
-    /// A snapshot for the tick result and the History window.
     pub fn snapshot(&self) -> LatencySnapshot {
         LatencySnapshot {
             samples: self.samples.len(),
@@ -231,7 +210,6 @@ impl LatencyWindow {
 /// A read-only view of the latency window at a point in time (R7.11, R7.12).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LatencySnapshot {
-    /// How many samples back the snapshot.
     pub samples: usize,
     /// Whether the targets can be judged yet (≥ 20 samples).
     pub ready: bool,
@@ -243,14 +221,9 @@ pub struct LatencySnapshot {
     pub exceeds_target: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Ledger + cursor store
-// ---------------------------------------------------------------------------
-
 /// A failure from the relay ledger or cursor store.
 #[derive(Debug, Error)]
 pub enum LedgerError {
-    /// The backing store failed.
     #[error("중계 기록 저장소 오류: {0}")]
     Backend(String),
 }
@@ -288,7 +261,6 @@ pub trait RelayCursorStore {
     /// relayed.
     fn load(&self, pair_key: &str) -> Result<Option<RelayCursor>, LedgerError>;
 
-    /// Persist the cursor for `pair_key`.
     fn save(&self, pair_key: &str, cursor: &RelayCursor) -> Result<(), LedgerError>;
 }
 
@@ -440,14 +412,9 @@ impl RelayCursorStore for SqliteRelayStore {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Sender seam
-// ---------------------------------------------------------------------------
-
 /// The outcome of relaying one message to one KakaoTalk room (R7.15).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelaySendOutcome {
-    /// The message was sent and this many images were delivered.
     Sent {
         /// How many attached images were confirmed as delivered.
         images_delivered: usize,
@@ -457,7 +424,6 @@ pub enum RelaySendOutcome {
         /// The plain-language fence reason.
         reason: String,
     },
-    /// The send failed at some stage.
     Failed {
         /// A short, stable failure code.
         code: &'static str,
@@ -476,10 +442,6 @@ pub trait RelaySender {
     fn send_relay(&self, chat_id: i64, text: &str, images: &[ImageBlob]) -> RelaySendOutcome;
 }
 
-// ---------------------------------------------------------------------------
-// Settlement
-// ---------------------------------------------------------------------------
-
 /// How a message's relay settled (R7.7, R7.8, R7.18).
 ///
 /// The cursor advances only on [`Settlement::Committed`] or
@@ -489,8 +451,8 @@ pub trait RelaySender {
 pub enum Settlement {
     /// Every source image was delivered to every target room.
     Committed(ImageTally),
-    /// The image counts disagree; the missing images are retried within the
-    /// window and the cursor stays put (R7.8).
+    /// The image counts disagree; the cursor stays put so the whole message is
+    /// retried on the next tick (R7.8).
     MissRetrying(ImageTally),
     /// Three consecutive mismatches (or an undeliverable target) — the miss is
     /// final and the cursor advances (R7.18).
@@ -498,15 +460,10 @@ pub enum Settlement {
 }
 
 impl Settlement {
-    /// Whether the cursor may advance past this message (R7.9).
     fn advances_cursor(&self) -> bool {
         matches!(self, Settlement::Committed(_) | Settlement::MissFinal(_))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Pure helpers
-// ---------------------------------------------------------------------------
 
 /// Extract the links to relay, preferring the real URL over display text
 /// (R7.3, R7.4), capped at [`MAX_LINKS`].
@@ -572,16 +529,11 @@ fn render_body(text: &str, links: &[String]) -> String {
     body
 }
 
-// ---------------------------------------------------------------------------
-// Tick result
-// ---------------------------------------------------------------------------
-
 /// One message's outcome within a [`RelayTick`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageOutcome {
     /// The provenance-hashed id of the message.
     pub message_pid: String,
-    /// How the message settled.
     pub settlement: Settlement,
     /// The attachments excluded from relaying (R7.19).
     pub excluded: Vec<ExcludedAttachment>,
@@ -594,7 +546,6 @@ pub struct MessageOutcome {
 /// The result of one [`TelegramRelay::tick`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayTick {
-    /// The detection mode in use this tick (R7.13).
     pub detect_mode: DetectMode,
     /// The messages processed this tick, in order.
     pub processed: Vec<MessageOutcome>,
@@ -606,10 +557,6 @@ pub struct RelayTick {
     /// this tick; the cursor is left untouched (R7.14).
     pub ax_unavailable: bool,
 }
-
-// ---------------------------------------------------------------------------
-// TelegramRelay
-// ---------------------------------------------------------------------------
 
 /// The Telegram → KakaoTalk relay for one pair (R7).
 pub struct TelegramRelay<'a> {
@@ -741,8 +688,6 @@ impl<'a> TelegramRelay<'a> {
         let start = self.clock.now_ms();
         let pid_hash = crate::context::provenance_id(&message.pid);
 
-        // Links (real URL preferred, R7.3/R7.4) and the excluded-attachment note
-        // (R7.19).
         let (rendered_links, unresolved_links) = extract_links(&message.links);
         let excluded = message.excluded.clone();
 
@@ -761,7 +706,6 @@ impl<'a> TelegramRelay<'a> {
         let body = render_body(&message.text, &rendered_links);
         let nothing_to_send = body.is_empty() && source_images == 0;
 
-        // Aggregate over target rooms.
         let mut all_delivered = true; // every room fully delivered (or already)
         let mut retrying = false; // some room has a retryable image miss
         let mut delivered_min = source_images; // worst delivered across sent rooms
@@ -789,8 +733,6 @@ impl<'a> TelegramRelay<'a> {
                     if complete {
                         let _ = self.ledger.mark(room, &pid_hash, self.clock.now_ms());
                     } else {
-                        // Image-count mismatch: retryable up to the streak limit
-                        // (R7.8, R7.18).
                         all_delivered = false;
                         let streak = self
                             .ledger
@@ -849,7 +791,6 @@ impl<'a> TelegramRelay<'a> {
             self.latency.record(latency);
         }
 
-        // Redacted journal record: stage, result code, elapsed only (R7.16).
         self.journal_stage(&pid_hash, Stage::Commit, status, code, start);
 
         MessageOutcome {
@@ -919,8 +860,6 @@ mod tests {
     use crate::ports::{AcquireError, ImageAcquirer, ImageAcquisition, ImageRef, TelegramMessage};
     use std::cell::RefCell;
 
-    // ---- helpers ----
-
     fn msg(pid: &str, at: i64, order: i64, text: &str) -> TelegramMessage {
         TelegramMessage {
             pid: pid.into(),
@@ -939,7 +878,6 @@ mod tests {
         }
     }
 
-    /// An acquirer that always yields a non-empty image.
     struct OkAcquirer {
         clock: VirtualClock,
     }
@@ -956,7 +894,6 @@ mod tests {
         }
     }
 
-    /// An acquirer that never yields an image.
     struct NeverAcquirer {
         kind: ImageAcquisition,
     }
@@ -999,7 +936,6 @@ mod tests {
         }
     }
 
-    /// A never-acquiring ladder (all three rungs fail).
     struct FailLadderRig {
         clock: VirtualClock,
         n0: NeverAcquirer,
@@ -1029,7 +965,6 @@ mod tests {
         }
     }
 
-    /// A sender that returns a scripted outcome and records every send target.
     struct ScriptedSender {
         outcome: RelaySendOutcome,
         sends: RefCell<Vec<i64>>,
@@ -1058,8 +993,6 @@ mod tests {
             kakao_rooms: rooms.to_vec(),
         }
     }
-
-    // ---- LatencyWindow ----
 
     #[test]
     fn latency_window_not_ready_below_twenty() {
@@ -1105,8 +1038,6 @@ mod tests {
         assert!(w.exceeds_target());
     }
 
-    // ---- extract_links / summarize_excluded ----
-
     #[test]
     fn extract_links_prefers_real_url_and_flags_display_only() {
         let links = vec![
@@ -1142,8 +1073,6 @@ mod tests {
         assert!(summarize_excluded(&[]).is_none());
     }
 
-    // ---- SqliteRelayStore ----
-
     #[test]
     fn ledger_mark_and_is_delivered() {
         let store = SqliteRelayStore::open_in_memory().unwrap();
@@ -1160,7 +1089,6 @@ mod tests {
         assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 1);
         assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 2);
         assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 3);
-        // Never exceeds the CHECK ceiling.
         assert_eq!(store.bump_mismatch(1, "pid").unwrap(), 3);
     }
 
@@ -1176,8 +1104,6 @@ mod tests {
         store.save("pair-1", &cursor).unwrap();
         assert_eq!(store.load("pair-1").unwrap(), Some(cursor));
     }
-
-    // ---- tick ----
 
     fn build<'a>(
         ax: &'a FakeAxReadPort,
@@ -1211,9 +1137,7 @@ mod tests {
             Settlement::Committed(_)
         ));
         assert_eq!(sender.send_count(), 1);
-        // Cursor advanced to the message.
         assert_eq!(relay.cursor().last_at, 1);
-        // Delivered — recorded in the ledger.
         let pid_hash = crate::context::provenance_id("m1");
         assert!(store.is_delivered(10, &pid_hash));
     }
@@ -1237,8 +1161,6 @@ mod tests {
         let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
 
         let tick = relay.tick();
-        // All three settled as committed, and the cursor walked 1 → 2 → 3, so the
-        // confirmed order is the ascending time order (R7.9, R12.8).
         assert_eq!(tick.processed.len(), 3);
         assert!(tick
             .processed
@@ -1258,7 +1180,6 @@ mod tests {
             images_delivered: 0,
         });
         let store = SqliteRelayStore::open_in_memory().unwrap();
-        // Pre-mark as delivered.
         store
             .mark(10, &crate::context::provenance_id("m1"), 1)
             .unwrap();
@@ -1270,7 +1191,6 @@ mod tests {
             tick.processed[0].settlement,
             Settlement::Committed(_)
         ));
-        // No new send happened — already delivered (R7.10).
         assert_eq!(sender.send_count(), 0);
         assert_eq!(relay.cursor().last_at, 1);
     }
@@ -1291,23 +1211,20 @@ mod tests {
         let journal = SqliteHistoryStore::open_in_memory().unwrap();
         let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
 
-        // Ticks 1 and 2: retrying, cursor pinned.
         for _ in 0..2 {
             let tick = relay.tick();
             assert!(matches!(
                 tick.processed[0].settlement,
                 Settlement::MissRetrying(_)
             ));
-            assert_eq!(relay.cursor().last_at, 0); // not advanced
+            assert_eq!(relay.cursor().last_at, 0);
         }
-        // Tick 3: third consecutive mismatch → final miss, cursor advances.
         let tick = relay.tick();
         assert!(matches!(
             tick.processed[0].settlement,
             Settlement::MissFinal(_)
         ));
         assert_eq!(relay.cursor().last_at, 1);
-        // Never marked delivered (R7.8/R7.10).
         assert!(!store.is_delivered(10, &crate::context::provenance_id("m1")));
     }
 
@@ -1329,7 +1246,6 @@ mod tests {
         let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
 
         let tick = relay.tick();
-        // The send still happened (text + links continue, R7.17).
         assert_eq!(sender.send_count(), 1);
         assert!(matches!(
             tick.processed[0].settlement,
@@ -1421,9 +1337,7 @@ mod tests {
         let journal = SqliteHistoryStore::open_in_memory().unwrap();
         let mut relay = build(&ax, &ladder, &sender, &store, &journal, &clock, pair(&[10]));
 
-        // Immediately: still on notifications.
         assert_eq!(relay.tick().detect_mode, DetectMode::Notification);
-        // After five seconds without confirmation: polling ≤ 2s (R7.13).
         clock.advance_ms(NOTIFICATION_CONFIRM_MS);
         let tick = relay.tick();
         match tick.detect_mode {

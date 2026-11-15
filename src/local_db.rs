@@ -9,10 +9,6 @@ use serde::Serialize;
 use serde_json::json;
 use sha2::Digest;
 
-// ---------------------------------------------------------------------------
-// Public data types
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, Serialize)]
 pub struct LocalChat {
     pub chat_id: i64,
@@ -442,8 +438,9 @@ pub fn is_self_author(author_id: i64, account_user_id: i64) -> bool {
 
 /// Exact attachment metadata read from one immutable local Kakao DB row.
 ///
-/// This intentionally excludes the message body and sender identity.  Media
-/// consumers need only the row identity, type, and opaque attachment JSON.
+/// This intentionally excludes the message body and sender name. Media
+/// consumers need only the row identity, author, type, and opaque attachment
+/// JSON.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalMediaAttachment {
     pub chat_id: i64,
@@ -517,10 +514,6 @@ pub struct LocalAuthorIdentity {
     pub is_self: bool,
 }
 
-// ---------------------------------------------------------------------------
-// Device info extraction
-// ---------------------------------------------------------------------------
-
 pub fn get_platform_uuid() -> Result<String> {
     let output = Command::new("/usr/sbin/ioreg")
         .args(["-rd1", "-c", "IOPlatformExpertDevice"])
@@ -531,8 +524,6 @@ pub fn get_platform_uuid() -> Result<String> {
     for line in stdout.lines() {
         if line.contains("IOPlatformUUID") {
             // ioreg outputs: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
-            // Split on '"' gives: ["", "IOPlatformUUID", " = ", "UUID-VALUE", ""]
-            // parts[3] is always the UUID value regardless of whether parts[1] is the key name.
             let parts: Vec<&str> = line.split('"').collect();
             if parts.len() >= 4 {
                 let uuid = parts[3].trim();
@@ -629,7 +620,7 @@ fn sha512_hex(bytes: &[u8]) -> String {
 /// True when SHA-512(user_id) equals the account hash. KakaoTalk stores the
 /// account hash as SHA-512 of the decimal user id, so a plist or cache that
 /// pairs the active hash with a different id is inconsistent and must not be
-/// trusted (2026-09-13).
+/// trusted.
 fn user_id_matches_account_hash(user_id: i64, account_hash: &str) -> bool {
     user_id > 0 && sha512_hex(user_id.to_string().as_bytes()) == account_hash
 }
@@ -800,7 +791,6 @@ fn get_user_id_from_plist_with_mode(mode: IdentityCacheMode) -> Result<i64> {
 fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
     let dict: plist::Dictionary = plist::from_file(path).context("Failed to parse plist")?;
 
-    // Strategy A: FSChatWindowTransparency keys → longest common suffix
     let prefix = "FSChatWindowTransparency";
     let suffixes: Vec<String> = dict
         .keys()
@@ -809,7 +799,7 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         .collect();
 
     if suffixes.len() >= 2 {
-        // Each suffix is chatId + userId. Find the common tail.
+        // Each suffix is chatId + userId.
         if let Some(common) = longest_common_suffix(&suffixes) {
             if let Ok(id) = common.parse::<i64>() {
                 return Ok(id);
@@ -817,7 +807,6 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         }
     }
 
-    // Strategy B: Direct key lookup
     for key in &["userId", "user_id", "KAKAO_USER_ID", "userID"] {
         if let Some(val) = dict.get(key) {
             if let Some(n) = val.as_signed_integer() {
@@ -831,8 +820,8 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         }
     }
 
-    // Strategy C: FSChatWindowFrame_ keys → shared userId (newer KT versions).
-    // Cheap and exact, so it runs before the brute-force fallback below.
+    // Newer KakaoTalk versions write FSChatWindowFrame_ keys. Cheap and exact,
+    // so this runs before the brute-force fallback below.
     let frame_prefix = "NSWindow Frame FSChatWindowFrame_";
     let frame_suffixes: Vec<String> = dict
         .keys()
@@ -847,8 +836,6 @@ fn extract_user_id_from_plist(path: &std::path::Path) -> Result<i64> {
         return Ok(id);
     }
 
-    // Strategy D: SHA-512 brute-force from revision key suffixes (last resort).
-    // Bounded by a wall-clock deadline so a missing/foreign hash cannot hang the CLI.
     if let Some(hash) = extract_active_account_hash(&dict) {
         if let Some(id) = recover_user_id_from_sha512(&hash) {
             return Ok(id);
@@ -886,8 +873,6 @@ fn extract_active_account_hash(dict: &plist::Dictionary) -> Option<String> {
     None
 }
 
-/// True when the plist belongs to the active account. When the active hash is
-/// unknown, any plist may be considered.
 fn plist_matches_active_account(dict: &plist::Dictionary, active_hash: Option<&str>) -> bool {
     match active_hash {
         None => true,
@@ -895,7 +880,6 @@ fn plist_matches_active_account(dict: &plist::Dictionary, active_hash: Option<&s
     }
 }
 
-/// Wall-clock budget for the one-time parallel SHA-512 pre-image search.
 const SHA512_BRUTE_FORCE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 const SHA512_BRUTE_FORCE_MAX_USER_ID: i64 = 1_000_000_000;
 const SHA512_BRUTE_FORCE_CHUNK: i64 = 100_000;
@@ -976,9 +960,6 @@ fn recover_user_id_from_sha512(hex_hash: &str) -> Option<i64> {
     }
 }
 
-/// Return the userId shared by every `FSChatWindowFrame_` suffix, but only when
-/// all suffixes are identical and parse as an integer. Returns `None` if the
-/// suffixes disagree (which would otherwise collapse to a wrong shared tail).
 fn unique_user_id(suffixes: &[String]) -> Option<i64> {
     let first = suffixes.first()?;
     if suffixes.iter().all(|s| s == first) {
@@ -1009,9 +990,7 @@ fn longest_common_suffix(strings: &[String]) -> Option<String> {
     Some(reversed[0][..common_len].iter().rev().collect())
 }
 
-// ---------------------------------------------------------------------------
-// Key derivation (matches kakaocli KeyDerivation.swift)
-// ---------------------------------------------------------------------------
+// Key derivation mirrors kakaocli's KeyDerivation.swift.
 
 fn hashed_device_uuid(uuid: &str) -> String {
     let sha1_hash = sha1::Sha1::digest(uuid.as_bytes());
@@ -1022,7 +1001,6 @@ fn hashed_device_uuid(uuid: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(&combined)
 }
 
-/// Derive the database file name from userId and UUID.
 fn derive_database_name(user_id: i64, uuid: &str) -> String {
     let reversed_uuid: String = uuid.chars().rev().collect();
     let hawawa = [
@@ -1037,18 +1015,15 @@ fn derive_database_name(user_id: i64, uuid: &str) -> String {
     ]
     .join(".");
 
-    // Salt: reversed base64(SHA1 || SHA256) of UUID
     let hashed = hashed_device_uuid(uuid);
     let salt: String = hashed.chars().rev().collect();
 
     let derived = pbkdf2_sha256(hawawa.as_bytes(), salt.as_bytes(), 100_000, 128);
     let hex_str = hex::encode(&derived);
 
-    // Extract substring [28..106] (78 chars)
     hex_str[28..106].to_string()
 }
 
-/// Derive the SQLCipher encryption key.
 fn derive_secure_key(user_id: i64, uuid: &str) -> String {
     let hashed = hashed_device_uuid(uuid);
 
@@ -1069,7 +1044,6 @@ fn derive_secure_key(user_id: i64, uuid: &str) -> String {
     let hawawa: String = parts.join("F");
     let reversed_hawawa: String = hawawa.chars().rev().collect();
 
-    // Salt: UUID from 30% offset to end
     let offset = (uuid.len() as f64 * 0.3) as usize;
     let salt = &uuid[offset..];
 
@@ -1077,28 +1051,24 @@ fn derive_secure_key(user_id: i64, uuid: &str) -> String {
     hex::encode(&derived)
 }
 
-/// PBKDF2-HMAC-SHA256
 fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, key_len: usize) -> Vec<u8> {
     use hmac::{Hmac, Mac};
     type HmacSha256 = Hmac<sha2::Sha256>;
 
-    let hash_len = 32; // SHA-256 output
+    let hash_len = 32;
     let blocks_needed = key_len.div_ceil(hash_len);
     let mut output = Vec::with_capacity(blocks_needed * hash_len);
 
     // The key schedule is identical for every PRF call, so key the HMAC once
-    // and clone the prepared state. Re-deriving it inside the 100k-iteration
-    // loop cost roughly 400k small allocations per derived key.
+    // and clone the prepared state. Re-keying inside the 100k-iteration loop
+    // costs roughly 400k small allocations per derived key.
     let keyed = HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
 
     for block_num in 1..=blocks_needed as u32 {
-        // U1 = PRF(password, salt || INT_32_BE(block_num))
         let mut mac = keyed.clone();
         mac.update(salt);
         mac.update(&block_num.to_be_bytes());
         let mut u = mac.finalize().into_bytes();
-        // `into_bytes()` yields a fixed-size array that is `Copy`, so the running
-        // XOR accumulator is a plain copy rather than a heap clone.
         let mut result = u;
 
         for _ in 1..iterations {
@@ -1116,12 +1086,6 @@ fn pbkdf2_sha256(password: &[u8], salt: &[u8], iterations: u32, key_len: usize) 
     output
 }
 
-// ---------------------------------------------------------------------------
-// Database path resolution
-// ---------------------------------------------------------------------------
-
-/// The KakaoTalk sandbox directory, relative to the home directory, that holds
-/// the encrypted database.
 const KAKAO_DATABASE_DIR: &str =
     "Library/Containers/com.kakao.KakaoTalkMac/Data/Library/Application Support/com.kakao.KakaoTalkMac";
 
@@ -1205,10 +1169,6 @@ fn database_identity(path: &Path) -> Result<DatabaseIdentity> {
         })
     }
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 pub struct LocalDbReader {
     conn: Connection,
@@ -1317,9 +1277,9 @@ impl std::io::Write for ByteCounter {
 /// The container sits behind macOS's "App Data" consent gate. While the
 /// operator has not answered the prompt, the `open()` syscall blocks inside
 /// SQLite's WAL shared-memory mapping, and the unattended host spent its whole
-/// 240s preflight budget there before fencing every room (2026-09-18). Bound
-/// the wait so a pending decision fails fast with a reason the operator can act
-/// on instead of a silent stall.
+/// 240s preflight budget there before fencing every room. Bound the wait so a
+/// pending decision fails fast with a reason the operator can act on instead of
+/// a silent stall.
 const LOCAL_DB_OPEN_TIMEOUT_SECS_DEFAULT: u64 = 25;
 const LOCAL_DB_OPEN_TIMEOUT_SECS_ENV: &str = "OPENKAKAO_DB_OPEN_TIMEOUT_SECS";
 const LOCAL_DB_OPEN_TIMEOUT_SECS_MAX: u64 = 240;
@@ -1389,7 +1349,6 @@ fn open_encrypted_connection_bounded(db_path: &Path, secure_key: &str) -> Result
         // state in SQLCipher builds used by current KakaoTalk databases.
         conn.pragma_update(None, "key", &key)?;
         conn.pragma_update(None, "cipher_compatibility", 3)?;
-        // Verify the key works
         conn.execute_batch("SELECT count(*) FROM sqlite_master")
             .context(
                 "Failed to decrypt KakaoTalk database. Key derivation may have failed. \
@@ -1502,15 +1461,12 @@ impl LocalDbReader {
         Ok(())
     }
 
-    /// Check if the local database is accessible (for doctor command).
     pub fn check_access() -> Result<LocalDbStatus> {
         let home = dirs::home_dir().context("No home directory")?;
         let container_dir = home.join(KAKAO_DATABASE_DIR);
 
-        // Resolve both identities exactly once. Each lookup spawns
-        // `/usr/sbin/ioreg` and parses the KakaoTalk preferences plist, so the
-        // previous "check then re-read" pattern paid for two extra process
-        // spawns and two extra plist parses per doctor run.
+        // Resolve both identities exactly once: each lookup spawns
+        // `/usr/sbin/ioreg` and parses the KakaoTalk preferences plist.
         let uuid = get_platform_uuid().ok();
         let user_id = get_user_id_from_plist().ok();
         let uuid_ok = uuid.is_some();
@@ -1665,8 +1621,7 @@ impl LocalDbReader {
             };
             // Member display names are only the last-resort title source, so
             // resolve the title first and run the per-member `NTUser` lookups
-            // only when the room has no usable name of its own. Rooms that do
-            // have a name previously paid one query per displayed member.
+            // only when the room has no usable name of its own.
             let mut title = resolve_group_title(
                 &chat_name,
                 &kakao_title,
@@ -1931,7 +1886,7 @@ impl LocalDbReader {
         Ok(rows)
     }
 
-    /// Find the memo chat (나와의 채팅) ID. Type 0 with activeMembersCount = 1.
+    /// Find the memo chat (나와의 채팅) ID.
     pub fn find_memo_chat_id(&self) -> Result<Option<i64>> {
         self.ensure_database_identity()?;
         let mut stmt = self.conn.prepare(
@@ -1941,8 +1896,6 @@ impl LocalDbReader {
             Ok(id) => Some(id),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(error) => {
-                // A real query failure used to be indistinguishable from "no
-                // memo room". Keep returning `None` but make it diagnosable.
                 eprintln!("[local_db.rs::find_memo_chat_id] query failed: {error}");
                 None
             }
@@ -1986,9 +1939,6 @@ impl LocalDbReader {
             anyhow::bail!("reconcile_required");
         }
         let tx = self.conn.unchecked_transaction()?;
-        // The chat row, the aggregate stats and the row page reuse SQL that is
-        // identical on every poll, so take them from the prepared-statement
-        // cache instead of re-parsing per poll per room.
         let mut stmt = tx.prepare_cached(
             "SELECT r.chatId, r.type, r.chatName, r.activeMembersCount,
                     r.lastLogId, r.lastUpdatedAt, r.countOfNewMessage,
@@ -2060,9 +2010,6 @@ impl LocalDbReader {
         }) {
             anyhow::bail!("local poll payload exceeds bounded size");
         }
-        // Encode into a counting sink rather than a buffer: the guard only needs
-        // the encoded length, and `to_vec` allocated the whole envelope on every
-        // poll for every watched room. Short-circuit order is unchanged.
         let mut payload_bytes = ByteCounter::default();
         serde_json::to_writer(&mut payload_bytes, &envelope)?;
         if payload_bytes.0 > LOCAL_POLL_MAX_BYTES {
@@ -2254,7 +2201,6 @@ mod tests {
     fn user_id_must_match_the_account_hash() {
         let hash = sha512_hex(b"222");
         assert!(user_id_matches_account_hash(222, &hash));
-        // Another account's id, even with the active hash present, is rejected.
         assert!(!user_id_matches_account_hash(111, &hash));
         assert!(!user_id_matches_account_hash(0, &hash));
         assert!(!user_id_matches_account_hash(-1, &hash));
@@ -2265,12 +2211,9 @@ mod tests {
         let active = revision_plist("aaaa", 7);
         let other = revision_plist("bbbb", 9);
         let empty = revision_plist("cccc", 0);
-        // Known active hash: only the plist that produced it is accepted, so a
-        // different account's plist cannot be selected or cached.
         assert!(plist_matches_active_account(&active, Some("aaaa")));
         assert!(!plist_matches_active_account(&other, Some("aaaa")));
         assert!(!plist_matches_active_account(&empty, Some("aaaa")));
-        // Unknown active hash: any plist may be considered.
         assert!(plist_matches_active_account(&other, None));
     }
 
@@ -2470,7 +2413,6 @@ mod tests {
 
     #[test]
     fn unique_user_id_rejects_shared_tail() {
-        // Different userIds that share a trailing run must NOT collapse to "3377".
         let s = vec!["199453377".to_string(), "23377".to_string()];
         assert_eq!(unique_user_id(&s), None);
     }

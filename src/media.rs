@@ -49,7 +49,6 @@ pub struct ValidatedImageFile {
 /// Detect media type from magic bytes, falling back to file extension.
 /// Returns (kakao_msg_type, extension).
 pub fn detect_media_type(data: &[u8], file_ext: &str) -> (i32, String) {
-    // Magic bytes detection
     if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xD8 {
         return (2, "jpg".into());
     }
@@ -59,16 +58,13 @@ pub fn detect_media_type(data: &[u8], file_ext: &str) -> (i32, String) {
     if data.len() >= 4 && &data[..4] == b"GIF8" {
         return (14, "gif".into());
     }
-    // Video: ftyp box (MP4/MOV/3GP)
     if data.len() >= 8 && &data[4..8] == b"ftyp" {
         return (3, if file_ext == "mov" { "mov" } else { "mp4" }.into());
     }
-    // WebM
     if data.len() >= 4 && &data[..4] == b"\x1a\x45\xdf\xa3" {
         return (3, "webm".into());
     }
 
-    // Fall back to extension
     match file_ext {
         "jpg" | "jpeg" => (2, "jpg".into()),
         "png" => (2, "png".into()),
@@ -98,7 +94,8 @@ pub fn jpeg_dimensions(data: &[u8]) -> Option<(i32, i32)> {
         if i + 2 > data.len() {
             return None;
         }
-        // SOF markers (C0-CF except C4, C8, CC)
+        // C4 (DHT), C8 (JPG) and CC (DAC) share the SOF range but are not frame
+        // headers, so they carry no dimensions.
         if (0xC0..=0xCF).contains(&marker) && marker != 0xC4 && marker != 0xC8 && marker != 0xCC {
             if i + 7 > data.len() {
                 return None;
@@ -508,7 +505,6 @@ fn multi_photo_sources(
 pub fn parse_attachment_url(attachment: &str, msg_type: i32) -> Option<(String, String)> {
     let v: serde_json::Value = serde_json::from_str(attachment).ok()?;
 
-    // Try direct "url" field first
     if let Some(url) = v.get("url").and_then(|u| u.as_str()) {
         if !url.is_empty() {
             let filename = v
@@ -517,7 +513,6 @@ pub fn parse_attachment_url(attachment: &str, msg_type: i32) -> Option<(String, 
                 .filter(|n| !n.is_empty() && *n != "(Emoticons)")
                 .map(String::from)
                 .or_else(|| {
-                    // Try to extract filename from "k" field
                     v.get("k")
                         .and_then(|k| k.as_str())
                         .and_then(|k| k.rsplit('/').next())
@@ -532,11 +527,9 @@ pub fn parse_attachment_url(attachment: &str, msg_type: i32) -> Option<(String, 
         }
     }
 
-    // Try "k" field (photo/video key): https://dn-m.talk.kakao.com/talkm/{k}
     if let Some(k) = v.get("k").and_then(|k| k.as_str()) {
         if !k.is_empty() {
             let url = format!("https://dn-m.talk.kakao.com/talkm/{}", k);
-            // Use the key's last segment as filename base
             let key_name = k.rsplit('/').next().unwrap_or(k);
             let ext = media_extension(msg_type);
             let filename = if key_name.contains('.') {
@@ -1278,7 +1271,6 @@ fn download_media_file_without_directory_creation(
     write_bounded_file(&mut response, path, content_length)
 }
 
-/// Download a media file from KakaoTalk CDN.
 pub fn download_media_file(creds: &KakaoCredentials, url: &str, path: &Path) -> Result<u64> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

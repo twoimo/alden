@@ -1,5 +1,5 @@
 //! 자기개선기(Self-Improver) — 대화가 쌓일수록 답변 품질이 올라가고, 나빠지면
-//! 스스로 되돌린다 (task 9, R8).
+//! 스스로 되돌린다 (R8).
 //!
 //! 이 모듈은 다섯 종류의 문제 신호를 감지하고, 누적된 신호를 원인 후보로 진단해
 //! 개선 후보(Knobs)를 만들고, 홀드아웃으로 평가한 뒤 순수 승격 게이트를 통과한
@@ -18,11 +18,12 @@
 //!   따른다. 진행 중 답변은 고정된 세대로 끝까지 완료되고, 다음 답변부터 새
 //!   세대를 본다.
 //! * **홀드아웃 분리 (R8.8).** [`HoldoutSet::split`]은 데이터셋의 20%(최대 500건)를
-//!   평가 전용으로 떼어 내며, 학습셋과 교집합이 0이 되도록 값 수준에서 분할한다.
+//!   평가 전용으로 떼어 내며, 표본을 인덱스 단위로 나눠 한 표본이 학습셋과
+//!   홀드아웃 중 한쪽에만 들어간다.
 //! * **로컬 전용 (R8.15, R12.9).** 감지·진단·평가·승격·롤백 전 과정에서 외부
-//!   네트워크 송신이 0이고, `is_local_only == true`인 임베더만 쓴다. 품질 점수는
-//!   외부 심판 없이 [`crate::experiment::score_reply`]로 로컬에서 계산한다.
-//!   [`NetworkPort`]를 주입해 하네스가 egress == 0을 단정할 수 있게 한다.
+//!   네트워크 송신이 0이다. 품질 점수는 외부 심판 없이
+//!   [`crate::experiment::score_reply`]로 로컬에서 계산한다. [`NetworkPort`]를
+//!   주입해 하네스가 egress == 0을 단정할 수 있게 한다.
 //!
 //! 저장되는 어떤 열에도 채팅 본문·생성된 답변·프롬프트·URL·절대 경로·계정
 //! 식별정보가 남지 않는다. 방·처리·표본 식별은 `context::provenance_id`로 해시한
@@ -42,10 +43,6 @@ use thiserror::Error;
 use crate::context::provenance_id;
 use crate::experiment::{score_reply, StyleTarget};
 use crate::ports::{Clock, NetworkPort};
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
 /// 답변 품질 점수가 이 값 미만이면 저품질 신호 (R8.1-1).
 pub const LOW_QUALITY_BELOW: u8 = 60;
@@ -90,10 +87,6 @@ pub const ROLLBACK_DROP: f32 = 5.0;
 /// 보관하는 최근 구성 세대 수 (R8.16, 결정 3).
 pub const KEEP_GENERATIONS: usize = 10;
 
-// ---------------------------------------------------------------------------
-// SignalKind
-// ---------------------------------------------------------------------------
-
 /// 다섯 종류의 문제 신호 (R8.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SignalKind {
@@ -121,7 +114,6 @@ impl SignalKind {
         }
     }
 
-    /// 저장 문자열을 다시 [`SignalKind`]으로 해석한다.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "low_quality" => Some(SignalKind::LowQuality),
@@ -138,7 +130,6 @@ impl SignalKind {
 /// 없다.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignalRecord {
-    /// 신호 종류.
     pub kind: SignalKind,
     /// 방 provenance id.
     pub room_pid: String,
@@ -217,31 +208,20 @@ pub fn detect_signals(obs: &ReplyObservation, drift_threshold: f32) -> Vec<(Sign
     out
 }
 
-// ---------------------------------------------------------------------------
-// Knobs (개선 후보가 바꿀 수 있는 전부 — 안전설정 필드 없음)
-// ---------------------------------------------------------------------------
-
-/// 말투프로필 파라미터.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StyleParams {
-    /// 존댓말 편향 가중치.
     pub honorific_bias: f32,
-    /// 격식 편향 가중치.
     pub formality_bias: f32,
     /// 목표 답변 길이(문자 수).
     pub target_len: u32,
 }
 
-/// 검색 가중치.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetrievalWeights {
-    /// 최근성 가중치.
     pub recency: f32,
-    /// 유사도 가중치.
     pub similarity: f32,
-    /// 수신자 일치 가중치.
     pub recipient: f32,
 }
 
@@ -262,11 +242,8 @@ pub struct FewShotSelection {
 pub struct Knobs {
     /// 프롬프트 버전 라벨(예: `v2`). 원문이 아닌 버전 식별자다.
     pub prompt_version: String,
-    /// 말투프로필 파라미터.
     pub style_params: StyleParams,
-    /// 검색 가중치.
     pub retrieval_weights: RetrievalWeights,
-    /// few-shot 예시 선택.
     pub few_shot: FewShotSelection,
 }
 
@@ -274,16 +251,11 @@ pub struct Knobs {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KnobsDigest(pub String);
 
-/// 개선이 바꿀 수 있는 네 가지 항목의 키 (R8.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum KnobKey {
-    /// 프롬프트 버전.
     PromptVersion,
-    /// 말투프로필 파라미터.
     StyleParams,
-    /// 검색 가중치.
     RetrievalWeights,
-    /// few-shot 예시 선택.
     FewShot,
 }
 
@@ -320,7 +292,6 @@ impl Knobs {
         serde_json::to_string(self).unwrap_or_default()
     }
 
-    /// 저장된 `knobs_json`을 다시 [`Knobs`]로 해석한다.
     pub fn from_json(s: &str) -> Result<Knobs, ImproveError> {
         serde_json::from_str(s).map_err(|e| ImproveError::InvalidKnobs(e.to_string()))
     }
@@ -345,7 +316,6 @@ impl Knobs {
     }
 }
 
-/// 구성이 자기 자신과 정합적인지 검증한다. 원자적 교체 전에 호출된다.
 fn validate_knobs(k: &Knobs) -> Result<(), ImproveError> {
     if k.prompt_version.trim().is_empty() {
         return Err(ImproveError::InvalidKnobs(
@@ -386,12 +356,10 @@ fn validate_knobs(k: &Knobs) -> Result<(), ImproveError> {
 pub struct KnobPatch;
 
 impl KnobPatch {
-    /// 원시 JSON을 [`Knobs`]로 해석한다.
     pub fn parse(raw: &serde_json::Value) -> Result<Knobs, RejectReason> {
         let obj = raw
             .as_object()
             .ok_or_else(|| RejectReason::MalformedPatch("객체가 아니에요".to_string()))?;
-        // 안전설정을 포함한 임의 키는 여기서 거부된다 — Knobs가 만들어지지 않는다.
         for key in obj.keys() {
             if !ALLOWED_KEYS.contains(&key.as_str()) {
                 return Err(RejectReason::SafetyChangeRequested);
@@ -413,21 +381,14 @@ impl KnobPatch {
     }
 }
 
-// ---------------------------------------------------------------------------
-// KnobStore (model_config 원자적 스냅샷 스왑 계약 위에)
-// ---------------------------------------------------------------------------
-
 /// 구성 세대 번호. `model_config` 버전과 같은 단조 증가 값.
 pub type KnobGeneration = u64;
 
 /// [`KnobStore::generations`]가 돌려주는 보관된 세대.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredGeneration {
-    /// 세대 번호.
     pub generation: KnobGeneration,
-    /// 해당 세대의 구성.
     pub knobs: Knobs,
-    /// 구성 다이제스트.
     pub digest: KnobsDigest,
 }
 
@@ -451,7 +412,7 @@ pub trait KnobStore {
 
 /// 메모리 기반 [`KnobStore`]. 현재 스냅샷은 `RwLock<Arc<..>>` 뒤에 있어 교체가
 /// 동시 [`KnobStore::current`] 호출과 원자적이다. 최근 [`KEEP_GENERATIONS`]개
-/// 세대를 링으로 보관한다.
+/// 세대를 보관한다.
 #[derive(Debug)]
 pub struct InMemoryKnobStore {
     inner: RwLock<Arc<(KnobGeneration, Knobs)>>,
@@ -482,7 +443,6 @@ impl KnobStore for InMemoryKnobStore {
     }
 
     fn apply(&self, next: Knobs) -> Result<KnobGeneration, ImproveError> {
-        // 저장 스냅샷을 건드리기 전에 검증한다 (R8.11).
         validate_knobs(&next)?;
         let mut guard = self
             .inner
@@ -502,7 +462,6 @@ impl KnobStore for InMemoryKnobStore {
             knobs: next,
             digest,
         });
-        // 최근 KEEP_GENERATIONS개만 유지한다.
         let len = history.len();
         if len > KEEP_GENERATIONS {
             history.drain(0..len - KEEP_GENERATIONS);
@@ -519,10 +478,6 @@ impl KnobStore for InMemoryKnobStore {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Holdout / 평가 / 승격 게이트
-// ---------------------------------------------------------------------------
-
 /// 평가에 쓰는 질문-답변 표본 한 건. 질문 원문은 메모리에서만 다루고 저장하지
 /// 않는다 (R8.16).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -535,10 +490,8 @@ pub struct QaSample {
     pub question: String,
 }
 
-/// 평가 전용으로 분리한 홀드아웃 (R8.8).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HoldoutSet {
-    /// 홀드아웃 표본.
     pub items: Vec<QaSample>,
 }
 
@@ -549,7 +502,7 @@ impl HoldoutSet {
     }
 
     /// 전체 표본을 `(학습셋, 홀드아웃)`으로 분할한다. 시드 기반 결정적 셔플로
-    /// 뽑되 값 수준 분할이므로 교집합이 0이다 (R8.8).
+    /// 뽑은 인덱스로 나누므로 한 표본은 한쪽에만 들어간다 (R8.8).
     pub fn split(all: Vec<QaSample>, seed: u64) -> (Vec<QaSample>, HoldoutSet) {
         let holdout_len = Self::holdout_len_for(all.len());
         let mut indices: Vec<usize> = (0..all.len()).collect();
@@ -569,12 +522,10 @@ impl HoldoutSet {
         (train, HoldoutSet { items: holdout })
     }
 
-    /// 홀드아웃 표본 수.
     pub fn len(&self) -> usize {
         self.items.len()
     }
 
-    /// 홀드아웃이 비었는지.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
@@ -594,11 +545,8 @@ pub struct Regression {
 /// 한 구성에 대한 홀드아웃 평가 요약 (R8.9).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalSummary {
-    /// 평균 품질 점수.
     pub mean_quality: f32,
-    /// 응답 지연 P95(밀리초).
     pub p95_latency_ms: u64,
-    /// 평가한 표본 수.
     pub evaluated: usize,
     /// 표본별 품질 점수(sample_pid → score). 회귀 계산에 쓴다.
     pub scores: BTreeMap<String, u8>,
@@ -639,15 +587,11 @@ pub enum RejectReason {
         /// 현재 대비 배수.
         ratio: f32,
     },
-    /// 회귀 사례가 있음 (R8.10).
     Regressions(Vec<Regression>),
-    /// 이전에 롤백된 구성 (R8.19/R8.20).
     PreviouslyRolledBack,
-    /// 안전설정 변경을 요청함 (R8.7).
     SafetyChangeRequested,
     /// 자동 개선 시도 3회에 도달 (R8.14).
     AttemptCapReached {
-        /// 상한.
         cap: u8,
     },
     /// 홀드아웃 표본이 50건 미만 (R8.18).
@@ -690,32 +634,26 @@ pub fn promotion_gate(
     digest: &KnobsDigest,
     attempts: u8,
 ) -> Result<(), RejectReason> {
-    // 이전에 되돌린 구성은 다시 올라와도 거부 (R8.20).
     if rolled_back.contains(digest) {
         return Err(RejectReason::PreviouslyRolledBack);
     }
-    // 시도 상한 도달 (R8.14).
     if attempts >= ATTEMPT_CAP {
         return Err(RejectReason::AttemptCapReached { cap: ATTEMPT_CAP });
     }
-    // 홀드아웃 부족 (R8.18).
     if holdout_len < MIN_HOLDOUT_FOR_EVAL {
         return Err(RejectReason::InsufficientHoldout {
             have: holdout_len,
             need: MIN_HOLDOUT_FOR_EVAL,
         });
     }
-    // 회귀 0 (R8.10).
     let regressions = compute_regressions(current, candidate);
     if !regressions.is_empty() {
         return Err(RejectReason::Regressions(regressions));
     }
-    // 평균 상승 ≥ 5점 (R8.9, R8.19).
     let delta = candidate.mean_quality - current.mean_quality;
     if delta < MIN_QUALITY_GAIN {
         return Err(RejectReason::GainTooSmall { delta });
     }
-    // P95 ≤ 현재 120% (R8.9, R8.19).
     let ratio = if current.p95_latency_ms == 0 {
         if candidate.p95_latency_ms == 0 {
             1.0
@@ -731,21 +669,16 @@ pub fn promotion_gate(
     Ok(())
 }
 
-/// 승격 결과 (R8.11, R8.18).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PromotionOutcome {
-    /// 승격됨.
     Promoted {
         /// 새 세대 번호.
         generation: KnobGeneration,
-        /// 바뀐 키.
         changed_keys: Vec<KnobKey>,
-        /// 승격 시각.
         at: i64,
         /// 홀드아웃 평균 품질 변화 폭.
         delta: f32,
     },
-    /// 게이트에서 거부됨.
     Rejected(RejectReason),
     /// 홀드아웃 표본 부족으로 평가·승격을 하지 않음 (R8.18).
     Insufficient {
@@ -756,7 +689,7 @@ pub enum PromotionOutcome {
     },
 }
 
-/// 자동/수동 롤백 결과 (R8.12, R8.13).
+/// 자동 롤백 결과 (R8.12).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RollbackOutcome {
     /// 되돌린 뒤 활성 구성의 세대.
@@ -767,10 +700,6 @@ pub struct RollbackOutcome {
     pub after_mean: f32,
 }
 
-// ---------------------------------------------------------------------------
-// 진단
-// ---------------------------------------------------------------------------
-
 /// 누적 신호에서 도출한 원인 후보 (R8.5). 항상 비어 있지 않고 네 항목의
 /// 부분집합이다.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -779,7 +708,6 @@ pub struct Diagnosis {
     pub causes: Vec<KnobKey>,
 }
 
-/// 한 신호 종류를 원인 후보로 매핑한다.
 fn causes_for(kind: SignalKind) -> &'static [KnobKey] {
     match kind {
         SignalKind::LowQuality => &[KnobKey::StyleParams, KnobKey::PromptVersion],
@@ -790,20 +718,12 @@ fn causes_for(kind: SignalKind) -> &'static [KnobKey] {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 오류
-// ---------------------------------------------------------------------------
-
-/// 자기개선 저장소/구성 오류.
 #[derive(Debug, Error)]
 pub enum ImproveError {
-    /// 구성이 올바르지 않음.
     #[error("개선 구성이 올바르지 않아요: {0}")]
     InvalidKnobs(String),
-    /// 요청한 세대를 찾지 못함.
     #[error("구성 세대를 찾지 못했어요: {0}")]
     GenerationNotFound(KnobGeneration),
-    /// 저장소 실패.
     #[error("자기개선 저장소 오류: {0}")]
     Backend(String),
 }
@@ -812,14 +732,9 @@ fn db_err(e: rusqlite::Error) -> ImproveError {
     ImproveError::Backend(e.to_string())
 }
 
-// ---------------------------------------------------------------------------
-// ImproveStore
-// ---------------------------------------------------------------------------
-
-/// 한 이력 항목(감지·진단·승격·거부·롤백) (R8.16).
+/// 한 이력 항목(승격·거부·롤백) (R8.16).
 #[derive(Debug, Clone, PartialEq)]
 pub struct HistoryEntry {
-    /// 시각.
     pub at: i64,
     /// 문제 유형(신호 종류 문자열).
     pub problem_kind: String,
@@ -827,20 +742,15 @@ pub struct HistoryEntry {
     pub changed_keys: String,
     /// 판정 결과 코드.
     pub verdict: String,
-    /// 관련 세대(있으면).
     pub generation: Option<KnobGeneration>,
 }
 
 /// 보관된 구성 세대 한 건(sqlite `knob_generation`) (R8.16, R8.17).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenerationRecord {
-    /// 세대 번호.
     pub generation: KnobGeneration,
-    /// 해당 세대 구성.
     pub knobs: Knobs,
-    /// 구성 다이제스트.
     pub digest: KnobsDigest,
-    /// 승격 시각.
     pub promoted_at: i64,
     /// 승격 시점의 홀드아웃 평균(0..=100) (R8.17).
     pub holdout_mean: u8,
@@ -848,7 +758,6 @@ pub struct GenerationRecord {
 
 /// 자기개선 상태의 지속 경계 (R8.4, R8.14, R8.16, R8.19).
 pub trait ImproveStore {
-    /// 문제 신호 한 건을 기록한다.
     fn record_signal(&self, s: &SignalRecord) -> Result<(), ImproveError>;
 
     /// `room_pid`에서 `since` 이후의 오탐 아닌 신호를 돌려준다.
@@ -874,19 +783,15 @@ pub trait ImproveStore {
     /// 구성 세대를 기록한다(최근 10개만 유지) (R8.16).
     fn record_generation(&self, rec: &GenerationRecord) -> Result<(), ImproveError>;
 
-    /// 세대 하나를 조회한다.
     fn generation(
         &self,
         generation: KnobGeneration,
     ) -> Result<Option<GenerationRecord>, ImproveError>;
 
-    /// 롤백된 구성 다이제스트 집합 (R8.19).
     fn rolled_back_digests(&self) -> Result<BTreeSet<KnobsDigest>, ImproveError>;
 
-    /// 롤백된 구성 다이제스트를 기록한다 (R8.19).
     fn record_rolled_back(&self, digest: &KnobsDigest, at: i64) -> Result<(), ImproveError>;
 
-    /// 이력 항목을 남긴다 (R8.16).
     fn record_history(&self, entry: &HistoryEntry) -> Result<(), ImproveError>;
 
     /// 최근 이력을 최신순으로 돌려준다 (R8.16).
@@ -895,7 +800,6 @@ pub trait ImproveStore {
     /// 홀드아웃 멤버를 교체 저장한다 (R8.8).
     fn set_holdout(&self, qa_pair_ids: &[i64]) -> Result<(), ImproveError>;
 
-    /// 홀드아웃 멤버 id를 돌려준다.
     fn holdout_ids(&self) -> Result<Vec<i64>, ImproveError>;
 }
 
@@ -1116,7 +1020,6 @@ impl ImproveStore for SqliteImproveStore {
                 ],
             )
             .map_err(db_err)?;
-        // 최근 KEEP_GENERATIONS개만 유지 (R8.16).
         self.conn
             .execute(
                 "DELETE FROM knob_generation WHERE generation NOT IN (
@@ -1249,18 +1152,12 @@ impl ImproveStore for SqliteImproveStore {
     }
 }
 
-// ---------------------------------------------------------------------------
-// ReplyModel (평가용 로컬 답변 생성 시임)
-// ---------------------------------------------------------------------------
-
 /// 한 구성으로 한 질문에 답을 만드는 로컬 시임. 실사용은 로컬 임베더/모델을,
 /// 테스트는 결정적 가짜를 주입한다. 외부 네트워크를 쓰지 않는다 (R8.15, R12.9).
 pub trait ReplyModel {
-    /// `knobs` 구성으로 `sample`에 대한 답을 만든다.
     fn generate(&self, knobs: &Knobs, sample: &QaSample) -> GeneratedReply;
 }
 
-/// [`ReplyModel::generate`]가 돌려주는 답과 측정 지연.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedReply {
     /// 생성된 답변 텍스트(메모리 전용, 저장하지 않음).
@@ -1278,10 +1175,6 @@ fn percentile(sorted: &[u64], p: f64) -> u64 {
     sorted[idx.min(sorted.len() - 1)]
 }
 
-// ---------------------------------------------------------------------------
-// SelfImprover
-// ---------------------------------------------------------------------------
-
 /// 자기개선기 (R8). 감지·진단·평가·승격·감시·롤백을 조율한다.
 ///
 /// 품질 점수는 [`crate::experiment::score_reply`](로컬)로 계산하고, 전 과정에
@@ -1295,7 +1188,6 @@ pub struct SelfImprover<'a> {
     clock: &'a dyn Clock,
     style: StyleTarget,
     drift_threshold: f32,
-    /// 승격 감시 상태(승격 직전 20건 평균, 승격 전 세대, 승격된 구성 다이제스트).
     watch: Option<WatchState>,
 }
 
@@ -1309,7 +1201,6 @@ struct WatchState {
 }
 
 impl<'a> SelfImprover<'a> {
-    /// 자기개선기를 조립한다.
     pub fn new(
         store: &'a dyn ImproveStore,
         knobs: &'a dyn KnobStore,
@@ -1368,7 +1259,7 @@ impl<'a> SelfImprover<'a> {
         for s in &signals {
             let fp = self.store.false_positive_count(room_pid, s.kind)?;
             if fp >= FALSE_POSITIVE_CAP {
-                continue; // 오탐 3회 이상 종류는 착수 판단에서 제외 (R8.4).
+                continue;
             }
             *by_kind.entry(s.kind).or_insert(0) += 1;
         }
@@ -1522,7 +1413,7 @@ impl<'a> SelfImprover<'a> {
         }
     }
 
-    /// 승격 후 실사용 20건을 감시하고, 승격 직전 20건 평균보다 5점 이상 낮으면
+    /// 승격 후 실사용 20건을 감시하고, 승격 직전 20건 평균보다 5점 넘게 낮으면
     /// 자동으로 되돌린다 (R8.12).
     pub fn watch_after_promotion(
         &mut self,
@@ -1532,15 +1423,14 @@ impl<'a> SelfImprover<'a> {
             return Ok(None);
         };
         if recent20.len() < WATCH_WINDOW {
-            return Ok(None); // 아직 20건이 쌓이지 않음.
+            return Ok(None);
         }
         let after_mean = mean_u8(&recent20[recent20.len() - WATCH_WINDOW..]);
         if after_mean >= watch.baseline_mean - ROLLBACK_DROP {
-            return Ok(None); // 품질이 충분히 유지됨.
+            return Ok(None);
         }
 
-        // 자동 롤백: 승격된 구성 다이제스트를 롤백 이력에 남기고(재승격 거부),
-        // 승격 직전 세대로 되돌린다 (R8.19).
+        // 롤백 이력에 남긴 다이제스트는 다시 승격되지 않는다 (R8.19).
         self.store
             .record_rolled_back(&watch.promoted_digest, self.clock.now_ms())?;
         let outcome = self.apply_generation(watch.prior_generation)?;
@@ -1562,14 +1452,12 @@ impl<'a> SelfImprover<'a> {
     /// 안전설정을 바꾸지 않는다.
     pub fn rollback_to(&mut self, gen: KnobGeneration) -> Result<KnobGeneration, ImproveError> {
         let applied = self.apply_generation(gen)?;
-        // 수동 되돌리기는 감시 상태를 해제한다.
         self.watch = None;
         Ok(applied)
     }
 
     /// 세대 `gen`의 구성을 실사용 기본으로 되돌려 적용하고 이력을 남긴다.
     fn apply_generation(&self, gen: KnobGeneration) -> Result<KnobGeneration, ImproveError> {
-        // 먼저 KnobStore의 인메모리 세대에서 찾고, 없으면 지속 저장소에서 찾는다.
         let knobs = self
             .knobs
             .generations(KEEP_GENERATIONS)?

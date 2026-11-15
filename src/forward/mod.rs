@@ -1,12 +1,11 @@
-//! Link forwarding, and the **shared** image-acquisition ladder (parent
-//! task 7).
+//! Link forwarding, and the **shared** image-acquisition ladder.
 //!
 //! This module delivers two things. First, the [`ImageLadder`] — the ordered,
 //! three-rung image-acquisition strategy shared by both the link forwarder
 //! (R6.4 Threads images) and the Telegram relay (R7.5), so both features rest on
-//! one image-count-parity guarantee (R12.6). Second, the [`LinkForwarder`] (task
-//! 7.1): the composer-driven feature that collects a link's content and
-//! forwards a redacted summary to the resolved KakaoTalk rooms (R6).
+//! one image-count-parity guarantee (R12.6). Second, the [`LinkForwarder`]: the
+//! composer-driven feature that collects a link's content and forwards a
+//! redacted summary to the resolved KakaoTalk rooms (R6).
 //!
 //! Several safety properties of the forwarder hold structurally:
 //!
@@ -22,11 +21,11 @@
 //!   already-delivered combination is refused with a plain-language "already
 //!   sent" and zero new sends.
 //! * **The journal stays redacted (R6.11).** Only the stage, result code,
-//!   elapsed time, and the two image counts are written — never the collected
-//!   body, the summary, the URL, a path, or an account identifier.
+//!   elapsed time, the two image counts, and a hashed trace id are written —
+//!   never the collected body, the summary, the raw URL, a path, or an account
+//!   identifier.
 //!
-//! The ladder embodies decision 2 of the design ("이미지 원본 확보 3단 경로를
-//! 순서 있는 사다리로 추상화"):
+//! The ladder's rules:
 //!
 //! * **Order, and only-on-failure advance (R7.5).** Rungs are tried in order —
 //!   original-save → cache-folder → screen-capture — and the next rung is tried
@@ -42,8 +41,7 @@
 //!   [`StepAttempt::PermissionMissing`] rather than being called.
 //! * **The outcome is data.** [`LadderOutcome`] records what each rung did and
 //!   whether the acquired image came from screen capture
-//!   ([`LadderOutcome::used_screen_capture`]), which is exactly what the relay
-//!   needs to warn about lower quality and the permission requirement (R7.6).
+//!   ([`LadderOutcome::used_screen_capture`], R7.6).
 
 use rusqlite::{params, Connection};
 use thiserror::Error;
@@ -57,7 +55,6 @@ use crate::room_catalog::RoomCatalog;
 /// many milliseconds to count as a success (R7.5).
 pub const STEP_TIMEOUT_MS: u64 = 2_000;
 
-/// The number of rungs in the image ladder (R7.5).
 pub const LADDER_RUNGS: usize = 3;
 
 /// What one rung of the ladder did.
@@ -73,8 +70,9 @@ pub enum StepAttempt {
     Empty,
     /// The rung did not answer within the two-second bound (R7.5).
     TimedOut,
-    /// The rung needs an OS permission that is not granted, so it was **not**
-    /// attempted (the screen-capture rung without screen recording, R9.10).
+    /// The rung needs an OS permission that is not granted: either the
+    /// screen-recording gate skipped the screen-capture rung without calling it
+    /// (R9.10), or the rung itself reported [`AcquireError::PermissionDenied`].
     PermissionMissing,
     /// The rung failed with a transport/availability error.
     Error(&'static str),
@@ -89,28 +87,22 @@ pub enum StepAttempt {
 /// order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LadderOutcome {
-    /// The acquired image, if any rung succeeded.
     pub acquired: Option<ImageBlob>,
     /// What each rung did, in order (original-save, cache-folder, screen-capture).
     pub attempts: [StepAttempt; LADDER_RUNGS],
-    /// Which acquisition kind produced [`Self::acquired`], if any.
     acquired_via: Option<ImageAcquisition>,
 }
 
 impl LadderOutcome {
-    /// Whether the acquired image came from the screen-capture rung, which the
-    /// relay uses to warn about lower quality and the permission requirement
-    /// (R7.6).
+    /// Whether the acquired image came from the screen-capture rung (R7.6).
     pub fn used_screen_capture(&self) -> bool {
         matches!(self.acquired_via, Some(ImageAcquisition::ScreenCapture))
     }
 
-    /// Whether an image was acquired at all.
     pub fn is_acquired(&self) -> bool {
         self.acquired.is_some()
     }
 
-    /// The acquisition kind that produced the image, if any.
     pub fn acquired_via(&self) -> Option<ImageAcquisition> {
         self.acquired_via
     }
@@ -123,7 +115,6 @@ impl LadderOutcome {
 /// [`ImageAcquirer::kind`] is [`ImageAcquisition::ScreenCapture`] for the
 /// permission gate — the ordering itself is whatever the caller wired.
 pub struct ImageLadder<'a> {
-    /// The three rungs, tried in order.
     pub steps: [&'a dyn ImageAcquirer; LADDER_RUNGS],
     /// The logical clock used to bound each rung to two seconds.
     pub clock: &'a dyn Clock,
@@ -142,16 +133,11 @@ impl ImageLadder<'_> {
         let mut attempts = [StepAttempt::Skipped; LADDER_RUNGS];
 
         for (idx, step) in self.steps.iter().enumerate() {
-            // The screen-capture rung needs the screen-recording permission; if
-            // it is missing, the rung is not attempted at all (R9.10).
             if step.kind() == ImageAcquisition::ScreenCapture && !screen_recording_granted {
                 attempts[idx] = StepAttempt::PermissionMissing;
                 continue;
             }
 
-            // Measure the rung against the two-second bound on the injected
-            // clock. A fake acquirer advances the clock to simulate work, so no
-            // real time is spent (R7.5).
             let start = self.clock.now_ms();
             let result = step.acquire(r);
             let elapsed = self.clock.now_ms().saturating_sub(start);
@@ -165,14 +151,12 @@ impl ImageLadder<'_> {
             match result {
                 Ok(blob) if !blob.bytes.is_empty() => {
                     attempts[idx] = StepAttempt::Acquired;
-                    // Remaining rungs are not tried once we have an image.
                     return LadderOutcome {
                         acquired: Some(blob),
                         attempts,
                         acquired_via: Some(step.kind()),
                     };
                 }
-                // A returned-but-empty image is a failure (R7.6).
                 Ok(_) | Err(AcquireError::Empty) => attempts[idx] = StepAttempt::Empty,
                 Err(AcquireError::PermissionDenied) => {
                     attempts[idx] = StepAttempt::PermissionMissing
@@ -192,10 +176,6 @@ impl ImageLadder<'_> {
     }
 }
 
-// ===========================================================================
-// Link forwarder (링크전달기) — task 7.1 (R6)
-// ===========================================================================
-
 /// The maximum links one forward request may carry (R6.16).
 pub const MAX_LINKS: usize = 5;
 /// The maximum room mentions one forward request may carry (R6.16).
@@ -213,10 +193,6 @@ pub const FORWARD_DEADLINE_SECS: u64 = 30;
 /// How many delivery records are kept per room (R6.14).
 pub const FORWARD_LEDGER_MAX_PER_ROOM: usize = 1_000;
 
-// ---------------------------------------------------------------------------
-// Request
-// ---------------------------------------------------------------------------
-
 /// A composer forward request: one or more links and one or more room mentions
 /// (R6.1). Links are plain URL strings, matching the collector boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,11 +203,6 @@ pub struct ForwardRequest {
     pub room_mentions: Vec<String>,
 }
 
-// ---------------------------------------------------------------------------
-// Mention resolution (R6.1, R6.2)
-// ---------------------------------------------------------------------------
-
-/// A room a mention resolved to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRoom {
     /// The database-authoritative chat id.
@@ -240,7 +211,6 @@ pub struct ResolvedRoom {
     pub title: String,
 }
 
-/// The result of resolving one room mention (R6.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MentionResolution {
     /// Exactly one room title matched (case-sensitive, after trimming).
@@ -301,10 +271,6 @@ fn candidate_titles(titles: &[(i64, String)]) -> Vec<String> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Summarize (R6.3, R6.9)
-// ---------------------------------------------------------------------------
-
 /// Summarize a body for forwarding (R6.9).
 ///
 /// The result is always at most [`SUMMARY_MAX`] (700) characters. When the body
@@ -316,18 +282,12 @@ fn candidate_titles(titles: &[(i64, String)]) -> Vec<String> {
 pub fn summarize(body: &str) -> String {
     let total = body.chars().count();
     let cap = if total <= SHORT_BODY_THRESHOLD {
-        // A short body may be kept whole, capped at 200.
         total.min(SHORT_BODY_THRESHOLD)
     } else {
-        // A longer body is at most half its length, and never over 700.
         (total / 2).min(SUMMARY_MAX)
     };
     body.chars().take(cap).collect()
 }
-
-// ---------------------------------------------------------------------------
-// Canonical link key (R6.7)
-// ---------------------------------------------------------------------------
 
 /// The canonical key that decides whether two links are "the same" for
 /// once-per-room delivery (R6.7): case-insensitive, ignoring any trailing
@@ -337,56 +297,42 @@ pub fn canonical_link_key(url: &str) -> String {
     trimmed.trim_end_matches('/').to_string()
 }
 
-// ---------------------------------------------------------------------------
-// PII masking (R6.13)
-// ---------------------------------------------------------------------------
-
 /// How many items of each personal-information kind were masked (R6.13).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PiiTally {
-    /// Masked phone numbers.
     pub phone: usize,
-    /// Masked addresses.
     pub address: usize,
-    /// Masked account numbers.
     pub account: usize,
 }
 
 impl PiiTally {
-    /// The total number of masked items across all kinds.
     pub fn total(&self) -> usize {
         self.phone + self.address + self.account
     }
 }
 
-/// The placeholder a masked phone number is replaced with (holds no digits).
 const PHONE_MASK: &str = "[전화번호]";
-/// The placeholder a masked account number is replaced with.
 const ACCOUNT_MASK: &str = "[계좌번호]";
-/// The placeholder a masked address is replaced with.
 const ADDRESS_MASK: &str = "[주소]";
 
-/// Mask phone numbers, addresses, and account numbers in `text`, returning the
+/// Mask phone numbers, account numbers, and addresses in `text`, returning the
 /// masked text and the per-kind counts (R6.13).
 ///
-/// Addresses are masked first (a token-level pass), so the digits inside an
-/// address are gone before the phone/account digit scan runs and cannot be
-/// double-counted. The masked value never appears in the result: each match is
-/// replaced by a digit-free placeholder.
+/// Phone and account numbers are masked first: their 9..=16 digit runs become
+/// digit-free placeholders, so they cannot be swallowed into an address span by
+/// the later token-level address pass. An address's short building number is
+/// never a phone or account number, so it survives for the address pass. The
+/// masked value never appears in the result: each match is replaced by a
+/// digit-free placeholder.
 pub fn mask_pii(text: &str) -> (String, PiiTally) {
     let mut tally = PiiTally::default();
-    // Phone and account numbers are masked first — they are the most specific
-    // (a 9..=16 digit run) — so their digits are replaced by digit-free
-    // placeholders and cannot be swallowed by the address token scan. An
-    // address's short building number (a few digits) is never a phone/account
-    // number, so it survives for the address pass.
     let after_digits = mask_phone_and_account(text, &mut tally);
     let masked = mask_addresses(&after_digits, &mut tally);
     (masked, tally)
 }
 
-/// Whether a token is an address unit word (ends with a Korean administrative
-/// or road/way suffix).
+/// Whether a token is an address unit word (ends with a Korean
+/// administrative-unit suffix such as 시, 구, or 동).
 fn is_area_token(token: &str) -> bool {
     matches!(
         token.chars().last(),
@@ -411,16 +357,14 @@ fn is_number_token(token: &str) -> bool {
 
 /// Mask address spans over whitespace tokens (R6.13).
 ///
-/// A span qualifies as an address when it contains a road token (로/길) with a
-/// following number, or at least two area tokens with a number — which masks a
-/// standard Korean address while leaving ordinary phrases (e.g. "운동 3번")
-/// untouched.
+/// A span qualifies as an address when it contains a number token and either a
+/// road token (로/길) or at least two area tokens — which masks a standard
+/// Korean address while leaving ordinary phrases (e.g. "운동 3번") untouched.
 fn mask_addresses(text: &str, tally: &mut PiiTally) -> String {
     let tokens: Vec<&str> = text.split(' ').collect();
     let mut out: Vec<String> = Vec::with_capacity(tokens.len());
     let mut i = 0;
     while i < tokens.len() {
-        // Grow a candidate span of consecutive address-ish tokens.
         let mut j = i;
         let mut area = 0usize;
         let mut road = false;
@@ -463,7 +407,6 @@ fn mask_phone_and_account(text: &str, tally: &mut PiiTally) -> String {
     while i < chars.len() {
         let c = chars[i];
         if c.is_ascii_digit() {
-            // Consume a maximal digit/hyphen run.
             let start = i;
             while i < chars.len() && (chars[i].is_ascii_digit() || chars[i] == '-') {
                 i += 1;
@@ -481,7 +424,6 @@ fn mask_phone_and_account(text: &str, tally: &mut PiiTally) -> String {
             } else {
                 out.push_str(run);
             }
-            // Preserve any trailing hyphens that were trimmed off the run.
             let trailing = chars[start..i].len() - run.chars().count();
             for _ in 0..trailing {
                 out.push('-');
@@ -494,29 +436,19 @@ fn mask_phone_and_account(text: &str, tally: &mut PiiTally) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Forward message (R6.3, R6.9)
-// ---------------------------------------------------------------------------
-
-/// The title field of a forward message (R6.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TitleField {
-    /// The original title was determined.
     Known(String),
-    /// The original title could not be determined (R6.3).
     Unknown,
 }
 
 /// The forward message built for one link (R6.3, R6.9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForwardMessage {
-    /// The original title, or [`TitleField::Unknown`] when it is unavailable.
     pub title: TitleField,
     /// The summary (≤ 700 chars, ≤ 50% of the body; see [`summarize`]).
     pub summary: String,
-    /// The source link.
     pub source: String,
-    /// The author, when the post is a third party's (R6.9).
     pub author: Option<String>,
     /// The acquired images to attach, in post order, at most
     /// [`MAX_IMAGES_PER_POST`].
@@ -549,39 +481,26 @@ impl ForwardMessage {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Image tally (R6.5, R6.6)
-// ---------------------------------------------------------------------------
-
 /// The source vs delivered image counts for one (room, link) forward (R6.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageTally {
     /// The number of images in the source post (including any over the cap).
     pub source: usize,
-    /// The number of images successfully delivered.
     pub delivered: usize,
 }
 
 impl ImageTally {
-    /// Whether every source image was delivered (R6.5).
     pub fn is_complete(&self) -> bool {
         self.source == self.delivered
     }
 
-    /// How many images are missing (source minus delivered) (R6.6).
     pub fn missing(&self) -> usize {
         self.source.saturating_sub(self.delivered)
     }
 }
 
-// ---------------------------------------------------------------------------
-// Delivery ledger (R6.7, R6.14)
-// ---------------------------------------------------------------------------
-
-/// A failure from the delivery ledger.
 #[derive(Debug, Error)]
 pub enum LedgerError {
-    /// The backing store failed.
     #[error("전달 완료 기록 저장소 오류: {0}")]
     Backend(String),
 }
@@ -589,7 +508,6 @@ pub enum LedgerError {
 /// Records which (room, link) combinations have been confirmed as delivered, so
 /// each link is forwarded to each room at most once (R6.7, R6.14).
 pub trait DeliveryLedger {
-    /// Whether `link_key` has already been delivered to `chat_id`.
     fn is_delivered(&self, chat_id: i64, link_key: &str) -> bool;
 
     /// Record a confirmed delivery. Only a fully-delivered combination is ever
@@ -617,7 +535,6 @@ impl SqliteDeliveryLedger {
         Self::new(conn)
     }
 
-    /// Open an in-memory ledger. Primarily for tests.
     pub fn open_in_memory() -> Result<Self, LedgerError> {
         let conn = Connection::open_in_memory().map_err(ledger_err)?;
         Self::new(conn)
@@ -628,7 +545,6 @@ fn ledger_err(e: rusqlite::Error) -> LedgerError {
     LedgerError::Backend(e.to_string())
 }
 
-/// Create the `forward_ledger` table if absent (R6 schema).
 pub fn ensure_forward_ledger_schema(conn: &Connection) -> Result<(), LedgerError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS forward_ledger(
@@ -664,7 +580,6 @@ impl DeliveryLedger for SqliteDeliveryLedger {
                 params![chat_id, link_key, at],
             )
             .map_err(ledger_err)?;
-        // Retention: keep only the most-recent records for this room (R6.14).
         self.conn
             .execute(
                 "DELETE FROM forward_ledger
@@ -681,15 +596,10 @@ impl DeliveryLedger for SqliteDeliveryLedger {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Collaborator seams
-// ---------------------------------------------------------------------------
-
-/// The link-collection seam (R11). In production this is the two-path
-/// [`RoutingCollector`]; tests inject a scripted collector so no real network
-/// is touched.
+/// The link-collection seam (R11). The two-path [`RoutingCollector`]
+/// implements it; tests inject a scripted collector so no real network is
+/// touched.
 pub trait LinkCollector {
-    /// Collect the content of one link.
     fn collect(&self, url: &str) -> Result<Collected, CollectFailure>;
 }
 
@@ -699,7 +609,6 @@ impl LinkCollector for RoutingCollector<'_> {
     }
 }
 
-/// The outcome of sending one forward message to one room (R6.10).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoomSendOutcome {
     /// The text was sent and this many images were delivered.
@@ -712,15 +621,14 @@ pub enum RoomSendOutcome {
         /// Why the send was fenced.
         reason: String,
     },
-    /// The send failed at some stage.
     Failed {
         /// A short, stable failure code.
         code: &'static str,
     },
 }
 
-/// The room-send seam (R6.10). In production this wraps
-/// [`SendGuard`](crate::safety::SendGuard) authorization plus the
+/// The room-send seam (R6.10). An implementation authorizes through
+/// [`SendGuard`](crate::safety::SendGuard) before sending through the
 /// [`SendPort`](crate::ports::SendPort); a fenced room reports
 /// [`RoomSendOutcome::Fenced`] and performs no send. Tests inject a scripted
 /// sender so no real KakaoTalk send happens.
@@ -729,25 +637,16 @@ pub trait RoomSender {
     fn send_forward(&self, chat_id: i64, text: &str, images: &[ImageBlob]) -> RoomSendOutcome;
 }
 
-// ---------------------------------------------------------------------------
-// Forward outcome
-// ---------------------------------------------------------------------------
-
-/// Why a mention failed to resolve (R6.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MentionFailReason {
-    /// No room title matched.
     NotFound,
-    /// Two or more room titles matched.
     Ambiguous,
 }
 
-/// One mention that failed to resolve, with its candidate hint (R6.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MentionFailure {
     /// The original mention text.
     pub mention: String,
-    /// Why it failed.
     pub reason: MentionFailReason,
     /// Up to ten candidate room titles.
     pub candidates: Vec<String>,
@@ -768,7 +667,6 @@ pub enum ForwardRejection {
     MentionResolution(Vec<MentionFailure>),
 }
 
-/// The per-room delivery result (R6.5, R6.6, R6.7, R6.10).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeliveryResult {
     /// This (room, link) was already delivered; zero new sends (R6.7).
@@ -791,32 +689,25 @@ pub enum DeliveryResult {
         /// Per-issue plain-language reasons for the miss (R6.6).
         miss_reasons: Vec<String>,
     },
-    /// The send failed at some stage.
     Failed {
         /// A short, stable failure code.
         code: &'static str,
     },
 }
 
-/// One room's delivery outcome for a link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RoomDelivery {
-    /// The target chat id.
     pub chat_id: i64,
-    /// The room's display title.
     pub room_title: String,
-    /// The delivery result.
     pub result: DeliveryResult,
 }
 
-/// The outcome of forwarding one link to all resolved rooms.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkOutcome {
     /// Collection failed; zero sends for this link (R6.8).
     CollectFailed(CollectFailure),
     /// The per-link deadline elapsed before sending; zero sends (R6.15).
     DeadlineExceeded,
-    /// The link was delivered (see each room's result).
     Delivered {
         /// The per-room results.
         rooms: Vec<RoomDelivery>,
@@ -829,48 +720,32 @@ pub enum LinkOutcome {
     },
 }
 
-/// One link's result within a forward request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkResult {
-    /// The link.
     pub link: String,
-    /// Its outcome.
     pub outcome: LinkOutcome,
 }
 
-/// The overall outcome of a forward request (R6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardOutcome {
     /// The request was rejected before any send (R6.2, R6.16).
     Rejected(ForwardRejection),
-    /// The request ran; carries each link's result.
     Ran {
         /// Per-link results, in request order.
         links: Vec<LinkResult>,
     },
 }
 
-// ---------------------------------------------------------------------------
-// LinkForwarder
-// ---------------------------------------------------------------------------
-
 /// The link forwarder (R6). Resolves room mentions, collects link content,
 /// builds a redacted summary, forwards it to each gate-passing room, and records
 /// only fully-delivered combinations.
 pub struct LinkForwarder<'a> {
-    /// The link-collection seam (Aside/fallback in production).
     pub collector: &'a dyn LinkCollector,
-    /// The room-send seam (guard + send port in production).
     pub sender: &'a dyn RoomSender,
-    /// The once-per-(room, link) ledger.
     pub ledger: &'a dyn DeliveryLedger,
-    /// The room catalog used to resolve mentions by real title.
     pub catalog: &'a dyn RoomCatalog,
-    /// The shared image-acquisition ladder for post images (R6.4).
     pub ladder: &'a ImageLadder<'a>,
-    /// The redacted pipeline journal (R6.11).
     pub journal: &'a dyn HistoryStore,
-    /// The logical clock bounding per-link processing.
     pub clock: &'a dyn Clock,
     /// Whether the screen-recording permission is granted (gates the ladder's
     /// screen-capture rung, R9.10).
@@ -885,7 +760,6 @@ impl LinkForwarder<'_> {
     /// rejected with zero sends (R6.2). Only then is each link collected and
     /// forwarded.
     pub fn forward(&self, req: &ForwardRequest) -> ForwardOutcome {
-        // 1. Count limits — reject with zero sends (R6.16).
         if req.links.is_empty()
             || req.links.len() > MAX_LINKS
             || req.room_mentions.is_empty()
@@ -897,7 +771,6 @@ impl LinkForwarder<'_> {
             });
         }
 
-        // 2. Resolve ALL mentions first (all-or-nothing, R6.2).
         let mut resolved: Vec<ResolvedRoom> = Vec::with_capacity(req.room_mentions.len());
         let mut failures: Vec<MentionFailure> = Vec::new();
         for mention in &req.room_mentions {
@@ -916,11 +789,9 @@ impl LinkForwarder<'_> {
             }
         }
         if !failures.is_empty() {
-            // Zero sends to any room (R6.2).
             return ForwardOutcome::Rejected(ForwardRejection::MentionResolution(failures));
         }
 
-        // 3. Forward each link.
         let links = req
             .links
             .iter()
@@ -929,14 +800,11 @@ impl LinkForwarder<'_> {
         ForwardOutcome::Ran { links }
     }
 
-    /// Collect, build, and forward one link to every resolved room.
     fn forward_one_link(&self, link: &str, resolved: &[ResolvedRoom]) -> LinkResult {
         let start = self.clock.now_ms();
         let deadline = start + (FORWARD_DEADLINE_SECS * 1_000) as i64;
         let link_key = canonical_link_key(link);
 
-        // Collect. A private/deleted/unreachable link stops here with zero
-        // sends (R6.8); the collector already deleted its temp data (R11.8).
         let collected = match self.collector.collect(link) {
             Ok(collected) => collected,
             Err(failure) => {
@@ -979,8 +847,6 @@ impl LinkForwarder<'_> {
         let (masked_body, pii) = mask_pii(&collected.body);
         let summary = summarize(&masked_body);
 
-        // Acquire the post's images through the shared ladder (R6.4), capped at
-        // the per-post maximum; the rest are dropped.
         let source_images = collected.images.len();
         let included = source_images.min(MAX_IMAGES_PER_POST);
         let (blobs, acquire_misses) = self.acquire_images(&collected.images[..included]);
@@ -1034,7 +900,6 @@ impl LinkForwarder<'_> {
         acquire_misses: &[String],
         start: i64,
     ) -> RoomDelivery {
-        // Already forwarded — zero new sends (R6.7).
         let result = if self.ledger.is_delivered(room.chat_id, link_key) {
             DeliveryResult::AlreadyDelivered
         } else {
@@ -1050,7 +915,6 @@ impl LinkForwarder<'_> {
                         delivered: images_delivered,
                     };
                     if images.is_complete() {
-                        // Only a fully-delivered combination is marked (R6.14).
                         let _ = self
                             .ledger
                             .mark(room.chat_id, link_key, self.clock.now_ms());
@@ -1104,8 +968,9 @@ impl LinkForwarder<'_> {
         (blobs, misses)
     }
 
-    /// Append a redacted journal record carrying only the stage, result code,
-    /// elapsed time, and the two image counts (R6.11).
+    /// Append a journal record carrying the stage, result code, elapsed time,
+    /// the two image counts, and the link key as a trace id that the journal
+    /// hashes — never the body, the summary, or the raw URL (R6.11).
     #[allow(
         clippy::too_many_arguments,
         reason = "one positional argument per recorded field keeps the call sites readable"
@@ -1164,7 +1029,6 @@ fn delivery_journal_record(result: &DeliveryResult) -> (Stage, StageStatus, &'st
     }
 }
 
-/// Build the per-issue miss reasons for a partial failure (R6.6).
 fn miss_reasons(
     source: usize,
     delivered: usize,
@@ -1194,8 +1058,6 @@ fn miss_reasons(
     reasons
 }
 
-/// A short plain-language reason an image could not be acquired, from the
-/// ladder's per-rung attempts (R6.6).
 fn acquire_miss_reason(outcome: &LadderOutcome) -> String {
     if outcome.attempts.contains(&StepAttempt::PermissionMissing) {
         "화면 기록 권한이 없어 일부 이미지를 가져오지 못했어요.".to_string()
@@ -1214,8 +1076,6 @@ mod forward_tests {
     use crate::room_catalog::{CatalogRoom, InMemoryRoomCatalog, MapRoomDirectory};
     use std::cell::RefCell;
     use std::sync::Arc;
-
-    // ---- resolve_mention ----
 
     fn catalog(rooms: &[(i64, &str)]) -> InMemoryRoomCatalog {
         let dir = Arc::new(MapRoomDirectory::new(
@@ -1251,7 +1111,6 @@ mod forward_tests {
     #[test]
     fn resolve_mention_is_case_sensitive() {
         let cat = catalog(&[(1, "Study"), (2, "업무방")]);
-        // A different case does not match (case-sensitive, R6.1).
         match resolve_mention("study", &cat) {
             MentionResolution::NotFound { candidates } => {
                 assert!(candidates.contains(&"Study".to_string()));
@@ -1279,8 +1138,6 @@ mod forward_tests {
             other => panic!("expected NotFound, got {other:?}"),
         }
     }
-
-    // ---- summarize ----
 
     #[test]
     fn summarize_keeps_short_body_whole() {
@@ -1320,8 +1177,6 @@ mod forward_tests {
         assert_eq!(out.chars().count(), 100);
     }
 
-    // ---- canonical_link_key ----
-
     #[test]
     fn canonical_link_key_ignores_case_and_trailing_slash() {
         assert_eq!(
@@ -1330,8 +1185,6 @@ mod forward_tests {
         );
         assert_eq!(canonical_link_key("https://x.com/a///"), "https://x.com/a");
     }
-
-    // ---- mask_pii ----
 
     #[test]
     fn mask_pii_masks_mobile_phone() {
@@ -1383,8 +1236,6 @@ mod forward_tests {
         assert!(!out.contains("123-456-7890"));
     }
 
-    // ---- ImageTally ----
-
     #[test]
     fn image_tally_complete_and_missing() {
         assert!(ImageTally {
@@ -1400,8 +1251,6 @@ mod forward_tests {
         assert_eq!(t.missing(), 2);
     }
 
-    // ---- DeliveryLedger ----
-
     #[test]
     fn ledger_marks_and_reports_delivered() {
         let ledger = SqliteDeliveryLedger::open_in_memory().unwrap();
@@ -1409,7 +1258,6 @@ mod forward_tests {
         assert!(!ledger.is_delivered(1, &key));
         ledger.mark(1, &key, 100).unwrap();
         assert!(ledger.is_delivered(1, &key));
-        // A different room is independent.
         assert!(!ledger.is_delivered(2, &key));
     }
 
@@ -1428,14 +1276,10 @@ mod forward_tests {
             )
             .unwrap();
         assert_eq!(count, FORWARD_LEDGER_MAX_PER_ROOM as i64);
-        // The oldest links were evicted; the newest is retained.
         assert!(ledger.is_delivered(1, "link-1004"));
         assert!(!ledger.is_delivered(1, "link-0"));
     }
 
-    // ---- LinkForwarder ----
-
-    /// A collector that returns a scripted result and counts its calls.
     struct ScriptedCollector {
         result: Result<Collected, CollectFailure>,
         calls: RefCell<usize>,
@@ -1464,7 +1308,6 @@ mod forward_tests {
         }
     }
 
-    /// A room sender that returns a fixed outcome and counts its sends.
     struct ScriptedSender {
         outcome: RoomSendOutcome,
         sends: RefCell<usize>,
@@ -1495,7 +1338,6 @@ mod forward_tests {
         }
     }
 
-    /// An acquirer that always yields a non-empty image.
     struct OkAcquirer {
         clock: VirtualClock,
     }
@@ -1512,7 +1354,6 @@ mod forward_tests {
         }
     }
 
-    /// An acquirer that never yields an image (used to fill unused rungs).
     struct NeverAcquirer {
         kind: ImageAcquisition,
     }
@@ -1595,7 +1436,6 @@ mod forward_tests {
             screen_recording_granted: true,
         };
 
-        // Zero links.
         assert!(matches!(
             fwd.forward(&ForwardRequest {
                 links: vec![],
@@ -1603,7 +1443,6 @@ mod forward_tests {
             }),
             ForwardOutcome::Rejected(ForwardRejection::CountOutOfRange { .. })
         ));
-        // Too many links.
         assert!(matches!(
             fwd.forward(&ForwardRequest {
                 links: (0..=MAX_LINKS).map(|i| format!("https://x/{i}")).collect(),
@@ -1611,7 +1450,6 @@ mod forward_tests {
             }),
             ForwardOutcome::Rejected(ForwardRejection::CountOutOfRange { .. })
         ));
-        // No sends happened.
         assert_eq!(sender.send_count(), 0);
     }
 
@@ -1638,8 +1476,6 @@ mod forward_tests {
             screen_recording_granted: true,
         };
 
-        // One good mention, one bad — the whole request is rejected with zero
-        // sends (R6.2).
         let outcome = fwd.forward(&ForwardRequest {
             links: vec!["https://x.com/a".into()],
             room_mentions: vec!["스터디".into(), "없는방".into()],
@@ -1703,7 +1539,6 @@ mod forward_tests {
             }
             other => panic!("expected ran, got {other:?}"),
         }
-        // The combination is now recorded.
         assert!(ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
     }
 
@@ -1751,7 +1586,6 @@ mod forward_tests {
             },
             other => panic!("expected ran, got {other:?}"),
         }
-        // A partial failure is retryable: nothing recorded (R6.6).
         assert!(!ledger.is_delivered(1, &canonical_link_key("https://x.com/a")));
     }
 
@@ -1912,7 +1746,6 @@ mod forward_tests {
                 } => {
                     assert_eq!(*source_images, 12);
                     assert_eq!(*dropped_images, 2);
-                    // 12 source vs 10 delivered → partial failure, not marked.
                     assert!(matches!(
                         rooms[0].result,
                         DeliveryResult::PartialFailure { .. }
@@ -2521,7 +2354,6 @@ mod tests {
         assert_eq!(out.attempts[1], StepAttempt::Skipped);
         assert_eq!(out.attempts[2], StepAttempt::Skipped);
         assert!(!out.used_screen_capture());
-        // The later rungs were never called.
         assert_eq!(s1.calls(), 0);
         assert_eq!(s2.calls(), 0);
     }
@@ -2634,7 +2466,6 @@ mod tests {
         let out = ladder.acquire(&img_ref(), false);
         assert!(!out.is_acquired());
         assert_eq!(out.attempts[2], StepAttempt::PermissionMissing);
-        // The screen-capture rung was never called (R9.10).
         assert_eq!(s2.calls(), 0);
     }
 

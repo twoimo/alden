@@ -1,4 +1,4 @@
-//! The two-path link collector (수집기 2경로) — parent task 7 (R11).
+//! The two-path link collector (수집기 2경로) (R11).
 //!
 //! Link content is fetched by one of two paths: the [`AsideCollector`], which
 //! talks to a **loopback** Aside browser MCP server, and the
@@ -43,23 +43,16 @@ pub const ASIDE_COLLECT_TIMEOUT_SECS: u64 = 10;
 /// The bound within which temporary raw data must be deleted (R11.8).
 pub const DELETION_DEADLINE_MS: u64 = 5_000;
 
-// ---------------------------------------------------------------------------
-// Value types
-// ---------------------------------------------------------------------------
-
 /// Which collection path produced a result (R11.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollectorPath {
-    /// The Aside browser MCP path.
     Aside,
-    /// The Aside-free fallback path.
     Fallback,
 }
 
 /// Why the collector switched from Aside to the fallback path (R11.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SwitchReason {
-    /// Aside is not installed.
     NotInstalled,
     /// The connection check did not answer within three seconds (R11.2).
     HealthTimeout,
@@ -74,7 +67,7 @@ pub enum SwitchReason {
 }
 
 impl SwitchReason {
-    /// A short, plain-language reason for the History window (R11.3).
+    /// A short, plain-language switch reason for the user (R11.3).
     pub fn as_plain(self) -> &'static str {
         match self {
             SwitchReason::NotInstalled => "Aside가 설치되어 있지 않아 다른 방법으로 가져왔어요",
@@ -91,27 +84,20 @@ impl SwitchReason {
 pub struct Collected {
     /// The original title, or `None` when it could not be determined (R6.3).
     pub title: Option<String>,
-    /// The original body text.
     pub body: String,
     /// Image references in the order they appear in the post (R6.4).
     pub images: Vec<crate::ports::ImageRef>,
     /// The author, when the post is a third party's (R6.9).
     pub author: Option<String>,
-    /// Which path produced this result.
     pub path: CollectorPath,
     /// The switch reason, if a switch happened. `Option` makes a second switch
     /// unrepresentable (R11.11).
     pub switched: Option<SwitchReason>,
 }
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
 /// A failure collecting one link on one path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum CollectError {
-    /// Aside is not installed.
     #[error("Aside가 설치되어 있지 않아요")]
     NotInstalled,
     /// The connection check did not answer within three seconds (R11.2).
@@ -127,13 +113,10 @@ pub enum CollectError {
     /// The post is private and cannot be viewed without logging in (R11.10).
     #[error("이 링크는 비공개라 볼 수 없어요")]
     Private,
-    /// The post has been deleted (R11.10).
     #[error("이 링크는 삭제되었어요")]
     Deleted,
-    /// The path did not finish in time.
     #[error("수집이 시간 안에 끝나지 않았어요")]
     Timeout,
-    /// Some other transport failure.
     #[error("링크 내용을 가져오지 못했어요: {0}")]
     Transport(String),
 }
@@ -154,7 +137,6 @@ pub enum CollectFailure {
     BothFailed {
         /// The Aside path's failure (a health failure counts).
         aside: CollectError,
-        /// The fallback path's failure.
         fallback: CollectError,
     },
     /// A terminal state that must not be retried on the other path (R11.10).
@@ -163,18 +145,12 @@ pub enum CollectFailure {
     DeadlineExceeded,
 }
 
-// ---------------------------------------------------------------------------
-// TempScope
-// ---------------------------------------------------------------------------
-
 /// The report of deleting a [`TempScope`]'s raw working data (R11.8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeletionReport {
-    /// Whether the temporary data was deleted.
     pub deleted: bool,
     /// Whether the deletion finished within the five-second bound (R11.8).
     pub within_deadline: bool,
-    /// How long the deletion took, in milliseconds.
     pub elapsed_ms: u64,
 }
 
@@ -190,7 +166,6 @@ pub struct TempScope {
 }
 
 impl TempScope {
-    /// Create a fresh scope with an empty working directory.
     pub fn new() -> std::io::Result<Self> {
         Ok(Self {
             dir: Some(tempfile::TempDir::new()?),
@@ -233,14 +208,9 @@ impl Drop for TempScope {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PageCollector and the two paths
-// ---------------------------------------------------------------------------
-
 /// One collection path (R11.1). Both Aside and the fallback implement this so
 /// the router can treat them uniformly.
 pub trait PageCollector {
-    /// Which path this is.
     fn path(&self) -> CollectorPath;
 
     /// A single connection check (R11.2). The fallback path always reports
@@ -267,7 +237,6 @@ impl LoopbackEndpoint {
         Self { port }
     }
 
-    /// The loopback URL this endpoint addresses.
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}/mcp", self.port)
     }
@@ -304,7 +273,7 @@ pub trait AsideTransport {
 ///
 /// It holds nothing but a [`LoopbackEndpoint`], a transport, a secret store,
 /// and a clock. The clock bounds the single connection check to three seconds
-/// (R11.2).
+/// (R11.2) and the collection to ten (R11.11).
 pub struct AsideCollector<'a> {
     endpoint: LoopbackEndpoint,
     transport: &'a dyn AsideTransport,
@@ -313,7 +282,6 @@ pub struct AsideCollector<'a> {
 }
 
 impl<'a> AsideCollector<'a> {
-    /// Build an Aside collector over a loopback endpoint and transport.
     pub fn new(
         endpoint: LoopbackEndpoint,
         transport: &'a dyn AsideTransport,
@@ -355,7 +323,6 @@ impl PageCollector for AsideCollector<'_> {
             }
         })?;
 
-        // Bound the collection to ten seconds on the injected clock (R11.11).
         let start = self.clock.now_ms();
         let mut result = self
             .transport
@@ -381,7 +348,6 @@ pub struct FallbackCollector<'a> {
 }
 
 impl<'a> FallbackCollector<'a> {
-    /// Build a fallback collector over a network port.
     pub fn new(net: &'a dyn NetworkPort) -> Self {
         Self { net }
     }
@@ -393,15 +359,11 @@ impl PageCollector for FallbackCollector<'_> {
     }
 
     fn health_check(&self) -> Result<(), CollectError> {
-        // The fallback path does not need Aside, so it is always healthy.
         Ok(())
     }
 
     fn collect(&self, url: &str, _scope: &mut TempScope) -> Result<Collected, CollectError> {
-        // A minimal, no-login fetch (R11.9): no credentials are ever sent. Rich
-        // HTML extraction is layered on in task 7.1; the parent step wires the
-        // path and maps status to the terminal/transport categories the router
-        // needs.
+        // A no-login fetch (R11.9): no credentials are ever sent.
         let response = self
             .net
             .request(crate::ports::HttpRequest {
@@ -427,19 +389,13 @@ impl PageCollector for FallbackCollector<'_> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RoutingCollector
-// ---------------------------------------------------------------------------
-
 /// The result of the Aside attempt, before deciding whether to fall back.
 enum AsideAttempt {
-    /// Aside collected the link.
     Collected(Collected),
     /// A terminal failure that forbids trying the other path (R11.10).
     Terminal(CollectError),
     /// Aside failed in a way that permits one switch to the fallback.
     Switch {
-        /// Why we are switching.
         reason: SwitchReason,
         /// The Aside failure to report if the fallback also fails (R11.4).
         aside_error: CollectError,
@@ -474,10 +430,6 @@ impl RoutingCollector<'_> {
         };
 
         let outcome = self.collect_within(url, &mut scope);
-
-        // On every exit — success, failure, or abandonment — delete the temp
-        // data (R11.8). The report is surfaced to the History window in
-        // task 7.2; the safety-net deletion happens here (and on Drop).
         let _report = scope.finish();
         outcome
     }
@@ -514,8 +466,6 @@ impl RoutingCollector<'_> {
                             return Err(CollectFailure::DeadlineExceeded);
                         }
                         collected.path = CollectorPath::Fallback;
-                        // Set the switch reason exactly once; `Option` makes a
-                        // second switch unrepresentable (R11.11).
                         collected.switched = Some(reason);
                         Ok(collected)
                     }
@@ -534,9 +484,7 @@ impl RoutingCollector<'_> {
         match self.aside.health_check() {
             Ok(()) => match self.aside.collect(url, scope) {
                 Ok(collected) => AsideAttempt::Collected(collected),
-                // Private/deleted must not be retried on the other path (R11.10).
                 Err(err) if err.forbids_other_path() => AsideAttempt::Terminal(err),
-                // A missing secret means try the remaining path once (R11.7).
                 Err(err @ CollectError::Unauthorized { .. }) => AsideAttempt::Switch {
                     reason: SwitchReason::SecretUnavailable,
                     aside_error: err,
@@ -550,7 +498,6 @@ impl RoutingCollector<'_> {
                     aside_error: err,
                 },
             },
-            // Health failure: switch to the fallback with a matching reason.
             Err(err @ CollectError::NotInstalled) => AsideAttempt::Switch {
                 reason: SwitchReason::NotInstalled,
                 aside_error: err,
@@ -571,8 +518,6 @@ mod tests {
     use crate::fakes::VirtualClock;
     use crate::ports::{ImageRef, PortError, SecretError};
     use std::cell::Cell;
-
-    // ---- TempScope ----
 
     #[test]
     fn temp_scope_finish_deletes_and_reports_within_deadline() {
@@ -596,8 +541,6 @@ mod tests {
         }
         assert!(!path.exists());
     }
-
-    // ---- CollectError classification ----
 
     #[test]
     fn private_and_deleted_forbid_other_path() {
@@ -625,8 +568,6 @@ mod tests {
         assert!(ep.url().starts_with("http://127.0.0.1:9123"));
     }
 
-    // ---- Fake page collectors for routing tests ----
-
     struct ScriptedCollector {
         path: CollectorPath,
         health: Cell<Option<CollectError>>,
@@ -634,7 +575,6 @@ mod tests {
         collect_calls: Cell<usize>,
     }
 
-    // A tiny cell holding a cloneable scripted collect result.
     type RefCellResult = std::cell::RefCell<Result<Collected, CollectError>>;
 
     impl ScriptedCollector {
@@ -710,7 +650,6 @@ mod tests {
         let out = router.collect("https://example.com/post").unwrap();
         assert_eq!(out.path, CollectorPath::Aside);
         assert_eq!(out.switched, None);
-        // The fallback was never collected from.
         assert_eq!(fallback.collect_calls(), 0);
     }
 
@@ -730,7 +669,6 @@ mod tests {
         let out = router.collect("https://example.com/post").unwrap();
         assert_eq!(out.path, CollectorPath::Fallback);
         assert_eq!(out.switched, Some(SwitchReason::NotInstalled));
-        // Aside was never collected from (only health-checked).
         assert_eq!(aside.collect_calls(), 0);
     }
 
@@ -749,7 +687,6 @@ mod tests {
         };
         let err = router.collect("https://example.com/post").unwrap_err();
         assert_eq!(err, CollectFailure::Terminal(CollectError::Private));
-        // The other path was never called (R11.10).
         assert_eq!(fallback.collect_calls(), 0);
     }
 
@@ -791,7 +728,6 @@ mod tests {
         };
         let out = router.collect("https://example.com/post").unwrap();
         assert_eq!(out.switched, Some(SwitchReason::SecretUnavailable));
-        // Exactly one fallback collection — the single allowed switch.
         assert_eq!(fallback.collect_calls(), 1);
     }
 
@@ -838,8 +774,8 @@ mod tests {
     #[test]
     fn deadline_exceeded_stops_before_fallback_send() {
         // Each clock read jumps 21 seconds: the start read is 0, but the very
-        // next read — the deadline check before any fallback send — is already
-        // past the 20-second bound.
+        // next read — the deadline check before the fallback collect — is
+        // already past the 20-second bound.
         let clock = AdvancingClock {
             now: Cell::new(0),
             step_ms: 21_000,
@@ -856,11 +792,8 @@ mod tests {
         };
         let err = router.collect("https://example.com/post").unwrap_err();
         assert_eq!(err, CollectFailure::DeadlineExceeded);
-        // The bound is honored before any fallback send happens (R11.12).
         assert_eq!(fallback.collect_calls(), 0);
     }
-
-    // ---- AsideCollector health-check bound and secret handling ----
 
     struct FakeTransport {
         health_result: Result<(), CollectError>,
@@ -942,8 +875,6 @@ mod tests {
         );
     }
 
-    // ---- FallbackCollector status mapping ----
-
     struct StatusNet {
         status: u16,
     }
@@ -986,7 +917,7 @@ mod tests {
         let net = StatusNet { status: 200 };
         let fallback = FallbackCollector::new(&net);
         assert!(fallback.health_check().is_ok());
-        // Keep the import used and confirm image refs stay orderable downstream.
+        // Only keeps the `ImageRef` import used.
         let _ = ImageRef {
             locator: "x".into(),
         };
