@@ -86,7 +86,7 @@ def _validate_paper_id(value: Any) -> str:
     return paper_id
 
 
-def _resolve_alphaxiv_cli(requested: Any) -> tuple[str | None, str | None]:
+def _resolve_cli(requested: Any) -> tuple[str | None, str | None]:
     """Resolve one executable without allowing option/path injection."""
     try:
         value = _valid_plain_text(requested, limit=4096)
@@ -113,11 +113,6 @@ def _resolve_alphaxiv_cli(requested: Any) -> tuple[str | None, str | None]:
     if not found:
         return None, "cli_missing"
     return found, None
-
-
-def _resolve_orx_cli(requested: Any) -> tuple[str | None, str | None]:
-    """Resolve the OpenResearch CLI with the same executable-path guard."""
-    return _resolve_alphaxiv_cli(requested)
 
 
 def _bytes(value: Any) -> bytes:
@@ -417,7 +412,7 @@ def collect_orx_paper_report(
         )
     timeout_value = min(MAX_TIMEOUT_SECONDS, max(0.1, timeout_value))
 
-    executable, resolve_error = _resolve_orx_cli(orx_cli)
+    executable, resolve_error = _resolve_cli(orx_cli)
     if resolve_error or not executable:
         return _paper_unavailable(
             requested_cli=requested_cli,
@@ -550,7 +545,7 @@ def collect_paper_report(
             paper_id=paper_id or DREAM_RSI_PAPER_ID,
         )
     if paper_source == "auto":
-        executable, _ = _resolve_alphaxiv_cli(alphaxiv_cli)
+        executable, _ = _resolve_cli(alphaxiv_cli)
         if executable:
             return collect_paper_report(
                 query,
@@ -560,7 +555,7 @@ def collect_paper_report(
                 timeout=timeout,
                 paper_id=paper_id,
             )
-        orx_executable, _ = _resolve_orx_cli(orx_cli)
+        orx_executable, _ = _resolve_cli(orx_cli)
         if orx_executable:
             return collect_orx_paper_report(
                 query,
@@ -606,7 +601,7 @@ def collect_paper_report(
             reason="invalid_timeout",
         )
 
-    executable, resolve_error = _resolve_alphaxiv_cli(alphaxiv_cli)
+    executable, resolve_error = _resolve_cli(alphaxiv_cli)
     if resolve_error or not executable:
         return _paper_unavailable(
             requested_cli=requested_cli,

@@ -588,7 +588,6 @@ class JarvisVoicePipeline:
         self._wake_source = "none"
         self._custom_model_selected = False
         self._transcript = ""
-        self._reply = ""
         self._speech_frames = 0
         self._silence_frames = 0
         self._noise_frames = 0
@@ -635,16 +634,13 @@ class JarvisVoicePipeline:
         self.state = state
         self.ring.clear()
         self._publish(error_code)
-        return VoiceResult(state=state, error_code=error_code, transcript=getattr(self, "_transcript", ""), reply=getattr(self, "_reply", ""))
+        return VoiceResult(state=state, error_code=error_code, transcript=self._transcript)
 
     def mic_disconnected(self) -> VoiceResult:
         return self._end(VoiceState.ERROR, "mic_disconnected")
 
     def mic_unavailable(self) -> VoiceResult:
         return self._end(VoiceState.ERROR, "mic_unavailable")
-
-    def model_swap_failed(self) -> VoiceResult:
-        return self._end(VoiceState.ERROR, "model_swap_failed")
 
     def feed_audio(
         self,
@@ -936,8 +932,6 @@ class Qwen3TtsAdapter:
             peak = max((abs(x) for x in samples_list), default=0.0)
             if peak > 1.0:
                 samples_list = [x / peak for x in samples_list]
-            from array import array
-
             pcm_arr = array("h", [int(max(-32768, min(32767, round(x * 32767.0)))) for x in samples_list])
             pcm_bytes = pcm_arr.tobytes()
             nframes = len(pcm_arr)
