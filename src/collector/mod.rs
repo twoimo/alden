@@ -42,6 +42,10 @@ pub const HEALTH_TIMEOUT_SECS: u64 = 3;
 pub const ASIDE_COLLECT_TIMEOUT_SECS: u64 = 10;
 /// The bound within which temporary raw data must be deleted (R11.8).
 pub const DELETION_DEADLINE_MS: u64 = 5_000;
+/// The most page-body bytes the fallback path keeps. A forward summary is at
+/// most 700 characters, so 1 MiB leaves ample room while keeping a huge or
+/// hostile page from being copied and scanned in full.
+pub const MAX_FALLBACK_BODY_BYTES: usize = 1 << 20;
 
 /// Which collection path produced a result (R11.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -379,7 +383,7 @@ impl PageCollector for FallbackCollector<'_> {
         match response.status {
             200 => Ok(Collected {
                 title: None,
-                body: String::from_utf8_lossy(&response.body).into_owned(),
+                body: bounded_text(&response.body),
                 images: Vec::new(),
                 author: None,
                 path: CollectorPath::Fallback,
@@ -390,6 +394,16 @@ impl PageCollector for FallbackCollector<'_> {
             other => Err(CollectError::Transport(format!("HTTP {other}"))),
         }
     }
+}
+
+/// Decode at most [`MAX_FALLBACK_BODY_BYTES`] of `bytes`, cutting before a
+/// UTF-8 sequence that the bound would split.
+fn bounded_text(bytes: &[u8]) -> String {
+    let mut end = bytes.len().min(MAX_FALLBACK_BODY_BYTES);
+    while end > 0 && end < bytes.len() && bytes[end] & 0b1100_0000 == 0b1000_0000 {
+        end -= 1;
+    }
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
 }
 
 /// The result of the Aside attempt, before deciding whether to fall back.
@@ -949,5 +963,42 @@ mod tests {
         let _ = ImageRef {
             locator: "x".into(),
         };
+    }
+
+    struct BodyNet {
+        body: Vec<u8>,
+    }
+    impl NetworkPort for BodyNet {
+        fn request(
+            &self,
+            _req: crate::ports::HttpRequest,
+        ) -> Result<crate::ports::HttpResponse, PortError> {
+            Ok(crate::ports::HttpResponse {
+                status: 200,
+                body: self.body.clone(),
+            })
+        }
+        fn egress_count(&self) -> usize {
+            0
+        }
+    }
+
+    #[test]
+    fn fallback_bounds_the_page_body_on_a_character_boundary() {
+        let net = BodyNet {
+            body: "가".repeat(2 << 20).into_bytes(),
+        };
+        let mut scope = TempScope::new().unwrap();
+        let out = FallbackCollector::new(&net)
+            .collect("https://x", &mut scope)
+            .unwrap();
+        assert!(
+            out.body.len() <= MAX_FALLBACK_BODY_BYTES,
+            "kept {} bytes of a {}-byte page",
+            out.body.len(),
+            net.body.len()
+        );
+        assert!(out.body.len() > MAX_FALLBACK_BODY_BYTES - 3);
+        assert!(!out.body.contains('\u{FFFD}'), "a character was split");
     }
 }
