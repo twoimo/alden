@@ -1,4 +1,7 @@
+import contextlib
+import errno
 import importlib.util
+import io
 import itertools
 import json
 import os
@@ -38,6 +41,10 @@ class FakeChild:
         self.stdout = None
         self.terminated = False
 
+    def __repr__(self):
+        scripts = [Path(arg).name for arg in self.argv if str(arg).endswith(".py")]
+        return f"FakeChild({' '.join(scripts)})"
+
     def poll(self):
         return self.returncode
 
@@ -56,7 +63,7 @@ class FakeChild:
 class SupervisorMainHarness:
     """Run the real supervisor main() against fake children and a fake DB probe."""
 
-    def __init__(self, test, root, *, db_ready, env=None, ticks=3, sleep_hook=None):
+    def __init__(self, test, root, *, db_ready, env=None, ticks=3, spawn_error=None):
         self.test = test
         self.state_root = root / "home" / "state" / "rooms" / "42"
         self.module = load_supervisor()
@@ -64,18 +71,19 @@ class SupervisorMainHarness:
         self.db_ready = db_ready
         self.env = env or {}
         self.ticks = ticks
-        self.sleep_hook = sleep_hook
+        self.spawn_error = spawn_error
         self.sleeps = 0
+        self.patches = {}
 
     def _popen(self, argv, **kwargs):
+        if self.spawn_error is not None and self.spawn_error in " ".join(argv):
+            raise OSError(errno.EAGAIN, "Resource temporarily unavailable")
         child = FakeChild(argv, kwargs.get("env"))
         self.spawned.append(child)
         return child
 
     def _sleep(self, _seconds):
         self.sleeps += 1
-        if self.sleep_hook is not None:
-            self.sleep_hook(self)
         if self.sleeps >= self.ticks:
             self.module._signal_requested = signal.SIGTERM
 
@@ -91,6 +99,11 @@ class SupervisorMainHarness:
         return json.loads((self.state_root / "supervisor-status.json").read_text("utf-8"))
 
     def run(self):
+        raised = self.run_capturing()
+        self.test.assertIsInstance(raised, SystemExit)
+        return raised.code
+
+    def run_capturing(self):
         module = self.module
         config = {
             "safety": {"allow_auto_reply": True},
@@ -124,10 +137,14 @@ class SupervisorMainHarness:
             module.signal, "signal"
         ), mock.patch.object(
             module.time, "sleep", side_effect=self._sleep
-        ):
-            with self.test.assertRaises(SystemExit) as raised:
+        ), contextlib.ExitStack() as stack:
+            for name, value in self.patches.items():
+                stack.enter_context(mock.patch.object(module, name, value))
+            try:
                 module.main()
-        return raised.exception.code
+            except BaseException as exc:
+                return exc
+        self.test.fail("supervisor main() returned instead of exiting")
 
 
 class GeekNewsOnlyRoomTests(unittest.TestCase):
@@ -188,6 +205,50 @@ class GeekNewsOnlyRoomTests(unittest.TestCase):
                 ],
             )
             self.assertTrue(harness.status()["database_started"])
+
+
+class SupervisorFailureCleanupTests(unittest.TestCase):
+    def test_status_write_failure_in_the_loop_stops_every_child(self):
+        with tempfile.TemporaryDirectory() as raw:
+            harness = SupervisorMainHarness(self, Path(raw), db_ready=lambda: True)
+            real_write_status = harness.module.write_status
+
+            def disk_full_after_first_tick(*args, **kwargs):
+                if harness.sleeps >= 1:
+                    raise OSError(errno.ENOSPC, "No space left on device")
+                return real_write_status(*args, **kwargs)
+
+            harness.patches["write_status"] = disk_full_after_first_tick
+            with contextlib.redirect_stderr(io.StringIO()):
+                raised = harness.run_capturing()
+
+            self.assertEqual(len(harness.spawned), 3)
+            self.assertEqual(
+                [child for child in harness.spawned if not child.terminated], []
+            )
+            self.assertIsInstance(raised, SystemExit)
+            self.assertEqual(raised.code, 1)
+
+    def test_failed_worker_start_stops_the_children_already_started(self):
+        with tempfile.TemporaryDirectory() as raw:
+            harness = SupervisorMainHarness(
+                self,
+                Path(raw),
+                db_ready=lambda: True,
+                spawn_error="auto-reply-worker.py",
+            )
+            with contextlib.redirect_stderr(io.StringIO()):
+                raised = harness.run_capturing()
+
+            self.assertEqual(
+                harness.scripts_started(),
+                ["auto-reply-apple-watch.py", "auto-reply-db-watch.py"],
+            )
+            self.assertEqual(
+                [child for child in harness.spawned if not child.terminated], []
+            )
+            self.assertIsInstance(raised, SystemExit)
+            self.assertEqual(raised.code, 1)
 
 
 if __name__ == "__main__":

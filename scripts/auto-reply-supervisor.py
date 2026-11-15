@@ -14,6 +14,7 @@ import stat
 import subprocess
 import time
 import tomllib
+import traceback
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -1500,6 +1501,14 @@ def stop(*_args: object, reason: str = "shutdown", exit_code: int = 0) -> None:
 
 
 def main() -> int:
+    try:
+        return _supervise()
+    except Exception:
+        traceback.print_exc()
+        stop(reason="supervisor_error", exit_code=1)
+
+
+def _supervise() -> int:
     global _status_context, LOG_DIR, SELF, CHAT
     parser = argparse.ArgumentParser()
     parser.add_argument("--once", action="store_true")
