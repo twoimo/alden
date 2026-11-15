@@ -3,6 +3,7 @@ use crate::resource_layout::{
 };
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
@@ -134,6 +135,10 @@ struct PythonRun<'a> {
     output_limit: usize,
     stdin_payload: Option<&'a [u8]>,
     global_abort_grace: Option<Duration>,
+    /// Runs once the child is registered and about to spawn. A refused call
+    /// (duplicate token, bad resources) never reaches it, so it cannot begin
+    /// or finish a job that another call owns.
+    on_registered: Option<&'a dyn Fn()>,
 }
 
 impl Default for PythonRun<'_> {
@@ -146,6 +151,7 @@ impl Default for PythonRun<'_> {
             output_limit: OUTPUT_LIMIT_BYTES,
             stdin_payload: None,
             global_abort_grace: None,
+            on_registered: None,
         }
     }
 }
@@ -434,22 +440,26 @@ impl PythonBridge {
         let is_swap = action == "model-swap";
         let is_mlx_launch = action == MLX_SERVER_LAUNCH_ACTION;
         let swap_job_id = token_id.unwrap_or("model-swap");
-        if is_swap {
+        let begun = Cell::new(false);
+        let begin = || {
             self.begin_job(swap_job_id, "model_swap", "swap", 0.9);
-        }
+            begun.set(true);
+        };
         let result: Result<Value, BridgeError> = (|| {
-            let bytes = self.run_python(
-                &args,
-                if is_swap {
+            let bytes = self.run_python_with_output_limit(PythonRun {
+                extra: &args,
+                timeout: if is_swap {
                     MODEL_SWAP_TIMEOUT
                 } else if is_mlx_launch {
                     MLX_LAUNCH_TIMEOUT
                 } else {
                     DEFAULT_TIMEOUT
                 },
-                if is_swap { token_id } else { None },
-                is_swap,
-            )?;
+                token_id: if is_swap { token_id } else { None },
+                cooperative_cancel: is_swap,
+                on_registered: if is_swap { Some(&begin) } else { None },
+                ..PythonRun::default()
+            })?;
             let value = parse_json_output(&bytes)?;
             Ok(match action {
                 "models" => sanitize_models(&value),
@@ -468,7 +478,7 @@ impl PythonBridge {
                 _ => return Err(BridgeError::ActionNotAllowed),
             })
         })();
-        if is_swap {
+        if is_swap && begun.get() {
             self.finish_job(swap_job_id);
         }
         result
@@ -486,7 +496,11 @@ impl PythonBridge {
         let args = browser_tool_args(job_id, task)?;
         let internal_token = format!("browser-tool-{job_id}");
         let cancellation_token = token_id.unwrap_or(&internal_token);
-        self.begin_job(job_id, "browser", "running", 0.7);
+        let begun = Cell::new(false);
+        let begin = || {
+            self.begin_job(job_id, "browser", "running", 0.7);
+            begun.set(true);
+        };
         let result: Result<SafeBrowserToolResult, BridgeError> = (|| {
             let bytes = self.run_python_with_output_limit(PythonRun {
                 extra: &args,
@@ -495,11 +509,17 @@ impl PythonBridge {
                 output_limit: BROWSER_TOOL_OUTPUT_LIMIT_BYTES,
                 stdin_payload: Some(task.as_bytes()),
                 global_abort_grace: Some(BROWSER_TOOL_ABORT_GRACE),
+                on_registered: Some(&begin),
                 ..PythonRun::default()
             })?;
             let value = parse_json_output(&bytes)?;
             Ok(sanitize_browser_tool_result(&value))
         })();
+        if !begun.get() {
+            // Refused before the child started. The job entry, if any, belongs
+            // to the call that holds the token, so leave it alone.
+            return result;
+        }
         match &result {
             Ok(value) if !value.error_code.is_empty() => {
                 self.set_job_error(job_id, Some(&value.error_code));
@@ -717,6 +737,7 @@ impl PythonBridge {
             output_limit,
             stdin_payload,
             global_abort_grace,
+            on_registered,
         } = run;
         let resources = self.config.resources()?;
         resources.validate().map_err(BridgeError::from)?;
@@ -781,6 +802,9 @@ impl PythonBridge {
                     global_abort_flag: global_abort_flag.clone(),
                 },
             );
+        }
+        if let Some(on_registered) = on_registered {
+            on_registered();
         }
 
         let mut args = vec![
@@ -5256,6 +5280,64 @@ mod tests {
             "normal exit waited {elapsed:?} on a lingering grandchild"
         );
         assert!(gone, "lingering grandchild was not stopped");
+    }
+
+    fn register_token_in_use(bridge: &PythonBridge, token: &str) {
+        bridge.cancellations.lock().unwrap().insert(
+            token.to_string(),
+            CancellationHandle {
+                flag: Arc::new(AtomicBool::new(false)),
+                cooperative_marker: None,
+                global_abort_flag: None,
+            },
+        );
+    }
+
+    fn job_error_code(bridge: &PythonBridge, job_id: &str) -> Option<Option<String>> {
+        bridge
+            .jobs_snapshot()
+            .into_iter()
+            .find(|event| event.job_id == job_id)
+            .map(|event| event.error_code)
+    }
+
+    #[test]
+    fn rejected_duplicate_browser_token_keeps_the_running_job() {
+        // A duplicate token is refused before any child starts. The refusal must
+        // not finish or re-label the job that still owns the token.
+        let (bridge, root) = fixture_bridge("dup-browser", SLEEPING_CHILD);
+        register_token_in_use(&bridge, "browser-dup");
+        bridge.begin_job("job-running", "browser", "running", 0.7);
+
+        let result = bridge.run_browser_tool("job-running", "open page", Some("browser-dup"));
+        let still_listed = job_error_code(&bridge, "job-running");
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
+        assert_eq!(still_listed, Some(None), "running browser job was removed or relabelled");
+    }
+
+    #[test]
+    fn rejected_duplicate_model_swap_token_keeps_the_running_job() {
+        let (bridge, root) = fixture_bridge("dup-swap", SLEEPING_CHILD);
+        let token = "123e4567-e89b-42d3-a456-426614174099";
+        register_token_in_use(&bridge, token);
+        bridge.begin_job(token, "model_swap", "swap", 0.9);
+
+        let result = bridge.fetch_settings_action(
+            "model-swap",
+            None,
+            None,
+            None,
+            Some(SWAP_MODEL_ID),
+            Some(true),
+            Some(token),
+        );
+        let still_listed = job_error_code(&bridge, token);
+        fs::remove_dir_all(root).unwrap();
+
+        assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
+        assert_eq!(still_listed, Some(None), "running swap job was removed or relabelled");
     }
 
     #[test]
