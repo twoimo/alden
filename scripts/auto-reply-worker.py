@@ -8814,7 +8814,7 @@ def _open_pinned_link(
     host_header = hostname
     if port not in {80, 443}:
         host_header = f"{hostname}:{port}"
-    last_error: BaseException | None = None
+    last_error: Exception | None = None
     for address in addresses:
         try:
             ip = str(address[4][0])
@@ -8842,11 +8842,13 @@ def _open_pinned_link(
             )
             return connection, connection.getresponse()
         except BaseException as exc:
-            last_error = exc
             try:
                 connection.close()
             except (NameError, OSError):
                 pass
+            if not isinstance(exc, Exception):
+                raise
+            last_error = exc
     if last_error is not None:
         raise last_error
     raise OSError("link connection unavailable")
@@ -16873,12 +16875,28 @@ def _idle_cycle(
     _publish_idle_progress(active_health)
 
 
+_WORKER_SHUTDOWN_STARTED = False
+
+
+def _raise_worker_shutdown(signum: int, _frame: object) -> None:
+    # The Rust sweep signals the whole group and the Python supervisor then
+    # terminates the worker again. A second SystemExit would abort the cleanup
+    # the first one started, so later signals wait for it to finish.
+    global _WORKER_SHUTDOWN_STARTED
+    if _WORKER_SHUTDOWN_STARTED:
+        return
+    _WORKER_SHUTDOWN_STARTED = True
+    raise SystemExit(128 + signum)
+
+
 def worker_main() -> int:
-    global _WORKER_HEALTH
+    global _WORKER_HEALTH, _WORKER_SHUTDOWN_STARTED
     connection: sqlite3.Connection | None = None
     circuit_connection: sqlite3.Connection | None = None
     health: _WorkerHealth | None = None
     idle_sampler: _IdleContextSampler | None = None
+    _WORKER_SHUTDOWN_STARTED = False
+    previous_sigterm = signal.signal(signal.SIGTERM, _raise_worker_shutdown)
     try:
         try:
             connection = _queue_connection()
@@ -17079,6 +17097,7 @@ def worker_main() -> int:
         if health is not None:
             health.close()
         _WORKER_HEALTH = None
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 def main() -> int:
     try:

@@ -114,7 +114,6 @@ raise SystemExit(worker.worker_main())
 
 
 class WorkerShutdownTests(unittest.TestCase):
-    @unittest.expectedFailure
     def test_sigterm_runs_cleanup_and_stops_the_isolated_model_group(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -165,7 +164,6 @@ class WorkerShutdownTests(unittest.TestCase):
                     except (ProcessLookupError, PermissionError):
                         pass
 
-    @unittest.expectedFailure
     def test_shutdown_during_a_link_attempt_is_not_retried_on_the_next_address(self):
         worker = load_worker("auto_reply_link_shutdown_test")
         attempts: list[str] = []
