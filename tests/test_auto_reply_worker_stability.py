@@ -4,6 +4,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
@@ -273,6 +274,41 @@ class GeekNewsCursorTests(unittest.TestCase):
         )
         self.assertEqual(first["ids"], [10, 11, 12])
         self.assertEqual(second["ids"], [10, 11, 12])
+
+    @unittest.expectedFailure
+    def test_concurrent_confirmed_posts_both_land_in_the_cursor(self):
+        real_replace = os.replace
+        first_writing = threading.Event()
+        second_done = threading.Event()
+        replaced: list[str] = []
+
+        def slow_first_replace(source, destination):
+            replaced.append(str(destination))
+            if len(replaced) == 1:
+                first_writing.set()
+                second_done.wait(1.0)
+            return real_replace(source, destination)
+
+        def confirm(ids, done=None):
+            try:
+                self.worker._mark_geeknews_digest_confirmed(
+                    {"proactive_ids": ids, "proactive_query": "geeknews-rss"},
+                    now=self.slot_time("morning"),
+                )
+            finally:
+                if done is not None:
+                    done.set()
+
+        with mock.patch.object(self.worker.os, "replace", side_effect=slow_first_replace):
+            first = threading.Thread(target=confirm, args=([10, 11],))
+            first.start()
+            self.assertTrue(first_writing.wait(5.0), "first writer never wrote")
+            second = threading.Thread(target=confirm, args=([20, 21], second_done))
+            second.start()
+            first.join(5.0)
+            second.join(5.0)
+        seen = self.worker._load_geeknews_seen_ids()
+        self.assertTrue({10, 11, 20, 21} <= seen, f"lost a confirmed post: {sorted(seen)}")
 
 
 if __name__ == "__main__":
