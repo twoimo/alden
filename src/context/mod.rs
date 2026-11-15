@@ -11,9 +11,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 mod common;
-mod index;
-mod live;
-mod reply_bundle;
 pub use common::{CONTEXT_REPLY_BUNDLE_MAX_EXCLUDED_LOG_IDS, STYLE_POLICY_VERSION};
 use common::{
     CONTEXT_RETRIEVAL_MIGRATION_REQUIRED, RETRIEVAL_INDEX_SCHEMA_VERSION, STYLE_USER, VECTOR_DIM,
@@ -482,13 +479,13 @@ impl ContextReplyBundle {
     }
     fn redact_provenance(&mut self) {
         for result in self.context.iter_mut().chain(self.styles.iter_mut()) {
-            result.source = stable_provenance_id(&result.source);
+            result.source = provenance_id(&result.source);
         }
         if let Some(profile) = self.style_profile.as_mut() {
-            profile.source = stable_provenance_id(&profile.source);
+            profile.source = provenance_id(&profile.source);
         }
         if let Some(response_time) = self.response_time.as_mut() {
-            response_time.source = stable_provenance_id(&response_time.source);
+            response_time.source = provenance_id(&response_time.source);
         }
         for prior in &mut self.prior_decisions {
             if let Ok(mut evidence) =
@@ -552,29 +549,29 @@ impl RecipientContextReplyBundle {
 
     fn redact_provenance(&mut self) {
         for result in self.context.iter_mut().chain(self.styles.iter_mut()) {
-            result.source = stable_provenance_id(&result.source);
+            result.source = provenance_id(&result.source);
         }
         if let Some(profile) = self.style_profile.as_mut() {
-            profile.source = stable_provenance_id(&profile.source);
+            profile.source = provenance_id(&profile.source);
         }
         if let Some(profile) = self.recipient_style_profile.as_mut() {
-            profile.profile.source = stable_provenance_id(&profile.profile.source);
+            profile.profile.source = provenance_id(&profile.profile.source);
         }
         if let Some(response_time) = self.response_time.as_mut() {
-            response_time.source = stable_provenance_id(&response_time.source);
+            response_time.source = provenance_id(&response_time.source);
         }
         redact_reply_decisions(&mut self.prior_decisions);
     }
 }
 
-fn stable_provenance_id(source: &str) -> String {
+pub fn provenance_id(source: &str) -> String {
     format!("source:{}", hex::encode(Sha256::digest(source.as_bytes())))
 }
 
 pub fn redact_absolute_paths(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(text) if Path::new(text).is_absolute() => {
-            *text = stable_provenance_id(text);
+            *text = provenance_id(text);
         }
         serde_json::Value::Array(values) => {
             for value in values {
@@ -589,19 +586,16 @@ pub fn redact_absolute_paths(value: &mut serde_json::Value) {
         _ => {}
     }
 }
-pub fn provenance_id(value: &str) -> String {
-    stable_provenance_id(value)
-}
 
 pub fn redact_context_results(results: &mut [ContextResult]) {
     for result in results {
-        result.source = stable_provenance_id(&result.source);
+        result.source = provenance_id(&result.source);
     }
 }
 
 pub fn redact_response_time_stats(stats: &mut Option<ResponseTimeStats>) {
     if let Some(stats) = stats {
-        stats.source = stable_provenance_id(&stats.source);
+        stats.source = provenance_id(&stats.source);
     }
 }
 
@@ -613,7 +607,7 @@ pub fn redact_reply_decisions(results: &mut [ReplyDecisionMatch]) {
                 serde_json::to_string(&evidence).unwrap_or_else(|_| "{}".to_string());
         } else {
             result.evidence_json = serde_json::json!({
-                "redacted_evidence": stable_provenance_id(&result.evidence_json)
+                "redacted_evidence": provenance_id(&result.evidence_json)
             })
             .to_string();
         }
@@ -1837,14 +1831,6 @@ pub struct SelfSendRepairReport {
 /// ledger. Used where no room queue is addressable (CSV import), so a bot reply
 /// that was already confirmed in the context database cannot be learned as an
 /// owner style sample.
-pub fn confirmed_self_sends_from_decisions(
-    db_path: &Path,
-    chat: &str,
-) -> Result<Vec<ConfirmedSelfSend>> {
-    let conn = open_db_readonly(db_path)?;
-    confirmed_self_sends_with_connection(&conn, chat)
-}
-
 fn confirmed_self_sends_with_connection(
     conn: &Connection,
     chat: &str,
@@ -3548,7 +3534,7 @@ pub fn recipient_style_profile_json(
 ) -> Result<Option<String>> {
     match recipient_style_profile(db_path, chat, recipient, source)? {
         Some(mut profile) => {
-            profile.profile.source = stable_provenance_id(&profile.profile.source);
+            profile.profile.source = provenance_id(&profile.profile.source);
             Ok(Some(serde_json::to_string(&profile)?))
         }
         None => Ok(None),
@@ -3563,7 +3549,7 @@ pub fn style_profile_json(
 ) -> Result<Option<String>> {
     match style_profile(db_path, chat, user, source)? {
         Some(mut profile) => {
-            profile.source = stable_provenance_id(&profile.source);
+            profile.source = provenance_id(&profile.source);
             Ok(Some(serde_json::to_string(&profile)?))
         }
         None => Ok(None),
@@ -4157,16 +4143,7 @@ pub fn reply_decision_search(
     }
     let conn = open_db_readonly(db_path)?;
     ensure_retrieval_index_current(&conn)?;
-    reply_decision_search_with_connection(&conn, chat, query, limit)
-}
-
-fn reply_decision_search_with_connection(
-    conn: &Connection,
-    chat: &str,
-    query: &str,
-    limit: usize,
-) -> Result<Vec<ReplyDecisionMatch>> {
-    reply_decision_search_with_connection_excluding(conn, chat, query, limit, &BTreeSet::new())
+    reply_decision_search_with_connection_excluding(&conn, chat, query, limit, &BTreeSet::new())
 }
 
 fn reply_decision_search_with_connection_excluding(
@@ -4328,20 +4305,8 @@ pub fn search_with_embedder(
     }
     let conn = open_db_readonly(db_path)?;
     ensure_retrieval_index_current(&conn)?;
-    search_with_connection(&conn, chat, source, query, mode, limit, embedder)
-}
-
-fn search_with_connection(
-    conn: &Connection,
-    chat: Option<&str>,
-    source: Option<&str>,
-    query: &str,
-    mode: &str,
-    limit: usize,
-    embedder: &dyn Embedder,
-) -> Result<Vec<ContextResult>> {
     search_with_connection_excluding(
-        conn,
+        &conn,
         chat,
         source,
         query,
@@ -4600,15 +4565,6 @@ fn recipient_style_search_with_connection(
         .collect())
 }
 
-pub fn context_reply_bundle(
-    db_path: &Path,
-    chat: &str,
-    query: &str,
-    source: Option<&str>,
-) -> Result<ContextReplyBundle> {
-    context_reply_bundle_internal(db_path, chat, query, source, None)
-}
-
 #[derive(Debug)]
 struct LiveEventExclusions {
     chat_id: i64,
@@ -4646,50 +4602,12 @@ fn live_event_exclusions(chat_id: i64, log_ids: &[i64]) -> Result<LiveEventExclu
     })
 }
 
-/// Build a reply bundle while excluding the live row currently being decided.
-/// This prevents the incoming message from becoming its own retrieval evidence.
-pub fn context_reply_bundle_excluding_live_event(
-    db_path: &Path,
-    chat: &str,
-    query: &str,
-    source: Option<&str>,
-    chat_id: i64,
-    current_log_id: i64,
-) -> Result<ContextReplyBundle> {
-    context_reply_bundle_excluding_live_events(
-        db_path,
-        chat,
-        query,
-        source,
-        chat_id,
-        &[current_log_id],
-    )
-}
-
-/// Build a reply bundle while excluding every row in one bounded incoming
-/// burst. Both live context rows and their canonical reply-decision IDs are
-/// excluded in the same read transaction.
-pub fn context_reply_bundle_excluding_live_events(
-    db_path: &Path,
-    chat: &str,
-    query: &str,
-    source: Option<&str>,
-    chat_id: i64,
-    excluded_log_ids: &[i64],
-) -> Result<ContextReplyBundle> {
-    let exclusions = live_event_exclusions(chat_id, excluded_log_ids)?;
-    context_reply_bundle_internal(db_path, chat, query, source, Some(&exclusions))
-}
-
 fn context_ids_for_excluded_live_events(
     conn: &Connection,
     chat: &str,
     preferred_source: Option<&str>,
-    exclusions: Option<&LiveEventExclusions>,
+    exclusions: &LiveEventExclusions,
 ) -> Result<BTreeSet<i64>> {
-    let Some(exclusions) = exclusions else {
-        return Ok(BTreeSet::new());
-    };
     let has_live_events = conn.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM sqlite_master
@@ -4732,31 +4650,22 @@ fn context_ids_for_excluded_live_events(
     Ok(context_ids)
 }
 
-fn context_reply_bundle_internal(
+pub fn context_reply_bundle(
     db_path: &Path,
     chat: &str,
     query: &str,
     source: Option<&str>,
-    exclusions: Option<&LiveEventExclusions>,
 ) -> Result<ContextReplyBundle> {
     if chat.trim().is_empty() {
         anyhow::bail!("chat name must not be empty");
     }
-    if query.trim().is_empty() {
-        // Punctuation-only or blank inbound still needs style/timing evidence.
-    }
+    // Punctuation-only or blank inbound still needs style/timing evidence.
 
     let conn = open_db_readonly(db_path)?;
     conn.execute_batch("BEGIN DEFERRED TRANSACTION")?;
     let result = (|| {
         ensure_retrieval_index_current(&conn)?;
         let preferred_source = preferred_context_source(&conn, Some(chat), source)?;
-        let excluded_context_ids = context_ids_for_excluded_live_events(
-            &conn,
-            chat,
-            preferred_source.as_deref(),
-            exclusions,
-        )?;
         let context = search_with_connection_excluding(
             &conn,
             Some(chat),
@@ -4764,7 +4673,7 @@ fn context_reply_bundle_internal(
             query,
             "hybrid",
             CONTEXT_REPLY_BUNDLE_CONTEXT_LIMIT,
-            &excluded_context_ids,
+            &BTreeSet::new(),
             &LocalHashEmbedder,
         )?;
         let styles = style_search_with_connection(
@@ -4775,16 +4684,12 @@ fn context_reply_bundle_internal(
             CONTEXT_REPLY_BUNDLE_STYLE_LIMIT,
             true,
         )?;
-        let empty_decision_event_ids = BTreeSet::new();
-        let excluded_decision_event_ids = exclusions
-            .map(|value| &value.decision_event_ids)
-            .unwrap_or(&empty_decision_event_ids);
         let prior_decisions = reply_decision_search_with_connection_excluding(
             &conn,
             chat,
             query,
             CONTEXT_REPLY_BUNDLE_DECISION_LIMIT,
-            excluded_decision_event_ids,
+            &BTreeSet::new(),
         )?;
         let style_profile = style_profile_with_connection(
             &conn,
@@ -4825,30 +4730,11 @@ fn context_reply_bundle_internal(
 }
 
 /// Build the version-2 reply bundle for a specific participant in one read
-/// snapshot. The current live row is excluded from context retrieval. Direct
+/// snapshot. Every live row of the incoming burst (`excluded_log_ids`) is
+/// excluded from context retrieval and prior decisions. Direct
 /// recipient-linked style evidence is used only when its profile clears the
 /// sample/confidence floor; otherwise both profile and style examples fall
 /// back to the authoritative room-wide register.
-pub fn context_reply_bundle_for_recipient(
-    db_path: &Path,
-    chat: &str,
-    query: &str,
-    source: Option<&str>,
-    recipient: &str,
-    chat_id: i64,
-    current_log_id: i64,
-) -> Result<RecipientContextReplyBundle> {
-    context_reply_bundle_for_recipient_excluding_live_events(
-        db_path,
-        chat,
-        query,
-        source,
-        recipient,
-        chat_id,
-        &[current_log_id],
-    )
-}
-
 pub fn context_reply_bundle_for_recipient_excluding_live_events(
     db_path: &Path,
     chat: &str,
@@ -4861,9 +4747,7 @@ pub fn context_reply_bundle_for_recipient_excluding_live_events(
     if chat.trim().is_empty() || recipient.trim().is_empty() {
         anyhow::bail!("recipient context reply bundle chat and recipient must not be empty");
     }
-    if query.trim().is_empty() {
-        // Recipient bundles keep style/timing when the inbound has no tokens.
-    }
+    // Recipient bundles keep style/timing when the inbound has no tokens.
     let exclusions = live_event_exclusions(chat_id, excluded_log_ids)?;
 
     let conn = open_db_readonly(db_path)?;
@@ -4875,7 +4759,7 @@ pub fn context_reply_bundle_for_recipient_excluding_live_events(
             &conn,
             chat,
             preferred_source.as_deref(),
-            Some(&exclusions),
+            &exclusions,
         )?;
         let context = search_with_connection_excluding(
             &conn,
@@ -4962,26 +4846,6 @@ pub fn context_reply_bundle_for_recipient_excluding_live_events(
     }
 }
 
-pub fn context_reply_bundle_for_recipient_json(
-    db_path: &Path,
-    chat: &str,
-    query: &str,
-    source: Option<&str>,
-    recipient: &str,
-    chat_id: i64,
-    current_log_id: i64,
-) -> Result<String> {
-    context_reply_bundle_for_recipient_excluding_live_events_json(
-        db_path,
-        chat,
-        query,
-        source,
-        recipient,
-        chat_id,
-        &[current_log_id],
-    )
-}
-
 pub fn context_reply_bundle_for_recipient_excluding_live_events_json(
     db_path: &Path,
     chat: &str,
@@ -5010,50 +4874,6 @@ pub fn context_reply_bundle_for_recipient_excluding_live_events_json(
     Ok(output)
 }
 
-pub fn context_reply_bundle_excluding_live_event_json(
-    db_path: &Path,
-    chat: &str,
-    query: &str,
-    source: Option<&str>,
-    chat_id: i64,
-    current_log_id: i64,
-) -> Result<String> {
-    context_reply_bundle_excluding_live_events_json(
-        db_path,
-        chat,
-        query,
-        source,
-        chat_id,
-        &[current_log_id],
-    )
-}
-
-pub fn context_reply_bundle_excluding_live_events_json(
-    db_path: &Path,
-    chat: &str,
-    query: &str,
-    source: Option<&str>,
-    chat_id: i64,
-    excluded_log_ids: &[i64],
-) -> Result<String> {
-    let bundle = context_reply_bundle_excluding_live_events(
-        db_path,
-        chat,
-        query,
-        source,
-        chat_id,
-        excluded_log_ids,
-    )?;
-    let output = serde_json::to_string(&bundle)?;
-    if output.len() > CONTEXT_REPLY_BUNDLE_MAX_JSON_BYTES {
-        anyhow::bail!(
-            "context reply bundle exceeds {} bytes",
-            CONTEXT_REPLY_BUNDLE_MAX_JSON_BYTES
-        );
-    }
-    Ok(output)
-}
-
 pub fn context_reply_bundle_json(
     db_path: &Path,
     chat: &str,
@@ -5070,21 +4890,6 @@ pub fn context_reply_bundle_json(
     }
     Ok(output)
 }
-
-pub const REPLY_DECISION_STATUSES: &[&str] = &[
-    "pending",
-    "processing",
-    "projection_pending",
-    "scheduled",
-    "sending",
-    "accepted_unconfirmed",
-    "sent",
-    "skipped",
-    "failed",
-    "delivery_unknown",
-    "reconcile_required",
-    "poison",
-];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReplyDecision {
@@ -6001,11 +5806,6 @@ fn rebuild_retrieval_index(conn: &Connection) -> Result<()> {
         [RETRIEVAL_INDEX_SCHEMA_VERSION],
     )?;
     Ok(())
-}
-
-pub fn rebuild_context_index(db_path: &Path) -> Result<()> {
-    let conn = open_db(db_path)?;
-    rebuild_retrieval_index(&conn)
 }
 
 fn keyword_search_excluding(
@@ -8194,14 +7994,14 @@ mod tests {
             assert!(record_reply_decision(&db, &record.to_string()).unwrap());
         }
 
-        let unfiltered = context_reply_bundle_for_recipient(
+        let unfiltered = context_reply_bundle_for_recipient_excluding_live_events(
             &db,
             chat,
             "burstmarker",
             Some(&ingested.source),
             "민수",
             chat_id,
-            999,
+            &[999],
         )
         .unwrap();
         assert!(unfiltered
@@ -8341,7 +8141,7 @@ mod tests {
 
         let error = search(&db, Some("chat-a"), None, "rebuild", "keyword", 5).unwrap_err();
         assert_eq!(error.to_string(), CONTEXT_RETRIEVAL_MIGRATION_REQUIRED);
-        rebuild_context_index(&db).unwrap();
+        rebuild_retrieval_index(&open_db(&db).unwrap()).unwrap();
         let results = search(&db, Some("chat-a"), None, "rebuild", "keyword", 5).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].message, "rebuild marker");
@@ -8989,14 +8789,14 @@ mod tests {
         assert!(!plan.contains("SCAN styles"));
         assert!(!plan.contains("USE TEMP B-TREE"));
 
-        let direct_bundle = context_reply_bundle_for_recipient(
+        let direct_bundle = context_reply_bundle_for_recipient_excluding_live_events(
             &db,
             "부자멘토멘티",
             "현재질문표식",
             None,
             "민수",
             chat_id,
-            9,
+            &[9],
         )
         .unwrap();
         assert_eq!(
@@ -9022,14 +8822,14 @@ mod tests {
             .iter()
             .all(|style| style.source.starts_with("source:")));
 
-        let fallback_bundle = context_reply_bundle_for_recipient(
+        let fallback_bundle = context_reply_bundle_for_recipient_excluding_live_events(
             &db,
             "부자멘토멘티",
             "현재질문표식",
             None,
             "영희",
             chat_id,
-            9,
+            &[9],
         )
         .unwrap();
         assert!(fallback_bundle
@@ -9045,14 +8845,14 @@ mod tests {
             .iter()
             .all(|style| style.mode == "vector_style"));
 
-        let json = context_reply_bundle_for_recipient_json(
+        let json = context_reply_bundle_for_recipient_excluding_live_events_json(
             &db,
             "부자멘토멘티",
             "현재질문표식",
             None,
             "민수",
             chat_id,
-            9,
+            &[9],
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
