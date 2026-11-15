@@ -2670,8 +2670,8 @@ def _poll_cursor(state: dict) -> int:
             if not isinstance(value, bool) and 0 < int(value) < MAX_INT64
         ]
         watermark = int(state.get("acked_watermark", 0))
-    except (TypeError, ValueError):
-        return 0
+    except (TypeError, ValueError) as exc:
+        raise DbFence("poll cursor malformed: reconcile_required") from exc
     if pending:
         return max(0, min(pending) - 1)
     return max(0, min(watermark, MAX_INT64 - 1))
