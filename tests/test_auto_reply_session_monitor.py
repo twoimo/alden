@@ -64,7 +64,7 @@ class SessionMonitorTests(unittest.TestCase):
                 module.run_once(manifest, state, now_ns=1_000_000_000_000, runner=runner),
                 0,
             )
-            self.assertGreaterEqual(len(calls), 1)
+            self.assertEqual(len(calls), 1)
             self.assertEqual(
                 calls[0][0],
                 [
@@ -75,12 +75,6 @@ class SessionMonitorTests(unittest.TestCase):
                     str(command),
                 ],
             )
-            if len(calls) > 1:
-                self.assertEqual(calls[1][0][:2], ["/usr/bin/osascript", "-e"])
-                self.assertIn("start-auto-reply-session.command", calls[1][0][2])
-                self.assertIn("close w saving no", calls[1][0][2])
-                self.assertIn("busy of w", calls[1][0][2])
-                self.assertNotIn("visible of process", calls[1][0][2])
             self.assertIs(calls[0][1]["stdin"], subprocess.DEVNULL)
             self.assertEqual(calls[0][1]["timeout"], module.OPEN_TIMEOUT_SECONDS)
             self.assertEqual(
@@ -111,6 +105,24 @@ class SessionMonitorTests(unittest.TestCase):
             self.assertNotIn("-j", open_call)
             self.assertNotIn("--hide", open_call)
             self.assertEqual(open_call[-1], str(command))
+
+    def test_launch_never_scripts_terminal_windows(self):
+        # The monitor cannot tell its watchdog window from a user window with
+        # the same title, so it must never close or miniaturize any window.
+        module = load(MONITOR, "session_monitor_no_window_scripting")
+        with tempfile.TemporaryDirectory() as temporary:
+            state, _, manifest, _ = self.fixture(Path(temporary))
+            calls = []
+
+            def runner(argv, **_kwargs):
+                calls.append(list(argv))
+                return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+            self.assertEqual(
+                module.run_once(manifest, state, now_ns=1_600_000_000_000, runner=runner),
+                0,
+            )
+            self.assertEqual([argv[0] for argv in calls], ["/usr/bin/open"])
 
     def test_held_watchdog_lock_never_opens_terminal(self):
         module = load(MONITOR, "session_monitor_lock")
