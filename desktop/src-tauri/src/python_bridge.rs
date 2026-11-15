@@ -9,8 +9,9 @@ use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -25,6 +26,10 @@ const MODEL_SWAP_TIMEOUT: Duration = Duration::from_secs(120);
 const MODEL_SWAP_RECOVERY_TIMEOUT: Duration = Duration::from_secs(120);
 const MLX_LAUNCH_TIMEOUT: Duration = Duration::from_secs(150);
 const OUTPUT_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+// SIGTERM grace before SIGKILL on a stopped process group, and the bound on
+// pipe drains after the leader is gone.
+const PROCESS_TERM_GRACE: Duration = Duration::from_millis(250);
+const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
 const BROWSER_TOOL_OUTPUT_LIMIT_BYTES: usize = 96 * 1024;
 const BROWSER_TOOL_RESULT_LIMIT_BYTES: usize = 64 * 1024;
 const BROWSER_TOOL_TASK_LIMIT_BYTES: usize = 16 * 1024;
@@ -970,8 +975,12 @@ fn run_process_with_recovery(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        // A private group lets stop signals reach descendants, not just the
+        // direct child. The group id is the child's pid.
+        .process_group(0);
     let mut child = command.spawn().map_err(|_| BridgeError::Spawn)?;
+    let group = i32::try_from(child.id()).map_err(|_| BridgeError::Spawn)?;
     let mut stdin_writer = if let Some(payload) = stdin_payload {
         let mut stdin = child.stdin.take().ok_or(BridgeError::Spawn)?;
         let payload = payload.to_vec();
@@ -1010,12 +1019,7 @@ fn run_process_with_recovery(
     let mut global_abort_started = None;
     let status = loop {
         if hard_cancel_flag.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            if let Some(writer) = stdin_writer.take() {
-                let _ = writer.join();
-            }
-            let _ = reader.join();
+            stop_process_group(&mut child, group, stdin_writer, reader);
             return Err(BridgeError::Cancelled);
         }
         if global_abort
@@ -1033,12 +1037,7 @@ fn run_process_with_recovery(
                 }
             }
             if recovery_started.is_none_or(|since| since.elapsed() >= recovery_timeout) {
-                let _ = child.kill();
-                let _ = child.wait();
-                if let Some(writer) = stdin_writer.take() {
-                    let _ = writer.join();
-                }
-                let _ = reader.join();
+                stop_process_group(&mut child, group, stdin_writer, reader);
                 return Err(BridgeError::Timeout);
             }
         }
@@ -1050,12 +1049,7 @@ fn run_process_with_recovery(
                         .as_ref()
                         .is_some_and(|(_, grace)| since.elapsed() >= *grace)
                 }) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    if let Some(writer) = stdin_writer.take() {
-                        let _ = writer.join();
-                    }
-                    let _ = reader.join();
+                    stop_process_group(&mut child, group, stdin_writer, reader);
                     return Err(BridgeError::Cancelled);
                 }
                 thread::sleep(Duration::from_millis(10));
@@ -1063,8 +1057,22 @@ fn run_process_with_recovery(
         }
     };
 
+    // The leader has exited, but a descendant may still hold the pipes open.
+    // Every wait below is bounded; a stuck pipe is stopped, then abandoned.
     if let Some(writer) = stdin_writer.take() {
+        if !wait_for_thread(&writer, PIPE_DRAIN_GRACE) {
+            signal_process_group(group, libc::SIGKILL);
+            if !wait_for_thread(&writer, PIPE_DRAIN_GRACE) {
+                return Err(BridgeError::Wait);
+            }
+        }
         writer.join().map_err(|_| BridgeError::Wait)??;
+    }
+    if !wait_for_thread(&reader, PIPE_DRAIN_GRACE) {
+        signal_process_group(group, libc::SIGKILL);
+        if !wait_for_thread(&reader, PIPE_DRAIN_GRACE) {
+            return Err(BridgeError::Wait);
+        }
     }
     let (output, oversized) = reader.join().map_err(|_| BridgeError::Wait)??;
     if oversized {
@@ -1077,6 +1085,72 @@ fn run_process_with_recovery(
         return Err(BridgeError::Empty);
     }
     Ok(output)
+}
+
+/// Stop a child and everything it spawned, then release its pipe threads.
+fn stop_process_group(
+    child: &mut Child,
+    group: i32,
+    stdin_writer: Option<thread::JoinHandle<Result<(), BridgeError>>>,
+    reader: thread::JoinHandle<Result<(Vec<u8>, bool), BridgeError>>,
+) {
+    terminate_process_group(child, group);
+    if let Some(writer) = stdin_writer {
+        let _ = join_when_finished(writer, PIPE_DRAIN_GRACE);
+    }
+    let _ = join_when_finished(reader, PIPE_DRAIN_GRACE);
+}
+
+/// SIGTERM the group, allow a short grace for handlers, then SIGKILL whatever
+/// remains. The leader is reaped here so the group id stays reserved until the
+/// group is gone.
+fn terminate_process_group(child: &mut Child, group: i32) {
+    signal_process_group(group, libc::SIGTERM);
+    let deadline = Instant::now() + PROCESS_TERM_GRACE;
+    loop {
+        let _ = child.try_wait();
+        if !process_group_alive(group) || Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if process_group_alive(group) {
+        signal_process_group(group, libc::SIGKILL);
+    }
+    let _ = child.wait();
+}
+
+fn signal_process_group(group: i32, signal: libc::c_int) {
+    // A negative pid addresses the process group. Errors mean the group is
+    // already gone, which is the state we want.
+    unsafe {
+        libc::killpg(group, signal);
+    }
+}
+
+fn process_group_alive(group: i32) -> bool {
+    unsafe { libc::killpg(group, 0) == 0 }
+}
+
+fn wait_for_thread<T>(handle: &thread::JoinHandle<T>, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    while !handle.is_finished() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    true
+}
+
+/// Join only a finished thread. A thread still blocked on a pipe is detached
+/// rather than joined, so the caller's deadline holds.
+fn join_when_finished<T>(handle: thread::JoinHandle<T>, limit: Duration) -> Option<T> {
+    if wait_for_thread(&handle, limit) {
+        handle.join().ok()
+    } else {
+        None
+    }
 }
 
 fn parse_json_output(bytes: &[u8]) -> Result<Value, BridgeError> {
@@ -5050,6 +5124,138 @@ mod tests {
                 libc::kill(pid, libc::SIGKILL);
             }
         }
+    }
+
+    #[test]
+    fn timeout_stops_grandchild_that_holds_stdout() {
+        // A shell spawns a sleeping grandchild that inherits stdout. Killing only
+        // the shell used to leave the pipe open, so the timeout waited 30s.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-group-timeout-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let pid_file = temp.join("grandchild.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; sleep 30", pid_file.display());
+        let started = Instant::now();
+        let result = run_process_with_recovery(
+            "sh",
+            &["-c".to_string(), script],
+            Duration::from_millis(200),
+            1024,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: Arc::new(AtomicBool::new(false)),
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+        );
+        let elapsed = started.elapsed();
+        let grandchild = wait_for_pid_file(&pid_file);
+        let gone = wait_until_gone(grandchild, Duration::from_secs(2));
+        kill_own_child(grandchild);
+        fs::remove_dir_all(&temp).unwrap();
+        assert!(matches!(result, Err(BridgeError::Timeout)));
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "timeout stretched to {elapsed:?} by a grandchild holding stdout"
+        );
+        assert!(gone, "grandchild survived the timeout");
+    }
+
+    #[test]
+    fn cancel_gives_child_a_sigterm_grace_before_kill() {
+        // The child installs a SIGTERM handler that records the signal. A
+        // SIGKILL-only stop never runs it, so the marker would be missing.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-term-grace-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let term_marker = temp.join("term.txt");
+        let ready = temp.join("ready.pid");
+        let script = "import os, pathlib, signal, sys, time\n\
+            term, ready = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])\n\
+            def on_term(*_):\n    term.write_text('term')\n    sys.exit(0)\n\
+            signal.signal(signal.SIGTERM, on_term)\n\
+            ready.write_text(str(os.getpid()))\n\
+            time.sleep(30)\n";
+        let cancel = Arc::new(AtomicBool::new(false));
+        let trigger = cancel.clone();
+        let ready_for_trigger = ready.clone();
+        let signal = thread::spawn(move || {
+            let child_pid = wait_for_pid_file(&ready_for_trigger);
+            trigger.store(true, Ordering::SeqCst);
+            child_pid
+        });
+        let result = run_process_with_recovery(
+            "python3",
+            &[
+                "-c".to_string(),
+                script.to_string(),
+                term_marker.to_string_lossy().into_owned(),
+                ready.to_string_lossy().into_owned(),
+            ],
+            Duration::from_secs(20),
+            1024,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: cancel,
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+        );
+        let child_pid = signal.join().unwrap();
+        let gone = wait_until_gone(child_pid, Duration::from_secs(2));
+        let marker = fs::read_to_string(&term_marker).ok();
+        kill_own_child(child_pid);
+        fs::remove_dir_all(&temp).unwrap();
+        assert!(matches!(result, Err(BridgeError::Cancelled)));
+        assert_eq!(marker.as_deref(), Some("term"), "SIGTERM was not delivered");
+        assert!(gone, "child survived cancellation");
+    }
+
+    #[test]
+    fn normal_exit_does_not_wait_on_a_lingering_grandchild() {
+        // The leader succeeds, but a background grandchild keeps stdout open.
+        // The pipe drain used to be unbounded, so this blocked for 30s.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-group-exit-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let pid_file = temp.join("grandchild.pid");
+        let script = format!("sleep 30 & echo $! > '{}'; echo done", pid_file.display());
+        let started = Instant::now();
+        let result = run_process_with_recovery(
+            "sh",
+            &["-c".to_string(), script],
+            Duration::from_secs(5),
+            1024,
+            ProcessControl {
+                stdin_payload: None,
+                hard_cancel_flag: Arc::new(AtomicBool::new(false)),
+                global_abort: None,
+                cooperative_marker: None,
+                recovery_timeout: Duration::ZERO,
+            },
+        );
+        let elapsed = started.elapsed();
+        let grandchild = wait_for_pid_file(&pid_file);
+        let gone = wait_until_gone(grandchild, Duration::from_secs(2));
+        kill_own_child(grandchild);
+        fs::remove_dir_all(&temp).unwrap();
+        assert_eq!(result.unwrap(), b"done\n");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "normal exit waited {elapsed:?} on a lingering grandchild"
+        );
+        assert!(gone, "lingering grandchild was not stopped");
     }
 
     #[test]
