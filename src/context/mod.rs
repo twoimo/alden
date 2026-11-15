@@ -6436,6 +6436,208 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn context_reads_fail_closed_on_a_missing_database_without_creating_it() {
+        let dir = tempdir().unwrap();
+        let parent = dir.path().join("absent");
+        let db = parent.join("context.sqlite3");
+        let assert_migration_required = |label: &str, result: Result<()>| {
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                CONTEXT_RETRIEVAL_MIGRATION_REQUIRED,
+                "{label}"
+            );
+        };
+
+        assert_migration_required(
+            "search",
+            search(&db, Some("방"), None, "probe", "hybrid", 5).map(|_| ()),
+        );
+        assert_migration_required(
+            "style_search",
+            style_search(&db, Some("방"), "probe", 5).map(|_| ()),
+        );
+        assert_migration_required(
+            "style_profile",
+            style_profile(&db, "방", STYLE_USER, None).map(|_| ()),
+        );
+        assert_migration_required(
+            "recipient_style_profile",
+            recipient_style_profile(&db, "방", "민수", None).map(|_| ()),
+        );
+        assert_migration_required(
+            "response_time_stats",
+            response_time_stats(&db, "방", STYLE_USER, None).map(|_| ()),
+        );
+        assert_migration_required(
+            "reply_decision_search",
+            reply_decision_search(&db, "방", "probe", 5).map(|_| ()),
+        );
+        assert_migration_required(
+            "get_reply_decision",
+            get_reply_decision(&db, "db:7:42").map(|_| ()),
+        );
+        assert_migration_required(
+            "live_context_sync_state",
+            live_context_sync_state(&db, TEST_ACCOUNT_FINGERPRINT, 7).map(|_| ()),
+        );
+        assert_migration_required(
+            "context_reply_bundle",
+            context_reply_bundle(&db, "방", "probe", None).map(|_| ()),
+        );
+        assert_migration_required(
+            "context_reply_bundle_for_recipient_excluding_live_events",
+            context_reply_bundle_for_recipient_excluding_live_events(
+                &db,
+                "방",
+                "probe",
+                None,
+                "민수",
+                7,
+                &[42],
+            )
+            .map(|_| ()),
+        );
+
+        assert!(
+            !parent.exists(),
+            "read paths must not create the context database or its directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn context_reads_refuse_a_symlinked_database() {
+        let dir = tempdir().unwrap();
+        let real = dir.path().join("real.sqlite3");
+        let csv = fixture(dir.path(), "chat.csv", "symlink probe");
+        index_csv(&real, "방", &csv).unwrap();
+        let link = dir.path().join("link.sqlite3");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert_eq!(
+            search(&real, Some("방"), None, "symlink", "keyword", 5)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            search(&link, Some("방"), None, "symlink", "keyword", 5)
+                .unwrap_err()
+                .to_string(),
+            CONTEXT_RETRIEVAL_MIGRATION_REQUIRED
+        );
+        assert_eq!(
+            context_reply_bundle(&link, "방", "symlink", None)
+                .unwrap_err()
+                .to_string(),
+            CONTEXT_RETRIEVAL_MIGRATION_REQUIRED
+        );
+    }
+
+    #[test]
+    fn read_only_context_connection_rejects_writes() -> Result<()> {
+        let dir = tempdir()?;
+        let db = dir.path().join("readonly.sqlite3");
+        let csv = fixture(dir.path(), "chat.csv", "read only probe");
+        index_csv(&db, "방", &csv)?;
+
+        let reader = open_db_readonly(&db)?;
+        let write = reader.execute(
+            "INSERT INTO context_messages(source, chat, date, user_name, message, vector)
+             VALUES ('source', '방', '2026-01-01', '민수', 'write probe', x'')",
+            [],
+        );
+        assert!(
+            matches!(
+                write,
+                Err(rusqlite::Error::SqliteFailure(ref error, _))
+                    if error.code == rusqlite::ErrorCode::ReadOnly
+            ),
+            "{write:?}"
+        );
+        let count: i64 =
+            reader.query_row("SELECT COUNT(*) FROM context_messages", [], |row| row.get(0))?;
+        assert_eq!(count, 1);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn context_database_open_refuses_a_symlinked_wal_sidecar() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir()?;
+        let outside = dir.path().join("outside.bin");
+        fs::write(&outside, b"not a wal")?;
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o644))?;
+        let db_dir = dir.path().join("ctx");
+        fs::create_dir(&db_dir)?;
+        let db = db_dir.join("context.sqlite3");
+        std::os::unix::fs::symlink(&outside, db_dir.join("context.sqlite3-wal"))?;
+        let csv = fixture(dir.path(), "chat.csv", "sidecar probe");
+
+        assert!(index_csv(&db, "방", &csv).is_err());
+        assert!(!db.exists());
+        assert_eq!(fs::metadata(&outside)?.permissions().mode() & 0o777, 0o644);
+        assert_eq!(fs::read(&outside)?, b"not a wal");
+        Ok(())
+    }
+
+    #[test]
+    fn csv_reindex_truncates_the_wal_and_scrubs_replaced_text() -> Result<()> {
+        let dir = tempdir()?;
+        let db = dir.path().join("context.sqlite3");
+        let retired = "retiredphrase7d28b";
+        let csv = fixture(dir.path(), "chat.csv", retired);
+        index_csv(&db, "방", &csv)?;
+
+        let concurrent_reader = open_db_readonly(&db)?;
+        let rows: i64 =
+            concurrent_reader.query_row("SELECT COUNT(*) FROM context_messages", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(rows, 1);
+        fs::write(&csv, "Date,User,Message\n2026-01-01,민수,replacement\n")?;
+        index_csv(&db, "방", &csv)?;
+
+        let wal = fs::read(dir.path().join("context.sqlite3-wal")).unwrap_or_default();
+        assert_eq!(wal.len(), 0);
+        let main_db = fs::read(&db)?;
+        assert!(!main_db
+            .windows(retired.len())
+            .any(|window| window == retired.as_bytes()));
+        drop(concurrent_reader);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queue_loader_never_follows_a_symlink_or_creates_a_missing_queue() {
+        let dir = tempdir().unwrap();
+        let queue = dir.path().join("reply-queue.sqlite3");
+        {
+            let conn = Connection::open(&queue).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE reply_jobs(event_id TEXT, status TEXT, reply TEXT, updated_at REAL);
+                 INSERT INTO reply_jobs VALUES('a','sent','보낸 문장',1000.0);",
+            )
+            .unwrap();
+        }
+        let before = fs::read(&queue).unwrap();
+        assert_eq!(confirmed_self_sends_from_queue(&queue).unwrap().len(), 1);
+        assert_eq!(fs::read(&queue).unwrap(), before);
+
+        let link = dir.path().join("linked-queue.sqlite3");
+        std::os::unix::fs::symlink(&queue, &link).unwrap();
+        assert!(confirmed_self_sends_from_queue(&link).unwrap().is_empty());
+
+        let missing_parent = dir.path().join("missing");
+        let absent = missing_parent.join("reply-queue.sqlite3");
+        assert!(confirmed_self_sends_from_queue(&absent).unwrap().is_empty());
+        assert!(!missing_parent.exists());
+    }
+
     fn style_profile_with_stats(
         common_endings: &[(&str, usize)],
         emoji_count: usize,
