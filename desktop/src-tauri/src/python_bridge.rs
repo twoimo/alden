@@ -707,7 +707,7 @@ impl PythonBridge {
             )?;
             voice_session_command(&plan, &self.config.state_root)?
                 .spawn()
-                .map(|_| ())
+                .map(reap_in_background)
                 .map_err(|_| BridgeError::Spawn)
         })
     }
@@ -1777,6 +1777,15 @@ fn plan_voice_session(
         script,
         tts_out: state_root.join(VOICE_TTS_OUT_NAME),
     })
+}
+
+/// The voice session outlives the call that starts it, so the bridge does not
+/// keep the handle. One background wait collects the exit status; dropping the
+/// Child unwaited would leave a zombie once the session ends.
+fn reap_in_background(mut child: Child) {
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
 }
 
 fn voice_session_command(
@@ -5338,6 +5347,30 @@ mod tests {
 
         assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
         assert_eq!(still_listed, Some(None), "running swap job was removed or relabelled");
+    }
+
+    #[test]
+    fn voice_session_child_is_reaped_after_it_exits() {
+        // The voice child is detached on purpose, but dropping the Child without
+        // waiting leaves a zombie once it exits. The fixture interpreter records
+        // its PID under the state root and exits straight away.
+        let (mut bridge, root) = fixture_bridge("voice-reap", SLEEPING_CHILD);
+        let state = root.join("state");
+        fs::create_dir_all(&state).unwrap();
+        let voice_python = root.join("bin/voice-python");
+        write_fixture_file(
+            &voice_python,
+            b"#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = --state-root ]; then echo $$ > \"$2/voice.pid\"; fi\n  shift\ndone\nexit 0\n",
+            true,
+        );
+        Arc::get_mut(&mut bridge.config).unwrap().voice_python = voice_python;
+
+        bridge.start_voice_session().unwrap();
+        let pid = wait_for_pid_file(&state.join("voice.pid"));
+        let gone = wait_until_gone(pid, Duration::from_secs(2));
+        kill_own_child(pid);
+        fs::remove_dir_all(root).unwrap();
+        assert!(gone, "exited voice session child was left as a zombie");
     }
 
     #[test]
