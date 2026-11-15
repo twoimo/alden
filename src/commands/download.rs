@@ -161,12 +161,8 @@ fn cmd_download_local(
             }
             created_paths.push(download_path.clone());
             created_paths.push(normalized_path.clone());
-            let image = normalize_downloaded_image(
-                &download_path,
-                &normalized_path,
-                message_type,
-                source,
-            )?;
+            let image =
+                normalize_downloaded_image(&download_path, &normalized_path, message_type, source)?;
             std::fs::remove_file(&download_path)?;
             let final_path = output_dir.join(opaque_image_filename(index, &image.media_type)?);
             if final_path.exists() || std::fs::symlink_metadata(&final_path).is_ok() {
