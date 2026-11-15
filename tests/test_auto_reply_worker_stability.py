@@ -275,7 +275,6 @@ class GeekNewsCursorTests(unittest.TestCase):
         self.assertEqual(first["ids"], [10, 11, 12])
         self.assertEqual(second["ids"], [10, 11, 12])
 
-    @unittest.expectedFailure
     def test_concurrent_confirmed_posts_both_land_in_the_cursor(self):
         real_replace = os.replace
         first_writing = threading.Event()

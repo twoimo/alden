@@ -17678,7 +17678,9 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             self.assertTrue(module._geeknews_slot_open(inside))
             module._store_geeknews_seen_ids({10}, 10, now=inside)
             self.assertTrue(module._geeknews_slot_open(inside + 60))
-            module._store_geeknews_seen_ids({10}, 10, now=inside, mark_posted_slot=True)
+            module._store_geeknews_seen_ids(
+                {10}, 10, now=inside, posted_slot="2026-08-16:morning"
+            )
             self.assertFalse(module._geeknews_slot_open(inside + 60))
             lunch_start, _ = module._geeknews_slot_window(morning.date(), "lunch", 12, 35, 15)
             self.assertTrue(module._geeknews_slot_open(lunch_start + 10))
@@ -17804,7 +17806,6 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
                     (0, json.dumps(rows).encode("utf-8"), b""),
                 ],
             ) as readback,
-            mock.patch.object(module, "_load_geeknews_seen_ids", return_value={7}),
             mock.patch.object(module, "_store_geeknews_seen_ids") as store,
             mock.patch.object(module.time, "time", return_value=1000.0),
         ):
@@ -17834,7 +17835,7 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
         ])
         self.assertEqual(readback.call_count, 2)
         self.assertEqual(readback.call_args_list[1].kwargs["timeout"], 8.0)
-        store.assert_called_once_with({7, 10, 11}, 11, mark_posted_slot=False)
+        store.assert_called_once_with({10, 11}, 11, posted_slot=None)
 
     def test_geeknews_operator_does_not_confirm_an_old_matching_message_in_same_second(self):
         module = self._load_auto_reply_module("auto_reply_geeknews_old_readback")

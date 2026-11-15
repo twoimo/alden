@@ -15813,6 +15813,7 @@ GEEKNEWS_DAILY_SLOTS = (
     ("evening", 19, 50, 25),
 )
 GEEKNEWS_ROOM_QUIET_SECONDS = 10 * 60
+GEEKNEWS_CURSOR_LOCK_NAME = ".geeknews-cursor.lock"
 
 
 def _geeknews_cursor_path() -> Path:
@@ -15865,15 +15866,18 @@ def _geeknews_slot_at(now: float) -> tuple[str, str] | None:
     return None
 
 
+def _geeknews_slot_marker(stamp: float) -> str | None:
+    slot = _geeknews_slot_at(stamp)
+    return None if slot is None else f"{slot[0]}:{slot[1]}"
+
+
 def _geeknews_slot_open(now: float) -> bool:
-    slot = _geeknews_slot_at(now)
-    if slot is None:
+    marker = _geeknews_slot_marker(now)
+    if marker is None:
         return False
-    day, name = slot
     posted = _load_geeknews_cursor().get("posted_slots")
     if not isinstance(posted, list):
         return True
-    marker = f"{day}:{name}"
     return marker not in {str(item) for item in posted[-32:]}
 
 
@@ -15926,22 +15930,18 @@ def _geeknews_slot_has_attempt(
 
 
 def _mark_geeknews_digest_confirmed(event: dict, *, now: float | None = None) -> None:
-    ids: set[int] = set()
-    for item in event.get("proactive_ids") or []:
-        if isinstance(item, int) and not isinstance(item, bool) and item > 0:
-            ids.add(item)
-    cursor = _load_geeknews_cursor()
-    values = cursor.get("seen_ids")
-    if isinstance(values, list):
-        for item in values[-200:]:
-            if isinstance(item, int) and not isinstance(item, bool) and item > 0:
-                ids.add(item)
-    newest = cursor.get("newest_id")
-    if not isinstance(newest, int) or isinstance(newest, bool) or newest <= 0:
-        newest = max(ids) if ids else 0
-    else:
-        newest = max(newest, max(ids) if ids else 0)
-    _store_geeknews_seen_ids(ids, newest, now=now, mark_posted_slot=True)
+    ids = {
+        item
+        for item in event.get("proactive_ids") or []
+        if isinstance(item, int) and not isinstance(item, bool) and item > 0
+    }
+    stamp = time.time() if now is None else float(now)
+    _store_geeknews_seen_ids(
+        ids,
+        max(ids, default=0),
+        now=stamp,
+        posted_slot=_geeknews_slot_marker(stamp),
+    )
 
 
 def _store_geeknews_seen_ids(
@@ -15949,41 +15949,49 @@ def _store_geeknews_seen_ids(
     newest_id: int,
     *,
     now: float | None = None,
-    mark_posted_slot: bool = False,
+    posted_slot: str | None = None,
 ) -> None:
+    """Merge one confirmed post into the room cursor.
+
+    The room worker and the host GeekNews slot CLI both record posts here, so
+    the read-merge-write holds the room's cursor lock.
+    """
     path = _geeknews_cursor_path()
-    previous = _load_geeknews_cursor()
-    posted = previous.get("posted_slots")
-    if not isinstance(posted, list):
-        posted = []
     stamp = time.time() if now is None else float(now)
-    if mark_posted_slot:
-        slot = _geeknews_slot_at(stamp)
-        if slot is not None:
-            marker = f"{slot[0]}:{slot[1]}"
-            if marker not in {str(item) for item in posted}:
-                posted = [*(str(item) for item in posted[-31:]), marker]
-    payload = {
-        "feed": GEEKNEWS_FEED_URL,
-        "newest_id": newest_id,
-        "seen_ids": sorted(seen_ids)[-200:],
-        "posted_slots": posted[-32:],
-        "updated_at": int(stamp),
-    }
-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    fd, temporary = tempfile.mkstemp(prefix="geeknews-cursor.", dir=path.parent)
-    try:
-        os.fchmod(fd, QUEUE_FILE_MODE)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except OSError:
+    with _private_lock(
+        path.with_name(GEEKNEWS_CURSOR_LOCK_NAME), expected_parent=path.parent
+    ):
+        previous = _load_geeknews_cursor()
+        seen = _load_geeknews_seen_ids() | set(seen_ids)
+        newest = previous.get("newest_id")
+        if not isinstance(newest, int) or isinstance(newest, bool) or newest <= 0:
+            newest = 0
+        posted = previous.get("posted_slots")
+        if not isinstance(posted, list):
+            posted = []
+        if posted_slot and posted_slot not in {str(item) for item in posted}:
+            posted = [*(str(item) for item in posted[-31:]), posted_slot]
+        payload = {
+            "feed": GEEKNEWS_FEED_URL,
+            "newest_id": max(newest, newest_id),
+            "seen_ids": sorted(seen)[-200:],
+            "posted_slots": posted[-32:],
+            "updated_at": int(stamp),
+        }
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        fd, temporary = tempfile.mkstemp(prefix="geeknews-cursor.", dir=path.parent)
         try:
-            os.unlink(temporary)
+            os.fchmod(fd, QUEUE_FILE_MODE)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
         except OSError:
-            pass
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
 
 
 def _html_to_plain(value: str) -> str:
@@ -17303,36 +17311,9 @@ def geeknews_operator_cli(arguments: list[str]) -> int:
     if confirmation_log_id is None:
         print("sent but not locally confirmed; cursor unchanged", file=sys.stderr)
         return 3
-    seen = _load_geeknews_seen_ids()
-    seen.update(ids)
-    newest = max(seen) if seen else 0
-    _store_geeknews_seen_ids(seen, newest, mark_posted_slot=False)
-    if args.mark_slot:
-        cursor = _load_geeknews_cursor()
-        posted = cursor.get("posted_slots")
-        if not isinstance(posted, list):
-            posted = []
-        if args.mark_slot not in {str(item) for item in posted}:
-            cursor["posted_slots"] = [*(str(item) for item in posted[-31:]), args.mark_slot][-32:]
-            cursor["seen_ids"] = sorted(seen)[-200:]
-            cursor["newest_id"] = newest
-            cursor["updated_at"] = int(time.time())
-            path = _geeknews_cursor_path()
-            raw = json.dumps(cursor, ensure_ascii=False, separators=(",", ":")).encode()
-            fd, temporary = tempfile.mkstemp(prefix="geeknews-cursor.", dir=path.parent)
-            try:
-                os.fchmod(fd, QUEUE_FILE_MODE)
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(raw)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                os.replace(temporary, path)
-            except OSError:
-                try:
-                    os.unlink(temporary)
-                except OSError:
-                    pass
-                raise
+    _store_geeknews_seen_ids(
+        set(ids), max(ids, default=0), posted_slot=args.mark_slot or None
+    )
     print(f"# confirmed log_id={confirmation_log_id} ids={ids}", file=sys.stderr)
     return 0
 
