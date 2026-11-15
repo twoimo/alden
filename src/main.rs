@@ -5844,6 +5844,222 @@ fn finish_worker_bound_local_send_setup<T>(
     }
 }
 
+/// What `local-send` holds for its whole run. An AutoReply worker holds the
+/// owner-generation and AX send locks until this drops, and carries the
+/// database-authoritative binding the AX sender re-attests. A plain run holds
+/// neither lock and carries no binding.
+struct LocalSendSetup {
+    _generation_lock: Option<fs::File>,
+    _send_lock: Option<fs::File>,
+    bound_chat: Option<commands::local_send::BoundLocalSend>,
+}
+
+/// Run the AutoReply worker's lock, readiness, and binding gates before a
+/// `local-send` mutates anything. `None` means the worker setup failed and the
+/// pre-send unavailable result was already emitted.
+fn prepare_local_send(
+    config: &config::OpenKakaoConfig,
+    chat_name: &str,
+    dry_run: bool,
+    preflight: bool,
+    json: bool,
+) -> Result<Option<LocalSendSetup>> {
+    let worker_identity = std::env::var("OPENKAKAO_AUTO_REPLY_WORKER")
+        .or_else(|_| std::env::var("OPENKAKAO_BUJAMENTOR_WORKER"))
+        .as_deref()
+        == Ok("1");
+    require_auto_reply_worker_preflight(preflight, worker_identity)?;
+    let is_auto_reply_worker = !dry_run && worker_identity;
+    let setup = (|| -> Result<_> {
+        let _generation_lock = if is_auto_reply_worker && !preflight {
+            let home = dirs::home_dir().context("cannot resolve home directory")?;
+            let lock_path = std::env::var_os("OPENKAKAO_AUTO_REPLY_GENERATION_LOCK")
+                .or_else(|| std::env::var_os("OPENKAKAO_AUTO_REPLY_LOCK"))
+                .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_GENERATION_LOCK"))
+                .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_LOCK"))
+                .filter(|value| !value.is_empty())
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    auto_reply_service::default_state_root(&home).join(".owner-generation.lock")
+                });
+            let lock = fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(lock_path)?;
+            #[cfg(unix)]
+            acquire_worker_setup_lock(
+                &lock,
+                "owner-generation lock",
+                std::time::Duration::from_millis(400),
+            )?;
+            Some(lock)
+        } else {
+            None
+        };
+        let _send_lock = if is_auto_reply_worker && !preflight {
+            if let Some(lock_path) =
+                std::env::var_os("OPENKAKAO_AUTO_REPLY_SEND_LOCK").filter(|value| !value.is_empty())
+            {
+                let lock = fs::OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .read(true)
+                    .write(true)
+                    .open(lock_path)?;
+                #[cfg(unix)]
+                acquire_worker_setup_lock(
+                    &lock,
+                    "AX send lock",
+                    std::time::Duration::from_millis(400),
+                )?;
+                Some(lock)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let mut bound_chat = None;
+        if !dry_run {
+            let mut worker_target = None;
+            if is_auto_reply_worker {
+                config::validate_auto_reply(config)?;
+                let expected_owner = std::env::var("OPENKAKAO_SUPERVISOR_OWNER")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .context("worker owner missing")?;
+                let expected_epoch = std::env::var("OPENKAKAO_DB_SOURCE_EPOCH")
+                    .ok()
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|value| 0 < *value && *value < MAX_INT64)
+                    .context("worker source epoch invalid")?;
+                let expected_target = std::env::var("OPENKAKAO_TARGET_CHAT_ID")
+                    .ok()
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|value| 0 < *value && *value < MAX_INT64)
+                    .context("worker target chat invalid")?;
+                let expected_last_observed = std::env::var("OPENKAKAO_EXPECTED_SOURCE_LOG_ID")
+                    .ok()
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|value| 0 < *value && *value < MAX_INT64)
+                    .context("worker scheduled source log ID invalid")?;
+                let expected_author_id = std::env::var("OPENKAKAO_EXPECTED_SOURCE_AUTHOR_ID")
+                    .ok()
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .filter(|value| 0 < *value && *value < MAX_INT64)
+                    .context("worker scheduled source author ID invalid")?;
+                let expected_author_nickname =
+                    std::env::var("OPENKAKAO_EXPECTED_SOURCE_AUTHOR_NICKNAME")
+                        .ok()
+                        .filter(|value| {
+                            !value.is_empty()
+                                && value.len() <= 1024
+                                && value.trim() == value
+                                && !value.chars().any(char::is_control)
+                        })
+                        .context("worker scheduled source author nickname invalid")?;
+                let proactive_send = std::env::var("OPENKAKAO_PROACTIVE_SEND")
+                    .ok()
+                    .is_some_and(|value| value == "1");
+                require_persisted_auto_reply_readiness(
+                    Some(expected_owner.as_str()),
+                    Some(expected_epoch),
+                    Some(expected_target),
+                    Some(chat_name),
+                    Some(expected_last_observed),
+                )?;
+                worker_target = Some((
+                    expected_target,
+                    expected_last_observed,
+                    expected_author_id,
+                    expected_author_nickname,
+                    proactive_send,
+                ));
+            }
+            require_ax_send(config)?;
+            require_allowed_send_chat(config, chat_name)?;
+            if let Some((
+                target_chat_id,
+                expected_last_observed,
+                expected_author_id,
+                expected_author_nickname,
+                proactive_send,
+            )) = worker_target
+            {
+                // Fetch the authoritative local tail only after both
+                // process locks and all persisted/safety gates are held.
+                // The AX sender will re-attest this numeric ID's latest
+                // suffix against the exact open window before mutation.
+                let reader = local_db::LocalDbReader::open_no_mutation()
+                    .context("open local database for bound AX send attestation")?;
+                let mut messages = reader.read_messages(target_chat_id, 20, None)?;
+                let source_fence =
+                    reader.poll_after(target_chat_id, 1, Some(expected_last_observed))?;
+                require_expected_local_source_tail(
+                    target_chat_id,
+                    expected_last_observed,
+                    &source_fence,
+                )?;
+                let source_message =
+                    resolve_bound_source_message(&messages, expected_last_observed, |log_id| {
+                        reader.read_message_by_log_id(target_chat_id, log_id)
+                    })?;
+                if proactive_send {
+                    if !source_message.is_self
+                        && (source_message.author_id != expected_author_id
+                            || source_message.sender_name.trim() != expected_author_nickname)
+                    {
+                        anyhow::bail!(
+                                    "scheduled reply source author identity drifted; re-enrollment is required"
+                                );
+                    }
+                } else if source_message.is_self
+                    || source_message.author_id != expected_author_id
+                    || source_message.sender_name.trim() != expected_author_nickname
+                {
+                    anyhow::bail!(
+                        "scheduled reply source author identity drifted; re-enrollment is required"
+                    );
+                }
+                let enrollment_path = std::env::var_os("OPENKAKAO_ENROLLMENT_PATH")
+                    .filter(|value| !value.is_empty())
+                    .map(PathBuf::from)
+                    .context("CLI enrollment authority missing")?;
+                let enrollment_raw = read_bounded_file(&enrollment_path)?;
+                let expected_enrollment_digest =
+                    std::env::var("OPENKAKAO_ENROLLMENT_SHA256").unwrap_or_default();
+                validate_cli_enrollment_digest(&enrollment_raw, expected_enrollment_digest.trim())?;
+                let enrollment: serde_json::Value = serde_json::from_slice(&enrollment_raw)
+                    .context("malformed CLI enrollment JSON")?;
+                require_cli_enrolled_reply_author(
+                    &enrollment,
+                    target_chat_id,
+                    expected_author_id,
+                    &expected_author_nickname,
+                )?;
+                messages.reverse();
+                let local_tail = ax_send::normalize_local_binding_suffix(&messages)
+                    .into_iter()
+                    .map(|(_, token)| token)
+                    .collect();
+                bound_chat = Some(commands::local_send::BoundLocalSend {
+                    chat_id: target_chat_id,
+                    expected_source_log_id: expected_last_observed,
+                    local_tail,
+                });
+            }
+        }
+        Ok(LocalSendSetup {
+            _generation_lock,
+            _send_lock,
+            bound_chat,
+        })
+    })();
+    finish_worker_bound_local_send_setup(setup, is_auto_reply_worker, preflight, chat_name, json)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     // The record window's data source must work while the config is broken:
@@ -6961,211 +7177,7 @@ fn main() -> Result<()> {
             preflight,
         } => {
             let msg = format_outgoing_message(&message, no_prefix);
-            let worker_identity = std::env::var("OPENKAKAO_AUTO_REPLY_WORKER")
-                .or_else(|_| std::env::var("OPENKAKAO_BUJAMENTOR_WORKER"))
-                .as_deref()
-                == Ok("1");
-            require_auto_reply_worker_preflight(preflight, worker_identity)?;
-            let is_auto_reply_worker = !dry_run && worker_identity;
-            let setup = (|| -> Result<_> {
-                let _generation_lock = if is_auto_reply_worker && !preflight {
-                    let home = dirs::home_dir().context("cannot resolve home directory")?;
-                    let lock_path = std::env::var_os("OPENKAKAO_AUTO_REPLY_GENERATION_LOCK")
-                        .or_else(|| std::env::var_os("OPENKAKAO_AUTO_REPLY_LOCK"))
-                        .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_GENERATION_LOCK"))
-                        .or_else(|| std::env::var_os("OPENKAKAO_BUJAMENTOR_LOCK"))
-                        .filter(|value| !value.is_empty())
-                        .map(std::path::PathBuf::from)
-                        .unwrap_or_else(|| {
-                            auto_reply_service::default_state_root(&home)
-                                .join(".owner-generation.lock")
-                        });
-                    let lock = fs::OpenOptions::new()
-                        .create(true)
-                        .truncate(false)
-                        .read(true)
-                        .write(true)
-                        .open(lock_path)?;
-                    #[cfg(unix)]
-                    acquire_worker_setup_lock(
-                        &lock,
-                        "owner-generation lock",
-                        std::time::Duration::from_millis(400),
-                    )?;
-                    Some(lock)
-                } else {
-                    None
-                };
-                let _send_lock = if is_auto_reply_worker && !preflight {
-                    if let Some(lock_path) = std::env::var_os("OPENKAKAO_AUTO_REPLY_SEND_LOCK")
-                        .filter(|value| !value.is_empty())
-                    {
-                        let lock = fs::OpenOptions::new()
-                            .create(true)
-                            .truncate(false)
-                            .read(true)
-                            .write(true)
-                            .open(lock_path)?;
-                        #[cfg(unix)]
-                        acquire_worker_setup_lock(
-                            &lock,
-                            "AX send lock",
-                            std::time::Duration::from_millis(400),
-                        )?;
-                        Some(lock)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let mut bound_chat = None;
-                if !dry_run {
-                    let mut worker_target = None;
-                    if is_auto_reply_worker {
-                        config::validate_auto_reply(&config)?;
-                        let expected_owner = std::env::var("OPENKAKAO_SUPERVISOR_OWNER")
-                            .ok()
-                            .filter(|value| !value.trim().is_empty())
-                            .context("worker owner missing")?;
-                        let expected_epoch = std::env::var("OPENKAKAO_DB_SOURCE_EPOCH")
-                            .ok()
-                            .and_then(|value| value.parse::<i64>().ok())
-                            .filter(|value| 0 < *value && *value < MAX_INT64)
-                            .context("worker source epoch invalid")?;
-                        let expected_target = std::env::var("OPENKAKAO_TARGET_CHAT_ID")
-                            .ok()
-                            .and_then(|value| value.parse::<i64>().ok())
-                            .filter(|value| 0 < *value && *value < MAX_INT64)
-                            .context("worker target chat invalid")?;
-                        let expected_last_observed =
-                            std::env::var("OPENKAKAO_EXPECTED_SOURCE_LOG_ID")
-                                .ok()
-                                .and_then(|value| value.parse::<i64>().ok())
-                                .filter(|value| 0 < *value && *value < MAX_INT64)
-                                .context("worker scheduled source log ID invalid")?;
-                        let expected_author_id =
-                            std::env::var("OPENKAKAO_EXPECTED_SOURCE_AUTHOR_ID")
-                                .ok()
-                                .and_then(|value| value.parse::<i64>().ok())
-                                .filter(|value| 0 < *value && *value < MAX_INT64)
-                                .context("worker scheduled source author ID invalid")?;
-                        let expected_author_nickname =
-                            std::env::var("OPENKAKAO_EXPECTED_SOURCE_AUTHOR_NICKNAME")
-                                .ok()
-                                .filter(|value| {
-                                    !value.is_empty()
-                                        && value.len() <= 1024
-                                        && value.trim() == value
-                                        && !value.chars().any(char::is_control)
-                                })
-                                .context("worker scheduled source author nickname invalid")?;
-                        let proactive_send = std::env::var("OPENKAKAO_PROACTIVE_SEND")
-                            .ok()
-                            .is_some_and(|value| value == "1");
-                        require_persisted_auto_reply_readiness(
-                            Some(expected_owner.as_str()),
-                            Some(expected_epoch),
-                            Some(expected_target),
-                            Some(&chat_name),
-                            Some(expected_last_observed),
-                        )?;
-                        worker_target = Some((
-                            expected_target,
-                            expected_last_observed,
-                            expected_author_id,
-                            expected_author_nickname,
-                            proactive_send,
-                        ));
-                    }
-                    require_ax_send(&config)?;
-                    require_allowed_send_chat(&config, &chat_name)?;
-                    if let Some((
-                        target_chat_id,
-                        expected_last_observed,
-                        expected_author_id,
-                        expected_author_nickname,
-                        proactive_send,
-                    )) = worker_target
-                    {
-                        // Fetch the authoritative local tail only after both
-                        // process locks and all persisted/safety gates are held.
-                        // The AX sender will re-attest this numeric ID's latest
-                        // suffix against the exact open window before mutation.
-                        let reader = local_db::LocalDbReader::open_no_mutation()
-                            .context("open local database for bound AX send attestation")?;
-                        let mut messages = reader.read_messages(target_chat_id, 20, None)?;
-                        let source_fence =
-                            reader.poll_after(target_chat_id, 1, Some(expected_last_observed))?;
-                        require_expected_local_source_tail(
-                            target_chat_id,
-                            expected_last_observed,
-                            &source_fence,
-                        )?;
-                        let source_message = resolve_bound_source_message(
-                            &messages,
-                            expected_last_observed,
-                            |log_id| reader.read_message_by_log_id(target_chat_id, log_id),
-                        )?;
-                        if proactive_send {
-                            if !source_message.is_self
-                                && (source_message.author_id != expected_author_id
-                                    || source_message.sender_name.trim()
-                                        != expected_author_nickname)
-                            {
-                                anyhow::bail!(
-                                    "scheduled reply source author identity drifted; re-enrollment is required"
-                                );
-                            }
-                        } else if source_message.is_self
-                            || source_message.author_id != expected_author_id
-                            || source_message.sender_name.trim() != expected_author_nickname
-                        {
-                            anyhow::bail!(
-                                "scheduled reply source author identity drifted; re-enrollment is required"
-                            );
-                        }
-                        let enrollment_path = std::env::var_os("OPENKAKAO_ENROLLMENT_PATH")
-                            .filter(|value| !value.is_empty())
-                            .map(PathBuf::from)
-                            .context("CLI enrollment authority missing")?;
-                        let enrollment_raw = read_bounded_file(&enrollment_path)?;
-                        let expected_enrollment_digest =
-                            std::env::var("OPENKAKAO_ENROLLMENT_SHA256").unwrap_or_default();
-                        validate_cli_enrollment_digest(
-                            &enrollment_raw,
-                            expected_enrollment_digest.trim(),
-                        )?;
-                        let enrollment: serde_json::Value = serde_json::from_slice(&enrollment_raw)
-                            .context("malformed CLI enrollment JSON")?;
-                        require_cli_enrolled_reply_author(
-                            &enrollment,
-                            target_chat_id,
-                            expected_author_id,
-                            &expected_author_nickname,
-                        )?;
-                        messages.reverse();
-                        let local_tail = ax_send::normalize_local_binding_suffix(&messages)
-                            .into_iter()
-                            .map(|(_, token)| token)
-                            .collect();
-                        bound_chat = Some(commands::local_send::BoundLocalSend {
-                            chat_id: target_chat_id,
-                            expected_source_log_id: expected_last_observed,
-                            local_tail,
-                        });
-                    }
-                }
-                Ok((_generation_lock, _send_lock, bound_chat))
-            })();
-            let Some((_generation_lock, _send_lock, bound_chat)) =
-                finish_worker_bound_local_send_setup(
-                    setup,
-                    is_auto_reply_worker,
-                    preflight,
-                    &chat_name,
-                    json,
-                )?
+            let Some(setup) = prepare_local_send(&config, &chat_name, dry_run, preflight, json)?
             else {
                 return Ok(());
             };
@@ -7176,7 +7188,7 @@ fn main() -> Result<()> {
                 dry_run,
                 preflight,
                 json,
-                bound_chat,
+                bound_chat: setup.bound_chat,
                 reply_to,
             })?
         }
