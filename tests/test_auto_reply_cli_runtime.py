@@ -14809,9 +14809,15 @@ print(json.dumps({
             ),
             mock.patch.object(module, "_rearm_model_call_in_flight_jobs"),
             mock.patch.object(module, "apply_operator_request"),
+            mock.patch.object(module, "recover_stale_jobs"),
+            mock.patch.object(module, "_auto_reconcile_give_up"),
+            mock.patch.object(module, "_queue_reconciliation_blockers", return_value=0),
+            mock.patch.object(module, "archive_terminal_jobs"),
+            # A busy claim may or may not have committed, so the worker must
+            # drop that connection and reopen the queue.
             mock.patch.object(
                 module,
-                "recover_stale_jobs",
+                "claim_job",
                 side_effect=sqlite3.OperationalError("database is locked"),
             ),
             mock.patch.object(module.time, "sleep") as sleep,
