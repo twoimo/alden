@@ -1860,12 +1860,9 @@ mod tests {
 
         let mut at_cap = encoded.clone();
         at_cap.extend(std::iter::repeat_n(0u8, MAX_JPEG_TRAILING_BYTES));
-        let at_cap_stripped = attested_image_bytes_for_decode(
-            &at_cap,
-            Some(at_cap.len() as u64),
-            Some("jpeg"),
-        )
-        .expect("8KiB trailer is the documented Kakao pad cap");
+        let at_cap_stripped =
+            attested_image_bytes_for_decode(&at_cap, Some(at_cap.len() as u64), Some("jpeg"))
+                .expect("8KiB trailer is the documented Kakao pad cap");
         assert_eq!(at_cap_stripped, encoded.as_slice());
 
         let mut over_cap = encoded.clone();
@@ -1902,25 +1899,18 @@ mod tests {
         let mut body = encoded.clone();
         body.extend_from_slice(&trailer);
         assert!(jpeg_prefix_with_exact_sef_trailer(&body).is_none());
-        let stripped = attested_image_bytes_for_decode(
-            &body,
-            Some(body.len() as u64),
-            Some("jpeg"),
-        )
-        .expect("Kakao padded SEF trailers must decode via bounded EOI strip");
+        let stripped =
+            attested_image_bytes_for_decode(&body, Some(body.len() as u64), Some("jpeg"))
+                .expect("Kakao padded SEF trailers must decode via bounded EOI strip");
         assert_eq!(stripped, encoded.as_slice());
         assert_eq!(
             attested_image_bytes_for_decode(&body, Some(body.len() as u64), None).unwrap(),
             encoded.as_slice()
         );
-        assert!(attested_image_bytes_for_decode(
-            &body,
-            Some(body.len() as u64),
-            Some("png")
-        )
-        .is_err());
+        assert!(
+            attested_image_bytes_for_decode(&body, Some(body.len() as u64), Some("png")).is_err()
+        );
     }
-
 
     #[cfg(unix)]
     #[test]
