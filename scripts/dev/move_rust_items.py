@@ -22,8 +22,9 @@ closing `}` or `;`, so doc comments and attributes travel with it. Moving a
 type also moves every `impl` block for it. Items that share a name (for
 example `#[cfg]` variants of one function) move together. A `--*-mod tests`
 flag selects the items inside `mod tests { ... }` instead of the file's top
-level; a destination gets a `mod tests` block if it lacks one. Moved text is
-not re-indented, so run rustfmt on the destination afterwards.
+level; a destination gets a `mod tests` block if it lacks one. Items that
+were adjacent in the source stay adjacent. Moved text is not re-indented, so
+run rustfmt on the destination afterwards.
 """
 
 import argparse
@@ -198,15 +199,17 @@ def cmd_move(args):
     missing = wanted - ({sp[3] for sp in chosen} | {impl_target(sp[3]) for sp in chosen})
     if missing:
         sys.exit(f"not found in {args.src}: {' '.join(sorted(missing))}")
-    taken, moved = set(), []
+    taken, block, prev_end = set(), "", None
     for s, _, e, _ in chosen:
         body = lines[s:e]
+        adjacent = prev_end == s and body and body[0].strip()
         while body and not body[0].strip():
             body = body[1:]
-        moved.append("".join(body))
+        block += ("" if adjacent or prev_end is None else "\n") + "".join(body)
         taken.update(range(s, e))
+        prev_end = e
     Path(args.src).write_text("".join(l for i, l in enumerate(lines) if i not in taken))
-    insert_into(Path(args.dst), "\n".join(moved), args.dst_mod)
+    insert_into(Path(args.dst), block, args.dst_mod)
     print(f"moved {len(chosen)} items ({len(taken)} lines) to {args.dst}")
 
 
