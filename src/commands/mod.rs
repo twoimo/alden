@@ -5,6 +5,7 @@ pub mod auto_reply_host;
 pub mod ax_read;
 pub mod ax_watch;
 pub mod chats;
+pub mod context;
 pub mod context_sync_local;
 pub mod dataset;
 pub mod doctor;

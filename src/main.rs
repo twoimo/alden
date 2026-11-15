@@ -1721,40 +1721,7 @@ fn main() -> Result<()> {
             chat,
             db,
             queue,
-        } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let queue_path = queue.as_deref().map(std::path::Path::new);
-            let count = openkakao_cli::context::index_csv_with_queue(
-                &db_path,
-                &chat,
-                std::path::Path::new(&input),
-                queue_path,
-            )?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "action": "index",
-                        "chat": chat,
-                        "input": openkakao_cli::context::provenance_id(&input),
-                        "db": openkakao_cli::context::provenance_id(
-                            &db_path.display().to_string()
-                        ),
-                        "messages": count,
-                        "network": false
-                    })
-                );
-            } else {
-                println!(
-                    "Indexed {} messages for '{}' into {} (offline).",
-                    count,
-                    chat,
-                    db_path.display()
-                );
-            }
-        }
+        } => commands::context::cmd_context_index(input, chat, db, queue, json)?,
         Commands::ContextSyncLocal {
             chat_id,
             chat,
@@ -1775,53 +1742,9 @@ fn main() -> Result<()> {
             db,
             queue,
             dry_run,
-        } => {
-            if chat.trim().is_empty() || chat.len() > 512 || chat.chars().any(char::is_control) {
-                anyhow::bail!("style repair chat name is invalid");
-            }
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            openkakao_cli::context::ensure_live_context_schema(&db_path)?;
-            let confirmed_sends = match queue.as_deref() {
-                Some(path) => openkakao_cli::context::confirmed_self_sends_from_queue(
-                    std::path::Path::new(path),
-                )?,
-                None => Vec::new(),
-            };
-            let report = openkakao_cli::context::repair_bot_sent_style_samples(
-                &db_path,
-                &chat,
-                chat_id,
-                &confirmed_sends,
-                dry_run,
-            )?;
-            if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
-            } else {
-                println!(
-                    "{}: {} matched of {} scanned rows ({} already ineligible, {} ambiguous), {} response samples and {} recipient samples dropped, {} sources rebuilt (dry_run={}).",
-                    chat,
-                    report.matched_rows,
-                    report.scanned_rows,
-                    report.already_ineligible,
-                    report.ambiguous_rows,
-                    report.deleted_response_samples,
-                    report.deleted_recipient_samples,
-                    report.rebuilt_sources.len(),
-                    report.dry_run,
-                );
-                for matched in &report.matches {
-                    println!(
-                        "  [{}|{}s] {} <- {}",
-                        matched.log_id,
-                        matched.offset_seconds,
-                        matched.message.chars().take(60).collect::<String>(),
-                        matched.matched_event_id,
-                    );
-                }
-            }
-        }
+        } => commands::context::cmd_context_repair_self_sends(
+            chat_id, chat, db, queue, dry_run, json,
+        )?,
         Commands::ContextSearch {
             query,
             chat,
@@ -1829,35 +1752,7 @@ fn main() -> Result<()> {
             limit,
             source,
             db,
-        } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let mut results = openkakao_cli::context::search(
-                &db_path,
-                chat.as_deref(),
-                source.as_deref(),
-                &query,
-                &mode,
-                limit,
-            )?;
-            if json {
-                openkakao_cli::context::redact_context_results(&mut results);
-                println!("{}", serde_json::to_string_pretty(&results)?);
-            } else {
-                for result in &results {
-                    println!(
-                        "[{:.3}] {} [{}] {}: {}",
-                        result.score,
-                        result.chat,
-                        result.date,
-                        result.user,
-                        util::truncate(&result.message, 160)
-                    );
-                }
-                println!("{} results (offline {} search)", results.len(), mode);
-            }
-        }
+        } => commands::context::cmd_context_search(query, chat, mode, limit, source, db, json)?,
         Commands::ContextReplyBundle {
             query,
             chat,
@@ -1867,198 +1762,42 @@ fn main() -> Result<()> {
             recipient,
             source,
             db,
-        } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let output = match (recipient.as_deref(), chat_id, current_log_id) {
-                (Some(recipient), Some(chat_id), Some(current_log_id)) => {
-                    let mut excluded_log_ids = Vec::with_capacity(1 + exclude_log_id.len());
-                    excluded_log_ids.push(current_log_id);
-                    excluded_log_ids.extend(exclude_log_id);
-                    openkakao_cli::context::context_reply_bundle_for_recipient_excluding_live_events_json(
-                        &db_path,
-                        &chat,
-                        &query,
-                        source.as_deref(),
-                        recipient,
-                        chat_id,
-                        &excluded_log_ids,
-                    )?
-                }
-                (None, None, None) if exclude_log_id.is_empty() => openkakao_cli::context::context_reply_bundle_json(
-                    &db_path,
-                    &chat,
-                    &query,
-                    source.as_deref(),
-                )?,
-                _ => anyhow::bail!(
-                    "recipient, chat-id, and current-log-id must be supplied together; exclude-log-id requires that recipient bundle mode"
-                ),
-            };
-            println!("{output}");
-        }
+        } => commands::context::cmd_context_reply_bundle(
+            query,
+            chat,
+            chat_id,
+            current_log_id,
+            exclude_log_id,
+            recipient,
+            source,
+            db,
+        )?,
         Commands::ContextStyleSearch {
             query,
             limit,
             db,
             chat,
-        } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let mut results =
-                openkakao_cli::context::style_search(&db_path, chat.as_deref(), &query, limit)?;
-            if json {
-                openkakao_cli::context::redact_context_results(&mut results);
-                println!("{}", serde_json::to_string_pretty(&results)?);
-            } else {
-                for result in &results {
-                    println!(
-                        "[{:.3}] {} [{}] {}: {}",
-                        result.score,
-                        result.chat,
-                        result.date,
-                        result.user,
-                        util::truncate(&result.message, 160)
-                    );
-                }
-                println!(
-                    "{} results (offline 최연우 style vector search)",
-                    results.len()
-                );
-            }
-        }
+        } => commands::context::cmd_context_style_search(query, limit, db, chat, json)?,
         Commands::ContextRecipientStyle {
             chat,
             recipient,
             source,
             db,
-        } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let profile = openkakao_cli::context::recipient_style_profile(
-                &db_path,
-                &chat,
-                &recipient,
-                source.as_deref(),
-            )?;
-            if json {
-                match openkakao_cli::context::recipient_style_profile_json(
-                    &db_path,
-                    &chat,
-                    &recipient,
-                    source.as_deref(),
-                )? {
-                    Some(payload) => println!("{payload}"),
-                    None => println!("null"),
-                }
-            } else if let Some(profile) = profile {
-                println!(
-                    "{} -> {}: {} direct samples (fallback={}, avg {:.1} chars)",
-                    profile.profile.user,
-                    profile.recipient,
-                    profile.direct_sample_count,
-                    profile.used_fallback,
-                    profile.profile.average_character_length
-                );
-            } else {
-                println!(
-                    "No recipient style profile for '{}' in '{}'.",
-                    recipient, chat
-                );
-            }
-        }
+        } => commands::context::cmd_context_recipient_style(chat, recipient, source, db, json)?,
         Commands::ContextResponseTime {
             chat,
             user,
             source,
             db,
-        } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let stats = openkakao_cli::context::response_time_stats(
-                &db_path,
-                &chat,
-                &user,
-                source.as_deref(),
-            )?;
-            if json {
-                let mut redacted_stats = stats;
-                openkakao_cli::context::redact_response_time_stats(&mut redacted_stats);
-                println!("{}", serde_json::to_string_pretty(&redacted_stats)?);
-            } else if let Some(stats) = stats {
-                println!(
-                    "{} average response: {:.1}s (median {:.1}s, p90 {:.1}s, {} samples)",
-                    stats.user,
-                    stats.average_seconds,
-                    stats.median_seconds,
-                    stats.p90_seconds,
-                    stats.sample_count
-                );
-            } else {
-                println!("No response-time samples for '{}' in '{}'.", user, chat);
-            }
-        }
+        } => commands::context::cmd_context_response_time(chat, user, source, db, json)?,
         Commands::ContextReplySearch {
             query,
             chat,
             limit,
             db,
-        } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let mut results =
-                openkakao_cli::context::reply_decision_search(&db_path, &chat, &query, limit)?;
-            if json {
-                openkakao_cli::context::redact_reply_decisions(&mut results);
-                println!("{}", serde_json::to_string_pretty(&results)?);
-            } else {
-                for result in &results {
-                    println!(
-                        "[{:.3}] {} {} [{}] {}: {}",
-                        result.score,
-                        result.decision,
-                        result.status,
-                        result.category,
-                        result.author,
-                        util::truncate(&result.message, 160)
-                    );
-                }
-                println!(
-                    "{} results (offline reply-decision vector search)",
-                    results.len()
-                );
-            }
-        }
+        } => commands::context::cmd_context_reply_search(query, chat, limit, db, json)?,
         Commands::ContextReplyRecord { record, db } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let applied = openkakao_cli::context::record_reply_decision(&db_path, &record)?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "recorded": applied,
-                        "applied": applied,
-                        "db": openkakao_cli::context::provenance_id(
-                            &db_path.display().to_string()
-                        ),
-                        "network": false
-                    })
-                );
-            } else if applied {
-                println!(
-                    "Recorded reply decision in {} (offline).",
-                    db_path.display()
-                );
-            } else {
-                println!("Reply decision was stale and was not recorded (offline).");
-            }
+            commands::context::cmd_context_reply_record(record, db, json)?
         }
         Commands::ContextReplyUpdate {
             event_id,
@@ -2067,34 +1806,7 @@ fn main() -> Result<()> {
             sent_at,
             db,
         } => {
-            let db_path = db
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(openkakao_cli::context::default_db_path);
-            let updated = openkakao_cli::context::update_reply_decision(
-                &db_path,
-                &event_id,
-                &status,
-                reply.as_deref(),
-                sent_at.as_deref(),
-            )?;
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "updated": updated,
-                        "applied": updated,
-                        "event_id": event_id,
-                        "db": openkakao_cli::context::provenance_id(
-                            &db_path.display().to_string()
-                        ),
-                        "network": false
-                    })
-                );
-            } else if updated {
-                println!("Updated reply decision {} (offline).", event_id);
-            } else {
-                println!("Reply decision {} was not found.", event_id);
-            }
+            commands::context::cmd_context_reply_update(event_id, status, reply, sent_at, db, json)?
         }
         Commands::AxServiceScrapeOnce => {
             println!(
