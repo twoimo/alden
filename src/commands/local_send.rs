@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::ax_send;
+use crate::config;
 use crate::local_db::{LocalDbReader, LocalMessage, LocalPollEnvelope, LOCAL_POLL_SCHEMA_VERSION};
 use crate::util::{confirm, normalize_outgoing_message, truncate, validate_outbound_message};
 use openkakao_cli::reply_policy::validate_auto_reply_laughter;
@@ -434,6 +435,39 @@ pub fn cmd_local_send(opts: LocalSendOptions) -> Result<()> {
     Ok(())
 }
 
+pub fn require_ax_send(config: &config::OpenKakaoConfig) -> Result<()> {
+    if !config.safety.allow_ax_send {
+        anyhow::bail!(
+            "AX-automation send is disabled by default.\n\
+             local-send drives the real KakaoTalk window (types text and hits Enter\n\
+             on your behalf) — treat it with the same care as `send`.\n\n\
+             To enable, add to ~/.config/openkakao/config.toml:\n\n\
+             [safety]\n\
+             allow_ax_send = true\n\n\
+             KakaoTalk must be running and already logged in; no server/LOCO contact is made."
+        );
+    }
+    Ok(())
+}
+
+/// `local-send` has no chat-id to cross-check against (the local DB it would
+/// normally verify with is unreadable on current KakaoTalk builds), so an
+/// exact-match allowlist in config and the shared catalog guard are used to
+/// prevent typos or substring collisions sending to the wrong chat.
+pub fn require_allowed_send_chat(config: &config::OpenKakaoConfig, chat_name: &str) -> Result<()> {
+    if !config::allowed_send_chat_targets(config, chat_name, None) {
+        anyhow::bail!(
+            "chat \"{chat_name}\" is not in the local-send allowlist.\n\n\
+             local-send matches chats by display-name text scraped from the KakaoTalk UI,\n\
+             not a chat-id, so an explicit allowlist is required to avoid sending to the\n\
+             wrong chat. Add to ~/.config/openkakao/config.toml:\n\n\
+             [safety]\n\
+             allowed_send_chats = [\"{chat_name}\"]"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,5 +682,43 @@ mod tests {
         ))
         .expect_err("a post-mutation failure must retain an error outcome");
         assert_eq!(error.to_string(), "after mutation");
+    }
+
+    #[test]
+    fn require_allowed_send_chat_accepts_a_catalog_enabled_room_title() {
+        let mut config = config::OpenKakaoConfig::default();
+        config.safety.allowed_send_chats = vec!["부자멘토멘티".into()];
+        assert!(require_allowed_send_chat(&config, "부자멘토멘티").is_ok());
+        // No substring, no surrounding whitespace, no case folding.
+        assert!(require_allowed_send_chat(&config, "부자멘토").is_err());
+        assert!(require_allowed_send_chat(&config, "부자멘토멘티 ").is_err());
+        assert!(require_allowed_send_chat(&config, "Vision AI 경진대회").is_err());
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("menubar-room-catalog.json"),
+            r#"{"rooms":[{"chat_id":437046948660911,"title":"Vision AI 경진대회","auto_reply":true,"geeknews":true}]}"#,
+        )
+        .expect("write catalog");
+        config.auto_reply.state_root = Some(dir.path().to_string_lossy().into_owned());
+        // The menubar catalog is the same trust level as the config allowlist,
+        // so enabling the room in the app must be enough to let local-send run.
+        assert!(require_allowed_send_chat(&config, "Vision AI 경진대회").is_ok());
+        assert!(require_allowed_send_chat(&config, "Vision AI").is_err());
+        assert!(require_allowed_send_chat(&config, "부자멘토").is_err());
+    }
+
+    #[test]
+    fn ax_send_disabled_by_default() {
+        let config = crate::config::OpenKakaoConfig::default();
+        assert!(!config.safety.allow_ax_send);
+        assert!(require_ax_send(&config).is_err());
+    }
+
+    #[test]
+    fn ax_send_enabled_when_configured() {
+        let mut config = crate::config::OpenKakaoConfig::default();
+        config.safety.allow_ax_send = true;
+        assert!(require_ax_send(&config).is_ok());
     }
 }
