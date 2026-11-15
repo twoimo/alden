@@ -821,21 +821,37 @@ def _session_retry_delay(consecutive_failures: int) -> tuple[float, bool]:
     )
 
 
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _terminate_owned_child(
     child: subprocess.Popen[Any],
     *,
     grace_seconds: float = SESSION_TERMINATE_GRACE_SECONDS,
 ) -> None:
-    """Terminate the new session led by an owned child process."""
-    if child.poll() is not None:
+    """Terminate the new session led by an owned child process.
+
+    Members of the session can outlive its leader, so the group is swept
+    until it is empty or the grace period ends, even after the leader exits.
+    """
+    process_group = child.pid
+    if child.poll() is None:
+        try:
+            leader_group = os.getpgid(child.pid)
+        except ProcessLookupError:
+            leader_group = process_group
+        if leader_group != process_group:
+            raise RuntimeError("owned child does not lead its process group")
+    elif not _process_group_exists(process_group):
         return
-    try:
-        process_group = os.getpgid(child.pid)
-    except ProcessLookupError:
-        child.wait(timeout=grace_seconds)
-        return
-    if process_group != child.pid:
-        raise RuntimeError("owned child does not lead its process group")
+    deadline = time.monotonic() + grace_seconds
     try:
         os.killpg(process_group, signal.SIGTERM)
     except ProcessLookupError:
@@ -843,20 +859,26 @@ def _terminate_owned_child(
         return
     try:
         child.wait(timeout=grace_seconds)
-        return
     except subprocess.TimeoutExpired:
-        pass
-
-    # Re-attest the group leader immediately before escalation. This avoids
-    # signaling an unrelated group if the child disappeared and its PID was
-    # reused during the grace period.
-    try:
-        if os.getpgid(child.pid) != process_group:
-            raise RuntimeError("owned child process group changed during shutdown")
-        os.killpg(process_group, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    child.wait(timeout=grace_seconds)
+        # Re-attest the group leader immediately before escalation. This avoids
+        # signaling an unrelated group if the child disappeared and its PID was
+        # reused during the grace period.
+        try:
+            if os.getpgid(child.pid) != process_group:
+                raise RuntimeError("owned child process group changed during shutdown")
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        child.wait(timeout=grace_seconds)
+        return
+    # A group ID cannot be reused while any member of the group is alive.
+    while _process_group_exists(process_group) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if _process_group_exists(process_group):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _session_guardian_spec(
@@ -1116,6 +1138,7 @@ def run_session_guardian(
         while not stop_event.is_set():
             exit_code = child.poll()
             if exit_code is not None:
+                terminate_child(child)
                 child = None
                 return int(exit_code)
             try:
