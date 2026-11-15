@@ -5587,7 +5587,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             module.cleanup_media_path(image)
             self.assertFalse(terminal.exists())
 
-    def test_codex_luna_max_fast_runner_is_pinned_and_parses_jsonl(self):
+    def test_codex_luna_configuration_generates_only_on_local_flash_next(self):
         with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
             runner = Path(temporary) / "codex"
             self._write_executable(runner, "#!/bin/sh\nexit 0\n")
@@ -5610,73 +5610,51 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 self._room_is_current(module)
             self._point_queue(module, Path(temporary))
             self.assertTrue(module.runner_is_trusted())
-            captured = {}
-
-            def fake_run(command, **kwargs):
-                captured["command"] = command
-                captured["kwargs"] = kwargs
-                response = {
-                    "should_reply": True,
-                    "reply": "그건 좀 아쉽네요",
-                    "category": "social",
-                    "reason": "useful_social_response",
-                    "evidence_ids": ["ctx:1"],
-                }
-                event = {
-                    "type": "item.completed",
-                    "item": {
-                        "type": "agent_message",
-                        "text": json.dumps(response, ensure_ascii=False),
-                    },
-                }
-                return 0, (json.dumps(event, ensure_ascii=False) + "\n").encode(), b""
-
-            module._run_bounded_process = fake_run
-            result = module.generate_reply(
-                "결과가 나왔어요",
-                [{"evidence_id": "ctx:1", "message": "지원 결과"}],
-                [],
-                [],
-                [],
-            )
+            response = {
+                "should_reply": True,
+                "reply": "그건 좀 아쉽네요",
+                "category": "social",
+                "reason": "useful_social_response",
+                "evidence_ids": ["ctx:1"],
+            }
+            with (
+                mock.patch.object(module, "_run_bounded_process") as process,
+                self._fake_mlx_gateway(
+                    module,
+                    json.dumps(response, ensure_ascii=False),
+                    model_id=module.FLASH_NEXT_MODEL_ID,
+                ) as gateway,
+            ):
+                result = module.generate_reply(
+                    "결과가 나왔어요",
+                    [{"evidence_id": "ctx:1", "message": "지원 결과"}],
+                    [],
+                    [],
+                    [],
+                )
+            # Product generation is local MLX only (e48e04e), so a trusted
+            # Luna configuration never starts its cloud runner.
+            process.assert_not_called()
+            gateway["external_urlopen"].assert_not_called()
             self.assertTrue(result["should_reply"])
-            command = captured["command"]
-            self.assertEqual(command[0:2], [str(runner), "exec"])
-            self.assertIn("--ignore-user-config", command)
-            self.assertIn("--ephemeral", command)
-            self.assertIn("gpt-5.6-luna", command)
-            self.assertIn('model_reasoning_effort="max"', command)
-            self.assertIn('service_tier="priority"', command)
-            self.assertIn("--output-schema", command)
+            self.assertEqual(result["reply"], "그건 좀 아쉽네요")
+            self.assertEqual(result["model"], module.FLASH_NEXT_MODEL_ID)
+            (payload,) = gateway["payloads"]
             self.assertEqual(
-                command[command.index("--output-schema") + 1],
-                str(SCRIPTS / "auto-reply-schema.json"),
+                payload["model"], module.FLASH_NEXT_MODEL_ID.removeprefix("mlx/")
             )
-            self.assertIn('web_search="disabled"', command)
-            self.assertEqual(command[-1], "-")
-            argv = "\0".join(command)
-            self.assertNotIn("결과가 나왔어요", argv)
-            self.assertNotIn("지원 결과", argv)
-            stdin_text = captured["kwargs"]["stdin_bytes"].decode("utf-8")
-            self.assertIn("결과가 나왔어요", stdin_text)
-            self.assertIn("지원 결과", stdin_text)
-            self.assertIn(
-                "Never use ㅎ characters",
-                stdin_text,
-            )
+            system, user = payload["messages"]
+            request_text = system["content"] + "\n" + user["content"]
+            self.assertIn("결과가 나왔어요", user["content"])
+            self.assertIn("지원 결과", user["content"])
+            self.assertIn("Never use ㅎ characters", request_text)
             self.assertIn(
                 "every consecutive ㅋ run must contain at least three characters",
-                stdin_text,
+                request_text,
             )
             self.assertLessEqual(
-                len(captured["kwargs"]["stdin_bytes"]),
-                module.MAX_MODEL_PROMPT_BYTES,
+                len(user["content"].encode("utf-8")), module.MAX_MODEL_PROMPT_BYTES
             )
-            self.assertEqual(
-                captured["kwargs"]["stdin_cap"], module.MAX_MODEL_PROMPT_BYTES
-            )
-            self.assertEqual(captured["kwargs"]["cwd"], Path("/tmp"))
-            self.assertEqual(captured["kwargs"]["env"]["CODEX_HOME"], str(codex_home))
 
     def test_direct_target_prompt_is_strong_but_allows_low_value_skip(self):
         with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
