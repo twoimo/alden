@@ -13782,14 +13782,12 @@ def send_reply(
     if not isinstance(result, dict):
         return False
     expected_source_log_id = _proactive_expected_source_log_id(event or {})
-    confirmation_log_id = result.get("confirmation_log_id") if isinstance(result, dict) else None
+    confirmation_log_id = result.get("confirmation_log_id")
     if (
         returncode == 0
-        and isinstance(result, dict)
         and result.get("status") == "accepted_unconfirmed"
         and result.get("confirmed") is False
         and event_id
-        and str(event.get("message") if isinstance(event, dict) else "") is not None
     ):
         inbound = None
         if isinstance(event, dict):
@@ -13813,7 +13811,6 @@ def send_reply(
             confirmation_log_id = confirmed
     if (
         returncode == 0
-        and isinstance(result, dict)
         and set(result) == {
             "chat_name",
             "status",
@@ -13839,7 +13836,6 @@ def send_reply(
         return False
     if (
         returncode != 0
-        or not isinstance(result, dict)
         or result.get("status") != "confirmed_local_db"
         or result.get("confirmed") is not True
         or result.get("network") is not False
@@ -15535,15 +15531,6 @@ def process_job(
             # confirmation later failed.  Such a row is always uncertain and
             # must never be rewritten as a proven no-send skip.
             delivery_phase = reply_job_delivery_phase(connection, event_id)
-            if delivery_phase == "sending":
-                finish_delivery_unknown(
-                    event,
-                    event_id,
-                    connection,
-                    reply=reply,
-                    error_class=DELIVERY_UNKNOWN,
-                )
-                return
             if delivery_phase == "projection_pending":
                 finish_burst_superseded(event, event_id, connection)
                 return
