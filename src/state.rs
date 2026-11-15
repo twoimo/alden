@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
@@ -64,46 +64,40 @@ pub fn state_path() -> Result<PathBuf> {
 }
 
 pub fn load_state() -> Result<OpenKakaoState> {
-    let path = state_path()?;
+    read_state(&state_path()?)
+}
+
+fn read_state(path: &Path) -> Result<OpenKakaoState> {
     if !path.exists() {
         return Ok(OpenKakaoState::default());
     }
 
     let data =
-        fs::read_to_string(&path).with_context(|| format!("Failed to read {}", path.display()))?;
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
     let state: OpenKakaoState = serde_json::from_str(&data)
         .with_context(|| format!("Failed to parse {}", path.display()))?;
     Ok(state)
 }
 
-pub fn save_state(state: &OpenKakaoState) -> Result<PathBuf> {
-    let path = state_path()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
+fn write_state(path: &Path, state: &OpenKakaoState) -> Result<()> {
+    let parent = path
+        .parent()
+        .with_context(|| format!("{} has no parent directory", path.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("Failed to create {}", parent.display()))?;
 
     let data = serde_json::to_string_pretty(state).context("Failed to serialize state")?;
 
-    #[cfg(unix)]
-    let mut file = {
-        use std::os::unix::fs::OpenOptionsExt;
-        fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .with_context(|| format!("Failed to create {}", path.display()))?
-    };
-    #[cfg(not(unix))]
-    let mut file =
-        fs::File::create(&path).with_context(|| format!("Failed to create {}", path.display()))?;
-
+    // Readers take no lock, so state.json is only ever replaced whole.
+    let mut file = tempfile::NamedTempFile::new_in(parent)
+        .with_context(|| format!("Failed to create a temporary file in {}", parent.display()))?;
     file.write_all(data.as_bytes())
-        .with_context(|| format!("Failed to write {}", path.display()))?;
-
-    Ok(path)
+        .with_context(|| format!("Failed to write {}", file.path().display()))?;
+    file.as_file()
+        .sync_all()
+        .with_context(|| format!("Failed to flush {}", file.path().display()))?;
+    file.persist(path)
+        .map_err(|error| anyhow::anyhow!("Failed to replace {}: {error}", path.display()))?;
+    Ok(())
 }
 
 fn parse_ts(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -318,15 +312,60 @@ pub fn recovery_state_summary() -> Result<String> {
 }
 
 fn mutate_state(mutator: impl FnOnce(&mut OpenKakaoState)) -> Result<()> {
-    let mut state = load_state()?;
+    mutate_state_at(&state_path()?, mutator)
+}
+
+fn mutate_state_at(path: &Path, mutator: impl FnOnce(&mut OpenKakaoState)) -> Result<()> {
+    let mut state = read_state(path)?;
     mutator(&mut state);
-    save_state(&state)?;
-    Ok(())
+    write_state(path, &state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn readers_never_see_a_partly_written_state_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let state = OpenKakaoState {
+            last_guard_reason: Some("가".repeat(4000)),
+            ..Default::default()
+        };
+        write_state(&path, &state).unwrap();
+
+        let writing = AtomicBool::new(true);
+        let torn_reads = std::thread::scope(|scope| {
+            let reader = scope.spawn(|| {
+                let mut torn = 0;
+                while writing.load(Ordering::Relaxed) {
+                    if read_state(&path).is_err() {
+                        torn += 1;
+                    }
+                }
+                torn
+            });
+            for _ in 0..100 {
+                write_state(&path, &state).unwrap();
+            }
+            writing.store(false, Ordering::Relaxed);
+            reader.join().unwrap()
+        });
+        assert_eq!(torn_reads, 0, "a reader saw an empty or partial state file");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_file_is_private_to_the_owner() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        write_state(&path, &OpenKakaoState::default()).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
 
     #[test]
     fn default_state_has_no_cooldown() {
