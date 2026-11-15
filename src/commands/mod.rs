@@ -11,6 +11,7 @@ pub mod dataset;
 pub mod doctor;
 pub mod download;
 pub mod experiment;
+pub mod local;
 pub mod local_send;
 pub mod members;
 pub mod probe;
