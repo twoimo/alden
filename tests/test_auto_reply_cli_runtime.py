@@ -11421,8 +11421,6 @@ print(json.dumps({
         )
 
         now = int(time.time())
-        event = self._burst_event(module, 425, "old question?", now - 301)
-        event["recent_messages"] = [self._recent_row(event)]
         bundle = {
             "context": [{"evidence_id": "ctx:one"}],
             "styles": [],
@@ -11431,17 +11429,37 @@ print(json.dumps({
             "recipient_style_profile": None,
             "response_time": stats,
         }
-        with (
-            mock.patch.object(module, "runner_is_trusted", return_value=True),
-            mock.patch.object(module, "run_context_reply_bundle", return_value=bundle),
-            mock.patch.object(module, "fetch_link_previews", return_value=[]),
-            mock.patch.object(module, "generate_reply") as model,
-        ):
-            analysis = module.analyze_event(event)
+
+        def analyze(log_id, message):
+            event = self._burst_event(module, log_id, message, now - 301)
+            event["recent_messages"] = [self._recent_row(event)]
+            with (
+                mock.patch.object(module, "runner_is_trusted", return_value=True),
+                mock.patch.object(module, "run_context_reply_bundle", return_value=bundle),
+                mock.patch.object(module, "fetch_link_previews", return_value=[]),
+                mock.patch.object(
+                    module,
+                    "generate_reply",
+                    return_value={
+                        "should_reply": False,
+                        "reply": "",
+                        "reason": "low_information",
+                        "category": "reaction",
+                    },
+                ) as model,
+            ):
+                return module.analyze_event(event), model
+
+        analysis, model = analyze(425, "old news")
         self.assertEqual(analysis["decision"], "skip")
         self.assertEqual(analysis["reason"], "stale_backlog")
         self.assertEqual(analysis["category"], "policy")
         model.assert_not_called()
+
+        # A question keeps reply authority past the window, so the same age
+        # still reaches the model.
+        _analysis, model = analyze(426, "old question?")
+        model.assert_called_once()
 
 
     def test_analyze_event_reaches_model_with_recent_messages_after_context_timeout(self):
