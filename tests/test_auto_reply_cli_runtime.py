@@ -18426,11 +18426,14 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             queue = self._worker_queue_connection(module)
             try:
                 now = time.time()
+                # The row is already past sending, where queue v3's status trigger
+                # records that Return may have been pressed.
                 queue.execute(
                     "INSERT INTO reply_jobs("
                     "event_id,event_json,status,due_at,decision,reason,category,reply,"
-                    "scheduled_delay_seconds,error_class,created_at,updated_at,attempt_no"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "scheduled_delay_seconds,error_class,created_at,updated_at,attempt_no,"
+                    "ax_mutation_authorized"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         "db:42:11",
                         json.dumps(event, ensure_ascii=False),
@@ -18584,11 +18587,14 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             queue = self._worker_queue_connection(module)
             try:
                 now = time.time()
+                # The row is already past sending, where queue v3's status trigger
+                # records that Return may have been pressed.
                 queue.execute(
                     "INSERT INTO reply_jobs("
                     "event_id,event_json,status,due_at,decision,reason,category,reply,"
-                    "scheduled_delay_seconds,error_class,created_at,updated_at,attempt_no"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "scheduled_delay_seconds,error_class,created_at,updated_at,attempt_no,"
+                    "ax_mutation_authorized"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         "db:42:1787110980",
                         json.dumps(event, ensure_ascii=False),
@@ -18667,11 +18673,14 @@ print(json.dumps({"stdin_eof": value == b""}), flush=True)
             queue = self._worker_queue_connection(module)
             try:
                 now = time.time()
+                # The row is already past sending, where queue v3's status trigger
+                # records that Return may have been pressed.
                 queue.execute(
                     "INSERT INTO reply_jobs("
                     "event_id,event_json,status,due_at,decision,reason,category,reply,"
-                    "scheduled_delay_seconds,error_class,created_at,updated_at,attempt_no"
-                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "scheduled_delay_seconds,error_class,created_at,updated_at,attempt_no,"
+                    "ax_mutation_authorized"
+                    ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         "db:42:11",
                         json.dumps(event, ensure_ascii=False),
