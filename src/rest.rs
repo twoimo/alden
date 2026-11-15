@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
@@ -13,9 +14,11 @@ use crate::error::OpenKakaoError;
 use crate::model::{
     json_i64, json_string, ChatMember, ChatMessage, ChatRoom, Friend, KakaoCredentials, MyProfile,
 };
+use crate::util::truncate;
 
 const BASE_URL: &str = "https://katalk.kakao.com";
 const PILSNER_URL: &str = "https://talk-pilsner.kakao.com";
+const MAX_CHAT_PAGES: usize = 100;
 
 pub struct KakaoRestClient {
     creds: KakaoCredentials,
@@ -176,19 +179,7 @@ impl KakaoRestClient {
     }
 
     pub fn get_all_chats(&self) -> Result<Vec<ChatRoom>> {
-        let mut all = Vec::new();
-        let mut cursor: Option<i64> = None;
-
-        loop {
-            let (rooms, next_cursor) = self.get_chats(cursor)?;
-            all.extend(rooms);
-            if next_cursor.is_none() {
-                break;
-            }
-            cursor = next_cursor;
-        }
-
-        Ok(all)
+        collect_chat_pages(|cursor| self.get_chats(cursor))
     }
 
     pub fn get_chat_members(&self, chat_id: i64) -> Result<Vec<ChatMember>> {
@@ -375,13 +366,7 @@ impl KakaoRestClient {
             .with_context(|| format!("{endpoint} request failed"))?;
 
         let text = response.text().context("Failed to read response")?;
-        serde_json::from_str(&text).with_context(|| {
-            format!(
-                "Failed to parse {} response: {}",
-                endpoint,
-                &text[..200.min(text.len())]
-            )
-        })
+        parse_account_response(endpoint, &text)
     }
 
     // NOTE: a passcode/register_device flow (request_passcode.json,
@@ -532,9 +517,93 @@ impl KakaoRestClient {
     }
 }
 
+fn collect_chat_pages(
+    mut fetch: impl FnMut(Option<i64>) -> Result<(Vec<ChatRoom>, Option<i64>)>,
+) -> Result<Vec<ChatRoom>> {
+    let mut all = Vec::new();
+    let mut seen = HashSet::new();
+    let mut cursor: Option<i64> = None;
+
+    for _ in 0..MAX_CHAT_PAGES {
+        let (rooms, next_cursor) = fetch(cursor)?;
+        all.extend(rooms);
+        let Some(next) = next_cursor else {
+            return Ok(all);
+        };
+        if !seen.insert(next) {
+            return Err(anyhow!("chat list cursor {next} repeated; stopped paging"));
+        }
+        cursor = Some(next);
+    }
+
+    Err(anyhow!(
+        "chat list did not end after {MAX_CHAT_PAGES} pages"
+    ))
+}
+
+fn parse_account_response(endpoint: &str, text: &str) -> Result<Value> {
+    serde_json::from_str(text).with_context(|| {
+        format!(
+            "Failed to parse {endpoint} response: {}",
+            truncate(text, 200)
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn room(chat_id: i64) -> ChatRoom {
+        ChatRoom::from_json(&serde_json::json!({ "chatId": chat_id }))
+    }
+
+    fn chat_ids(rooms: &[ChatRoom]) -> Vec<i64> {
+        rooms.iter().map(|room| room.chat_id).collect()
+    }
+
+    #[test]
+    fn chat_pages_follow_cursors_until_the_last_page() {
+        let pages = collect_chat_pages(|cursor| match cursor {
+            None => Ok((vec![room(1), room(2)], Some(10))),
+            Some(10) => Ok((vec![room(3)], Some(20))),
+            Some(20) => Ok((vec![room(4)], None)),
+            other => panic!("unexpected cursor {other:?}"),
+        })
+        .unwrap();
+        assert_eq!(chat_ids(&pages), vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn repeated_chat_cursor_stops_with_an_error() {
+        let mut requests = 0;
+        let result = collect_chat_pages(|_| {
+            requests += 1;
+            assert!(requests <= 50, "kept requesting a repeated cursor");
+            Ok((vec![room(requests)], Some(7)))
+        });
+        assert!(result.is_err());
+        assert_eq!(requests, 2, "no request after the cursor repeats");
+    }
+
+    #[test]
+    fn endless_chat_cursors_stop_at_the_page_cap() {
+        let mut requests = 0;
+        let result = collect_chat_pages(|_| {
+            requests += 1;
+            assert!(requests <= 2 * MAX_CHAT_PAGES, "never stopped paginating");
+            Ok((vec![room(requests as i64)], Some(requests as i64)))
+        });
+        assert!(result.is_err());
+        assert_eq!(requests, MAX_CHAT_PAGES);
+    }
+
+    #[test]
+    fn unparseable_korean_account_response_is_an_error_not_a_panic() {
+        let body = "가".repeat(100);
+        let error = parse_account_response("login.json", &body).unwrap_err();
+        assert!(error.to_string().contains(&body));
+    }
 
     #[test]
     fn xvc_is_deterministic_sha512_prefix() {

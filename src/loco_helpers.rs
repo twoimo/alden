@@ -5,7 +5,7 @@ use crate::error::OpenKakaoError;
 use crate::loco;
 use crate::model::KakaoCredentials;
 use crate::rest::KakaoRestClient;
-use crate::util::{parse_loco_status_from_error, print_loco_error_hint};
+use crate::util::{parse_loco_status_from_error, print_loco_error_hint, truncate};
 
 /// Connect LOCO client and login, auto-refreshing token on -950.
 pub async fn loco_connect_with_auto_refresh(
@@ -51,15 +51,8 @@ pub fn try_renew_token(creds: &KakaoCredentials, refresh_token: &str) -> Result<
         .unwrap_or(-1);
     eprintln!("[renew] renew_token.json status: {}", status);
 
-    if let Some(obj) = response.as_object() {
-        for (k, v) in obj {
-            let v_str = format!("{}", v);
-            if v_str.len() > 60 {
-                eprintln!("  {}: {}...", k, &v_str[..60]);
-            } else {
-                eprintln!("  {}: {}", k, v);
-            }
-        }
+    for line in renew_response_lines(&response) {
+        eprintln!("{line}");
     }
 
     if status != 0 {
@@ -70,6 +63,15 @@ pub fn try_renew_token(creds: &KakaoCredentials, refresh_token: &str) -> Result<
         .get("access_token")
         .and_then(serde_json::Value::as_str)
         .map(String::from))
+}
+
+fn renew_response_lines(response: &serde_json::Value) -> Vec<String> {
+    let Some(obj) = response.as_object() else {
+        return Vec::new();
+    };
+    obj.iter()
+        .map(|(k, v)| format!("  {k}: {}", truncate(&v.to_string(), 60)))
+        .collect()
 }
 
 /// Whether a LOCO probe error should be retried (transient socket failures).
@@ -109,5 +111,19 @@ pub fn check_loco_status(command: &str, response: &crate::loco::packet::LocoPack
         Ok(())
     } else {
         Err(OpenKakaoError::loco_with_body(command, status, response.body.clone()).into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renew_response_preview_keeps_korean_values_whole() {
+        let response = serde_json::json!({ "message": "가".repeat(100) });
+        assert_eq!(
+            renew_response_lines(&response),
+            vec![format!("  message: \"{}...", "가".repeat(59))]
+        );
     }
 }
