@@ -282,7 +282,7 @@ fn candidate_titles(titles: &[(i64, String)]) -> Vec<String> {
 pub fn summarize(body: &str) -> String {
     let total = body.chars().count();
     let cap = if total <= SHORT_BODY_THRESHOLD {
-        total.min(SHORT_BODY_THRESHOLD)
+        total
     } else {
         (total / 2).min(SUMMARY_MAX)
     };

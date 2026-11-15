@@ -31,7 +31,7 @@
 //! provenance 해시만 담는다 (R8.16, R12.4).
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -410,12 +410,12 @@ pub trait KnobStore {
     fn generations(&self, limit: usize) -> Result<Vec<StoredGeneration>, ImproveError>;
 }
 
-/// 메모리 기반 [`KnobStore`]. 현재 스냅샷은 `RwLock<Arc<..>>` 뒤에 있어 교체가
+/// 메모리 기반 [`KnobStore`]. 현재 스냅샷은 `RwLock` 뒤에 있어 교체가
 /// 동시 [`KnobStore::current`] 호출과 원자적이다. 최근 [`KEEP_GENERATIONS`]개
 /// 세대를 보관한다.
 #[derive(Debug)]
 pub struct InMemoryKnobStore {
-    inner: RwLock<Arc<(KnobGeneration, Knobs)>>,
+    inner: RwLock<(KnobGeneration, Knobs)>,
     history: RwLock<Vec<StoredGeneration>>,
 }
 
@@ -430,7 +430,7 @@ impl InMemoryKnobStore {
             digest,
         };
         Ok(Self {
-            inner: RwLock::new(Arc::new((1, initial))),
+            inner: RwLock::new((1, initial)),
             history: RwLock::new(vec![seeded]),
         })
     }
@@ -450,7 +450,7 @@ impl KnobStore for InMemoryKnobStore {
             .expect("knob store lock poisoned on write");
         let next_gen = guard.0.saturating_add(1);
         let digest = next.digest();
-        *guard = Arc::new((next_gen, next.clone()));
+        *guard = (next_gen, next.clone());
         drop(guard);
 
         let mut history = self
