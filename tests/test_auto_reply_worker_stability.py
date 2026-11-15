@@ -309,7 +309,6 @@ class GeekNewsCursorTests(unittest.TestCase):
         seen = self.worker._load_geeknews_seen_ids()
         self.assertTrue({10, 11, 20, 21} <= seen, f"lost a confirmed post: {sorted(seen)}")
 
-    @unittest.expectedFailure
     def test_a_late_confirmation_marks_the_slot_the_post_belongs_to(self):
         morning = self.slot_time("morning")
         lunch = self.slot_time("lunch")

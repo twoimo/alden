@@ -15935,13 +15935,13 @@ def _mark_geeknews_digest_confirmed(event: dict, *, now: float | None = None) ->
         for item in event.get("proactive_ids") or []
         if isinstance(item, int) and not isinstance(item, bool) and item > 0
     }
-    stamp = time.time() if now is None else float(now)
-    _store_geeknews_seen_ids(
-        ids,
-        max(ids, default=0),
-        now=stamp,
-        posted_slot=_geeknews_slot_marker(stamp),
+    sent_at = event.get("sent_at")
+    posted_slot = (
+        _geeknews_slot_marker(float(sent_at))
+        if isinstance(sent_at, int) and not isinstance(sent_at, bool) and sent_at > 0
+        else None
     )
+    _store_geeknews_seen_ids(ids, max(ids, default=0), now=now, posted_slot=posted_slot)
 
 
 def _store_geeknews_seen_ids(
