@@ -57,6 +57,7 @@ const MODEL_SWAP_OPT_IN: &str = "qwen38-27b-explicit-v1";
 const MODEL_SWAP_CANCEL_DIR: &str = "model-swap-cancel";
 const VOICE_TTS_OUT_NAME: &str = "jarvis-voice-out.wav";
 static VOICE_SESSION_START_LOCK: Mutex<()> = Mutex::new(());
+static MARKER_TEMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 // Registry keys for children started without a caller token. The prefix is
 // refused for caller tokens, so the UI cannot cancel these entries by name.
 const INTERNAL_CANCEL_PREFIX: &str = "internal:";
@@ -2023,7 +2024,10 @@ fn write_model_swap_cancel_marker(path: &Path) -> Result<(), BridgeError> {
         .file_name()
         .and_then(|value| value.to_str())
         .ok_or(BridgeError::StateIo)?;
-    let temp = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    // Same-process writers share the pid, so each write also takes a sequence
+    // number; create_new then never collides with a writer in flight.
+    let seq = MARKER_TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp = parent.join(format!(".{file_name}.{}.{seq}.tmp", std::process::id()));
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -5347,6 +5351,31 @@ mod tests {
 
         assert!(matches!(result, Err(BridgeError::ActionNotAllowed)));
         assert_eq!(still_listed, Some(None), "running swap job was removed or relabelled");
+    }
+
+    #[test]
+    fn cancel_marker_writes_do_not_collide_on_temp_names() {
+        // Writers in one process share a pid. A writer that is already in flight
+        // holds the pid-based temp name, and create_new used to make the second
+        // writer fail. Each write needs its own temp name.
+        let temp = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("openkakao-marker-collide-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).unwrap();
+        let marker = temp.join("marker.json");
+        let in_flight = temp.join(format!(".marker.json.{}.tmp", std::process::id()));
+        fs::write(&in_flight, b"other writer").unwrap();
+
+        let result = write_model_swap_cancel_marker(&marker);
+        let written = safe_small_json(&marker).and_then(|value| value.get("cancelled").cloned());
+        let other_untouched = fs::read(&in_flight).unwrap();
+        fs::remove_dir_all(&temp).unwrap();
+
+        assert!(result.is_ok(), "a second writer collided with an in-flight temp file");
+        assert_eq!(written, Some(json!(true)));
+        assert_eq!(other_untouched, b"other writer");
     }
 
     #[test]
