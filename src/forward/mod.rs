@@ -45,7 +45,13 @@
 //!   ([`LadderOutcome::used_screen_capture`]), which is exactly what the relay
 //!   needs to warn about lower quality and the permission requirement (R7.6).
 
+use rusqlite::{params, Connection};
+use thiserror::Error;
+
+use crate::collector::{CollectFailure, Collected, RoutingCollector};
+use crate::logging::{FlowKind, HistoryStore, PipelineEvent, Stage, StageStatus};
 use crate::ports::{AcquireError, Clock, ImageAcquirer, ImageAcquisition, ImageBlob, ImageRef};
+use crate::room_catalog::RoomCatalog;
 
 /// The per-rung time bound: a rung must return a non-empty image within this
 /// many milliseconds to count as a success (R7.5).
@@ -186,287 +192,9 @@ impl ImageLadder<'_> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fakes::VirtualClock;
-    use std::cell::Cell;
-
-    /// A scripted rung: a kind, an outcome, and how long it takes on the shared
-    /// virtual clock. It advances the clock by `takes_ms` on each call so the
-    /// ladder's two-second bound is exercised without any real sleep.
-    struct FakeAcquirer {
-        kind: ImageAcquisition,
-        clock: VirtualClock,
-        takes_ms: i64,
-        outcome: Outcome,
-        calls: Cell<usize>,
-    }
-
-    #[derive(Clone)]
-    enum Outcome {
-        Bytes(Vec<u8>),
-        Empty,
-        Err(AcquireError),
-    }
-
-    impl FakeAcquirer {
-        fn new(
-            kind: ImageAcquisition,
-            clock: VirtualClock,
-            takes_ms: i64,
-            outcome: Outcome,
-        ) -> Self {
-            Self {
-                kind,
-                clock,
-                takes_ms,
-                outcome,
-                calls: Cell::new(0),
-            }
-        }
-
-        fn ok(kind: ImageAcquisition, clock: VirtualClock) -> Self {
-            Self::new(kind, clock, 100, Outcome::Bytes(vec![1, 2, 3]))
-        }
-
-        fn calls(&self) -> usize {
-            self.calls.get()
-        }
-    }
-
-    impl ImageAcquirer for FakeAcquirer {
-        fn kind(&self) -> ImageAcquisition {
-            self.kind
-        }
-
-        fn acquire(&self, _r: &ImageRef) -> Result<ImageBlob, AcquireError> {
-            self.calls.set(self.calls.get() + 1);
-            self.clock.advance_ms(self.takes_ms);
-            match &self.outcome {
-                Outcome::Bytes(b) => Ok(ImageBlob {
-                    bytes: b.clone(),
-                    mime: "image/png".into(),
-                }),
-                Outcome::Empty => Ok(ImageBlob {
-                    bytes: Vec::new(),
-                    mime: "image/png".into(),
-                }),
-                Outcome::Err(e) => Err(e.clone()),
-            }
-        }
-    }
-
-    fn img_ref() -> ImageRef {
-        ImageRef {
-            locator: "loc-1".into(),
-        }
-    }
-
-    #[test]
-    fn first_rung_success_skips_the_rest() {
-        let clock = VirtualClock::new(0);
-        let s0 = FakeAcquirer::ok(ImageAcquisition::OriginalSave, clock.clone());
-        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
-        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), true);
-        assert!(out.is_acquired());
-        assert_eq!(out.attempts[0], StepAttempt::Acquired);
-        assert_eq!(out.attempts[1], StepAttempt::Skipped);
-        assert_eq!(out.attempts[2], StepAttempt::Skipped);
-        assert!(!out.used_screen_capture());
-        // The later rungs were never called.
-        assert_eq!(s1.calls(), 0);
-        assert_eq!(s2.calls(), 0);
-    }
-
-    #[test]
-    fn falls_through_to_next_rung_only_on_failure() {
-        let clock = VirtualClock::new(0);
-        let s0 = FakeAcquirer::new(
-            ImageAcquisition::OriginalSave,
-            clock.clone(),
-            50,
-            Outcome::Err(AcquireError::NotAvailable),
-        );
-        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
-        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), true);
-        assert!(out.is_acquired());
-        assert_eq!(out.attempts[0], StepAttempt::Error("not_available"));
-        assert_eq!(out.attempts[1], StepAttempt::Acquired);
-        assert_eq!(out.attempts[2], StepAttempt::Skipped);
-        assert_eq!(s0.calls(), 1);
-        assert_eq!(s1.calls(), 1);
-        assert_eq!(s2.calls(), 0);
-    }
-
-    #[test]
-    fn empty_image_is_a_failure_that_advances() {
-        let clock = VirtualClock::new(0);
-        let s0 = FakeAcquirer::new(
-            ImageAcquisition::OriginalSave,
-            clock.clone(),
-            10,
-            Outcome::Empty,
-        );
-        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
-        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), true);
-        assert_eq!(out.attempts[0], StepAttempt::Empty);
-        assert_eq!(out.attempts[1], StepAttempt::Acquired);
-    }
-
-    #[test]
-    fn slow_rung_times_out_and_advances() {
-        let clock = VirtualClock::new(0);
-        // The first rung answers after 2001ms — past the 2s bound.
-        let s0 = FakeAcquirer::new(
-            ImageAcquisition::OriginalSave,
-            clock.clone(),
-            (STEP_TIMEOUT_MS as i64) + 1,
-            Outcome::Bytes(vec![9]),
-        );
-        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
-        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), true);
-        assert_eq!(out.attempts[0], StepAttempt::TimedOut);
-        assert_eq!(out.attempts[1], StepAttempt::Acquired);
-    }
-
-    #[test]
-    fn exactly_two_seconds_still_counts_as_in_time() {
-        let clock = VirtualClock::new(0);
-        let s0 = FakeAcquirer::new(
-            ImageAcquisition::OriginalSave,
-            clock.clone(),
-            STEP_TIMEOUT_MS as i64,
-            Outcome::Bytes(vec![9]),
-        );
-        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
-        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), true);
-        assert_eq!(out.attempts[0], StepAttempt::Acquired);
-    }
-
-    #[test]
-    fn screen_capture_not_attempted_without_permission() {
-        let clock = VirtualClock::new(0);
-        let s0 = FakeAcquirer::new(
-            ImageAcquisition::OriginalSave,
-            clock.clone(),
-            10,
-            Outcome::Err(AcquireError::NotAvailable),
-        );
-        let s1 = FakeAcquirer::new(
-            ImageAcquisition::CacheFolder,
-            clock.clone(),
-            10,
-            Outcome::Err(AcquireError::NotAvailable),
-        );
-        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), false);
-        assert!(!out.is_acquired());
-        assert_eq!(out.attempts[2], StepAttempt::PermissionMissing);
-        // The screen-capture rung was never called (R9.10).
-        assert_eq!(s2.calls(), 0);
-    }
-
-    #[test]
-    fn screen_capture_used_when_earlier_rungs_fail_and_permission_present() {
-        let clock = VirtualClock::new(0);
-        let s0 = FakeAcquirer::new(
-            ImageAcquisition::OriginalSave,
-            clock.clone(),
-            10,
-            Outcome::Err(AcquireError::NotAvailable),
-        );
-        let s1 = FakeAcquirer::new(
-            ImageAcquisition::CacheFolder,
-            clock.clone(),
-            10,
-            Outcome::Empty,
-        );
-        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), true);
-        assert!(out.is_acquired());
-        assert_eq!(out.attempts[2], StepAttempt::Acquired);
-        assert!(out.used_screen_capture());
-        assert_eq!(out.acquired_via(), Some(ImageAcquisition::ScreenCapture));
-    }
-
-    #[test]
-    fn all_three_rungs_fail_yields_no_image() {
-        let clock = VirtualClock::new(0);
-        let s0 = FakeAcquirer::new(
-            ImageAcquisition::OriginalSave,
-            clock.clone(),
-            10,
-            Outcome::Err(AcquireError::NotAvailable),
-        );
-        let s1 = FakeAcquirer::new(
-            ImageAcquisition::CacheFolder,
-            clock.clone(),
-            10,
-            Outcome::Err(AcquireError::Failed("boom".into())),
-        );
-        let s2 = FakeAcquirer::new(
-            ImageAcquisition::ScreenCapture,
-            clock.clone(),
-            10,
-            Outcome::Empty,
-        );
-        let ladder = ImageLadder {
-            steps: [&s0, &s1, &s2],
-            clock: &clock,
-        };
-        let out = ladder.acquire(&img_ref(), true);
-        assert!(!out.is_acquired());
-        assert_eq!(out.attempts[0], StepAttempt::Error("not_available"));
-        assert_eq!(out.attempts[1], StepAttempt::Error("failed"));
-        assert_eq!(out.attempts[2], StepAttempt::Empty);
-        assert!(!out.used_screen_capture());
-    }
-}
-
 // ===========================================================================
 // Link forwarder (링크전달기) — task 7.1 (R6)
 // ===========================================================================
-
-use rusqlite::{params, Connection};
-use thiserror::Error;
-
-use crate::collector::{CollectFailure, Collected, RoutingCollector};
-use crate::logging::{FlowKind, HistoryStore, PipelineEvent, Stage, StageStatus};
-use crate::room_catalog::RoomCatalog;
 
 /// The maximum links one forward request may carry (R6.16).
 pub const MAX_LINKS: usize = 5;
@@ -2697,5 +2425,276 @@ mod forward_tests {
                 None,
             )]
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fakes::VirtualClock;
+    use std::cell::Cell;
+
+    /// A scripted rung: a kind, an outcome, and how long it takes on the shared
+    /// virtual clock. It advances the clock by `takes_ms` on each call so the
+    /// ladder's two-second bound is exercised without any real sleep.
+    struct FakeAcquirer {
+        kind: ImageAcquisition,
+        clock: VirtualClock,
+        takes_ms: i64,
+        outcome: Outcome,
+        calls: Cell<usize>,
+    }
+
+    #[derive(Clone)]
+    enum Outcome {
+        Bytes(Vec<u8>),
+        Empty,
+        Err(AcquireError),
+    }
+
+    impl FakeAcquirer {
+        fn new(
+            kind: ImageAcquisition,
+            clock: VirtualClock,
+            takes_ms: i64,
+            outcome: Outcome,
+        ) -> Self {
+            Self {
+                kind,
+                clock,
+                takes_ms,
+                outcome,
+                calls: Cell::new(0),
+            }
+        }
+
+        fn ok(kind: ImageAcquisition, clock: VirtualClock) -> Self {
+            Self::new(kind, clock, 100, Outcome::Bytes(vec![1, 2, 3]))
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.get()
+        }
+    }
+
+    impl ImageAcquirer for FakeAcquirer {
+        fn kind(&self) -> ImageAcquisition {
+            self.kind
+        }
+
+        fn acquire(&self, _r: &ImageRef) -> Result<ImageBlob, AcquireError> {
+            self.calls.set(self.calls.get() + 1);
+            self.clock.advance_ms(self.takes_ms);
+            match &self.outcome {
+                Outcome::Bytes(b) => Ok(ImageBlob {
+                    bytes: b.clone(),
+                    mime: "image/png".into(),
+                }),
+                Outcome::Empty => Ok(ImageBlob {
+                    bytes: Vec::new(),
+                    mime: "image/png".into(),
+                }),
+                Outcome::Err(e) => Err(e.clone()),
+            }
+        }
+    }
+
+    fn img_ref() -> ImageRef {
+        ImageRef {
+            locator: "loc-1".into(),
+        }
+    }
+
+    #[test]
+    fn first_rung_success_skips_the_rest() {
+        let clock = VirtualClock::new(0);
+        let s0 = FakeAcquirer::ok(ImageAcquisition::OriginalSave, clock.clone());
+        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
+        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), true);
+        assert!(out.is_acquired());
+        assert_eq!(out.attempts[0], StepAttempt::Acquired);
+        assert_eq!(out.attempts[1], StepAttempt::Skipped);
+        assert_eq!(out.attempts[2], StepAttempt::Skipped);
+        assert!(!out.used_screen_capture());
+        // The later rungs were never called.
+        assert_eq!(s1.calls(), 0);
+        assert_eq!(s2.calls(), 0);
+    }
+
+    #[test]
+    fn falls_through_to_next_rung_only_on_failure() {
+        let clock = VirtualClock::new(0);
+        let s0 = FakeAcquirer::new(
+            ImageAcquisition::OriginalSave,
+            clock.clone(),
+            50,
+            Outcome::Err(AcquireError::NotAvailable),
+        );
+        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
+        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), true);
+        assert!(out.is_acquired());
+        assert_eq!(out.attempts[0], StepAttempt::Error("not_available"));
+        assert_eq!(out.attempts[1], StepAttempt::Acquired);
+        assert_eq!(out.attempts[2], StepAttempt::Skipped);
+        assert_eq!(s0.calls(), 1);
+        assert_eq!(s1.calls(), 1);
+        assert_eq!(s2.calls(), 0);
+    }
+
+    #[test]
+    fn empty_image_is_a_failure_that_advances() {
+        let clock = VirtualClock::new(0);
+        let s0 = FakeAcquirer::new(
+            ImageAcquisition::OriginalSave,
+            clock.clone(),
+            10,
+            Outcome::Empty,
+        );
+        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
+        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), true);
+        assert_eq!(out.attempts[0], StepAttempt::Empty);
+        assert_eq!(out.attempts[1], StepAttempt::Acquired);
+    }
+
+    #[test]
+    fn slow_rung_times_out_and_advances() {
+        let clock = VirtualClock::new(0);
+        // The first rung answers after 2001ms — past the 2s bound.
+        let s0 = FakeAcquirer::new(
+            ImageAcquisition::OriginalSave,
+            clock.clone(),
+            (STEP_TIMEOUT_MS as i64) + 1,
+            Outcome::Bytes(vec![9]),
+        );
+        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
+        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), true);
+        assert_eq!(out.attempts[0], StepAttempt::TimedOut);
+        assert_eq!(out.attempts[1], StepAttempt::Acquired);
+    }
+
+    #[test]
+    fn exactly_two_seconds_still_counts_as_in_time() {
+        let clock = VirtualClock::new(0);
+        let s0 = FakeAcquirer::new(
+            ImageAcquisition::OriginalSave,
+            clock.clone(),
+            STEP_TIMEOUT_MS as i64,
+            Outcome::Bytes(vec![9]),
+        );
+        let s1 = FakeAcquirer::ok(ImageAcquisition::CacheFolder, clock.clone());
+        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), true);
+        assert_eq!(out.attempts[0], StepAttempt::Acquired);
+    }
+
+    #[test]
+    fn screen_capture_not_attempted_without_permission() {
+        let clock = VirtualClock::new(0);
+        let s0 = FakeAcquirer::new(
+            ImageAcquisition::OriginalSave,
+            clock.clone(),
+            10,
+            Outcome::Err(AcquireError::NotAvailable),
+        );
+        let s1 = FakeAcquirer::new(
+            ImageAcquisition::CacheFolder,
+            clock.clone(),
+            10,
+            Outcome::Err(AcquireError::NotAvailable),
+        );
+        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), false);
+        assert!(!out.is_acquired());
+        assert_eq!(out.attempts[2], StepAttempt::PermissionMissing);
+        // The screen-capture rung was never called (R9.10).
+        assert_eq!(s2.calls(), 0);
+    }
+
+    #[test]
+    fn screen_capture_used_when_earlier_rungs_fail_and_permission_present() {
+        let clock = VirtualClock::new(0);
+        let s0 = FakeAcquirer::new(
+            ImageAcquisition::OriginalSave,
+            clock.clone(),
+            10,
+            Outcome::Err(AcquireError::NotAvailable),
+        );
+        let s1 = FakeAcquirer::new(
+            ImageAcquisition::CacheFolder,
+            clock.clone(),
+            10,
+            Outcome::Empty,
+        );
+        let s2 = FakeAcquirer::ok(ImageAcquisition::ScreenCapture, clock.clone());
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), true);
+        assert!(out.is_acquired());
+        assert_eq!(out.attempts[2], StepAttempt::Acquired);
+        assert!(out.used_screen_capture());
+        assert_eq!(out.acquired_via(), Some(ImageAcquisition::ScreenCapture));
+    }
+
+    #[test]
+    fn all_three_rungs_fail_yields_no_image() {
+        let clock = VirtualClock::new(0);
+        let s0 = FakeAcquirer::new(
+            ImageAcquisition::OriginalSave,
+            clock.clone(),
+            10,
+            Outcome::Err(AcquireError::NotAvailable),
+        );
+        let s1 = FakeAcquirer::new(
+            ImageAcquisition::CacheFolder,
+            clock.clone(),
+            10,
+            Outcome::Err(AcquireError::Failed("boom".into())),
+        );
+        let s2 = FakeAcquirer::new(
+            ImageAcquisition::ScreenCapture,
+            clock.clone(),
+            10,
+            Outcome::Empty,
+        );
+        let ladder = ImageLadder {
+            steps: [&s0, &s1, &s2],
+            clock: &clock,
+        };
+        let out = ladder.acquire(&img_ref(), true);
+        assert!(!out.is_acquired());
+        assert_eq!(out.attempts[0], StepAttempt::Error("not_available"));
+        assert_eq!(out.attempts[1], StepAttempt::Error("failed"));
+        assert_eq!(out.attempts[2], StepAttempt::Empty);
+        assert!(!out.used_screen_capture());
     }
 }
