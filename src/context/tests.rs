@@ -1,6 +1,46 @@
+use super::embedding::{encode_vector, vector_to_bytes};
+use super::live::{live_event_digest, live_index_text};
+use super::reply_bundle::{
+    live_event_exclusions, CONTEXT_REPLY_BUNDLE_CONTEXT_LIMIT, CONTEXT_REPLY_BUNDLE_DECISION_LIMIT,
+    CONTEXT_REPLY_BUNDLE_SCHEMA_VERSION, CONTEXT_REPLY_BUNDLE_STYLE_LIMIT,
+    RECIPIENT_CONTEXT_REPLY_BUNDLE_SCHEMA_VERSION,
+};
+use super::reply_decision::REPLY_DECISION_CANDIDATE_CAP;
+use super::response_time::{
+    fit_response_time_distribution, response_delay_percentile, response_time_distribution_is_valid,
+    summarize_response_delays, MAX_RESPONSE_DELAY_SECONDS, MIN_SCHEDULED_RESPONSE_DELAY_SECONDS,
+    RESPONSE_TIME_DISTRIBUTION_COMPONENTS, RESPONSE_TIME_DISTRIBUTION_FIT_TRANSFORM,
+    RESPONSE_TIME_DISTRIBUTION_MIN_COMPONENT_SAMPLES, RESPONSE_TIME_DISTRIBUTION_MIN_SAMPLES,
+    RESPONSE_TIME_DISTRIBUTION_MODEL_KIND, RESPONSE_TIME_DISTRIBUTION_POLICY_VERSION,
+    RESPONSE_TIME_DISTRIBUTION_SCHEMA_VERSION,
+};
+use super::schema::{
+    rebuild_retrieval_index, CONTEXT_RETRIEVAL_MIGRATION_REQUIRED, LIVE_CONTEXT_SCHEMA_VERSION,
+};
+use super::search::{
+    style_search_with_connection, CONTEXT_VECTOR_CANDIDATE_CAP, RECIPIENT_STYLE_SEARCH_SQL,
+    STYLE_VECTOR_CANDIDATE_CAP,
+};
+use super::self_send::AUTO_GENERATED_MATCH_WINDOW_SECONDS;
+use super::store::{
+    checkpoint_context_wal_truncate, open_db, open_db_readonly, set_context_db_permissions,
+    sqlite_sidecar_path,
+};
+use super::style::{classify_style_message, is_assistant_tell_style, STYLE_USER};
+use super::topics::{classify_message_topics, message_has_interest_topic, TOPIC_LEXICON};
 use super::*;
+use anyhow::Result;
+use chrono::Utc;
+use rusqlite::{params, Connection};
+use std::collections::BTreeMap;
+use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
+
+fn is_conversational_style_message(message: &str) -> bool {
+    classify_style_message(message).style_eligible
+}
 
 const TEST_ACCOUNT_FINGERPRINT: &str =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
