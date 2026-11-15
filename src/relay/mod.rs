@@ -686,7 +686,7 @@ impl<'a> TelegramRelay<'a> {
         for _ in 0..(LATENCY_WINDOW_MAX * 16 + 16) {
             let port_cursor = self.cursor.as_port_cursor();
             let message = match self.ax.messages_after(&port_cursor, 1) {
-                Ok(mut batch) => batch.drain(..).next(),
+                Ok(batch) => batch.into_iter().next(),
                 Err(_) => {
                     // Window not found or permission missing: stop and keep the
                     // cursor untouched so relay resumes after recovery (R7.14).
@@ -738,14 +738,7 @@ impl<'a> TelegramRelay<'a> {
     /// Relay one message to every target room, applying the once-per-room,
     /// image-parity, and mismatch-streak rules (R7.7, R7.8, R7.10, R7.18).
     fn process_message(&mut self, message: &crate::ports::TelegramMessage) -> MessageOutcome {
-        let clock = self.clock;
-        let ledger = self.ledger;
-        let sender = self.sender;
-        let ladder = self.ladder;
-        let screen = self.screen_recording_granted;
-        let rooms = self.pair.kakao_rooms.clone();
-
-        let start = clock.now_ms();
+        let start = self.clock.now_ms();
         let pid_hash = crate::context::provenance_id(&message.pid);
 
         // Links (real URL preferred, R7.3/R7.4) and the excluded-attachment note
@@ -759,7 +752,7 @@ impl<'a> TelegramRelay<'a> {
         let dropped_images = source_images.saturating_sub(MAX_IMAGES);
         let mut blobs = Vec::new();
         for image in message.images.iter().take(MAX_IMAGES) {
-            let outcome = ladder.acquire(image, screen);
+            let outcome = self.ladder.acquire(image, self.screen_recording_granted);
             if let Some(blob) = outcome.acquired {
                 blobs.push(blob);
             }
@@ -774,32 +767,33 @@ impl<'a> TelegramRelay<'a> {
         let mut delivered_min = source_images; // worst delivered across sent rooms
         let mut saw_send = false;
 
-        for &room in &rooms {
+        for &room in &self.pair.kakao_rooms {
             // Dedup: an already-delivered (message, room) is never re-sent
             // (R7.10). It counts as delivered for this message.
-            if ledger.is_delivered(room, &pid_hash) {
+            if self.ledger.is_delivered(room, &pid_hash) {
                 continue;
             }
 
             if nothing_to_send {
                 // Only excluded attachments — nothing relayable; settle the room
                 // so the message can advance (R7.19).
-                let _ = ledger.mark(room, &pid_hash, clock.now_ms());
+                let _ = self.ledger.mark(room, &pid_hash, self.clock.now_ms());
                 continue;
             }
 
-            match sender.send_relay(room, &body, &blobs) {
+            match self.sender.send_relay(room, &body, &blobs) {
                 RelaySendOutcome::Sent { images_delivered } => {
                     saw_send = true;
                     delivered_min = delivered_min.min(images_delivered);
                     let complete = images_delivered == source_images && dropped_images == 0;
                     if complete {
-                        let _ = ledger.mark(room, &pid_hash, clock.now_ms());
+                        let _ = self.ledger.mark(room, &pid_hash, self.clock.now_ms());
                     } else {
                         // Image-count mismatch: retryable up to the streak limit
                         // (R7.8, R7.18).
                         all_delivered = false;
-                        let streak = ledger
+                        let streak = self
+                            .ledger
                             .bump_mismatch(room, &pid_hash)
                             .unwrap_or(MISMATCH_STREAK_LIMIT);
                         if streak < MISMATCH_STREAK_LIMIT {
@@ -807,13 +801,9 @@ impl<'a> TelegramRelay<'a> {
                         }
                     }
                 }
-                RelaySendOutcome::Fenced { .. } => {
-                    // Fenced rooms never receive a send (R7.15). Fencing is not
-                    // an image miss, so it does not trigger a retry.
-                    all_delivered = false;
-                    delivered_min = 0;
-                }
-                RelaySendOutcome::Failed { .. } => {
+                // Fenced rooms never receive a send (R7.15). Neither fencing nor
+                // a failed send is an image miss, so neither triggers a retry.
+                RelaySendOutcome::Fenced { .. } | RelaySendOutcome::Failed { .. } => {
                     all_delivered = false;
                     delivered_min = 0;
                 }
@@ -832,24 +822,21 @@ impl<'a> TelegramRelay<'a> {
             delivered,
         };
 
-        let (settlement, stage, status, code) = if retrying {
+        let (settlement, status, code) = if retrying {
             (
                 Settlement::MissRetrying(tally),
-                Stage::Commit,
                 StageStatus::Failed,
                 "relay_miss_retry",
             )
         } else if all_delivered {
             (
                 Settlement::Committed(tally),
-                Stage::Commit,
                 StageStatus::Success,
                 "relay_committed",
             )
         } else {
             (
                 Settlement::MissFinal(tally),
-                Stage::Commit,
                 StageStatus::Failed,
                 "relay_miss_final",
             )
@@ -858,12 +845,12 @@ impl<'a> TelegramRelay<'a> {
         // Record a confirmed relay's latency (R7.11): from the message's
         // appearance time to the confirmed send.
         if matches!(settlement, Settlement::Committed(_)) {
-            let latency = clock.now_ms().saturating_sub(message.at).max(0) as u64;
+            let latency = self.clock.now_ms().saturating_sub(message.at).max(0) as u64;
             self.latency.record(latency);
         }
 
         // Redacted journal record: stage, result code, elapsed only (R7.16).
-        self.journal_stage(&pid_hash, stage, status, code, start);
+        self.journal_stage(&pid_hash, Stage::Commit, status, code, start);
 
         MessageOutcome {
             message_pid: pid_hash,
