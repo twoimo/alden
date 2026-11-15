@@ -1,8 +1,10 @@
 import importlib.util
+import io
 import json
 import os
 import re
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -331,6 +333,78 @@ class GeekNewsCursorTests(unittest.TestCase):
             "a morning post confirmed late burned the lunch slot",
         )
 
+    @unittest.expectedFailure
+    def test_worker_alerts_when_a_confirmed_post_cannot_be_recorded(self):
+        self.cursor_path.mkdir()
+        stderr = io.StringIO()
+        with mock.patch.object(self.worker.sys, "stderr", stderr):
+            self.worker._mark_geeknews_digest_confirmed(
+                {
+                    "proactive_ids": [10, 11],
+                    "proactive_query": "geeknews-rss",
+                    "sent_at": int(self.slot_time("morning")),
+                }
+            )
+        self.assertRegex(stderr.getvalue(), r"\b10\b.*\b11\b")
+
+    @unittest.expectedFailure
+    def test_worker_does_not_repost_a_confirmed_digest_the_cursor_missed(self):
+        morning = self.slot_time("morning")
+        lunch = self.slot_time("lunch")
+        connection = sqlite3.connect(":memory:")
+        connection.execute(
+            "CREATE TABLE reply_jobs(event_id TEXT, event_json TEXT, status TEXT, reason TEXT)"
+        )
+        delivered = {
+            "event_id": f"db:42:{int(morning)}",
+            "chat_id": 42,
+            "proactive": True,
+            "proactive_query": "geeknews-rss",
+            "proactive_ids": [10, 11],
+            "sent_at": int(morning),
+        }
+        connection.execute(
+            "INSERT INTO reply_jobs VALUES (?, ?, 'sent', 'geeknews_rss')",
+            (delivered["event_id"], json.dumps(delivered)),
+        )
+        source = {
+            "event_id": "db:42:99",
+            "canonical_event_id": "db:42:99",
+            "chat_id": 42,
+            "log_id": 99,
+            "author_id": 7,
+            "author_nickname": "문승현",
+            "is_self": False,
+            "reply_authorized": True,
+            "message": "요즘 어때",
+            "sent_at": int(lunch) - 10_000,
+        }
+        queued: list[dict] = []
+        with (
+            mock.patch.object(
+                self.worker, "_fetch_geeknews_feed_xml", return_value=geeknews_feed(10, 11, 12)
+            ),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "OPENKAKAO_AUTO_REPLY_STATE_ROOT": str(self.state_root),
+                    "OPENKAKAO_GEEKNEWS_ENABLED": "1",
+                },
+            ),
+        ):
+            enqueued = self.worker.maybe_enqueue_proactive_topic(
+                connection,
+                now=lunch,
+                response_time=None,
+                style_profile=None,
+                last_observed_sent_at=int(lunch) - 10_000,
+                conversation_advanced=False,
+                source_event=source,
+                enqueue=lambda event: queued.append(event) or True,
+            )
+        self.assertIsNotNone(enqueued)
+        self.assertEqual(queued[0]["proactive_ids"], [12])
+
 
 NIMDA = 325472527151234
 OTHER = 417780809780519
@@ -366,6 +440,7 @@ class GeekNewsOperatorTests(unittest.TestCase):
         self.reads: list[list[str]] = []
         self.sends: list[list[str]] = []
         self.send_result = None
+        self.stderr = io.StringIO()
 
     def local_read(self, command, **kwargs):
         self.reads.append(list(command))
@@ -398,7 +473,7 @@ class GeekNewsOperatorTests(unittest.TestCase):
             mock.patch.object(self.worker, "_run_bounded_process", side_effect=self.local_read),
             mock.patch.object(self.worker.subprocess, "run", side_effect=self.local_send),
             mock.patch.object(self.worker.time, "time", return_value=1000.0),
-            mock.patch.object(self.worker.sys, "stderr"),
+            mock.patch.object(self.worker.sys, "stderr", self.stderr),
             mock.patch.object(self.worker.sys, "stdout"),
         ):
             return self.worker.geeknews_operator_cli(arguments)
@@ -445,6 +520,42 @@ class GeekNewsOperatorTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_operator("--chat", "NIMDA room")
         self.assertEqual(self.sends, [])
+
+    @unittest.expectedFailure
+    def test_a_confirmed_post_the_cursor_cannot_record_is_reported(self):
+        (self.room / "geeknews-rss-cursor.json").mkdir()
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(len(self.sends), 1)
+        self.assertEqual(result, 5, "a confirmed but unrecorded post exited as a success")
+        self.assertRegex(self.stderr.getvalue(), r"\b10\b.*\b11\b.*\b12\b")
+
+    @unittest.expectedFailure
+    def test_items_the_room_already_shows_as_our_posts_are_not_sent_again(self):
+        self.room_rows += [
+            {
+                "chat_id": NIMDA,
+                "log_id": 498,
+                "sent_at": 800,
+                "is_self": True,
+                "message": "GeekNews TOP5 · 2026-08-16 08:41 KST\n\n"
+                "1. 글 10 https://news.hada.io/topic?id=10\n\n"
+                "2. 글 11 https://news.hada.io/topic?id=11",
+            },
+            {
+                "chat_id": NIMDA,
+                "log_id": 499,
+                "sent_at": 850,
+                "is_self": False,
+                "message": "이거 봤어? https://news.hada.io/topic?id=12",
+            },
+        ]
+        result = self.run_operator("--chat", "NIMDA room", "--queue", str(self.queue))
+        self.assertEqual(result, 0)
+        posted = self.sends[0][3]
+        self.assertNotIn("topic?id=10", posted)
+        self.assertNotIn("topic?id=11", posted)
+        self.assertIn("topic?id=12", posted)
+        self.assertEqual(self.cursor()["seen_ids"], [12])
 
 
 class PortabilityTests(unittest.TestCase):
