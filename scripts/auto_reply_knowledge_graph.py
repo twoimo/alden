@@ -78,7 +78,6 @@ ANN_BITS_PER_BAND = 8
 # 호환된다(2026-09-22).
 _ANN_SIGN_MATRIX_CACHE: dict[tuple[int, int], tuple[bytes, ...]] = {}
 _ANN_SIGN_MATRIX_CACHE_MAX_SHAPES = 8
-ALIAS_DICTIONARY_VERSION = "2026-09-20.1"
 KST = ZoneInfo("Asia/Seoul")
 
 # Provenance kinds. "seed" is a hand-written starting node that no message
@@ -2397,14 +2396,15 @@ def collect_knowledge_graph_list(
                 )
             except (TypeError, ValueError):
                 evidence = _seed_evidence()
-            aliases = json.loads(aliases_str)
+            # Parsed only to reject a corrupt row; the aliases are not shown.
+            json.loads(aliases_str)
             facts = json.loads(facts_str)
             connected = rel_map.get(eid, [])
             
             body_parts = [
                 f"【{name}】 ({cat})",
                 f"설명: {desc}",
-                f"주요 사실/맥락:",
+                "주요 사실/맥락:",
             ]
             for fact in facts:
                 body_parts.append(f"  • {fact}")
@@ -2701,7 +2701,6 @@ def _alias_matches(
 
 
 KNOWLEDGE_EMBEDDING_DIM = 128
-VECTOR_CANDIDATE_MIN = 0.0
 
 
 def _deterministic_text_embedding(

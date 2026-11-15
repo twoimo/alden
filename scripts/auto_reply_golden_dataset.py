@@ -371,10 +371,6 @@ def audit_golden_record(record: dict[str, Any], approvals: QualityApprovals | No
     }
 
 
-def is_audited_gold(record: dict[str, Any], approvals: QualityApprovals | None = None) -> bool:
-    return bool(audit_golden_record(record, approvals).get("accepted"))
-
-
 def audit_golden_records(
     records: Sequence[dict[str, Any]],
     approvals: QualityApprovals | None = None,
