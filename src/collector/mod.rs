@@ -30,6 +30,8 @@
 //!   deletion that fails or misses the five-second bound fails the collection
 //!   with [`CollectFailure::TempDataNotDeleted`], so it is never silent.
 
+use std::time::Duration;
+
 use thiserror::Error;
 
 use crate::ports::{Clock, NetworkPort, Secret, SecretKey, SecretStore};
@@ -264,21 +266,28 @@ impl LoopbackEndpoint {
 ///
 /// Abstracted so no real network is needed in tests, and — more importantly —
 /// so the collector only ever knows the loopback endpoint it was handed, never
-/// an external editor's MCP configuration (R11.5). Timing is measured by the
-/// caller on the injected clock, so the transport itself needs no clock.
+/// an external editor's MCP configuration (R11.5).
+///
+/// The collector cannot interrupt a call that blocks, so each call carries its
+/// time bound and the transport must give up by then (for example as its HTTP
+/// client timeout), answering [`CollectError::HealthTimeout`] or
+/// [`CollectError::Timeout`]. The caller also measures each call on the
+/// injected clock and treats a late answer as a timeout.
 pub trait AsideTransport {
-    /// A single connection-check request to the loopback endpoint (R11.2).
-    fn health(&self, endpoint: &LoopbackEndpoint) -> Result<(), CollectError>;
+    /// A single connection-check request to the loopback endpoint, abandoned
+    /// after `bound` (R11.2).
+    fn health(&self, endpoint: &LoopbackEndpoint, bound: Duration) -> Result<(), CollectError>;
 
-    /// Fetch structured content for `url` through the loopback MCP server.
-    /// `session` is the collector session secret, borrowed so its contents are
-    /// never copied or rendered.
+    /// Fetch structured content for `url` through the loopback MCP server,
+    /// abandoned after `bound` (R11.11). `session` is the collector session
+    /// secret, borrowed so its contents are never copied or rendered.
     fn fetch(
         &self,
         endpoint: &LoopbackEndpoint,
         url: &str,
         session: Option<&Secret>,
         scope: &mut TempScope,
+        bound: Duration,
     ) -> Result<Collected, CollectError>;
 }
 
@@ -319,7 +328,9 @@ impl PageCollector for AsideCollector<'_> {
         // Exactly one connection-check request, bounded to three seconds on the
         // injected clock (R11.2).
         let start = self.clock.now_ms();
-        let result = self.transport.health(&self.endpoint);
+        let result = self
+            .transport
+            .health(&self.endpoint, Duration::from_secs(HEALTH_TIMEOUT_SECS));
         let elapsed = self.clock.now_ms().saturating_sub(start);
         if elapsed > (HEALTH_TIMEOUT_SECS * 1000) as i64 {
             return Err(CollectError::HealthTimeout);
@@ -337,9 +348,13 @@ impl PageCollector for AsideCollector<'_> {
         })?;
 
         let start = self.clock.now_ms();
-        let mut result = self
-            .transport
-            .fetch(&self.endpoint, url, Some(&session), scope);
+        let mut result = self.transport.fetch(
+            &self.endpoint,
+            url,
+            Some(&session),
+            scope,
+            Duration::from_secs(ASIDE_COLLECT_TIMEOUT_SECS),
+        );
         let elapsed = self.clock.now_ms().saturating_sub(start);
         if elapsed > (ASIDE_COLLECT_TIMEOUT_SECS * 1000) as i64 {
             return Err(CollectError::Timeout);
@@ -901,9 +916,15 @@ mod tests {
         health_result: Result<(), CollectError>,
         health_takes_ms: i64,
         clock: VirtualClock,
+        bounds: std::cell::RefCell<Vec<std::time::Duration>>,
     }
     impl AsideTransport for FakeTransport {
-        fn health(&self, _endpoint: &LoopbackEndpoint) -> Result<(), CollectError> {
+        fn health(
+            &self,
+            _endpoint: &LoopbackEndpoint,
+            bound: std::time::Duration,
+        ) -> Result<(), CollectError> {
+            self.bounds.borrow_mut().push(bound);
             self.clock.advance_ms(self.health_takes_ms);
             self.health_result.clone()
         }
@@ -913,9 +934,35 @@ mod tests {
             _url: &str,
             _session: Option<&Secret>,
             _scope: &mut TempScope,
+            bound: std::time::Duration,
         ) -> Result<Collected, CollectError> {
+            self.bounds.borrow_mut().push(bound);
             Ok(collected(CollectorPath::Aside))
         }
+    }
+
+    #[test]
+    fn aside_hands_each_transport_call_its_time_bound() {
+        let clock = VirtualClock::new(0);
+        let transport = FakeTransport {
+            health_result: Ok(()),
+            health_takes_ms: 10,
+            clock: clock.clone(),
+            bounds: Default::default(),
+        };
+        let secrets = OkSecrets;
+        let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);
+        aside.health_check().unwrap();
+        aside
+            .collect("https://example.com/post", &mut TempScope::new().unwrap())
+            .unwrap();
+        assert_eq!(
+            *transport.bounds.borrow(),
+            vec![
+                std::time::Duration::from_secs(HEALTH_TIMEOUT_SECS),
+                std::time::Duration::from_secs(ASIDE_COLLECT_TIMEOUT_SECS)
+            ]
+        );
     }
 
     struct OkSecrets;
@@ -939,6 +986,7 @@ mod tests {
             health_result: Ok(()),
             health_takes_ms: (HEALTH_TIMEOUT_SECS as i64) * 1000 + 1,
             clock: clock.clone(),
+            bounds: Default::default(),
         };
         let secrets = OkSecrets;
         let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);
@@ -952,6 +1000,7 @@ mod tests {
             health_result: Ok(()),
             health_takes_ms: 500,
             clock: clock.clone(),
+            bounds: Default::default(),
         };
         let secrets = OkSecrets;
         let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);
@@ -965,6 +1014,7 @@ mod tests {
             health_result: Ok(()),
             health_takes_ms: 10,
             clock: clock.clone(),
+            bounds: Default::default(),
         };
         let secrets = MissingSecrets;
         let aside = AsideCollector::new(LoopbackEndpoint::new(9000), &transport, &secrets, &clock);

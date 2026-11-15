@@ -136,7 +136,11 @@ struct CountingTransport {
 }
 
 impl openkakao_cli::collector::AsideTransport for CountingTransport {
-    fn health(&self, _endpoint: &LoopbackEndpoint) -> Result<(), CollectError> {
+    fn health(
+        &self,
+        _endpoint: &LoopbackEndpoint,
+        _bound: std::time::Duration,
+    ) -> Result<(), CollectError> {
         self.health_calls.set(self.health_calls.get() + 1);
         self.clock.advance_ms(self.health_delay_ms);
         self.health_result.clone()
@@ -148,6 +152,7 @@ impl openkakao_cli::collector::AsideTransport for CountingTransport {
         _url: &str,
         _session: Option<&Secret>,
         _scope: &mut TempScope,
+        _bound: std::time::Duration,
     ) -> Result<Collected, CollectError> {
         self.fetch_result.clone()
     }

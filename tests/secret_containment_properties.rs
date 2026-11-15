@@ -96,7 +96,11 @@ struct RecordingTransport {
     saw_secret_ref: Cell<bool>,
 }
 impl AsideTransport for RecordingTransport {
-    fn health(&self, endpoint: &LoopbackEndpoint) -> Result<(), CollectError> {
+    fn health(
+        &self,
+        endpoint: &LoopbackEndpoint,
+        _bound: std::time::Duration,
+    ) -> Result<(), CollectError> {
         self.endpoints_seen.borrow_mut().push(endpoint.clone());
         self.clock.advance_ms(10);
         Ok(())
@@ -108,6 +112,7 @@ impl AsideTransport for RecordingTransport {
         url: &str,
         session: Option<&Secret>,
         _scope: &mut TempScope,
+        _bound: std::time::Duration,
     ) -> Result<Collected, CollectError> {
         self.endpoints_seen.borrow_mut().push(endpoint.clone());
         // The secret is available by reference — record that it arrived, but
