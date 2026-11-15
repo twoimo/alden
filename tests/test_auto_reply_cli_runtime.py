@@ -259,6 +259,27 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
             module = self._load_auto_reply_module(name)
         return module, runner
 
+    @staticmethod
+    def _load_ax_ui_module(name):
+        """Execute a private auto_reply_ax_ui that reads the current environment.
+
+        Reloading the shared module in place would mint new classes, and a
+        module that imported the old ones (jarvis_tool_runtime) then fails its
+        isinstance checks for the rest of the process.
+        """
+        spec = importlib.util.spec_from_file_location(
+            name, SCRIPTS / "auto_reply_ax_ui.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        # dataclasses resolves the module's string annotations via sys.modules.
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.modules.pop(name, None)
+        return module
+
     def _local_mlx_environment(self, root):
         """The product profile validate_auto_reply_local_mlx_profile accepts."""
         from auto_reply_ondevice import FLASH_NEXT_MODEL_ID
@@ -7318,9 +7339,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_NAME")
         os.environ["OPENKAKAO_TARGET_CHAT_NAME"] = 'Ops "West"'
         try:
-            import auto_reply_ax_ui
-
-            module = importlib.reload(auto_reply_ax_ui)
+            module = self._load_ax_ui_module("auto_reply_ax_ui_escaped_name_test")
             rendered = module._confirmation_script("hello", 1)
             self.assertIn('name of candidateWindow as text) is "Ops \\"West\\""', rendered)
             self.assertIn("exactWindowCount is not 1", rendered)
@@ -7352,17 +7371,12 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 os.environ.pop("OPENKAKAO_TARGET_CHAT_NAME", None)
             else:
                 os.environ["OPENKAKAO_TARGET_CHAT_NAME"] = previous
-            import auto_reply_ax_ui
-
-            importlib.reload(auto_reply_ax_ui)
 
     def test_dynamic_ax_script_rejects_control_character(self):
         previous = os.environ.get("OPENKAKAO_TARGET_CHAT_NAME")
         os.environ["OPENKAKAO_TARGET_CHAT_NAME"] = "bad\nname"
         try:
-            import auto_reply_ax_ui
-
-            module = importlib.reload(auto_reply_ax_ui)
+            module = self._load_ax_ui_module("auto_reply_ax_ui_control_char_test")
             with self.assertRaises(ValueError):
                 module._confirmation_script("hello", 1)
         finally:
@@ -7370,14 +7384,9 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
                 os.environ.pop("OPENKAKAO_TARGET_CHAT_NAME", None)
             else:
                 os.environ["OPENKAKAO_TARGET_CHAT_NAME"] = previous
-            import auto_reply_ax_ui
-
-            importlib.reload(auto_reply_ax_ui)
 
     def test_exact_window_available_requires_one_window_and_fails_closed(self):
-        import auto_reply_ax_ui
-
-        module = importlib.reload(auto_reply_ax_ui)
+        module = self._load_ax_ui_module("auto_reply_ax_ui_exact_window_test")
         rendered = module._script_for_chat(module._EXACT_WINDOW_SCRIPT)
         self.assertIn("repeat with candidateWindow in every window", rendered)
         self.assertIn("name of candidateWindow as text", rendered)
@@ -7407,9 +7416,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         self.assertEqual(run.call_count, 3)
 
     def test_exact_window_available_retries_zero_or_error_but_not_ambiguity(self):
-        import auto_reply_ax_ui
-
-        module = importlib.reload(auto_reply_ax_ui)
+        module = self._load_ax_ui_module("auto_reply_ax_ui_exact_window_retry_test")
         retryable_sequences = (
             [(0, b"0\n", b""), (0, b"1\n", b"")],
             [(1, b"", b"transient"), (0, b"1\n", b"")],
@@ -7441,9 +7448,7 @@ class AutoReplyCliRuntimeTests(unittest.TestCase):
         sleep.assert_not_called()
 
     def test_exact_window_available_keeps_one_absolute_timeout_budget(self):
-        import auto_reply_ax_ui
-
-        module = importlib.reload(auto_reply_ax_ui)
+        module = self._load_ax_ui_module("auto_reply_ax_ui_exact_window_budget_test")
         now = [10.0]
         observed_timeouts = []
 
